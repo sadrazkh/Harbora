@@ -1,0 +1,157 @@
+@model BackupsPageViewModel
+@{
+    ViewData["Title"] = "Backups";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+    string Size(long b) => b <= 0 ? "—" : b < 1048576 ? $"{b / 1024.0:0} KB" : $"{b / 1048576.0:0.0} MB";
+    string StatusClass(Harbora.Domain.Common.BackupStatus s) => s switch
+    {
+        Harbora.Domain.Common.BackupStatus.Completed => "bg-emerald-500/15 text-emerald-400",
+        Harbora.Domain.Common.BackupStatus.Failed => "bg-red-500/15 text-red-400",
+        Harbora.Domain.Common.BackupStatus.Running or Harbora.Domain.Common.BackupStatus.Pending => "bg-brand-500/15 text-brand-300 animate-pulse",
+        _ => "bg-slate-500/15 text-slate-300"
+    };
+}
+<h1 class="text-2xl font-bold mb-6">@T["Backups"]</h1>
+
+@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
+
+<div class="grid lg:grid-cols-3 gap-6">
+    <!-- Run a backup -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 class="font-semibold mb-3">@T["Run backup"]</h2>
+        <form asp-controller="Backups" asp-action="Run" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <select name="target" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                @foreach (var (val, label) in Model.Targets){<option value="@val">@label</option>}
+            </select>
+            <select name="destinationId" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                @foreach (var d in Model.Destinations){<option value="@d.Id">@d.Name (@d.Type)</option>}
+            </select>
+            <button class="w-full rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Run backup"]</button>
+        </form>
+    </section>
+
+    <!-- Destinations -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 class="font-semibold mb-3">@T["Destinations"]</h2>
+        <div class="space-y-1 mb-3 text-sm">
+            @foreach (var d in Model.Destinations)
+            {
+                <div class="flex justify-between"><span>@d.Name</span><span class="text-slate-500">@d.Type</span></div>
+            }
+        </div>
+        <details>
+            <summary class="cursor-pointer text-sm text-brand-400">+ @T["Add destination"]</summary>
+            <form asp-controller="Backups" asp-action="CreateDestination" method="post" class="mt-3 space-y-2" data-dest-form>
+                @Html.AntiForgeryToken()
+                <input name="name" placeholder="Name" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                <select name="type" data-dest-type class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                    <option value="Local">Local</option><option value="S3">S3-compatible</option>
+                </select>
+                <div data-when-local><input name="localPath" placeholder="/var/lib/harbora/backups" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" /></div>
+                <div data-when-s3 class="space-y-2" style="display:none">
+                    <input name="endpoint" placeholder="https://s3.example.com" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="bucket" placeholder="bucket" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="region" placeholder="us-east-1" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="accessKey" placeholder="access key" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="secretKey" type="password" placeholder="secret key" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                </div>
+                <button class="w-full rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@T["Save"]</button>
+            </form>
+        </details>
+    </section>
+
+    <!-- Schedules -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 class="font-semibold mb-3">@T["Schedules"]</h2>
+        <div class="space-y-1 mb-3 text-sm">
+            @foreach (var s in Model.Schedules)
+            {
+                <div class="flex items-center justify-between">
+                    <span>@s.Type · every @s.IntervalHours h · keep @s.RetentionCount</span>
+                    <form asp-controller="Backups" asp-action="DeleteSchedule" asp-route-id="@s.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                </div>
+            }
+        </div>
+        <details>
+            <summary class="cursor-pointer text-sm text-brand-400">+ @T["Add schedule"]</summary>
+            <form asp-controller="Backups" asp-action="CreateSchedule" method="post" class="mt-3 space-y-2">
+                @Html.AntiForgeryToken()
+                <select name="target" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                    @foreach (var (val, label) in Model.Targets){<option value="@val">@label</option>}
+                </select>
+                <select name="destinationId" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                    @foreach (var d in Model.Destinations){<option value="@d.Id">@d.Name</option>}
+                </select>
+                <div class="flex gap-2">
+                    <input name="intervalHours" type="number" value="24" title="@T["Interval (hours)"]" class="w-1/2 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="retentionCount" type="number" value="7" title="@T["Retention"]" class="w-1/2 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                </div>
+                <button class="w-full rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@T["Add schedule"]</button>
+            </form>
+        </details>
+    </section>
+</div>
+
+<!-- History -->
+<h2 class="text-lg font-semibold mt-8 mb-3">@T["History"]</h2>
+<div class="rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
+    <table class="w-full text-sm">
+        <thead class="text-slate-400 border-b border-slate-800">
+            <tr>
+                <th class="p-3 text-start">@T["Target"]</th><th class="p-3 text-start">@T["Type"]</th>
+                <th class="p-3 text-start">@T["Status"]</th><th class="p-3 text-start">Size</th>
+                <th class="p-3 text-start">@T["Destination"]</th><th class="p-3 text-end">@T["Actions"]</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800">
+            @if (Model.Backups.Count == 0){<tr><td colspan="6" class="p-4 text-slate-400">—</td></tr>}
+            @foreach (var b in Model.Backups)
+            {
+                <tr>
+                    <td class="p-3 font-mono text-xs">@b.TargetRef</td>
+                    <td class="p-3">@b.Type</td>
+                    <td class="p-3"><span class="rounded-full px-2 py-0.5 text-xs @StatusClass(b.Status)">@b.Status</span></td>
+                    <td class="p-3 text-slate-400">@Size(b.SizeBytes)</td>
+                    <td class="p-3 text-slate-400">@b.Destination?.Name</td>
+                    <td class="p-3">
+                        <div class="flex items-center justify-end gap-2">
+                            @if (b.Status == Harbora.Domain.Common.BackupStatus.Completed)
+                            {
+                                <a href="/backups/@b.Id/download" class="text-xs rounded-lg bg-slate-800 hover:bg-slate-700 px-2 py-1">@T["Download"]</a>
+                                <form asp-controller="Backups" asp-action="Restore" asp-route-id="@b.Id" method="post" data-restore>
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="confirm" />
+                                    <button class="text-xs rounded-lg bg-amber-900/40 hover:bg-amber-900/60 text-amber-300 px-2 py-1">@T["Restore"]</button>
+                                </form>
+                            }
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@section Scripts {
+<script>
+    // Destination form: toggle local/S3 fields
+    document.querySelectorAll('[data-dest-form]').forEach(function (form) {
+        var sel = form.querySelector('[data-dest-type]');
+        function sync(){ form.querySelector('[data-when-local]').style.display = sel.value==='Local'?'':'none';
+                         form.querySelector('[data-when-s3]').style.display = sel.value==='S3'?'':'none'; }
+        sel.addEventListener('change', sync); sync();
+    });
+    // Restore: require typing RESTORE
+    document.querySelectorAll('[data-restore]').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            var v = prompt('@(isFa ? "این عملیات داده‌ی فعلی را بازنویسی می‌کند. برای تأیید RESTORE را تایپ کنید:" : "This overwrites current data. Type RESTORE to confirm:")');
+            if (v !== 'RESTORE') { e.preventDefault(); return; }
+            form.querySelector('input[name=confirm]').value = 'RESTORE';
+        });
+    });
+</script>
+}

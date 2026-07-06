@@ -2,7 +2,7 @@
 
 A self-hosted deployment platform — deploy and manage all your apps from a single, bilingual (فارسی/English, RTL/LTR) web UI. Think CapRover/Coolify in spirit, but with its own identity, a clean modular architecture, and a strong focus on UX and simplicity.
 
-> **Status:** Phase 1 (foundation) + Phase 2 (visual route designer) + Phase 3 (managed services). Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback), and **managed services** (Postgres / MySQL / MariaDB / Redis / MongoDB — provision, generated encrypted credentials, safe connection info, attach-to-app). Backups and monitoring dashboards have their **data model and engine seams in place** and land next.
+> **Status:** Phases 1–4. Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback), **managed services** (Postgres / MySQL / MariaDB / Redis / MongoDB — provision, encrypted credentials, safe connection info, attach-to-app), and **backups** (config + volume/database via one-off tar containers, local + S3-compatible destinations, scheduled runs, retention, download, and restore with a typed confirm). Monitoring dashboards have their **data model and engine seams in place** and land next.
 
 ---
 
@@ -91,13 +91,13 @@ Drop an `examples/harbora.yml` (`app: my-app`) in your repo so `harbora deploy` 
 
 First-run setup, PBKDF2 password hashing (210k iterations), RBAC roles, API/CLI tokens (only SHA-256 hashes stored), AES-GCM secret encryption at rest, CSRF on all MVC forms, secure cookies, webhook HMAC secrets per repo, secret redaction in logs, and an audit-log table. Docker access is fully typed — no shell command strings.
 
-## Known limitations (Phase 1–2)
+## Known limitations (Phases 1–4)
 
 - **Single server** only (the remote-agent transport is designed but not wired).
-- **Backups and monitoring charts** render as placeholders backed by a ready data model/engine — full UIs come next.
-- Managed-service data volumes are preserved on remove (volume deletion is wired with the backup engine in Phase 4 to avoid accidental data loss); service backup/restore also lands in Phase 4.
+- **Monitoring charts** render as a placeholder backed by a ready data model/engine — full UI comes next.
 - Route basic-auth: the toggle persists, but htpasswd credential injection at apply-time is the next refinement.
 - Health checks are container-liveness based (HTTP health probing is the next refinement).
+- Backups run on the server (they need Docker for volume tar/untar); config/platform backups are pure JSON and work anywhere.
 - The frontend must be built (`npm run build`) before publishing; the Docker image does this automatically.
 
 ## License

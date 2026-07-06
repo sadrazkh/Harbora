@@ -94,4 +94,17 @@
   <data name="Attach to app"><value>اتصال به اپلیکیشن</value></data>
   <data name="Attach"><value>اتصال</value></data>
   <data name="Start"><value>شروع</value></data>
+  <data name="Run backup"><value>اجرای پشتیبان</value></data>
+  <data name="Destinations"><value>مقصدها</value></data>
+  <data name="Schedules"><value>زمان‌بندی‌ها</value></data>
+  <data name="Add destination"><value>افزودن مقصد</value></data>
+  <data name="Add schedule"><value>افزودن زمان‌بندی</value></data>
+  <data name="History"><value>تاریخچه</value></data>
+  <data name="Target"><value>هدف</value></data>
+  <data name="Destination"><value>مقصد</value></data>
+  <data name="Download"><value>دانلود</value></data>
+  <data name="Restore"><value>بازگردانی</value></data>
+  <data name="Interval (hours)"><value>بازه (ساعت)</value></data>
+  <data name="Retention"><value>نگه‌داری</value></data>
+  <data name="Actions"><value>عملیات</value></data>
 </root>

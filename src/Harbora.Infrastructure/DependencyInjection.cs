@@ -59,6 +59,13 @@ public static class DependencyInjection
         services.AddScoped<Services.ManagedServiceEngine>();
         services.AddScoped<IManagedServiceEngine>(sp => sp.GetRequiredService<Services.ManagedServiceEngine>());
 
+        // Backups (config + volume/db), storage (local + S3), and the schedule runner.
+        services.Configure<Backups.BackupOptions>(config.GetSection("Backups"));
+        services.AddSingleton<IBackupStorage, Backups.BackupStorage>();
+        services.AddScoped<Backups.BackupEngine>();
+        services.AddScoped<IBackupEngine>(sp => sp.GetRequiredService<Backups.BackupEngine>());
+        services.AddHostedService<Backups.BackupScheduler>();
+
         return services;
     }
 

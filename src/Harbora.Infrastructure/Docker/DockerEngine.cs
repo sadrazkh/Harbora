@@ -152,6 +152,44 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         await client.Volumes.CreateAsync(new VolumesCreateParameters { Name = name }, ct);
     }
 
+    public async Task RemoveVolumeAsync(string name, CancellationToken ct)
+    {
+        try { await client.Volumes.RemoveAsync(name, force: true, ct); }
+        catch (DockerApiException ex) { logger.LogWarning("Volume {Name} not removed: {Msg}", name, ex.Message); }
+    }
+
+    public async Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct)
+    {
+        await PullImageAsync(request.Image, new Progress<string>(l => log?.Report(l)), ct);
+
+        var create = new CreateContainerParameters
+        {
+            Image = request.Image,
+            Cmd = request.Command.ToList(),
+            HostConfig = new HostConfig
+            {
+                Binds = request.Binds.Select(b => $"{b.Source}:{b.Target}{(b.ReadOnly ? ":ro" : "")}").ToList(),
+                AutoRemove = false
+            }
+        };
+
+        var container = await client.Containers.CreateContainerAsync(create, ct);
+        try
+        {
+            await client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters(), ct);
+            if (log is not null)
+                await client.Containers.GetContainerLogsAsync(container.ID,
+                    new ContainerLogsParameters { ShowStdout = true, ShowStderr = true, Follow = true }, ct, new Progress<string>(log.Report));
+            var wait = await client.Containers.WaitContainerAsync(container.ID, ct);
+            return (int)wait.StatusCode;
+        }
+        finally
+        {
+            try { await client.Containers.RemoveContainerAsync(container.ID, new ContainerRemoveParameters { Force = true }, ct); }
+            catch { /* best effort */ }
+        }
+    }
+
     public async Task<HostInfo> GetHostInfoAsync(CancellationToken ct)
     {
         var info = await client.System.GetSystemInfoAsync(ct);

@@ -21,6 +21,24 @@ public class BackupDestination : BaseEntity
     public bool IsDefault { get; set; }
 }
 
+/// <summary>A recurring backup rule evaluated by the backup scheduler.</summary>
+public class BackupSchedule : BaseEntity
+{
+    public Guid WorkspaceId { get; set; }
+    public Guid DestinationId { get; set; }
+
+    public BackupType Type { get; set; }
+    public string TargetRef { get; set; } = string.Empty;
+
+    public int IntervalHours { get; set; } = 24;
+    /// <summary>Keep at most this many successful backups per target; older ones are pruned.</summary>
+    public int RetentionCount { get; set; } = 7;
+
+    public DateTimeOffset? LastRunAt { get; set; }
+    public DateTimeOffset? NextRunAt { get; set; }
+    public bool IsEnabled { get; set; } = true;
+}
+
 /// <summary>A backup run + its retention metadata.</summary>
 public class Backup : BaseEntity
 {

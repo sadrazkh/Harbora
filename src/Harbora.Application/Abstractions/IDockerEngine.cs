@@ -22,9 +22,21 @@ public interface IDockerEngine
 
     Task EnsureNetworkAsync(string name, CancellationToken ct);
     Task EnsureVolumeAsync(string name, CancellationToken ct);
+    Task RemoveVolumeAsync(string name, CancellationToken ct);
+
+    /// <summary>
+    /// Runs a short-lived container to completion (used by the backup engine to tar/untar
+    /// volumes) and returns its exit code. The container is removed afterwards.
+    /// </summary>
+    Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct);
 
     Task<HostInfo> GetHostInfoAsync(CancellationToken ct);
 }
+
+public record DockerOneOffRequest(
+    string Image,
+    IReadOnlyList<string> Command,
+    IReadOnlyList<(string Source, string Target, bool ReadOnly)> Binds);
 
 public record DockerBuildRequest(
     string ContextPath,

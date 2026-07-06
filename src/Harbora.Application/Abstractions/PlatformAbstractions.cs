@@ -23,11 +23,20 @@ public interface IMetricsCollector
     Task CollectAsync(CancellationToken ct);
 }
 
-/// <summary>Runs and restores backups against a destination.</summary>
+/// <summary>Runs, restores, downloads and prunes backups against a destination.</summary>
 public interface IBackupEngine
 {
-    Task<Guid> RunBackupAsync(Guid workspaceId, Domain.Common.BackupType type, string targetRef, Guid destinationId, CancellationToken ct);
+    /// <summary>Create the backup row and queue the work on the background worker; returns the backup id.</summary>
+    Task<Guid> QueueBackupAsync(Guid workspaceId, Domain.Common.BackupType type, string targetRef, Guid destinationId, bool scheduled, CancellationToken ct);
+
+    /// <summary>Restore a completed backup. Destructive — callers must confirm first.</summary>
     Task RestoreAsync(Guid backupId, CancellationToken ct);
+
+    /// <summary>Open a completed backup's artifact for download.</summary>
+    Task<(Stream Stream, string FileName)> OpenArtifactAsync(Guid backupId, CancellationToken ct);
+
+    /// <summary>Apply retention rules (delete artifacts + rows past the keep window/count).</summary>
+    Task EnforceRetentionAsync(CancellationToken ct);
 }
 
 /// <summary>Fan-out for alerts across configured channels (email/Telegram/Discord/webhook).</summary>

@@ -35,6 +35,7 @@ public class HarboraDbContext(DbContextOptions<HarboraDbContext> options) : DbCo
     public DbSet<ManagedService> ManagedServices => Set<ManagedService>();
     public DbSet<BackupDestination> BackupDestinations => Set<BackupDestination>();
     public DbSet<Backup> Backups => Set<Backup>();
+    public DbSet<BackupSchedule> BackupSchedules => Set<BackupSchedule>();
     public DbSet<MonitoringMetric> MonitoringMetrics => Set<MonitoringMetric>();
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();

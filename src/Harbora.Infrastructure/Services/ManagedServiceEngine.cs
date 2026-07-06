@@ -97,8 +97,9 @@ public sealed class ManagedServiceEngine(
         if (svc is null) return;
         var id = await FindContainerIdAsync(svc.ContainerName, ct);
         if (id is not null) await docker.RemoveContainerAsync(id, force: true, ct);
-        // NOTE: the data volume is intentionally left in place even when deleteData is set;
-        // volume deletion is wired with the backup engine in a later phase to avoid data loss.
+        // With the backup engine in place, honouring deleteData is now safe: the UI warns and
+        // users can back up first. Default keeps the volume.
+        if (deleteData) await docker.RemoveVolumeAsync(svc.VolumeName, ct);
         db.ManagedServices.Remove(svc);
         await db.SaveChangesAsync(ct);
     }

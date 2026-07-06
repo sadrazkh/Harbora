@@ -73,6 +73,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./traefik/dynamic:/dynamic
       - harbora_builds:/var/lib/harbora/builds
+      # Shared with one-off tar containers so backup artifacts are visible to both.
+      - harbora_backups:/var/lib/harbora/backups
     labels:
       - traefik.enable=true
       - traefik.http.routers.harbora.rule=Host(`${PANEL_DOMAIN}`)
@@ -92,3 +94,4 @@ volumes:
   harbora_redis:
   harbora_acme:
   harbora_builds:
+  harbora_backups:
