@@ -1,0 +1,55 @@
+@model SetupViewModel
+@{
+    ViewData["Title"] = "Setup";
+    Layout = "_Auth";
+}
+<h1 class="title">@T["Set up your administrator account"]</h1>
+<p class="subtitle">@T["Deploy and manage all your apps from one place."]</p>
+
+<form asp-controller="Setup" asp-action="Index" method="post">
+    @Html.AntiForgeryToken()
+    <div asp-validation-summary="ModelOnly" class="error"></div>
+
+    <div class="field">
+        <label>@T["Platform Name"]</label>
+        <input asp-for="PlatformName" />
+    </div>
+    <div class="field">
+        <label>@T["Display Name"]</label>
+        <input asp-for="DisplayName" autocomplete="name" />
+        <span asp-validation-for="DisplayName" class="text-muted"></span>
+    </div>
+    <div class="field">
+        <label>@T["Email"]</label>
+        <input asp-for="Email" type="email" autocomplete="username" />
+        <span asp-validation-for="Email" class="text-muted"></span>
+    </div>
+    <div class="row">
+        <div class="field">
+            <label>@T["Password"]</label>
+            <input asp-for="Password" type="password" autocomplete="new-password" />
+        </div>
+        <div class="field">
+            <label>@T["Confirm Password"]</label>
+            <input asp-for="ConfirmPassword" type="password" autocomplete="new-password" />
+        </div>
+    </div>
+    <div class="row">
+        <div class="field">
+            <label>@T["Root Domain"]</label>
+            <input asp-for="RootDomain" placeholder="example.com" />
+        </div>
+        <div class="field">
+            <label>ACME Email (Let's Encrypt)</label>
+            <input asp-for="AcmeEmail" type="email" />
+        </div>
+    </div>
+    <div class="field">
+        <label>@T["Language"]</label>
+        <select asp-for="Culture">
+            <option value="fa">فارسی</option>
+            <option value="en">English</option>
+        </select>
+    </div>
+    <button type="submit" class="btn btn-primary">@T["Complete Setup"]</button>
+</form>

@@ -1,0 +1,19 @@
+@model List<Harbora.Domain.Templates.AppTemplate>
+@{
+    ViewData["Title"] = "Templates";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<h1 class="text-2xl font-bold mb-6">@T["Templates"]</h1>
+<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    @foreach (var t in Model)
+    {
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+            <div class="flex items-center justify-between">
+                <span class="font-semibold">@(isFa ? t.NameFa : t.Name)</span>
+                <span class="text-xs rounded-full bg-slate-800 px-2 py-0.5 text-slate-300">@t.Category</span>
+            </div>
+            <p class="mt-2 text-sm text-slate-400">@(isFa ? t.DescriptionFa : t.Description)</p>
+            <a href="/apps/create?templateId=@t.Id" class="mt-4 inline-block rounded-lg bg-brand-600 hover:bg-brand-500 px-3 py-1.5 text-sm font-semibold">@T["Deploy"]</a>
+        </div>
+    }
+</div>

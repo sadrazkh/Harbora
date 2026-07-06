@@ -1,0 +1,12 @@
+@model ErrorViewModel
+@{
+    ViewData["Title"] = "Error";
+    Layout = "_Auth";
+}
+<h1 class="title">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "خطا" : "Error")</h1>
+<p class="subtitle">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "هنگام پردازش درخواست خطایی رخ داد." : "An error occurred while processing your request.")</p>
+@if (Model.ShowRequestId)
+{
+    <p class="text-muted">Request ID: <code>@Model.RequestId</code></p>
+}
+<a class="btn btn-primary" href="/">@T["Dashboard"]</a>

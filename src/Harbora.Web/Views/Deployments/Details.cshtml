@@ -1,0 +1,47 @@
+@model Deployment
+@{ ViewData["Title"] = $"Deployment #{Model.Number}"; }
+<div class="mb-4 flex items-center justify-between">
+    <div>
+        <a href="/apps/details/@Model.AppId" class="text-brand-400 text-sm">← @Model.App?.Name</a>
+        <h1 class="text-2xl font-bold flex items-center gap-3">
+            @T["Deployments"] #@Model.Number
+            <span data-status><partial name="_DeployStatusBadge" model="Model.Status" /></span>
+        </h1>
+    </div>
+</div>
+
+@* Vue island: connects to SignalR and renders live logs. Mount point carries its config. *@
+<div id="deployment-logs"
+     data-deployment-id="@Model.Id"
+     data-status="@Model.Status"
+     class="rounded-xl border border-slate-800 bg-black/60 font-mono text-xs leading-relaxed">
+    <div class="flex items-center justify-between px-4 py-2 border-b border-slate-800 text-slate-400">
+        <span>build &amp; deploy logs</span>
+        <a href="/deployments/@Model.Id/logs" class="hover:text-white">download</a>
+    </div>
+    <pre data-log-output class="p-4 max-h-[60vh] overflow-auto whitespace-pre-wrap"></pre>
+</div>
+
+@section Scripts {
+<script>
+    // No-bundle fallback: if the Vue island hasn't taken over within 800ms, poll the log API.
+    (function () {
+        var el = document.getElementById('deployment-logs');
+        var out = el.querySelector('[data-log-output]');
+        var last = -1, done = false;
+        var terminal = ['Succeeded','Failed','Cancelled','RolledBack'];
+        function poll() {
+            if (window.__harboraLogsMounted) return; // Vue island active
+            fetch('/deployments/@Model.Id/logs?after=' + last)
+                .then(function (r) { return r.json(); })
+                .then(function (lines) {
+                    lines.forEach(function (l) { out.textContent += l.message + '\n'; last = l.seq; });
+                    out.scrollTop = out.scrollHeight;
+                })
+                .finally(function () { if (!done) setTimeout(poll, 1500); });
+        }
+        if (terminal.indexOf('@Model.Status') === -1) setTimeout(poll, 800);
+        else setTimeout(function(){ if(!window.__harboraLogsMounted) poll(); }, 800);
+    })();
+</script>
+}

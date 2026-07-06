@@ -1,0 +1,27 @@
+@using System.Globalization
+@{
+    var culture = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+    var dir = culture == "fa" ? "rtl" : "ltr";
+}
+<!DOCTYPE html>
+<html lang="@culture" dir="@dir" class="h-full">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] · Harbora</title>
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="icon" href="~/favicon.ico" />
+    <link rel="stylesheet" href="~/css/fallback.css" />
+</head>
+<body class="h-full bg-slate-950 text-slate-100" style="background:#020617;color:#e2e8f0">
+    <div class="auth-wrap">
+        <div class="auth-card">
+            <div class="auth-brand">
+                <span class="auth-logo">H</span>
+                <span>Harbora</span>
+            </div>
+            @RenderBody()
+        </div>
+    </div>
+</body>
+</html>

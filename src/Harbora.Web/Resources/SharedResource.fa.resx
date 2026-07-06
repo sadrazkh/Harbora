@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+              <xsd:attribute name="xml:space" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <data name="Dashboard"><value>داشبورد</value></data>
+  <data name="Overview"><value>نمای کلی</value></data>
+  <data name="Applications"><value>اپلیکیشن‌ها</value></data>
+  <data name="Deployments"><value>استقرارها</value></data>
+  <data name="Routing"><value>مسیریابی</value></data>
+  <data name="Databases"><value>دیتابیس‌ها</value></data>
+  <data name="Backups"><value>پشتیبان‌گیری</value></data>
+  <data name="Monitoring"><value>پایش</value></data>
+  <data name="Logs"><value>لاگ‌ها</value></data>
+  <data name="Templates"><value>قالب‌ها</value></data>
+  <data name="Settings"><value>تنظیمات</value></data>
+  <data name="Audit Log"><value>گزارش فعالیت</value></data>
+  <data name="API Tokens"><value>توکن‌های API</value></data>
+  <data name="Login"><value>ورود</value></data>
+  <data name="Logout"><value>خروج</value></data>
+  <data name="Email"><value>ایمیل</value></data>
+  <data name="Password"><value>گذرواژه</value></data>
+  <data name="Sign in"><value>ورود به حساب</value></data>
+  <data name="Create Application"><value>ساخت اپلیکیشن</value></data>
+  <data name="New App"><value>اپ جدید</value></data>
+  <data name="Deploy"><value>استقرار</value></data>
+  <data name="Redeploy"><value>استقرار مجدد</value></data>
+  <data name="Rollback"><value>بازگردانی</value></data>
+  <data name="Restart"><value>راه‌اندازی مجدد</value></data>
+  <data name="Stop"><value>توقف</value></data>
+  <data name="Status"><value>وضعیت</value></data>
+  <data name="Name"><value>نام</value></data>
+  <data name="Source"><value>منبع</value></data>
+  <data name="Branch or Tag"><value>شاخه یا تگ</value></data>
+  <data name="Domain"><value>دامنه</value></data>
+  <data name="Domains"><value>دامنه‌ها</value></data>
+  <data name="Environment Variables"><value>متغیرهای محیطی</value></data>
+  <data name="Save"><value>ذخیره</value></data>
+  <data name="Cancel"><value>انصراف</value></data>
+  <data name="Running"><value>در حال اجرا</value></data>
+  <data name="Stopped"><value>متوقف</value></data>
+  <data name="Failed"><value>ناموفق</value></data>
+  <data name="Succeeded"><value>موفق</value></data>
+  <data name="Welcome to Harbora"><value>به هاربورا خوش آمدید</value></data>
+  <data name="Deploy and manage all your apps from one place."><value>همه‌ی اپلیکیشن‌های خود را از یک‌جا مستقر و مدیریت کنید.</value></data>
+  <data name="Set up your administrator account"><value>حساب مدیر خود را بسازید</value></data>
+  <data name="Display Name"><value>نام نمایشی</value></data>
+  <data name="Confirm Password"><value>تکرار گذرواژه</value></data>
+  <data name="Root Domain"><value>دامنه‌ی اصلی</value></data>
+  <data name="Complete Setup"><value>تکمیل نصب</value></data>
+  <data name="No applications yet"><value>هنوز اپلیکیشنی ندارید</value></data>
+  <data name="Create your first app to get started."><value>برای شروع، اولین اپ خود را بسازید.</value></data>
+  <data name="CPU"><value>پردازنده</value></data>
+  <data name="Memory"><value>حافظه</value></data>
+  <data name="Disk"><value>دیسک</value></data>
+  <data name="Uptime"><value>در دسترس بودن</value></data>
+  <data name="Recent Deployments"><value>استقرارهای اخیر</value></data>
+  <data name="Language"><value>زبان</value></data>
+  <data name="Dark mode"><value>حالت تیره</value></data>
+</root>

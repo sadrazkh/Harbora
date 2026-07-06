@@ -1,0 +1,74 @@
+@model App
+@{ ViewData["Title"] = Model.Name; }
+<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+    <div>
+        <h1 class="text-2xl font-bold flex items-center gap-3">@Model.Name <partial name="_StatusBadge" model="Model.Status" /></h1>
+        <p class="text-slate-400 text-sm">@Model.Slug · @Model.SourceType @(Model.GitRepository is not null ? "· " + Model.GitRepository.FullName : "")</p>
+    </div>
+    <div class="flex gap-2">
+        <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post">
+            @Html.AntiForgeryToken()
+            <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Deploy"]</button>
+        </form>
+    </div>
+</div>
+
+<div class="grid lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-6">
+        <section class="rounded-xl border border-slate-800 bg-slate-900/60">
+            <div class="px-4 py-3 border-b border-slate-800 font-semibold">@T["Deployments"]</div>
+            <div class="divide-y divide-slate-800">
+                @if (!Model.Deployments.Any())
+                {
+                    <div class="p-4 text-slate-400 text-sm">—</div>
+                }
+                @foreach (var d in Model.Deployments.OrderByDescending(x => x.Number))
+                {
+                    <div class="flex items-center justify-between p-3">
+                        <a href="/deployments/details/@d.Id" class="min-w-0">
+                            <div class="text-sm font-medium">#@d.Number · @d.Trigger</div>
+                            <div class="text-xs text-slate-500 truncate">@(d.CommitMessage ?? d.GitRef) @(d.CommitSha is not null ? "· " + d.CommitSha[..Math.Min(7, d.CommitSha.Length)] : "")</div>
+                        </a>
+                        <div class="flex items-center gap-3">
+                            <partial name="_DeployStatusBadge" model="d.Status" />
+                            @if (d.Status == DeploymentStatus.Succeeded && d.Id != Model.ActiveDeploymentId)
+                            {
+                                <form asp-controller="Apps" asp-action="Rollback" asp-route-id="@Model.Id" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="deploymentId" value="@d.Id" />
+                                    <button class="text-xs rounded-lg bg-slate-800 hover:bg-slate-700 px-2 py-1">@T["Rollback"]</button>
+                                </form>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </section>
+    </div>
+
+    <div class="space-y-6">
+        <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <div class="font-semibold mb-3">@T["Domains"]</div>
+            @if (!Model.Domains.Any()) { <p class="text-slate-400 text-sm">—</p> }
+            @foreach (var dom in Model.Domains)
+            {
+                <div class="flex items-center justify-between text-sm py-1">
+                    <a href="https://@dom.Host" target="_blank" class="text-brand-400">@dom.Host</a>
+                    @if (dom.SslEnabled) { <span class="text-xs text-emerald-400">SSL</span> }
+                </div>
+            }
+        </section>
+
+        <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <div class="font-semibold mb-3">@T["Environment Variables"]</div>
+            @if (!Model.EnvironmentVariables.Any()) { <p class="text-slate-400 text-sm">—</p> }
+            @foreach (var e in Model.EnvironmentVariables)
+            {
+                <div class="flex items-center justify-between text-sm py-1 font-mono">
+                    <span class="text-slate-300">@e.Key</span>
+                    <span class="text-slate-500">@(e.IsSecret ? "••••••" : e.Value)</span>
+                </div>
+            }
+        </section>
+    </div>
+</div>

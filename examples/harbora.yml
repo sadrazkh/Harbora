@@ -1,0 +1,12 @@
+# Example Harbora project file. Drop this in your repo root so `harbora deploy` and CI
+# know which app to target without extra flags.
+app: my-app          # the app slug created in the Harbora UI
+
+# Optional metadata (reserved for future `harbora init`/`up` flows):
+build:
+  dockerfile: Dockerfile
+  context: .
+env:
+  NODE_ENV: production
+domains:
+  - my-app.example.com

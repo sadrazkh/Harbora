@@ -1,0 +1,9 @@
+@{
+    var title = ViewData["Title"] as string ?? "";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<h1 class="text-2xl font-bold mb-2">@title</h1>
+<div class="rounded-xl border border-dashed border-slate-700 p-12 text-center">
+    <p class="text-lg font-medium">@(isFa ? "این بخش در فاز بعدی تکمیل می‌شود" : "This section arrives in the next phase")</p>
+    <p class="mt-1 text-slate-400">@(isFa ? "معماری و مدل داده آن از هم‌اکنون آماده است." : "Its architecture and data model are already in place.")</p>
+</div>

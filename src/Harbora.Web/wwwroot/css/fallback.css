@@ -1,0 +1,30 @@
+/*
+ * Minimal fallback styles used before Tailwind is built (npm run build) and by the auth pages.
+ * The full design system comes from Tailwind via Vite; this keeps the app usable out of the box.
+ */
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, "Segoe UI", Tahoma, sans-serif; }
+a { color: #38bdf8; text-decoration: none; }
+
+.auth-wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.auth-card { width: 100%; max-width: 420px; background: #0f172a; border: 1px solid #1e293b; border-radius: 16px; padding: 28px; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+.auth-brand { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; margin-bottom: 20px; }
+.auth-logo { display: inline-flex; height: 34px; width: 34px; align-items: center; justify-content: center; border-radius: 10px; background: #4f46e5; }
+
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 13px; margin-bottom: 6px; color: #94a3b8; }
+.field input, .field select {
+    width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #334155;
+    background: #1e293b; color: #e2e8f0; font-size: 14px;
+}
+.field input:focus, .field select:focus { outline: 2px solid #6366f1; border-color: transparent; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;
+    padding: 10px 16px; border-radius: 10px; border: 0; font-size: 14px; font-weight: 600; }
+.btn-primary { background: #4f46e5; color: #fff; width: 100%; }
+.btn-primary:hover { background: #4338ca; }
+.text-muted { color: #94a3b8; font-size: 13px; }
+.title { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
+.subtitle { color: #94a3b8; margin: 0 0 20px; font-size: 14px; }
+.error { background: #7f1d1d33; border: 1px solid #b91c1c; color: #fca5a5; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; }
+.row { display: flex; gap: 12px; }
+.row > * { flex: 1; }

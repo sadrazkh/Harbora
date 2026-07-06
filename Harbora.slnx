@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Harbora.Agent/Harbora.Agent.csproj" />
+    <Project Path="src/Harbora.Application/Harbora.Application.csproj" />
+    <Project Path="src/Harbora.Cli/Harbora.Cli.csproj" />
+    <Project Path="src/Harbora.Data/Harbora.Data.csproj" />
+    <Project Path="src/Harbora.Domain/Harbora.Domain.csproj" />
+    <Project Path="src/Harbora.Infrastructure/Harbora.Infrastructure.csproj" />
+    <Project Path="src/Harbora.Shared/Harbora.Shared.csproj" />
+    <Project Path="src/Harbora.Web/Harbora.Web.csproj" />
+  </Folder>
+</Solution>

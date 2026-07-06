@@ -1,0 +1,85 @@
+@model CreateAppViewModel
+@{ ViewData["Title"] = "Create Application"; }
+<div class="max-w-2xl mx-auto">
+    <h1 class="text-2xl font-bold mb-6">@T["Create Application"]</h1>
+
+    <form asp-controller="Apps" asp-action="Create" method="post" class="space-y-5">
+        @Html.AntiForgeryToken()
+        <div asp-validation-summary="ModelOnly" class="rounded-lg bg-red-900/30 border border-red-700 text-red-300 px-4 py-2 text-sm"></div>
+
+        <div class="grid sm:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">@T["Name"]</label>
+                <input asp-for="Name" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+                <span asp-validation-for="Name" class="text-red-400 text-xs"></span>
+            </div>
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">Slug</label>
+                <input asp-for="Slug" placeholder="my-app" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+                <span asp-validation-for="Slug" class="text-red-400 text-xs"></span>
+            </div>
+        </div>
+
+        <div>
+            <label class="block text-sm text-slate-400 mb-1">@T["Source"]</label>
+            <select asp-for="SourceType" data-source class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2"
+                    asp-items="Html.GetEnumSelectList<AppSourceType>()"></select>
+        </div>
+
+        <div data-when="GitRepository,Dockerfile" class="space-y-4">
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">Git Clone URL</label>
+                <input asp-for="CloneUrl" placeholder="https://github.com/user/repo.git" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+            </div>
+            <div class="grid sm:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-slate-400 mb-1">@T["Branch or Tag"]</label>
+                    <input asp-for="GitRef" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+                </div>
+                <div>
+                    <label class="block text-sm text-slate-400 mb-1">Access Token (private repos)</label>
+                    <input asp-for="GitToken" type="password" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">Dockerfile path</label>
+                <input asp-for="DockerfilePath" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+            </div>
+        </div>
+
+        <div data-when="PrebuiltImage">
+            <label class="block text-sm text-slate-400 mb-1">Image</label>
+            <input asp-for="PrebuiltImage" placeholder="nginx:alpine" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+        </div>
+
+        <div class="grid sm:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">Container Port</label>
+                <input asp-for="ContainerPort" type="number" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+            </div>
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">@T["Domain"]</label>
+                <input asp-for="Domain" placeholder="app.example.com" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+            </div>
+        </div>
+
+        <div class="flex gap-3 pt-2">
+            <button type="submit" class="rounded-lg bg-brand-600 hover:bg-brand-500 px-5 py-2 font-semibold">@T["Save"]</button>
+            <a href="/apps" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-5 py-2">@T["Cancel"]</a>
+        </div>
+    </form>
+</div>
+
+@section Scripts {
+<script>
+    // Progressive field toggling (works without the Vue bundle).
+    var sel = document.querySelector('[data-source]');
+    function sync() {
+        var v = sel.options[sel.selectedIndex].text.replace(/\s/g,'');
+        document.querySelectorAll('[data-when]').forEach(function (el) {
+            el.style.display = el.getAttribute('data-when').split(',').some(function (w){ return v.indexOf(w) > -1; }) ? '' : 'none';
+        });
+    }
+    sel && (sel.addEventListener('change', sync), sync());
+</script>
+}

@@ -1,0 +1,84 @@
+@model DashboardViewModel
+@{
+    ViewData["Title"] = "Dashboard";
+    string Fmt(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
+}
+<div class="mb-6 flex items-center justify-between">
+    <h1 class="text-2xl font-bold">@T["Overview"]</h1>
+    <a href="/apps/create" class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">+ @T["New App"]</a>
+</div>
+
+@if (!Model.DockerAvailable)
+{
+    <div class="mb-6 rounded-xl border border-amber-700/50 bg-amber-900/20 px-4 py-3 text-amber-200 text-sm">
+        Docker daemon is not reachable. Metrics and deployments are paused until Docker is available.
+    </div>
+}
+
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-slate-400 text-sm">@T["Applications"]</div>
+        <div class="mt-1 text-2xl font-bold">@Model.AppCount</div>
+    </div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-slate-400 text-sm">@T["Running"]</div>
+        <div class="mt-1 text-2xl font-bold text-emerald-400">@Model.RunningCount</div>
+    </div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-slate-400 text-sm">@T["Memory"]</div>
+        <div class="mt-1 text-2xl font-bold">@Fmt(Model.MemoryTotal)</div>
+    </div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-slate-400 text-sm">@T["Disk"]</div>
+        <div class="mt-1 text-2xl font-bold">@Fmt(Model.DiskUsed) / @Fmt(Model.DiskTotal)</div>
+    </div>
+</div>
+
+<div class="grid lg:grid-cols-3 gap-6">
+    <section class="lg:col-span-2">
+        <h2 class="mb-3 text-lg font-semibold">@T["Applications"]</h2>
+        @if (Model.Apps.Count == 0)
+        {
+            <div class="rounded-xl border border-dashed border-slate-700 p-10 text-center">
+                <p class="text-lg font-medium">@T["No applications yet"]</p>
+                <p class="mt-1 text-slate-400">@T["Create your first app to get started."]</p>
+                <a href="/apps/create" class="mt-4 inline-block rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Create Application"]</a>
+            </div>
+        }
+        else
+        {
+            <div class="grid sm:grid-cols-2 gap-4">
+                @foreach (var app in Model.Apps)
+                {
+                    <a href="/apps/details/@app.Id" class="rounded-xl border border-slate-800 bg-slate-900/60 p-4 hover:border-brand-600 transition">
+                        <div class="flex items-center justify-between">
+                            <span class="font-semibold">@app.Name</span>
+                            <partial name="_StatusBadge" model="app.Status" />
+                        </div>
+                        <div class="mt-1 text-sm text-slate-400">@app.Slug · @app.SourceType</div>
+                    </a>
+                }
+            </div>
+        }
+    </section>
+
+    <section>
+        <h2 class="mb-3 text-lg font-semibold">@T["Recent Deployments"]</h2>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 divide-y divide-slate-800">
+            @if (Model.RecentDeployments.Count == 0)
+            {
+                <div class="p-4 text-slate-400 text-sm">—</div>
+            }
+            @foreach (var d in Model.RecentDeployments)
+            {
+                <a href="/deployments/details/@d.Id" class="flex items-center justify-between p-3 hover:bg-slate-800/40">
+                    <div class="min-w-0">
+                        <div class="truncate text-sm font-medium">@d.App?.Name #@d.Number</div>
+                        <div class="text-xs text-slate-500">@d.CreatedAt.LocalDateTime.ToString("MM/dd HH:mm")</div>
+                    </div>
+                    <partial name="_DeployStatusBadge" model="d.Status" />
+                </a>
+            }
+        </div>
+    </section>
+</div>

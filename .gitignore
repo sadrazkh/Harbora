@@ -1,0 +1,22 @@
+# .NET
+bin/
+obj/
+*.user
+[Dd]ebug/
+[Rr]elease/
+
+# Frontend
+node_modules/
+src/Harbora.Web/wwwroot/build/
+
+# Secrets / local
+.env
+*.log
+deploy/**/.env
+appsettings.*.local.json
+
+# OS / IDE
+.vs/
+.idea/
+.DS_Store
+Thumbs.db

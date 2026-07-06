@@ -1,0 +1,9 @@
+**/bin
+**/obj
+**/node_modules
+**/wwwroot/build
+.git
+.vs
+.idea
+**/.env
+*.md

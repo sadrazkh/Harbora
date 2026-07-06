@@ -1,0 +1,105 @@
+@using System.Globalization
+@inject ViteManifest Vite
+@{
+    var culture = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+    var isRtl = culture == "fa";
+    var dir = isRtl ? "rtl" : "ltr";
+    var (viteJs, viteCss) = Vite.Resolve("Scripts/main.ts");
+    string Active(string controller) =>
+        string.Equals((string?)ViewContext.RouteData.Values["controller"], controller, StringComparison.OrdinalIgnoreCase)
+            ? "bg-brand-600/10 text-brand-400" : "text-slate-300 hover:bg-slate-800/60 hover:text-white";
+}
+<!DOCTYPE html>
+<html lang="@culture" dir="@dir" class="h-full">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>@ViewData["Title"] · Harbora</title>
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="manifest" href="~/manifest.webmanifest" />
+    <link rel="icon" href="~/favicon.ico" />
+    @if (Vite.UseDevServer)
+    {
+        <script type="module" src="@(Vite.DevServerUrl)/@@vite/client"></script>
+        <script type="module" src="@(Vite.DevServerUrl)/Scripts/main.ts"></script>
+    }
+    else
+    {
+        foreach (var css in viteCss) { <link rel="stylesheet" href="@css" /> }
+        @* Fallback base styles so the shell is usable even before `npm run build`. *@
+        <link rel="stylesheet" href="~/css/fallback.css" />
+    }
+    <script>
+        // Apply persisted theme before paint to avoid a flash.
+        (function () {
+            var t = localStorage.getItem('harbora-theme');
+            if (t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches))
+                document.documentElement.classList.add('dark');
+        })();
+    </script>
+</head>
+<body class="h-full bg-slate-950 text-slate-100 antialiased">
+<div class="flex h-full">
+    <aside id="sidebar" class="hidden md:flex md:w-64 flex-col border-e border-slate-800 bg-slate-900/70 backdrop-blur">
+        <div class="flex items-center gap-2 px-5 h-16 border-b border-slate-800">
+            <span class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 font-bold">H</span>
+            <span class="text-lg font-semibold tracking-tight">Harbora</span>
+        </div>
+        <nav class="flex-1 overflow-y-auto p-3 space-y-1 text-sm">
+            <a href="/" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Home")">@T["Dashboard"]</a>
+            <a href="/apps" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Apps")">@T["Applications"]</a>
+            <a href="/routes" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Routes")">@T["Routing"]</a>
+            <a href="/databases" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Databases")">@T["Databases"]</a>
+            <a href="/backups" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Backups")">@T["Backups"]</a>
+            <a href="/monitoring" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Monitoring")">@T["Monitoring"]</a>
+            <a href="/templates" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Templates")">@T["Templates"]</a>
+            <a href="/settings" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Settings")">@T["Settings"]</a>
+        </nav>
+    </aside>
+
+    <div class="flex-1 flex flex-col min-w-0">
+        <header class="flex items-center gap-3 h-16 px-4 md:px-6 border-b border-slate-800 bg-slate-900/40">
+            <button data-toggle-sidebar class="md:hidden p-2 rounded-lg hover:bg-slate-800" aria-label="menu">☰</button>
+            <div class="flex-1">
+                <input type="search" placeholder="@(isRtl ? "جستجو…" : "Search…")"
+                       class="w-full max-w-md rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+            </div>
+
+            <button data-theme-toggle class="p-2 rounded-lg hover:bg-slate-800" title="@T["Dark mode"]">◐</button>
+
+            <form asp-controller="Account" asp-action="SetLanguage" method="post" class="flex items-center">
+                <input type="hidden" name="returnUrl" value="@Context.Request.Path" />
+                <input type="hidden" name="culture" value="@(isRtl ? "en" : "fa")" />
+                <button type="submit" class="px-2 py-1 rounded-lg text-sm hover:bg-slate-800" title="@T["Language"]">
+                    @(isRtl ? "EN" : "فا")
+                </button>
+            </form>
+
+            <form asp-controller="Account" asp-action="Logout" method="post">
+                <button type="submit" class="px-3 py-1.5 rounded-lg text-sm bg-slate-800 hover:bg-slate-700">@T["Logout"]</button>
+            </form>
+        </header>
+
+        <main class="flex-1 overflow-y-auto p-4 md:p-8">
+            @RenderBody()
+        </main>
+    </div>
+</div>
+
+@if (Vite.UseDevServer is false && viteJs is not null)
+{
+    <script type="module" src="@viteJs"></script>
+}
+<script>
+    document.querySelector('[data-theme-toggle]')?.addEventListener('click', function () {
+        var el = document.documentElement, dark = el.classList.toggle('dark');
+        localStorage.setItem('harbora-theme', dark ? 'dark' : 'light');
+    });
+    document.querySelector('[data-toggle-sidebar]')?.addEventListener('click', function () {
+        document.getElementById('sidebar')?.classList.toggle('hidden');
+    });
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function(){});
+</script>
+@await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

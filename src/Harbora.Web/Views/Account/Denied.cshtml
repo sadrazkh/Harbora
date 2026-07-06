@@ -1,0 +1,8 @@
+@using System.Globalization
+@{
+    ViewData["Title"] = "Access denied";
+    Layout = "_Auth";
+}
+<h1 class="title">403</h1>
+<p class="subtitle">@(CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "به این بخش دسترسی ندارید." : "You don't have access to this area.")</p>
+<a class="btn btn-primary" href="/">@T["Dashboard"]</a>

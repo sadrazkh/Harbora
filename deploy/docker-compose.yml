@@ -1,0 +1,94 @@
+# Harbora platform stack. The installer templates the .env file consumed here.
+# Traefik terminates TLS (Let's Encrypt) and reverse-proxies both the panel and every
+# deployed app; Postgres and Redis back the platform itself.
+services:
+  traefik:
+    image: traefik:v3.2
+    container_name: harbora-traefik
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.directory=/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic:/dynamic
+      - harbora_acme:/acme
+    networks:
+      - harbora
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: harbora-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - harbora_pgdata:/var/lib/postgresql/data
+    networks:
+      - harbora
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: harbora-redis
+    restart: unless-stopped
+    volumes:
+      - harbora_redis:/data
+    networks:
+      - harbora
+
+  panel:
+    image: harbora/panel:latest
+    container_name: harbora-panel
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      Harbora__MasterKey: ${HARBORA_MASTER_KEY}
+      Traefik__DynamicConfigPath: "/dynamic/harbora.yml"
+      Runtime__RootDomain: ${ROOT_DOMAIN}
+      ASPNETCORE_ENVIRONMENT: Production
+    volumes:
+      # The panel talks to Docker directly (single-server mode) and writes proxy config.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./traefik/dynamic:/dynamic
+      - harbora_builds:/var/lib/harbora/builds
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.harbora.rule=Host(`${PANEL_DOMAIN}`)
+      - traefik.http.routers.harbora.entrypoints=websecure
+      - traefik.http.routers.harbora.tls.certresolver=letsencrypt
+      - traefik.http.services.harbora.loadbalancer.server.port=8080
+    networks:
+      - harbora
+
+networks:
+  harbora:
+    name: harbora
+    external: false
+
+volumes:
+  harbora_pgdata:
+  harbora_redis:
+  harbora_acme:
+  harbora_builds:

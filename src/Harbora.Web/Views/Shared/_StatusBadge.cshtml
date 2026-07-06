@@ -1,0 +1,12 @@
+@model Harbora.Domain.Common.AppStatus
+@{
+    var (cls, label) = Model switch
+    {
+        AppStatus.Running => ("bg-emerald-500/15 text-emerald-400", T["Running"].Value),
+        AppStatus.Stopped => ("bg-slate-500/15 text-slate-300", T["Stopped"].Value),
+        AppStatus.Failed or AppStatus.Crashed => ("bg-red-500/15 text-red-400", T["Failed"].Value),
+        AppStatus.Deploying => ("bg-brand-500/15 text-brand-300", T["Deploy"].Value),
+        _ => ("bg-slate-500/15 text-slate-300", Model.ToString())
+    };
+}
+<span class="rounded-full px-2.5 py-0.5 text-xs font-medium @cls">@label</span>

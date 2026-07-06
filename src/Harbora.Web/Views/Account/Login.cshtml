@@ -1,0 +1,23 @@
+@model LoginViewModel
+@{
+    ViewData["Title"] = "Login";
+    Layout = "_Auth";
+}
+<h1 class="title">@T["Welcome to Harbora"]</h1>
+<p class="subtitle">@T["Sign in"]</p>
+
+<form asp-controller="Account" asp-action="Login" method="post">
+    @Html.AntiForgeryToken()
+    <input type="hidden" asp-for="ReturnUrl" />
+    <div asp-validation-summary="All" class="error"></div>
+
+    <div class="field">
+        <label>@T["Email"]</label>
+        <input asp-for="Email" type="email" autocomplete="username" autofocus />
+    </div>
+    <div class="field">
+        <label>@T["Password"]</label>
+        <input asp-for="Password" type="password" autocomplete="current-password" />
+    </div>
+    <button type="submit" class="btn btn-primary">@T["Sign in"]</button>
+</form>

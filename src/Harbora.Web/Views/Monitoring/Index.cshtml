@@ -1,0 +1,30 @@
+@model List<Harbora.Application.Abstractions.ContainerInfo>
+@{ ViewData["Title"] = "Monitoring"; }
+<h1 class="text-2xl font-bold mb-6">@T["Monitoring"]</h1>
+<div class="rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
+    <table class="w-full text-sm">
+        <thead class="text-slate-400 border-b border-slate-800">
+            <tr class="text-start">
+                <th class="p-3 text-start">Container</th>
+                <th class="p-3 text-start">Image</th>
+                <th class="p-3 text-start">@T["Status"]</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800">
+            @if (Model.Count == 0)
+            {
+                <tr><td colspan="3" class="p-4 text-slate-400">—</td></tr>
+            }
+            @foreach (var c in Model)
+            {
+                <tr>
+                    <td class="p-3 font-mono">@c.Name</td>
+                    <td class="p-3 text-slate-400">@c.Image</td>
+                    <td class="p-3">
+                        <span class="rounded-full px-2 py-0.5 text-xs @(c.State == "running" ? "bg-emerald-500/15 text-emerald-400" : "bg-slate-500/15 text-slate-300")">@c.Status</span>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>

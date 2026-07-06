@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Logical-property helpers keep spacing correct in both RTL (fa) and LTR (en). */
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar { height: 8px; width: 8px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
+}
+
+/* Persian webfont — swap in a self-hosted Vazirmatn in production. */
+:root { color-scheme: dark; }
