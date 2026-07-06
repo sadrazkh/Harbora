@@ -107,4 +107,5 @@
   <data name="Interval (hours)"><value>بازه (ساعت)</value></data>
   <data name="Retention"><value>نگه‌داری</value></data>
   <data name="Actions"><value>عملیات</value></data>
+  <data name="Git"><value>گیت</value></data>
 </root>

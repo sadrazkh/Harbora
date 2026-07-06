@@ -36,6 +36,10 @@ public static class DependencyInjection
         services.AddSingleton<IGitService, LibGit2GitService>();
         services.AddSingleton<IProxyEngine, TraefikProxyEngine>();
 
+        // Git providers (repo import) + webhook processing (deploy on push/tag).
+        services.AddScoped<IGitProviderClient, Git.GitProviderClient>();
+        services.AddScoped<IGitWebhookProcessor, Git.GitWebhookProcessor>();
+
         // Security
         var masterKey = config["Harbora:MasterKey"]
                         ?? Environment.GetEnvironmentVariable("HARBORA_MASTER_KEY")

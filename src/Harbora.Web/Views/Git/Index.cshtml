@@ -1,0 +1,84 @@
+@model GitPageViewModel
+@{
+    ViewData["Title"] = "Git";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold">@(isFa ? "اتصال Git" : "Git Providers")</h1>
+    <p class="text-slate-400 text-sm">@(isFa ? "مخازن را وصل کنید و با هر push یا tag به‌صورت خودکار مستقر کنید." : "Connect repositories and deploy automatically on every push or tag.")</p>
+</div>
+
+<div class="grid lg:grid-cols-3 gap-6">
+    <!-- Connect a provider -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 class="font-semibold mb-3">@(isFa ? "اتصال provider" : "Connect a provider")</h2>
+        <form asp-controller="Git" asp-action="Connect" method="post" class="space-y-3" data-provider-form>
+            @Html.AntiForgeryToken()
+            <input name="name" placeholder="Name" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <select name="type" data-provider-type class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                <option value="GitHub">GitHub</option><option value="GitLab">GitLab</option>
+                <option value="Gitea">Gitea</option><option value="Custom">Custom</option>
+            </select>
+            <input name="apiBaseUrl" data-api-base placeholder="API base URL (Gitea/self-hosted)" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <input name="token" type="password" placeholder="Access token (PAT)" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <button class="w-full rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@(isFa ? "اتصال" : "Connect")</button>
+        </form>
+    </section>
+
+    <!-- Providers + repos -->
+    <section class="lg:col-span-2 space-y-4">
+        @if (Model.Providers.Count == 0)
+        {
+            <div class="rounded-xl border border-dashed border-slate-700 p-10 text-center text-slate-400">
+                @(isFa ? "هنوز provider متصل نشده است." : "No providers connected yet.")
+            </div>
+        }
+        @foreach (var p in Model.Providers)
+        {
+            <div class="rounded-xl border border-slate-800 bg-slate-900/60">
+                <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+                    <div class="font-semibold">@p.Name <span class="text-xs text-slate-500">· @p.Type</span></div>
+                    <a href="/git/providers/@p.Id/repos" class="text-sm rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5">@(isFa ? "ایمپورت مخازن" : "Import repos")</a>
+                </div>
+                <div class="divide-y divide-slate-800">
+                    @if (!p.Repositories.Any()){<div class="p-4 text-slate-400 text-sm">—</div>}
+                    @foreach (var repo in p.Repositories)
+                    {
+                        <div class="p-4 space-y-2">
+                            <div class="flex items-center justify-between">
+                                <span class="font-mono text-sm">@repo.FullName</span>
+                                <span class="text-xs text-slate-500">@repo.DefaultBranch</span>
+                            </div>
+                            <div class="text-xs text-slate-400">@(isFa ? "آدرس وبهوک:" : "Webhook URL:")</div>
+                            <code class="block break-all rounded bg-black/50 px-2 py-1 text-xs">@Model.WebhookBase/webhooks/git/@repo.Id</code>
+                            <div class="flex items-center justify-between">
+                                <div class="text-xs text-slate-400">@(isFa ? "سکرت:" : "Secret:") <code class="text-slate-300">@repo.WebhookSecret</code></div>
+                                <form asp-controller="Git" asp-action="RotateSecret" asp-route-id="@repo.Id" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <button class="text-xs text-amber-400">@(isFa ? "چرخش سکرت" : "rotate")</button>
+                                </form>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </section>
+</div>
+
+<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-sm text-slate-400">
+    @(isFa
+        ? "راهنما: در تنظیمات وبهوک provider، Content-Type را application/json و Secret را همان مقدار بالا قرار دهید. GitHub/Gitea با امضای HMAC و GitLab با هدر توکن تأیید می‌شوند."
+        : "Tip: in the provider's webhook settings use Content-Type application/json and the secret above. GitHub/Gitea verify via HMAC signature; GitLab via the token header.")
+</div>
+
+@section Scripts {
+<script>
+    document.querySelectorAll('[data-provider-form]').forEach(function (form) {
+        var sel = form.querySelector('[data-provider-type]');
+        var api = form.querySelector('[data-api-base]');
+        function sync(){ api.style.display = (sel.value==='Gitea'||sel.value==='Custom'||sel.value==='GitLab') ? '' : 'none'; }
+        sel.addEventListener('change', sync); sync();
+    });
+</script>
+}

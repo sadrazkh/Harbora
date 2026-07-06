@@ -2,7 +2,7 @@
 
 A self-hosted deployment platform — deploy and manage all your apps from a single, bilingual (فارسی/English, RTL/LTR) web UI. Think CapRover/Coolify in spirit, but with its own identity, a clean modular architecture, and a strong focus on UX and simplicity.
 
-> **Status:** Phases 1–5. Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback), **managed services** (Postgres / MySQL / MariaDB / Redis / MongoDB — provision, encrypted credentials, safe connection info, attach-to-app), **backups** (config + volume/database via one-off tar containers, local + S3-compatible destinations, scheduled runs, retention, download, and restore with a typed confirm), and **monitoring + alerts** (host/container metrics time series, live CPU chart, per-app health, disk/backup/crash warnings, and notifications over email / Telegram / Discord / custom webhook). Multi-server and Git-provider OAuth land next.
+> **Status:** Phases 1–6. Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback), **managed services** (Postgres / MySQL / MariaDB / Redis / MongoDB — provision, encrypted credentials, safe connection info, attach-to-app), **backups** (config + volume/database via one-off tar containers, local + S3-compatible destinations, scheduled runs, retention, download, and restore with a typed confirm), **monitoring + alerts** (host/container metrics time series, live CPU chart, per-app health, disk/backup/crash warnings, and notifications over email / Telegram / Discord / custom webhook), and **Git integration** (connect GitHub/GitLab/Gitea by token, import repos, and deploy-on-push/tag via HMAC-verified webhooks). Multi-server lands next.
 
 ---
 
@@ -95,6 +95,7 @@ First-run setup, PBKDF2 password hashing (210k iterations), RBAC roles, API/CLI 
 
 - **Single server** only (the remote-agent transport is designed but not wired).
 - Monitoring metrics need Docker; CPU% is an aggregate of per-container stats (host-level CPU sampling is a later refinement). SSL-expiry alerts are wired to the alert model but populated once certificate metadata sync lands.
+- Git providers connect via personal access token; full OAuth authorization-code flow is a later refinement. Webhook auto-deploy (push/tag) is complete with HMAC/token verification.
 - Route basic-auth: the toggle persists, but htpasswd credential injection at apply-time is the next refinement.
 - Health checks are container-liveness based (HTTP health probing is the next refinement).
 - Backups run on the server (they need Docker for volume tar/untar); config/platform backups are pure JSON and work anywhere.

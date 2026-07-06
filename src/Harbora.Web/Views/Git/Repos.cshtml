@@ -1,0 +1,40 @@
+@model RemoteReposViewModel
+@{
+    ViewData["Title"] = Model.Provider.Name;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<div class="mb-6">
+    <a href="/git" class="text-brand-400 text-sm">← @(isFa ? "اتصال Git" : "Git Providers")</a>
+    <h1 class="text-2xl font-bold">@Model.Provider.Name <span class="text-sm text-slate-500">· @Model.Provider.Type</span></h1>
+</div>
+
+@if (Model.Error is not null)
+{
+    <div class="rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-3 text-sm">@Model.Error</div>
+}
+else if (Model.Repositories.Count == 0)
+{
+    <div class="rounded-xl border border-dashed border-slate-700 p-10 text-center text-slate-400">@(isFa ? "مخزنی یافت نشد." : "No repositories found.")</div>
+}
+else
+{
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 divide-y divide-slate-800">
+        @foreach (var r in Model.Repositories)
+        {
+            <div class="flex items-center justify-between p-3">
+                <div class="min-w-0">
+                    <div class="font-mono text-sm truncate">@r.FullName @if (r.Private){<span class="text-xs text-amber-400">🔒</span>}</div>
+                    <div class="text-xs text-slate-500">@r.DefaultBranch</div>
+                </div>
+                <form asp-controller="Git" asp-action="ImportRepo" method="post">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="providerId" value="@Model.Provider.Id" />
+                    <input type="hidden" name="fullName" value="@r.FullName" />
+                    <input type="hidden" name="cloneUrl" value="@r.CloneUrl" />
+                    <input type="hidden" name="defaultBranch" value="@r.DefaultBranch" />
+                    <button class="text-sm rounded-lg bg-brand-600 hover:bg-brand-500 px-3 py-1.5 font-semibold">@(isFa ? "افزودن" : "Add")</button>
+                </form>
+            </div>
+        }
+    </div>
+}
