@@ -1,0 +1,27 @@
+# Run this on a REMOTE node to join it to a Harbora panel as an extra server.
+#   HARBORA_AGENT_TOKEN=$(openssl rand -hex 24) docker compose -f agent.compose.yml up -d
+# Then in the panel: Servers → Add a server → http://<node-ip>:9700 + the same token.
+services:
+  agent:
+    image: harbora/agent:latest
+    container_name: harbora-agent
+    restart: unless-stopped
+    environment:
+      Agent__Token: ${HARBORA_AGENT_TOKEN}
+    ports:
+      - "9700:9700"
+    volumes:
+      # The agent drives the local Docker daemon on this node.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - harbora_builds:/var/lib/harbora/builds
+      - harbora_backups:/var/lib/harbora/backups
+    networks:
+      - harbora
+
+networks:
+  harbora:
+    name: harbora
+
+volumes:
+  harbora_builds:
+  harbora_backups:

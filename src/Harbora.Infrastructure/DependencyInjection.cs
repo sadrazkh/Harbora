@@ -31,6 +31,8 @@ public static class DependencyInjection
             return new DockerClientConfiguration(new Uri(host)).CreateClient();
         });
         services.AddScoped<IDockerEngine, DockerEngine>();
+        // Per-server engine resolution (local in-process vs remote agent) for multi-server.
+        services.AddScoped<IServerEngineFactory, Docker.ServerEngineFactory>();
 
         // Source + proxy engines
         services.AddSingleton<IGitService, LibGit2GitService>();

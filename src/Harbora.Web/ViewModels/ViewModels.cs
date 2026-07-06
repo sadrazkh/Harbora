@@ -39,6 +39,8 @@ public sealed class CreateAppViewModel
     public int ContainerPort { get; set; } = 80;
     public string? Domain { get; set; }
     public Guid? TemplateId { get; set; }
+    /// <summary>Target node; defaults to the local server when unset.</summary>
+    public Guid? ServerId { get; set; }
 }
 
 public sealed class CreateServiceViewModel

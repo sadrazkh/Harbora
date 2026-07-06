@@ -26,6 +26,14 @@
                     asp-items="Html.GetEnumSelectList<AppSourceType>()"></select>
         </div>
 
+        @if (ViewBag.Servers is List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> servers && servers.Count > 1)
+        {
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "سرور" : "Server")</label>
+                <select asp-for="ServerId" asp-items="servers" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2"></select>
+            </div>
+        }
+
         <div data-when="GitRepository,Dockerfile" class="space-y-4">
             <div>
                 <label class="block text-sm text-slate-400 mb-1">Git Clone URL</label>

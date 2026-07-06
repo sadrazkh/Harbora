@@ -17,7 +17,7 @@ namespace Harbora.Infrastructure.Deployments;
 /// </summary>
 public sealed class DeploymentPipeline(
     HarboraDbContext db,
-    IDockerEngine docker,
+    IServerEngineFactory engineFactory,
     IGitService git,
     IProxyEngine proxy,
     IDeploymentLogStream stream,
@@ -42,6 +42,9 @@ public sealed class DeploymentPipeline(
             .Include(a => a.Domains)
             .Include(a => a.GitRepository)!.ThenInclude(r => r!.Provider)
             .FirstAsync(a => a.Id == deployment.AppId, ct);
+
+        // Resolve the container engine for this app's server (local or remote agent).
+        var docker = await engineFactory.ResolveAsync(app.ServerId, ct);
 
         var secrets = app.EnvironmentVariables.Where(e => e.IsSecret)
             .Select(e => SafeUnprotect(e.Value)).Where(v => v.Length > 0).ToList();
@@ -74,7 +77,7 @@ public sealed class DeploymentPipeline(
             var imageTag = $"{_opt.ImagePrefix}/{app.Slug}:build-{deployment.Number}";
             var buildLog = new Progress<string>(l => _ = Log(LogStream.Build, l));
 
-            imageTag = await AcquireImageAsync(app, deployment, imageTag, buildLog, Log, ct);
+            imageTag = await AcquireImageAsync(docker, app, deployment, imageTag, buildLog, Log, ct);
             deployment.ImageTag = imageTag;
 
             await SetStatus(DeploymentStatus.Deploying);
@@ -83,7 +86,7 @@ public sealed class DeploymentPipeline(
                 await docker.EnsureVolumeAsync(v.Name, ct);
 
             var containerName = $"harbora-{app.Slug}";
-            await RemoveExistingContainerAsync(containerName, Log, ct);
+            await RemoveExistingContainerAsync(docker, containerName, Log, ct);
 
             var env = BuildEnv(app);
             var labels = new Dictionary<string, string>
@@ -100,7 +103,7 @@ public sealed class DeploymentPipeline(
                 app.ContainerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath), ct);
 
             await Log(LogStream.System, $"Container {containerId[..12]} is up. Verifying health …");
-            var healthy = await WaitForHealthyAsync(containerName, ct);
+            var healthy = await WaitForHealthyAsync(docker, containerName, ct);
             if (!healthy)
                 throw new InvalidOperationException("Container failed its health check.");
 
@@ -130,7 +133,7 @@ public sealed class DeploymentPipeline(
     }
 
     private async Task<string> AcquireImageAsync(
-        App app, Deployment deployment, string imageTag,
+        IDockerEngine docker, App app, Deployment deployment, string imageTag,
         IProgress<string> buildLog, Func<LogStream, string, Task> log, CancellationToken ct)
     {
         switch (app.SourceType)
@@ -184,7 +187,7 @@ public sealed class DeploymentPipeline(
             e => e.Key,
             e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
-    private async Task RemoveExistingContainerAsync(string containerName, Func<LogStream, string, Task> log, CancellationToken ct)
+    private async Task RemoveExistingContainerAsync(IDockerEngine docker, string containerName, Func<LogStream, string, Task> log, CancellationToken ct)
     {
         var existing = await docker.ListContainersAsync($"harbora.app", ct);
         var match = existing.FirstOrDefault(c => c.Name == containerName);
@@ -193,7 +196,7 @@ public sealed class DeploymentPipeline(
         await docker.RemoveContainerAsync(match.Id, force: true, ct);
     }
 
-    private async Task<bool> WaitForHealthyAsync(string containerName, CancellationToken ct)
+    private async Task<bool> WaitForHealthyAsync(IDockerEngine docker, string containerName, CancellationToken ct)
     {
         // MVP health check: confirm the container is still running after a short settle period.
         for (var i = 0; i < 6; i++)

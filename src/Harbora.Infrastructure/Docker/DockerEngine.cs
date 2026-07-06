@@ -1,4 +1,3 @@
-using System.Formats.Tar;
 using Docker.DotNet;
 using Docker.DotNet.Models;
 using Harbora.Application.Abstractions;
@@ -15,12 +14,23 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
 {
     public async Task<string> BuildImageAsync(DockerBuildRequest request, IProgress<string> log, CancellationToken ct)
     {
-        await using var tarball = CreateTarball(request.ContextPath);
+        await using var tarball = DockerTar.Create(request.ContextPath);
+        return await BuildImageFromTarAsync(tarball, request.Dockerfile, request.ImageTag, request.BuildArgs, log, ct);
+    }
+
+    /// <summary>
+    /// Build from an already-packed context tar. Used by the agent, which receives the tar over
+    /// HTTP rather than a local path.
+    /// </summary>
+    public async Task<string> BuildImageFromTarAsync(
+        Stream tarContext, string dockerfile, string imageTag,
+        IReadOnlyDictionary<string, string> buildArgs, IProgress<string> log, CancellationToken ct)
+    {
         var parameters = new ImageBuildParameters
         {
-            Dockerfile = request.Dockerfile,
-            Tags = [request.ImageTag],
-            BuildArgs = request.BuildArgs.ToDictionary(kv => kv.Key, kv => kv.Value),
+            Dockerfile = dockerfile,
+            Tags = [imageTag],
+            BuildArgs = buildArgs.ToDictionary(kv => kv.Key, kv => kv.Value),
             Remove = true,
             ForceRemove = true
         };
@@ -32,9 +42,9 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         });
 
         await client.Images.BuildImageFromDockerfileAsync(
-            parameters, tarball, authConfigs: null, headers: null, progress, ct);
+            parameters, tarContext, authConfigs: null, headers: null, progress, ct);
 
-        return request.ImageTag;
+        return imageTag;
     }
 
     public async Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct)
@@ -213,25 +223,6 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
     }
 
     // --- helpers ---
-
-    private static Stream CreateTarball(string sourceDir)
-    {
-        var ms = new MemoryStream();
-        using (var writer = new TarWriter(ms, TarEntryFormat.Pax, leaveOpen: true))
-        {
-            var root = Path.GetFullPath(sourceDir);
-            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
-            {
-                var rel = Path.GetRelativePath(root, file).Replace('\\', '/');
-                // Skip common heavy/irrelevant dirs to keep the build context lean.
-                if (rel.StartsWith(".git/") || rel.Contains("/node_modules/") || rel.StartsWith("node_modules/"))
-                    continue;
-                writer.WriteEntry(file, rel);
-            }
-        }
-        ms.Position = 0;
-        return ms;
-    }
 
     private static (string Repo, string Tag) SplitImage(string image)
     {

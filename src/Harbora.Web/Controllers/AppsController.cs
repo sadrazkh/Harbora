@@ -56,7 +56,9 @@ public sealed class AppsController(
             return View(model);
         }
 
-        var serverId = await db.Servers.Where(s => s.IsLocal).Select(s => s.Id).FirstAsync(ct);
+        var serverId = model.ServerId is { } sid && await db.Servers.AnyAsync(s => s.Id == sid, ct)
+            ? sid
+            : await db.Servers.Where(s => s.IsLocal).Select(s => s.Id).FirstAsync(ct);
         var app = new App
         {
             WorkspaceId = WorkspaceId,
@@ -146,6 +148,9 @@ public sealed class AppsController(
         var templates = await db.AppTemplates.Where(t => t.IsEnabled)
             .OrderBy(t => t.Category).ThenBy(t => t.Name).ToListAsync(ct);
         ViewBag.Templates = templates.Select(t => new SelectListItem($"{t.Name}", t.Id.ToString())).ToList();
+
+        ViewBag.Servers = await db.Servers.OrderByDescending(s => s.IsLocal).ThenBy(s => s.Name)
+            .Select(s => new SelectListItem(s.IsLocal ? s.Name + " (local)" : s.Name, s.Id.ToString())).ToListAsync(ct);
     }
 
     private static string DeriveRepoName(string cloneUrl)

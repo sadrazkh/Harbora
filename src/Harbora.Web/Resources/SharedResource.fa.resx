@@ -108,4 +108,5 @@
   <data name="Retention"><value>نگه‌داری</value></data>
   <data name="Actions"><value>عملیات</value></data>
   <data name="Git"><value>گیت</value></data>
+  <data name="Servers"><value>سرورها</value></data>
 </root>

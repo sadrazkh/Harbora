@@ -16,7 +16,7 @@ namespace Harbora.Infrastructure.Services;
 /// </summary>
 public sealed class ManagedServiceEngine(
     HarboraDbContext db,
-    IDockerEngine docker,
+    IServerEngineFactory engineFactory,
     ISecretProtector protector,
     IBackgroundJobQueue queue,
     ISystemClock clock,
@@ -40,6 +40,7 @@ public sealed class ManagedServiceEngine(
         var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == serviceId, ct);
         if (svc is null) return;
         var def = ServiceCatalog.All[svc.Type];
+        var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
 
         try
         {
@@ -52,7 +53,7 @@ public sealed class ManagedServiceEngine(
             await docker.EnsureNetworkAsync(_opt.Network, ct);
             await docker.EnsureVolumeAsync(svc.VolumeName, ct);
             await docker.PullImageAsync(image, new Progress<string>(l => logger.LogDebug("{Svc}: {Line}", svc.Name, l)), ct);
-            await RemoveContainerByNameAsync(svc.ContainerName, ct);
+            await RemoveContainerByNameAsync(docker, svc.ContainerName, ct);
 
             await docker.RunContainerAsync(new DockerRunRequest(
                 image, svc.ContainerName, _opt.Network,
@@ -76,7 +77,8 @@ public sealed class ManagedServiceEngine(
     public async Task StartAsync(Guid serviceId, CancellationToken ct)
     {
         var svc = await db.ManagedServices.FirstAsync(s => s.Id == serviceId, ct);
-        var id = await FindContainerIdAsync(svc.ContainerName, ct);
+        var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
+        var id = await FindContainerIdAsync(docker, svc.ContainerName, ct);
         if (id is not null) await docker.RestartContainerAsync(id, ct); // restart starts a stopped container
         svc.Status = ServiceStatus.Running;
         await db.SaveChangesAsync(ct);
@@ -85,7 +87,8 @@ public sealed class ManagedServiceEngine(
     public async Task StopAsync(Guid serviceId, CancellationToken ct)
     {
         var svc = await db.ManagedServices.FirstAsync(s => s.Id == serviceId, ct);
-        var id = await FindContainerIdAsync(svc.ContainerName, ct);
+        var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
+        var id = await FindContainerIdAsync(docker, svc.ContainerName, ct);
         if (id is not null) await docker.StopContainerAsync(id, ct);
         svc.Status = ServiceStatus.Stopped;
         await db.SaveChangesAsync(ct);
@@ -95,7 +98,8 @@ public sealed class ManagedServiceEngine(
     {
         var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == serviceId, ct);
         if (svc is null) return;
-        var id = await FindContainerIdAsync(svc.ContainerName, ct);
+        var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
+        var id = await FindContainerIdAsync(docker, svc.ContainerName, ct);
         if (id is not null) await docker.RemoveContainerAsync(id, force: true, ct);
         // With the backup engine in place, honouring deleteData is now safe: the UI warns and
         // users can back up first. Default keeps the volume.
@@ -123,15 +127,15 @@ public sealed class ManagedServiceEngine(
     private ServiceCreds CredsFor(ManagedService svc) =>
         new(svc.ContainerName, ServiceCatalog.All[svc.Type].Port, svc.Username, SafeUnprotect(svc.EncryptedPassword), svc.DatabaseName);
 
-    private async Task<string?> FindContainerIdAsync(string name, CancellationToken ct)
+    private static async Task<string?> FindContainerIdAsync(IDockerEngine docker, string name, CancellationToken ct)
     {
         var containers = await docker.ListContainersAsync("harbora.service", ct);
         return containers.FirstOrDefault(c => c.Name == name)?.Id;
     }
 
-    private async Task RemoveContainerByNameAsync(string name, CancellationToken ct)
+    private static async Task RemoveContainerByNameAsync(IDockerEngine docker, string name, CancellationToken ct)
     {
-        var id = await FindContainerIdAsync(name, ct);
+        var id = await FindContainerIdAsync(docker, name, ct);
         if (id is not null) await docker.RemoveContainerAsync(id, force: true, ct);
     }
 

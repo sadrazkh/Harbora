@@ -1,0 +1,70 @@
+@model List<Harbora.Domain.Servers.Server>
+@{
+    ViewData["Title"] = "Servers";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
+    string Gb(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
+    string StatusClass(Harbora.Domain.Common.ServerStatus s) => s switch
+    {
+        Harbora.Domain.Common.ServerStatus.Online => "bg-emerald-500/15 text-emerald-400",
+        Harbora.Domain.Common.ServerStatus.Offline => "bg-red-500/15 text-red-400",
+        Harbora.Domain.Common.ServerStatus.Degraded => "bg-amber-500/15 text-amber-300",
+        _ => "bg-slate-500/15 text-slate-300"
+    };
+}
+<h1 class="text-2xl font-bold mb-6">@(isFa ? "سرورها" : "Servers")</h1>
+
+@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
+
+<div class="grid lg:grid-cols-3 gap-6">
+    <section class="lg:col-span-2 space-y-4">
+        @foreach (var s in Model)
+        {
+            <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="font-semibold text-lg flex items-center gap-2">
+                            @s.Name
+                            @if (s.IsLocal){<span class="text-xs rounded bg-slate-800 px-2 py-0.5 text-slate-300">local</span>}
+                        </div>
+                        <div class="text-sm text-slate-400">@s.Hostname @(s.DockerVersion is not null ? "· Docker " + s.DockerVersion : "")</div>
+                    </div>
+                    <span class="rounded-full px-2.5 py-0.5 text-xs font-medium @StatusClass(s.Status)">@s.Status</span>
+                </div>
+                <div class="mt-3 grid grid-cols-3 gap-3 text-sm">
+                    <div><div class="text-slate-500 text-xs">CPU</div>@(s.CpuCores > 0 ? s.CpuCores + " cores" : "—")</div>
+                    <div><div class="text-slate-500 text-xs">Memory</div>@Gb(s.TotalMemoryBytes)</div>
+                    <div><div class="text-slate-500 text-xs">Disk</div>@Gb(s.TotalDiskBytes)</div>
+                </div>
+                <div class="mt-3 flex items-center gap-2">
+                    <a href="/servers/@s.Id/test" class="text-xs rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5">@(isFa ? "تست اتصال" : "Test")</a>
+                    @if (!s.IsLocal)
+                    {
+                        <form asp-controller="Servers" asp-action="Remove" asp-route-id="@s.Id" method="post" onsubmit="return confirm('@(isFa ? "حذف سرور؟" : "Remove server?")')">
+                            @Html.AntiForgeryToken()
+                            <button class="text-xs rounded-lg bg-red-900/40 hover:bg-red-900/60 text-red-300 px-3 py-1.5">@(isFa ? "حذف" : "Remove")</button>
+                        </form>
+                    }
+                    @if (s.LastHeartbeatAt is not null){<span class="text-xs text-slate-500">@(isFa ? "آخرین ضربان:" : "last seen") @s.LastHeartbeatAt.Value.LocalDateTime.ToString("MM/dd HH:mm")</span>}
+                </div>
+            </div>
+        }
+    </section>
+
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 h-fit">
+        <h2 class="font-semibold mb-3">@(isFa ? "افزودن سرور" : "Add a server")</h2>
+        <form asp-controller="Servers" asp-action="Add" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <input name="name" placeholder="Name (e.g. node-2)" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <input name="agentEndpoint" placeholder="http://node-2:9700" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <input name="token" type="password" placeholder="Agent token" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <button class="w-full rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@(isFa ? "افزودن و تست" : "Add & test")</button>
+        </form>
+        <p class="mt-3 text-xs text-slate-500">
+            @(isFa
+                ? "روی نود مقصد، Harbora Agent را با همین توکن اجرا کنید (پورت پیش‌فرض ۹۷۰۰)."
+                : "Run the Harbora Agent on the target node with this token (default port 9700).")
+        </p>
+    </section>
+</div>

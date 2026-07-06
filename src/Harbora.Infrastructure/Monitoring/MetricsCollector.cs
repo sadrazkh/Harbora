@@ -13,7 +13,7 @@ namespace Harbora.Infrastructure.Monitoring;
 /// </summary>
 public sealed class MetricsCollector(
     HarboraDbContext db,
-    IDockerEngine docker,
+    IServerEngineFactory engineFactory,
     INotificationService notifications,
     ISystemClock clock,
     ILogger<MetricsCollector> logger) : IMetricsCollector
@@ -24,10 +24,23 @@ public sealed class MetricsCollector(
 
     public async Task CollectAsync(CancellationToken ct)
     {
-        var server = await db.Servers.FirstOrDefaultAsync(s => s.IsLocal, ct);
-        if (server is null) return;
-
         var now = clock.UtcNow;
+        var servers = await db.Servers.ToListAsync(ct);
+
+        // Sample every registered node through its own engine (local in-process or remote agent).
+        foreach (var server in servers)
+        {
+            var docker = await engineFactory.ResolveAsync(server.Id, ct);
+            await CollectServerAsync(server, docker, now, ct);
+        }
+
+        var cutoff = now - Retention;
+        await db.MonitoringMetrics.Where(m => m.Timestamp < cutoff).ExecuteDeleteAsync(ct);
+        await db.SaveChangesAsync(ct);
+    }
+
+    private async Task CollectServerAsync(Domain.Servers.Server server, IDockerEngine docker, DateTimeOffset now, CancellationToken ct)
+    {
         var samples = new List<MonitoringMetric>();
 
         // --- host ---
@@ -82,13 +95,10 @@ public sealed class MetricsCollector(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Container metrics unavailable.");
+            logger.LogWarning(ex, "Container metrics unavailable for {Server}.", server.Name);
         }
 
         db.MonitoringMetrics.AddRange(samples);
-        var cutoff = now - Retention;
-        await db.MonitoringMetrics.Where(m => m.Timestamp < cutoff).ExecuteDeleteAsync(ct);
-        await db.SaveChangesAsync(ct);
     }
 
     private async Task DetectCrashAsync(IReadOnlyDictionary<string, string> labels, DateTimeOffset now, CancellationToken ct)

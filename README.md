@@ -2,7 +2,7 @@
 
 A self-hosted deployment platform — deploy and manage all your apps from a single, bilingual (فارسی/English, RTL/LTR) web UI. Think CapRover/Coolify in spirit, but with its own identity, a clean modular architecture, and a strong focus on UX and simplicity.
 
-> **Status:** Phases 1–6. Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback), **managed services** (Postgres / MySQL / MariaDB / Redis / MongoDB — provision, encrypted credentials, safe connection info, attach-to-app), **backups** (config + volume/database via one-off tar containers, local + S3-compatible destinations, scheduled runs, retention, download, and restore with a typed confirm), **monitoring + alerts** (host/container metrics time series, live CPU chart, per-app health, disk/backup/crash warnings, and notifications over email / Telegram / Discord / custom webhook), and **Git integration** (connect GitHub/GitLab/Gitea by token, import repos, and deploy-on-push/tag via HMAC-verified webhooks). Multi-server lands next.
+> **Status:** Phases 1–6. Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback), **managed services** (Postgres / MySQL / MariaDB / Redis / MongoDB — provision, encrypted credentials, safe connection info, attach-to-app), **backups** (config + volume/database via one-off tar containers, local + S3-compatible destinations, scheduled runs, retention, download, and restore with a typed confirm), **monitoring + alerts** (host/container metrics time series, live CPU chart, per-app health, disk/backup/crash warnings, and notifications over email / Telegram / Discord / custom webhook), **Git integration** (connect GitHub/GitLab/Gitea by token, import repos, and deploy-on-push/tag via HMAC-verified webhooks), and **multi-server** (a token-authed Harbora Agent runs each remote node; the panel picks the right engine per server, so deploys, managed services and metrics all work across nodes). The whole platform is feature-complete against the original spec.
 
 ---
 
@@ -91,9 +91,10 @@ Drop an `examples/harbora.yml` (`app: my-app`) in your repo so `harbora deploy` 
 
 First-run setup, PBKDF2 password hashing (210k iterations), RBAC roles, API/CLI tokens (only SHA-256 hashes stored), AES-GCM secret encryption at rest, CSRF on all MVC forms, secure cookies, webhook HMAC secrets per repo, secret redaction in logs, and an audit-log table. Docker access is fully typed — no shell command strings.
 
-## Known limitations (Phases 1–4)
+## Known limitations
 
-- **Single server** only (the remote-agent transport is designed but not wired).
+- Multi-server uses per-node bridge networks (no overlay yet), so an app and the managed services it attaches to should live on the same node. Cross-node backups run against the target node's staging volume.
+- Remote agent auth is a bearer token; mTLS is the planned hardening.
 - Monitoring metrics need Docker; CPU% is an aggregate of per-container stats (host-level CPU sampling is a later refinement). SSL-expiry alerts are wired to the alert model but populated once certificate metadata sync lands.
 - Git providers connect via personal access token; full OAuth authorization-code flow is a later refinement. Webhook auto-deploy (push/tag) is complete with HMAC/token verification.
 - Route basic-auth: the toggle persists, but htpasswd credential injection at apply-time is the next refinement.

@@ -1,0 +1,13 @@
+# Harbora Agent — runs on each remote node and executes container operations for the panel.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY Harbora.slnx ./
+COPY src/ ./src/
+RUN dotnet publish src/Harbora.Agent/Harbora.Agent.csproj -c Release -o /app
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+WORKDIR /app
+COPY --from=build /app ./
+ENV ASPNETCORE_URLS=http://+:9700
+EXPOSE 9700
+ENTRYPOINT ["dotnet", "Harbora.Agent.dll"]
