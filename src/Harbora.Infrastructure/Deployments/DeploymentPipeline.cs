@@ -23,6 +23,7 @@ public sealed class DeploymentPipeline(
     IDeploymentLogStream stream,
     ISecretProtector protector,
     ISecretRedactor redactor,
+    INotificationService notifications,
     ISystemClock clock,
     IOptions<HarboraRuntimeOptions> options,
     ILogger<DeploymentPipeline> logger)
@@ -123,6 +124,8 @@ public sealed class DeploymentPipeline(
             await db.SaveChangesAsync(ct);
             await stream.PublishStatusAsync(deploymentId, DeploymentStatus.Failed, ct);
             await Log(LogStream.System, $"❌ Deployment failed: {redactor.Redact(ex.Message, secrets)}");
+            await notifications.NotifyAsync(app.WorkspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical,
+                $"Deploy failed: {app.Name} #{deployment.Number}", redactor.Redact(ex.Message, secrets), ct);
         }
     }
 

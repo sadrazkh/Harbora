@@ -2,6 +2,7 @@ import './app.css';
 import { createApp } from 'vue';
 import DeploymentLogs from './islands/DeploymentLogs.vue';
 import RouteDesigner from './islands/RouteDesigner.vue';
+import MetricsChart from './islands/MetricsChart.vue';
 
 // "Islands" pattern: Razor renders the page; we hydrate only the interactive nodes.
 // Each island is a mount point identified by id/selector — like initialising a jQuery plugin,
@@ -23,6 +24,14 @@ const islands: Record<string, IslandMounter> = {
       targets: JSON.parse(el.dataset.targets || '[]'),
       csrf: el.dataset.csrf || '',
       lang: el.dataset.lang || 'en',
+    }).mount(el);
+  },
+  'metrics-chart': (el) => {
+    createApp(MetricsChart, {
+      name: el.dataset.name!,
+      label: el.dataset.label || '',
+      color: el.dataset.color || '#818cf8',
+      resource: el.dataset.resource,
     }).mount(el);
   },
 };

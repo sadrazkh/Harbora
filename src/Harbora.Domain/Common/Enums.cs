@@ -157,6 +157,17 @@ public enum AlertSeverity
     Critical = 2
 }
 
+/// <summary>The trigger that fired a notification; matched against an Alert's opt-in flags.</summary>
+public enum AlertEvent
+{
+    DeployFailed = 0,
+    AppCrashed = 1,
+    SslExpiring = 2,
+    DiskWarning = 3,
+    BackupFailed = 4,
+    Test = 5
+}
+
 public enum ServerStatus
 {
     Unknown = 0,

@@ -42,5 +42,12 @@ public interface IBackupEngine
 /// <summary>Fan-out for alerts across configured channels (email/Telegram/Discord/webhook).</summary>
 public interface INotificationService
 {
-    Task NotifyAsync(Guid workspaceId, Domain.Common.AlertSeverity severity, string title, string body, CancellationToken ct);
+    /// <summary>
+    /// Deliver a notification to every enabled alert in the workspace that opted into this event
+    /// and whose minimum severity is satisfied. Best-effort — channel failures are logged, not thrown.
+    /// </summary>
+    Task NotifyAsync(Guid workspaceId, Domain.Common.AlertEvent evt, Domain.Common.AlertSeverity severity, string title, string body, CancellationToken ct);
+
+    /// <summary>Send a one-off test message to a single alert (for the "test" button).</summary>
+    Task SendTestAsync(Guid alertId, CancellationToken ct);
 }

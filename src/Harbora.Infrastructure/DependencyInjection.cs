@@ -66,6 +66,12 @@ public static class DependencyInjection
         services.AddScoped<IBackupEngine>(sp => sp.GetRequiredService<Backups.BackupEngine>());
         services.AddHostedService<Backups.BackupScheduler>();
 
+        // Monitoring + notifications.
+        services.AddHttpClient();
+        services.AddScoped<INotificationService, Notifications.NotificationService>();
+        services.AddScoped<IMetricsCollector, Monitoring.MetricsCollector>();
+        services.AddHostedService<Monitoring.MetricsCollectorHostedService>();
+
         return services;
     }
 

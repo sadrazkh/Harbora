@@ -23,6 +23,7 @@ public sealed class BackupEngine(
     IDockerEngine docker,
     IBackupStorage storage,
     IBackgroundJobQueue queue,
+    INotificationService notifications,
     ISystemClock clock,
     IOptions<BackupOptions> options,
     ILogger<BackupEngine> logger) : IBackupEngine
@@ -87,6 +88,8 @@ public sealed class BackupEngine(
             backup.ErrorMessage = ex.Message;
             backup.FinishedAt = clock.UtcNow;
             await db.SaveChangesAsync(ct);
+            await notifications.NotifyAsync(backup.WorkspaceId, AlertEvent.BackupFailed, AlertSeverity.Warning,
+                $"Backup failed: {backup.Type}", ex.Message, ct);
         }
     }
 

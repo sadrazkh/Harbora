@@ -1,30 +1,168 @@
-@model List<Harbora.Application.Abstractions.ContainerInfo>
-@{ ViewData["Title"] = "Monitoring"; }
+@model MonitoringDashboardViewModel
+@{
+    ViewData["Title"] = "Monitoring";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    string Gb(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
+    string HealthClass(string s) => s.ToLower() switch
+    {
+        "running" => "bg-emerald-500/15 text-emerald-400",
+        "exited" or "crashed" or "failed" => "bg-red-500/15 text-red-400",
+        _ => "bg-slate-500/15 text-slate-300"
+    };
+}
 <h1 class="text-2xl font-bold mb-6">@T["Monitoring"]</h1>
-<div class="rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
-    <table class="w-full text-sm">
-        <thead class="text-slate-400 border-b border-slate-800">
-            <tr class="text-start">
-                <th class="p-3 text-start">Container</th>
-                <th class="p-3 text-start">Image</th>
-                <th class="p-3 text-start">@T["Status"]</th>
-            </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-800">
-            @if (Model.Count == 0)
-            {
-                <tr><td colspan="3" class="p-4 text-slate-400">—</td></tr>
-            }
-            @foreach (var c in Model)
-            {
-                <tr>
-                    <td class="p-3 font-mono">@c.Name</td>
-                    <td class="p-3 text-slate-400">@c.Image</td>
-                    <td class="p-3">
-                        <span class="rounded-full px-2 py-0.5 text-xs @(c.State == "running" ? "bg-emerald-500/15 text-emerald-400" : "bg-slate-500/15 text-slate-300")">@c.Status</span>
-                    </td>
-                </tr>
-            }
-        </tbody>
-    </table>
+
+@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
+@if (!Model.DockerAvailable)
+{
+    <div class="mb-4 rounded-lg bg-amber-900/20 border border-amber-700 text-amber-200 px-4 py-2 text-sm">Docker daemon unreachable — live metrics paused.</div>
+}
+@if (Model.DiskWarning)
+{
+    <div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">⚠ @(isFa ? "فضای دیسک رو به اتمام است" : "Disk space is running low") — @Gb(Model.DiskUsed) / @Gb(Model.DiskTotal)</div>
+}
+@if (Model.BackupWarning)
+{
+    <div class="mb-4 rounded-lg bg-amber-900/20 border border-amber-700 text-amber-200 px-4 py-2 text-sm">⚠ @Model.BackupWarningText</div>
+}
+
+<!-- Stat cards -->
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><div class="text-slate-400 text-sm">@T["CPU"]</div><div class="mt-1 text-2xl font-bold">@Model.CpuPercent.ToString("0.0")%</div></div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><div class="text-slate-400 text-sm">@T["Disk"]</div><div class="mt-1 text-2xl font-bold">@Gb(Model.DiskUsed) / @Gb(Model.DiskTotal)</div></div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><div class="text-slate-400 text-sm">@T["Memory"]</div><div class="mt-1 text-2xl font-bold">@Gb(Model.MemTotal)</div></div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><div class="text-slate-400 text-sm">Containers</div><div class="mt-1 text-2xl font-bold">@Model.ContainersRunning</div></div>
 </div>
+
+<!-- CPU chart (Vue island) -->
+<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4 mb-6">
+    <div class="text-sm text-slate-400 mb-2">CPU % (@(isFa ? "۶۰ دقیقه اخیر" : "last 60 min"))</div>
+    <div id="metrics-chart" data-name="cpu.percent" data-label="CPU %" data-color="#818cf8" style="min-height:120px"></div>
+</div>
+
+<div class="grid lg:grid-cols-2 gap-6">
+    <!-- App health -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60">
+        <div class="px-4 py-3 border-b border-slate-800 font-semibold">@T["Applications"]</div>
+        <div class="divide-y divide-slate-800">
+            @if (Model.Apps.Count == 0){<div class="p-4 text-slate-400 text-sm">—</div>}
+            @foreach (var a in Model.Apps)
+            {
+                <div class="flex items-center justify-between p-3">
+                    <a href="/apps" class="text-sm font-medium">@a.Name</a>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-slate-500">@a.LastDeployStatus</span>
+                        <span class="rounded-full px-2 py-0.5 text-xs @HealthClass(a.ContainerState)">@a.ContainerState</span>
+                    </div>
+                </div>
+            }
+        </div>
+    </section>
+
+    <!-- Recent deploys -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60">
+        <div class="px-4 py-3 border-b border-slate-800 font-semibold flex items-center justify-between">
+            <span>@T["Recent Deployments"]</span>
+            @if (Model.FailedDeploys > 0){<span class="text-xs text-red-400">@Model.FailedDeploys @T["Failed"]</span>}
+        </div>
+        <div class="divide-y divide-slate-800">
+            @if (Model.RecentDeploys.Count == 0){<div class="p-4 text-slate-400 text-sm">—</div>}
+            @foreach (var d in Model.RecentDeploys)
+            {
+                <a href="/deployments/details/@d.Id" class="flex items-center justify-between p-3 hover:bg-slate-800/40">
+                    <span class="text-sm">@d.App?.Name #@d.Number</span>
+                    <partial name="_DeployStatusBadge" model="d.Status" />
+                </a>
+            }
+        </div>
+    </section>
+</div>
+
+<!-- SSL / domains -->
+<section class="rounded-xl border border-slate-800 bg-slate-900/60 mt-6">
+    <div class="px-4 py-3 border-b border-slate-800 font-semibold">SSL &amp; @T["Domains"]</div>
+    <div class="divide-y divide-slate-800">
+        @if (Model.Domains.Count == 0){<div class="p-4 text-slate-400 text-sm">—</div>}
+        @foreach (var d in Model.Domains)
+        {
+            <div class="flex items-center justify-between p-3 text-sm">
+                <span class="font-mono">@d.Host</span>
+                <span class="text-xs @(d.SslEnabled ? "text-emerald-400" : "text-slate-400")">@(d.SslEnabled ? "🔒 Let's Encrypt" : "no SSL")</span>
+            </div>
+        }
+    </div>
+</section>
+
+<!-- Alerts -->
+<section class="rounded-xl border border-slate-800 bg-slate-900/60 mt-6 p-5">
+    <h2 class="font-semibold mb-3">@(isFa ? "هشدارها و اعلان‌ها" : "Alerts & Notifications")</h2>
+    <div class="space-y-2 mb-4">
+        @if (Model.Alerts.Count == 0){<p class="text-slate-400 text-sm">—</p>}
+        @foreach (var a in Model.Alerts)
+        {
+            <div class="flex items-center justify-between rounded-lg bg-slate-800/50 px-3 py-2 text-sm">
+                <span>@a.Name <span class="text-slate-500">· @a.Channel · ≥@a.MinSeverity</span></span>
+                <div class="flex items-center gap-2">
+                    <form asp-controller="Alerts" asp-action="Test" asp-route-id="@a.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-brand-400">test</button></form>
+                    <form asp-controller="Alerts" asp-action="Delete" asp-route-id="@a.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                </div>
+            </div>
+        }
+    </div>
+
+    <details>
+        <summary class="cursor-pointer text-sm text-brand-400">+ @(isFa ? "افزودن هشدار" : "Add alert")</summary>
+        <form asp-controller="Alerts" asp-action="Create" method="post" class="mt-3 grid sm:grid-cols-2 gap-3" data-alert-form>
+            @Html.AntiForgeryToken()
+            <input name="name" placeholder="Name" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <select name="channel" data-alert-channel class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                <option value="Telegram">Telegram</option><option value="Discord">Discord</option>
+                <option value="Webhook">Custom webhook</option><option value="Email">Email</option>
+            </select>
+            <select name="minSeverity" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                <option value="Info">Info</option><option value="Warning" selected>Warning</option><option value="Critical">Critical</option>
+            </select>
+            <div></div>
+
+            <div data-ch="Telegram" class="grid grid-cols-2 gap-2 sm:col-span-2">
+                <input name="telegramToken" placeholder="Bot token" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                <input name="telegramChatId" placeholder="Chat id" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            </div>
+            <div data-ch="Discord Webhook" class="sm:col-span-2" style="display:none">
+                <input name="webhookUrl" placeholder="Webhook URL" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            </div>
+            <div data-ch="Email" class="grid grid-cols-2 gap-2 sm:col-span-2" style="display:none">
+                <input name="smtpHost" placeholder="SMTP host" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                <input name="smtpPort" type="number" value="587" placeholder="Port" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                <input name="smtpUser" placeholder="User" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                <input name="smtpPassword" type="password" placeholder="Password" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                <input name="emailFrom" placeholder="From" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                <input name="emailTo" placeholder="To" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            </div>
+
+            <div class="sm:col-span-2 flex flex-wrap gap-3 text-sm">
+                <label class="flex items-center gap-1"><input type="checkbox" name="onDeployFailed" value="true" checked> deploy failed</label>
+                <label class="flex items-center gap-1"><input type="checkbox" name="onAppCrashed" value="true" checked> app crashed</label>
+                <label class="flex items-center gap-1"><input type="checkbox" name="onSslExpiring" value="true"> SSL expiring</label>
+                <label class="flex items-center gap-1"><input type="checkbox" name="onDiskWarning" value="true" checked> disk warning</label>
+                <label class="flex items-center gap-1"><input type="checkbox" name="onBackupFailed" value="true" checked> backup failed</label>
+            </div>
+            <div><button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Save"]</button></div>
+        </form>
+    </details>
+</section>
+
+@section Scripts {
+<script>
+    document.querySelectorAll('[data-alert-form]').forEach(function (form) {
+        var sel = form.querySelector('[data-alert-channel]');
+        function sync() {
+            form.querySelectorAll('[data-ch]').forEach(function (el) {
+                el.style.display = el.getAttribute('data-ch').split(' ').indexOf(sel.value) > -1 ? '' : 'none';
+            });
+        }
+        sel.addEventListener('change', sync); sync();
+    });
+</script>
+}

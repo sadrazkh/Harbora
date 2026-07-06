@@ -24,25 +24,6 @@ public sealed class TemplatesController(HarboraDbContext db) : Controller
 }
 
 [Authorize]
-public sealed class MonitoringController(IDockerEngine docker, ILogger<MonitoringController> logger) : Controller
-{
-    public async Task<IActionResult> Index(CancellationToken ct)
-    {
-        ViewData["Title"] = "Monitoring";
-        try
-        {
-            var containers = await docker.ListContainersAsync("harbora.managed", ct);
-            return View(containers.ToList());
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Docker unavailable for monitoring.");
-            return View(new List<ContainerInfo>());
-        }
-    }
-}
-
-[Authorize]
 public sealed class SettingsController(
     HarboraDbContext db,
     ITokenService tokens,
