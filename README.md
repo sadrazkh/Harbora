@@ -2,7 +2,7 @@
 
 A self-hosted deployment platform — deploy and manage all your apps from a single, bilingual (فارسی/English, RTL/LTR) web UI. Think CapRover/Coolify in spirit, but with its own identity, a clean modular architecture, and a strong focus on UX and simplicity.
 
-> **Status:** Phase 1 (foundation) — solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA. Backups, the visual route designer, managed databases, and monitoring dashboards have their **data model and engine seams in place** and land in the next phases.
+> **Status:** Phase 1 (foundation) + Phase 2 (visual route designer). Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, and the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback). Backups, managed databases, and monitoring dashboards have their **data model and engine seams in place** and land in the next phases.
 
 ---
 
@@ -91,10 +91,11 @@ Drop an `examples/harbora.yml` (`app: my-app`) in your repo so `harbora deploy` 
 
 First-run setup, PBKDF2 password hashing (210k iterations), RBAC roles, API/CLI tokens (only SHA-256 hashes stored), AES-GCM secret encryption at rest, CSRF on all MVC forms, secure cookies, webhook HMAC secrets per repo, secret redaction in logs, and an audit-log table. Docker access is fully typed — no shell command strings.
 
-## Known limitations (Phase 1)
+## Known limitations (Phase 1–2)
 
 - **Single server** only (the remote-agent transport is designed but not wired).
-- **Backups, managed databases, monitoring charts, and the drag-and-drop route designer** render as placeholders backed by a ready data model/engine — full UIs come next.
+- **Backups, managed databases, and monitoring charts** render as placeholders backed by a ready data model/engine — full UIs come next.
+- Route basic-auth: the toggle persists, but htpasswd credential injection at apply-time is the next refinement.
 - Health checks are container-liveness based (HTTP health probing is the next refinement).
 - The frontend must be built (`npm run build`) before publishing; the Docker image does this automatically.
 

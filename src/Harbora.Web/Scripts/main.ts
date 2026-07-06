@@ -1,6 +1,7 @@
 import './app.css';
 import { createApp } from 'vue';
 import DeploymentLogs from './islands/DeploymentLogs.vue';
+import RouteDesigner from './islands/RouteDesigner.vue';
 
 // "Islands" pattern: Razor renders the page; we hydrate only the interactive nodes.
 // Each island is a mount point identified by id/selector — like initialising a jQuery plugin,
@@ -15,6 +16,14 @@ const islands: Record<string, IslandMounter> = {
     }).mount(el);
     // Tell the Razor fallback poller to stand down — the island owns the stream now.
     (window as any).__harboraLogsMounted = true;
+  },
+  'route-designer': (el) => {
+    createApp(RouteDesigner, {
+      initialRoutes: JSON.parse(el.dataset.routes || '[]'),
+      targets: JSON.parse(el.dataset.targets || '[]'),
+      csrf: el.dataset.csrf || '',
+      lang: el.dataset.lang || 'en',
+    }).mount(el);
   },
 };
 

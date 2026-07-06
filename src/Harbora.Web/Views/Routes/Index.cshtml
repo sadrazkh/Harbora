@@ -1,0 +1,19 @@
+@{
+    ViewData["Title"] = "Routing";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold">@T["Routing"]</h1>
+    <p class="text-slate-400 text-sm">@(isFa ? "قوانین مسیریابی را بکشید و رها کنید؛ کانفیگ Traefik خودکار ساخته و اعتبارسنجی می‌شود." : "Drag routing rules to prioritise; the Traefik config is generated and validated for you.")</p>
+</div>
+
+@* Vue island: the visual route designer. Initial state + CSRF travel via data attributes. *@
+<div id="route-designer"
+     data-routes="@ViewBag.RoutesJson"
+     data-targets="@ViewBag.TargetsJson"
+     data-csrf="@ViewBag.Csrf"
+     data-lang="@(isFa ? "fa" : "en")">
+    <div class="rounded-xl border border-dashed border-slate-700 p-8 text-center text-slate-400">
+        Loading designer… (run <code>npm run build</code> if this doesn't disappear)
+    </div>
+</div>
