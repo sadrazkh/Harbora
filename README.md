@@ -2,7 +2,7 @@
 
 A self-hosted deployment platform — deploy and manage all your apps from a single, bilingual (فارسی/English, RTL/LTR) web UI. Think CapRover/Coolify in spirit, but with its own identity, a clean modular architecture, and a strong focus on UX and simplicity.
 
-> **Status:** Phase 1 (foundation) + Phase 2 (visual route designer). Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, and the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback). Backups, managed databases, and monitoring dashboards have their **data model and engine seams in place** and land in the next phases.
+> **Status:** Phase 1 (foundation) + Phase 2 (visual route designer) + Phase 3 (managed services). Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback), and **managed services** (Postgres / MySQL / MariaDB / Redis / MongoDB — provision, generated encrypted credentials, safe connection info, attach-to-app). Backups and monitoring dashboards have their **data model and engine seams in place** and land next.
 
 ---
 
@@ -94,7 +94,8 @@ First-run setup, PBKDF2 password hashing (210k iterations), RBAC roles, API/CLI 
 ## Known limitations (Phase 1–2)
 
 - **Single server** only (the remote-agent transport is designed but not wired).
-- **Backups, managed databases, and monitoring charts** render as placeholders backed by a ready data model/engine — full UIs come next.
+- **Backups and monitoring charts** render as placeholders backed by a ready data model/engine — full UIs come next.
+- Managed-service data volumes are preserved on remove (volume deletion is wired with the backup engine in Phase 4 to avoid accidental data loss); service backup/restore also lands in Phase 4.
 - Route basic-auth: the toggle persists, but htpasswd credential injection at apply-time is the next refinement.
 - Health checks are container-liveness based (HTTP health probing is the next refinement).
 - The frontend must be built (`npm run build`) before publishing; the Docker image does this automatically.

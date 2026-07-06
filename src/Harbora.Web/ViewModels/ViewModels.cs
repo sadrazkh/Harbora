@@ -41,6 +41,13 @@ public sealed class CreateAppViewModel
     public Guid? TemplateId { get; set; }
 }
 
+public sealed class CreateServiceViewModel
+{
+    [Required] public string Name { get; set; } = string.Empty;
+    public ManagedServiceType Type { get; set; } = ManagedServiceType.PostgreSql;
+    public string Version { get; set; } = string.Empty;
+}
+
 public sealed class DashboardViewModel
 {
     public int AppCount { get; set; }

@@ -54,6 +54,11 @@ public static class DependencyInjection
         services.AddScoped<IDeploymentEngine, DeploymentEngine>();
         services.AddScoped<DeploymentPipeline>();
 
+        // Managed services (databases/caches). Concrete type is registered too so background
+        // jobs can resolve ProvisionAsync directly.
+        services.AddScoped<Services.ManagedServiceEngine>();
+        services.AddScoped<IManagedServiceEngine>(sp => sp.GetRequiredService<Services.ManagedServiceEngine>());
+
         return services;
     }
 

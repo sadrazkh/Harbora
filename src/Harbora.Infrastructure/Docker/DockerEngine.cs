@@ -75,6 +75,9 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         if (r.ContainerPort is { } port)
             create.ExposedPorts = new Dictionary<string, EmptyStruct> { [$"{port}/tcp"] = default };
 
+        if (r.Command is { Count: > 0 })
+            create.Cmd = r.Command.ToList();
+
         var response = await client.Containers.CreateContainerAsync(create, ct);
         await client.Containers.StartContainerAsync(response.ID, new ContainerStartParameters(), ct);
         logger.LogInformation("Started container {Name} ({Id})", r.ContainerName, response.ID[..12]);

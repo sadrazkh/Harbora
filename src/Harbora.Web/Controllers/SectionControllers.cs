@@ -12,12 +12,6 @@ namespace Harbora.Web.Controllers;
 /// a shared placeholder so navigation is complete and honest rather than dead links.
 /// </summary>
 [Authorize]
-public sealed class DatabasesController : Controller
-{
-    public IActionResult Index() { ViewData["Title"] = "Databases"; return View("_Placeholder"); }
-}
-
-[Authorize]
 public sealed class BackupsController : Controller
 {
     public IActionResult Index() { ViewData["Title"] = "Backups"; return View("_Placeholder"); }

@@ -83,4 +83,15 @@
   <data name="Recent Deployments"><value>استقرارهای اخیر</value></data>
   <data name="Language"><value>زبان</value></data>
   <data name="Dark mode"><value>حالت تیره</value></data>
+  <data name="New Service"><value>سرویس جدید</value></data>
+  <data name="Create Service"><value>ساخت سرویس</value></data>
+  <data name="No services yet"><value>هنوز سرویسی ندارید</value></data>
+  <data name="Type"><value>نوع</value></data>
+  <data name="Version"><value>نسخه</value></data>
+  <data name="Connection info"><value>اطلاعات اتصال</value></data>
+  <data name="Reveal"><value>نمایش</value></data>
+  <data name="Hide"><value>پنهان</value></data>
+  <data name="Attach to app"><value>اتصال به اپلیکیشن</value></data>
+  <data name="Attach"><value>اتصال</value></data>
+  <data name="Start"><value>شروع</value></data>
 </root>

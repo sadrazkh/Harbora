@@ -1,0 +1,69 @@
+@model Harbora.Domain.Services.ManagedService
+@{
+    ViewData["Title"] = Model.Name;
+    var conn = ViewBag.Connection as string ?? "";
+    var reveal = (bool)(ViewBag.Reveal ?? false);
+    var apps = ViewBag.Apps as IEnumerable<dynamic> ?? Enumerable.Empty<dynamic>();
+    var msg = TempData["Message"] as string;
+    string StatusClass(Harbora.Domain.Common.ServiceStatus s) => s switch
+    {
+        Harbora.Domain.Common.ServiceStatus.Running => "bg-emerald-500/15 text-emerald-400",
+        Harbora.Domain.Common.ServiceStatus.Failed => "bg-red-500/15 text-red-400",
+        Harbora.Domain.Common.ServiceStatus.Provisioning => "bg-brand-500/15 text-brand-300 animate-pulse",
+        _ => "bg-slate-500/15 text-slate-300"
+    };
+}
+<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+    <div>
+        <a href="/databases" class="text-brand-400 text-sm">← @T["Databases"]</a>
+        <h1 class="text-2xl font-bold flex items-center gap-3">@Model.Name
+            <span class="rounded-full px-2.5 py-0.5 text-xs font-medium @StatusClass(Model.Status)">@Model.Status</span>
+        </h1>
+        <p class="text-slate-400 text-sm">@Model.Type · @Model.Version</p>
+    </div>
+    <div class="flex gap-2">
+        <form asp-controller="Databases" asp-action="Start" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-sm">▶ @T["Start"]</button></form>
+        <form asp-controller="Databases" asp-action="Stop" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-sm">⏸ @T["Stop"]</button></form>
+        <form asp-controller="Databases" asp-action="Remove" asp-route-id="@Model.Id" method="post" onsubmit="return confirm('@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "حذف سرویس؟" : "Remove service?")')">@Html.AntiForgeryToken()<button class="rounded-lg bg-red-900/40 hover:bg-red-900/60 text-red-300 px-3 py-1.5 text-sm">🗑 @T["Remove"]</button></form>
+    </div>
+</div>
+
+@if (msg is not null)
+{
+    <div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>
+}
+
+<div class="grid lg:grid-cols-2 gap-6">
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="font-semibold">@T["Connection info"]</h2>
+            <a href="/databases/@Model.Id?reveal=@(reveal ? "false" : "true")" class="text-xs text-brand-400">@(reveal ? T["Hide"] : T["Reveal"])</a>
+        </div>
+        <div class="space-y-2 text-sm font-mono">
+            <div class="flex justify-between"><span class="text-slate-500">host</span><span>@Model.ContainerName</span></div>
+            <div class="flex justify-between"><span class="text-slate-500">port</span><span>@Model.InternalPort</span></div>
+            <div class="flex justify-between"><span class="text-slate-500">user</span><span>@Model.Username</span></div>
+            @if (!string.IsNullOrEmpty(Model.DatabaseName))
+            {
+                <div class="flex justify-between"><span class="text-slate-500">database</span><span>@Model.DatabaseName</span></div>
+            }
+        </div>
+        <div class="mt-4 rounded-lg bg-black/50 p-3 text-xs font-mono break-all">@conn</div>
+        <p class="mt-2 text-xs text-slate-500">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "این سرویس فقط از شبکه‌ی داخلی Harbora در دسترس است." : "Reachable only from the internal Harbora network.")</p>
+    </section>
+
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 class="font-semibold mb-3">@T["Attach to app"]</h2>
+        <p class="text-sm text-slate-400 mb-3">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "متغیرهای اتصال به‌صورت رمزنگاری‌شده به اپ اضافه می‌شوند." : "Connection variables are added to the app, encrypted.")</p>
+        <form asp-controller="Databases" asp-action="Attach" asp-route-id="@Model.Id" method="post" class="flex gap-2">
+            @Html.AntiForgeryToken()
+            <select name="appId" class="flex-1 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                @foreach (var a in apps)
+                {
+                    <option value="@a.Id">@a.Name</option>
+                }
+            </select>
+            <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Attach"]</button>
+        </form>
+    </section>
+</div>
