@@ -12,6 +12,37 @@
 @if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
 @if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
 
+@{
+    var u = Model.Usage;
+    string Mb(long b) => b <= 0 ? "∞" : $"{b / 1024 / 1024} MB";
+    string Pct(double used, double max) => max <= 0 ? "5" : Math.Min(100, used / max * 100).ToString("0");
+    (string label, string txt, double used, double max)[] usageCards =
+    {
+        (isFa ? "اپلیکیشن‌ها" : "Apps", $"{u.Apps} / {(u.MaxApps == 0 ? "∞" : u.MaxApps.ToString())}", u.Apps, u.MaxApps),
+        (isFa ? "سرویس‌ها" : "Services", $"{u.Services} / {(u.MaxServices == 0 ? "∞" : u.MaxServices.ToString())}", u.Services, u.MaxServices),
+        (isFa ? "حافظه" : "Memory", $"{Mb(u.MemoryUsedBytes)} / {Mb(u.MaxMemoryBytes)}", u.MemoryUsedBytes, u.MaxMemoryBytes),
+        ("CPU", $"{u.CpuUsed:0.##} / {(u.MaxCpuCores == 0 ? "∞" : u.MaxCpuCores.ToString("0.##"))}", u.CpuUsed, u.MaxCpuCores),
+    };
+}
+<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-6">
+    <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold">@(isFa ? "مصرف نسبت به پلن" : "Usage vs plan") <span class="text-slate-500 text-sm">· @u.PlanName</span></h2>
+        @if (Model.Suspended){<span class="text-xs rounded bg-red-500/15 text-red-400 px-2 py-0.5">@(isFa ? "معلق" : "suspended")</span>}
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        @foreach (var c in usageCards)
+        {
+            <div>
+                <div class="text-slate-400 text-sm">@c.label</div>
+                <div class="mt-1 font-bold">@c.txt</div>
+                <div class="mt-2 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                    <div class="h-full bg-brand-500" style="width:@Pct(c.used, c.max)%"></div>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
 <div class="grid lg:grid-cols-3 gap-6">
     <section class="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
         <div class="px-4 py-3 border-b border-slate-800 font-semibold">@(isFa ? "اعضا" : "Members")</div>

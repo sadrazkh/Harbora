@@ -26,6 +26,8 @@ public sealed class TenantDetailsViewModel
     public string Name { get; set; } = string.Empty;
     public string Slug { get; set; } = string.Empty;
     public bool IsDefault { get; set; }
+    public bool Suspended { get; set; }
+    public Application.Abstractions.WorkspaceUsage Usage { get; set; } = null!;
     public List<TenantMember> Members { get; set; } = new();
 }
 

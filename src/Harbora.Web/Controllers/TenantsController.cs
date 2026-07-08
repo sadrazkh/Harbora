@@ -16,7 +16,7 @@ namespace Harbora.Web.Controllers;
 /// </summary>
 [Authorize(Roles = "Owner,Admin")]
 [Route("tenants")]
-public sealed partial class TenantsController(HarboraDbContext db, IPasswordHasher hasher) : Controller
+public sealed partial class TenantsController(HarboraDbContext db, IPasswordHasher hasher, IQuotaService quota) : Controller
 {
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken ct)
@@ -102,7 +102,9 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
 
         return View(new TenantDetailsViewModel
         {
-            WorkspaceId = ws.Id, Name = ws.Name, Slug = ws.Slug, IsDefault = ws.IsDefault, Members = members
+            WorkspaceId = ws.Id, Name = ws.Name, Slug = ws.Slug, IsDefault = ws.IsDefault, Suspended = ws.IsSuspended,
+            Usage = await quota.GetUsageAsync(ws.Id, ct),
+            Members = members
         });
     }
 
