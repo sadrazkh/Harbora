@@ -9,6 +9,12 @@ public sealed class HarboraRuntimeOptions
     /// <summary>Shared docker network apps + Traefik join so the proxy can reach containers by name.</summary>
     public string Network { get; set; } = "harbora";
 
+    /// <summary>Traefik container name; joined to each tenant network so it can route ingress in.</summary>
+    public string ProxyContainerName { get; set; } = "harbora-traefik";
+
+    /// <summary>Per-workspace network name pattern giving tenant-to-tenant isolation.</summary>
+    public string WorkspaceNetwork(string slug) => $"harbora-ws-{slug}";
+
     /// <summary>Image repository prefix, e.g. "harbora/{slug}:build-{n}".</summary>
     public string ImagePrefix { get; set; } = "harbora";
 

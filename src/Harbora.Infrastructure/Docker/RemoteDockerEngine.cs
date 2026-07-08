@@ -95,6 +95,8 @@ public sealed class RemoteDockerEngine(
     }
 
     public Task EnsureNetworkAsync(string name, CancellationToken ct) => PostJson("agent/networks/ensure", new { name }, ct);
+    public Task ConnectNetworkAsync(string containerNameOrId, string network, CancellationToken ct) =>
+        PostJson("agent/networks/connect", new { container = containerNameOrId, network }, ct);
     public Task EnsureVolumeAsync(string name, CancellationToken ct) => PostJson("agent/volumes/ensure", new { name }, ct);
     public Task RemoveVolumeAsync(string name, CancellationToken ct) => PostJson("agent/volumes/remove", new { name }, ct);
 

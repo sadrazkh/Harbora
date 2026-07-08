@@ -50,13 +50,16 @@ public sealed class ManagedServiceEngine(
             var creds = CredsFor(svc);
             var image = $"{def.ImageRepo}:{svc.Version}";
 
-            await docker.EnsureNetworkAsync(_opt.Network, ct);
+            // Provision on the owning workspace's network so only that tenant's apps can reach it.
+            var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
+            var network = _opt.WorkspaceNetwork(wsSlug);
+            await docker.EnsureNetworkAsync(network, ct);
             await docker.EnsureVolumeAsync(svc.VolumeName, ct);
             await docker.PullImageAsync(image, new Progress<string>(l => logger.LogDebug("{Svc}: {Line}", svc.Name, l)), ct);
             await RemoveContainerByNameAsync(docker, svc.ContainerName, ct);
 
             await docker.RunContainerAsync(new DockerRunRequest(
-                image, svc.ContainerName, _opt.Network,
+                image, svc.ContainerName, network,
                 def.Env(creds),
                 new Dictionary<string, string> { ["harbora.managed"] = "true", ["harbora.service"] = svc.Name },
                 new[] { (svc.VolumeName, def.DataMountPath, false) },

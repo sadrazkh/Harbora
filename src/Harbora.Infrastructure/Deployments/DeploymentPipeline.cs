@@ -82,14 +82,19 @@ public sealed class DeploymentPipeline(
             deployment.ImageTag = imageTag;
 
             await SetStatus(DeploymentStatus.Deploying);
-            await docker.EnsureNetworkAsync(_opt.Network, ct);
+
+            // Per-tenant isolation: each workspace gets its own network. Apps + their attached
+            // services share it; other tenants can't reach them.
+            var wsSlug = await db.Workspaces.Where(w => w.Id == app.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
+            var network = _opt.WorkspaceNetwork(wsSlug);
+            await docker.EnsureNetworkAsync(network, ct);
             foreach (var v in app.Volumes)
                 await docker.EnsureVolumeAsync(v.Name, ct);
 
             var containerName = $"harbora-{app.Slug}";
             await RemoveExistingContainerAsync(docker, containerName, Log, ct);
 
-            // Decide how the proxy reaches this app. On the local node Traefik shares the harbora
+            // Decide how the proxy reaches this app. On the local node Traefik joins the tenant
             // network and routes by container name. On a remote node there is no shared overlay, so
             // we publish the container port to a stable host port and route to the node's host:port.
             var server = await db.Servers.FirstAsync(s => s.Id == app.ServerId, ct);
@@ -103,6 +108,11 @@ public sealed class DeploymentPipeline(
                 upstreamHost = server.Hostname;
                 upstreamPort = app.PublishedHostPort!.Value;
             }
+            else
+            {
+                // Give the local Traefik ingress into this tenant's network (idempotent).
+                await docker.ConnectNetworkAsync(_opt.ProxyContainerName, network, ct);
+            }
 
             var env = BuildEnv(app);
             var labels = new Dictionary<string, string>
@@ -114,7 +124,7 @@ public sealed class DeploymentPipeline(
 
             await Log(LogStream.System, $"Starting container {containerName} …");
             var containerId = await docker.RunContainerAsync(new DockerRunRequest(
-                imageTag, containerName, _opt.Network, env, labels,
+                imageTag, containerName, network, env, labels,
                 app.Volumes.Select(v => (v.Name, v.MountPath, v.ReadOnly)).ToList(),
                 app.ContainerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath,
                 Command: null, PublishToHostPort: publishPort), ct);

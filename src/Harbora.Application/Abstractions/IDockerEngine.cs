@@ -21,6 +21,8 @@ public interface IDockerEngine
     Task<ContainerStats?> GetStatsAsync(string containerId, CancellationToken ct);
 
     Task EnsureNetworkAsync(string name, CancellationToken ct);
+    /// <summary>Attach an existing container to a network (idempotent) — used to give Traefik ingress into per-tenant networks.</summary>
+    Task ConnectNetworkAsync(string containerNameOrId, string network, CancellationToken ct);
     Task EnsureVolumeAsync(string name, CancellationToken ct);
     Task RemoveVolumeAsync(string name, CancellationToken ct);
 

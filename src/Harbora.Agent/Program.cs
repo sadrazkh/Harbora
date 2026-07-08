@@ -95,6 +95,7 @@ app.MapPost("/agent/build", async (string tag, string dockerfile, HttpContext ct
 });
 
 app.MapPost("/agent/networks/ensure", (NameBody b, IDockerEngine e, CancellationToken ct) => e.EnsureNetworkAsync(b.Name, ct));
+app.MapPost("/agent/networks/connect", (ConnectBody b, IDockerEngine e, CancellationToken ct) => e.ConnectNetworkAsync(b.Container, b.Network, ct));
 app.MapPost("/agent/volumes/ensure", (NameBody b, IDockerEngine e, CancellationToken ct) => e.EnsureVolumeAsync(b.Name, ct));
 app.MapPost("/agent/volumes/remove", (NameBody b, IDockerEngine e, CancellationToken ct) => e.RemoveVolumeAsync(b.Name, ct));
 
@@ -140,4 +141,5 @@ namespace Harbora.Agent
 
     public sealed record ImageBody(string Image);
     public sealed record NameBody(string Name);
+    public sealed record ConnectBody(string Container, string Network);
 }

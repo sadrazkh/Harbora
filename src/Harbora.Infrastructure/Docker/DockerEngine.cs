@@ -172,6 +172,19 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         await client.Volumes.CreateAsync(new VolumesCreateParameters { Name = name }, ct);
     }
 
+    public async Task ConnectNetworkAsync(string containerNameOrId, string network, CancellationToken ct)
+    {
+        try
+        {
+            await client.Networks.ConnectNetworkAsync(network, new NetworkConnectParameters { Container = containerNameOrId }, ct);
+        }
+        catch (DockerApiException ex) when ((int)ex.StatusCode is 403 or 404 or 500)
+        {
+            // Already attached, or the proxy container isn't present (e.g. local dev) — safe to ignore.
+            logger.LogDebug("Connect {Container}→{Network}: {Msg}", containerNameOrId, network, ex.Message);
+        }
+    }
+
     public async Task RemoveVolumeAsync(string name, CancellationToken ct)
     {
         try { await client.Volumes.RemoveAsync(name, force: true, ct); }
