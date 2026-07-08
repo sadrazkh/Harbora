@@ -100,10 +100,18 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
             .Join(db.Users, m => m.UserId, u => u.Id, (m, u) => new TenantMember(u.Id, u.Email, u.DisplayName, m.Role.ToString(), u.IsActive))
             .OrderBy(m => m.Email).ToListAsync(ct);
 
+        var now = DateTimeOffset.UtcNow;
+        var period = new DateOnly(now.Year, now.Month, 1);
+        var metered = await db.UsageRecords.AsNoTracking().FirstOrDefaultAsync(r => r.WorkspaceId == ws.Id && r.Period == period, ct);
+
         return View(new TenantDetailsViewModel
         {
             WorkspaceId = ws.Id, Name = ws.Name, Slug = ws.Slug, IsDefault = ws.IsDefault, Suspended = ws.IsSuspended,
             Usage = await quota.GetUsageAsync(ws.Id, ct),
+            MemoryGbHours = metered?.MemoryGbHours ?? 0,
+            CpuCoreHours = metered?.CpuCoreHours ?? 0,
+            AppCountPeak = metered?.AppCountPeak ?? 0,
+            PeriodLabel = period.ToString("yyyy-MM"),
             Members = members
         });
     }

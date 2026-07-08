@@ -43,6 +43,7 @@ public class HarboraDbContext(DbContextOptions<HarboraDbContext> options) : DbCo
     public DbSet<Setting> Settings => Set<Setting>();
     public DbSet<Harbora.Domain.Tenancy.Plan> Plans => Set<Harbora.Domain.Tenancy.Plan>();
     public DbSet<Harbora.Domain.Tenancy.InstanceSize> InstanceSizes => Set<Harbora.Domain.Tenancy.InstanceSize>();
+    public DbSet<Harbora.Domain.Tenancy.UsageRecord> UsageRecords => Set<Harbora.Domain.Tenancy.UsageRecord>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -108,6 +109,7 @@ public class HarboraDbContext(DbContextOptions<HarboraDbContext> options) : DbCo
         b.Entity<Setting>(e => e.HasIndex(x => x.Key).IsUnique());
         b.Entity<Harbora.Domain.Tenancy.InstanceSize>(e => e.HasIndex(x => x.Key).IsUnique());
         b.Entity<Harbora.Domain.Tenancy.Plan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
+        b.Entity<Harbora.Domain.Tenancy.UsageRecord>(e => e.HasIndex(x => new { x.WorkspaceId, x.Period }).IsUnique());
         b.Entity<AuditLog>(e => e.HasIndex(x => x.CreatedAt));
     }
 

@@ -77,6 +77,7 @@ public static class DependencyInjection
         services.AddScoped<IQuotaService, Tenancy.QuotaService>();
         services.AddScoped<INodeCapacityService, Tenancy.NodeCapacityService>();
         services.AddScoped<ISchedulerService, Tenancy.SchedulerService>();
+        services.AddHostedService<Tenancy.MeteringService>();
 
         // Monitoring + notifications.
         services.AddHttpClient();

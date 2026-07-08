@@ -28,6 +28,13 @@ public sealed class TenantDetailsViewModel
     public bool IsDefault { get; set; }
     public bool Suspended { get; set; }
     public Application.Abstractions.WorkspaceUsage Usage { get; set; } = null!;
+
+    // Metered usage for the current billing month.
+    public double MemoryGbHours { get; set; }
+    public double CpuCoreHours { get; set; }
+    public int AppCountPeak { get; set; }
+    public string PeriodLabel { get; set; } = string.Empty;
+
     public List<TenantMember> Members { get; set; } = new();
 }
 
