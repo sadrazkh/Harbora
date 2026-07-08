@@ -57,6 +57,10 @@ services:
 
   panel:
     image: harbora/panel:latest
+    # Build from the cloned repo on first run (no registry required). `docker compose up -d --build`.
+    build:
+      context: ..
+      dockerfile: Dockerfile
     container_name: harbora-panel
     restart: unless-stopped
     depends_on:

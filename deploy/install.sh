@@ -1,139 +1,174 @@
 #!/usr/bin/env bash
 #
-# Harbora installer — one command to stand up the platform on a fresh Linux VPS.
+# Harbora — easy installer. One command on a fresh Linux VPS:
 #
-#   curl -fsSL https://get.harbora.dev/install.sh | bash
-#   curl -fsSL https://get.harbora.dev/install.sh | bash -s -- update
-#   curl -fsSL https://get.harbora.dev/install.sh | bash -s -- uninstall
+#   curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash
 #
-# Safe to re-run: it never overwrites an existing .env (so secrets are stable) and only
-# creates what is missing.
+# It installs every prerequisite itself (Docker, git, openssl), fetches the source, generates a
+# config with sensible defaults, builds the platform from source, and starts it.
+#
+#   ... | bash                      # install (default)
+#   ... | bash -s -- update         # pull latest + rebuild
+#   ... | bash -s -- uninstall      # stop & remove (prompts before deleting data)
+#
+# Override defaults with env vars, e.g.:
+#   PANEL_DOMAIN=panel.example.com ROOT_DOMAIN=apps.example.com ACME_EMAIL=you@example.com \
+#     curl -fsSL .../install.sh | bash
+#
+# Safe to re-run: an existing .env (with your secrets) is never overwritten.
 set -euo pipefail
 
 HARBORA_DIR="${HARBORA_DIR:-/opt/harbora}"
-REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy}"
-COMPOSE="docker compose"
+REPO_URL="${REPO_URL:-https://github.com/sadrazkh/Harbora}"
+REPO_BRANCH="${REPO_BRANCH:-master}"
+APP_DIR="$HARBORA_DIR/app"
+COMPOSE_DIR="$APP_DIR/deploy"
 
-c_green='\033[0;32m'; c_blue='\033[0;34m'; c_yellow='\033[1;33m'; c_red='\033[0;31m'; c_reset='\033[0m'
-log()  { echo -e "${c_blue}➜${c_reset} $*"; }
-ok()   { echo -e "${c_green}✓${c_reset} $*"; }
-warn() { echo -e "${c_yellow}!${c_reset} $*"; }
-die()  { echo -e "${c_red}✗ $*${c_reset}" >&2; exit 1; }
+c_g='\033[0;32m'; c_b='\033[0;34m'; c_y='\033[1;33m'; c_r='\033[0;31m'; c_0='\033[0m'
+log()  { echo -e "${c_b}➜${c_0} $*"; }
+ok()   { echo -e "${c_g}✓${c_0} $*"; }
+warn() { echo -e "${c_y}!${c_0} $*"; }
+die()  { echo -e "${c_r}✗ $*${c_0}" >&2; exit 1; }
 
-require_root() {
-  [ "$(id -u)" -eq 0 ] || die "Please run as root (or via sudo)."
+require_root() { [ "$(id -u)" -eq 0 ] || die "Run as root (or: sudo bash)."; }
+
+detect_pkg() {
+  if   command -v apt-get >/dev/null; then PKG=apt
+  elif command -v dnf     >/dev/null; then PKG=dnf
+  elif command -v yum     >/dev/null; then PKG=yum
+  elif command -v apk     >/dev/null; then PKG=apk
+  else die "No supported package manager (apt/dnf/yum/apk)."; fi
 }
 
 check_os() {
   [ "$(uname -s)" = "Linux" ] || die "Harbora installs on Linux only."
-  if [ -f /etc/os-release ]; then . /etc/os-release; log "Detected ${PRETTY_NAME:-Linux}."; fi
-  case "$(uname -m)" in
-    x86_64|aarch64|arm64) ;;
-    *) die "Unsupported architecture: $(uname -m)";;
+  case "$(uname -m)" in x86_64|aarch64|arm64) ;; *) die "Unsupported arch: $(uname -m)";; esac
+  [ -f /etc/os-release ] && { . /etc/os-release; log "Detected ${PRETTY_NAME:-Linux} ($(uname -m))."; }
+}
+
+install_prereqs() {
+  log "Installing prerequisites (curl, git, openssl)…"
+  case "$PKG" in
+    apt) export DEBIAN_FRONTEND=noninteractive; apt-get update -qq; apt-get install -y -qq curl git openssl ca-certificates >/dev/null;;
+    dnf) dnf install -y -q curl git openssl ca-certificates >/dev/null;;
+    yum) yum install -y -q curl git openssl ca-certificates >/dev/null;;
+    apk) apk add --no-cache curl git openssl ca-certificates >/dev/null;;
   esac
+  ok "Prerequisites ready."
 }
 
 install_docker() {
-  if command -v docker >/dev/null 2>&1; then ok "Docker present ($(docker --version | cut -d' ' -f3 | tr -d ,))."; return; fi
-  log "Installing Docker…"
-  curl -fsSL https://get.docker.com | sh
-  systemctl enable --now docker || true
-  ok "Docker installed."
+  if command -v docker >/dev/null 2>&1; then ok "Docker present ($(docker --version | awk '{print $3}' | tr -d ,)).";
+  else
+    log "Installing Docker…"
+    curl -fsSL https://get.docker.com | sh >/dev/null
+    ok "Docker installed."
+  fi
+  command -v systemctl >/dev/null && systemctl enable --now docker >/dev/null 2>&1 || true
+  docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required (ships with modern Docker)."
 }
 
-check_compose() {
-  docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required (comes with modern Docker)."
+fetch_source() {
+  if [ -d "$APP_DIR/.git" ]; then
+    log "Updating source…"; git -C "$APP_DIR" fetch --depth 1 origin "$REPO_BRANCH" -q; git -C "$APP_DIR" reset --hard "origin/$REPO_BRANCH" -q
+  else
+    log "Cloning $REPO_URL…"; mkdir -p "$HARBORA_DIR"; git clone --depth 1 -b "$REPO_BRANCH" "$REPO_URL" "$APP_DIR" -q
+  fi
+  ok "Source at $APP_DIR."
 }
 
-rand() { head -c "$1" /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c "$1"; }
+public_ip() {
+  curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null \
+    || curl -fsS4 --max-time 5 https://ifconfig.me 2>/dev/null \
+    || hostname -I 2>/dev/null | awk '{print $1}' \
+    || echo "127.0.0.1"
+}
 
-scaffold() {
-  log "Preparing ${HARBORA_DIR}…"
-  mkdir -p "$HARBORA_DIR/traefik/dynamic"
-  cd "$HARBORA_DIR"
+rand() { openssl rand "$1" 2>/dev/null | head -c 200; }
 
-  # Fetch compose file (unless running from a local checkout that already has it).
-  if [ ! -f docker-compose.yml ]; then
-    curl -fsSL "$REPO_RAW/docker-compose.yml" -o docker-compose.yml
+write_env() {
+  mkdir -p "$COMPOSE_DIR/traefik/dynamic"
+  cd "$COMPOSE_DIR"
+  if [ -f .env ]; then ok "Existing .env kept (secrets preserved)."; return; fi
+
+  local ip; ip="$(public_ip)"
+  # Smart defaults: nip.io resolves *.<ip>.nip.io to the server IP, so it works with no DNS setup.
+  PANEL_DOMAIN="${PANEL_DOMAIN:-panel.${ip}.nip.io}"
+  ROOT_DOMAIN="${ROOT_DOMAIN:-apps.${ip}.nip.io}"
+  ACME_EMAIL="${ACME_EMAIL:-admin@${PANEL_DOMAIN}}"
+
+  # Prompt only when attached to a terminal and the value wasn't provided via env.
+  if [ -t 0 ]; then
+    read -rp "Panel domain [$PANEL_DOMAIN]: " _p; PANEL_DOMAIN="${_p:-$PANEL_DOMAIN}"
+    read -rp "Apps root domain [$ROOT_DOMAIN]: " _r; ROOT_DOMAIN="${_r:-$ROOT_DOMAIN}"
+    read -rp "Let's Encrypt email [$ACME_EMAIL]: " _e; ACME_EMAIL="${_e:-$ACME_EMAIL}"
   fi
 
-  if [ ! -f .env ]; then
-    log "Generating configuration (.env)…"
-    PANEL_DOMAIN="${PANEL_DOMAIN:-}"
-    ACME_EMAIL="${ACME_EMAIL:-}"
-    ROOT_DOMAIN="${ROOT_DOMAIN:-}"
-    if [ -z "$PANEL_DOMAIN" ]; then read -rp "Panel domain (e.g. panel.example.com): " PANEL_DOMAIN; fi
-    if [ -z "$ROOT_DOMAIN" ];  then read -rp "Apps root domain (e.g. example.com): " ROOT_DOMAIN; fi
-    if [ -z "$ACME_EMAIL" ];   then read -rp "Email for Let's Encrypt: " ACME_EMAIL; fi
-
-    cat > .env <<EOF
+  log "Writing configuration (.env)…"
+  cat > .env <<EOF
 PANEL_DOMAIN=${PANEL_DOMAIN}
 ROOT_DOMAIN=${ROOT_DOMAIN}
 ACME_EMAIL=${ACME_EMAIL}
 POSTGRES_USER=harbora
 POSTGRES_DB=harbora
-POSTGRES_PASSWORD=$(rand 32)
-HARBORA_MASTER_KEY=$(rand 44)
+POSTGRES_PASSWORD=$(openssl rand -hex 24)
+HARBORA_MASTER_KEY=$(openssl rand -base64 32)
 EOF
-    chmod 600 .env
-    ok "Secrets generated and stored in ${HARBORA_DIR}/.env (mode 600)."
-  else
-    ok "Existing .env kept (secrets preserved)."
-  fi
-
-  touch traefik/dynamic/harbora.yml
+  chmod 600 .env
+  ok "Config written (secrets generated, mode 600)."
 }
 
 start() {
-  cd "$HARBORA_DIR"
-  log "Pulling / building containers…"
-  $COMPOSE pull || true
-  $COMPOSE up -d
+  cd "$COMPOSE_DIR"
+  log "Building and starting Harbora (first build can take a few minutes)…"
+  docker compose up -d --build
   ok "Harbora is starting."
 }
 
-show_next_steps() {
-  cd "$HARBORA_DIR"; . ./.env
-  echo
-  ok "Installation complete."
-  echo -e "  ${c_green}Panel:${c_reset}       https://${PANEL_DOMAIN}"
-  echo -e "  ${c_green}First setup:${c_reset} https://${PANEL_DOMAIN}/setup"
-  echo
-  echo "Next steps:"
-  echo "  1) Point an A record for ${PANEL_DOMAIN} (and *.${ROOT_DOMAIN}) at this server."
-  echo "  2) Open the setup URL and create your owner account."
-  echo "  3) Connect a Git repo, create an app, and deploy."
-  echo
-  echo "Manage:  cd ${HARBORA_DIR} && docker compose [ps|logs -f|restart]"
+wait_healthy() {
+  log "Waiting for the panel container to come up…"
+  for _ in $(seq 1 40); do
+    local state; state="$(docker inspect -f '{{.State.Status}}' harbora-panel 2>/dev/null || echo '')"
+    if [ "$state" = "running" ]; then ok "Panel container is running."; sleep 3; return; fi
+    if [ "$state" = "exited" ]; then die "Panel exited on boot. Inspect: cd $COMPOSE_DIR && docker compose logs panel"; fi
+    sleep 3
+  done
+  warn "Panel not running yet; check: cd $COMPOSE_DIR && docker compose logs -f panel"
 }
 
-cmd_install() { require_root; check_os; install_docker; check_compose; scaffold; start; show_next_steps; }
+next_steps() {
+  cd "$COMPOSE_DIR"; . ./.env
+  echo
+  ok "Installation complete."
+  echo -e "  ${c_g}Panel:${c_0}        https://${PANEL_DOMAIN}"
+  echo -e "  ${c_g}First setup:${c_0}  https://${PANEL_DOMAIN}/setup"
+  echo
+  echo "Next:"
+  echo "  1) Point DNS for ${PANEL_DOMAIN} and *.${ROOT_DOMAIN} at this server (skip if using the nip.io default)."
+  echo "  2) Open the setup URL and create your owner account."
+  echo "  3) Create an app and deploy — or a tenant workspace to resell to a customer."
+  echo
+  echo "Manage:  cd ${COMPOSE_DIR} && docker compose [ps | logs -f panel | restart]"
+}
+
+cmd_install() { require_root; check_os; detect_pkg; install_prereqs; install_docker; fetch_source; write_env; start; wait_healthy; next_steps; }
 
 cmd_update() {
-  require_root; check_compose
-  [ -d "$HARBORA_DIR" ] || die "Harbora is not installed at ${HARBORA_DIR}."
-  cd "$HARBORA_DIR"
-  log "Updating to the latest images…"
-  curl -fsSL "$REPO_RAW/docker-compose.yml" -o docker-compose.yml
-  $COMPOSE pull
-  $COMPOSE up -d
+  require_root; detect_pkg
+  [ -d "$APP_DIR/.git" ] || die "Harbora is not installed at $APP_DIR."
+  fetch_source; start; wait_healthy
   ok "Harbora updated."
 }
 
 cmd_uninstall() {
   require_root
-  [ -d "$HARBORA_DIR" ] || die "Nothing to uninstall at ${HARBORA_DIR}."
-  cd "$HARBORA_DIR"
+  [ -d "$COMPOSE_DIR" ] || die "Nothing to uninstall at $COMPOSE_DIR."
+  cd "$COMPOSE_DIR"
   warn "This stops Harbora and removes its containers."
-  read -rp "Also delete volumes (databases, backups)? [y/N] " del
-  if [ "${del:-N}" = "y" ] || [ "${del:-N}" = "Y" ]; then
-    $COMPOSE down -v
-    warn "Volumes deleted."
-  else
-    $COMPOSE down
-    ok "Containers removed; data volumes kept."
-  fi
-  echo "Config remains in ${HARBORA_DIR}. Remove it manually if you are done."
+  local del="N"; [ -t 0 ] && read -rp "Also delete volumes (databases, backups, apps' data)? [y/N] " del
+  if [ "${del:-N}" = "y" ] || [ "${del:-N}" = "Y" ]; then docker compose down -v; warn "Volumes deleted.";
+  else docker compose down; ok "Containers removed; data volumes kept."; fi
+  echo "Source + config remain in ${HARBORA_DIR}. Remove manually if you're done."
 }
 
 case "${1:-install}" in

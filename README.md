@@ -1,106 +1,205 @@
 # Harbora
 
-A self-hosted deployment platform — deploy and manage all your apps from a single, bilingual (فارسی/English, RTL/LTR) web UI. Think CapRover/Coolify in spirit, but with its own identity, a clean modular architecture, and a strong focus on UX and simplicity.
+A self-hosted, **multi-tenant PaaS** — install it on a VPS with one command, open the web UI, and
+deploy/manage all your apps. Then resell it: give customers their own quota-limited, network-isolated
+workspaces across your primary and helper servers. Bilingual (فارسی/English, RTL/LTR), PWA, with a CLI.
 
-> **Status:** Phases 1–6. Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback), **managed services** (Postgres / MySQL / MariaDB / Redis / MongoDB — provision, encrypted credentials, safe connection info, attach-to-app), **backups** (config + volume/database via one-off tar containers, local + S3-compatible destinations, scheduled runs, retention, download, and restore with a typed confirm), **monitoring + alerts** (host/container metrics time series, live CPU chart, per-app health, disk/backup/crash warnings, and notifications over email / Telegram / Discord / custom webhook), **Git integration** (connect GitHub/GitLab/Gitea by token, import repos, and deploy-on-push/tag via HMAC-verified webhooks), and **multi-server** (a token-authed Harbora Agent runs each remote node; the panel picks the right engine per server, so deploys, managed services and metrics all work across nodes), and **multi-tenant PaaS** — per-workspace **plans + instance sizes + quotas** (apps pick a resource tier; creation/deploy are quota-checked), a **capacity-aware scheduler** that places apps on a node with room and refuses to overcommit, a **provider console** (create tenant workspaces, assign plans, invite users, watch each tenant's usage, suspend), **per-tenant network isolation** (each workspace runs on its own docker network; Traefik joins each for ingress), and **usage metering** (per-workspace GB-hours + vCPU-hours accrued as a billing basis, surfaced in the provider console). The core is feature-complete against the original spec, and it works as a resellable multi-tenant PaaS.
+> **Status:** feature-complete against its spec — app deployment (Git / Dockerfile / image / templates),
+> visual routing designer, managed databases, backups (local + S3), monitoring + alerts, Git webhooks +
+> OAuth, multi-server agents, and a full multi-tenant layer (plans, quotas, capacity scheduler, provider
+> console, per-tenant network isolation, usage metering). Builds clean; run it on a VPS to use it live.
 
 ---
 
-## Why these choices
+## 🚀 Install (one command)
 
-| Decision | Choice | Reason |
-|---|---|---|
-| Reverse proxy | **Traefik** | Routes change constantly on a deploy platform. Traefik hot-reloads a dynamic-config file with **no restart**, ships **built-in ACME/Let's Encrypt**, and discovers containers by label. Nginx would need full config regeneration + reload + a separate certbot. The visual designer emits `Route`s → Harbora renders/validates/applies Traefik config; you never hand-edit anything. |
-| CSS | **Tailwind** | You wanted a premium, original UI that doesn't look like a stock admin template. Tailwind + a thin Vue layer gives full design control, first-class dark mode, and clean RTL/LTR via logical utilities. |
-| Frontend | **Vue islands via Vite** | No separate SPA server. Vite compiles Vue components into `wwwroot/build`; Razor references the hashed assets through a manifest and hydrates only interactive nodes — like versioned jQuery plugins, but reactive. |
-| Container access | **Docker.DotNet** | One `IDockerEngine` seam; no shell-string command building anywhere (removes a class of injection risks). |
-| Live logs | **SignalR** | Build/deploy/container logs stream to the UI and CLI from one pipeline. |
-| Secrets at rest | **AES-256-GCM** | Master key from `HARBORA_MASTER_KEY` (installer-generated), kept out of the DB. |
-
-## Architecture (Clean, modular)
-
-```
-Harbora.Domain          entities, enums, domain rules (no dependencies)
-Harbora.Application     use-cases + port interfaces (IDockerEngine, IProxyEngine, IGitService, IDeploymentEngine…)
-Harbora.Infrastructure  adapters: Docker.DotNet, LibGit2Sharp, Traefik engine, AES-GCM, PBKDF2, job queue, deploy pipeline
-Harbora.Data            EF Core + PostgreSQL, migrations
-Harbora.Web             ASP.NET Core MVC/Razor + embedded Vue islands + SignalR + JSON API
-Harbora.Agent           server-ops seam (in-process for the single-server MVP; ready for a remote agent)
-Harbora.Cli             `harbora` CLI (System-friendly, Spectre.Console)
-Harbora.Shared          cross-cutting contracts
-```
-
-Deployment logic lives in the **Application/Infrastructure deploy engine** and runs on a background worker — never in controllers.
-
-## One-command install (Linux VPS)
+On a fresh **Linux VPS** (Ubuntu/Debian/Fedora/Alpine), as root:
 
 ```bash
-curl -fsSL https://get.harbora.dev/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash
 ```
 
-The installer checks the OS, installs Docker if missing, generates secrets into `/opt/harbora/.env` (mode 600), writes the Traefik + Postgres + Redis + panel stack, and starts it. It's safe to re-run.
+That's it. The installer is **fully self-contained** — it:
+
+1. checks OS/arch compatibility,
+2. **installs every prerequisite itself** — `curl`, `git`, `openssl`, and **Docker** (with Compose) if missing,
+3. fetches the source into `/opt/harbora/app`,
+4. generates `/opt/harbora/app/deploy/.env` with **smart defaults** and freshly-random secrets,
+5. **builds the platform from source** and starts it (Traefik + PostgreSQL + Redis + the panel),
+6. prints your panel URL and next steps.
+
+It is **safe to re-run** — an existing `.env` (your secrets) is never overwritten.
+
+### Zero-DNS default (just works)
+
+If you don't pass any domains, Harbora defaults to **`nip.io`** wildcard DNS based on your server's
+public IP — e.g. `panel.203.0.113.10.nip.io` — which resolves automatically with **no DNS setup**, so
+you get a working HTTPS panel immediately. Great for trying it out.
+
+### Custom domains (production)
+
+Point DNS at your server first:
+
+- `panel.example.com` → your VPS IP
+- `*.apps.example.com` → your VPS IP (wildcard for deployed apps)
+
+Then install non-interactively with your domains:
 
 ```bash
-# update to the latest images
-curl -fsSL https://get.harbora.dev/install.sh | bash -s -- update
-# stop & remove (prompts before deleting data volumes)
-curl -fsSL https://get.harbora.dev/install.sh | bash -s -- uninstall
+PANEL_DOMAIN=panel.example.com \
+ROOT_DOMAIN=apps.example.com \
+ACME_EMAIL=you@example.com \
+  curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash
 ```
 
-After install, open **`https://<panel-domain>/setup`** to create your owner account.
+Run it in a terminal (not piped) and it will **prompt** for these, showing the defaults.
 
-## Local development
+TLS certificates are obtained automatically from **Let's Encrypt** on first HTTPS hit.
 
-Prerequisites: **.NET 10 SDK**, **Node 22**, and a **PostgreSQL** (Docker is easiest).
+### Prerequisites (all auto-installed)
+
+You don't need to install anything by hand. For reference, the installer ensures: Docker + Compose v2,
+`git`, `curl`, `openssl`. Recommended VPS: **2 GB+ RAM**, x86_64 or arm64, ports **80** and **443** open.
+
+---
+
+## 🔄 Update & 🗑 Uninstall
 
 ```bash
-# 1) Postgres
-docker run -d --name harbora-pg -e POSTGRES_USER=harbora -e POSTGRES_PASSWORD=harbora \
-  -e POSTGRES_DB=harbora -p 5432:5432 postgres:16-alpine
+# Update to the latest source and rebuild:
+curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash -s -- update
 
-# 2) Frontend (Vue islands + Tailwind → wwwroot/build)
-cd src/Harbora.Web
-npm install
-npm run build          # or: npm run dev  (then set Vite:UseDevServer=true in appsettings)
-
-# 3) Run the panel (auto-migrates + seeds templates on boot)
-cd ../..
-dotnet run --project src/Harbora.Web
+# Uninstall (prompts before deleting data volumes):
+curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash -s -- uninstall
 ```
 
-Open `http://localhost:5000` (or the shown port) → you'll be redirected to `/setup`.
+Or from the checkout: `cd /opt/harbora/app/deploy && docker compose up -d --build` (update),
+`docker compose down` (stop), `docker compose down -v` (also wipe data).
 
-## CLI
+---
+
+## ▶️ First run
+
+1. Open **`https://<panel-domain>/setup`** and create your **owner** account (that's you, the provider).
+2. You're in. The dashboard shows apps, deployments and host resources.
+
+### Deploy your first app (60-second smoke test)
+
+**Apps → New App** → source *Prebuilt image* → image `nginx:alpine`, port `80`, size `nano`, domain
+`test.<root-domain>` → **Save** → **Deploy**. Watch the live logs; then open the domain — nginx, with a
+valid cert. You can also deploy from a **Git repo / Dockerfile / docker-compose / static site / template**.
+
+A detailed, copy-paste walkthrough (including adding worker nodes) is in **[deploy/RUNBOOK.md](deploy/RUNBOOK.md)**.
+
+---
+
+## 🏢 Run it as a PaaS for customers
+
+Harbora is multi-tenant. As the provider you:
+
+1. **Plans** — define tiers (max apps/services, CPU/RAM/disk caps, allowed instance sizes, price).
+   Built-ins are seeded: *Provider* (unlimited, yours), *Starter*, *Pro*.
+2. **Tenants** (provider console) — create a customer **workspace**, assign a plan, **invite a user**
+   (email + temp password + workspace role). Suspend/resume anytime.
+3. The customer logs in and sees **only their workspace**. Their apps are **quota-checked**, the
+   **scheduler** places them on a node with capacity (never overcommitting your servers), each tenant
+   runs on its **own isolated docker network**, and usage is **metered** (GB-hours / vCPU-hours) as a
+   billing basis — all visible to you per tenant.
+
+Instance sizes (nano → large) map to real CPU/memory limits, so customers only consume what their plan allows.
+
+---
+
+## 🖥 CLI
 
 ```bash
-# build a single-file binary (or `dotnet run --project src/Harbora.Cli -- <args>`)
-dotnet publish src/Harbora.Cli -c Release
+dotnet publish src/Harbora.Cli -c Release      # or: dotnet run --project src/Harbora.Cli -- <args>
 
 harbora login --server https://panel.example.com --token hbr_cli_xxx   # token from Settings → API Tokens
-harbora whoami
 harbora apps
-harbora deploy my-app --ref main       # deploys and follows the live logs
+harbora deploy my-app --ref main               # deploys and follows live logs
 harbora deploy my-app --tag v1.0.0
 harbora logs <deploymentId>
 harbora status
 ```
 
-Drop an `examples/harbora.yml` (`app: my-app`) in your repo so `harbora deploy` needs no arguments in CI.
+Drop `app: my-app` in a `harbora.yml` at your repo root so `harbora deploy` needs no arguments in CI.
 
-## Security
+---
 
-First-run setup, PBKDF2 password hashing (210k iterations), RBAC roles, API/CLI tokens (only SHA-256 hashes stored), AES-GCM secret encryption at rest, CSRF on all MVC forms, secure cookies, webhook HMAC secrets per repo, secret redaction in logs, and an audit-log table. Docker access is fully typed — no shell command strings.
+## 🧩 Add helper servers (multi-server)
 
-## Known limitations
+On each worker VPS:
 
-- Multi-server routes cross-node by publishing each remote app's port to a stable host port (no shared overlay), so an app and the managed services it attaches to should still live on the same node. Cross-node backups run against the target node's staging volume.
-- Remote-agent auth is a bearer token, with optional **mTLS** (client certificate) for hardened setups; certificate provisioning is handled by the installer.
-- Git connects via personal access token **or** OAuth (authorization-code) — OAuth requires registering an OAuth app and pasting its client id/secret once.
-- Monitoring metrics need Docker; CPU% is an aggregate of per-container stats (host-level CPU sampling is a later refinement). SSL-expiry alerts are wired to the alert model but populated once certificate metadata sync lands.
-- Health checks HTTP-probe the app's health path (container name on the local node, node host:published-port on a remote node), falling back to container-liveness when no health path is set.
-- Backups run on the server (they need Docker for volume tar/untar); config/platform backups are pure JSON and work anywhere.
-- Usage metering records the billing *basis* (GB-hours / vCPU-hours from committed resources); it does not include an invoicing/payment engine, and meters provisioned size rather than instantaneous consumption.
-- The frontend must be built (`npm run build`) before publishing; the Docker image does this automatically.
+```bash
+git clone https://github.com/sadrazkh/Harbora /opt/harbora/app && cd /opt/harbora/app/deploy
+docker build -f Dockerfile.agent -t harbora/agent:latest ..
+export HARBORA_AGENT_TOKEN=$(openssl rand -hex 24); echo "$HARBORA_AGENT_TOKEN"
+docker compose -f agent.compose.yml up -d
+```
+
+Then **Servers → Add a server** → `http://<worker-ip>:9700` + that token. New apps auto-schedule onto
+whichever node has room. Optional **mTLS** (client certificate) hardens the panel↔agent link.
+
+---
+
+## ✨ Features
+
+- **Deploy** from Git repo, Dockerfile, docker-compose, prebuilt image, static site, or one-click templates.
+- **Git integration**: connect GitHub/GitLab/Gitea by token **or OAuth**; deploy-on-push/tag via
+  HMAC-verified webhooks; commit metadata, deploy history, rollback.
+- **Visual routing designer**: drag-and-drop rules, host/path routing, SSL toggle, HTTP→HTTPS,
+  WebSocket, basic-auth, custom headers, live Traefik-config preview, validate + apply with rollback.
+- **Managed databases**: PostgreSQL, MySQL, MariaDB, Redis, MongoDB — provisioned with encrypted
+  credentials, safe connection info, one-click attach to an app.
+- **Backups**: app config, volume/database, full platform; local + S3-compatible; scheduled; retention;
+  download; restore (with a typed confirm).
+- **Monitoring + alerts**: host/container metrics, live CPU chart, app health, disk/backup/crash
+  warnings; notify via email / Telegram / Discord / custom webhook.
+- **Multi-tenant PaaS**: plans, instance sizes, quotas, capacity-aware scheduler, provider console,
+  per-tenant network isolation, usage metering.
+- **UI/UX**: premium Tailwind dashboard, dark mode, RTL/LTR, PWA (installable + offline shell), bilingual.
+- **Security**: first-run setup, PBKDF2 hashing, RBAC, API/CLI tokens (hashed), AES-GCM secrets at rest,
+  CSRF, secure cookies, webhook HMAC, audit log, secret redaction in logs.
+
+## 🏛 Architecture
+
+Clean, modular .NET solution (`Harbora.slnx`):
+
+```
+Domain → Application (ports) → Infrastructure / Data → Web
+                                             + Agent (remote nodes) · Cli · Shared
+```
+
+- **Reverse proxy: Traefik** — hot-reloads dynamic config (no restart), built-in Let's Encrypt, discovers
+  containers by label. The visual designer emits routes → Harbora renders/validates/applies Traefik config.
+- **CSS: Tailwind** — original, premium look (not a stock admin template), first-class dark mode + RTL/LTR.
+- **Frontend: Vue islands via Vite** — compiled into `wwwroot/build`; Razor hydrates only interactive
+  nodes. **No separate SPA server.**
+- **Containers: Docker.DotNet** — one `IDockerEngine` seam (local in-process, or a remote agent over HTTP);
+  no shell-string commands.
+- **Live logs: SignalR.** **Jobs: background worker + Redis.** **DB: PostgreSQL + EF Core.**
+
+## 🛠 Local development
+
+Prereqs: **.NET 10 SDK**, **Node 22**, **PostgreSQL** (Docker easiest).
+
+```bash
+docker run -d --name harbora-pg -e POSTGRES_USER=harbora -e POSTGRES_PASSWORD=harbora \
+  -e POSTGRES_DB=harbora -p 5432:5432 postgres:16-alpine
+
+cd src/Harbora.Web && npm install && npm run build && cd ../..   # build the Vue islands + Tailwind
+dotnet run --project src/Harbora.Web                             # auto-migrates + seeds → /setup
+```
+
+## ⚠️ Known limitations
+
+- Multi-server routes cross-node via published host ports (no shared overlay), so an app and the managed
+  services it attaches to should live on the same node.
+- Git OAuth requires registering an OAuth app (client id/secret); token connection needs no setup.
+- Usage metering records the billing *basis* (GB-hours / vCPU-hours from committed size); there's no
+  invoicing/payment engine yet.
+- Health checks HTTP-probe the app's health path (falling back to container-liveness when none is set).
 
 ## License
 

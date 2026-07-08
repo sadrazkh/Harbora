@@ -87,6 +87,9 @@ app.UseAuthorization();
 // Redirect everything to the setup wizard until the platform is initialised.
 app.UseMiddleware<SetupGuardMiddleware>();
 
+// Unauthenticated liveness probe for the installer / load balancer.
+app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
+
 app.MapControllers(); // attribute-routed API + controllers
 app.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
 app.MapHub<DeploymentHub>("/hubs/deployments");

@@ -49,6 +49,7 @@ public sealed class SetupGuardMiddleware(RequestDelegate next)
     private static bool IsExempt(string path) =>
         path.StartsWith("/setup", StringComparison.OrdinalIgnoreCase) ||
         path.StartsWith("/webhooks", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/healthz", StringComparison.OrdinalIgnoreCase) ||
         path.StartsWith("/css", StringComparison.OrdinalIgnoreCase) ||
         path.StartsWith("/js", StringComparison.OrdinalIgnoreCase) ||
         path.StartsWith("/build", StringComparison.OrdinalIgnoreCase) ||

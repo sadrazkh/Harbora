@@ -110,8 +110,10 @@ public sealed class DeploymentPipeline(
             }
             else
             {
-                // Give the local Traefik ingress into this tenant's network (idempotent).
+                // Give the local Traefik ingress into this tenant's network, and the panel reach
+                // for HTTP health checks by container name (both idempotent, best-effort).
                 await docker.ConnectNetworkAsync(_opt.ProxyContainerName, network, ct);
+                await docker.ConnectNetworkAsync(_opt.PanelContainerName, network, ct);
             }
 
             var env = BuildEnv(app);
