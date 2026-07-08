@@ -14,6 +14,9 @@ interface Route {
   redirectHttpToHttps: boolean;
   webSocketEnabled: boolean;
   basicAuthEnabled: boolean;
+  basicAuthUser: string | null;
+  basicAuthPassword: string | null;
+  basicAuthConfigured: boolean;
   customHeadersJson: string | null;
   redirectTo: string | null;
   isEnabled: boolean;
@@ -41,6 +44,7 @@ const dict: Record<string, [string, string]> = {
   port: ['پورت', 'Port'], type: ['نوع', 'Type'], ssl: ['SSL', 'SSL'],
   forceHttps: ['ریدایرکت HTTP→HTTPS', 'Redirect HTTP→HTTPS'], ws: ['WebSocket', 'WebSocket'],
   basicAuth: ['احراز پایه', 'Basic auth'], headers: ['هدرهای سفارشی (JSON)', 'Custom headers (JSON)'],
+  authUser: ['نام کاربری', 'Username'], authPass: ['گذرواژه', 'Password'], authSet: ['•••••• (تنظیم‌شده)', '•••••• (set)'],
   redirectTo: ['ریدایرکت به', 'Redirect to'], enabled: ['فعال', 'Enabled'],
   empty: ['هنوز مسیری نیست', 'No routes yet'], remove: ['حذف', 'Remove'],
   noConfig: ['برای دیدن کانفیگ، «کانفیگ تولیدشده» را بزنید.', 'Open “Generated config” to render.'],
@@ -56,6 +60,7 @@ function newRoute(): Route {
     id: null, appId: null, type: 'HostBased', host: '', pathPrefix: '/', priority: routes.length + 1,
     targetService: props.targets[0]?.service ?? '', targetPort: props.targets[0]?.port ?? 80,
     sslEnabled: true, redirectHttpToHttps: true, webSocketEnabled: false, basicAuthEnabled: false,
+    basicAuthUser: '', basicAuthPassword: '', basicAuthConfigured: false,
     customHeadersJson: null, redirectTo: null, isEnabled: true,
   };
 }
@@ -169,6 +174,12 @@ async function doSave() {
               <label class="flex items-center gap-2"><input type="checkbox" v-model="r.redirectHttpToHttps" @change="markDirty"> {{ t('forceHttps') }}</label>
               <label class="flex items-center gap-2"><input type="checkbox" v-model="r.webSocketEnabled" @change="markDirty"> {{ t('ws') }}</label>
               <label class="flex items-center gap-2"><input type="checkbox" v-model="r.basicAuthEnabled" @change="markDirty"> {{ t('basicAuth') }}</label>
+            </div>
+            <div v-if="r.basicAuthEnabled" class="grid grid-cols-2 gap-2">
+              <input v-model="r.basicAuthUser" @input="markDirty" :placeholder="t('authUser')" class="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm" />
+              <input v-model="r.basicAuthPassword" @input="markDirty" type="password"
+                     :placeholder="r.basicAuthConfigured ? t('authSet') : t('authPass')"
+                     class="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm" />
             </div>
             <label class="text-xs text-slate-400 block">{{ t('headers') }}
               <input v-model="r.customHeadersJson" @input="markDirty" placeholder='{"X-Frame-Options":"DENY"}' class="mt-1 w-full rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm font-mono" />

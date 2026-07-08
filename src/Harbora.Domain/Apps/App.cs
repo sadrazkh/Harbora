@@ -38,8 +38,12 @@ public class App : BaseEntity
 
     // --- Runtime config ---
     public int ContainerPort { get; set; } = 80;   // port the app listens on inside the container
+    /// <summary>Host port a remote node publishes the container on, so Traefik can route to it cross-node.</summary>
+    public int? PublishedHostPort { get; set; }
     public int? DesiredReplicas { get; set; } = 1;
     public string? HealthCheckPath { get; set; } = "/";
+    /// <summary>Chosen instance-size key; drives the container CPU/memory limits below.</summary>
+    public string? InstanceSizeKey { get; set; }
     public long MemoryLimitBytes { get; set; }
     public double CpuLimit { get; set; }
 

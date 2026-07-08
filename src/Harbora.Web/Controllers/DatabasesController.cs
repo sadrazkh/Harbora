@@ -21,6 +21,7 @@ namespace Harbora.Web.Controllers;
 public sealed partial class DatabasesController(
     HarboraDbContext db,
     IManagedServiceEngine engine,
+    IQuotaService quota,
     ISecretProtector protector,
     ICurrentUser currentUser) : Controller
 {
@@ -49,6 +50,10 @@ public sealed partial class DatabasesController(
     {
         var entry = engine.Catalog.FirstOrDefault(c => c.Type == model.Type);
         if (entry is null) ModelState.AddModelError(nameof(model.Type), "Unknown service type.");
+
+        var check = await quota.CanAddServiceAsync(WorkspaceId, ct);
+        if (!check.Allowed) ModelState.AddModelError(string.Empty, check.Reason ?? "Plan quota exceeded.");
+
         if (!ModelState.IsValid) { ViewBag.Catalog = engine.Catalog; return View(model); }
 
         var slug = Slugify(model.Name);

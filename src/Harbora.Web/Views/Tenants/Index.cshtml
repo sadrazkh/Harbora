@@ -1,0 +1,86 @@
+@model TenantsPageViewModel
+@{
+    ViewData["Title"] = "Tenants";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
+}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold">@(isFa ? "مستأجرها" : "Tenants")</h1>
+    <p class="text-slate-400 text-sm">@(isFa ? "workspaceهای مشتریان روی این پلتفرم و پلن هرکدام." : "Customer workspaces hosted on this platform and their plans.")</p>
+</div>
+
+@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
+
+<div class="grid lg:grid-cols-3 gap-6">
+    <section class="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
+        <table class="w-full text-sm">
+            <thead class="text-slate-400 border-b border-slate-800">
+                <tr>
+                    <th class="p-3 text-start">@(isFa ? "مستأجر" : "Tenant")</th>
+                    <th class="p-3 text-start">@(isFa ? "پلن" : "Plan")</th>
+                    <th class="p-3 text-start">@(isFa ? "کاربر/اپ/سرویس" : "Users/Apps/Svc")</th>
+                    <th class="p-3 text-end">@(isFa ? "عملیات" : "Actions")</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+                @foreach (var t in Model.Tenants)
+                {
+                    <tr class="@(t.Suspended ? "opacity-60" : "")">
+                        <td class="p-3">
+                            <div class="font-medium">@t.Name @if (t.IsDefault){<span class="text-xs rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">provider</span>}</div>
+                            <div class="text-xs text-slate-500 font-mono">@t.Slug</div>
+                        </td>
+                        <td class="p-3">
+                            <form asp-controller="Tenants" asp-action="AssignPlan" asp-route-id="@t.WorkspaceId" method="post" class="flex items-center gap-1">
+                                @Html.AntiForgeryToken()
+                                <select name="planId" onchange="this.form.submit()" class="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1 text-xs">
+                                    <option value="">@(isFa ? "پیش‌فرض" : "Default")</option>
+                                    @foreach (var p in Model.Plans)
+                                    {
+                                        <option value="@p.Id" selected="@(t.PlanId == p.Id)">@p.Name</option>
+                                    }
+                                </select>
+                            </form>
+                        </td>
+                        <td class="p-3 text-slate-400">@t.Members / @t.Apps / @t.Services</td>
+                        <td class="p-3">
+                            <div class="flex items-center justify-end gap-2">
+                                @if (t.Suspended)
+                                {
+                                    <span class="text-xs rounded bg-red-500/15 text-red-400 px-2 py-0.5">@(isFa ? "معلق" : "suspended")</span>
+                                }
+                                @if (!t.IsDefault)
+                                {
+                                    <form asp-controller="Tenants" asp-action="Suspend" asp-route-id="@t.WorkspaceId" method="post">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="suspended" value="@(t.Suspended ? "false" : "true")" />
+                                        <button class="text-xs rounded-lg bg-slate-800 hover:bg-slate-700 px-2 py-1">@(t.Suspended ? (isFa ? "فعال‌سازی" : "resume") : (isFa ? "تعلیق" : "suspend"))</button>
+                                    </form>
+                                }
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </section>
+
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 h-fit">
+        <h2 class="font-semibold mb-3">@(isFa ? "مستأجر جدید" : "New tenant")</h2>
+        <form asp-controller="Tenants" asp-action="Create" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <input name="name" placeholder="@(isFa ? "نام" : "Name")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <input name="slug" placeholder="slug (a-z0-9-)" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <select name="planId" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                <option value="">@(isFa ? "پلن پیش‌فرض" : "Default plan")</option>
+                @foreach (var p in Model.Plans)
+                {
+                    <option value="@p.Id">@p.Name</option>
+                }
+            </select>
+            <button class="w-full rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@(isFa ? "ساخت" : "Create")</button>
+        </form>
+        <p class="mt-2 text-xs text-slate-500">@(isFa ? "بعد از ساخت، در فاز بعد کاربر مشتری را دعوت می‌کنی." : "You'll invite the customer's user in the next phase.")</p>
+    </section>
+</div>

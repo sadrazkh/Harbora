@@ -23,7 +23,19 @@ public sealed class ServerEngineFactory(
             return local;
 
         var token = string.IsNullOrEmpty(server.AgentTokenHash) ? "" : SafeUnprotect(server.AgentTokenHash);
-        return new RemoteDockerEngine(httpFactory, server.AgentEndpoint!, token);
+
+        System.Security.Cryptography.X509Certificates.X509Certificate2? clientCert = null;
+        if (server.AgentUseMtls && !string.IsNullOrEmpty(server.AgentClientCertPfx))
+        {
+            try
+            {
+                var pfx = Convert.FromBase64String(SafeUnprotect(server.AgentClientCertPfx));
+                clientCert = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadPkcs12(pfx, password: null);
+            }
+            catch { /* fall back to token-only if the cert can't be loaded */ }
+        }
+
+        return new RemoteDockerEngine(httpFactory, server.AgentEndpoint!, token, clientCert);
     }
 
     private string SafeUnprotect(string value)

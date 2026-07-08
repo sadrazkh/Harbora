@@ -19,6 +19,7 @@ namespace Harbora.Web.Controllers;
 public sealed class RoutesController(
     HarboraDbContext db,
     IProxyEngine proxy,
+    ISecretProtector protector,
     ICurrentUser currentUser,
     IAntiforgery antiforgery) : Controller
 {
@@ -86,6 +87,15 @@ public sealed class RoutesController(
                 db.Routes.Add(entity);
             }
             dto.ApplyTo(entity);
+
+            // Basic-auth credentials: hash a newly entered password into an encrypted htpasswd line;
+            // keep the existing one if none supplied; clear it when auth is turned off.
+            if (dto.BasicAuthEnabled && !string.IsNullOrWhiteSpace(dto.BasicAuthPassword))
+                entity.BasicAuthUsersEncrypted = protector.Protect(
+                    Harbora.Infrastructure.Proxy.Htpasswd.Line(
+                        string.IsNullOrWhiteSpace(dto.BasicAuthUser) ? "admin" : dto.BasicAuthUser!, dto.BasicAuthPassword!));
+            else if (!dto.BasicAuthEnabled)
+                entity.BasicAuthUsersEncrypted = null;
         }
         await db.SaveChangesAsync(ct);
 

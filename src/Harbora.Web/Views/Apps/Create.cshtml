@@ -60,6 +60,14 @@
             <input asp-for="PrebuiltImage" placeholder="nginx:alpine" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
         </div>
 
+        @if (ViewBag.Sizes is List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> sizes && sizes.Count > 0)
+        {
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "اندازه‌ی منبع" : "Instance size")</label>
+                <select asp-for="InstanceSizeKey" asp-items="sizes" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2"></select>
+            </div>
+        }
+
         <div class="grid sm:grid-cols-2 gap-4">
             <div>
                 <label class="block text-sm text-slate-400 mb-1">Container Port</label>

@@ -2,7 +2,7 @@
 
 A self-hosted deployment platform — deploy and manage all your apps from a single, bilingual (فارسی/English, RTL/LTR) web UI. Think CapRover/Coolify in spirit, but with its own identity, a clean modular architecture, and a strong focus on UX and simplicity.
 
-> **Status:** Phases 1–6. Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback), **managed services** (Postgres / MySQL / MariaDB / Redis / MongoDB — provision, encrypted credentials, safe connection info, attach-to-app), **backups** (config + volume/database via one-off tar containers, local + S3-compatible destinations, scheduled runs, retention, download, and restore with a typed confirm), **monitoring + alerts** (host/container metrics time series, live CPU chart, per-app health, disk/backup/crash warnings, and notifications over email / Telegram / Discord / custom webhook), **Git integration** (connect GitHub/GitLab/Gitea by token, import repos, and deploy-on-push/tag via HMAC-verified webhooks), and **multi-server** (a token-authed Harbora Agent runs each remote node; the panel picks the right engine per server, so deploys, managed services and metrics all work across nodes). The whole platform is feature-complete against the original spec.
+> **Status:** Phases 1–6. Done: solution architecture, data model, single-server deploy engine (Git / Dockerfile / prebuilt image), Traefik routing + Let's Encrypt, live logs, first-run setup, auth, CLI, PWA, the **drag-and-drop routing designer** (visual route map, live Traefik-config preview, validate, save-and-apply with rollback), **managed services** (Postgres / MySQL / MariaDB / Redis / MongoDB — provision, encrypted credentials, safe connection info, attach-to-app), **backups** (config + volume/database via one-off tar containers, local + S3-compatible destinations, scheduled runs, retention, download, and restore with a typed confirm), **monitoring + alerts** (host/container metrics time series, live CPU chart, per-app health, disk/backup/crash warnings, and notifications over email / Telegram / Discord / custom webhook), **Git integration** (connect GitHub/GitLab/Gitea by token, import repos, and deploy-on-push/tag via HMAC-verified webhooks), and **multi-server** (a token-authed Harbora Agent runs each remote node; the panel picks the right engine per server, so deploys, managed services and metrics all work across nodes), and **multi-tenant PaaS foundations** (per-workspace **plans + instance sizes + quotas** — apps pick a resource tier, and app/service creation and deploys are quota-checked against the tenant's plan). The core is feature-complete against the original spec.
 
 ---
 
@@ -93,12 +93,11 @@ First-run setup, PBKDF2 password hashing (210k iterations), RBAC roles, API/CLI 
 
 ## Known limitations
 
-- Multi-server uses per-node bridge networks (no overlay yet), so an app and the managed services it attaches to should live on the same node. Cross-node backups run against the target node's staging volume.
-- Remote agent auth is a bearer token; mTLS is the planned hardening.
+- Multi-server routes cross-node by publishing each remote app's port to a stable host port (no shared overlay), so an app and the managed services it attaches to should still live on the same node. Cross-node backups run against the target node's staging volume.
+- Remote-agent auth is a bearer token, with optional **mTLS** (client certificate) for hardened setups; certificate provisioning is handled by the installer.
+- Git connects via personal access token **or** OAuth (authorization-code) — OAuth requires registering an OAuth app and pasting its client id/secret once.
 - Monitoring metrics need Docker; CPU% is an aggregate of per-container stats (host-level CPU sampling is a later refinement). SSL-expiry alerts are wired to the alert model but populated once certificate metadata sync lands.
-- Git providers connect via personal access token; full OAuth authorization-code flow is a later refinement. Webhook auto-deploy (push/tag) is complete with HMAC/token verification.
-- Route basic-auth: the toggle persists, but htpasswd credential injection at apply-time is the next refinement.
-- Health checks are container-liveness based (HTTP health probing is the next refinement).
+- Health checks HTTP-probe the app's health path (container name on the local node, node host:published-port on a remote node), falling back to container-liveness when no health path is set.
 - Backups run on the server (they need Docker for volume tar/untar); config/platform backups are pure JSON and work anywhere.
 - The frontend must be built (`npm run build`) before publishing; the Docker image does this automatically.
 

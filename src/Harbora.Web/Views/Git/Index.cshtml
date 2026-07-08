@@ -2,16 +2,37 @@
 @{
     ViewData["Title"] = "Git";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var oauthConfigured = ViewBag.OAuthConfigured as HashSet<string> ?? new();
+    var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
 }
 <div class="mb-6">
     <h1 class="text-2xl font-bold">@(isFa ? "اتصال Git" : "Git Providers")</h1>
     <p class="text-slate-400 text-sm">@(isFa ? "مخازن را وصل کنید و با هر push یا tag به‌صورت خودکار مستقر کنید." : "Connect repositories and deploy automatically on every push or tag.")</p>
 </div>
 
+@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
+
 <div class="grid lg:grid-cols-3 gap-6">
     <!-- Connect a provider -->
     <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
         <h2 class="font-semibold mb-3">@(isFa ? "اتصال provider" : "Connect a provider")</h2>
+
+        @* OAuth one-click connect (shown per provider once its OAuth app is configured) *@
+        @if (oauthConfigured.Count > 0)
+        {
+            <div class="space-y-2 mb-4">
+                @foreach (var t in new[] { "GitHub", "GitLab", "Gitea" })
+                {
+                    if (oauthConfigured.Contains(t))
+                    {
+                        <a href="/git/oauth/@t/start" class="block text-center rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm font-semibold">@(isFa ? "اتصال با " : "Connect with ")@t</a>
+                    }
+                }
+            </div>
+            <div class="text-xs text-slate-500 mb-4">@(isFa ? "یا با توکن دستی:" : "or with a manual token:")</div>
+        }
+
         <form asp-controller="Git" asp-action="Connect" method="post" class="space-y-3" data-provider-form>
             @Html.AntiForgeryToken()
             <input name="name" placeholder="Name" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
@@ -23,6 +44,24 @@
             <input name="token" type="password" placeholder="Access token (PAT)" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
             <button class="w-full rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@(isFa ? "اتصال" : "Connect")</button>
         </form>
+
+        <details class="mt-4">
+            <summary class="cursor-pointer text-sm text-brand-400">@(isFa ? "تنظیم OAuth app" : "Configure OAuth app")</summary>
+            <form asp-controller="Git" asp-action="SaveOAuthConfig" method="post" class="mt-3 space-y-2">
+                @Html.AntiForgeryToken()
+                <select name="type" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                    <option value="GitHub">GitHub</option><option value="GitLab">GitLab</option><option value="Gitea">Gitea</option>
+                </select>
+                <input name="clientId" placeholder="Client ID" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                <input name="clientSecret" type="password" placeholder="Client Secret" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                <input name="oauthBase" placeholder="OAuth base URL (Gitea/self-hosted)" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                <button class="w-full rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@(isFa ? "ذخیره" : "Save")</button>
+            </form>
+            <p class="mt-2 text-xs text-slate-500">
+                @(isFa ? "Redirect URI را در OAuth app ثبت کنید:" : "Register this redirect URI in your OAuth app:")
+                <code class="block break-all mt-1">@Model.WebhookBase/git/oauth/callback</code>
+            </p>
+        </details>
     </section>
 
     <!-- Providers + repos -->

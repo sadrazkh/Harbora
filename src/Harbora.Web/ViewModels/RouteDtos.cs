@@ -18,6 +18,11 @@ public sealed class RouteDto
     public bool RedirectHttpToHttps { get; set; } = true;
     public bool WebSocketEnabled { get; set; }
     public bool BasicAuthEnabled { get; set; }
+    /// <summary>Plaintext credentials entered in the designer (input only; never returned).</summary>
+    public string? BasicAuthUser { get; set; }
+    public string? BasicAuthPassword { get; set; }
+    /// <summary>Output flag: whether credentials are already stored for this route.</summary>
+    public bool BasicAuthConfigured { get; set; }
     public string? CustomHeadersJson { get; set; }
     public string? RedirectTo { get; set; }
     public bool IsEnabled { get; set; } = true;
@@ -36,6 +41,7 @@ public sealed class RouteDto
         RedirectHttpToHttps = r.RedirectHttpToHttps,
         WebSocketEnabled = r.WebSocketEnabled,
         BasicAuthEnabled = r.BasicAuthEnabled,
+        BasicAuthConfigured = !string.IsNullOrWhiteSpace(r.BasicAuthUsersEncrypted),
         CustomHeadersJson = r.CustomHeadersJson,
         RedirectTo = r.RedirectTo,
         IsEnabled = r.IsEnabled

@@ -109,4 +109,6 @@
   <data name="Actions"><value>عملیات</value></data>
   <data name="Git"><value>گیت</value></data>
   <data name="Servers"><value>سرورها</value></data>
+  <data name="Plans"><value>پلن‌ها</value></data>
+  <data name="Tenants"><value>مستأجرها</value></data>
 </root>

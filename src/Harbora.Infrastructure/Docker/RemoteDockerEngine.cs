@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Harbora.Application.Abstractions;
 
@@ -10,13 +11,27 @@ namespace Harbora.Infrastructure.Docker;
 /// (bearer-token auth). Control operations are JSON; build/pull/logs stream the agent's output
 /// back line-by-line into the caller's <see cref="IProgress{T}"/>.
 /// </summary>
-public sealed class RemoteDockerEngine(IHttpClientFactory httpFactory, string baseUrl, string token) : IDockerEngine
+public sealed class RemoteDockerEngine(
+    IHttpClientFactory httpFactory, string baseUrl, string token, X509Certificate2? clientCert = null) : IDockerEngine
 {
     // IncludeFields lets the ValueTuple mounts in DockerRunRequest/DockerOneOffRequest round-trip.
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { IncludeFields = true };
 
+    // When mTLS is on, a dedicated client presents the certificate (factory clients can't carry one).
+    private readonly HttpClient? _mtlsClient = clientCert is null ? null : BuildMtlsClient(baseUrl, token, clientCert);
+
+    private static HttpClient BuildMtlsClient(string baseUrl, string token, X509Certificate2 cert)
+    {
+        var handler = new SocketsHttpHandler();
+        handler.SslOptions.ClientCertificates = new X509CertificateCollection { cert };
+        var client = new HttpClient(handler) { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(30) };
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
     private HttpClient Client()
     {
+        if (_mtlsClient is not null) return _mtlsClient;
         var client = httpFactory.CreateClient();
         client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);

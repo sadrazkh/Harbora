@@ -2,6 +2,7 @@ using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Servers;
 using Harbora.Domain.Templates;
+using Harbora.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Web.Data;
@@ -26,7 +27,44 @@ public sealed class DbSeeder(HarboraDbContext db)
             else existing.ManifestJson = t.ManifestJson; // keep manifests current
         }
 
+        await SeedTenancyAsync();
+
         await db.SaveChangesAsync();
+    }
+
+    /// <summary>Seed instance sizes + default plans and ensure every workspace has a plan.</summary>
+    private async Task SeedTenancyAsync()
+    {
+        const long MB = 1024 * 1024;
+        foreach (var s in new[]
+        {
+            new InstanceSize { Key = "nano",   Name = "Nano",   NameFa = "نانو",   CpuCores = 0.25, MemoryBytes = 256 * MB,  IsBuiltIn = true, SortOrder = 1 },
+            new InstanceSize { Key = "micro",  Name = "Micro",  NameFa = "میکرو",  CpuCores = 0.5,  MemoryBytes = 512 * MB,  IsBuiltIn = true, SortOrder = 2 },
+            new InstanceSize { Key = "small",  Name = "Small",  NameFa = "کوچک",   CpuCores = 1,    MemoryBytes = 1024 * MB, IsBuiltIn = true, SortOrder = 3 },
+            new InstanceSize { Key = "medium", Name = "Medium", NameFa = "متوسط",  CpuCores = 2,    MemoryBytes = 2048 * MB, IsBuiltIn = true, SortOrder = 4 },
+            new InstanceSize { Key = "large",  Name = "Large",  NameFa = "بزرگ",   CpuCores = 4,    MemoryBytes = 4096 * MB, IsBuiltIn = true, SortOrder = 5 },
+        })
+        {
+            if (!await db.InstanceSizes.AnyAsync(x => x.Key == s.Key)) db.InstanceSizes.Add(s);
+        }
+
+        if (!await db.Plans.AnyAsync())
+        {
+            db.Plans.AddRange(
+                // The provider's own workspace runs on this unlimited default.
+                new Plan { Name = "Provider", NameFa = "اپراتور", IsDefault = true },
+                new Plan { Name = "Starter", NameFa = "شروع", MaxApps = 2, MaxServices = 1,
+                    MaxMemoryBytes = 1024 * MB, MaxCpuCores = 1, AllowedSizeKeys = "nano,micro", MonthlyPrice = 5 },
+                new Plan { Name = "Pro", NameFa = "حرفه‌ای", MaxApps = 10, MaxServices = 5,
+                    MaxMemoryBytes = 8192 * MB, MaxCpuCores = 8, AllowedSizeKeys = "nano,micro,small,medium", MonthlyPrice = 25 });
+        }
+        await db.SaveChangesAsync();
+
+        // Ensure existing workspaces point at the default plan.
+        var defaultPlanId = await db.Plans.Where(p => p.IsDefault).Select(p => p.Id).FirstOrDefaultAsync();
+        if (defaultPlanId != Guid.Empty)
+            await db.Workspaces.Where(w => w.PlanId == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(w => w.PlanId, defaultPlanId));
     }
 
     /// <summary>

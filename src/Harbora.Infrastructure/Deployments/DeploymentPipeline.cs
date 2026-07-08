@@ -24,6 +24,7 @@ public sealed class DeploymentPipeline(
     ISecretProtector protector,
     ISecretRedactor redactor,
     INotificationService notifications,
+    IHttpClientFactory httpFactory,
     ISystemClock clock,
     IOptions<HarboraRuntimeOptions> options,
     ILogger<DeploymentPipeline> logger)
@@ -88,6 +89,21 @@ public sealed class DeploymentPipeline(
             var containerName = $"harbora-{app.Slug}";
             await RemoveExistingContainerAsync(docker, containerName, Log, ct);
 
+            // Decide how the proxy reaches this app. On the local node Traefik shares the harbora
+            // network and routes by container name. On a remote node there is no shared overlay, so
+            // we publish the container port to a stable host port and route to the node's host:port.
+            var server = await db.Servers.FirstAsync(s => s.Id == app.ServerId, ct);
+            int? publishPort = null;
+            string upstreamHost = containerName;
+            var upstreamPort = app.ContainerPort;
+            if (!server.IsLocal)
+            {
+                app.PublishedHostPort ??= AllocateHostPort(app.Slug);
+                publishPort = app.PublishedHostPort;
+                upstreamHost = server.Hostname;
+                upstreamPort = app.PublishedHostPort!.Value;
+            }
+
             var env = BuildEnv(app);
             var labels = new Dictionary<string, string>
             {
@@ -100,14 +116,16 @@ public sealed class DeploymentPipeline(
             var containerId = await docker.RunContainerAsync(new DockerRunRequest(
                 imageTag, containerName, _opt.Network, env, labels,
                 app.Volumes.Select(v => (v.Name, v.MountPath, v.ReadOnly)).ToList(),
-                app.ContainerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath), ct);
+                app.ContainerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath,
+                Command: null, PublishToHostPort: publishPort), ct);
 
             await Log(LogStream.System, $"Container {containerId[..12]} is up. Verifying health …");
-            var healthy = await WaitForHealthyAsync(docker, containerName, ct);
+            var healthy = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort, containerName, app.HealthCheckPath,
+                msg => Log(LogStream.System, msg), ct);
             if (!healthy)
                 throw new InvalidOperationException("Container failed its health check.");
 
-            await WireProxyAsync(app, containerName, Log, ct);
+            await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
 
             deployment.Status = DeploymentStatus.Succeeded;
             deployment.FinishedAt = clock.UtcNow;
@@ -196,23 +214,56 @@ public sealed class DeploymentPipeline(
         await docker.RemoveContainerAsync(match.Id, force: true, ct);
     }
 
-    private async Task<bool> WaitForHealthyAsync(IDockerEngine docker, string containerName, CancellationToken ct)
+    /// <summary>
+    /// Health gate: first wait for the container to reach "running" (fail fast if it exits). Then,
+    /// for a local-server app with a health path, HTTP-probe it over the shared harbora network
+    /// until it returns a success status. Remote nodes fall back to liveness (the panel can't reach
+    /// their containers by name without an overlay network).
+    /// </summary>
+    private async Task<bool> WaitForHealthyAsync(
+        IDockerEngine docker, string upstreamHost, int upstreamPort, string containerName, string? healthPath,
+        Func<string, Task> log, CancellationToken ct)
     {
-        // MVP health check: confirm the container is still running after a short settle period.
-        for (var i = 0; i < 6; i++)
+        var running = false;
+        for (var i = 0; i < 8 && !running; i++)
         {
             await Task.Delay(TimeSpan.FromSeconds(2), ct);
-            var containers = await docker.ListContainersAsync("harbora.app", ct);
-            var c = containers.FirstOrDefault(x => x.Name == containerName);
+            var c = (await docker.ListContainersAsync("harbora.app", ct)).FirstOrDefault(x => x.Name == containerName);
             if (c is null) return false;
-            if (c.State.Equals("running", StringComparison.OrdinalIgnoreCase)) return true;
             if (c.State.Equals("exited", StringComparison.OrdinalIgnoreCase)) return false;
+            running = c.State.Equals("running", StringComparison.OrdinalIgnoreCase);
         }
-        return true;
+        if (!running) return false;
+
+        if (string.IsNullOrWhiteSpace(healthPath))
+            return true;
+
+        // Probe the same address the proxy will use: container name on the local network, or the
+        // node's host:publishedPort for a remote node.
+        var url = $"http://{upstreamHost}:{upstreamPort}/{healthPath.TrimStart('/')}";
+        await log($"HTTP health check → {url}");
+        var client = httpFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(5);
+
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                using var res = await client.GetAsync(url, ct);
+                if ((int)res.StatusCode < 400) return true;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                // App still booting / not accepting connections yet — keep trying.
+            }
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        }
+        await log("Health check did not pass within the timeout.");
+        return false;
     }
 
     /// <summary>Materialise a Route per domain then re-apply the whole workspace's proxy config.</summary>
-    private async Task WireProxyAsync(App app, string containerName, Func<LogStream, string, Task> log, CancellationToken ct)
+    private async Task WireProxyAsync(App app, string upstreamHost, int upstreamPort, Func<LogStream, string, Task> log, CancellationToken ct)
     {
         if (app.Domains.Count == 0)
         {
@@ -228,8 +279,8 @@ public sealed class DeploymentPipeline(
                 route = new Route { WorkspaceId = app.WorkspaceId, AppId = app.Id, Host = domain.Host };
                 db.Routes.Add(route);
             }
-            route.TargetService = containerName;
-            route.TargetPort = app.ContainerPort;
+            route.TargetService = upstreamHost;
+            route.TargetPort = upstreamPort;
             route.SslEnabled = domain.SslEnabled;
             route.RedirectHttpToHttps = domain.ForceHttps;
             route.IsEnabled = true;
@@ -241,6 +292,14 @@ public sealed class DeploymentPipeline(
         await log(LogStream.System, result.Success
             ? "Proxy configuration applied."
             : $"⚠ Proxy apply failed{(result.RolledBack ? " (rolled back)" : "")}: {result.Error}");
+    }
+
+    /// <summary>Deterministic host port (20000–29999) for a remote app's published container port.</summary>
+    private static int AllocateHostPort(string slug)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(slug));
+        var value = BitConverter.ToUInt32(hash, 0);
+        return 20000 + (int)(value % 10000);
     }
 
     private string SafeUnprotect(string value)

@@ -54,6 +54,11 @@
             <a href="/backups" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Backups")">@T["Backups"]</a>
             <a href="/monitoring" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Monitoring")">@T["Monitoring"]</a>
             <a href="/servers" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Servers")">@T["Servers"]</a>
+            <a href="/plans" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Plans")">@T["Plans"]</a>
+            @if (User.IsInRole("Owner") || User.IsInRole("Admin"))
+            {
+                <a href="/tenants" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Tenants")">@T["Tenants"]</a>
+            }
             <a href="/templates" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Templates")">@T["Templates"]</a>
             <a href="/settings" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Settings")">@T["Settings"]</a>
         </nav>

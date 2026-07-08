@@ -41,6 +41,7 @@ public static class DependencyInjection
         // Git providers (repo import) + webhook processing (deploy on push/tag).
         services.AddScoped<IGitProviderClient, Git.GitProviderClient>();
         services.AddScoped<IGitWebhookProcessor, Git.GitWebhookProcessor>();
+        services.AddScoped<IGitOAuthService, Git.GitOAuthService>();
 
         // Security
         var masterKey = config["Harbora:MasterKey"]
@@ -71,6 +72,11 @@ public static class DependencyInjection
         services.AddScoped<Backups.BackupEngine>();
         services.AddScoped<IBackupEngine>(sp => sp.GetRequiredService<Backups.BackupEngine>());
         services.AddHostedService<Backups.BackupScheduler>();
+
+        // Tenancy quotas + node capacity (PaaS).
+        services.AddScoped<IQuotaService, Tenancy.QuotaService>();
+        services.AddScoped<INodeCapacityService, Tenancy.NodeCapacityService>();
+        services.AddScoped<ISchedulerService, Tenancy.SchedulerService>();
 
         // Monitoring + notifications.
         services.AddHttpClient();

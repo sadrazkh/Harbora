@@ -1,13 +1,28 @@
+using System.Security.Cryptography.X509Certificates;
 using Docker.DotNet;
 using Harbora.Agent;
 using Harbora.Application.Abstractions;
 using Harbora.Infrastructure.Docker;
-using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Sync writes are needed to stream ordered log lines straight to the response body.
-builder.WebHost.ConfigureKestrel(o => o.AllowSynchronousIO = true);
+// Optional mTLS: when enabled the agent is served over HTTPS and requires a client certificate
+// that chains to the configured CA (in addition to the bearer token). Provisioned by the installer.
+var requireClientCert = builder.Configuration.GetValue("Agent:RequireClientCert", false);
+var clientCa = requireClientCert ? LoadCa(builder.Configuration["Agent:ClientCaPem"]) : null;
+
+builder.WebHost.ConfigureKestrel(o =>
+{
+    // Sync writes are needed to stream ordered log lines straight to the response body.
+    o.AllowSynchronousIO = true;
+    if (clientCa is not null)
+        o.ConfigureHttpsDefaults(https =>
+        {
+            https.ClientCertificateMode = ClientCertificateMode.RequireCertificate;
+            https.ClientCertificateValidation = (cert, _, _) => ChainsTo(cert, clientCa);
+        });
+});
 
 // The agent only needs the container runtime — not the panel's DB/EF stack.
 builder.Services.AddSingleton<IDockerClient>(_ =>
@@ -92,6 +107,24 @@ static IReadOnlyDictionary<string, string> ParseBuildArgs(string header) =>
     string.IsNullOrWhiteSpace(header)
         ? new Dictionary<string, string>()
         : System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(header) ?? new();
+
+// Load a CA certificate from a PEM string or a file path.
+static X509Certificate2? LoadCa(string? pemOrPath)
+{
+    if (string.IsNullOrWhiteSpace(pemOrPath)) return null;
+    var pem = File.Exists(pemOrPath) ? File.ReadAllText(pemOrPath) : pemOrPath;
+    return X509Certificate2.CreateFromPem(pem);
+}
+
+// True when the presented client cert chains to our custom CA (no external trust required).
+static bool ChainsTo(X509Certificate2 clientCert, X509Certificate2 ca)
+{
+    using var chain = new X509Chain();
+    chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+    chain.ChainPolicy.CustomTrustStore.Add(ca);
+    chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+    return chain.Build(clientCert);
+}
 
 namespace Harbora.Agent
 {

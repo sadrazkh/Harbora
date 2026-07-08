@@ -83,7 +83,17 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         };
 
         if (r.ContainerPort is { } port)
+        {
             create.ExposedPorts = new Dictionary<string, EmptyStruct> { [$"{port}/tcp"] = default };
+
+            // Publish to a host port so a remote node's container is reachable across the network
+            // (used for cross-node routing where there is no shared overlay network).
+            if (r.PublishToHostPort is { } hostPort)
+                hostConfig.PortBindings = new Dictionary<string, IList<PortBinding>>
+                {
+                    [$"{port}/tcp"] = [new PortBinding { HostPort = hostPort.ToString() }]
+                };
+        }
 
         if (r.Command is { Count: > 0 })
             create.Cmd = r.Command.ToList();

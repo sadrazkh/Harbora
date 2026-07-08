@@ -55,7 +55,8 @@ public record DockerRunRequest(
     long MemoryLimitBytes,
     double CpuLimit,
     string? HealthCheckPath,
-    IReadOnlyList<string>? Command = null);
+    IReadOnlyList<string>? Command = null,
+    int? PublishToHostPort = null);
 
 public record ContainerInfo(string Id, string Name, string Image, string State, string Status, IReadOnlyDictionary<string, string> Labels);
 public record ContainerStats(double CpuPercent, long MemoryUsedBytes, long MemoryLimitBytes, long NetRxBytes, long NetTxBytes);

@@ -41,6 +41,8 @@ public sealed class CreateAppViewModel
     public Guid? TemplateId { get; set; }
     /// <summary>Target node; defaults to the local server when unset.</summary>
     public Guid? ServerId { get; set; }
+    /// <summary>Resource tier; sets the container CPU/memory limits and is quota-checked.</summary>
+    public string? InstanceSizeKey { get; set; }
 }
 
 public sealed class CreateServiceViewModel

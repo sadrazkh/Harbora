@@ -17,6 +17,7 @@ namespace Harbora.Web.Controllers;
 public sealed class ServersController(
     HarboraDbContext db,
     IServerEngineFactory engineFactory,
+    INodeCapacityService capacity,
     ISecretProtector protector,
     Harbora.Application.Abstractions.ISystemClock clock) : Controller
 {
@@ -25,12 +26,13 @@ public sealed class ServersController(
     {
         ViewData["Title"] = "Servers";
         var servers = await db.Servers.OrderByDescending(s => s.IsLocal).ThenBy(s => s.Name).ToListAsync(ct);
+        ViewBag.Capacities = (await capacity.GetAllAsync(ct)).ToDictionary(c => c.ServerId);
         return View(servers);
     }
 
     [HttpPost("add")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Add(string name, string agentEndpoint, string token, CancellationToken ct)
+    public async Task<IActionResult> Add(string name, string agentEndpoint, string token, bool useMtls, string? clientCertPfxBase64, CancellationToken ct)
     {
         var host = Uri.TryCreate(agentEndpoint, UriKind.Absolute, out var uri) ? uri.Host : agentEndpoint;
         var server = new Server
@@ -40,6 +42,9 @@ public sealed class ServersController(
             IsLocal = false,
             AgentEndpoint = agentEndpoint.TrimEnd('/'),
             AgentTokenHash = string.IsNullOrWhiteSpace(token) ? null : protector.Protect(token),
+            AgentUseMtls = useMtls,
+            AgentClientCertPfx = useMtls && !string.IsNullOrWhiteSpace(clientCertPfxBase64)
+                ? protector.Protect(clientCertPfxBase64.Trim()) : null,
             Status = ServerStatus.Unknown
         };
         db.Servers.Add(server);

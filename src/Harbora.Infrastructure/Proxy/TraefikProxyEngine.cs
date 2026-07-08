@@ -13,7 +13,10 @@ namespace Harbora.Infrastructure.Proxy;
 /// atomically: write to a temp file, back up the current one, swap in place, and roll back the
 /// file if anything throws. Traefik picks up the change via its file-provider watcher.
 /// </summary>
-public sealed class TraefikProxyEngine(IOptions<TraefikOptions> options, ILogger<TraefikProxyEngine> logger) : IProxyEngine
+public sealed class TraefikProxyEngine(
+    IOptions<TraefikOptions> options,
+    ISecretProtector protector,
+    ILogger<TraefikProxyEngine> logger) : IProxyEngine
 {
     private readonly TraefikOptions _opt = options.Value;
 
@@ -166,10 +169,13 @@ public sealed class TraefikProxyEngine(IOptions<TraefikOptions> options, ILogger
         }
         if (r.BasicAuthEnabled && !string.IsNullOrWhiteSpace(r.BasicAuthUsersEncrypted))
         {
-            // Note: the caller decrypts and re-supplies htpasswd lines before render in production.
+            var users = SafeDecrypt(r.BasicAuthUsersEncrypted!)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             sb.AppendLine($"    {name}-auth:");
             sb.AppendLine("      basicAuth:");
-            sb.AppendLine("        users: []  # populated at apply time from encrypted store");
+            sb.AppendLine("        users:");
+            foreach (var u in users)
+                sb.AppendLine($"          - \"{u}\"");
         }
     }
 
@@ -180,12 +186,20 @@ public sealed class TraefikProxyEngine(IOptions<TraefikOptions> options, ILogger
         if (r.RedirectHttpToHttps) list.Add($"{name}-https");
         if (r.Type == RouteType.Redirect && !string.IsNullOrWhiteSpace(r.RedirectTo)) list.Add($"{name}-redirect");
         if (r.CustomHeadersJson is { Length: > 0 }) list.Add($"{name}-headers");
-        if (r.BasicAuthEnabled) list.Add($"{name}-auth");
+        // Only reference the auth middleware when credentials actually exist, so the router never
+        // points at a middleware we didn't render.
+        if (r.BasicAuthEnabled && !string.IsNullOrWhiteSpace(r.BasicAuthUsersEncrypted)) list.Add($"{name}-auth");
         return list;
     }
 
     private static string RouterName(Route r) =>
         "r-" + r.Id.ToString("N")[..12];
+
+    private string SafeDecrypt(string cipher)
+    {
+        try { return protector.Unprotect(cipher); }
+        catch { return string.Empty; }
+    }
 
     private static bool TryParseHeaders(string json, out Dictionary<string, string> headers)
     {

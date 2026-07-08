@@ -9,6 +9,12 @@ public class Workspace : BaseEntity
     public string Slug { get; set; } = string.Empty;
     public bool IsDefault { get; set; }
 
+    /// <summary>Tenancy plan governing this workspace's quotas (null = platform default plan).</summary>
+    public Guid? PlanId { get; set; }
+
+    /// <summary>When suspended (e.g. overdue), new deploys are blocked.</summary>
+    public bool IsSuspended { get; set; }
+
     public ICollection<WorkspaceMember> Members { get; set; } = new List<WorkspaceMember>();
 }
 

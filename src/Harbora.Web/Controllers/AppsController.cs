@@ -16,6 +16,8 @@ namespace Harbora.Web.Controllers;
 public sealed class AppsController(
     HarboraDbContext db,
     IDeploymentEngine deployEngine,
+    IQuotaService quota,
+    ISchedulerService scheduler,
     ISecretProtector protector,
     ICurrentUser currentUser,
     ISystemClock clock) : Controller
@@ -50,15 +52,32 @@ public sealed class AppsController(
         if (model.SourceType == AppSourceType.PrebuiltImage && string.IsNullOrWhiteSpace(model.PrebuiltImage))
             ModelState.AddModelError(nameof(model.PrebuiltImage), "An image reference is required.");
 
+        // Resolve the instance size (drives container limits + scheduling).
+        var size = string.IsNullOrWhiteSpace(model.InstanceSizeKey)
+            ? null
+            : await db.InstanceSizes.FirstOrDefaultAsync(s => s.Key == model.InstanceSizeKey, ct);
+        var needMem = size?.MemoryBytes ?? 0;
+        var needCpu = size?.CpuCores ?? 0;
+
+        // Enforce the workspace's plan quota before creating anything.
+        var check = await quota.CanAddAppAsync(WorkspaceId, model.InstanceSizeKey, excludeAppId: null, ct);
+        if (!check.Allowed)
+            ModelState.AddModelError(string.Empty, check.Reason ?? "Plan quota exceeded.");
+
+        // Place on a node with capacity: honour an explicit choice (guarded) or auto-schedule.
+        var placement = model.ServerId is { } chosen && await db.Servers.AnyAsync(s => s.Id == chosen, ct)
+            ? await scheduler.CheckAsync(chosen, needMem, needCpu, ct)
+            : await scheduler.PlaceAsync(needMem, needCpu, await PlanPoolAsync(ct), ct);
+        if (!placement.Ok)
+            ModelState.AddModelError(string.Empty, placement.Reason ?? "No server has capacity for this instance size.");
+
         if (!ModelState.IsValid)
         {
             await PopulateTemplates(ct);
             return View(model);
         }
 
-        var serverId = model.ServerId is { } sid && await db.Servers.AnyAsync(s => s.Id == sid, ct)
-            ? sid
-            : await db.Servers.Where(s => s.IsLocal).Select(s => s.Id).FirstAsync(ct);
+        var serverId = placement.ServerId!.Value;
         var app = new App
         {
             WorkspaceId = WorkspaceId,
@@ -70,7 +89,10 @@ public sealed class AppsController(
             DockerfilePath = model.DockerfilePath,
             PrebuiltImage = model.PrebuiltImage,
             GitRef = model.GitRef,
-            TemplateId = model.TemplateId
+            TemplateId = model.TemplateId,
+            InstanceSizeKey = size?.Key,
+            MemoryLimitBytes = size?.MemoryBytes ?? 0,
+            CpuLimit = size?.CpuCores ?? 0
         };
 
         if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile)
@@ -124,6 +146,14 @@ public sealed class AppsController(
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
+        // Block deploys for suspended/over-quota workspaces (excludes this app from the count).
+        var check = await quota.CanAddAppAsync(WorkspaceId, app.InstanceSizeKey, excludeAppId: app.Id, ct);
+        if (!check.Allowed)
+        {
+            TempData["Error"] = check.Reason;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
         var deploymentId = await deployEngine.QueueDeploymentAsync(
             new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, gitRef ?? app.GitRef), ct);
 
@@ -151,6 +181,30 @@ public sealed class AppsController(
 
         ViewBag.Servers = await db.Servers.OrderByDescending(s => s.IsLocal).ThenBy(s => s.Name)
             .Select(s => new SelectListItem(s.IsLocal ? s.Name + " (local)" : s.Name, s.Id.ToString())).ToListAsync(ct);
+
+        // Offer only the instance sizes this workspace's plan allows.
+        var plan = await db.Workspaces.Where(w => w.Id == WorkspaceId).Select(w => w.PlanId).FirstOrDefaultAsync(ct) is { } pid
+            ? await db.Plans.FirstOrDefaultAsync(p => p.Id == pid, ct)
+            : await db.Plans.FirstOrDefaultAsync(p => p.IsDefault, ct);
+        var allowed = plan is null || string.IsNullOrWhiteSpace(plan.AllowedSizeKeys)
+            ? null
+            : plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var sizes = await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct);
+        ViewBag.Sizes = sizes
+            .Where(s => allowed is null || allowed.Contains(s.Key))
+            .Select(s => new SelectListItem($"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key))
+            .ToList();
+    }
+
+    /// <summary>The node pool this workspace's plan restricts placement to (null = any pool).</summary>
+    private async Task<string?> PlanPoolAsync(CancellationToken ct)
+    {
+        var planId = await db.Workspaces.Where(w => w.Id == WorkspaceId).Select(w => w.PlanId).FirstOrDefaultAsync(ct);
+        var pool = planId is { } pid
+            ? await db.Plans.Where(p => p.Id == pid).Select(p => p.NodePool).FirstOrDefaultAsync(ct)
+            : await db.Plans.Where(p => p.IsDefault).Select(p => p.NodePool).FirstOrDefaultAsync(ct);
+        return string.IsNullOrWhiteSpace(pool) ? null : pool;
     }
 
     private static string DeriveRepoName(string cloneUrl)

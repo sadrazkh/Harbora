@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260707113109_MultiServerAndPublishedPort")]
+    partial class MultiServerAndPublishedPort
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -68,9 +71,6 @@ namespace Harbora.Data.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<string>("HealthCheckPath")
-                        .HasColumnType("text");
-
-                    b.Property<string>("InstanceSizeKey")
                         .HasColumnType("text");
 
                     b.Property<long>("MemoryLimitBytes")
@@ -670,15 +670,9 @@ namespace Harbora.Data.Migrations
                     b.Property<bool>("IsDefault")
                         .HasColumnType("boolean");
 
-                    b.Property<bool>("IsSuspended")
-                        .HasColumnType("boolean");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<Guid?>("PlanId")
-                        .HasColumnType("uuid");
 
                     b.Property<string>("Slug")
                         .IsRequired()
@@ -986,9 +980,6 @@ namespace Harbora.Data.Migrations
                     b.Property<int>("CpuCores")
                         .HasColumnType("integer");
 
-                    b.Property<double>("CpuOvercommitFactor")
-                        .HasColumnType("double precision");
-
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1008,13 +999,6 @@ namespace Harbora.Data.Migrations
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<string>("Pool")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<double>("ReservedMemoryRatio")
-                        .HasColumnType("double precision");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");
@@ -1182,110 +1166,6 @@ namespace Harbora.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("AppTemplates");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Tenancy.InstanceSize", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<double>("CpuCores")
-                        .HasColumnType("double precision");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("IsBuiltIn")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("IsEnabled")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Key")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<long>("MemoryBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("NameFa")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("SortOrder")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Key")
-                        .IsUnique();
-
-                    b.ToTable("InstanceSizes");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Tenancy.Plan", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("AllowedSizeKeys")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("IsDefault")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("IsEnabled")
-                        .HasColumnType("boolean");
-
-                    b.Property<int>("MaxApps")
-                        .HasColumnType("integer");
-
-                    b.Property<double>("MaxCpuCores")
-                        .HasColumnType("double precision");
-
-                    b.Property<long>("MaxDiskBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<long>("MaxMemoryBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<int>("MaxServices")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("MonthlyPrice")
-                        .HasPrecision(10, 2)
-                        .HasColumnType("numeric(10,2)");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("NameFa")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("NodePool")
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("Plans");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Apps.App", b =>
