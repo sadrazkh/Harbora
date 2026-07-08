@@ -89,6 +89,77 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
         return RedirectToAction(nameof(Index));
     }
 
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> Details(Guid id, CancellationToken ct)
+    {
+        var ws = await db.Workspaces.FirstOrDefaultAsync(w => w.Id == id, ct);
+        if (ws is null) return NotFound();
+        ViewData["Title"] = ws.Name;
+
+        var members = await db.WorkspaceMembers.Where(m => m.WorkspaceId == id)
+            .Join(db.Users, m => m.UserId, u => u.Id, (m, u) => new TenantMember(u.Id, u.Email, u.DisplayName, m.Role.ToString(), u.IsActive))
+            .OrderBy(m => m.Email).ToListAsync(ct);
+
+        return View(new TenantDetailsViewModel
+        {
+            WorkspaceId = ws.Id, Name = ws.Name, Slug = ws.Slug, IsDefault = ws.IsDefault, Members = members
+        });
+    }
+
+    /// <summary>Add a customer user to the workspace (create the account if the email is new).</summary>
+    [HttpPost("{id:guid}/members")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> AddMember(Guid id, string email, string? displayName, string? password, WorkspaceRole role, CancellationToken ct)
+    {
+        var ws = await db.Workspaces.FirstOrDefaultAsync(w => w.Id == id, ct);
+        if (ws is null) return NotFound();
+
+        email = (email ?? "").Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            TempData["Error"] = "Email is required.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email, ct);
+        if (user is null)
+        {
+            if (string.IsNullOrWhiteSpace(password) || password.Length < 8)
+            {
+                TempData["Error"] = "A temporary password (min 8 chars) is required for a new user.";
+                return RedirectToAction(nameof(Details), new { id });
+            }
+            user = new User
+            {
+                Email = email,
+                DisplayName = string.IsNullOrWhiteSpace(displayName) ? email : displayName,
+                PasswordHash = hasher.Hash(password),
+                Role = SystemRole.Member // a tenant user, not a platform admin
+            };
+            db.Users.Add(user);
+        }
+
+        if (await db.WorkspaceMembers.AnyAsync(m => m.WorkspaceId == id && m.UserId == user.Id, ct))
+        {
+            TempData["Error"] = "This user is already a member.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        db.WorkspaceMembers.Add(new WorkspaceMember { Workspace = ws, User = user, Role = role });
+        await db.SaveChangesAsync(ct);
+        TempData["Message"] = $"Added {email} as {role}.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    [HttpPost("{id:guid}/members/{userId:guid}/remove")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RemoveMember(Guid id, Guid userId, CancellationToken ct)
+    {
+        await db.WorkspaceMembers.Where(m => m.WorkspaceId == id && m.UserId == userId).ExecuteDeleteAsync(ct);
+        TempData["Message"] = "Member removed.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
     private static string Slugify(string value)
     {
         var slug = NonSlug().Replace(value.Trim().ToLowerInvariant(), "-").Trim('-');

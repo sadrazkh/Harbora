@@ -1,0 +1,58 @@
+@model TenantDetailsViewModel
+@{
+    ViewData["Title"] = Model.Name;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
+}
+<div class="mb-6">
+    <a href="/tenants" class="text-brand-400 text-sm">← @(isFa ? "مستأجرها" : "Tenants")</a>
+    <h1 class="text-2xl font-bold">@Model.Name <span class="text-sm text-slate-500 font-mono">@Model.Slug</span></h1>
+</div>
+
+@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
+
+<div class="grid lg:grid-cols-3 gap-6">
+    <section class="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800 font-semibold">@(isFa ? "اعضا" : "Members")</div>
+        <table class="w-full text-sm">
+            <tbody class="divide-y divide-slate-800">
+                @if (Model.Members.Count == 0){<tr><td class="p-4 text-slate-400">—</td></tr>}
+                @foreach (var m in Model.Members)
+                {
+                    <tr>
+                        <td class="p-3">
+                            <div class="font-medium">@m.DisplayName</div>
+                            <div class="text-xs text-slate-500">@m.Email</div>
+                        </td>
+                        <td class="p-3"><span class="text-xs rounded bg-slate-800 px-2 py-0.5 text-slate-300">@m.WorkspaceRole</span></td>
+                        <td class="p-3 text-end">
+                            <form asp-controller="Tenants" asp-action="RemoveMember" asp-route-id="@Model.WorkspaceId" asp-route-userId="@m.UserId" method="post"
+                                  onsubmit="return confirm('@(isFa ? "حذف عضو؟" : "Remove member?")')">
+                                @Html.AntiForgeryToken()
+                                <button class="text-xs text-red-400">@(isFa ? "حذف" : "remove")</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </section>
+
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 h-fit">
+        <h2 class="font-semibold mb-3">@(isFa ? "افزودن کاربر" : "Add a user")</h2>
+        <form asp-controller="Tenants" asp-action="AddMember" asp-route-id="@Model.WorkspaceId" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <input name="email" type="email" placeholder="@(isFa ? "ایمیل" : "Email")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <input name="displayName" placeholder="@(isFa ? "نام نمایشی" : "Display name")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <input name="password" type="password" placeholder="@(isFa ? "گذرواژه موقت (کاربر جدید)" : "Temp password (new user)")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <select name="role" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                <option value="Admin">@(isFa ? "مدیر workspace" : "Workspace admin")</option>
+                <option value="Member" selected>@(isFa ? "عضو" : "Member")</option>
+                <option value="Viewer">@(isFa ? "بیننده" : "Viewer")</option>
+            </select>
+            <button class="w-full rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@(isFa ? "افزودن" : "Add")</button>
+        </form>
+        <p class="mt-2 text-xs text-slate-500">@(isFa ? "اگر ایمیل موجود باشد، فقط عضو می‌شود؛ وگرنه حساب ساخته می‌شود." : "Existing email → just added; otherwise an account is created.")</p>
+    </section>
+</div>
