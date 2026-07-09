@@ -1,0 +1,79 @@
+@model List<DomainRow>
+@{
+    ViewData["Title"] = "Domains";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var serverIp = ViewBag.ServerIp as string ?? "?";
+}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold">@(isFa ? "دامنه‌ها و SSL" : "Domains & SSL")</h1>
+    <p class="text-slate-400 text-sm">
+        @(isFa ? "برای هر دامنه یک رکورد A بسازید که به IP این سرور اشاره کند:" : "Point an A record for each domain at this server's IP:")
+        <code class="text-brand-300">@serverIp</code>
+    </p>
+</div>
+
+@if (Model.Count == 0)
+{
+    <div class="rounded-xl border border-dashed border-slate-700 p-12 text-center text-slate-400">
+        @(isFa ? "هنوز دامنه‌ای وصل نشده. از صفحه‌ی هر اپ دامنه اضافه کنید." : "No domains yet. Add one from an app's page.")
+    </div>
+}
+else
+{
+    <div class="space-y-3">
+        @foreach (var d in Model)
+        {
+            <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4" data-host="@d.Host">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="min-w-0">
+                        <a href="https://@d.Host" target="_blank" class="font-mono font-semibold text-brand-400">@d.Host</a>
+                        <div class="text-xs text-slate-500">@(isFa ? "اپ:" : "app:") <a href="/apps/details/@d.AppId" class="hover:text-slate-300">@d.AppName</a>
+                            @if (d.Primary){<span class="ms-1 rounded bg-slate-800 px-1.5 py-0.5 text-[10px]">primary</span>}</div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        @if (d.Ssl){<span class="text-xs text-emerald-400">🔒 SSL</span>}
+                        <button data-test="dns" class="text-xs rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5">@(isFa ? "تست DNS" : "Test DNS")</button>
+                        <button data-test="ssl" class="text-xs rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5">@(isFa ? "تست SSL" : "Test SSL")</button>
+                    </div>
+                </div>
+                <div class="mt-2 text-xs font-mono text-slate-400">
+                    @(isFa ? "رکورد لازم:" : "Required record:") <span class="text-slate-300">A&nbsp;&nbsp;@d.Host&nbsp;&nbsp;→&nbsp;&nbsp;@serverIp</span>
+                </div>
+                <div data-result class="mt-2 text-xs"></div>
+            </div>
+        }
+    </div>
+}
+
+@section Scripts {
+<script>
+    const fa = @(isFa ? "true" : "false");
+    function tag(ok, txt) {
+        const cls = ok ? 'text-emerald-400' : 'text-red-400';
+        return `<span class="${cls}">${ok ? '✓' : '✗'} ${txt}</span>`;
+    }
+    document.querySelectorAll('[data-host]').forEach(card => {
+        const host = card.dataset.host;
+        const out = card.querySelector('[data-result]');
+        card.querySelectorAll('[data-test]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const kind = btn.dataset.test;
+                out.innerHTML = fa ? 'در حال بررسی…' : 'Checking…';
+                try {
+                    const r = await fetch(`/domains/test-${kind}?host=${encodeURIComponent(host)}`);
+                    const j = await r.json();
+                    if (kind === 'dns') {
+                        const resolved = (j.resolved || []).join(', ') || (fa ? 'رزولوو نشد' : 'not resolvable');
+                        out.innerHTML = tag(j.ok, (fa ? 'DNS → ' : 'DNS → ') + resolved) +
+                            (j.ok ? '' : ` <span class="text-slate-500">(${fa ? 'انتظار' : 'expected'} ${j.expected})</span>`);
+                    } else {
+                        out.innerHTML = j.ok
+                            ? tag(true, (fa ? 'گواهی معتبر · ' : 'valid cert · ') + (j.issuer || '') + (j.expires ? ` · ${fa ? 'انقضا' : 'exp'} ${j.expires}` : ''))
+                            : tag(false, (fa ? 'SSL ناموفق: ' : 'SSL failed: ') + (j.error || `HTTP ${j.status}`));
+                    }
+                } catch (e) { out.innerHTML = tag(false, String(e)); }
+            });
+        });
+    });
+</script>
+}

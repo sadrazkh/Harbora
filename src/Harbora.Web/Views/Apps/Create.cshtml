@@ -10,12 +10,12 @@
         <div class="grid sm:grid-cols-2 gap-4">
             <div>
                 <label class="block text-sm text-slate-400 mb-1">@T["Name"]</label>
-                <input asp-for="Name" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+                <input asp-for="Name" required class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
                 <span asp-validation-for="Name" class="text-red-400 text-xs"></span>
             </div>
             <div>
                 <label class="block text-sm text-slate-400 mb-1">Slug</label>
-                <input asp-for="Slug" placeholder="my-app" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+                <input asp-for="Slug" placeholder="my-app" required pattern="[a-z0-9-]{2,50}" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
                 <span asp-validation-for="Slug" class="text-red-400 text-xs"></span>
             </div>
         </div>

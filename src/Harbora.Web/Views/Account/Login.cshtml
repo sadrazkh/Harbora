@@ -13,11 +13,11 @@
 
     <div class="field">
         <label>@T["Email"]</label>
-        <input asp-for="Email" type="email" autocomplete="username" autofocus />
+        <input asp-for="Email" type="email" autocomplete="username" required autofocus />
     </div>
     <div class="field">
         <label>@T["Password"]</label>
-        <input asp-for="Password" type="password" autocomplete="current-password" />
+        <input asp-for="Password" type="password" autocomplete="current-password" required />
     </div>
     <button type="submit" class="btn btn-primary">@T["Sign in"]</button>
 </form>

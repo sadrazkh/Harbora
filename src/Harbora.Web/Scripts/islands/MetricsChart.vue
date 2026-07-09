@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 
-const props = defineProps<{ name: string; label: string; color: string; resource?: string }>();
+const props = defineProps<{ name: string; label: string; color: string; resource?: string; height?: number }>();
 
 interface Point { t: number; v: number; }
 const points = ref<Point[]>([]);
-const W = 800, H = 120, PAD = 8;
+const W = 800, PAD = 8;
+const H = props.height ?? 120;
 let timer: number | undefined;
 
 async function load() {
@@ -37,13 +38,13 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
 
 <template>
   <div>
-    <div v-if="points.length < 2" class="text-slate-500 text-sm py-8 text-center">
-      Collecting data… (samples every 30s)
+    <div v-if="points.length < 2" class="text-slate-600 text-xs" :style="{ lineHeight: H + 'px' }">
+      ···
     </div>
     <svg v-else :viewBox="`0 0 ${W} ${H}`" preserveAspectRatio="none" class="w-full" :style="{ height: H + 'px' }">
       <path :d="area" :fill="color" opacity="0.12" />
       <path :d="path" :stroke="color" fill="none" stroke-width="2" stroke-linejoin="round" />
     </svg>
-    <div class="text-xs text-slate-400 mt-1">{{ label }}: {{ latest.toFixed(1) }}</div>
+    <div v-if="label" class="text-xs text-slate-400 mt-1">{{ label }}: {{ latest.toFixed(1) }}</div>
   </div>
 </template>

@@ -1,47 +1,115 @@
-@model List<Harbora.Domain.Settings.Setting>
 @{
     ViewData["Title"] = "Settings";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var isProvider = (bool)(ViewBag.IsProvider ?? false);
     var tokens = ViewBag.Tokens as List<Harbora.Domain.Identity.ApiToken> ?? new();
     var newToken = TempData["NewToken"] as string;
+    var msg = TempData["Message"] as string;
 }
 <h1 class="text-2xl font-bold mb-6">@T["Settings"]</h1>
 
+@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
+
 <div class="grid lg:grid-cols-2 gap-6">
-    <section class="rounded-xl border border-slate-800 bg-slate-900/60 divide-y divide-slate-800">
-        <div class="px-4 py-3 font-semibold border-b border-slate-800">Platform</div>
-        @foreach (var s in Model)
-        {
-            <div class="flex items-center justify-between p-4">
-                <span class="font-mono text-sm text-slate-300">@s.Key</span>
-                <span class="text-sm text-slate-400">@s.Value</span>
+    @* ---- Platform ---- *@
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 class="font-semibold mb-3">@(isFa ? "پلتفرم" : "Platform")</h2>
+        <form asp-controller="Settings" asp-action="UpdatePlatform" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">@(isFa ? "نام پلتفرم" : "Platform name")</label>
+                <input name="platformName" value="@ViewBag.PlatformName" @(isProvider ? "" : "disabled")
+                       class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm disabled:opacity-60" />
             </div>
-        }
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">@(isFa ? "دامنه‌ی اصلی اپ‌ها" : "Apps root domain")</label>
+                <input name="rootDomain" value="@ViewBag.RootDomain" placeholder="apps.example.com" @(isProvider ? "" : "disabled")
+                       class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm disabled:opacity-60" />
+            </div>
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">ACME email (Let's Encrypt)</label>
+                <input name="acmeEmail" type="email" value="@ViewBag.AcmeEmail" @(isProvider ? "" : "disabled")
+                       class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm disabled:opacity-60" />
+            </div>
+            @if (isProvider)
+            {
+                <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Save"]</button>
+            }
+            else
+            {
+                <p class="text-xs text-slate-500">@(isFa ? "فقط اپراتور می‌تواند این‌ها را تغییر دهد." : "Only the provider can change these.")</p>
+            }
+        </form>
+        <p class="mt-3 text-xs text-slate-500">@(isFa ? "دامنه‌ی پنل در نصب تنظیم می‌شود و نیاز به بازراه‌اندازی دارد." : "The panel domain is set at install time and requires a restart to change.")</p>
     </section>
 
-    <section class="rounded-xl border border-slate-800 bg-slate-900/60">
-        <div class="px-4 py-3 font-semibold border-b border-slate-800">@T["API Tokens"]</div>
-        <div class="p-4 space-y-4">
-            @if (newToken is not null)
+    @* ---- Appearance & language ---- *@
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 class="font-semibold mb-3">@(isFa ? "ظاهر و زبان" : "Appearance & language")</h2>
+
+        <label class="block text-sm text-slate-400 mb-2">@T["Dark mode"]</label>
+        <div class="inline-flex rounded-lg bg-slate-800 p-1 text-sm mb-5" id="themeCtl">
+            <button type="button" data-theme="light" class="rounded-md px-3 py-1">☀ @(isFa ? "روشن" : "Light")</button>
+            <button type="button" data-theme="dark" class="rounded-md px-3 py-1">🌙 @(isFa ? "تیره" : "Dark")</button>
+            <button type="button" data-theme="system" class="rounded-md px-3 py-1">💻 @(isFa ? "سیستم" : "System")</button>
+        </div>
+
+        <label class="block text-sm text-slate-400 mb-2">@T["Language"]</label>
+        <form asp-controller="Account" asp-action="SetLanguage" method="post" class="flex gap-2">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="returnUrl" value="/settings" />
+            <select name="culture" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                <option value="fa" selected="@(ViewBag.Culture as string == "fa")">فارسی</option>
+                <option value="en" selected="@(ViewBag.Culture as string == "en")">English</option>
+            </select>
+            <button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@T["Save"]</button>
+        </form>
+    </section>
+
+    @* ---- API tokens ---- *@
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 lg:col-span-2">
+        <h2 class="font-semibold mb-3">@T["API Tokens"]</h2>
+        @if (newToken is not null)
+        {
+            <div class="rounded-lg bg-emerald-900/20 border border-emerald-700 p-3 text-sm mb-3">
+                <div class="text-emerald-300 mb-1">@(isFa ? "این توکن را همین حالا کپی کنید؛ دوباره نمایش داده نمی‌شود." : "Copy this token now — it won't be shown again.")</div>
+                <code class="block break-all text-emerald-200">@newToken</code>
+            </div>
+        }
+        <form asp-controller="Settings" asp-action="CreateToken" method="post" class="flex gap-2 mb-3 max-w-md">
+            @Html.AntiForgeryToken()
+            <input name="name" placeholder="@(isFa ? "نام توکن" : "Token name")" class="flex-1 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@(isFa ? "ساخت" : "Create")</button>
+        </form>
+        <div class="divide-y divide-slate-800 max-w-md">
+            @foreach (var t in tokens)
             {
-                <div class="rounded-lg bg-emerald-900/20 border border-emerald-700 p-3 text-sm">
-                    <div class="text-emerald-300 mb-1">Copy this token now — it won't be shown again.</div>
-                    <code class="block break-all text-emerald-200">@newToken</code>
+                <div class="flex items-center justify-between py-2 text-sm">
+                    <span>@t.Name <span class="text-slate-500 font-mono">@t.Prefix…</span></span>
+                    <span class="text-xs text-slate-500">@t.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd")</span>
                 </div>
             }
-            <form asp-controller="Settings" asp-action="CreateToken" method="post" class="flex gap-2">
-                @Html.AntiForgeryToken()
-                <input name="name" placeholder="Token name" class="flex-1 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">Create</button>
-            </form>
-            <div class="divide-y divide-slate-800">
-                @foreach (var t in tokens)
-                {
-                    <div class="flex items-center justify-between py-2 text-sm">
-                        <span>@t.Name <span class="text-slate-500 font-mono">@t.Prefix…</span></span>
-                        <span class="text-xs text-slate-500">@t.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd")</span>
-                    </div>
-                }
-            </div>
         </div>
     </section>
 </div>
+
+@section Scripts {
+<script>
+    (function () {
+        const cur = localStorage.getItem('harbora-theme') || 'system';
+        const ctl = document.getElementById('themeCtl');
+        function mark() {
+            const v = localStorage.getItem('harbora-theme') || 'system';
+            ctl.querySelectorAll('button').forEach(b => b.classList.toggle('bg-slate-700', b.dataset.theme === v));
+        }
+        function apply(v) {
+            localStorage.setItem('harbora-theme', v);
+            const dark = v === 'dark' || (v === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+            document.documentElement.classList.toggle('dark', dark);
+            mark();
+        }
+        ctl.querySelectorAll('button').forEach(b => b.addEventListener('click', () => apply(b.dataset.theme)));
+        mark();
+    })();
+</script>
+}

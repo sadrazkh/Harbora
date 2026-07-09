@@ -3,7 +3,9 @@
 # deployed app; Postgres and Redis back the platform itself.
 services:
   traefik:
-    image: traefik:v3.2
+    # v3.6+ is required for Docker Engine 27+/29 (older Traefik negotiates Docker API 1.24 and
+    # fails with "client version 1.24 is too old"). Pinned to the minor so patches are picked up.
+    image: traefik:v3.6
     container_name: harbora-traefik
     restart: unless-stopped
     command:
@@ -81,6 +83,9 @@ services:
       - harbora_backups:/var/lib/harbora/backups
     labels:
       - traefik.enable=true
+      # Pin the network Traefik uses to reach the panel — it joins tenant networks too, and
+      # without this it can pick the wrong one and serve 404/502.
+      - traefik.docker.network=harbora
       - traefik.http.routers.harbora.rule=Host(`${PANEL_DOMAIN}`)
       - traefik.http.routers.harbora.entrypoints=websecure
       - traefik.http.routers.harbora.tls.certresolver=letsencrypt

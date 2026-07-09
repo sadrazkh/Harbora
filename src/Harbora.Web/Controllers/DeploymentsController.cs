@@ -12,6 +12,15 @@ public sealed class DeploymentsController(HarboraDbContext db, ICurrentUser curr
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 
+    public async Task<IActionResult> Index(CancellationToken ct)
+    {
+        ViewData["Title"] = "Deployments";
+        var deployments = await db.Deployments.Include(d => d.App)
+            .Where(d => d.App!.WorkspaceId == WorkspaceId)
+            .OrderByDescending(d => d.CreatedAt).Take(100).ToListAsync(ct);
+        return View(deployments);
+    }
+
     public async Task<IActionResult> Details(Guid id, CancellationToken ct)
     {
         var deployment = await db.Deployments

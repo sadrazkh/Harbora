@@ -29,14 +29,43 @@ public sealed class SettingsController(
     ITokenService tokens,
     ICurrentUser currentUser) : Controller
 {
+    private bool IsProvider => User.IsInRole("Owner") || User.IsInRole("Admin");
+
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         ViewData["Title"] = "Settings";
         ViewBag.Tokens = await db.ApiTokens
             .Where(t => t.UserId == currentUser.UserId && !t.IsRevoked)
             .OrderByDescending(t => t.CreatedAt).ToListAsync(ct);
-        var settings = await db.Settings.Where(s => !s.IsSecret).OrderBy(s => s.Key).ToListAsync(ct);
-        return View(settings);
+
+        var settings = await db.Settings.Where(s => !s.IsSecret).ToDictionaryAsync(s => s.Key, s => s.Value, ct);
+        ViewBag.IsProvider = IsProvider;
+        ViewBag.PlatformName = settings.GetValueOrDefault(Harbora.Domain.Settings.SettingKeys.PlatformName, "Harbora");
+        ViewBag.RootDomain = settings.GetValueOrDefault(Harbora.Domain.Settings.SettingKeys.PlatformRootDomain, "");
+        ViewBag.AcmeEmail = settings.GetValueOrDefault(Harbora.Domain.Settings.SettingKeys.AcmeEmail, "");
+        ViewBag.Culture = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+        return View();
+    }
+
+    /// <summary>Provider-only: update the platform display settings.</summary>
+    [HttpPost("/settings/platform")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> UpdatePlatform(string platformName, string? rootDomain, string? acmeEmail, CancellationToken ct)
+    {
+        if (!IsProvider) return Forbid();
+        await SetAsync(Harbora.Domain.Settings.SettingKeys.PlatformName, platformName, ct);
+        await SetAsync(Harbora.Domain.Settings.SettingKeys.PlatformRootDomain, rootDomain ?? "", ct);
+        await SetAsync(Harbora.Domain.Settings.SettingKeys.AcmeEmail, acmeEmail ?? "", ct);
+        await db.SaveChangesAsync(ct);
+        TempData["Message"] = "Settings saved.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    private async Task SetAsync(string key, string value, CancellationToken ct)
+    {
+        var setting = await db.Settings.FirstOrDefaultAsync(s => s.Key == key, ct);
+        if (setting is null) db.Settings.Add(new Harbora.Domain.Settings.Setting { Key = key, Value = value });
+        else setting.Value = value;
     }
 
     /// <summary>Issues a CLI/API token. The plaintext is shown exactly once via TempData.</summary>

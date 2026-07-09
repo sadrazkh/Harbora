@@ -1,48 +1,143 @@
 @model DashboardViewModel
 @{
     ViewData["Title"] = "Dashboard";
-    string Fmt(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    string Gb(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
+    string DiskPct() => Model.DiskTotal > 0 ? $"{(double)Model.DiskUsed / Model.DiskTotal * 100:0}%" : "—";
 }
-<div class="mb-6 flex items-center justify-between">
-    <h1 class="text-2xl font-bold">@T["Overview"]</h1>
+
+<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+    <div>
+        <h1 class="text-2xl font-bold">@T["Overview"]</h1>
+        <p class="text-slate-400 text-sm">@(isFa ? "وضعیت پلتفرم و اپلیکیشن‌های شما در یک نگاه" : "Your platform and apps at a glance")</p>
+    </div>
     <a href="/apps/create" class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">+ @T["New App"]</a>
+</div>
+
+@* ---- Health strip: server / traefik / ssl / docker ---- *@
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+    @{
+        (string label, string value, string cls)[] health =
+        {
+            (isFa ? "سرورها" : "Servers",
+             $"{Model.ServersOnline}/{Model.ServersTotal} " + (isFa ? "آنلاین" : "online"),
+             Model.ServersOnline == Model.ServersTotal && Model.ServersTotal > 0 ? "text-emerald-400" : "text-amber-300"),
+            ("Traefik",
+             Model.TraefikRunning switch { true => isFa ? "در حال اجرا" : "running", false => isFa ? "متوقف!" : "stopped!", _ => isFa ? "نامشخص" : "unknown" },
+             Model.TraefikRunning switch { true => "text-emerald-400", false => "text-red-400", _ => "text-slate-400" }),
+            ("SSL",
+             Model.DomainsTotal == 0 ? (isFa ? "بدون دامنه" : "no domains") : $"{Model.DomainsSsl}/{Model.DomainsTotal} " + (isFa ? "امن" : "secured"),
+             Model.DomainsTotal == 0 ? "text-slate-400" : Model.DomainsSsl == Model.DomainsTotal ? "text-emerald-400" : "text-amber-300"),
+            ("Docker",
+             Model.DockerAvailable ? Model.DockerVersion : (isFa ? "در دسترس نیست" : "unreachable"),
+             Model.DockerAvailable ? "text-emerald-400" : "text-red-400"),
+        };
+    }
+    @foreach (var h in health)
+    {
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 flex items-center justify-between">
+            <span class="text-sm text-slate-400">@h.label</span>
+            <span class="text-sm font-semibold @h.cls">● @h.value</span>
+        </div>
+    }
 </div>
 
 @if (!Model.DockerAvailable)
 {
     <div class="mb-6 rounded-xl border border-amber-700/50 bg-amber-900/20 px-4 py-3 text-amber-200 text-sm">
-        Docker daemon is not reachable. Metrics and deployments are paused until Docker is available.
+        @(isFa ? "دیمن Docker در دسترس نیست — متریک‌ها و استقرارها تا برقراری اتصال متوقف‌اند." : "Docker daemon is not reachable. Metrics and deployments are paused until it's back.")
     </div>
 }
 
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+@* ---- Resource stat cards ---- *@
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
     <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <div class="text-slate-400 text-sm">@T["Applications"]</div>
-        <div class="mt-1 text-2xl font-bold">@Model.AppCount</div>
-    </div>
-    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <div class="text-slate-400 text-sm">@T["Running"]</div>
-        <div class="mt-1 text-2xl font-bold text-emerald-400">@Model.RunningCount</div>
+        <div class="text-slate-400 text-sm">@T["CPU"]</div>
+        <div class="mt-1 text-2xl font-bold">@Model.CpuPercent.ToString("0.0")%</div>
+        <div id="metrics-chart" data-name="cpu.percent" data-label="" data-color="#818cf8" data-height="36" class="mt-1"></div>
     </div>
     <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
         <div class="text-slate-400 text-sm">@T["Memory"]</div>
-        <div class="mt-1 text-2xl font-bold">@Fmt(Model.MemoryTotal)</div>
+        <div class="mt-1 text-2xl font-bold">@Gb(Model.MemoryTotal)</div>
+        <div class="mt-1 text-xs text-slate-500">@Model.ContainersRunning @(isFa ? "کانتینر فعال" : "containers running")</div>
     </div>
     <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
         <div class="text-slate-400 text-sm">@T["Disk"]</div>
-        <div class="mt-1 text-2xl font-bold">@Fmt(Model.DiskUsed) / @Fmt(Model.DiskTotal)</div>
+        <div class="mt-1 text-2xl font-bold">@DiskPct()</div>
+        <div class="mt-2 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+            <div class="h-full @(Model.DiskTotal > 0 && (double)Model.DiskUsed / Model.DiskTotal >= 0.85 ? "bg-red-500" : "bg-brand-500")"
+                 style="width:@(Model.DiskTotal > 0 ? ((double)Model.DiskUsed / Model.DiskTotal * 100).ToString("0") : "0")%"></div>
+        </div>
+        <div class="mt-1 text-xs text-slate-500">@Gb(Model.DiskUsed) / @Gb(Model.DiskTotal)</div>
+    </div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="text-slate-400 text-sm">@T["Deployments"]</div>
+        <div class="mt-1 text-2xl font-bold">@Model.DeploymentsTotal</div>
+        <div class="mt-1 text-xs @(Model.FailedDeployments > 0 ? "text-red-400" : "text-slate-500")">
+            @Model.FailedDeployments @(isFa ? "ناموفق" : "failed") · @Model.RunningCount/@Model.AppCount @T["Running"]
+        </div>
     </div>
 </div>
 
+@* ---- Quick actions ---- *@
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
+    @{
+        (string href, string icon, string label)[] actions =
+        {
+            ("/apps/create", "🚀", isFa ? "ساخت اپ" : "Create App"),
+            ("/apps", "📦", isFa ? "استقرار" : "Deploy"),
+            ("/routes", "🌐", isFa ? "دامنه‌ها و مسیرها" : "Domains & Routes"),
+            ("/backups", "💾", T["Backups"].Value),
+        };
+    }
+    @foreach (var a in actions)
+    {
+        <a href="@a.href" class="group rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-center hover:border-brand-600 hover:bg-slate-900 transition">
+            <div class="text-2xl">@a.icon</div>
+            <div class="mt-1 text-sm font-medium group-hover:text-brand-300">@a.label</div>
+        </a>
+    }
+</div>
+
+@if (Model.AppCount == 0)
+{
+    @* ---- Onboarding guide (no apps yet) ---- *@
+    <div class="rounded-2xl border border-brand-700/40 bg-gradient-to-br from-slate-900 to-slate-900/40 p-8 mb-8">
+        <h2 class="text-xl font-bold mb-1">@(isFa ? "به Harbora خوش آمدید! 🎉" : "Welcome to Harbora! 🎉")</h2>
+        <p class="text-slate-400 text-sm mb-5">@(isFa ? "در سه قدم اولین اپ خود را آنلاین کنید:" : "Get your first app online in three steps:")</p>
+        <div class="grid sm:grid-cols-3 gap-4">
+            @{
+                (string n, string t, string d)[] steps =
+                {
+                    ("1", isFa ? "ساخت اپ" : "Create an app", isFa ? "از Git، ایمیج Docker یا قالب آماده" : "From Git, a Docker image or a template"),
+                    ("2", isFa ? "اتصال دامنه" : "Attach a domain", isFa ? "SSL خودکار از Let's Encrypt" : "SSL is automatic via Let's Encrypt"),
+                    ("3", isFa ? "استقرار" : "Deploy", isFa ? "لاگ زنده، سلامت‌سنجی و rollback" : "Live logs, health checks, rollback"),
+                };
+            }
+            @foreach (var s in steps)
+            {
+                <div class="rounded-xl bg-slate-800/50 p-4">
+                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-brand-600 text-sm font-bold">@s.n</span>
+                    <div class="mt-2 font-semibold">@s.t</div>
+                    <div class="text-xs text-slate-400 mt-1">@s.d</div>
+                </div>
+            }
+        </div>
+        <a href="/apps/create" class="mt-6 inline-block rounded-lg bg-brand-600 hover:bg-brand-500 px-5 py-2.5 font-semibold">@T["Create Application"] ←</a>
+    </div>
+}
+
 <div class="grid lg:grid-cols-3 gap-6">
+    @* ---- Apps ---- *@
     <section class="lg:col-span-2">
-        <h2 class="mb-3 text-lg font-semibold">@T["Applications"]</h2>
+        <div class="mb-3 flex items-center justify-between">
+            <h2 class="text-lg font-semibold">@T["Applications"]</h2>
+            @if (Model.AppCount > 0){<a href="/apps" class="text-sm text-brand-400">@(isFa ? "همه" : "view all") →</a>}
+        </div>
         @if (Model.Apps.Count == 0)
         {
-            <div class="rounded-xl border border-dashed border-slate-700 p-10 text-center">
-                <p class="text-lg font-medium">@T["No applications yet"]</p>
-                <p class="mt-1 text-slate-400">@T["Create your first app to get started."]</p>
-                <a href="/apps/create" class="mt-4 inline-block rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Create Application"]</a>
+            <div class="rounded-xl border border-dashed border-slate-700 p-8 text-center text-slate-400 text-sm">
+                @T["No applications yet"]
             </div>
         }
         else
@@ -62,23 +157,44 @@
         }
     </section>
 
-    <section>
-        <h2 class="mb-3 text-lg font-semibold">@T["Recent Deployments"]</h2>
-        <div class="rounded-xl border border-slate-800 bg-slate-900/60 divide-y divide-slate-800">
-            @if (Model.RecentDeployments.Count == 0)
-            {
-                <div class="p-4 text-slate-400 text-sm">—</div>
-            }
-            @foreach (var d in Model.RecentDeployments)
-            {
-                <a href="/deployments/details/@d.Id" class="flex items-center justify-between p-3 hover:bg-slate-800/40">
-                    <div class="min-w-0">
-                        <div class="truncate text-sm font-medium">@d.App?.Name #@d.Number</div>
-                        <div class="text-xs text-slate-500">@d.CreatedAt.LocalDateTime.ToString("MM/dd HH:mm")</div>
-                    </div>
-                    <partial name="_DeployStatusBadge" model="d.Status" />
-                </a>
-            }
-        </div>
-    </section>
+    <div class="space-y-6">
+        @* ---- Recent deployments ---- *@
+        <section>
+            <h2 class="mb-3 text-lg font-semibold">@T["Recent Deployments"]</h2>
+            <div class="rounded-xl border border-slate-800 bg-slate-900/60 divide-y divide-slate-800">
+                @if (Model.RecentDeployments.Count == 0)
+                {
+                    <div class="p-4 text-slate-400 text-sm">@(isFa ? "هنوز استقراری انجام نشده" : "No deployments yet")</div>
+                }
+                @foreach (var d in Model.RecentDeployments)
+                {
+                    <a href="/deployments/details/@d.Id" class="flex items-center justify-between p-3 hover:bg-slate-800/40">
+                        <div class="min-w-0">
+                            <div class="truncate text-sm font-medium">@d.App?.Name #@d.Number</div>
+                            <div class="text-xs text-slate-500">@d.CreatedAt.LocalDateTime.ToString("MM/dd HH:mm")</div>
+                        </div>
+                        <partial name="_DeployStatusBadge" model="d.Status" />
+                    </a>
+                }
+            </div>
+        </section>
+
+        @* ---- Recent errors ---- *@
+        @if (Model.RecentErrors.Count > 0)
+        {
+            <section>
+                <h2 class="mb-3 text-lg font-semibold text-red-300">@(isFa ? "آخرین خطاها" : "Recent errors")</h2>
+                <div class="rounded-xl border border-red-900/50 bg-red-950/20 divide-y divide-red-900/30">
+                    @foreach (var e in Model.RecentErrors)
+                    {
+                        <a href="@e.Link" class="block p-3 hover:bg-red-900/10">
+                            <div class="text-sm font-medium text-red-300">@e.Title</div>
+                            <div class="text-xs text-slate-400 truncate">@e.Detail</div>
+                            <div class="text-xs text-slate-600 mt-0.5">@e.At.LocalDateTime.ToString("MM/dd HH:mm")</div>
+                        </a>
+                    }
+                </div>
+            </section>
+        }
+    </div>
 </div>

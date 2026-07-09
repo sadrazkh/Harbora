@@ -57,13 +57,27 @@ public sealed class DashboardViewModel
     public int AppCount { get; set; }
     public int RunningCount { get; set; }
     public int FailedDeployments { get; set; }
+    public int DeploymentsTotal { get; set; }
     public double CpuPercent { get; set; }
     public long MemoryUsed { get; set; }
     public long MemoryTotal { get; set; }
     public long DiskUsed { get; set; }
     public long DiskTotal { get; set; }
+    public int ContainersRunning { get; set; }
     public string DockerVersion { get; set; } = "—";
     public bool DockerAvailable { get; set; }
+
+    // Platform health strip
+    public int ServersOnline { get; set; }
+    public int ServersTotal { get; set; }
+    /// <summary>null = unknown (Docker unreachable / dev machine).</summary>
+    public bool? TraefikRunning { get; set; }
+    public int DomainsTotal { get; set; }
+    public int DomainsSsl { get; set; }
+
     public List<Deployment> RecentDeployments { get; set; } = new();
     public List<App> Apps { get; set; } = new();
+    public List<DashboardError> RecentErrors { get; set; } = new();
 }
+
+public sealed record DashboardError(string Title, string Detail, DateTimeOffset At, string Link);

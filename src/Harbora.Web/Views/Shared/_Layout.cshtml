@@ -30,17 +30,18 @@
         <link rel="stylesheet" href="~/css/fallback.css" />
     }
     <script>
-        // Apply persisted theme before paint to avoid a flash.
+        // Apply persisted theme before paint to avoid a flash. Values: dark | light | system.
         (function () {
             var t = localStorage.getItem('harbora-theme');
-            if (t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches))
-                document.documentElement.classList.add('dark');
+            var dark = t === 'dark' || ((t === 'system' || !t) && matchMedia('(prefers-color-scheme: dark)').matches);
+            document.documentElement.classList.toggle('dark', dark);
         })();
     </script>
 </head>
 <body class="h-full bg-slate-950 text-slate-100 antialiased">
 <div class="flex h-full">
-    <aside id="sidebar" class="hidden md:flex md:w-64 flex-col border-e border-slate-800 bg-slate-900/70 backdrop-blur">
+    <div id="backdrop" class="app-backdrop hidden md:hidden"></div>
+    <aside id="sidebar" class="app-sidebar flex md:w-64 flex-col border-e border-slate-800 bg-slate-900 md:bg-slate-900/70 backdrop-blur">
         <div class="flex items-center gap-2 px-5 h-16 border-b border-slate-800">
             <span class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 font-bold">H</span>
             <span class="text-lg font-semibold tracking-tight">Harbora</span>
@@ -48,7 +49,9 @@
         <nav class="flex-1 overflow-y-auto p-3 space-y-1 text-sm">
             <a href="/" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Home")">@T["Dashboard"]</a>
             <a href="/apps" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Apps")">@T["Applications"]</a>
+            <a href="/deployments" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Deployments")">@T["Deployments"]</a>
             <a href="/git" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Git")">@T["Git"]</a>
+            <a href="/domains" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Domains")">@T["Domains"]</a>
             <a href="/routes" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Routes")">@T["Routing"]</a>
             <a href="/databases" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Databases")">@T["Databases"]</a>
             <a href="/backups" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Backups")">@T["Backups"]</a>
@@ -102,9 +105,29 @@
         var el = document.documentElement, dark = el.classList.toggle('dark');
         localStorage.setItem('harbora-theme', dark ? 'dark' : 'light');
     });
-    document.querySelector('[data-toggle-sidebar]')?.addEventListener('click', function () {
-        document.getElementById('sidebar')?.classList.toggle('hidden');
+
+    // Mobile slide-over sidebar.
+    (function () {
+        var sidebar = document.getElementById('sidebar'), backdrop = document.getElementById('backdrop');
+        function open(v) { sidebar.classList.toggle('is-open', v); backdrop.classList.toggle('hidden', !v); }
+        document.querySelector('[data-toggle-sidebar]')?.addEventListener('click', function () {
+            open(!sidebar.classList.contains('is-open'));
+        });
+        backdrop?.addEventListener('click', function () { open(false); });
+        sidebar?.querySelectorAll('a').forEach(function (a) { a.addEventListener('click', function () { open(false); }); });
+    })();
+
+    // Loading state: disable submit + spinner once a form really submits.
+    // Bubble phase + defaultPrevented check so a cancelled confirm() never leaves a stuck button.
+    document.addEventListener('submit', function (e) {
+        var form = e.target;
+        if (e.defaultPrevented || form.hasAttribute('data-no-loading')) return;
+        var btn = form.querySelector('button[type=submit], button:not([type])');
+        if (btn && !btn.disabled) {
+            setTimeout(function () { btn.classList.add('btn-spin'); btn.disabled = true; }, 0);
+        }
     });
+
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function(){});
 </script>
 @await RenderSectionAsync("Scripts", required: false)

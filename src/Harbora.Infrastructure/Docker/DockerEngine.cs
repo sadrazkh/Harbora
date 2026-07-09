@@ -119,6 +119,14 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         await client.Containers.GetContainerLogsAsync(containerId, parameters, ct, new Progress<string>(sink.Report));
     }
 
+    public async Task<string> GetLogsAsync(string containerId, int tailLines, CancellationToken ct)
+    {
+        var parameters = new ContainerLogsParameters { ShowStdout = true, ShowStderr = true, Follow = false, Tail = tailLines.ToString() };
+        using var stream = await client.Containers.GetContainerLogsAsync(containerId, tty: false, parameters, ct);
+        var (stdout, stderr) = await stream.ReadOutputToEndAsync(ct);
+        return string.Concat(stdout, stderr);
+    }
+
     public async Task<IReadOnlyList<ContainerInfo>> ListContainersAsync(string? labelFilter, CancellationToken ct)
     {
         var parameters = new ContainersListParameters { All = true };

@@ -16,6 +16,7 @@ namespace Harbora.Web.Controllers;
 public sealed class AppsController(
     HarboraDbContext db,
     IDeploymentEngine deployEngine,
+    IAppOperationsService ops,
     IQuotaService quota,
     ISchedulerService scheduler,
     ISecretProtector protector,
@@ -172,6 +173,128 @@ public sealed class AppsController(
                 RollbackToDeploymentId: deploymentId), ct);
         return RedirectToAction("Details", "Deployments", new { id = newId });
     }
+
+    // ---- lifecycle ----
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Restart(Guid id, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+        await ops.RestartAsync(id, ct);
+        TempData["Message"] = "Restarted.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Stop(Guid id, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+        await ops.StopAsync(id, ct);
+        TempData["Message"] = "Stopped.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Start(Guid id, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+        await ops.StartAsync(id, ct);
+        TempData["Message"] = "Started.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Delete(Guid id, bool removeVolumes, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+        await ops.DeleteAsync(id, removeVolumes, ct);
+        TempData["Message"] = "App deleted.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    // ---- logs ----
+
+    [HttpGet("/apps/{id:guid}/logs")]
+    public async Task<IActionResult> Logs(Guid id, CancellationToken ct)
+    {
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+        return View(app);
+    }
+
+    [HttpGet("/apps/{id:guid}/logs/data")]
+    public async Task<IActionResult> LogsData(Guid id, int tail = 200, CancellationToken ct = default)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+        return Content(await ops.GetLogsAsync(id, tail, ct), "text/plain");
+    }
+
+    // ---- environment variables ----
+
+    [HttpPost("/apps/{id:guid}/env")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> AddEnv(Guid id, string key, string? value, bool isSecret, bool availableAtBuild, CancellationToken ct)
+    {
+        var app = await db.Apps.Include(a => a.EnvironmentVariables).FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(key)) { TempData["Error"] = "Key is required."; return RedirectToAction(nameof(Details), new { id }); }
+
+        var existing = app.EnvironmentVariables.FirstOrDefault(e => e.Key == key);
+        var stored = isSecret ? protector.Protect(value ?? "") : value ?? "";
+        if (existing is null)
+            app.EnvironmentVariables.Add(new EnvironmentVariable { Key = key, Value = stored, IsSecret = isSecret, AvailableAtBuild = availableAtBuild });
+        else { existing.Value = stored; existing.IsSecret = isSecret; existing.AvailableAtBuild = availableAtBuild; }
+        await db.SaveChangesAsync(ct);
+        TempData["Message"] = "Variable saved. Redeploy to apply.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    [HttpPost("/apps/{id:guid}/env/{envId:guid}/delete")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteEnv(Guid id, Guid envId, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+        await db.EnvironmentVariables.Where(e => e.Id == envId && e.AppId == id).ExecuteDeleteAsync(ct);
+        TempData["Message"] = "Variable removed. Redeploy to apply.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    // ---- domains ----
+
+    [HttpPost("/apps/{id:guid}/domains")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> AddDomain(Guid id, string host, bool ssl, CancellationToken ct)
+    {
+        var app = await db.Apps.Include(a => a.Domains).FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+        host = (host ?? "").Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(host)) { TempData["Error"] = "Host is required."; return RedirectToAction(nameof(Details), new { id }); }
+        if (await db.Domains.AnyAsync(d => d.Host == host, ct)) { TempData["Error"] = "This domain is already in use."; return RedirectToAction(nameof(Details), new { id }); }
+
+        app.Domains.Add(new DomainName { Host = host, SslEnabled = ssl, ForceHttps = ssl, IsPrimary = app.Domains.Count == 0 });
+        await db.SaveChangesAsync(ct);
+        TempData["Message"] = "Domain added. Redeploy to route it.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    [HttpPost("/apps/{id:guid}/domains/{domainId:guid}/delete")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteDomain(Guid id, Guid domainId, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+        var host = await db.Domains.Where(d => d.Id == domainId && d.AppId == id).Select(d => d.Host).FirstOrDefaultAsync(ct);
+        await db.Domains.Where(d => d.Id == domainId && d.AppId == id).ExecuteDeleteAsync(ct);
+        if (host is not null) await db.Routes.Where(r => r.AppId == id && r.Host == host).ExecuteDeleteAsync(ct);
+        TempData["Message"] = "Domain removed.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    private Task<bool> OwnsAsync(Guid appId, CancellationToken ct) =>
+        db.Apps.AnyAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
 
     private async Task PopulateTemplates(CancellationToken ct)
     {

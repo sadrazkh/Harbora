@@ -32,6 +32,7 @@ const islands: Record<string, IslandMounter> = {
       label: el.dataset.label || '',
       color: el.dataset.color || '#818cf8',
       resource: el.dataset.resource,
+      height: el.dataset.height ? Number(el.dataset.height) : undefined,
     }).mount(el);
   },
 };

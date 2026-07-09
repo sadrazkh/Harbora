@@ -79,6 +79,9 @@ app.MapGet("/agent/containers/{id}/logs", async (string id, HttpContext ctx, IDo
     await e.StreamLogsAsync(id, new WriterProgress(writer), ct);
 });
 
+app.MapGet("/agent/containers/{id}/logsnapshot", (string id, int tail, IDockerEngine e, CancellationToken ct) =>
+    e.GetLogsAsync(id, tail <= 0 ? 200 : tail, ct));
+
 app.MapPost("/agent/images/pull", async (ImageBody body, HttpContext ctx, IDockerEngine e, CancellationToken ct) =>
 {
     ctx.Response.ContentType = "text/plain";

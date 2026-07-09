@@ -2,11 +2,82 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Theme tokens. The slate scale is remapped through these variables (see tailwind.config.js).
+ * Dark = the real slate ramp. Light = an inverted ramp so backgrounds (slate-900/950) become
+ * light surfaces and text (slate-100/300/400) becomes dark — every existing view flips for free.
+ */
+@layer base {
+  :root {
+    color-scheme: light;
+    --s50: 15 23 42;
+    --s100: 15 23 42;    /* strong text → near-black */
+    --s200: 30 41 59;
+    --s300: 51 65 85;    /* text */
+    --s400: 71 85 105;   /* muted text (readable on light) */
+    --s500: 100 116 139; /* faint text */
+    --s600: 148 163 184;
+    --s700: 203 213 225; /* hover / strong border */
+    --s800: 226 232 240; /* borders, inputs, buttons */
+    --s900: 255 255 255; /* card / surface */
+    --s950: 241 245 249; /* app canvas */
+  }
+  html.dark {
+    color-scheme: dark;
+    --s50: 248 250 252;
+    --s100: 241 245 249;
+    --s200: 226 232 240;
+    --s300: 203 213 225;
+    --s400: 148 163 184;
+    --s500: 100 116 139;
+    --s600: 71 85 105;
+    --s700: 51 65 85;
+    --s800: 30 41 59;
+    --s900: 15 23 42;
+    --s950: 2 6 23;
+  }
+}
+
 /* Logical-property helpers keep spacing correct in both RTL (fa) and LTR (en). */
 @layer utilities {
   .scrollbar-thin::-webkit-scrollbar { height: 8px; width: 8px; }
-  .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: rgb(var(--s700)); border-radius: 9999px; }
 }
 
-/* Persian webfont — swap in a self-hosted Vazirmatn in production. */
-:root { color-scheme: dark; }
+/* ---- Interaction polish (applies app-wide, no per-view markup needed) ---- */
+@layer base {
+  html { scroll-behavior: smooth; }
+  body { transition: background-color .2s ease, color .2s ease; }
+
+  a, button { transition: background-color .15s ease, border-color .15s ease, color .15s ease, transform .06s ease, opacity .15s ease; }
+  button:not(:disabled):active { transform: translateY(1px); }
+  button:disabled, [aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+
+  /* Consistent keyboard focus ring on all interactive elements. */
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid #6366f1;
+    outline-offset: 2px;
+    border-radius: .5rem;
+  }
+
+  /* App page scrollbar. */
+  * { scrollbar-color: rgb(var(--s700)) transparent; scrollbar-width: thin; }
+}
+
+/* ---- Mobile slide-over sidebar (desktop keeps the static layout) ---- */
+@media (max-width: 767px) {
+  .app-sidebar { position: fixed; top: 0; bottom: 0; z-index: 40; width: 16rem; transition: transform .22s ease; }
+  html[dir="ltr"] .app-sidebar { left: 0; transform: translateX(-100%); }
+  html[dir="rtl"] .app-sidebar { right: 0; transform: translateX(100%); }
+  .app-sidebar.is-open { transform: translateX(0); box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  .app-backdrop { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.55); backdrop-filter: blur(2px); }
+}
+
+/* Tiny inline spinner for loading buttons. */
+.btn-spin::before {
+  content: ""; display: inline-block; width: .85em; height: .85em; margin-inline-end: .4em;
+  border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%;
+  vertical-align: -1px; animation: hbr-spin .7s linear infinite;
+}
+@keyframes hbr-spin { to { transform: rotate(360deg); } }

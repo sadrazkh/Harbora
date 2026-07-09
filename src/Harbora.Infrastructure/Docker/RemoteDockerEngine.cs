@@ -81,6 +81,13 @@ public sealed class RemoteDockerEngine(
         await StreamLines(res, sink, ct);
     }
 
+    public async Task<string> GetLogsAsync(string id, int tailLines, CancellationToken ct)
+    {
+        var res = await Client().GetAsync($"agent/containers/{id}/logsnapshot?tail={tailLines}", ct);
+        res.EnsureSuccessStatusCode();
+        return await res.Content.ReadAsStringAsync(ct);
+    }
+
     public async Task<IReadOnlyList<ContainerInfo>> ListContainersAsync(string? labelFilter, CancellationToken ct)
     {
         var url = "agent/containers" + (string.IsNullOrEmpty(labelFilter) ? "" : $"?label={Uri.EscapeDataString(labelFilter)}");

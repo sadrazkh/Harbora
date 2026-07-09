@@ -1,5 +1,8 @@
 @model List<App>
-@{ ViewData["Title"] = "Applications"; }
+@{
+    ViewData["Title"] = "Applications";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
 <div class="mb-6 flex items-center justify-between">
     <h1 class="text-2xl font-bold">@T["Applications"]</h1>
     <a href="/apps/create" class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">+ @T["New App"]</a>
@@ -15,17 +18,62 @@
 }
 else
 {
-    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div class="mb-4 flex flex-wrap items-center gap-3">
+        <input id="search" type="search" placeholder="@(isFa ? "جستجوی اپ…" : "Search apps…")"
+               class="w-full sm:w-64 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+        <div class="inline-flex rounded-lg bg-slate-800 p-1 text-sm" id="statusFilter">
+            <button data-status="all" class="rounded-md px-3 py-1 bg-slate-700">@(isFa ? "همه" : "All")</button>
+            <button data-status="Running" class="px-3 py-1">@T["Running"]</button>
+            <button data-status="Stopped" class="px-3 py-1">@T["Stopped"]</button>
+            <button data-status="Failed" class="px-3 py-1">@T["Failed"]</button>
+        </div>
+    </div>
+
+    <div id="appGrid" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         @foreach (var app in Model)
         {
-            <a href="/apps/details/@app.Id" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 hover:border-brand-600 transition">
+            <a href="/apps/details/@app.Id" class="app-card rounded-xl border border-slate-800 bg-slate-900/60 p-5 hover:border-brand-600 transition"
+               data-name="@app.Name.ToLower() @app.Slug" data-status="@app.Status">
                 <div class="flex items-center justify-between">
                     <span class="font-semibold text-lg">@app.Name</span>
                     <partial name="_StatusBadge" model="app.Status" />
                 </div>
                 <div class="mt-2 text-sm text-slate-400">@app.Slug</div>
-                <div class="mt-1 text-xs text-slate-500">@app.SourceType · port @app.ContainerPort</div>
+                <div class="mt-1 text-xs text-slate-500">@app.SourceType · port @app.ContainerPort @(string.IsNullOrEmpty(app.InstanceSizeKey) ? "" : "· " + app.InstanceSizeKey)</div>
             </a>
         }
     </div>
+    <p id="noMatch" class="hidden text-center text-slate-500 py-10 text-sm">@(isFa ? "موردی یافت نشد." : "No apps match.")</p>
+}
+
+@section Scripts {
+<script>
+    (function () {
+        const search = document.getElementById('search');
+        const cards = Array.from(document.querySelectorAll('.app-card'));
+        const noMatch = document.getElementById('noMatch');
+        let status = 'all';
+        function apply() {
+            const q = (search?.value || '').toLowerCase().trim();
+            let shown = 0;
+            cards.forEach(c => {
+                const okQ = !q || c.dataset.name.includes(q);
+                const okS = status === 'all' || c.dataset.status.startsWith(status);
+                const show = okQ && okS;
+                c.style.display = show ? '' : 'none';
+                if (show) shown++;
+            });
+            if (noMatch) noMatch.classList.toggle('hidden', shown > 0);
+        }
+        search?.addEventListener('input', apply);
+        document.getElementById('statusFilter')?.querySelectorAll('button').forEach(b => {
+            b.addEventListener('click', () => {
+                status = b.dataset.status;
+                b.parentElement.querySelectorAll('button').forEach(x => x.classList.remove('bg-slate-700'));
+                b.classList.add('bg-slate-700');
+                apply();
+            });
+        });
+    })();
+</script>
 }

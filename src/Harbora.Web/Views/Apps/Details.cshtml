@@ -1,32 +1,42 @@
 @model App
-@{ ViewData["Title"] = Model.Name; }
+@{
+    ViewData["Title"] = Model.Name;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
+    var running = Model.Status == AppStatus.Running;
+}
 <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
     <div>
+        <a href="/apps" class="text-brand-400 text-sm">← @T["Applications"]</a>
         <h1 class="text-2xl font-bold flex items-center gap-3">@Model.Name <partial name="_StatusBadge" model="Model.Status" /></h1>
-        <p class="text-slate-400 text-sm">@Model.Slug · @Model.SourceType @(Model.GitRepository is not null ? "· " + Model.GitRepository.FullName : "")</p>
+        <p class="text-slate-400 text-sm">@Model.Slug · @Model.SourceType @(Model.GitRepository is not null ? "· " + Model.GitRepository.FullName : "")
+            @if (!string.IsNullOrEmpty(Model.InstanceSizeKey)){<span>· @Model.InstanceSizeKey</span>}
+        </p>
     </div>
-    <div class="flex gap-2">
-        <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post">
-            @Html.AntiForgeryToken()
-            <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Deploy"]</button>
-        </form>
+    <div class="flex flex-wrap gap-2">
+        <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Deploy"]</button></form>
+        <form asp-controller="Apps" asp-action="Restart" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">↻ @T["Restart"]</button></form>
+        @if (running)
+        {
+            <form asp-controller="Apps" asp-action="Stop" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">⏸ @T["Stop"]</button></form>
+        }
+        else
+        {
+            <form asp-controller="Apps" asp-action="Start" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">▶ @T["Start"]</button></form>
+        }
+        <a href="/apps/@Model.Id/logs" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">📜 @T["Logs"]</a>
     </div>
 </div>
 
-@if (TempData["Error"] is string errMsg)
-{
-    <div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@errMsg</div>
-}
+@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
 
 <div class="grid lg:grid-cols-3 gap-6">
     <div class="lg:col-span-2 space-y-6">
         <section class="rounded-xl border border-slate-800 bg-slate-900/60">
             <div class="px-4 py-3 border-b border-slate-800 font-semibold">@T["Deployments"]</div>
             <div class="divide-y divide-slate-800">
-                @if (!Model.Deployments.Any())
-                {
-                    <div class="p-4 text-slate-400 text-sm">—</div>
-                }
+                @if (!Model.Deployments.Any()){<div class="p-4 text-slate-400 text-sm">—</div>}
                 @foreach (var d in Model.Deployments.OrderByDescending(x => x.Number))
                 {
                     <div class="flex items-center justify-between p-3">
@@ -49,31 +59,70 @@
                 }
             </div>
         </section>
+
+        @* ---- Environment variables ---- *@
+        <section class="rounded-xl border border-slate-800 bg-slate-900/60">
+            <div class="px-4 py-3 border-b border-slate-800 font-semibold">@T["Environment Variables"]</div>
+            <div class="divide-y divide-slate-800">
+                @if (!Model.EnvironmentVariables.Any()){<div class="p-4 text-slate-400 text-sm">—</div>}
+                @foreach (var e in Model.EnvironmentVariables.OrderBy(x => x.Key))
+                {
+                    <div class="flex items-center justify-between p-3 text-sm font-mono">
+                        <span class="text-slate-300">@e.Key @if (e.IsSecret){<span class="text-[10px] not-italic rounded bg-slate-800 px-1 text-amber-400 font-sans">secret</span>}@if (e.AvailableAtBuild){<span class="text-[10px] rounded bg-slate-800 px-1 text-sky-400 font-sans">build</span>}</span>
+                        <div class="flex items-center gap-2">
+                            <span class="text-slate-500">@(e.IsSecret ? "••••••" : e.Value)</span>
+                            <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@Model.Id" asp-route-envId="@e.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                        </div>
+                    </div>
+                }
+            </div>
+            <form asp-controller="Apps" asp-action="AddEnv" asp-route-id="@Model.Id" method="post" class="p-3 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-6 gap-2">
+                @Html.AntiForgeryToken()
+                <input name="key" placeholder="KEY" class="sm:col-span-2 rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm font-mono" />
+                <input name="value" placeholder="value" class="sm:col-span-2 rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm font-mono" />
+                <label class="flex items-center gap-1 text-xs"><input type="checkbox" name="isSecret" value="true"> secret</label>
+                <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-3 py-1.5 text-sm font-semibold">+ @T["Save"]</button>
+            </form>
+        </section>
     </div>
 
     <div class="space-y-6">
-        <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-            <div class="font-semibold mb-3">@T["Domains"]</div>
-            @if (!Model.Domains.Any()) { <p class="text-slate-400 text-sm">—</p> }
-            @foreach (var dom in Model.Domains)
-            {
-                <div class="flex items-center justify-between text-sm py-1">
-                    <a href="https://@dom.Host" target="_blank" class="text-brand-400">@dom.Host</a>
-                    @if (dom.SslEnabled) { <span class="text-xs text-emerald-400">SSL</span> }
+        @* ---- Domains ---- *@
+        <section class="rounded-xl border border-slate-800 bg-slate-900/60">
+            <div class="px-4 py-3 border-b border-slate-800 font-semibold">@T["Domains"]</div>
+            <div class="divide-y divide-slate-800">
+                @if (!Model.Domains.Any()){<div class="p-4 text-slate-400 text-sm">—</div>}
+                @foreach (var dom in Model.Domains)
+                {
+                    <div class="flex items-center justify-between p-3 text-sm">
+                        <a href="https://@dom.Host" target="_blank" class="text-brand-400 truncate">@dom.Host</a>
+                        <div class="flex items-center gap-2">
+                            @if (dom.SslEnabled){<span class="text-xs text-emerald-400">SSL</span>}
+                            <form asp-controller="Apps" asp-action="DeleteDomain" asp-route-id="@Model.Id" asp-route-domainId="@dom.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                        </div>
+                    </div>
+                }
+            </div>
+            <form asp-controller="Apps" asp-action="AddDomain" asp-route-id="@Model.Id" method="post" class="p-3 border-t border-slate-800 space-y-2">
+                @Html.AntiForgeryToken()
+                <input name="host" placeholder="app.example.com" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm" />
+                <div class="flex items-center justify-between">
+                    <label class="flex items-center gap-1 text-xs"><input type="checkbox" name="ssl" value="true" checked> @(isFa ? "SSL خودکار" : "Auto SSL")</label>
+                    <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-3 py-1.5 text-sm font-semibold">+ @(isFa ? "افزودن" : "Add")</button>
                 </div>
-            }
+            </form>
         </section>
 
-        <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-            <div class="font-semibold mb-3">@T["Environment Variables"]</div>
-            @if (!Model.EnvironmentVariables.Any()) { <p class="text-slate-400 text-sm">—</p> }
-            @foreach (var e in Model.EnvironmentVariables)
-            {
-                <div class="flex items-center justify-between text-sm py-1 font-mono">
-                    <span class="text-slate-300">@e.Key</span>
-                    <span class="text-slate-500">@(e.IsSecret ? "••••••" : e.Value)</span>
-                </div>
-            }
+        @* ---- Danger zone ---- *@
+        <section class="rounded-xl border border-red-900/50 bg-red-950/10 p-4">
+            <div class="font-semibold text-red-300 mb-1">@(isFa ? "منطقه‌ی خطر" : "Danger zone")</div>
+            <p class="text-xs text-slate-400 mb-3">@(isFa ? "حذف اپ، کانتینر و مسیرهایش را پاک می‌کند." : "Deleting removes the container and its routes.")</p>
+            <form asp-controller="Apps" asp-action="Delete" asp-route-id="@Model.Id" method="post"
+                  onsubmit="return confirm('@(isFa ? "این اپ حذف شود؟ این عمل برگشت‌ناپذیر است." : "Delete this app? This cannot be undone.")')">
+                @Html.AntiForgeryToken()
+                <label class="flex items-center gap-1 text-xs mb-2"><input type="checkbox" name="removeVolumes" value="true"> @(isFa ? "حذف داده‌ها (volumes)" : "Also delete data volumes")</label>
+                <button class="rounded-lg bg-red-900/40 hover:bg-red-900/60 text-red-300 px-4 py-2 text-sm font-semibold">🗑 @(isFa ? "حذف اپ" : "Delete app")</button>
+            </form>
         </section>
     </div>
 </div>

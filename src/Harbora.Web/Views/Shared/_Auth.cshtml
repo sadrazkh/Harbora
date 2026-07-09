@@ -23,5 +23,12 @@
             @RenderBody()
         </div>
     </div>
+    <script>
+        document.addEventListener('submit', function (e) {
+            if (e.defaultPrevented) return;
+            var b = e.target.querySelector('button[type=submit], button:not([type])');
+            if (b && !b.disabled) setTimeout(function () { b.disabled = true; b.textContent = '…'; }, 0);
+        });
+    </script>
 </body>
 </html>

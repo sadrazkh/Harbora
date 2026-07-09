@@ -17,6 +17,9 @@ public interface IDockerEngine
 
     Task StreamLogsAsync(string containerId, IProgress<string> sink, CancellationToken ct);
 
+    /// <summary>Non-following snapshot of the last <paramref name="tailLines"/> log lines.</summary>
+    Task<string> GetLogsAsync(string containerId, int tailLines, CancellationToken ct);
+
     Task<IReadOnlyList<ContainerInfo>> ListContainersAsync(string? labelFilter, CancellationToken ct);
     Task<ContainerStats?> GetStatsAsync(string containerId, CancellationToken ct);
 

@@ -19,16 +19,18 @@ On a fresh **Linux VPS** (Ubuntu/Debian/Fedora/Alpine), as root:
 curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash
 ```
 
-That's it. The installer is **fully self-contained** — it:
+That's it. The installer is **fully self-contained and interactive (فارسی/English)** — it:
 
 1. checks OS/arch compatibility,
 2. **installs every prerequisite itself** — `curl`, `git`, `openssl`, and **Docker** (with Compose) if missing,
-3. fetches the source into `/opt/harbora/app`,
-4. generates `/opt/harbora/app/deploy/.env` with **smart defaults** and freshly-random secrets,
-5. **builds the platform from source** and starts it (Traefik + PostgreSQL + Redis + the panel),
-6. prints your panel URL and next steps.
+3. **asks whether you have a real domain** (and derives `panel.` + `apps.` from it) or falls back to zero-DNS `nip.io`,
+4. **tests DNS** for the panel + apps wildcard — warns clearly if records don't point at the server (you can still continue and fix DNS later),
+5. asks for the **Let's Encrypt email** (blank → sensible default),
+6. generates `/opt/harbora/app/deploy/.env` with freshly-random secrets,
+7. **builds the platform from source** and starts it (Traefik v3.6 + PostgreSQL + Redis + the panel),
+8. **verifies the install**: Traefik↔Docker API compatibility, the panel route through Traefik (a 404 prints a clear bilingual fix), and SSL issuance (on failure it prints the ACME log lines and likely causes).
 
-It is **safe to re-run** — an existing `.env` (your secrets) is never overwritten.
+It is **idempotent** — safe to re-run; an existing `.env` (your secrets) is never overwritten, and a running stack is reused.
 
 ### Zero-DNS default (just works)
 
@@ -54,7 +56,14 @@ ACME_EMAIL=you@example.com \
 
 Run it in a terminal (not piped) and it will **prompt** for these, showing the defaults.
 
-TLS certificates are obtained automatically from **Let's Encrypt** on first HTTPS hit.
+### How SSL works
+
+Traefik obtains certificates from **Let's Encrypt via the HTTP-01 challenge**: the panel domain and
+**each app domain get their own certificate automatically** on first HTTPS hit — no wildcard needed,
+because every route Harbora generates carries `certresolver: letsencrypt`. Requirements: the domain's
+DNS must point at the server, and **port 80 must be reachable from the internet** (the challenge runs
+over it). A **wildcard certificate** (`*.apps.example.com`) is only possible with a **DNS-01 challenge**
+(provider API credentials); it's not needed for the default per-subdomain design.
 
 ### Prerequisites (all auto-installed)
 
@@ -191,6 +200,21 @@ docker run -d --name harbora-pg -e POSTGRES_USER=harbora -e POSTGRES_PASSWORD=ha
 cd src/Harbora.Web && npm install && npm run build && cd ../..   # build the Vue islands + Tailwind
 dotnet run --project src/Harbora.Web                             # auto-migrates + seeds → /setup
 ```
+
+## 🔧 Troubleshooting
+
+Run all commands from `/opt/harbora/app/deploy`.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Panel returns **404** (Traefik default page) | Traefik didn't read the panel container's labels — usually the Docker-API error below, or Traefik started before the panel | `docker compose logs traefik \| tail -50` → then `docker compose restart traefik` |
+| Traefik log: **`client version 1.24 is too old. Minimum supported API version is 1.40`** | Old Traefik (≤ v3.2) with new Docker Engine (27+/29) | This repo pins **traefik:v3.6** (compatible). Update: `docker compose pull traefik && docker compose up -d traefik` |
+| **No SSL certificate** / browser warning persists | DNS doesn't point at the server, or port **80** isn't reachable (HTTP-01 challenge needs it) | Check DNS: `getent hosts panel.your-domain` must return the server IP. Open port 80. ACME log: `docker logs harbora-traefik 2>&1 \| grep -i acme \| tail -20` |
+| **DNS wrong** — installer warned during setup | A/wildcard records missing or pointing elsewhere | Add `A panel.example.com → server IP` and `A *.apps.example.com → server IP`, wait for propagation, re-run the installer (`update`) |
+| **Ports 80/443 already in use** | Another web server (nginx/apache) on the host | `systemctl stop nginx && systemctl disable nginx` (or apache2), then `docker compose up -d` |
+| **ARM64 server** | — | Fully supported: the installer detects `aarch64/arm64`; Traefik/Postgres/Redis/.NET images are all multi-arch. First build is just slower |
+| Panel container **exits on boot** | DB not ready or bad `.env` | `docker compose logs panel` — it retries the DB; check `POSTGRES_*` values in `.env` |
+| Want a clean re-install | — | `docker compose down -v` (**destroys data**), remove `deploy/.env`, re-run installer |
 
 ## ⚠️ Known limitations
 
