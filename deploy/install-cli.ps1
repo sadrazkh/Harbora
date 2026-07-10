@@ -16,7 +16,15 @@ $exe = Join-Path $dir 'harbora.exe'
 
 Write-Host "-> Downloading $asset ..."
 try { Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing }
-catch { Write-Error "Download failed. Is a release published for $asset?"; exit 1 }
+catch {
+  Write-Host ""
+  Write-Warning "No published release found ($asset)."
+  Write-Host "Fix: from the repo, tag a release so CI builds the binaries:" -ForegroundColor Yellow
+  Write-Host "     git tag v0.1.0 && git push origin v0.1.0" -ForegroundColor Yellow
+  Write-Host "Or build from source (needs the .NET SDK):" -ForegroundColor Yellow
+  Write-Host "     dotnet publish src/Harbora.Cli -c Release" -ForegroundColor Yellow
+  exit 1
+}
 
 # Add the install dir to the user PATH (persisted) if it isn't already there.
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')

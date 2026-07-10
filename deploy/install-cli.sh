@@ -30,7 +30,14 @@ else dest="$HOME/.local/bin"; mkdir -p "$dest"; fi
 
 echo "➜ Downloading $asset …"
 tmp="$(mktemp)"
-curl -fsSL "$url" -o "$tmp" || { echo "✗ Download failed. Is a release published for $asset?" >&2; exit 1; }
+if ! curl -fsSL "$url" -o "$tmp"; then
+  echo "✗ No published release found ($asset)." >&2
+  echo "  Fix: tag a release so CI builds the binaries:" >&2
+  echo "       git tag v0.1.0 && git push origin v0.1.0" >&2
+  echo "  Or build from source (needs the .NET SDK):" >&2
+  echo "       dotnet publish src/Harbora.Cli -c Release" >&2
+  exit 1
+fi
 chmod +x "$tmp"
 ${SUDO:-} mv "$tmp" "$dest/harbora"
 
