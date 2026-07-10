@@ -1,0 +1,67 @@
+name: Release CLI
+
+# Tag a version to publish the CLI:  git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the GitHub release + upload assets
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { rid: linux-x64,   asset: harbora-linux-x64 }
+          - { rid: linux-arm64, asset: harbora-linux-arm64 }
+          - { rid: win-x64,     asset: harbora-win-x64.exe }
+          - { rid: win-arm64,   asset: harbora-win-arm64.exe }
+          - { rid: osx-x64,     asset: harbora-osx-x64 }
+          - { rid: osx-arm64,   asset: harbora-osx-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish self-contained single-file
+        run: >
+          dotnet publish src/Harbora.Cli/Harbora.Cli.csproj -c Release -r ${{ matrix.rid }}
+          --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false
+          -o out/${{ matrix.rid }}
+
+      - name: Rename output
+        run: |
+          if [[ "${{ matrix.rid }}" == win-* ]]; then cp out/${{ matrix.rid }}/harbora.exe ${{ matrix.asset }};
+          else cp out/${{ matrix.rid }}/harbora ${{ matrix.asset }}; fi
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}
+          fail_on_unmatched_files: true
+
+  dotnet-tool:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Pack the dotnet tool
+        run: dotnet pack src/Harbora.Cli/Harbora.Cli.csproj -c Release -o nupkg
+      - name: Attach nupkg to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nupkg/*.nupkg
+      # Optional: publish to NuGet so `dotnet tool install -g Harbora.Cli` works globally.
+      # Add a NUGET_API_KEY repo secret to enable it.
+      - name: Push to NuGet
+        if: ${{ env.NUGET_API_KEY != '' }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: dotnet nuget push nupkg/*.nupkg -k "$NUGET_API_KEY" -s https://api.nuget.org/v3/index.json --skip-duplicate

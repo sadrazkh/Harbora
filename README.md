@@ -119,20 +119,46 @@ Instance sizes (nano → large) map to real CPU/memory limits, so customers only
 
 ---
 
-## 🖥 CLI
+## 🖥 CLI — one-command install
+
+Install the `harbora` CLI (self-contained binary, **no .NET runtime needed**):
+
+**Linux / macOS** — in a terminal:
 
 ```bash
-dotnet publish src/Harbora.Cli -c Release      # or: dotnet run --project src/Harbora.Cli -- <args>
+curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install-cli.sh | bash
+```
 
+**Windows** — in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install-cli.ps1 | iex
+```
+
+> These download the right binary for your OS/arch (x64/arm64) from the latest GitHub release and put
+> `harbora` on your PATH.
+
+**Alternative (any OS, if you have the .NET SDK)** — install as a global tool:
+
+```bash
+dotnet tool install --global Harbora.Cli
+```
+
+### Deploy directly
+
+```bash
 harbora login --server https://panel.example.com --token hbr_cli_xxx   # token from Settings → API Tokens
 harbora apps
-harbora deploy my-app --ref main               # deploys and follows live logs
-harbora deploy my-app --tag v1.0.0
+harbora deploy my-app --ref main               # deploys and follows the live logs
+harbora deploy my-app --tag v1.0.0             # deploy a specific tag
 harbora logs <deploymentId>
 harbora status
 ```
 
 Drop `app: my-app` in a `harbora.yml` at your repo root so `harbora deploy` needs no arguments in CI.
+
+> First release not tagged yet? Build from source once: `dotnet publish src/Harbora.Cli -c Release`
+> (output in `src/Harbora.Cli/bin/Release/net10.0/publish/harbora`), or `dotnet run --project src/Harbora.Cli -- <args>`.
 
 ---
 

@@ -15,6 +15,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AssemblyName>harbora</AssemblyName>
+    <RootNamespace>Harbora.Cli</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Cross-platform install path #1: `dotnet tool install -g Harbora.Cli` → `harbora` command. -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>harbora</ToolCommandName>
+    <PackageId>Harbora.Cli</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Harbora CLI — deploy and manage apps on a Harbora platform.</Description>
   </PropertyGroup>
 
 </Project>
