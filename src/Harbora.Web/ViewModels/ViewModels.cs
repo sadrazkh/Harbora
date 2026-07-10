@@ -43,6 +43,8 @@ public sealed class CreateAppViewModel
     public Guid? ServerId { get; set; }
     /// <summary>Resource tier; sets the container CPU/memory limits and is quota-checked.</summary>
     public string? InstanceSizeKey { get; set; }
+    /// <summary>Build + deploy immediately after creating (go straight to live logs).</summary>
+    public bool DeployNow { get; set; } = true;
 }
 
 public sealed class CreateServiceViewModel

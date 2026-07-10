@@ -87,6 +87,24 @@
     </div>
 
     <div class="space-y-6">
+        @* ---- Git auto-deploy ---- *@
+        @if (Model.GitRepository is not null)
+        {
+            <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                <div class="font-semibold mb-2">@(isFa ? "استقرار خودکار (Git)" : "Auto-deploy (Git)")</div>
+                <div class="text-xs text-slate-400 mb-2">
+                    @(isFa ? "با هر push به" : "On push to") <code class="text-slate-300">@(Model.GitRef ?? Model.GitRepository.DefaultBranch)</code>
+                    @(Model.AutoDeployOnPush
+                        ? (isFa ? "خودکار دیپلوی می‌شود ✓" : "auto-deploys ✓")
+                        : (isFa ? "غیرفعال است" : "is off"))
+                </div>
+                <div class="text-xs text-slate-400">@(isFa ? "آدرس Webhook (در تنظیمات مخزن قرار دهید):" : "Webhook URL (add it in your repo settings):")</div>
+                <code class="block break-all rounded bg-black/50 px-2 py-1 text-xs mt-1">@Context.Request.Scheme://@Context.Request.Host/webhooks/git/@Model.GitRepository.Id</code>
+                <div class="text-xs text-slate-400 mt-2">@(isFa ? "سکرت:" : "Secret:") <code class="text-slate-300 break-all">@Model.GitRepository.WebhookSecret</code></div>
+                <p class="text-[11px] text-slate-500 mt-2">@(isFa ? "Content-Type را application/json بگذارید. GitHub/Gitea با امضای HMAC و GitLab با هدر توکن تأیید می‌شوند." : "Use Content-Type application/json. GitHub/Gitea verify by HMAC; GitLab by token header.")</p>
+            </section>
+        }
+
         @* ---- Domains ---- *@
         <section class="rounded-xl border border-slate-800 bg-slate-900/60">
             <div class="px-4 py-3 border-b border-slate-800 font-semibold">@T["Domains"]</div>

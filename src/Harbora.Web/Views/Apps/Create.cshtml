@@ -79,6 +79,13 @@
             </div>
         </div>
 
+        <label class="flex items-center gap-2 text-sm pt-1">
+            <input asp-for="DeployNow" type="checkbox" />
+            @(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa"
+                ? "همین حالا بساز و دیپلوی کن (رفتن به لاگ زنده)"
+                : "Build & deploy now (go to live logs)")
+        </label>
+
         <div class="flex gap-3 pt-2">
             <button type="submit" class="rounded-lg bg-brand-600 hover:bg-brand-500 px-5 py-2 font-semibold">@T["Save"]</button>
             <a href="/apps" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-5 py-2">@T["Cancel"]</a>

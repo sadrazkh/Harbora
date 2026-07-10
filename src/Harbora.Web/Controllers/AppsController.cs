@@ -125,6 +125,16 @@ public sealed class AppsController(
         db.Apps.Add(app);
         await db.SaveChangesAsync(ct);
 
+        // "Give it a repo and it just works": build + deploy right away and show live logs.
+        var canDeploy = model.SourceType is AppSourceType.GitRepository
+            or AppSourceType.Dockerfile or AppSourceType.PrebuiltImage;
+        if (model.DeployNow && canDeploy)
+        {
+            var deploymentId = await deployEngine.QueueDeploymentAsync(
+                new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, app.GitRef), ct);
+            return RedirectToAction("Details", "Deployments", new { id = deploymentId });
+        }
+
         return RedirectToAction(nameof(Details), new { id = app.Id });
     }
 
