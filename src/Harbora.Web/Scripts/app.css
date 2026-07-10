@@ -10,17 +10,17 @@
 @layer base {
   :root {
     color-scheme: light;
-    --s50: 15 23 42;
+    --s50:  15 23 42;
     --s100: 15 23 42;    /* strong text → near-black */
     --s200: 30 41 59;
-    --s300: 51 65 85;    /* text */
+    --s300: 51 65 85;    /* body text */
     --s400: 71 85 105;   /* muted text (readable on light) */
     --s500: 100 116 139; /* faint text */
     --s600: 148 163 184;
-    --s700: 203 213 225; /* hover / strong border */
-    --s800: 226 232 240; /* borders, inputs, buttons */
-    --s900: 255 255 255; /* card / surface */
-    --s950: 241 245 249; /* app canvas */
+    --s700: 203 213 225; /* borders (slate-300) — clearly visible on light */
+    --s800: 241 245 249; /* input / button fills (slate-100) — distinct from white cards + gray canvas */
+    --s900: 255 255 255; /* card / surface → white pops on the canvas */
+    --s950: 226 232 240; /* app canvas (slate-200) — a real gray so white cards stand out */
   }
   html.dark {
     color-scheme: dark;

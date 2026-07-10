@@ -43,8 +43,8 @@ public sealed class AppsController(
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Create(CreateAppViewModel model, CancellationToken ct)
     {
-        if (await db.Apps.AnyAsync(a => a.WorkspaceId == WorkspaceId && a.Slug == model.Slug, ct))
-            ModelState.AddModelError(nameof(model.Slug), "An app with this slug already exists.");
+        // Auto-derive a unique slug from the name (keeps the form to just "name + source").
+        var slug = await UniqueSlugAsync(Slugify(string.IsNullOrWhiteSpace(model.Slug) ? model.Name : model.Slug!), ct);
 
         if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile
             && string.IsNullOrWhiteSpace(model.CloneUrl))
@@ -84,9 +84,9 @@ public sealed class AppsController(
             WorkspaceId = WorkspaceId,
             ServerId = serverId,
             Name = model.Name,
-            Slug = model.Slug,
+            Slug = slug,
             SourceType = model.SourceType,
-            ContainerPort = model.ContainerPort,
+            ContainerPort = model.ContainerPort <= 0 ? 80 : model.ContainerPort,
             DockerfilePath = model.DockerfilePath,
             PrebuiltImage = model.PrebuiltImage,
             GitRef = model.GitRef,
@@ -119,8 +119,16 @@ public sealed class AppsController(
             app.GitRepository = repo;
         }
 
-        if (!string.IsNullOrWhiteSpace(model.Domain))
-            app.Domains.Add(new DomainName { Host = model.Domain.Trim().ToLowerInvariant(), SslEnabled = true, ForceHttps = true, IsPrimary = true });
+        // Domain: use the one given, else auto-assign {slug}.{root domain} so the app is instantly reachable.
+        var host = model.Domain?.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            var root = await db.Settings.Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.PlatformRootDomain)
+                .Select(s => s.Value).FirstOrDefaultAsync(ct);
+            if (!string.IsNullOrWhiteSpace(root)) host = $"{slug}.{root.Trim()}";
+        }
+        if (!string.IsNullOrWhiteSpace(host) && !await db.Domains.AnyAsync(d => d.Host == host, ct))
+            app.Domains.Add(new DomainName { Host = host, SslEnabled = true, ForceHttps = true, IsPrimary = true });
 
         db.Apps.Add(app);
         await db.SaveChangesAsync(ct);
@@ -338,6 +346,23 @@ public sealed class AppsController(
             ? await db.Plans.Where(p => p.Id == pid).Select(p => p.NodePool).FirstOrDefaultAsync(ct)
             : await db.Plans.Where(p => p.IsDefault).Select(p => p.NodePool).FirstOrDefaultAsync(ct);
         return string.IsNullOrWhiteSpace(pool) ? null : pool;
+    }
+
+    private static string Slugify(string value)
+    {
+        var chars = (value ?? "").Trim().ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
+        var slug = new string(chars).Trim('-');
+        while (slug.Contains("--")) slug = slug.Replace("--", "-");
+        if (slug.Length > 50) slug = slug[..50].Trim('-');
+        return string.IsNullOrWhiteSpace(slug) ? "app" : slug;
+    }
+
+    private async Task<string> UniqueSlugAsync(string baseSlug, CancellationToken ct)
+    {
+        var slug = baseSlug;
+        for (var n = 2; await db.Apps.AnyAsync(a => a.WorkspaceId == WorkspaceId && a.Slug == slug, ct); n++)
+            slug = $"{baseSlug}-{n}";
+        return slug;
     }
 
     private static string DeriveRepoName(string cloneUrl)

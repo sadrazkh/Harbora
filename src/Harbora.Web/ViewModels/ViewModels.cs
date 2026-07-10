@@ -26,9 +26,9 @@ public sealed class LoginViewModel
 
 public sealed class CreateAppViewModel
 {
-    [Required, RegularExpression("^[a-z0-9-]{2,50}$", ErrorMessage = "Use 2–50 lowercase letters, digits or hyphens.")]
-    public string Slug { get; set; } = string.Empty;
     [Required] public string Name { get; set; } = string.Empty;
+    /// <summary>Optional; auto-derived from the name when left blank.</summary>
+    public string? Slug { get; set; }
     public AppSourceType SourceType { get; set; } = AppSourceType.GitRepository;
 
     public string? CloneUrl { get; set; }
