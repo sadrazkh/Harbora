@@ -1,10 +1,13 @@
 name: Release CLI
 
 # Tag a version to publish the CLI:  git tag v0.1.0 && git push origin v0.1.0
+# (both "v0.1.0" and "0.1.0" style tags trigger this.)
 on:
   push:
-    tags: ['v*']
-  workflow_dispatch:
+    tags:
+      - 'v*'
+      - '[0-9]*'
+  workflow_dispatch:   # also runnable manually from the Actions tab
 
 permissions:
   contents: write   # create the GitHub release + upload assets
