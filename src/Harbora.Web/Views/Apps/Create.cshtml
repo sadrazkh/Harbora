@@ -52,6 +52,9 @@
             <div>
                 <label class="block text-sm text-slate-400 mb-1">Dockerfile path</label>
                 <input asp-for="DockerfilePath" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2" />
+                <span class="text-xs text-slate-500">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa"
+                    ? "اگر مخزن Dockerfile نداشته باشد، استک (Node/.NET/Go/PHP/Python/استاتیک) خودکار تشخیص داده می‌شود."
+                    : "No Dockerfile? Harbora auto-detects the stack (Node/.NET/Go/PHP/Python/static).")</span>
             </div>
         </div>
 

@@ -129,10 +129,20 @@ Install the `harbora` CLI (self-contained binary, **no .NET runtime needed**):
 curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install-cli.sh | bash
 ```
 
-**Windows** — in PowerShell:
+**Windows — PowerShell:**
 
 ```powershell
 irm https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install-cli.ps1 | iex
+```
+
+**Windows — cmd.exe** (either one):
+
+```bat
+:: invoke the PowerShell installer from cmd:
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install-cli.ps1 | iex"
+
+:: …or just download the exe directly (Windows 10+ ships curl):
+curl -L -o "%USERPROFILE%\harbora.exe" https://github.com/sadrazkh/Harbora/releases/latest/download/harbora-win-x64.exe
 ```
 
 > These download the right binary for your OS/arch (x64/arm64) from the latest GitHub release and put
@@ -148,14 +158,21 @@ dotnet tool install --global Harbora.Cli
 
 ```bash
 harbora login --server https://panel.example.com --token hbr_cli_xxx   # token from Settings → API Tokens
-harbora apps
-harbora deploy my-app --ref main               # deploys and follows the live logs
+
+# In ANY project folder, scaffold the config in one command (slug = folder name):
+harbora init                                   # writes ./harbora.yml (uses the folder name; detects Dockerfile)
+
+harbora deploy                                 # deploys this project (reads ./harbora.yml) and follows live logs
+# …or without a config file:
+harbora deploy my-app --ref main
 harbora deploy my-app --tag v1.0.0             # deploy a specific tag
+harbora apps
 harbora logs <deploymentId>
 harbora status
 ```
 
-Drop `app: my-app` in a `harbora.yml` at your repo root so `harbora deploy` needs no arguments in CI.
+`harbora init` creates a ready-to-edit `harbora.yml`, so `harbora deploy` needs no arguments — the same
+file also drives CI. To reuse a different name: `harbora init --app my-name`.
 
 > First release not tagged yet? Build from source once: `dotnet publish src/Harbora.Cli -c Release`
 > (output in `src/Harbora.Cli/bin/Release/net10.0/publish/harbora`), or `dotnet run --project src/Harbora.Cli -- <args>`.
@@ -180,7 +197,7 @@ whichever node has room. Optional **mTLS** (client certificate) hardens the pane
 
 ## ✨ Features
 
-- **Deploy** from Git repo, Dockerfile, docker-compose, prebuilt image, static site, or one-click templates.
+- **Deploy** from a Git repo (with a Dockerfile **or none** — automatic buildpacks detect Node / .NET / Go / PHP / Python / static and generate the build), a Dockerfile, docker-compose, a prebuilt image, or one-click templates.
 - **Git integration**: connect GitHub/GitLab/Gitea by token **or OAuth**; deploy-on-push/tag via
   HMAC-verified webhooks; commit metadata, deploy history, rollback.
 - **Visual routing designer**: drag-and-drop rules, host/path routing, SSL toggle, HTTP→HTTPS,

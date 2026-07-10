@@ -197,13 +197,27 @@ public sealed class DeploymentPipeline(
                 var contextPath = Path.Combine(checkout.LocalPath, app.BuildContextPath?.TrimStart('.', '/', '\\') ?? "");
                 if (!Directory.Exists(contextPath)) contextPath = checkout.LocalPath;
 
+                // Use the repo's Dockerfile if present; otherwise auto-detect the stack (buildpack).
+                var dockerfile = app.DockerfilePath ?? "Dockerfile";
+                if (!File.Exists(Path.Combine(contextPath, dockerfile)))
+                {
+                    var pack = Buildpacks.Detect(contextPath, app.ContainerPort);
+                    if (pack is null)
+                        throw new InvalidOperationException(
+                            "No Dockerfile found and the stack couldn't be auto-detected. Add a Dockerfile, or deploy a prebuilt image / template.");
+
+                    dockerfile = "Dockerfile.harbora";
+                    await File.WriteAllTextAsync(Path.Combine(contextPath, dockerfile), pack.Value.Dockerfile, ct);
+                    await log(LogStream.System, $"No Dockerfile — auto-detected {pack.Value.Stack}; using a generated build.");
+                }
+
                 await log(LogStream.System, $"Building image {imageTag} …");
                 var buildArgs = app.EnvironmentVariables
                     .Where(e => e.AvailableAtBuild)
                     .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
                 return await docker.BuildImageAsync(
-                    new DockerBuildRequest(contextPath, app.DockerfilePath ?? "Dockerfile", imageTag, buildArgs),
+                    new DockerBuildRequest(contextPath, dockerfile, imageTag, buildArgs),
                     buildLog, ct);
             }
 

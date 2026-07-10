@@ -165,3 +165,67 @@ public sealed class StatusCommand : AsyncCommand
         return 0;
     }
 }
+
+/// <summary>Scaffolds a harbora.yml in the current folder so `harbora deploy` works with no args.</summary>
+public sealed class InitCommand : AsyncCommand<InitCommand.Settings>
+{
+    public sealed class Settings : CommandSettings
+    {
+        [CommandOption("-a|--app <SLUG>"), Description("App slug (defaults to the folder name)")]
+        public string? App { get; init; }
+
+        [CommandOption("-f|--force"), Description("Overwrite an existing harbora.yml")]
+        public bool Force { get; init; }
+    }
+
+    protected override Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    {
+        const string file = "harbora.yml";
+        if (File.Exists(file) && !settings.Force)
+        {
+            AnsiConsole.MarkupLine("[yellow]![/] harbora.yml already exists. Use [yellow]--force[/] to overwrite.");
+            return Task.FromResult(1);
+        }
+
+        var slug = Slugify(settings.App ?? new DirectoryInfo(Directory.GetCurrentDirectory()).Name);
+        var hasDockerfile = File.Exists("Dockerfile");
+        var hasCompose = File.Exists("docker-compose.yml") || File.Exists("compose.yaml") || File.Exists("compose.yml");
+
+        var yaml =
+            $"""
+            # Harbora project config. Edit as needed, then run:  harbora deploy
+            app: {slug}
+
+            build:
+              dockerfile: {(hasDockerfile ? "Dockerfile" : "Dockerfile   # add a Dockerfile to this repo, or deploy a prebuilt image from the UI")}
+              context: .
+
+            # Environment variables (or set them in the app's page / with `harbora env`):
+            # env:
+            #   NODE_ENV: production
+
+            # Domains to route to this app (attach + get SSL automatically):
+            # domains:
+            #   - {slug}.example.com
+
+            """;
+
+        File.WriteAllText(file, yaml);
+        AnsiConsole.MarkupLine($"[green]✓[/] Wrote [bold]harbora.yml[/] (app: [bold]{slug}[/]).");
+        if (hasCompose && !hasDockerfile)
+            AnsiConsole.MarkupLine("[grey]  Detected docker-compose — set the source to docker-compose when creating the app in the UI.[/]");
+        if (!hasDockerfile && !hasCompose)
+            AnsiConsole.MarkupLine("[yellow]  No Dockerfile found[/] — add one, or create the app from a prebuilt image/template in the UI.");
+        AnsiConsole.MarkupLine("Next:  [yellow]harbora deploy[/]");
+        return Task.FromResult(0);
+    }
+
+    private static string Slugify(string name)
+    {
+        var chars = name.Trim().ToLowerInvariant()
+            .Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
+        var slug = new string(chars).Trim('-');
+        while (slug.Contains("--")) slug = slug.Replace("--", "-");
+        return string.IsNullOrWhiteSpace(slug) ? "app" : slug;
+    }
+}
