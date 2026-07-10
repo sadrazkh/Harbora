@@ -9,7 +9,10 @@ export default defineConfig({
   plugins: [vue()],
   base: '/build/',
   build: {
-    manifest: true,
+    // Write the manifest at build/manifest.json (NOT the default .vite/ hidden dir):
+    // the .NET SDK excludes dot-folders from `dotnet publish`, which silently dropped the
+    // manifest in the Docker image and left the app with no CSS/JS links.
+    manifest: 'manifest.json',
     outDir: resolve(__dirname, 'wwwroot/build'),
     emptyOutDir: true,
     rollupOptions: {
