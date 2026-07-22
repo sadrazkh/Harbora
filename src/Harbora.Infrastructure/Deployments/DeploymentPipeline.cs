@@ -76,10 +76,21 @@ public sealed class DeploymentPipeline(
             await SetStatus(DeploymentStatus.Building);
             await Log(LogStream.System, $"Deployment #{deployment.Number} started ({app.SourceType}).");
 
-            var imageTag = $"{_opt.ImagePrefix}/{app.Slug}:build-{deployment.Number}";
-            var buildLog = new Progress<string>(l => _ = Log(LogStream.Build, l));
-
-            imageTag = await AcquireImageAsync(docker, app, deployment, imageTag, buildLog, Log, ct);
+            string imageTag;
+            if (deployment.RolledBackFromId is { } rollbackTargetId)
+            {
+                // Rollback = re-release a prior artifact. Never rebuild (instant + exact; ADR-006).
+                var target = await db.Deployments.FirstOrDefaultAsync(d => d.Id == rollbackTargetId, ct);
+                imageTag = DeploymentPlanning.ResolveRollbackImage(target);
+                await Log(LogStream.System,
+                    $"Rolling back to deployment #{target!.Number}; re-releasing image {imageTag} (no rebuild).");
+            }
+            else
+            {
+                imageTag = $"{_opt.ImagePrefix}/{app.Slug}:build-{deployment.Number}";
+                var buildLog = new Progress<string>(l => _ = Log(LogStream.Build, l));
+                imageTag = await AcquireImageAsync(docker, app, deployment, imageTag, buildLog, Log, ct);
+            }
             deployment.ImageTag = imageTag;
 
             await SetStatus(DeploymentStatus.Deploying);
@@ -92,22 +103,23 @@ public sealed class DeploymentPipeline(
             foreach (var v in app.Volumes)
                 await docker.EnsureVolumeAsync(v.Name, ct);
 
-            var containerName = $"harbora-{app.Slug}";
-            await RemoveExistingContainerAsync(docker, containerName, Log, ct);
+            // Zero-downtime cutover (ADR-007): the new container gets a versioned name and starts
+            // ALONGSIDE the currently-serving one. We only retire the old container(s) AFTER the new
+            // one is healthy and traffic has been switched — so a failed deploy never drops traffic.
+            var containerName = DeploymentPlanning.ContainerName(app.Slug, deployment.Number);
 
             // Decide how the proxy reaches this app. On the local node Traefik joins the tenant
             // network and routes by container name. On a remote node there is no shared overlay, so
-            // we publish the container port to a stable host port and route to the node's host:port.
+            // we publish the container port to a per-deployment host port (lets old + new coexist).
             var server = await db.Servers.FirstAsync(s => s.Id == app.ServerId, ct);
             int? publishPort = null;
             string upstreamHost = containerName;
             var upstreamPort = app.ContainerPort;
             if (!server.IsLocal)
             {
-                app.PublishedHostPort ??= AllocateHostPort(app.Slug);
-                publishPort = app.PublishedHostPort;
+                publishPort = DeploymentPlanning.HostPort(app.Slug, deployment.Number);
                 upstreamHost = server.Hostname;
-                upstreamPort = app.PublishedHostPort!.Value;
+                upstreamPort = publishPort.Value;
             }
             else
             {
@@ -139,7 +151,10 @@ public sealed class DeploymentPipeline(
             if (!healthy)
                 throw new InvalidOperationException("Container failed its health check.");
 
+            // New container is healthy → switch traffic to it, THEN retire the old container(s).
             await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
+            await RetireOldContainersAsync(docker, app.Slug, keepContainerName: containerName, Log, ct);
+            if (!server.IsLocal) app.PublishedHostPort = publishPort;
 
             app.ActiveDeploymentId = deployment.Id;
             app.Status = AppStatus.Running;
@@ -149,6 +164,9 @@ public sealed class DeploymentPipeline(
         catch (Exception ex)
         {
             logger.LogError(ex, "Deployment {Id} failed.", deploymentId);
+            // Zero-downtime guarantee: remove only the just-started (failed) container; the previous
+            // version — if any — keeps serving untouched.
+            await TryRemoveContainerByNameAsync(docker, DeploymentPlanning.ContainerName(app.Slug, deployment.Number), ct);
             // Failed is reachable from any in-flight state; guard against a double-terminal write.
             if (DeploymentStateMachine.IsInFlight(deployment.Status))
                 DeploymentStateMachine.Transition(deployment, DeploymentStatus.Failed, clock.UtcNow);
@@ -231,13 +249,33 @@ public sealed class DeploymentPipeline(
             e => e.Key,
             e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
-    private async Task RemoveExistingContainerAsync(IDockerEngine docker, string containerName, Func<LogStream, string, Task> log, CancellationToken ct)
+    /// <summary>
+    /// Retire this app's previous container(s) after a successful cutover — everything labelled for
+    /// the app except the just-deployed container (incl. any legacy unversioned container).
+    /// </summary>
+    private async Task RetireOldContainersAsync(
+        IDockerEngine docker, string slug, string keepContainerName, Func<LogStream, string, Task> log, CancellationToken ct)
     {
-        var existing = await docker.ListContainersAsync($"harbora.app", ct);
-        var match = existing.FirstOrDefault(c => c.Name == containerName);
-        if (match is null) return;
-        await log(LogStream.System, $"Replacing previous container {match.Id[..12]} …");
-        await docker.RemoveContainerAsync(match.Id, force: true, ct);
+        var existing = await docker.ListContainersAsync(DeploymentPlanning.AppLabel, ct);
+        var toRetire = DeploymentPlanning.ContainersToRetire(existing, slug, keepContainerName);
+        foreach (var id in toRetire)
+        {
+            await log(LogStream.System, $"Retiring previous container {id[..12]} …");
+            try { await docker.RemoveContainerAsync(id, force: true, ct); }
+            catch (Exception ex) { await log(LogStream.System, $"(could not remove {id[..12]}: {ex.Message})"); }
+        }
+    }
+
+    /// <summary>Best-effort removal of a single container by exact name (used to clean up a failed deploy).</summary>
+    private static async Task TryRemoveContainerByNameAsync(IDockerEngine docker, string containerName, CancellationToken ct)
+    {
+        try
+        {
+            var existing = await docker.ListContainersAsync(DeploymentPlanning.AppLabel, ct);
+            var match = existing.FirstOrDefault(c => c.Name == containerName);
+            if (match is not null) await docker.RemoveContainerAsync(match.Id, force: true, ct);
+        }
+        catch { /* best effort — never mask the original failure */ }
     }
 
     /// <summary>
@@ -318,14 +356,6 @@ public sealed class DeploymentPipeline(
         await log(LogStream.System, result.Success
             ? "Proxy configuration applied."
             : $"⚠ Proxy apply failed{(result.RolledBack ? " (rolled back)" : "")}: {result.Error}");
-    }
-
-    /// <summary>Deterministic host port (20000–29999) for a remote app's published container port.</summary>
-    private static int AllocateHostPort(string slug)
-    {
-        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(slug));
-        var value = BitConverter.ToUInt32(hash, 0);
-        return 20000 + (int)(value % 10000);
     }
 
     private string SafeUnprotect(string value)

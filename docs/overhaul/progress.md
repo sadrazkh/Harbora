@@ -5,6 +5,50 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-23 — Phase 4: Zero-downtime cutover + artifact rollback (C4)
+
+**What was done**
+- **Zero-downtime cutover (ADR-007):** the new container now starts under a **versioned name**
+  (`harbora-{slug}-{n}`) ALONGSIDE the currently-serving one; the old container is retired only
+  AFTER the new one passes health checks and traffic has been switched. A failed deploy now leaves
+  the previous version serving (was: old container removed before the new one even started →
+  downtime + outage on failure).
+- **True artifact rollback (ADR-006):** rollback now **re-releases the prior deployment's image**
+  with no rebuild (instant + exact). Fixed a real correctness bug — the previous "rollback" ignored
+  `RolledBackFromId` and rebuilt from current source, which could produce a *different* image.
+- Remote nodes get a **per-deployment host port** so old+new can coexist during cutover.
+- Container lookup for restart/stop/logs/delete is now **label-based** (was exact-name), matching
+  the versioned naming.
+
+**Files changed**
+- Added `src/Harbora.Infrastructure/Deployments/DeploymentPlanning.cs` (pure helpers: versioned
+  naming, retirement selection, per-deployment port, rollback-image resolution).
+- `DeploymentPipeline.cs`: rollback short-circuit (skip build), start-new-before-retire-old cutover,
+  failed-container cleanup on error, retire-after-cutover.
+- `AppOperationsService.cs`: label-based current-container lookup.
+- Added `tests/Harbora.Tests/DeploymentPlanningTests.cs` (+6).
+
+**Tests / checks run**
+- `dotnet build Harbora.slnx -c Release` → 0 warnings / 0 errors.
+- `dotnet test` → **59 passed** (+6).
+
+**Result**
+- SUCCESS at build + unit level. Fixes C4 and a rollback correctness bug.
+- Live cutover/rollback still needs a **Docker host** to verify end-to-end (P2 Docker step); the
+  pure planning logic is fully unit-tested.
+
+**Decisions**
+- Versioned container names + retire-after-cutover chosen over the old remove-then-start, and the
+  fix applies to remote nodes too via per-deployment ports (strictly better than the prior stable-
+  port remove-first behavior). Legacy unversioned containers are retired automatically on first
+  redeploy (safe migration).
+
+**Next step**
+- C3 honesty pass: implement Static-site + single-container Template deploys (currently throw),
+  expose them in the create form, gate Compose until implemented, and correct the README.
+
+---
+
 ## 2026-07-22 — Phase 2 (partial): Master key fail-closed (critical security fix)
 
 **What was done**
