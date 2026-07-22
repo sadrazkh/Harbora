@@ -62,16 +62,17 @@ public sealed class DeploymentPipeline(
             await stream.PublishLogAsync(deploymentId, s, clean, ct);
         }
 
+        // All status changes go through the state machine (ADR-004): illegal transitions throw,
+        // timestamps are stamped consistently, and the row is persisted + streamed on every change.
         async Task SetStatus(DeploymentStatus status)
         {
-            deployment.Status = status;
+            DeploymentStateMachine.Transition(deployment, status, clock.UtcNow);
             await stream.PublishStatusAsync(deploymentId, status, ct);
             await db.SaveChangesAsync(ct);
         }
 
         try
         {
-            deployment.StartedAt = clock.UtcNow;
             await SetStatus(DeploymentStatus.Building);
             await Log(LogStream.System, $"Deployment #{deployment.Number} started ({app.SourceType}).");
 
@@ -132,6 +133,7 @@ public sealed class DeploymentPipeline(
                 Command: null, PublishToHostPort: publishPort), ct);
 
             await Log(LogStream.System, $"Container {containerId[..12]} is up. Verifying health …");
+            await SetStatus(DeploymentStatus.HealthChecking);
             var healthy = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort, containerName, app.HealthCheckPath,
                 msg => Log(LogStream.System, msg), ct);
             if (!healthy)
@@ -139,19 +141,17 @@ public sealed class DeploymentPipeline(
 
             await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
 
-            deployment.Status = DeploymentStatus.Succeeded;
-            deployment.FinishedAt = clock.UtcNow;
             app.ActiveDeploymentId = deployment.Id;
             app.Status = AppStatus.Running;
-            await db.SaveChangesAsync(ct);
-            await stream.PublishStatusAsync(deploymentId, DeploymentStatus.Succeeded, ct);
+            await SetStatus(DeploymentStatus.Succeeded);
             await Log(LogStream.System, $"✅ Deployment #{deployment.Number} succeeded.");
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Deployment {Id} failed.", deploymentId);
-            deployment.Status = DeploymentStatus.Failed;
-            deployment.FinishedAt = clock.UtcNow;
+            // Failed is reachable from any in-flight state; guard against a double-terminal write.
+            if (DeploymentStateMachine.IsInFlight(deployment.Status))
+                DeploymentStateMachine.Transition(deployment, DeploymentStatus.Failed, clock.UtcNow);
             deployment.ErrorMessage = ex.Message;
             app.Status = app.ActiveDeploymentId is null ? AppStatus.Failed : AppStatus.Running;
             await db.SaveChangesAsync(ct);

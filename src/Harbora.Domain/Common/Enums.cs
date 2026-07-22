@@ -46,7 +46,10 @@ public enum DeploymentStatus
     Succeeded = 4,
     Failed = 5,
     Cancelled = 6,
-    RolledBack = 7
+    RolledBack = 7,
+    // Appended (value 8) so existing persisted values stay stable. Sits logically between
+    // Deploying and Succeeded: the new container is up and being health-probed before cutover.
+    HealthChecking = 8
 }
 
 public enum DeploymentTrigger

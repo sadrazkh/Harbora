@@ -70,6 +70,8 @@ public static class DependencyInjection
         services.AddScoped<IDeploymentEngine, DeploymentEngine>();
         services.AddScoped<DeploymentPipeline>();
         services.AddScoped<IAppOperationsService, AppOperationsService>();
+        // Crash recovery: reconcile in-flight deployments on startup (ADR-005).
+        services.AddHostedService<Deployments.DeploymentReconciler>();
 
         // Managed services (databases/caches). Concrete type is registered too so background
         // jobs can resolve ProvisionAsync directly.

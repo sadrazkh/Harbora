@@ -13,12 +13,14 @@
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <PackageReference Include="FluentAssertions" Version="6.12.1" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.4" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Harbora.Domain\Harbora.Domain.csproj" />
     <ProjectReference Include="..\..\src\Harbora.Application\Harbora.Application.csproj" />
     <ProjectReference Include="..\..\src\Harbora.Infrastructure\Harbora.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Harbora.Data\Harbora.Data.csproj" />
   </ItemGroup>
 
 </Project>
