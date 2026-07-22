@@ -38,3 +38,21 @@ public interface ISecretRedactor
 {
     string Redact(string text, IEnumerable<string> secretValues);
 }
+
+/// <summary>
+/// Append-only audit trail for security-relevant actions (doc 10 §2.13). The actor/workspace
+/// default to the current user; callers pass the request IP (the abstraction stays free of any
+/// web dependency). Best-effort — an audit failure must never break the action being audited.
+/// </summary>
+public interface IAuditLogger
+{
+    Task LogAsync(
+        string action,
+        string? targetType = null,
+        string? targetId = null,
+        string? ipAddress = null,
+        string? actorEmailOverride = null,
+        Guid? userIdOverride = null,
+        string? metadataJson = null,
+        CancellationToken ct = default);
+}

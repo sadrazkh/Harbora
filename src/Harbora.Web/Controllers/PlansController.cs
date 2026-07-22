@@ -1,5 +1,6 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Authorization;
 using Harbora.Domain.Tenancy;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
@@ -35,6 +36,7 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
 
     [HttpPost("create")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.PlansManage)]
     public async Task<IActionResult> CreatePlan(
         string name, int maxApps, int maxServices, long maxMemoryMb, double maxCpu,
         string? allowedSizeKeys, decimal monthlyPrice, CancellationToken ct)

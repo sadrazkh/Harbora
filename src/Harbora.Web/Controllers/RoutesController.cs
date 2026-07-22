@@ -1,5 +1,6 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Authorization;
 using Harbora.Web.ViewModels;
 using Route = Harbora.Domain.Networking.Route;
 using Microsoft.AspNetCore.Antiforgery;
@@ -64,6 +65,7 @@ public sealed class RoutesController(
 
     [HttpPost("save")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.RoutesManage)]
     public async Task<IActionResult> Save([FromBody] List<RouteDto> routes, CancellationToken ct)
     {
         // Validate before touching the DB so a bad config never persists.

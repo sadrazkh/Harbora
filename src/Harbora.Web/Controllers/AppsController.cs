@@ -1,6 +1,7 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
+using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Git;
 using Harbora.Domain.Networking;
@@ -20,10 +21,11 @@ public sealed class AppsController(
     IQuotaService quota,
     ISchedulerService scheduler,
     ISecretProtector protector,
-    ICurrentUser currentUser,
-    ISystemClock clock) : Controller
+    IAuditLogger audit,
+    ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
+    private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -33,6 +35,7 @@ public sealed class AppsController(
     }
 
     [HttpGet]
+    [Authorize(Policy = Capabilities.AppsCreate)]
     public async Task<IActionResult> Create(CancellationToken ct)
     {
         await PopulateTemplates(ct);
@@ -41,12 +44,13 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsCreate)]
     public async Task<IActionResult> Create(CreateAppViewModel model, CancellationToken ct)
     {
         // Auto-derive a unique slug from the name (keeps the form to just "name + source").
         var slug = await UniqueSlugAsync(Slugify(string.IsNullOrWhiteSpace(model.Slug) ? model.Name : model.Slug!), ct);
 
-        if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile
+        if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile or AppSourceType.StaticSite
             && string.IsNullOrWhiteSpace(model.CloneUrl))
             ModelState.AddModelError(nameof(model.CloneUrl), "A Git repository URL is required.");
 
@@ -96,7 +100,7 @@ public sealed class AppsController(
             CpuLimit = size?.CpuCores ?? 0
         };
 
-        if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile)
+        if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile or AppSourceType.StaticSite)
         {
             var provider = new GitProvider
             {
@@ -135,7 +139,7 @@ public sealed class AppsController(
 
         // "Give it a repo and it just works": build + deploy right away and show live logs.
         var canDeploy = model.SourceType is AppSourceType.GitRepository
-            or AppSourceType.Dockerfile or AppSourceType.PrebuiltImage;
+            or AppSourceType.Dockerfile or AppSourceType.PrebuiltImage or AppSourceType.StaticSite;
         if (model.DeployNow && canDeploy)
         {
             var deploymentId = await deployEngine.QueueDeploymentAsync(
@@ -160,6 +164,7 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
     public async Task<IActionResult> Deploy(Guid id, string? gitRef, CancellationToken ct)
     {
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
@@ -175,12 +180,14 @@ public sealed class AppsController(
 
         var deploymentId = await deployEngine.QueueDeploymentAsync(
             new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, gitRef ?? app.GitRef), ct);
+        await audit.LogAsync("app.deploy", "app", id.ToString(), ClientIp, ct: ct);
 
         return RedirectToAction("Details", "Deployments", new { id = deploymentId });
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
     public async Task<IActionResult> Rollback(Guid id, Guid deploymentId, CancellationToken ct)
     {
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
@@ -189,6 +196,8 @@ public sealed class AppsController(
         var newId = await deployEngine.QueueDeploymentAsync(
             new DeploymentRequest(app.Id, DeploymentTrigger.Rollback, currentUser.UserId ?? Guid.Empty,
                 RollbackToDeploymentId: deploymentId), ct);
+        await audit.LogAsync("app.rollback", "app", id.ToString(), ClientIp,
+            metadataJson: $"{{\"toDeploymentId\":\"{deploymentId}\"}}", ct: ct);
         return RedirectToAction("Details", "Deployments", new { id = newId });
     }
 
@@ -196,6 +205,7 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
     public async Task<IActionResult> Restart(Guid id, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
@@ -206,6 +216,7 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
     public async Task<IActionResult> Stop(Guid id, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
@@ -216,6 +227,7 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
     public async Task<IActionResult> Start(Guid id, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
@@ -226,10 +238,13 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDelete)]
     public async Task<IActionResult> Delete(Guid id, bool removeVolumes, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
         await ops.DeleteAsync(id, removeVolumes, ct);
+        await audit.LogAsync("app.delete", "app", id.ToString(), ClientIp,
+            metadataJson: $"{{\"removeVolumes\":{removeVolumes.ToString().ToLowerInvariant()}}}", ct: ct);
         TempData["Message"] = "App deleted.";
         return RedirectToAction(nameof(Index));
     }
@@ -255,6 +270,7 @@ public sealed class AppsController(
 
     [HttpPost("/apps/{id:guid}/env")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> AddEnv(Guid id, string key, string? value, bool isSecret, bool availableAtBuild, CancellationToken ct)
     {
         var app = await db.Apps.Include(a => a.EnvironmentVariables).FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
@@ -273,6 +289,7 @@ public sealed class AppsController(
 
     [HttpPost("/apps/{id:guid}/env/{envId:guid}/delete")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> DeleteEnv(Guid id, Guid envId, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
@@ -285,6 +302,7 @@ public sealed class AppsController(
 
     [HttpPost("/apps/{id:guid}/domains")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> AddDomain(Guid id, string host, bool ssl, CancellationToken ct)
     {
         var app = await db.Apps.Include(a => a.Domains).FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
@@ -301,6 +319,7 @@ public sealed class AppsController(
 
     [HttpPost("/apps/{id:guid}/domains/{domainId:guid}/delete")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> DeleteDomain(Guid id, Guid domainId, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();

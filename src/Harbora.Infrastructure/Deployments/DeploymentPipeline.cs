@@ -62,23 +62,35 @@ public sealed class DeploymentPipeline(
             await stream.PublishLogAsync(deploymentId, s, clean, ct);
         }
 
+        // All status changes go through the state machine (ADR-004): illegal transitions throw,
+        // timestamps are stamped consistently, and the row is persisted + streamed on every change.
         async Task SetStatus(DeploymentStatus status)
         {
-            deployment.Status = status;
+            DeploymentStateMachine.Transition(deployment, status, clock.UtcNow);
             await stream.PublishStatusAsync(deploymentId, status, ct);
             await db.SaveChangesAsync(ct);
         }
 
         try
         {
-            deployment.StartedAt = clock.UtcNow;
             await SetStatus(DeploymentStatus.Building);
             await Log(LogStream.System, $"Deployment #{deployment.Number} started ({app.SourceType}).");
 
-            var imageTag = $"{_opt.ImagePrefix}/{app.Slug}:build-{deployment.Number}";
-            var buildLog = new Progress<string>(l => _ = Log(LogStream.Build, l));
-
-            imageTag = await AcquireImageAsync(docker, app, deployment, imageTag, buildLog, Log, ct);
+            string imageTag;
+            if (deployment.RolledBackFromId is { } rollbackTargetId)
+            {
+                // Rollback = re-release a prior artifact. Never rebuild (instant + exact; ADR-006).
+                var target = await db.Deployments.FirstOrDefaultAsync(d => d.Id == rollbackTargetId, ct);
+                imageTag = DeploymentPlanning.ResolveRollbackImage(target);
+                await Log(LogStream.System,
+                    $"Rolling back to deployment #{target!.Number}; re-releasing image {imageTag} (no rebuild).");
+            }
+            else
+            {
+                imageTag = $"{_opt.ImagePrefix}/{app.Slug}:build-{deployment.Number}";
+                var buildLog = new Progress<string>(l => _ = Log(LogStream.Build, l));
+                imageTag = await AcquireImageAsync(docker, app, deployment, imageTag, buildLog, Log, ct);
+            }
             deployment.ImageTag = imageTag;
 
             await SetStatus(DeploymentStatus.Deploying);
@@ -91,22 +103,23 @@ public sealed class DeploymentPipeline(
             foreach (var v in app.Volumes)
                 await docker.EnsureVolumeAsync(v.Name, ct);
 
-            var containerName = $"harbora-{app.Slug}";
-            await RemoveExistingContainerAsync(docker, containerName, Log, ct);
+            // Zero-downtime cutover (ADR-007): the new container gets a versioned name and starts
+            // ALONGSIDE the currently-serving one. We only retire the old container(s) AFTER the new
+            // one is healthy and traffic has been switched — so a failed deploy never drops traffic.
+            var containerName = DeploymentPlanning.ContainerName(app.Slug, deployment.Number);
 
             // Decide how the proxy reaches this app. On the local node Traefik joins the tenant
             // network and routes by container name. On a remote node there is no shared overlay, so
-            // we publish the container port to a stable host port and route to the node's host:port.
+            // we publish the container port to a per-deployment host port (lets old + new coexist).
             var server = await db.Servers.FirstAsync(s => s.Id == app.ServerId, ct);
             int? publishPort = null;
             string upstreamHost = containerName;
             var upstreamPort = app.ContainerPort;
             if (!server.IsLocal)
             {
-                app.PublishedHostPort ??= AllocateHostPort(app.Slug);
-                publishPort = app.PublishedHostPort;
+                publishPort = DeploymentPlanning.HostPort(app.Slug, deployment.Number);
                 upstreamHost = server.Hostname;
-                upstreamPort = app.PublishedHostPort!.Value;
+                upstreamPort = publishPort.Value;
             }
             else
             {
@@ -132,26 +145,31 @@ public sealed class DeploymentPipeline(
                 Command: null, PublishToHostPort: publishPort), ct);
 
             await Log(LogStream.System, $"Container {containerId[..12]} is up. Verifying health …");
+            await SetStatus(DeploymentStatus.HealthChecking);
             var healthy = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort, containerName, app.HealthCheckPath,
                 msg => Log(LogStream.System, msg), ct);
             if (!healthy)
                 throw new InvalidOperationException("Container failed its health check.");
 
+            // New container is healthy → switch traffic to it, THEN retire the old container(s).
             await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
+            await RetireOldContainersAsync(docker, app.Slug, keepContainerName: containerName, Log, ct);
+            if (!server.IsLocal) app.PublishedHostPort = publishPort;
 
-            deployment.Status = DeploymentStatus.Succeeded;
-            deployment.FinishedAt = clock.UtcNow;
             app.ActiveDeploymentId = deployment.Id;
             app.Status = AppStatus.Running;
-            await db.SaveChangesAsync(ct);
-            await stream.PublishStatusAsync(deploymentId, DeploymentStatus.Succeeded, ct);
+            await SetStatus(DeploymentStatus.Succeeded);
             await Log(LogStream.System, $"✅ Deployment #{deployment.Number} succeeded.");
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Deployment {Id} failed.", deploymentId);
-            deployment.Status = DeploymentStatus.Failed;
-            deployment.FinishedAt = clock.UtcNow;
+            // Zero-downtime guarantee: remove only the just-started (failed) container; the previous
+            // version — if any — keeps serving untouched.
+            await TryRemoveContainerByNameAsync(docker, DeploymentPlanning.ContainerName(app.Slug, deployment.Number), ct);
+            // Failed is reachable from any in-flight state; guard against a double-terminal write.
+            if (DeploymentStateMachine.IsInFlight(deployment.Status))
+                DeploymentStateMachine.Transition(deployment, DeploymentStatus.Failed, clock.UtcNow);
             deployment.ErrorMessage = ex.Message;
             app.Status = app.ActiveDeploymentId is null ? AppStatus.Failed : AppStatus.Running;
             await db.SaveChangesAsync(ct);
@@ -177,53 +195,113 @@ public sealed class DeploymentPipeline(
 
             case AppSourceType.GitRepository:
             case AppSourceType.Dockerfile:
+                return await BuildFromGitAsync(docker, app, deployment, imageTag, buildLog, log, forceStatic: false, ct);
+
+            case AppSourceType.StaticSite:
+                // A repo of static files served by Nginx — always use the generated static build,
+                // ignoring any Dockerfile / stack detection.
+                return await BuildFromGitAsync(docker, app, deployment, imageTag, buildLog, log, forceStatic: true, ct);
+
+            case AppSourceType.Template:
             {
-                if (app.GitRepository is null)
-                    throw new InvalidOperationException("No Git repository linked.");
+                var template = app.TemplateId is { } tid
+                    ? await db.AppTemplates.FirstOrDefaultAsync(t => t.Id == tid, ct)
+                    : null;
+                if (template is null)
+                    throw new InvalidOperationException("This app references a template that no longer exists.");
 
-                var token = app.GitRepository.Provider?.EncryptedCredential is { } enc && enc.Length > 0
-                    ? SafeUnprotect(enc) : null;
-                var workDir = Path.Combine(_opt.WorkDir, app.Slug, deployment.Number.ToString());
-                var gitRef = deployment.GitRef ?? app.GitRepository.DefaultBranch;
-
-                await log(LogStream.System, $"Checking out {app.GitRepository.FullName}@{gitRef} …");
-                var checkout = await git.CheckoutAsync(
-                    app.GitRepository.CloneUrl, gitRef, token, workDir, buildLog, ct);
-
-                deployment.CommitSha = checkout.CommitSha;
-                deployment.CommitMessage = checkout.CommitMessage;
-                deployment.CommitAuthor = checkout.CommitAuthor;
-
-                var contextPath = Path.Combine(checkout.LocalPath, app.BuildContextPath?.TrimStart('.', '/', '\\') ?? "");
-                if (!Directory.Exists(contextPath)) contextPath = checkout.LocalPath;
-
-                // Use the repo's Dockerfile if present; otherwise auto-detect the stack (buildpack).
-                var dockerfile = app.DockerfilePath ?? "Dockerfile";
-                if (!File.Exists(Path.Combine(contextPath, dockerfile)))
+                var spec = TemplateResolver.Resolve(template.ManifestJson);
+                switch (spec.Kind)
                 {
-                    var pack = Buildpacks.Detect(contextPath, app.ContainerPort);
-                    if (pack is null)
+                    case TemplateResolver.TemplateKind.Image:
+                        await log(LogStream.System, $"Template '{template.Name}': pulling image {spec.Image} …");
+                        await docker.PullImageAsync(spec.Image!, buildLog, ct);
+                        return spec.Image!;
+
+                    case TemplateResolver.TemplateKind.Git:
+                        if (app.GitRepository is null)
+                            throw new InvalidOperationException(
+                                $"Template '{template.Name}' deploys from a Git repository — add a repository URL to the app, then redeploy.");
+                        return await BuildFromGitAsync(docker, app, deployment, imageTag, buildLog, log, forceStatic: false, ct);
+
+                    case TemplateResolver.TemplateKind.ManagedService:
                         throw new InvalidOperationException(
-                            "No Dockerfile found and the stack couldn't be auto-detected. Add a Dockerfile, or deploy a prebuilt image / template.");
+                            $"'{template.Name}' provisions a managed database/cache — create it from the Databases page, not as an app.");
 
-                    dockerfile = "Dockerfile.harbora";
-                    await File.WriteAllTextAsync(Path.Combine(contextPath, dockerfile), pack.Value.Dockerfile, ct);
-                    await log(LogStream.System, $"No Dockerfile — auto-detected {pack.Value.Stack}; using a generated build.");
+                    default:
+                        throw new InvalidOperationException(spec.Reason ?? "This template isn't one-click deployable yet.");
                 }
-
-                await log(LogStream.System, $"Building image {imageTag} …");
-                var buildArgs = app.EnvironmentVariables
-                    .Where(e => e.AvailableAtBuild)
-                    .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
-
-                return await docker.BuildImageAsync(
-                    new DockerBuildRequest(contextPath, dockerfile, imageTag, buildArgs),
-                    buildLog, ct);
             }
 
+            case AppSourceType.DockerCompose:
+                // Multi-service Compose orchestration is planned (see docs/overhaul/12 P7+) but not
+                // yet implemented; fail with a clear message rather than a raw NotSupported.
+                throw new InvalidOperationException(
+                    "Docker Compose deployments aren't supported yet. Deploy from a Git repo, Dockerfile, " +
+                    "prebuilt image, static site or template for now.");
+
             default:
-                throw new NotSupportedException($"Source type {app.SourceType} is not yet supported by the build engine.");
+                throw new NotSupportedException($"Source type {app.SourceType} is not supported.");
         }
+    }
+
+    /// <summary>
+    /// Checkout + build for Git/Dockerfile/StaticSite/Git-templates. When <paramref name="forceStatic"/>
+    /// is set, always generate an Nginx static build regardless of any Dockerfile or detected stack.
+    /// </summary>
+    private async Task<string> BuildFromGitAsync(
+        IDockerEngine docker, App app, Deployment deployment, string imageTag,
+        IProgress<string> buildLog, Func<LogStream, string, Task> log, bool forceStatic, CancellationToken ct)
+    {
+        if (app.GitRepository is null)
+            throw new InvalidOperationException("No Git repository linked.");
+
+        var token = app.GitRepository.Provider?.EncryptedCredential is { } enc && enc.Length > 0
+            ? SafeUnprotect(enc) : null;
+        var workDir = Path.Combine(_opt.WorkDir, app.Slug, deployment.Number.ToString());
+        var gitRef = deployment.GitRef ?? app.GitRepository.DefaultBranch;
+
+        await log(LogStream.System, $"Checking out {app.GitRepository.FullName}@{gitRef} …");
+        var checkout = await git.CheckoutAsync(app.GitRepository.CloneUrl, gitRef, token, workDir, buildLog, ct);
+
+        deployment.CommitSha = checkout.CommitSha;
+        deployment.CommitMessage = checkout.CommitMessage;
+        deployment.CommitAuthor = checkout.CommitAuthor;
+
+        var contextPath = Path.Combine(checkout.LocalPath, app.BuildContextPath?.TrimStart('.', '/', '\\') ?? "");
+        if (!Directory.Exists(contextPath)) contextPath = checkout.LocalPath;
+
+        string dockerfile;
+        if (forceStatic)
+        {
+            dockerfile = "Dockerfile.harbora";
+            await File.WriteAllTextAsync(Path.Combine(contextPath, dockerfile), Buildpacks.ForStaticSite().Dockerfile, ct);
+            await log(LogStream.System, "Static site — using a generated Nginx build.");
+        }
+        else
+        {
+            // Use the repo's Dockerfile if present; otherwise auto-detect the stack (buildpack).
+            dockerfile = app.DockerfilePath ?? "Dockerfile";
+            if (!File.Exists(Path.Combine(contextPath, dockerfile)))
+            {
+                var pack = Buildpacks.Detect(contextPath, app.ContainerPort);
+                if (pack is null)
+                    throw new InvalidOperationException(
+                        "No Dockerfile found and the stack couldn't be auto-detected. Add a Dockerfile, or deploy a prebuilt image / template.");
+
+                dockerfile = "Dockerfile.harbora";
+                await File.WriteAllTextAsync(Path.Combine(contextPath, dockerfile), pack.Value.Dockerfile, ct);
+                await log(LogStream.System, $"No Dockerfile — auto-detected {pack.Value.Stack}; using a generated build.");
+            }
+        }
+
+        await log(LogStream.System, $"Building image {imageTag} …");
+        var buildArgs = app.EnvironmentVariables
+            .Where(e => e.AvailableAtBuild)
+            .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
+
+        return await docker.BuildImageAsync(
+            new DockerBuildRequest(contextPath, dockerfile, imageTag, buildArgs), buildLog, ct);
     }
 
     private Dictionary<string, string> BuildEnv(App app) =>
@@ -231,13 +309,33 @@ public sealed class DeploymentPipeline(
             e => e.Key,
             e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
-    private async Task RemoveExistingContainerAsync(IDockerEngine docker, string containerName, Func<LogStream, string, Task> log, CancellationToken ct)
+    /// <summary>
+    /// Retire this app's previous container(s) after a successful cutover — everything labelled for
+    /// the app except the just-deployed container (incl. any legacy unversioned container).
+    /// </summary>
+    private async Task RetireOldContainersAsync(
+        IDockerEngine docker, string slug, string keepContainerName, Func<LogStream, string, Task> log, CancellationToken ct)
     {
-        var existing = await docker.ListContainersAsync($"harbora.app", ct);
-        var match = existing.FirstOrDefault(c => c.Name == containerName);
-        if (match is null) return;
-        await log(LogStream.System, $"Replacing previous container {match.Id[..12]} …");
-        await docker.RemoveContainerAsync(match.Id, force: true, ct);
+        var existing = await docker.ListContainersAsync(DeploymentPlanning.AppLabel, ct);
+        var toRetire = DeploymentPlanning.ContainersToRetire(existing, slug, keepContainerName);
+        foreach (var id in toRetire)
+        {
+            await log(LogStream.System, $"Retiring previous container {id[..12]} …");
+            try { await docker.RemoveContainerAsync(id, force: true, ct); }
+            catch (Exception ex) { await log(LogStream.System, $"(could not remove {id[..12]}: {ex.Message})"); }
+        }
+    }
+
+    /// <summary>Best-effort removal of a single container by exact name (used to clean up a failed deploy).</summary>
+    private static async Task TryRemoveContainerByNameAsync(IDockerEngine docker, string containerName, CancellationToken ct)
+    {
+        try
+        {
+            var existing = await docker.ListContainersAsync(DeploymentPlanning.AppLabel, ct);
+            var match = existing.FirstOrDefault(c => c.Name == containerName);
+            if (match is not null) await docker.RemoveContainerAsync(match.Id, force: true, ct);
+        }
+        catch { /* best effort — never mask the original failure */ }
     }
 
     /// <summary>
@@ -318,14 +416,6 @@ public sealed class DeploymentPipeline(
         await log(LogStream.System, result.Success
             ? "Proxy configuration applied."
             : $"⚠ Proxy apply failed{(result.RolledBack ? " (rolled back)" : "")}: {result.Error}");
-    }
-
-    /// <summary>Deterministic host port (20000–29999) for a remote app's published container port.</summary>
-    private static int AllocateHostPort(string slug)
-    {
-        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(slug));
-        var value = BitConverter.ToUInt32(hash, 0);
-        return 20000 + (int)(value % 10000);
     }
 
     private string SafeUnprotect(string value)

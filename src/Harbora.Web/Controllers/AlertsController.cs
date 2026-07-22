@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Monitoring;
 using Microsoft.AspNetCore.Authorization;
@@ -25,6 +26,7 @@ public sealed class AlertsController(
 
     [HttpPost("")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AlertsManage)]
     public async Task<IActionResult> Create(
         string name, AlertChannel channel, AlertSeverity minSeverity,
         string? webhookUrl, string? telegramToken, string? telegramChatId,
@@ -60,6 +62,7 @@ public sealed class AlertsController(
 
     [HttpPost("{id:guid}/test")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AlertsManage)]
     public async Task<IActionResult> Test(Guid id, CancellationToken ct)
     {
         if (await Owns(id, ct)) await notifications.SendTestAsync(id, ct);
@@ -69,6 +72,7 @@ public sealed class AlertsController(
 
     [HttpPost("{id:guid}/delete")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AlertsManage)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         await db.Alerts.Where(a => a.Id == id && a.WorkspaceId == WorkspaceId).ExecuteDeleteAsync(ct);

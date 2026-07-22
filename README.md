@@ -197,7 +197,7 @@ whichever node has room. Optional **mTLS** (client certificate) hardens the pane
 
 ## ✨ Features
 
-- **Deploy** from a Git repo (with a Dockerfile **or none** — automatic buildpacks detect Node / .NET / Go / PHP / Python / static and generate the build), a Dockerfile, docker-compose, a prebuilt image, or one-click templates.
+- **Deploy** from a Git repo (with a Dockerfile **or none** — automatic buildpacks detect Node / .NET / Go / PHP / Python / static and generate the build), a Dockerfile, a **static site** (Git repo served by Nginx), a prebuilt image, or a one-click **template** (single-container templates; multi-service templates like WordPress+DB are on the roadmap). **Docker Compose deploys are planned but not yet shipped.**
 - **Git integration**: connect GitHub/GitLab/Gitea by token **or OAuth**; deploy-on-push/tag via
   HMAC-verified webhooks; commit metadata, deploy history, rollback.
 - **Visual routing designer**: drag-and-drop rules, host/path routing, SSL toggle, HTTP→HTTPS,

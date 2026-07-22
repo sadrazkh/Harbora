@@ -1,5 +1,6 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Web.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
@@ -37,6 +38,7 @@ public sealed class ApiV1Controller(
     }
 
     [HttpPost("apps/{slug}/deploy")]
+    [Authorize(Policy = Capabilities.AppsDeploy, AuthenticationSchemes = TokenAuthenticationHandler.SchemeName)]
     public async Task<IActionResult> Deploy(string slug, [FromBody] DeployBody? body, CancellationToken ct)
     {
         var app = await db.Apps.FirstOrDefaultAsync(a => a.WorkspaceId == WorkspaceId && a.Slug == slug, ct);
