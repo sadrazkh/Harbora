@@ -5,6 +5,38 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-23 — Staged deploy-progress UI + live reconciler verification
+
+**What was done**
+- Added a **staged deploy-progress bar** (`_DeployProgress` partial) to the deployment details
+  page: Queued → Build → Deploy → Health → Live, server-rendered from the current status, with a
+  clear failed-state message ("previous version is still serving — retry or roll back"). Matches
+  docs/overhaul/08.
+- **Live-verified the P3 crash reconciler against real PostgreSQL:** inserted a deployment in the
+  `Building` state, restarted the app, and confirmed the reconciler transitioned it to `Failed`
+  with *"Interrupted by a platform restart before completion. Please redeploy."* and set the app
+  status to Failed — exactly the C2 behavior, now proven end-to-end (not only in the unit test).
+
+**Files changed**
+- Added `src/Harbora.Web/Views/Shared/_DeployProgress.cshtml`; included it in
+  `Views/Deployments/Details.cshtml`.
+
+**Tests / checks run**
+- `dotnet build` (web) → 0/0 (Razor precompiles, partial valid).
+- Runtime render check (real Postgres, seeded deployments): details page renders 200 for Building/
+  Failed/Succeeded; Succeeded shows all five steps complete (5 ✓); Failed shows the ✕ + recovery
+  message. Reconciler DB fingerprint confirmed.
+
+**Result**
+- SUCCESS. A signature UX gap from the spec is closed, and the crash-recovery fix is now verified
+  live against PostgreSQL.
+
+**Next step**
+- Audit logging for privileged actions (login/deploy/rollback), then the deeper Docker-dependent
+  and broad-refactor items (per-action RBAC, monitoring depth, previews).
+
+---
+
 ## 2026-07-23 — Security & reliability hardening (H3 + threats 2.8 / 2.18)
 
 **What was done**
