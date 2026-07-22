@@ -5,6 +5,36 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-23 — Pushed to GitHub: branch `overhaul` + PR #1
+
+**What was done**
+- Pushed the entire overhaul branch (10 commits, original messages preserved) to
+  `github.com/sadrazkh/Harbora` on branch **`overhaul`** via the GitHub integration
+  (`create_branch` + per-commit `push_files`, replayed in order on top of `master@84603e0`).
+- Opened **Pull Request #1** (`overhaul` → `master`) with a full summary of the phase:
+  https://github.com/sadrazkh/Harbora/pull/1
+
+**Verification**
+- `origin/master` was still exactly the local baseline `84603e0` (no drift) before branching.
+- After the push: fetched `origin/overhaul` and diffed against local — **only** the planned CI-file
+  relocation differs (see below); all other 57 files byte-identical; all 10 commit messages intact.
+- One transient GitHub 500 on commit 8 (ref not moved) — verified via `list_branches`, retried
+  safely, succeeded.
+
+**Decision / known limitation**
+- The integration token lacks the GitHub `workflows` permission, so `.github/workflows/ci.yml`
+  could not be pushed (403 on tree containing workflow files). The workflow was shipped at
+  **`docs/overhaul/ci-workflow.yml`** with a relocation note. **Manual step after merge:**
+  `git mv docs/overhaul/ci-workflow.yml .github/workflows/ci.yml` (and drop the 4-line note), or
+  re-push it with a token that has the `workflows` scope.
+- Local branch was reset to `origin/overhaul` so local == remote lineage from here on.
+
+**Next step**
+- Review/merge PR #1; move the CI file; then continue with the roadmap phases (Docker-host E2E
+  verification, per-action RBAC, monitoring depth, previews).
+
+---
+
 ## 2026-07-23 — Audit logging for privileged actions (threat 2.13)
 
 **What was done**
