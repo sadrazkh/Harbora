@@ -137,6 +137,9 @@ public static class Buildpacks
         return new BuildpackResult(df, "Python");
     }
 
+    /// <summary>Public entry for a forced static-site (Nginx) build, used by StaticSite deploys.</summary>
+    public static BuildpackResult ForStaticSite() => Static();
+
     // --- Static site ---
     private static BuildpackResult Static()
     {

@@ -195,53 +195,113 @@ public sealed class DeploymentPipeline(
 
             case AppSourceType.GitRepository:
             case AppSourceType.Dockerfile:
+                return await BuildFromGitAsync(docker, app, deployment, imageTag, buildLog, log, forceStatic: false, ct);
+
+            case AppSourceType.StaticSite:
+                // A repo of static files served by Nginx — always use the generated static build,
+                // ignoring any Dockerfile / stack detection.
+                return await BuildFromGitAsync(docker, app, deployment, imageTag, buildLog, log, forceStatic: true, ct);
+
+            case AppSourceType.Template:
             {
-                if (app.GitRepository is null)
-                    throw new InvalidOperationException("No Git repository linked.");
+                var template = app.TemplateId is { } tid
+                    ? await db.AppTemplates.FirstOrDefaultAsync(t => t.Id == tid, ct)
+                    : null;
+                if (template is null)
+                    throw new InvalidOperationException("This app references a template that no longer exists.");
 
-                var token = app.GitRepository.Provider?.EncryptedCredential is { } enc && enc.Length > 0
-                    ? SafeUnprotect(enc) : null;
-                var workDir = Path.Combine(_opt.WorkDir, app.Slug, deployment.Number.ToString());
-                var gitRef = deployment.GitRef ?? app.GitRepository.DefaultBranch;
-
-                await log(LogStream.System, $"Checking out {app.GitRepository.FullName}@{gitRef} …");
-                var checkout = await git.CheckoutAsync(
-                    app.GitRepository.CloneUrl, gitRef, token, workDir, buildLog, ct);
-
-                deployment.CommitSha = checkout.CommitSha;
-                deployment.CommitMessage = checkout.CommitMessage;
-                deployment.CommitAuthor = checkout.CommitAuthor;
-
-                var contextPath = Path.Combine(checkout.LocalPath, app.BuildContextPath?.TrimStart('.', '/', '\\') ?? "");
-                if (!Directory.Exists(contextPath)) contextPath = checkout.LocalPath;
-
-                // Use the repo's Dockerfile if present; otherwise auto-detect the stack (buildpack).
-                var dockerfile = app.DockerfilePath ?? "Dockerfile";
-                if (!File.Exists(Path.Combine(contextPath, dockerfile)))
+                var spec = TemplateResolver.Resolve(template.ManifestJson);
+                switch (spec.Kind)
                 {
-                    var pack = Buildpacks.Detect(contextPath, app.ContainerPort);
-                    if (pack is null)
+                    case TemplateResolver.TemplateKind.Image:
+                        await log(LogStream.System, $"Template '{template.Name}': pulling image {spec.Image} …");
+                        await docker.PullImageAsync(spec.Image!, buildLog, ct);
+                        return spec.Image!;
+
+                    case TemplateResolver.TemplateKind.Git:
+                        if (app.GitRepository is null)
+                            throw new InvalidOperationException(
+                                $"Template '{template.Name}' deploys from a Git repository — add a repository URL to the app, then redeploy.");
+                        return await BuildFromGitAsync(docker, app, deployment, imageTag, buildLog, log, forceStatic: false, ct);
+
+                    case TemplateResolver.TemplateKind.ManagedService:
                         throw new InvalidOperationException(
-                            "No Dockerfile found and the stack couldn't be auto-detected. Add a Dockerfile, or deploy a prebuilt image / template.");
+                            $"'{template.Name}' provisions a managed database/cache — create it from the Databases page, not as an app.");
 
-                    dockerfile = "Dockerfile.harbora";
-                    await File.WriteAllTextAsync(Path.Combine(contextPath, dockerfile), pack.Value.Dockerfile, ct);
-                    await log(LogStream.System, $"No Dockerfile — auto-detected {pack.Value.Stack}; using a generated build.");
+                    default:
+                        throw new InvalidOperationException(spec.Reason ?? "This template isn't one-click deployable yet.");
                 }
-
-                await log(LogStream.System, $"Building image {imageTag} …");
-                var buildArgs = app.EnvironmentVariables
-                    .Where(e => e.AvailableAtBuild)
-                    .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
-
-                return await docker.BuildImageAsync(
-                    new DockerBuildRequest(contextPath, dockerfile, imageTag, buildArgs),
-                    buildLog, ct);
             }
 
+            case AppSourceType.DockerCompose:
+                // Multi-service Compose orchestration is planned (see docs/overhaul/12 P7+) but not
+                // yet implemented; fail with a clear message rather than a raw NotSupported.
+                throw new InvalidOperationException(
+                    "Docker Compose deployments aren't supported yet. Deploy from a Git repo, Dockerfile, " +
+                    "prebuilt image, static site or template for now.");
+
             default:
-                throw new NotSupportedException($"Source type {app.SourceType} is not yet supported by the build engine.");
+                throw new NotSupportedException($"Source type {app.SourceType} is not supported.");
         }
+    }
+
+    /// <summary>
+    /// Checkout + build for Git/Dockerfile/StaticSite/Git-templates. When <paramref name="forceStatic"/>
+    /// is set, always generate an Nginx static build regardless of any Dockerfile or detected stack.
+    /// </summary>
+    private async Task<string> BuildFromGitAsync(
+        IDockerEngine docker, App app, Deployment deployment, string imageTag,
+        IProgress<string> buildLog, Func<LogStream, string, Task> log, bool forceStatic, CancellationToken ct)
+    {
+        if (app.GitRepository is null)
+            throw new InvalidOperationException("No Git repository linked.");
+
+        var token = app.GitRepository.Provider?.EncryptedCredential is { } enc && enc.Length > 0
+            ? SafeUnprotect(enc) : null;
+        var workDir = Path.Combine(_opt.WorkDir, app.Slug, deployment.Number.ToString());
+        var gitRef = deployment.GitRef ?? app.GitRepository.DefaultBranch;
+
+        await log(LogStream.System, $"Checking out {app.GitRepository.FullName}@{gitRef} …");
+        var checkout = await git.CheckoutAsync(app.GitRepository.CloneUrl, gitRef, token, workDir, buildLog, ct);
+
+        deployment.CommitSha = checkout.CommitSha;
+        deployment.CommitMessage = checkout.CommitMessage;
+        deployment.CommitAuthor = checkout.CommitAuthor;
+
+        var contextPath = Path.Combine(checkout.LocalPath, app.BuildContextPath?.TrimStart('.', '/', '\\') ?? "");
+        if (!Directory.Exists(contextPath)) contextPath = checkout.LocalPath;
+
+        string dockerfile;
+        if (forceStatic)
+        {
+            dockerfile = "Dockerfile.harbora";
+            await File.WriteAllTextAsync(Path.Combine(contextPath, dockerfile), Buildpacks.ForStaticSite().Dockerfile, ct);
+            await log(LogStream.System, "Static site — using a generated Nginx build.");
+        }
+        else
+        {
+            // Use the repo's Dockerfile if present; otherwise auto-detect the stack (buildpack).
+            dockerfile = app.DockerfilePath ?? "Dockerfile";
+            if (!File.Exists(Path.Combine(contextPath, dockerfile)))
+            {
+                var pack = Buildpacks.Detect(contextPath, app.ContainerPort);
+                if (pack is null)
+                    throw new InvalidOperationException(
+                        "No Dockerfile found and the stack couldn't be auto-detected. Add a Dockerfile, or deploy a prebuilt image / template.");
+
+                dockerfile = "Dockerfile.harbora";
+                await File.WriteAllTextAsync(Path.Combine(contextPath, dockerfile), pack.Value.Dockerfile, ct);
+                await log(LogStream.System, $"No Dockerfile — auto-detected {pack.Value.Stack}; using a generated build.");
+            }
+        }
+
+        await log(LogStream.System, $"Building image {imageTag} …");
+        var buildArgs = app.EnvironmentVariables
+            .Where(e => e.AvailableAtBuild)
+            .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
+
+        return await docker.BuildImageAsync(
+            new DockerBuildRequest(contextPath, dockerfile, imageTag, buildArgs), buildLog, ct);
     }
 
     private Dictionary<string, string> BuildEnv(App app) =>

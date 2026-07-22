@@ -5,6 +5,47 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-23 — Phase 7 (C3): Static-site + Template deploys + honest Compose gating
+
+**What was done**
+- Implemented **Static-site** deploys (git checkout → forced Nginx build) — previously threw
+  `NotSupported`. Exposed as a source card in the create form; wired through the controller
+  (validation, repo creation, deployability).
+- Implemented **Template** deploys via a pure `TemplateResolver`: image-based templates deploy
+  one-click (pull image), git-based templates build from the app's repo, managed-service and
+  multi-service (`requires`) templates return an **honest, specific message** instead of a raw
+  crash.
+- **Docker Compose** now fails with a clear "not yet supported / planned" message (still gated, not
+  selectable) instead of `NotSupportedException`.
+- Refactored the git build path into a reusable `BuildFromGitAsync(forceStatic)` helper.
+- **README** corrected: Compose is "planned, not shipped"; Static/Template status stated honestly.
+
+**Files changed**
+- `DeploymentPipeline.cs` (StaticSite/Template/Compose cases + BuildFromGitAsync),
+  `TemplateResolver.cs` (new, pure), `Buildpacks.cs` (public `ForStaticSite`),
+  `Apps/Create.cshtml` (Static card + multi-source panels), `AppsController.cs` (StaticSite),
+  `README.md`. Added `tests/Harbora.Tests/TemplateResolverTests.cs` (+5).
+
+**Tests / checks run**
+- `dotnet build Harbora.slnx -c Release` → 0/0. `dotnet test` → **64 passed**.
+- Runtime: `/apps/create` renders all three source cards (Git, Image, **Static site**); auth + form
+  load verified (HTTP 200).
+
+**Result**
+- SUCCESS. C3 resolved honestly: advertised single-container sources now work or fail with a helpful
+  message; Compose is truthfully marked as planned. No control implies an unimplemented capability.
+
+**Decisions**
+- Scoped Template to single-container (image/git); multi-service templates (WordPress+DB) return a
+  clear "not one-click yet" message and remain a documented roadmap item rather than shipping a
+  half-working multi-service orchestration I can't verify without Docker.
+
+**Next step**
+- Remaining backend hardening (webhook de-dup/rate-limit, RBAC per-action, audit) and the
+  Docker-host end-to-end verification (P2 live step) are the natural continuations.
+
+---
+
 ## 2026-07-23 — Phase 4: Zero-downtime cutover + artifact rollback (C4)
 
 **What was done**

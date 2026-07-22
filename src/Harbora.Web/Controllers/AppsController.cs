@@ -45,7 +45,7 @@ public sealed class AppsController(
         // Auto-derive a unique slug from the name (keeps the form to just "name + source").
         var slug = await UniqueSlugAsync(Slugify(string.IsNullOrWhiteSpace(model.Slug) ? model.Name : model.Slug!), ct);
 
-        if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile
+        if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile or AppSourceType.StaticSite
             && string.IsNullOrWhiteSpace(model.CloneUrl))
             ModelState.AddModelError(nameof(model.CloneUrl), "A Git repository URL is required.");
 
@@ -95,7 +95,7 @@ public sealed class AppsController(
             CpuLimit = size?.CpuCores ?? 0
         };
 
-        if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile)
+        if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile or AppSourceType.StaticSite)
         {
             var provider = new GitProvider
             {
@@ -134,7 +134,7 @@ public sealed class AppsController(
 
         // "Give it a repo and it just works": build + deploy right away and show live logs.
         var canDeploy = model.SourceType is AppSourceType.GitRepository
-            or AppSourceType.Dockerfile or AppSourceType.PrebuiltImage;
+            or AppSourceType.Dockerfile or AppSourceType.PrebuiltImage or AppSourceType.StaticSite;
         if (model.DeployNow && canDeploy)
         {
             var deploymentId = await deployEngine.QueueDeploymentAsync(
