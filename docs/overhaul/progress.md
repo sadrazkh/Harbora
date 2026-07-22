@@ -5,6 +5,51 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-23 — Action-level RBAC + Operator role (H2 / threat 2.12)
+
+**What was done**
+- Added the **Operator** role (enum value 4, appended) — day-2 ops only.
+- Introduced a capability-based authorization model (deny-by-default): `Capabilities` (16 named
+  action policies) + pure `RolePermissions` matrix (Domain) + `CapabilityRequirement` /
+  `CapabilityAuthorizationHandler` (Web) evaluating the caller's role claim. Registered one policy
+  per capability via `AddCapabilityAuthorization()` (replaced the bare `AddAuthorization()`).
+- Applied `[Authorize(Policy = …)]` to **every privileged action** across all controllers **and**
+  the token-authenticated API:
+  - Apps: create / deploy+rollback / operate (restart·stop·start) / delete / env·domains.
+  - Databases, Routes(save), Git(connect·import·oauth·rotate), Alerts, Backups(run/restore/manage),
+    Servers(add/remove), Plans(create), Settings(platform), Tenants (whole controller).
+  - API `POST /api/v1/apps/{slug}/deploy` → `apps.deploy` (same matrix as the UI).
+- Role→capability matrix: Owner/Admin = all; Member (developer) = app lifecycle + databases/routes/
+  git; Operator = operate + backups.run; Viewer = read-only.
+
+**Files changed**
+- New: `Domain/Authorization/Capabilities.cs`, `Domain/Authorization/RolePermissions.cs`,
+  `Web/Infrastructure/CapabilityAuthorization.cs`.
+- Edited: `Enums.cs` (Operator), `Program.cs` (policy registration), and 11 controllers.
+- Tests: `RolePermissionsTests.cs` (full matrix) + `CapabilityAuthorizationHandlerTests.cs`
+  (adapter, incl. missing/unknown role) → **96 tests total**. Test project now references
+  `Harbora.Web` to test the handler directly.
+
+**Tests / checks run**
+- Build 0/0; `dotnet test` → **96 passed** (+10).
+- **Live enforcement (real Postgres):** as Owner, `GET /apps/create` → 200. After switching the
+  user's role to Viewer and re-logging in: `GET /apps/create` and `POST /servers/add` both →
+  **302 → /account/denied** (denied). Role restored to Owner afterward.
+
+**Decisions**
+- Deny-by-default: unknown/missing role claim → denied (verified by test). Cookie users get a 302
+  to `/account/denied`; API/token users get 403 — both driven by the same policy + matrix.
+- `RolePermissions` lives in Domain (pure, framework-free) so the matrix is the single source of
+  truth and is exhaustively unit-tested; the Web handler is a thin adapter.
+- Converted the pre-existing `[Authorize(Roles="Owner,Admin")]` on Tenants to the capability policy
+  for one consistent model.
+
+**Next step**
+- Push this to GitHub `overhaul` / PR #1. Remaining: Operator/role selection in the member-invite
+  UI, resource-level "own apps" scoping for Member, audit UI/export.
+
+---
+
 ## 2026-07-23 — Pushed to GitHub: branch `overhaul` + PR #1
 
 **What was done**

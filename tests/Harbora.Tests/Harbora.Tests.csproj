@@ -21,6 +21,7 @@
     <ProjectReference Include="..\..\src\Harbora.Application\Harbora.Application.csproj" />
     <ProjectReference Include="..\..\src\Harbora.Infrastructure\Harbora.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Harbora.Data\Harbora.Data.csproj" />
+    <ProjectReference Include="..\..\src\Harbora.Web\Harbora.Web.csproj" />
   </ItemGroup>
 
 </Project>

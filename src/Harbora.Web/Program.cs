@@ -60,7 +60,8 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TokenAuthenticationHandler>(
         TokenAuthenticationHandler.SchemeName, _ => { });
 
-builder.Services.AddAuthorization();
+// Action-level RBAC: one policy per capability, evaluated against the caller's role (doc 10 §2.12).
+builder.Services.AddCapabilityAuthorization();
 builder.Services.AddAntiforgery(o => o.HeaderName = "X-CSRF-TOKEN");
 
 // Per-IP rate limits (doc 10 §2.18): throttle login brute-force and webhook floods. Other traffic

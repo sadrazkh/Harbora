@@ -1,6 +1,7 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
+using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Git;
 using Harbora.Domain.Networking;
@@ -34,6 +35,7 @@ public sealed class AppsController(
     }
 
     [HttpGet]
+    [Authorize(Policy = Capabilities.AppsCreate)]
     public async Task<IActionResult> Create(CancellationToken ct)
     {
         await PopulateTemplates(ct);
@@ -42,6 +44,7 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsCreate)]
     public async Task<IActionResult> Create(CreateAppViewModel model, CancellationToken ct)
     {
         // Auto-derive a unique slug from the name (keeps the form to just "name + source").
@@ -161,6 +164,7 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
     public async Task<IActionResult> Deploy(Guid id, string? gitRef, CancellationToken ct)
     {
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
@@ -183,6 +187,7 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
     public async Task<IActionResult> Rollback(Guid id, Guid deploymentId, CancellationToken ct)
     {
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
@@ -200,6 +205,7 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
     public async Task<IActionResult> Restart(Guid id, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
@@ -210,6 +216,7 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
     public async Task<IActionResult> Stop(Guid id, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
@@ -220,6 +227,7 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
     public async Task<IActionResult> Start(Guid id, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
@@ -230,6 +238,7 @@ public sealed class AppsController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDelete)]
     public async Task<IActionResult> Delete(Guid id, bool removeVolumes, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
@@ -261,6 +270,7 @@ public sealed class AppsController(
 
     [HttpPost("/apps/{id:guid}/env")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> AddEnv(Guid id, string key, string? value, bool isSecret, bool availableAtBuild, CancellationToken ct)
     {
         var app = await db.Apps.Include(a => a.EnvironmentVariables).FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
@@ -279,6 +289,7 @@ public sealed class AppsController(
 
     [HttpPost("/apps/{id:guid}/env/{envId:guid}/delete")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> DeleteEnv(Guid id, Guid envId, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
@@ -291,6 +302,7 @@ public sealed class AppsController(
 
     [HttpPost("/apps/{id:guid}/domains")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> AddDomain(Guid id, string host, bool ssl, CancellationToken ct)
     {
         var app = await db.Apps.Include(a => a.Domains).FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
@@ -307,6 +319,7 @@ public sealed class AppsController(
 
     [HttpPost("/apps/{id:guid}/domains/{domainId:guid}/delete")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> DeleteDomain(Guid id, Guid domainId, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
