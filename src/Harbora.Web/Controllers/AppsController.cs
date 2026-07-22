@@ -20,9 +20,11 @@ public sealed class AppsController(
     IQuotaService quota,
     ISchedulerService scheduler,
     ISecretProtector protector,
+    IAuditLogger audit,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
+    private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -174,6 +176,7 @@ public sealed class AppsController(
 
         var deploymentId = await deployEngine.QueueDeploymentAsync(
             new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, gitRef ?? app.GitRef), ct);
+        await audit.LogAsync("app.deploy", "app", id.ToString(), ClientIp, ct: ct);
 
         return RedirectToAction("Details", "Deployments", new { id = deploymentId });
     }
@@ -188,6 +191,8 @@ public sealed class AppsController(
         var newId = await deployEngine.QueueDeploymentAsync(
             new DeploymentRequest(app.Id, DeploymentTrigger.Rollback, currentUser.UserId ?? Guid.Empty,
                 RollbackToDeploymentId: deploymentId), ct);
+        await audit.LogAsync("app.rollback", "app", id.ToString(), ClientIp,
+            metadataJson: $"{{\"toDeploymentId\":\"{deploymentId}\"}}", ct: ct);
         return RedirectToAction("Details", "Deployments", new { id = newId });
     }
 
@@ -229,6 +234,8 @@ public sealed class AppsController(
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
         await ops.DeleteAsync(id, removeVolumes, ct);
+        await audit.LogAsync("app.delete", "app", id.ToString(), ClientIp,
+            metadataJson: $"{{\"removeVolumes\":{removeVolumes.ToString().ToLowerInvariant()}}}", ct: ct);
         TempData["Message"] = "App deleted.";
         return RedirectToAction(nameof(Index));
     }

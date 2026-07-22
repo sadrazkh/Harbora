@@ -60,6 +60,7 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<ISecretRedactor, SecretRedactor>();
         services.AddScoped<ITokenService, TokenService>();
+        services.AddScoped<IAuditLogger, Auditing.AuditLogger>();
 
         // Platform services
         services.AddSingleton<ISystemClock, SystemClock>();

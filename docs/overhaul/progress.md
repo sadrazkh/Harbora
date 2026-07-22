@@ -5,6 +5,36 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-23 — Audit logging for privileged actions (threat 2.13)
+
+**What was done**
+- Added `IAuditLogger` (Application) + `AuditLogger` (Infrastructure): append-only audit rows,
+  actor/workspace default to the current user, request IP passed by the caller (no web coupling),
+  best-effort (an audit failure never breaks the audited action).
+- Wired it into the highest-value actions: **login success**, **login failure**, **app deploy**,
+  **app rollback**, **app delete** — each records actor, target, IP, and metadata.
+
+**Files changed**
+- `SecurityAbstractions.cs` (`IAuditLogger`), `Auditing/AuditLogger.cs` (new), `DependencyInjection.cs`
+  (register), `AccountController.cs` (login ±), `AppsController.cs` (deploy/rollback/delete).
+- Added `tests/Harbora.Tests/AuditLoggerTests.cs` (+2) → **86 tests total**.
+
+**Tests / checks run**
+- Build 0/0; `dotnet test` → **86 passed**.
+- Runtime (real Postgres): a wrong-password then correct-password login produced two audit rows —
+  `user.login_failed` and `user.login` — each with the actor email and client IP (127.0.0.1).
+
+**Result**
+- SUCCESS. Security-relevant actions are now audited (the entity existed but was previously written
+  only by the webhook path). Audit UI + CSV/webhook export remain a follow-up (R-AUD-1).
+
+**Next step**
+- Remaining items are broad refactors or Docker-dependent (per-action RBAC across all controllers,
+  per-app/route monitoring, PR previews, in-browser DB client, multi-server port table, OpenAPI).
+  These are documented in the roadmap; the critical/verifiable overhaul work is complete.
+
+---
+
 ## 2026-07-23 — Staged deploy-progress UI + live reconciler verification
 
 **What was done**
