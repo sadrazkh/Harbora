@@ -5,6 +5,47 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-22 — Phase 2 (partial): Master key fail-closed (critical security fix)
+
+**What was done**
+- Implemented ADR-009 / threat 2.2: the master encryption key is now resolved **fail-closed**.
+  Previously it silently fell back to a public default — in code *and* hardcoded in
+  `appsettings.json` — so with `HARBORA_MASTER_KEY` unset, all "encrypted" secrets were trivially
+  decryptable. Fixed both instances.
+
+**Files changed**
+- Added `src/Harbora.Infrastructure/Security/MasterKeyResolver.cs` (pure policy: Production must
+  have a secure key; rejects known-insecure placeholders; Development uses a dev key with a loud
+  warning).
+- `DependencyInjection.cs`: use the resolver; coalesce a blank appsettings value through to the env
+  var; print a warning when the dev fallback is used.
+- `appsettings.json`: removed the insecure `Harbora:MasterKey` default (now blank).
+- `appsettings.Development.json`: added a dev-only key for local convenience.
+- Added `tests/Harbora.Tests/MasterKeyResolverTests.cs` (8 tests).
+
+**Tests / checks run**
+- `dotnet build Harbora.slnx -c Release` → 0 warnings / 0 errors.
+- `dotnet test` → **31 passed** (was 24; +7 net).
+- Runtime (built DLL, real Postgres): Production **without** a key → aborts with the precise
+  message; Production **with** an env key → `/healthz` 200; Development (no env key) → boots and
+  prints the INSECURE-key warning.
+
+**Result**
+- SUCCESS. The platform's most serious "insecure default" is closed and covered by tests.
+
+**Decisions**
+- Marked BREAKING (semver-major): existing Production installs that never set `HARBORA_MASTER_KEY`
+  will now refuse to boot. Justified (it's a real vulnerability), low blast radius (the installer
+  already generates the key in `deploy/.env`), and documented as a migration note (doc 11 §2.3).
+  This is the one intentional breaking default in the overhaul; per the escalation rules it is
+  reversible (unset the check) and non-destructive, so proceeded and recorded.
+
+**Next step**
+- P2 remainder needs a Docker host: reproduce install + one real end-to-end deploy (image + git),
+  recorded here. Then P3 — deployment state machine + crash reconciler (ADR-004/005).
+
+---
+
 ## 2026-07-22 — Phase 0–1: Guardrails & protective tests (execution begins)
 
 **What was done**
