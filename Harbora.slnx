@@ -9,4 +9,7 @@
     <Project Path="src/Harbora.Shared/Harbora.Shared.csproj" />
     <Project Path="src/Harbora.Web/Harbora.Web.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Harbora.Tests/Harbora.Tests.csproj" />
+  </Folder>
 </Solution>

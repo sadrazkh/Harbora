@@ -19,7 +19,6 @@ public sealed class ManagedServiceEngine(
     IServerEngineFactory engineFactory,
     ISecretProtector protector,
     IBackgroundJobQueue queue,
-    ISystemClock clock,
     IOptions<HarboraRuntimeOptions> options,
     ILogger<ManagedServiceEngine> logger) : IManagedServiceEngine
 {

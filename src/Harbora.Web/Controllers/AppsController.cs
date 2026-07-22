@@ -20,8 +20,7 @@ public sealed class AppsController(
     IQuotaService quota,
     ISchedulerService scheduler,
     ISecretProtector protector,
-    ICurrentUser currentUser,
-    ISystemClock clock) : Controller
+    ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 
