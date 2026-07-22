@@ -1,6 +1,7 @@
 using Harbora.Application.Abstractions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace Harbora.Web.Controllers;
 
@@ -11,6 +12,7 @@ namespace Harbora.Web.Controllers;
 [AllowAnonymous]
 [ApiController]
 [Route("webhooks")]
+[EnableRateLimiting("webhook")]
 public sealed class WebhooksController(IGitWebhookProcessor processor) : ControllerBase
 {
     [HttpPost("git/{repositoryId:guid}")]

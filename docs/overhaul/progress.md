@@ -5,6 +5,41 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-23 — Security & reliability hardening (H3 + threats 2.8 / 2.18)
+
+**What was done**
+- **Concurrency guard (H3):** `DeploymentEngine.QueueDeploymentAsync` now coalesces concurrent
+  triggers (double-clicks, webhook storms) onto the existing in-flight deployment instead of racing
+  a second build — at most one active deployment per app.
+- **SSRF guard (threat 2.8):** new pure `UrlSafety.IsAllowedOutboundUrl` rejects non-http(s)
+  schemes, localhost/metadata hostnames, and loopback/link-local/private/unique-local IP literals.
+  Applied to the outbound Discord + generic webhook notification channels (blocked → logged, never
+  sent; never breaks a deploy).
+- **Rate limiting (threat 2.18):** per-IP fixed-window limiters — login `auth` (10/min) and inbound
+  git `webhook` (60/min); 429 on exceed. Middleware added; policies applied via
+  `[EnableRateLimiting]` on the login POST and the webhooks controller.
+
+**Files changed**
+- `DeploymentEngine.cs` (concurrency guard), `Security/UrlSafety.cs` (new),
+  `Notifications/NotificationService.cs` (SSRF guard on webhook/Discord), `Program.cs` (rate
+  limiter registration + middleware), `AccountController.cs` + `WebhooksController.cs`
+  (`EnableRateLimiting`). Added `UrlSafetyTests.cs` (+11) and `DeploymentEngineConcurrencyTests.cs`
+  (+2), plus others → **84 tests total**.
+
+**Tests / checks run**
+- Build 0/0; `dotnet test` → **84 passed**.
+- Runtime: `/healthz` 200; login hammered 14× → first 10 = 200, then **429 429 429 429** (limiter
+  works); app boots with the limiter active.
+
+**Result**
+- SUCCESS. Three targeted security/reliability gaps closed, all verifiable without Docker.
+
+**Next step**
+- Deeper items (per-action RBAC, audit coverage/export, per-app monitoring, previews, in-browser DB
+  client) and the live Docker-host end-to-end run remain — larger and/or Docker-dependent.
+
+---
+
 ## 2026-07-23 — Phase 7 (C3): Static-site + Template deploys + honest Compose gating
 
 **What was done**

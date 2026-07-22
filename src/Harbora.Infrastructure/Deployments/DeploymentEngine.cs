@@ -21,6 +21,17 @@ public sealed class DeploymentEngine(
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == request.AppId, ct)
                   ?? throw new InvalidOperationException("App not found.");
 
+        // At most one active deployment per app (H3): coalesce concurrent triggers (double-clicks,
+        // webhook storms) onto the existing in-flight deployment instead of racing a second build.
+        var inFlightStatuses = DeploymentStateMachine.InFlight.ToArray();
+        var inFlight = await db.Deployments
+            .Where(d => d.AppId == app.Id && inFlightStatuses.Contains(d.Status))
+            .OrderByDescending(d => d.Number)
+            .Select(d => (Guid?)d.Id)
+            .FirstOrDefaultAsync(ct);
+        if (inFlight is { } activeId)
+            return activeId;
+
         var nextNumber = await db.Deployments.Where(d => d.AppId == app.Id)
             .Select(d => (int?)d.Number).MaxAsync(ct) ?? 0;
 
