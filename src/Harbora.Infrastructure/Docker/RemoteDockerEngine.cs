@@ -61,6 +61,23 @@ public sealed class RemoteDockerEngine(
         await StreamLines(res, log, ct);
     }
 
+    public async Task<IReadOnlyList<ImageInfo>> ListImagesAsync(string? tagPrefix, CancellationToken ct)
+    {
+        var url = "agent/images" + (string.IsNullOrEmpty(tagPrefix) ? "" : $"?prefix={Uri.EscapeDataString(tagPrefix)}");
+        return await Client().GetFromJsonAsync<List<ImageInfo>>(url, ct) ?? new();
+    }
+
+    public async Task<bool> ImageExistsAsync(string imageRef, CancellationToken ct)
+    {
+        var res = await Client().GetAsync($"agent/images/exists?image={Uri.EscapeDataString(imageRef)}", ct);
+        if (!res.IsSuccessStatusCode) return false;
+        var doc = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
+        return doc.GetProperty("exists").GetBoolean();
+    }
+
+    public Task RemoveImageAsync(string imageRef, CancellationToken ct) =>
+        PostJson("agent/images/remove", new { image = imageRef }, ct);
+
     public async Task<string> RunContainerAsync(DockerRunRequest request, CancellationToken ct)
     {
         var res = await Client().PostAsJsonAsync("agent/containers/run", request, Json, ct);

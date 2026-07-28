@@ -22,6 +22,7 @@ public sealed class AppsController(
     ISchedulerService scheduler,
     ISecretProtector protector,
     IAuditLogger audit,
+    IRollbackPlanner rollbackPlanner,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -195,6 +196,21 @@ public sealed class AppsController(
         return RedirectToAction("Details", "Deployments", new { id = deploymentId });
     }
 
+    /// <summary>
+    /// Confirmation step for a rollback: shows exactly which version would be restored and blocks
+    /// up front if the artifact is gone, instead of failing part-way through the deploy.
+    /// </summary>
+    [HttpGet]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
+    public async Task<IActionResult> ConfirmRollback(Guid id, Guid deploymentId, CancellationToken ct)
+    {
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        var plan = await rollbackPlanner.PrepareAsync(id, deploymentId, ct);
+        return View(new RollbackViewModel(app.Id, app.Name, deploymentId, plan));
+    }
+
     [HttpPost]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.AppsDeploy)]
@@ -202,6 +218,15 @@ public sealed class AppsController(
     {
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
+
+        // Re-check rather than trusting the confirmation screen: retention could have pruned the
+        // image between rendering the page and submitting it.
+        var plan = await rollbackPlanner.PrepareAsync(id, deploymentId, ct);
+        if (!plan.CanRollback)
+        {
+            TempData["Error"] = plan.Reason;
+            return RedirectToAction(nameof(Details), new { id });
+        }
 
         Guid newId;
         try

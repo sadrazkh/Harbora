@@ -28,10 +28,11 @@ Priority chosen for this stretch: **make what exists trustworthy** before making
 
 ## 2. Risks found in review that doc 12 did not anticipate
 
-- **R1 — No image pruning exists anywhere in the codebase.** Every deploy leaves
-  `{prefix}/{slug}:build-{n}` on disk forever. Artifact rollback now *depends* on those images
-  surviving, so "instant rollback" currently works only because nothing cleans up — and breaks the
-  moment anyone runs `docker image prune`. Retention must become an explicit, owned policy.
+- **R1 — No image pruning exists anywhere in the codebase.** ✅ *Closed in Phase C.* Every deploy left
+  `{prefix}/{slug}:build-{n}` on disk forever, and artifact rollback *depended* on those images
+  surviving — so "instant rollback" worked only because nothing cleaned up, and broke the moment
+  anyone ran `docker image prune`. Retention is now an explicit, configurable policy, and a rollback
+  whose artifact is gone says so up front instead of failing mid-deploy.
 - **R2 — The cutover path has zero behavioural coverage.** ✅ *Closed in Phase B.* Tests covered only
   the pure helpers in `DeploymentPlanning`; `DeploymentPipeline.ExecuteAsync`, which holds the actual
   ordering guarantee (start new → health → switch proxy → retire old), was never executed by a test
@@ -78,14 +79,20 @@ return values:
 **Why it matters:** every headline claim of PR #1 gets verified as *behaviour* for the first time,
 and the assertions become the precise specification for the real E2E run once a host exists.
 
-### Phase C — image retention + resilient rollback
+### Phase C — image retention + resilient rollback ✅ done
 *Medium · medium risk (deletes data)*
 
-- Keep the last *k* images per app (plus the active deployment's image); prune the rest after a
-  successful cutover.
-- `ResolveRollbackImage` must verify the image still exists and fail with a clear message up front,
-  rather than failing part-way through a deploy.
-- Show which commit/image a rollback targets before the user confirms (owed from P4).
+- ✅ Keep the last *k* images per app (plus the active deployment's image); prune the rest after a
+  successful cutover. `Runtime:ImageRetentionCount`, default 5.
+- ✅ Verify the image still exists and fail with a clear message up front, rather than part-way
+  through a deploy — `IRollbackPlanner`, plus a re-check in the pipeline.
+- ✅ Show which commit/image a rollback targets before the user confirms (owed from P4).
+
+> **Outcome:** `IDockerEngine` had no image operations at all, so this phase began by adding
+> list/exists/remove across all four engines (local, remote, agent, fake). Retention deliberately
+> never touches user-supplied images, ignores failed deployments, and dedupes by tag so a rollback
+> can't shrink the window. Mutation testing caught one weak test, which was rewritten. See
+> `progress.md`, 2026-07-28.
 
 ### Phase D — durable job queue (completes P3)
 *Medium · medium risk (core path)*

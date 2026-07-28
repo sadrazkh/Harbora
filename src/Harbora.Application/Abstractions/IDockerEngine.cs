@@ -10,6 +10,18 @@ public interface IDockerEngine
     Task<string> BuildImageAsync(DockerBuildRequest request, IProgress<string> log, CancellationToken ct);
     Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct);
 
+    /// <summary>Tagged images present on this node, optionally filtered to those whose tag starts with a prefix.</summary>
+    Task<IReadOnlyList<ImageInfo>> ListImagesAsync(string? tagPrefix, CancellationToken ct);
+
+    /// <summary>
+    /// Whether an image reference resolves on this node. Artifact rollback re-releases a prior
+    /// image, so this is what makes "instant rollback" checkable before we promise it.
+    /// </summary>
+    Task<bool> ImageExistsAsync(string imageRef, CancellationToken ct);
+
+    /// <summary>Best-effort image removal. An image still in use by a container is left alone.</summary>
+    Task RemoveImageAsync(string imageRef, CancellationToken ct);
+
     Task<string> RunContainerAsync(DockerRunRequest request, CancellationToken ct);
     Task StopContainerAsync(string containerId, CancellationToken ct);
     Task RemoveContainerAsync(string containerId, bool force, CancellationToken ct);
@@ -64,5 +76,6 @@ public record DockerRunRequest(
     int? PublishToHostPort = null);
 
 public record ContainerInfo(string Id, string Name, string Image, string State, string Status, IReadOnlyDictionary<string, string> Labels);
+public record ImageInfo(string Id, string Tag, DateTimeOffset CreatedAt, long SizeBytes);
 public record ContainerStats(double CpuPercent, long MemoryUsedBytes, long MemoryLimitBytes, long NetRxBytes, long NetTxBytes);
 public record HostInfo(int CpuCores, long TotalMemoryBytes, long TotalDiskBytes, long FreeDiskBytes, string DockerVersion, int ContainersRunning);

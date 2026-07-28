@@ -71,6 +71,7 @@ public static class DependencyInjection
         services.AddScoped<IDeploymentEngine, DeploymentEngine>();
         services.AddScoped<DeploymentPipeline>();
         services.AddScoped<IAppOperationsService, AppOperationsService>();
+        services.AddScoped<IRollbackPlanner, Deployments.RollbackPlanner>();
         // Crash recovery: reconcile in-flight deployments on startup (ADR-005).
         services.AddHostedService<Deployments.DeploymentReconciler>();
 

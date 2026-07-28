@@ -19,6 +19,7 @@ public sealed class FakeDockerEngine : IDockerEngine
     private readonly List<Call> _calls = [];
     private readonly object _gate = new();
     private readonly ConcurrentDictionary<string, ContainerInfo> _containers = new();
+    private readonly ConcurrentDictionary<string, ImageInfo> _images = new(StringComparer.Ordinal);
     private int _idSeq;
 
     /// <summary>Every operation, in the order it happened.</summary>
@@ -51,6 +52,32 @@ public sealed class FakeDockerEngine : IDockerEngine
     public IReadOnlyList<string> LiveContainerNames =>
         _containers.Values.Select(c => c.Name).OrderBy(n => n, StringComparer.Ordinal).ToList();
 
+    /// <summary>Image tags still on the node — i.e. what rollback can still reach.</summary>
+    public IReadOnlyList<string> StoredImageTags =>
+        _images.Keys.OrderBy(t => t, StringComparer.Ordinal).ToList();
+
+    /// <summary>Puts an image on the node as if a previous build or pull had left it there.</summary>
+    public FakeDockerEngine SeedImage(params string[] tags)
+    {
+        foreach (var tag in tags)
+            _images[tag] = new ImageInfo($"sha256:{tag.GetHashCode():x8}", tag, DateTimeOffset.UnixEpoch, 1024);
+        return this;
+    }
+
+    /// <summary>
+    /// Silently drops images from the node, as if something outside Harbora had reclaimed them
+    /// (`docker image prune`, disk cleanup, a rebuilt host). Not recorded — nothing in the platform
+    /// performed this.
+    /// </summary>
+    public FakeDockerEngine ForgetImage(params string[] tags)
+    {
+        foreach (var tag in tags) _images.TryRemove(tag, out _);
+        return this;
+    }
+
+    /// <summary>Image tags whose removal fails — e.g. still referenced by a container.</summary>
+    public HashSet<string> UndeletableImages { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Seeds a container as if a previous deployment had left it running.</summary>
     public string SeedContainer(string name, string slug, string state = "running", string image = "img:old")
     {
@@ -74,6 +101,7 @@ public sealed class FakeDockerEngine : IDockerEngine
     {
         Record(nameof(BuildImageAsync), request.ImageTag);
         if (BuildFailure is not null) throw BuildFailure;
+        SeedImage(request.ImageTag);
         log.Report($"built {request.ImageTag}");
         return Task.FromResult(request.ImageTag);
     }
@@ -81,7 +109,30 @@ public sealed class FakeDockerEngine : IDockerEngine
     public Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct)
     {
         Record(nameof(PullImageAsync), image);
+        SeedImage(image);
         log.Report($"pulled {image}");
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<ImageInfo>> ListImagesAsync(string? tagPrefix, CancellationToken ct)
+    {
+        // Not recorded: like ListContainersAsync this is a query, and recording it would bury the
+        // ordering assertions in noise.
+        IReadOnlyList<ImageInfo> snapshot = _images.Values
+            .Where(i => tagPrefix is null || i.Tag.StartsWith(tagPrefix, StringComparison.Ordinal))
+            .ToList();
+        return Task.FromResult(snapshot);
+    }
+
+    public Task<bool> ImageExistsAsync(string imageRef, CancellationToken ct)
+        => Task.FromResult(_images.ContainsKey(imageRef));
+
+    public Task RemoveImageAsync(string imageRef, CancellationToken ct)
+    {
+        Record(nameof(RemoveImageAsync), imageRef);
+        if (UndeletableImages.Contains(imageRef))
+            throw new InvalidOperationException($"image {imageRef} is in use by a container");
+        _images.TryRemove(imageRef, out _);
         return Task.CompletedTask;
     }
 

@@ -59,6 +59,45 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
             new ImagesCreateParameters { FromImage = repo, Tag = tag }, authConfig: null, progress, ct);
     }
 
+    public async Task<IReadOnlyList<ImageInfo>> ListImagesAsync(string? tagPrefix, CancellationToken ct)
+    {
+        var images = await client.Images.ListImagesAsync(new ImagesListParameters { All = false }, ct);
+
+        // One Docker image can carry several tags; retention reasons about tags, so flatten them.
+        return images
+            .Where(i => i.RepoTags is not null)
+            .SelectMany(i => i.RepoTags
+                .Where(t => !string.IsNullOrWhiteSpace(t) && t != "<none>:<none>")
+                .Where(t => tagPrefix is null || t.StartsWith(tagPrefix, StringComparison.Ordinal))
+                .Select(t => new ImageInfo(i.ID, t, i.Created, i.Size)))
+            .ToList();
+    }
+
+    public async Task<bool> ImageExistsAsync(string imageRef, CancellationToken ct)
+    {
+        try
+        {
+            await client.Images.InspectImageAsync(imageRef, ct);
+            return true;
+        }
+        catch (DockerImageNotFoundException) { return false; }
+        catch (DockerApiException ex) when ((int)ex.StatusCode == 404) { return false; }
+    }
+
+    public async Task RemoveImageAsync(string imageRef, CancellationToken ct)
+    {
+        try
+        {
+            // Force = false on purpose: an image a container still references must survive, even if
+            // our bookkeeping thinks it is prunable.
+            await client.Images.DeleteImageAsync(imageRef, new ImageDeleteParameters { Force = false }, ct);
+        }
+        catch (DockerApiException ex)
+        {
+            logger.LogWarning("Image {Image} not removed: {Msg}", imageRef, ex.Message);
+        }
+    }
+
     public async Task<string> RunContainerAsync(DockerRunRequest r, CancellationToken ct)
     {
         var hostConfig = new HostConfig

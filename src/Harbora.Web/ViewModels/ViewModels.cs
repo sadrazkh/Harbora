@@ -83,3 +83,10 @@ public sealed class DashboardViewModel
 }
 
 public sealed record DashboardError(string Title, string Detail, DateTimeOffset At, string Link);
+
+/// <summary>Backs the rollback confirmation screen: what would be restored, or why it can't be.</summary>
+public sealed record RollbackViewModel(
+    Guid AppId,
+    string AppName,
+    Guid TargetDeploymentId,
+    Harbora.Application.Abstractions.RollbackPlan Plan);

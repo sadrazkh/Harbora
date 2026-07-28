@@ -1,0 +1,84 @@
+@using Harbora.Web.ViewModels
+@model RollbackViewModel
+@inject Microsoft.AspNetCore.Mvc.Localization.IViewLocalizer T
+@{
+    ViewData["Title"] = T["Roll back"].Value;
+    var plan = Model.Plan;
+    string Short(string? sha) => string.IsNullOrEmpty(sha) ? "—" : sha[..Math.Min(7, sha.Length)];
+}
+
+<div class="max-w-2xl">
+    <a href="/apps/details/@Model.AppId" class="text-sm text-slate-400 hover:text-slate-200">&larr; @Model.AppName</a>
+    <h1 class="text-xl font-semibold mt-2 mb-4">@T["Roll back"] · @Model.AppName</h1>
+
+    @if (!plan.CanRollback)
+    {
+        <div class="rounded-xl border border-red-800 bg-red-900/20 p-4">
+            <div class="text-red-300 font-medium mb-1">@T["This rollback isn't possible"]</div>
+            <div class="text-sm text-red-200/80">@plan.Reason</div>
+        </div>
+        <a href="/apps/details/@Model.AppId"
+           class="inline-block mt-4 rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@T["Back"]</a>
+    }
+    else
+    {
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 divide-y divide-slate-800">
+            <div class="px-4 py-3 font-semibold">@T["You are about to restore"]</div>
+
+            <div class="p-4 grid sm:grid-cols-2 gap-4 text-sm">
+                <div>
+                    <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">@T["Currently live"]</div>
+                    <div class="font-medium">@(plan.CurrentNumber is not null ? $"#{plan.CurrentNumber}" : "—")</div>
+                    <div class="text-xs text-slate-500 font-mono">@Short(plan.CurrentCommitSha)</div>
+                </div>
+                <div>
+                    <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">@T["Rolling back to"]</div>
+                    <div class="font-medium text-amber-300">#@plan.TargetNumber</div>
+                    <div class="text-xs text-slate-500 font-mono">@Short(plan.CommitSha)</div>
+                </div>
+            </div>
+
+            <div class="p-4 space-y-2 text-sm">
+                @if (!string.IsNullOrWhiteSpace(plan.CommitMessage))
+                {
+                    <div class="flex gap-2">
+                        <span class="text-slate-500 shrink-0">@T["Commit"]:</span>
+                        <span class="truncate">@plan.CommitMessage</span>
+                    </div>
+                }
+                @if (!string.IsNullOrWhiteSpace(plan.CommitAuthor))
+                {
+                    <div class="flex gap-2">
+                        <span class="text-slate-500 shrink-0">@T["Author"]:</span>
+                        <span>@plan.CommitAuthor</span>
+                    </div>
+                }
+                @if (plan.DeployedAt is not null)
+                {
+                    <div class="flex gap-2">
+                        <span class="text-slate-500 shrink-0">@T["Deployed"]:</span>
+                        <span>@plan.DeployedAt.Value.ToString("yyyy-MM-dd HH:mm")</span>
+                    </div>
+                }
+                <div class="flex gap-2">
+                    <span class="text-slate-500 shrink-0">@T["Image"]:</span>
+                    <span class="font-mono text-xs break-all">@plan.ImageTag</span>
+                </div>
+            </div>
+
+            <div class="p-4 text-xs text-slate-400">
+                @T["This image is already built, so no rebuild happens. The new container starts alongside the current one and traffic only switches after it passes its health check."]
+            </div>
+        </div>
+
+        <form asp-controller="Apps" asp-action="Rollback" asp-route-id="@Model.AppId" method="post" class="mt-4 flex gap-2">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="deploymentId" value="@Model.TargetDeploymentId" />
+            <button class="rounded-lg bg-amber-600 hover:bg-amber-500 px-4 py-2 text-sm font-medium">
+                @T["Roll back to"] #@plan.TargetNumber
+            </button>
+            <a href="/apps/details/@Model.AppId"
+               class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@T["Cancel"]</a>
+        </form>
+    }
+</div>

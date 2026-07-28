@@ -110,6 +110,15 @@ public sealed class DeploymentPipeline(
                 // Rollback = re-release a prior artifact. Never rebuild (instant + exact; ADR-006).
                 var target = await db.Deployments.FirstOrDefaultAsync(d => d.Id == rollbackTargetId, ct);
                 imageTag = DeploymentPlanning.ResolveRollbackImage(target);
+
+                // The artifact must still be on the node. Checking here — before anything is started
+                // or changed — turns a confusing mid-deploy failure into a clear "can't do that yet".
+                if (!await docker.ImageExistsAsync(imageTag, ct))
+                    throw new InvalidOperationException(
+                        $"The image for deployment #{target!.Number} ({imageTag}) is no longer on this server, " +
+                        "so it cannot be re-released. It was most likely pruned by image retention — " +
+                        "deploy that commit from source instead.");
+
                 await Log(LogStream.System,
                     $"Rolling back to deployment #{target!.Number}; re-releasing image {imageTag} (no rebuild).");
             }
@@ -193,6 +202,10 @@ public sealed class DeploymentPipeline(
             app.Status = AppStatus.Running;
             await SetStatus(DeploymentStatus.Succeeded);
             await Log(LogStream.System, $"✅ Deployment #{deployment.Number} succeeded.");
+
+            // Only after the deployment is recorded as succeeded — pruning is housekeeping and must
+            // never be able to turn a live, working deployment into a failure.
+            await PruneOldImagesAsync(docker, app, Log, ct);
         }
         catch (Exception ex)
         {
@@ -358,6 +371,44 @@ public sealed class DeploymentPipeline(
 
         DeploymentStateMachine.Transition(superseded, DeploymentStatus.RolledBack, clock.UtcNow);
         await log(LogStream.System, $"Deployment #{superseded.Number} marked rolled back.");
+    }
+
+    /// <summary>
+    /// Delete this app's superseded build images, keeping the active one and the newest
+    /// <see cref="HarboraRuntimeOptions.ImageRetentionCount"/> rollback targets.
+    ///
+    /// Without this, every deploy leaves an image on disk forever. With it, retention becomes an
+    /// explicit promise: rollback reaches exactly as far back as the retained images, and the depth
+    /// is configurable rather than "however long until someone runs docker image prune".
+    /// Entirely best-effort — a failure here is logged and never touches the deployment's outcome.
+    /// </summary>
+    private async Task PruneOldImagesAsync(
+        IDockerEngine docker, App app, Func<LogStream, string, Task> log, CancellationToken ct)
+    {
+        if (_opt.ImageRetentionCount <= 0) return;
+
+        try
+        {
+            var prefix = DeploymentPlanning.BuildImagePrefix(_opt.ImagePrefix, app.Slug);
+            var onNode = await docker.ListImagesAsync(prefix, ct);
+            var history = await db.Deployments.Where(d => d.AppId == app.Id).ToListAsync(ct);
+
+            var prunable = DeploymentPlanning.ImagesToPrune(
+                onNode, history, app.ActiveDeploymentId, _opt.ImagePrefix, app.Slug, _opt.ImageRetentionCount);
+            if (prunable.Count == 0) return;
+
+            foreach (var tag in prunable)
+                await docker.RemoveImageAsync(tag, ct);
+
+            await log(LogStream.System,
+                $"Retention: removed {prunable.Count} superseded image(s); keeping the newest " +
+                $"{_opt.ImageRetentionCount} for rollback.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Image retention failed for app {Slug}.", app.Slug);
+            await log(LogStream.System, $"(image cleanup skipped: {ex.Message})");
+        }
     }
 
     /// <summary>

@@ -140,7 +140,26 @@ public sealed class PipelineHarness : IDisposable
         Db.SaveChanges();
 
         Docker.SeedContainer(DeploymentPlanning.ContainerName(App.Slug, number), App.Slug, image: image);
+        // A deployment that really ran left its image on the node too — rollback depends on it.
+        if (!string.IsNullOrWhiteSpace(image)) Docker.SeedImage(image);
         return previous;
+    }
+
+    /// <summary>
+    /// Adds a past successful deployment to the history WITHOUT making it active — used to build up
+    /// enough history for retention windows to be meaningful.
+    /// </summary>
+    public Deployment SeedSucceededDeployment(int number, string? image)
+    {
+        var deployment = new Deployment
+        {
+            Id = Guid.NewGuid(), AppId = App.Id, Number = number,
+            Status = DeploymentStatus.Succeeded, ImageTag = image,
+            CreatedAt = Clock.UtcNow, FinishedAt = Clock.UtcNow
+        };
+        Db.Deployments.Add(deployment);
+        Db.SaveChanges();
+        return deployment;
     }
 
     /// <summary>Queues a deployment row the pipeline can pick up (bypassing the engine).</summary>

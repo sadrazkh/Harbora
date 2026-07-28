@@ -48,11 +48,10 @@
                             <partial name="_DeployStatusBadge" model="d.Status" />
                             @if (d.Status == DeploymentStatus.Succeeded && d.Id != Model.ActiveDeploymentId)
                             {
-                                <form asp-controller="Apps" asp-action="Rollback" asp-route-id="@Model.Id" method="post">
-                                    @Html.AntiForgeryToken()
-                                    <input type="hidden" name="deploymentId" value="@d.Id" />
-                                    <button class="text-xs rounded-lg bg-slate-800 hover:bg-slate-700 px-2 py-1">@T["Rollback"]</button>
-                                </form>
+                                @* Confirmation step shows the exact commit/image being restored and
+                                   blocks up front if retention already pruned that artifact. *@
+                                <a href="/apps/confirmrollback/@Model.Id?deploymentId=@d.Id"
+                                   class="text-xs rounded-lg bg-slate-800 hover:bg-slate-700 px-2 py-1">@T["Rollback"]</a>
                             }
                         </div>
                     </div>

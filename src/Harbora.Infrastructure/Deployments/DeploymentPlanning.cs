@@ -79,4 +79,66 @@ public static class DeploymentPlanning
         superseded is not null &&
         superseded.Id != currentDeploymentId &&
         DeploymentStateMachine.CanTransition(superseded.Status, DeploymentStatus.RolledBack);
+
+    // ---- image retention (Phase C) ----
+
+    /// <summary>
+    /// The tag prefix Harbora's own build images share for an app: <c>{prefix}/{slug}:build-</c>.
+    /// Retention only ever considers tags matching this — a prebuilt or template image like
+    /// <c>nginx:1.27</c> belongs to the user, not to us, and must never be pruned.
+    /// </summary>
+    public static string BuildImagePrefix(string imagePrefix, string slug) => $"{imagePrefix}/{slug}:build-";
+
+    /// <summary>
+    /// Which of this app's build images may be deleted after a successful cutover.
+    ///
+    /// Artifact rollback re-releases a stored image rather than rebuilding (ADR-006), so retention is
+    /// what decides how far back "instant rollback" actually reaches. Kept: the active deployment's
+    /// image, and the images of the <paramref name="keep"/> most recent rollback-eligible
+    /// deployments (Succeeded or RolledBack — the only ones a user can roll back to). Everything
+    /// else carrying our build-tag prefix is prunable.
+    /// </summary>
+    /// <param name="onNode">Images present on the node (already filtered to this app is fine).</param>
+    /// <param name="deployments">This app's deployment history, any order.</param>
+    /// <param name="activeDeploymentId">The deployment currently serving traffic.</param>
+    /// <param name="imagePrefix">Registry/repository prefix, e.g. "harbora".</param>
+    /// <param name="slug">App slug.</param>
+    /// <param name="keep">How many rollback-eligible deployments to retain images for (min 1).</param>
+    public static IReadOnlyList<string> ImagesToPrune(
+        IEnumerable<ImageInfo> onNode,
+        IEnumerable<Deployment> deployments,
+        Guid? activeDeploymentId,
+        string imagePrefix,
+        string slug,
+        int keep)
+    {
+        var prefix = BuildImagePrefix(imagePrefix, slug);
+        var history = deployments.ToList();
+
+        var protectedTags = new HashSet<string>(StringComparer.Ordinal);
+
+        // Never prune what is serving traffic right now.
+        var active = history.FirstOrDefault(d => d.Id == activeDeploymentId);
+        if (!string.IsNullOrWhiteSpace(active?.ImageTag)) protectedTags.Add(active!.ImageTag!);
+
+        // Keep the newest N rollback targets. A rollback re-releases an existing tag, so two
+        // deployments can share one image — dedupe by tag, not by deployment, or a rollback would
+        // silently shrink the retention window.
+        var rollbackTargets = history
+            .Where(d => d.Status is DeploymentStatus.Succeeded or DeploymentStatus.RolledBack)
+            .Where(d => !string.IsNullOrWhiteSpace(d.ImageTag))
+            .OrderByDescending(d => d.Number)
+            .Select(d => d.ImageTag!)
+            .Distinct(StringComparer.Ordinal)
+            .Take(Math.Max(1, keep));
+
+        foreach (var tag in rollbackTargets) protectedTags.Add(tag);
+
+        return onNode
+            .Select(i => i.Tag)
+            .Where(t => t.StartsWith(prefix, StringComparison.Ordinal))
+            .Where(t => !protectedTags.Contains(t))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
 }

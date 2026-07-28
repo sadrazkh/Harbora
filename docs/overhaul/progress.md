@@ -5,6 +5,72 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-28 — Phase C: image retention + resilient rollback
+
+**What was done**
+- **Image operations added to the runtime seam.** `IDockerEngine` had no way to list, check or
+  delete images at all — retention was impossible to implement, and "instant rollback" could not
+  even be verified. Added `ListImagesAsync` / `ImageExistsAsync` / `RemoveImageAsync`, implemented
+  across all four engines: `DockerEngine` (Docker.DotNet), `RemoteDockerEngine` (HTTP), the
+  `Harbora.Agent` endpoints (`GET /agent/images`, `GET /agent/images/exists`,
+  `POST /agent/images/remove`), and `FakeDockerEngine`.
+- **Retention policy** as a pure function, `DeploymentPlanning.ImagesToPrune`. Keeps the active
+  image plus the newest N *rollback-eligible* (Succeeded/RolledBack) images; prunes the rest after
+  a successful cutover. Configurable via `Runtime:ImageRetentionCount` (default 5; 0 disables).
+  Closes **R1** from doc 15 — previously every deploy leaked an image forever, and artifact
+  rollback only worked because nothing cleaned up.
+- **Rollback pre-flight.** New `IRollbackPlanner` checks up front that the target exists, belongs to
+  the app, succeeded, has a retained image, and that the image is *still on the node*. The pipeline
+  also re-checks before starting anything, so a pruned artifact fails cleanly instead of part-way
+  through a deploy.
+- **Rollback confirmation screen** (`Apps/ConfirmRollback`): shows the live version vs. the target
+  with commit sha/message/author, deploy time and the exact image being re-released — or explains
+  why the rollback is blocked. The Details page now links here instead of posting straight through.
+  Closes P4's owed "pre-confirm rollback diff". The POST re-runs the plan, since retention could
+  prune between rendering and submitting.
+
+**Safety properties deliberately encoded**
+- User-supplied images (`nginx:1.27`, template images) are **never** prunable — only tags matching
+  `{prefix}/{slug}:build-`. Deleting a shared base image would break unrelated apps.
+- Failed deployments do not consume the retention window; otherwise a burst of broken builds would
+  silently push every working version out of rollback range.
+- Retention dedupes by **image tag, not deployment** — a rollback re-releases an existing tag, so
+  counting deployments would spend the window on one artifact.
+- Pruning runs only after the deployment is recorded `Succeeded`, and any failure is swallowed:
+  housekeeping must never turn a live, working deployment into a failure.
+- `RemoveImageAsync` uses `Force = false`, so an image a container still references survives even if
+  our bookkeeping thinks otherwise.
+
+**Files changed**
+- New: `Application/Abstractions/IRollbackPlanner.cs`, `Infrastructure/Deployments/RollbackPlanner.cs`,
+  `Web/Views/Apps/ConfirmRollback.cshtml`, `tests/…/ImageRetentionTests.cs`,
+  `tests/…/RollbackResilienceTests.cs`.
+- Edited: `IDockerEngine.cs`, `DockerEngine.cs`, `RemoteDockerEngine.cs`, `Agent/Program.cs`,
+  `DeploymentPlanning.cs`, `DeploymentPipeline.cs`, `HarboraRuntimeOptions.cs`,
+  `DependencyInjection.cs`, `AppsController.cs`, `ViewModels.cs`, `Apps/Details.cshtml`,
+  `appsettings.json`, and the test fakes.
+
+**Checks run**
+- `dotnet build Harbora.slnx -c Release` → 0 warnings / 0 errors.
+- `dotnet test` → **179/179 passed** (was 154).
+- **Mutation-tested** — retention deletes data, so a weak test here is actively dangerous:
+  1. drop active-image protection → 1 test fails ✅
+  2. drop the build-prefix guard (would delete `nginx:1.27`) → 2 tests fail ✅
+  3. let failed deployments consume the window → 1 test fails ✅
+  4. dedupe by deployment instead of by tag → **survived** ❌ → the test used a case that was
+     immune (rollback to a non-adjacent version). Rewrote it around the common case — rolling back
+     to the immediately previous version, where the two newest deployments share a tag — and the
+     mutation is now caught ✅.
+
+**Next step**
+- Phase D (durable job queue) — completes P3. The in-memory `Channel` still means a `Queued`
+  deployment only survives a restart because the reconciler re-queues it into another volatile
+  channel; `CancelAsync` still cannot stop work already in progress.
+- Note for a future phase: retention is per-app and runs on deploy, so an app that is never
+  deployed again keeps its images indefinitely. A platform-wide sweep is the natural follow-up.
+
+---
+
 ## 2026-07-28 — Phase B: pipeline integration harness (fake Docker engine)
 
 **What was done**

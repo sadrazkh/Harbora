@@ -24,6 +24,13 @@ public sealed class HarboraRuntimeOptions
     /// <summary>Root domain used to build default subdomains: {slug}.{RootDomain}.</summary>
     public string RootDomain { get; set; } = "localhost";
 
+    /// <summary>
+    /// How many rollback-eligible deployments keep their build image after a successful deploy.
+    /// This is the real depth of "instant rollback": beyond it, an artifact rollback is impossible
+    /// and the user must redeploy from source. 0 disables pruning entirely.
+    /// </summary>
+    public int ImageRetentionCount { get; set; } = 5;
+
     // ---- Health gate (the cutover decision) ----
     // Defaults reproduce the previous hardcoded behaviour: up to 16s to reach "running", then up to
     // 20s of HTTP probing. Configurable because a slow-booting app (JVM, migrations on start) needs

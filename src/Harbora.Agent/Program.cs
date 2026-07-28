@@ -89,6 +89,15 @@ app.MapPost("/agent/images/pull", async (ImageBody body, HttpContext ctx, IDocke
     await e.PullImageAsync(body.Image, new WriterProgress(writer), ct);
 });
 
+app.MapGet("/agent/images", (string? prefix, IDockerEngine e, CancellationToken ct) =>
+    e.ListImagesAsync(string.IsNullOrEmpty(prefix) ? null : prefix, ct));
+
+app.MapGet("/agent/images/exists", async (string image, IDockerEngine e, CancellationToken ct) =>
+    Results.Ok(new { exists = await e.ImageExistsAsync(image, ct) }));
+
+app.MapPost("/agent/images/remove", (ImageBody b, IDockerEngine e, CancellationToken ct) =>
+    e.RemoveImageAsync(b.Image, ct));
+
 app.MapPost("/agent/build", async (string tag, string dockerfile, HttpContext ctx, DockerEngine e, CancellationToken ct) =>
 {
     var buildArgs = ParseBuildArgs(ctx.Request.Headers["X-Build-Args"].ToString());
