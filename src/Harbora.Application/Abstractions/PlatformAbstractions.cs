@@ -6,17 +6,6 @@ public interface ISystemClock
     DateTimeOffset UtcNow { get; }
 }
 
-/// <summary>
-/// Minimal in-process background job queue (Channel-backed). A hosted worker drains it.
-/// Deployments, backups and metric collection all flow through here so the request path
-/// never blocks on long-running work.
-/// </summary>
-public interface IBackgroundJobQueue
-{
-    ValueTask EnqueueAsync(Func<IServiceProvider, CancellationToken, Task> job, CancellationToken ct = default);
-    ValueTask<Func<IServiceProvider, CancellationToken, Task>> DequeueAsync(CancellationToken ct);
-}
-
 /// <summary>Collects host + container metrics into the monitoring store.</summary>
 public interface IMetricsCollector
 {

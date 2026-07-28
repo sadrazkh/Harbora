@@ -4,6 +4,7 @@ using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
+using Harbora.Domain.Jobs;
 using Harbora.Infrastructure.Deployments;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,18 +19,6 @@ namespace Harbora.Tests;
 /// </summary>
 public class DeploymentReconcilerTests
 {
-    private sealed class CapturingQueue : IBackgroundJobQueue
-    {
-        public int Enqueued;
-        public ValueTask EnqueueAsync(Func<IServiceProvider, CancellationToken, Task> job, CancellationToken ct = default)
-        {
-            Interlocked.Increment(ref Enqueued);
-            return ValueTask.CompletedTask;
-        }
-        public ValueTask<Func<IServiceProvider, CancellationToken, Task>> DequeueAsync(CancellationToken ct)
-            => throw new NotSupportedException();
-    }
-
     private sealed class FixedClock : ISystemClock
     {
         public DateTimeOffset UtcNow { get; } = DateTimeOffset.UtcNow;
@@ -69,9 +58,8 @@ public class DeploymentReconcilerTests
             await db.SaveChangesAsync();
         }
 
-        var queue = new CapturingQueue();
         var reconciler = new DeploymentReconciler(
-            sp.GetRequiredService<IServiceScopeFactory>(), queue, new FixedClock(),
+            sp.GetRequiredService<IServiceScopeFactory>(), new FixedClock(),
             NullLogger<DeploymentReconciler>.Instance);
 
         await reconciler.ReconcileAsync(default);
@@ -80,8 +68,8 @@ public class DeploymentReconcilerTests
         {
             var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
 
-            // The one Queued deployment was re-queued exactly once.
-            queue.Enqueued.Should().Be(1);
+            // The one Queued deployment got exactly one durable job (it had none).
+            db.Jobs.Count(j => j.Kind == JobKind.Deployment && j.Status == JobStatus.Pending).Should().Be(1);
             var queued = db.Deployments.Single(d => d.AppId == apps.Queued);
             queued.Status.Should().Be(DeploymentStatus.Queued, "re-queued rows keep their status until picked up");
 
@@ -115,13 +103,40 @@ public class DeploymentReconcilerTests
             db.Deployments.Add(new Deployment { AppId = Guid.NewGuid(), Number = 1, Status = DeploymentStatus.Succeeded });
             await db.SaveChangesAsync();
         }
-        var queue = new CapturingQueue();
         var reconciler = new DeploymentReconciler(
-            sp.GetRequiredService<IServiceScopeFactory>(), queue, new FixedClock(),
+            sp.GetRequiredService<IServiceScopeFactory>(), new FixedClock(),
             NullLogger<DeploymentReconciler>.Instance);
 
         await reconciler.ReconcileAsync(default);
 
-        queue.Enqueued.Should().Be(0);
+        using var verify = sp.CreateScope();
+        verify.ServiceProvider.GetRequiredService<HarboraDbContext>().Jobs.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_queued_deployment_that_still_has_its_job_is_not_queued_twice()
+    {
+        // Since the job table is durable, the job normally survives the restart alongside the
+        // deployment row. Re-queueing unconditionally here would deploy the same thing twice.
+        var sp = BuildProvider("recon-dup-" + Guid.NewGuid());
+        var appId = Guid.NewGuid();
+        var deploymentId = Guid.NewGuid();
+        using (var scope = sp.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+            db.Apps.Add(new App { Id = appId, Name = "x", Slug = "x", Status = AppStatus.Created });
+            db.Deployments.Add(new Deployment { Id = deploymentId, AppId = appId, Number = 1, Status = DeploymentStatus.Queued });
+            db.Jobs.Add(new Job { Kind = JobKind.Deployment, TargetId = deploymentId, Status = JobStatus.Pending });
+            await db.SaveChangesAsync();
+        }
+
+        var reconciler = new DeploymentReconciler(
+            sp.GetRequiredService<IServiceScopeFactory>(), new FixedClock(),
+            NullLogger<DeploymentReconciler>.Instance);
+        await reconciler.ReconcileAsync(default);
+
+        using var verify = sp.CreateScope();
+        verify.ServiceProvider.GetRequiredService<HarboraDbContext>()
+            .Jobs.Count(j => j.TargetId == deploymentId).Should().Be(1);
     }
 }

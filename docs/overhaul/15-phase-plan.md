@@ -94,12 +94,20 @@ and the assertions become the precise specification for the real E2E run once a 
 > can't shrink the window. Mutation testing caught one weak test, which was rewritten. See
 > `progress.md`, 2026-07-28.
 
-### Phase D — durable job queue (completes P3)
+### Phase D — durable job queue (completes P3) ✅ done
 *Medium · medium risk (core path)*
 
-Replace the in-memory `Channel` with a persisted `Job` table so a `Queued` deployment genuinely
-survives a restart instead of being re-queued into another volatile channel. Wire real
-`CancellationToken` support so `CancelAsync` stops work in progress.
+- ✅ Persisted `Job` table replaces the in-memory `Channel`; a `Queued` deployment genuinely survives
+  a restart instead of being re-queued into another volatile channel.
+- ✅ Real `CancellationToken` support — `CancelAsync` now stops work in progress, not just the record.
+
+> **Outcome:** a delegate can't be persisted, so the queue stores a *description* of the work
+> (kind + target) and a dispatcher maps it back to a call. Making the queue durable revealed that
+> the existing reconciler would now double-deploy on restart; fixed. Mutation testing found one
+> untested path (cancel-then-restart). See `progress.md`, 2026-07-28.
+>
+> Known limitation: the cancellation registry is process-local, so a cancel cannot interrupt a job
+> running on another instance (the flag still persists). Single-instance today.
 
 ### Phase E — data-safety hardening
 *Large · high risk (data)*

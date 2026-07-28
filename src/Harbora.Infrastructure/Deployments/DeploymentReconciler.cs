@@ -2,6 +2,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
+using Harbora.Domain.Jobs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -10,10 +11,12 @@ using Microsoft.Extensions.Logging;
 namespace Harbora.Infrastructure.Deployments;
 
 /// <summary>
-/// Crash recovery (ADR-005 / fixes C2). The in-process job queue is not durable: a restart while a
-/// deployment is in flight would otherwise leave its row stuck in a non-terminal state forever.
-/// On startup this reconciles every in-flight deployment exactly once:
-///   • Queued  → re-enqueued (the row survived; only the in-memory channel item was lost).
+/// Crash recovery (ADR-005 / fixes C2). A restart while a deployment is in flight would otherwise
+/// leave its row stuck in a non-terminal state forever. On startup this reconciles every in-flight
+/// deployment exactly once:
+///   • Queued  → re-enqueued, but ONLY if no live job already covers it. Since Phase D the job
+///     table is durable, so the usual case is that the job survived too and re-queueing here would
+///     deploy twice.
 ///   • Building/Pushing/Deploying/HealthChecking → marked Failed ("interrupted by a restart"),
 ///     because a partially-built/started deployment cannot be safely resumed; the previously
 ///     running container (if any) keeps serving, so the app stays Running when it had one.
@@ -21,7 +24,6 @@ namespace Harbora.Infrastructure.Deployments;
 /// </summary>
 public sealed class DeploymentReconciler(
     IServiceScopeFactory scopeFactory,
-    IBackgroundJobQueue queue,
     ISystemClock clock,
     ILogger<DeploymentReconciler> logger) : IHostedService
 {
@@ -61,11 +63,21 @@ public sealed class DeploymentReconciler(
         {
             if (d.Status == DeploymentStatus.Queued)
             {
-                // The persisted row is the source of truth; re-schedule the work.
-                var id = d.Id;
-                await queue.EnqueueAsync((sp, jobCt) =>
-                    sp.GetRequiredService<DeploymentPipeline>().ExecuteAsync(id, jobCt), ct);
-                requeued++;
+                // The durable job normally survived the restart and will be picked up on its own.
+                // Only heal the case where the deployment row exists without one — re-queueing
+                // unconditionally would run the same deployment twice.
+                var hasLiveJob = await db.Jobs.AnyAsync(
+                    j => j.Kind == JobKind.Deployment && j.TargetId == d.Id &&
+                         (j.Status == JobStatus.Pending || j.Status == JobStatus.Running), ct);
+                if (!hasLiveJob)
+                {
+                    db.Jobs.Add(new Job
+                    {
+                        Kind = JobKind.Deployment, TargetId = d.Id,
+                        Status = JobStatus.Pending, CreatedAt = clock.UtcNow
+                    });
+                    requeued++;
+                }
                 continue;
             }
 

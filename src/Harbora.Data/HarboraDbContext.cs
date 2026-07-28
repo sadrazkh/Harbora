@@ -40,6 +40,7 @@ public class HarboraDbContext(DbContextOptions<HarboraDbContext> options) : DbCo
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<Harbora.Domain.Jobs.Job> Jobs => Set<Harbora.Domain.Jobs.Job>();
     public DbSet<Setting> Settings => Set<Setting>();
     public DbSet<Harbora.Domain.Tenancy.Plan> Plans => Set<Harbora.Domain.Tenancy.Plan>();
     public DbSet<Harbora.Domain.Tenancy.InstanceSize> InstanceSizes => Set<Harbora.Domain.Tenancy.InstanceSize>();
@@ -111,6 +112,18 @@ public class HarboraDbContext(DbContextOptions<HarboraDbContext> options) : DbCo
         b.Entity<Harbora.Domain.Tenancy.Plan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
         b.Entity<Harbora.Domain.Tenancy.UsageRecord>(e => e.HasIndex(x => new { x.WorkspaceId, x.Period }).IsUnique());
         b.Entity<AuditLog>(e => e.HasIndex(x => x.CreatedAt));
+
+        b.Entity<Harbora.Domain.Jobs.Job>(e =>
+        {
+            // The worker's hot path: oldest Pending job first.
+            e.HasIndex(x => new { x.Status, x.CreatedAt });
+            // Finding the live job for a deployment/backup when cancelling or reconciling.
+            e.HasIndex(x => new { x.TargetId, x.Status });
+            e.Property(x => x.ClaimedBy).HasMaxLength(128);
+            e.Property(x => x.Error).HasMaxLength(2048);
+            // Makes two workers claiming the same job a lost update rather than a double execution.
+            e.Property(x => x.ClaimStamp).IsConcurrencyToken();
+        });
     }
 
     public override async Task<int> SaveChangesAsync(CancellationToken ct = default)

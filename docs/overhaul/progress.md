@@ -5,6 +5,76 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-28 — Phase D: durable job queue (completes P3)
+
+**What was done**
+- Replaced the in-memory `Channel` queue with a persisted **`Job` table**. The old queue held
+  `Func<IServiceProvider, CancellationToken, Task>` delegates — a delegate cannot be written to a
+  database, which is why "crash-safe deploys" previously meant *the reconciler re-queued work into
+  another equally volatile channel*. Persisting a **description** of the work (kind + target id)
+  instead makes the row itself the queue.
+- New: `Job`/`JobKind`/`JobStatus` (Domain), `IJobQueue` + `IJobCancellationRegistry`
+  (Application), `DatabaseJobQueue`, `JobWorker`, `JobDispatcher`, `JobReconciler`,
+  `JobCancellationRegistry`, `JobSignal` (Infrastructure). EF migration `DurableJobQueue`.
+- Deleted `ChannelBackgroundJobQueue`, `BackgroundJobWorker` and `IBackgroundJobQueue`. All three
+  producers migrated: deployments, backups, managed-service provisioning.
+- **Real cancellation.** `IJobCancellationRegistry` maps running job → its `CancellationTokenSource`,
+  so `DeploymentEngine.CancelAsync` now stops the work as well as updating the record. Previously
+  cancelling a Building deployment only rewrote a column while the build carried on.
+- `JobSignal` wakes the worker instantly on an in-process enqueue, so durability costs no latency;
+  a 5s poll is the backstop that also catches rows written by the reconciler.
+- `JobReconciler` runs **before** `DeploymentReconciler` and settles jobs left `Running` by a crash.
+  Deliberately does not retry: deployments/backups/provisioning have side effects that a blind
+  re-run could compound.
+
+**A duplicate-deploy bug this introduced, and fixed**
+`DeploymentReconciler` used to re-queue every `Queued` deployment on startup. With a durable queue
+the job row survives the restart too, so that would deploy the same thing **twice**. It now
+re-queues only when no live job covers the deployment — heal the gap, don't duplicate the work.
+Covered by `A_queued_deployment_that_still_has_its_job_is_not_queued_twice`.
+
+**Semantics worth stating**
+- Host shutdown returns a claimed job to `Pending` with its claim released — the work never
+  happened, so it must resume, not be recorded as cancelled or failed.
+- A user cancel settles a `Pending` job outright; if the worker claimed it in the meantime, the
+  concurrency stamp turns that into a caught conflict and the running path interrupts it instead.
+- `ClaimStamp` is an EF concurrency token, so two workers racing for one job means a lost update
+  for one of them rather than a double execution. Enforced on Postgres; the InMemory provider used
+  in tests does not check it, so that guarantee is not test-covered — noted honestly.
+
+**Files changed**
+- New: `Domain/Jobs/Job.cs`, `Application/Abstractions/IJobQueue.cs`, four files under
+  `Infrastructure/Jobs/`, `Migrations/…_DurableJobQueue.cs`, `tests/…/DurableJobQueueTests.cs`,
+  `tests/…/Fakes/JobHarness.cs`.
+- Deleted: `Jobs/ChannelBackgroundJobQueue.cs`, `Jobs/BackgroundJobWorker.cs`.
+- Edited: `PlatformAbstractions.cs`, `HarboraDbContext.cs`, `DependencyInjection.cs`,
+  `DeploymentEngine.cs`, `DeploymentReconciler.cs`, `BackupEngine.cs`, `ManagedServiceEngine.cs`,
+  and two test files.
+
+**Checks run**
+- `dotnet build Harbora.slnx -c Release` → 0 warnings / 0 errors.
+- `dotnet test` → **197/197 passed** (was 179).
+- **Mutation-tested:**
+  1. ignore `CancelRequested` on a pending job → **survived** ❌. The queue settles a pending cancel
+     itself, so the worker's guard only matters after *cancel-then-restart* — a path I hadn't
+     tested. Added that test; mutation now caught ✅. Also hardened the cancel/claim race the
+     investigation exposed.
+  2. treat host shutdown as cancellation (losing the work) → 1 test fails ✅
+  3. remove the cancellation registration → **rejected by the compiler** (unused parameter is an
+     error here); the compiling variant — registering a decoy token — fails 1 test ✅. That run
+     also showed the blocking stub could hang the suite instead of failing, so its wait is now
+     bounded: the test fails in ~11s rather than never.
+
+**Next step**
+- Phase E (data-safety hardening): backup→restore round-trip verification, archive encryption,
+  dry-run restore; then the audit-log UI/export, centralized workspace scoping and cross-tenant
+  tests still owed from P13.
+- Known limitation: a cancel for a job running on **another** instance persists the flag but cannot
+  interrupt it — the registry is process-local. Single-instance today; worth revisiting if the
+  platform ever runs more than one panel.
+
+---
+
 ## 2026-07-28 — Phase C: image retention + resilient rollback
 
 **What was done**

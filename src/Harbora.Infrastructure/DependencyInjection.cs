@@ -64,8 +64,14 @@ public static class DependencyInjection
 
         // Platform services
         services.AddSingleton<ISystemClock, SystemClock>();
-        services.AddSingleton<IBackgroundJobQueue, ChannelBackgroundJobQueue>();
-        services.AddHostedService<BackgroundJobWorker>();
+        // Durable job queue (P3): work is persisted before it runs, so a restart resumes from the
+        // database rather than losing whatever was in memory.
+        services.AddSingleton<IJobCancellationRegistry, JobCancellationRegistry>();
+        services.AddSingleton<JobSignal>();
+        services.AddScoped<IJobQueue, DatabaseJobQueue>();
+        // Settles jobs orphaned by a crash BEFORE deployments are reconciled — order matters.
+        services.AddHostedService<JobReconciler>();
+        services.AddHostedService<JobWorker>();
 
         // Deployment engine
         services.AddScoped<IDeploymentEngine, DeploymentEngine>();

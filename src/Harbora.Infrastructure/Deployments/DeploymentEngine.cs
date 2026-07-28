@@ -2,8 +2,8 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
+using Harbora.Domain.Jobs;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Harbora.Infrastructure.Deployments;
 
@@ -13,7 +13,7 @@ namespace Harbora.Infrastructure.Deployments;
 /// </summary>
 public sealed class DeploymentEngine(
     HarboraDbContext db,
-    IBackgroundJobQueue queue,
+    IJobQueue jobs,
     ISystemClock clock) : IDeploymentEngine
 {
     public async Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct)
@@ -67,8 +67,9 @@ public sealed class DeploymentEngine(
         await db.SaveChangesAsync(ct);
 
         var deploymentId = deployment.Id;
-        await queue.EnqueueAsync((sp, jobCt) =>
-            sp.GetRequiredService<DeploymentPipeline>().ExecuteAsync(deploymentId, jobCt), ct);
+        // The job row is persisted alongside the deployment, so a restart resumes it from the
+        // database instead of relying on anything held in memory.
+        await jobs.EnqueueAsync(JobKind.Deployment, deploymentId, ct);
 
         return deploymentId;
     }
@@ -86,5 +87,9 @@ public sealed class DeploymentEngine(
 
         DeploymentStateMachine.Transition(deployment, DeploymentStatus.Cancelled, clock.UtcNow);
         await db.SaveChangesAsync(ct);
+
+        // Stop the work as well as the record: a queued job is settled before it starts, and a
+        // running pipeline is signalled through its cancellation token.
+        await jobs.RequestCancellationAsync(JobKind.Deployment, deploymentId, ct);
     }
 }

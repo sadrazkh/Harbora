@@ -18,7 +18,7 @@ public sealed class ManagedServiceEngine(
     HarboraDbContext db,
     IServerEngineFactory engineFactory,
     ISecretProtector protector,
-    IBackgroundJobQueue queue,
+    IJobQueue jobs,
     IOptions<HarboraRuntimeOptions> options,
     ILogger<ManagedServiceEngine> logger) : IManagedServiceEngine
 {
@@ -30,8 +30,7 @@ public sealed class ManagedServiceEngine(
             d.Versions, d.Port, d.HasDatabaseName)).ToList();
 
     public Task QueueProvisionAsync(Guid serviceId, CancellationToken ct) =>
-        queue.EnqueueAsync((sp, jobCt) =>
-            sp.GetRequiredService<ManagedServiceEngine>().ProvisionAsync(serviceId, jobCt), ct).AsTask();
+        jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.ServiceProvision, serviceId, ct);
 
     /// <summary>Runs on the background worker. Pulls the image and (re)creates the container.</summary>
     public async Task ProvisionAsync(Guid serviceId, CancellationToken ct)

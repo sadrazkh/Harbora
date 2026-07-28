@@ -22,7 +22,7 @@ public sealed class BackupEngine(
     HarboraDbContext db,
     IDockerEngine docker,
     IBackupStorage storage,
-    IBackgroundJobQueue queue,
+    IJobQueue jobs,
     INotificationService notifications,
     ISystemClock clock,
     IOptions<BackupOptions> options,
@@ -42,7 +42,7 @@ public sealed class BackupEngine(
         await db.SaveChangesAsync(ct);
 
         var id = backup.Id;
-        await queue.EnqueueAsync((sp, jobCt) => sp.GetRequiredService<BackupEngine>().RunAsync(id, jobCt), ct);
+        await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.Backup, id, ct);
         return id;
     }
 

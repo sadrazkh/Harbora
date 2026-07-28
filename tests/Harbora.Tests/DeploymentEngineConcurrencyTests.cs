@@ -4,6 +4,7 @@ using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
+using Harbora.Domain.Jobs;
 using Harbora.Infrastructure.Deployments;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,13 +18,17 @@ namespace Harbora.Tests;
 /// </summary>
 public class DeploymentEngineConcurrencyTests
 {
-    private sealed class NoopQueue : IBackgroundJobQueue
+    /// <summary>Records enqueues/cancellations without persisting anything.</summary>
+    private sealed class NoopQueue : IJobQueue
     {
         public int Enqueued;
-        public ValueTask EnqueueAsync(Func<IServiceProvider, CancellationToken, Task> job, CancellationToken ct = default)
-        { Enqueued++; return ValueTask.CompletedTask; }
-        public ValueTask<Func<IServiceProvider, CancellationToken, Task>> DequeueAsync(CancellationToken ct)
-            => throw new NotSupportedException();
+        public readonly List<Guid> CancelledTargets = [];
+
+        public Task<Guid> EnqueueAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
+        { Enqueued++; return Task.FromResult(Guid.NewGuid()); }
+
+        public Task<bool> RequestCancellationAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
+        { CancelledTargets.Add(targetId); return Task.FromResult(true); }
     }
 
     private sealed class Clock : ISystemClock { public DateTimeOffset UtcNow => DateTimeOffset.UtcNow; }
