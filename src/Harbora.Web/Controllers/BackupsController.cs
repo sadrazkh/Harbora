@@ -1,5 +1,6 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Authorization;
 using Harbora.Domain.Backups;
 using Harbora.Domain.Common;
 using Harbora.Web.ViewModels;
@@ -49,6 +50,7 @@ public sealed class BackupsController(
 
     [HttpPost("run")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.BackupsRun)]
     public async Task<IActionResult> Run(string target, Guid destinationId, CancellationToken ct)
     {
         if (!TryParseTarget(target, out var type, out var reference))
@@ -71,6 +73,7 @@ public sealed class BackupsController(
 
     [HttpPost("{id:guid}/restore")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.BackupsRestore)]
     public async Task<IActionResult> Restore(Guid id, string confirm, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
@@ -86,6 +89,7 @@ public sealed class BackupsController(
 
     [HttpPost("destinations")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.BackupsManage)]
     public async Task<IActionResult> CreateDestination(
         string name, BackupDestinationType type, string? localPath,
         string? endpoint, string? bucket, string? region, string? accessKey, string? secretKey, CancellationToken ct)
@@ -108,6 +112,7 @@ public sealed class BackupsController(
 
     [HttpPost("schedules")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.BackupsManage)]
     public async Task<IActionResult> CreateSchedule(string target, Guid destinationId, int intervalHours, int retentionCount, CancellationToken ct)
     {
         if (!TryParseTarget(target, out var type, out var reference))
@@ -126,6 +131,7 @@ public sealed class BackupsController(
 
     [HttpPost("schedules/{id:guid}/delete")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.BackupsManage)]
     public async Task<IActionResult> DeleteSchedule(Guid id, CancellationToken ct)
     {
         await db.BackupSchedules.Where(s => s.Id == id && s.WorkspaceId == WorkspaceId).ExecuteDeleteAsync(ct);

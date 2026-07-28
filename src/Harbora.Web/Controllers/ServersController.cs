@@ -1,5 +1,6 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Servers;
 using Microsoft.AspNetCore.Authorization;
@@ -32,6 +33,7 @@ public sealed class ServersController(
 
     [HttpPost("add")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.ServersManage)]
     public async Task<IActionResult> Add(string name, string agentEndpoint, string token, bool useMtls, string? clientCertPfxBase64, CancellationToken ct)
     {
         var host = Uri.TryCreate(agentEndpoint, UriKind.Absolute, out var uri) ? uri.Host : agentEndpoint;
@@ -81,6 +83,7 @@ public sealed class ServersController(
 
     [HttpPost("{id:guid}/remove")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.ServersManage)]
     public async Task<IActionResult> Remove(Guid id, CancellationToken ct)
     {
         var server = await db.Servers.FirstOrDefaultAsync(s => s.Id == id, ct);

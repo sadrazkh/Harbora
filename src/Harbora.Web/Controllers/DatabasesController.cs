@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
+using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Services;
 using Harbora.Web.ViewModels;
@@ -37,6 +38,7 @@ public sealed partial class DatabasesController(
     }
 
     [HttpGet("create")]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
     public IActionResult Create()
     {
         ViewData["Title"] = "New service";
@@ -46,6 +48,7 @@ public sealed partial class DatabasesController(
 
     [HttpPost("create")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
     public async Task<IActionResult> Create(CreateServiceViewModel model, CancellationToken ct)
     {
         var entry = engine.Catalog.FirstOrDefault(c => c.Type == model.Type);
@@ -104,22 +107,26 @@ public sealed partial class DatabasesController(
 
     [HttpPost("{id:guid}/start")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
     public async Task<IActionResult> Start(Guid id, CancellationToken ct)
     { await Guard(id, ct); await engine.StartAsync(id, ct); return RedirectToAction(nameof(Details), new { id }); }
 
     [HttpPost("{id:guid}/stop")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
     public async Task<IActionResult> Stop(Guid id, CancellationToken ct)
     { await Guard(id, ct); await engine.StopAsync(id, ct); return RedirectToAction(nameof(Details), new { id }); }
 
     [HttpPost("{id:guid}/remove")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
     public async Task<IActionResult> Remove(Guid id, CancellationToken ct)
     { await Guard(id, ct); await engine.RemoveAsync(id, deleteData: false, ct); return RedirectToAction(nameof(Index)); }
 
     /// <summary>Injects the service's connection env into an app (secret, encrypted). Applies on next deploy.</summary>
     [HttpPost("{id:guid}/attach")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
     public async Task<IActionResult> Attach(Guid id, Guid appId, CancellationToken ct)
     {
         await Guard(id, ct);

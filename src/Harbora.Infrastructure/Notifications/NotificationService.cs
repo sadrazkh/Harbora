@@ -83,6 +83,7 @@ public sealed class NotificationService(
     private async Task SendDiscord(string target, AlertSeverity severity, string title, string body, CancellationToken ct)
     {
         var t = JsonSerializer.Deserialize<UrlTarget>(target)!;
+        GuardOutboundUrl(t.Url);
         var client = httpFactory.CreateClient();
         var color = severity switch { AlertSeverity.Critical => 15158332, AlertSeverity.Warning => 15844367, _ => 3066993 };
         await client.PostAsJsonAsync(t.Url, new { embeds = new[] { new { title, description = body, color } } }, ct);
@@ -91,8 +92,17 @@ public sealed class NotificationService(
     private async Task SendWebhook(string target, AlertSeverity severity, string title, string body, CancellationToken ct)
     {
         var t = JsonSerializer.Deserialize<UrlTarget>(target)!;
+        GuardOutboundUrl(t.Url);
         var client = httpFactory.CreateClient();
         await client.PostAsJsonAsync(t.Url, new { severity = severity.ToString(), title, body, at = DateTimeOffset.UtcNow }, ct);
+    }
+
+    /// <summary>SSRF guard (doc 10 §2.8): refuse to call internal/reserved targets. Throws;
+    /// DispatchSafe logs and swallows so a blocked channel never breaks a deploy/backup.</summary>
+    private static void GuardOutboundUrl(string url)
+    {
+        if (!Security.UrlSafety.IsAllowedOutboundUrl(url, out var reason))
+            throw new InvalidOperationException($"Refusing to call webhook URL: {reason}.");
     }
 
     private Task SendEmail(string target, string title, string body, CancellationToken ct)

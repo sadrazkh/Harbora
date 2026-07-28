@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Threading.RateLimiting;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Infrastructure;
@@ -7,6 +8,7 @@ using Harbora.Web.Infrastructure;
 using Harbora.Web.Realtime;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Localization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -58,8 +60,24 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TokenAuthenticationHandler>(
         TokenAuthenticationHandler.SchemeName, _ => { });
 
-builder.Services.AddAuthorization();
+// Action-level RBAC: one policy per capability, evaluated against the caller's role (doc 10 §2.12).
+builder.Services.AddCapabilityAuthorization();
 builder.Services.AddAntiforgery(o => o.HeaderName = "X-CSRF-TOKEN");
+
+// Per-IP rate limits (doc 10 §2.18): throttle login brute-force and webhook floods. Other traffic
+// is unaffected. 429 on rejection.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    static Func<HttpContext, RateLimitPartition<string>> PerIp(int permitPerMinute) => ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions { Window = TimeSpan.FromMinutes(1), PermitLimit = permitPerMinute, QueueLimit = 0 });
+
+    options.AddPolicy("auth", PerIp(10));      // login attempts / IP / minute
+    options.AddPolicy("webhook", PerIp(60));   // inbound git webhooks / IP / minute
+});
 
 var app = builder.Build();
 
@@ -81,6 +99,7 @@ app.UseRequestLocalization(app.Services.GetRequiredService<
     Microsoft.Extensions.Options.IOptions<RequestLocalizationOptions>>().Value);
 app.UseStaticFiles();
 app.UseRouting();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 

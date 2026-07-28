@@ -1,5 +1,6 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Authorization;
 using Harbora.Web.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -50,9 +51,9 @@ public sealed class SettingsController(
     /// <summary>Provider-only: update the platform display settings.</summary>
     [HttpPost("/settings/platform")]
     [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.PlatformManage)]
     public async Task<IActionResult> UpdatePlatform(string platformName, string? rootDomain, string? acmeEmail, CancellationToken ct)
     {
-        if (!IsProvider) return Forbid();
         await SetAsync(Harbora.Domain.Settings.SettingKeys.PlatformName, platformName, ct);
         await SetAsync(Harbora.Domain.Settings.SettingKeys.PlatformRootDomain, rootDomain ?? "", ct);
         await SetAsync(Harbora.Domain.Settings.SettingKeys.AcmeEmail, acmeEmail ?? "", ct);

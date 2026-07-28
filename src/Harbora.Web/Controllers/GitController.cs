@@ -1,5 +1,6 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Git;
 using Harbora.Web.ViewModels;
@@ -47,6 +48,7 @@ public sealed class GitController(
     }
 
     [HttpPost("connect")]
+    [Authorize(Policy = Capabilities.GitManage)]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Connect(string name, GitProviderType type, string? apiBaseUrl, string token, CancellationToken ct)
     {
@@ -83,6 +85,7 @@ public sealed class GitController(
     }
 
     [HttpPost("repos")]
+    [Authorize(Policy = Capabilities.GitManage)]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ImportRepo(Guid providerId, string fullName, string cloneUrl, string defaultBranch, CancellationToken ct)
     {
@@ -108,6 +111,7 @@ public sealed class GitController(
 
     /// <summary>Save an OAuth app's client id/secret/base for a provider type (secret encrypted).</summary>
     [HttpPost("oauth/config")]
+    [Authorize(Policy = Capabilities.GitManage)]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SaveOAuthConfig(GitProviderType type, string clientId, string clientSecret, string? oauthBase, CancellationToken ct)
     {
@@ -120,6 +124,7 @@ public sealed class GitController(
     }
 
     [HttpGet("oauth/{type}/start")]
+    [Authorize(Policy = Capabilities.GitManage)]
     public async Task<IActionResult> OAuthStart(GitProviderType type, CancellationToken ct)
     {
         var clientId = await GetSetting($"oauth.{type}.client_id", ct);
@@ -183,6 +188,7 @@ public sealed class GitController(
     }
 
     [HttpPost("repos/{id:guid}/rotate-secret")]
+    [Authorize(Policy = Capabilities.GitManage)]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> RotateSecret(Guid id, CancellationToken ct)
     {

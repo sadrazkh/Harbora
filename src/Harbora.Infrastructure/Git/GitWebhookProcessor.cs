@@ -19,7 +19,6 @@ namespace Harbora.Infrastructure.Git;
 public sealed class GitWebhookProcessor(
     HarboraDbContext db,
     IDeploymentEngine deployEngine,
-    ISystemClock clock,
     ILogger<GitWebhookProcessor> logger) : IGitWebhookProcessor
 {
     public async Task<WebhookResult> ProcessAsync(Guid repositoryId, WebhookRequest request, CancellationToken ct)

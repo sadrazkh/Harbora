@@ -43,14 +43,24 @@ public static class DependencyInjection
         services.AddScoped<IGitWebhookProcessor, Git.GitWebhookProcessor>();
         services.AddScoped<IGitOAuthService, Git.GitOAuthService>();
 
-        // Security
-        var masterKey = config["Harbora:MasterKey"]
-                        ?? Environment.GetEnvironmentVariable("HARBORA_MASTER_KEY")
-                        ?? "dev-insecure-master-key-change-me";
-        services.AddSingleton<ISecretProtector>(new AesGcmSecretProtector(masterKey));
+        // Security — resolve the master key fail-closed (ADR-009 / doc 10 §2.2): Production must
+        // supply a key; only Development may fall back to the insecure dev key (with a loud warning).
+        // Coalesce so a blank appsettings value (the shipped default) falls through to the env var.
+        var configuredKey = Coalesce(config["Harbora:MasterKey"],
+                                     Environment.GetEnvironmentVariable("HARBORA_MASTER_KEY"));
+        var isProduction = !string.Equals(
+            Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production",
+            "Development", StringComparison.OrdinalIgnoreCase);
+        var masterKey = MasterKeyResolver.Resolve(configuredKey, isProduction);
+        if (masterKey.UsedDevFallback)
+            Console.Error.WriteLine(
+                "⚠ HARBORA_MASTER_KEY is not set — using the INSECURE development key. " +
+                "Never run Production like this.");
+        services.AddSingleton<ISecretProtector>(new AesGcmSecretProtector(masterKey.Key));
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<ISecretRedactor, SecretRedactor>();
         services.AddScoped<ITokenService, TokenService>();
+        services.AddScoped<IAuditLogger, Auditing.AuditLogger>();
 
         // Platform services
         services.AddSingleton<ISystemClock, SystemClock>();
@@ -61,6 +71,8 @@ public static class DependencyInjection
         services.AddScoped<IDeploymentEngine, DeploymentEngine>();
         services.AddScoped<DeploymentPipeline>();
         services.AddScoped<IAppOperationsService, AppOperationsService>();
+        // Crash recovery: reconcile in-flight deployments on startup (ADR-005).
+        services.AddHostedService<Deployments.DeploymentReconciler>();
 
         // Managed services (databases/caches). Concrete type is registered too so background
         // jobs can resolve ProvisionAsync directly.

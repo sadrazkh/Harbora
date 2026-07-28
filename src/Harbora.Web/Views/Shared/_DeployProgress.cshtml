@@ -1,0 +1,74 @@
+@model Harbora.Domain.Common.DeploymentStatus
+@{
+    // Staged progress visualization (docs/overhaul/08). Server-rendered from the current status
+    // (accurate on load/refresh); the DeploymentLogs Vue island updates it live in production.
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    string[] labels = isFa
+        ? new[] { "در صف", "ساخت", "استقرار", "سلامت‌سنجی", "زنده" }
+        : new[] { "Queued", "Build", "Deploy", "Health", "Live" };
+
+    // Which step is "current" for each status (index into labels).
+    int active = Model switch
+    {
+        DeploymentStatus.Queued => 0,
+        DeploymentStatus.Building => 1,
+        DeploymentStatus.Pushing => 1,
+        DeploymentStatus.Deploying => 2,
+        DeploymentStatus.HealthChecking => 3,
+        DeploymentStatus.Succeeded => 4,
+        DeploymentStatus.RolledBack => 4,
+        _ => -1 // Failed / Cancelled
+    };
+    var failed = Model is DeploymentStatus.Failed;
+    var cancelled = Model is DeploymentStatus.Cancelled;
+    var done = Model is DeploymentStatus.Succeeded or DeploymentStatus.RolledBack;
+}
+<div class="mb-4 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-4" data-deploy-progress
+     data-status="@Model">
+    <ol class="flex items-center gap-2">
+        @for (var i = 0; i < labels.Length; i++)
+        {
+            // Per-step visual state.
+            var reached = active >= i || done;
+            string circle, text, line;
+            if (done || (active > i && active >= 0))
+            {
+                circle = "bg-emerald-500 text-white"; text = "text-emerald-300"; line = "bg-emerald-500";
+            }
+            else if (active == i && !failed && !cancelled)
+            {
+                circle = "bg-brand-500 text-white animate-pulse"; text = "text-brand-300"; line = "bg-slate-700";
+            }
+            else if ((failed || cancelled) && i == 0)
+            {
+                circle = failed ? "bg-red-500 text-white" : "bg-slate-600 text-white";
+                text = failed ? "text-red-300" : "text-slate-400"; line = "bg-slate-700";
+            }
+            else
+            {
+                circle = "bg-slate-800 text-slate-500 border border-slate-700"; text = "text-slate-500"; line = "bg-slate-700";
+            }
+
+            <li class="flex items-center @(i < labels.Length - 1 ? "flex-1" : "")">
+                <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold @circle">
+                    @if (done || (active > i && active >= 0)) { <text>✓</text> }
+                    else if (failed && i == 0) { <text>✕</text> }
+                    else { @(i + 1) }
+                </span>
+                <span class="ms-2 text-xs font-medium @text whitespace-nowrap">@labels[i]</span>
+                @if (i < labels.Length - 1)
+                {
+                    <span class="mx-2 h-0.5 flex-1 rounded @line"></span>
+                }
+            </li>
+        }
+    </ol>
+    @if (failed)
+    {
+        <p class="mt-3 text-sm text-red-300">@(isFa ? "استقرار ناموفق بود — نسخه‌ی قبلی همچنان در حال سرویس‌دهی است. می‌توانید دوباره تلاش یا rollback کنید." : "Deploy failed — the previous version is still serving. You can retry or roll back.")</p>
+    }
+    else if (cancelled)
+    {
+        <p class="mt-3 text-sm text-slate-400">@(isFa ? "استقرار لغو شد." : "Deployment was cancelled.")</p>
+    }
+</div>

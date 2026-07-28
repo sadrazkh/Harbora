@@ -22,7 +22,7 @@
         @* ---- Source as visual cards ---- *@
         <div>
             <label class="block text-sm text-slate-400 mb-2">@T["Source"]</label>
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 <label class="cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="GitRepository" data-src checked />
                     <div class="text-2xl">🐙</div>
@@ -35,11 +35,17 @@
                     <div class="mt-1 font-semibold">@(isFa ? "ایمیج Docker" : "Docker image")</div>
                     <div class="text-xs text-slate-500">@(isFa ? "یک ایمیج آماده اجرا کن" : "Run a prebuilt image")</div>
                 </label>
+                <label class="cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
+                    <input class="sr-only" type="radio" asp-for="SourceType" value="StaticSite" data-src />
+                    <div class="text-2xl">📄</div>
+                    <div class="mt-1 font-semibold">@(isFa ? "سایت استاتیک" : "Static site")</div>
+                    <div class="text-xs text-slate-500">@(isFa ? "از مخزن Git، پشت Nginx" : "From a Git repo, served by Nginx")</div>
+                </label>
             </div>
         </div>
 
         @* ---- Essential field per source ---- *@
-        <div data-panel="GitRepository">
+        <div data-panel="GitRepository,StaticSite">
             <label class="block text-sm text-slate-400 mb-1">@(isFa ? "آدرس Git" : "Git repository URL")</label>
             <input asp-for="CloneUrl" placeholder="https://github.com/user/repo.git" class="@input" />
         </div>
@@ -57,18 +63,18 @@
                         <label class="block text-sm text-slate-400 mb-1">Slug</label>
                         <input asp-for="Slug" placeholder="@(isFa ? "خودکار از نام" : "auto from name")" class="@input" />
                     </div>
-                    <div data-panel="GitRepository">
+                    <div data-panel="GitRepository,StaticSite">
                         <label class="block text-sm text-slate-400 mb-1">@T["Branch or Tag"]</label>
                         <input asp-for="GitRef" class="@input" />
                     </div>
                 </div>
 
-                <div data-panel="GitRepository" class="grid sm:grid-cols-2 gap-4">
+                <div data-panel="GitRepository,StaticSite" class="grid sm:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">@(isFa ? "توکن دسترسی (مخزن خصوصی)" : "Access token (private repo)")</label>
                         <input asp-for="GitToken" type="password" class="@input" />
                     </div>
-                    <div>
+                    <div data-panel="GitRepository">
                         <label class="block text-sm text-slate-400 mb-1">Dockerfile path</label>
                         <input asp-for="DockerfilePath" class="@input" />
                         <span class="text-xs text-slate-500">@(isFa ? "نبود؟ استک خودکار تشخیص داده می‌شود." : "None? The stack is auto-detected.")</span>
@@ -122,7 +128,8 @@
     function syncSource() {
         var val = document.querySelector('[data-src]:checked')?.value || 'GitRepository';
         document.querySelectorAll('[data-panel]').forEach(function (el) {
-            el.style.display = el.getAttribute('data-panel') === val ? '' : 'none';
+            var list = el.getAttribute('data-panel').split(',').map(function (s) { return s.trim(); });
+            el.style.display = list.indexOf(val) >= 0 ? '' : 'none';
         });
     }
     document.querySelectorAll('[data-src]').forEach(function (r) { r.addEventListener('change', syncSource); });

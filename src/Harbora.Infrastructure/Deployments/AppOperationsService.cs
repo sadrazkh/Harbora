@@ -80,9 +80,10 @@ public sealed class AppOperationsService(
 
     private static async Task<string?> FindContainerIdAsync(IDockerEngine docker, string slug, CancellationToken ct)
     {
-        var name = $"harbora-{slug}";
-        var containers = await docker.ListContainersAsync("harbora.app", ct);
-        return containers.FirstOrDefault(c => c.Name == name)?.Id;
+        // Containers are versioned (harbora-{slug}-{n}) for zero-downtime cutover, so match by the
+        // app label rather than an exact name and prefer the running one.
+        var containers = await docker.ListContainersAsync(DeploymentPlanning.AppLabel, ct);
+        return DeploymentPlanning.CurrentContainerId(containers, slug);
     }
 
     private async Task SetStatusAsync(App app, AppStatus status, CancellationToken ct)

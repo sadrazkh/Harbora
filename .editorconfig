@@ -1,0 +1,25 @@
+# Harbora — editor + analyzer conventions (overhaul P0).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.{cs,csx}]
+indent_size = 4
+# Treat unused-parameter and a few correctness analyzers as build errors so dead
+# constructor params (the class of warning fixed in P0) can't creep back in.
+dotnet_diagnostic.CS9113.severity = error
+dotnet_diagnostic.IDE0060.severity = warning
+
+[*.{js,ts,vue,json,css,yml,yaml}]
+indent_size = 2
+
+[*.{cshtml,razor}]
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false

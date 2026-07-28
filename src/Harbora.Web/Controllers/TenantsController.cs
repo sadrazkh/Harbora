@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
 using Harbora.Web.ViewModels;
@@ -14,7 +15,7 @@ namespace Harbora.Web.Controllers;
 /// Provider console: manage the customer workspaces (tenants) hosted on this platform — create
 /// them, assign a plan, suspend/resume, and manage their members. Restricted to Owners/Admins.
 /// </summary>
-[Authorize(Roles = "Owner,Admin")]
+[Authorize(Policy = Capabilities.TenantsManage)]
 [Route("tenants")]
 public sealed partial class TenantsController(HarboraDbContext db, IPasswordHasher hasher, IQuotaService quota) : Controller
 {

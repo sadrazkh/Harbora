@@ -20,3 +20,7 @@ appsettings.*.local.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# Overhaul: local dev artifacts
+tests/**/bin/
+tests/**/obj/

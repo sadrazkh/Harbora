@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Web.Controllers;
@@ -14,13 +15,17 @@ namespace Harbora.Web.Controllers;
 public sealed class AccountController(
     HarboraDbContext db,
     IPasswordHasher hasher,
+    IAuditLogger audit,
     Harbora.Application.Abstractions.ISystemClock clock) : Controller
 {
+    private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
+
     [HttpGet("/account/login")]
     public IActionResult Login(string? returnUrl) => View(new LoginViewModel { ReturnUrl = returnUrl });
 
     [HttpPost("/account/login")]
     [ValidateAntiForgeryToken]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> Login(LoginViewModel model)
     {
         if (!ModelState.IsValid) return View(model);
@@ -31,6 +36,8 @@ public sealed class AccountController(
         var ok = user is not null && hasher.Verify(model.Password, user.PasswordHash);
         if (!ok || user is null)
         {
+            await audit.LogAsync("user.login_failed", "user", user?.Id.ToString(), ClientIp,
+                actorEmailOverride: email, userIdOverride: user?.Id);
             ModelState.AddModelError(string.Empty, "Invalid email or password.");
             return View(model);
         }
@@ -51,6 +58,8 @@ public sealed class AccountController(
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
         await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
 
+        await audit.LogAsync("user.login", "user", user.Id.ToString(), ClientIp,
+            actorEmailOverride: user.Email, userIdOverride: user.Id);
         return LocalRedirect(model.ReturnUrl ?? "/");
     }
 

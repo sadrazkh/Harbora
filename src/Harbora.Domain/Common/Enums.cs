@@ -3,10 +3,13 @@ namespace Harbora.Domain.Common;
 /// <summary>Coarse RBAC roles. Fine-grained project permissions layer on top via WorkspaceMember.</summary>
 public enum SystemRole
 {
-    Owner = 0,   // full control, created at first-run setup
-    Admin = 1,   // manage everything except billing/owner transfer
-    Member = 2,  // deploy/manage assigned projects
-    Viewer = 3   // read-only
+    Owner = 0,    // full control, created at first-run setup
+    Admin = 1,    // manage everything except billing/owner transfer
+    Member = 2,   // developer: create/deploy/manage own apps, databases, routes, git
+    Viewer = 3,   // read-only
+    // Appended (value 4) so existing persisted values stay stable. Ops role: day-2 operations
+    // (restart/stop/start apps, run backups) but NOT create/delete/deploy or platform management.
+    Operator = 4
 }
 
 public enum WorkspaceRole
@@ -46,7 +49,10 @@ public enum DeploymentStatus
     Succeeded = 4,
     Failed = 5,
     Cancelled = 6,
-    RolledBack = 7
+    RolledBack = 7,
+    // Appended (value 8) so existing persisted values stay stable. Sits logically between
+    // Deploying and Succeeded: the new container is up and being health-probed before cutover.
+    HealthChecking = 8
 }
 
 public enum DeploymentTrigger

@@ -10,6 +10,9 @@
     </div>
 </div>
 
+@* Staged progress (server-rendered; the Vue island updates it live in production). *@
+<partial name="_DeployProgress" model="Model.Status" />
+
 @* Vue island: connects to SignalR and renders live logs. Mount point carries its config. *@
 <div id="deployment-logs"
      data-deployment-id="@Model.Id"
