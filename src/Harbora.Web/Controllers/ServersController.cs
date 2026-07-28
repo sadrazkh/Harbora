@@ -89,7 +89,10 @@ public sealed class ServersController(
         var server = await db.Servers.FirstOrDefaultAsync(s => s.Id == id, ct);
         if (server is null || server.IsLocal) { TempData["Error"] = "The local server cannot be removed."; return RedirectToAction(nameof(Index)); }
 
-        if (await db.Apps.AnyAsync(a => a.ServerId == id, ct) || await db.ManagedServices.AnyAsync(s => s.ServerId == id, ct))
+        // Platform-wide on purpose: a node may host other tenants' workloads, and removing it must
+        // be blocked by ANY of them — not just the ones this admin's workspace can see.
+        if (await db.Apps.IgnoreQueryFilters().AnyAsync(a => a.ServerId == id, ct) ||
+            await db.ManagedServices.IgnoreQueryFilters().AnyAsync(s => s.ServerId == id, ct))
         {
             TempData["Error"] = "Move or delete this node's apps and services first.";
             return RedirectToAction(nameof(Index));

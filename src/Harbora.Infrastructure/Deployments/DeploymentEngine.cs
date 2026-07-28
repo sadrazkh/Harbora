@@ -54,6 +54,7 @@ public sealed class DeploymentEngine(
         var deployment = new Deployment
         {
             AppId = app.Id,
+            WorkspaceId = app.WorkspaceId,
             Number = nextNumber + 1,
             Status = DeploymentStatus.Queued,
             Trigger = request.Trigger,

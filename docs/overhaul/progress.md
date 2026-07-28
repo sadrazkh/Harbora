@@ -5,6 +5,69 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-28 — Global query filters: workspace scoping (closes P13)
+
+**What was done**
+- New `IWorkspaceScope` decides whether the current unit of work belongs to one tenant or spans all
+  of them. `HttpWorkspaceScope` keys that on **request vs. system**, not authenticated vs. anonymous:
+  no `HttpContext` → background work (deploy pipeline, job worker, schedulers, seeding) runs
+  unscoped; a request with no workspace claim scopes to `Guid.Empty` and therefore matches nothing.
+  Deny by default — a request must never fall back to seeing everything.
+- `HarboraDbContext` applies global query filters to every tenant-owned entity: `App`, `Route`,
+  `ManagedService`, `Backup`, `BackupDestination`, `BackupSchedule`, `Alert`, `GitProvider`,
+  `WorkspaceMember`, `UsageRecord`, `Deployment`. The existing single-argument constructor still
+  builds a system-scoped context, so every background call site keeps working unchanged.
+- The two places that legitimately span tenants now say so explicitly with `IgnoreQueryFilters()`:
+  the tenants admin page, and the "is this server still in use?" check before removing a node —
+  which must be blocked by *any* tenant's workload, not just the admin's own.
+
+**A design decision the tests forced**
+Filtering `Deployment` through its `App` navigation looked natural and was wrong. Because `AppId` is
+non-nullable, EF treats the relationship as required and emits an **INNER JOIN** — so a deployment
+whose app row is missing disappears from *every* query, including the crash reconciler whose entire
+purpose is to find stranded deployments. `IgnoreWorkspaceFilter ||` cannot rescue rows the join has
+already dropped. Found because seven existing tests started failing.
+
+Fixed by denormalising `WorkspaceId` onto `Deployment` (migration `DeploymentWorkspaceScope`, with a
+backfill from the owning app — without it every existing deployment would keep the empty default and
+vanish from its own tenant's history on upgrade) and filtering on a direct comparison. No join, no
+hazard, and an index to match.
+
+`EnvironmentVariable`, `Volume`, `DomainName` and `DeploymentLog` are deliberately left unfiltered:
+they are only ever reached through a parent that *is* filtered, so a navigation filter would add a
+join to every read — and the same inner-join hazard — for no extra protection. Stated explicitly in
+a test rather than left implied.
+
+**Files changed**
+- New: `Application/Abstractions/IWorkspaceScope.cs`, `Web/Infrastructure/HttpWorkspaceScope.cs`,
+  `Migrations/…_DeploymentWorkspaceScope.cs`, `tests/…/WorkspaceQueryFilterTests.cs`.
+- Edited: `HarboraDbContext.cs`, `Deployment.cs`, `DeploymentEngine.cs`, `Program.cs`,
+  `TenantsController.cs`, `ServersController.cs`.
+
+**Checks run**
+- `dotnet build Harbora.slnx -c Release` → 0 warnings / 0 errors.
+- `dotnet test` → **259/259 passed** (was 244).
+- **Mutation-tested:**
+  1. treat "no workspace" as unscoped (the anonymous-sees-everything bug) → 1 test fails ✅
+  2. drop the `App` filter → 4 tests fail ✅
+  3. forget to stamp `WorkspaceId` on a new deployment → **survived** ❌. This one matters: the
+     deployment would still build and release (background work is unscoped) but never appear in the
+     UI of the tenant who triggered it — it would look like the deploy silently vanished. Added
+     `A_newly_queued_deployment_is_visible_to_the_tenant_that_triggered_it`; now caught ✅.
+
+**Honest notes**
+- The filters are defence in depth, not a fix for a live leak: every controller was already scoping
+  its queries by hand. What changes is the failure mode of a *future* mistake — "missing" instead of
+  "another tenant's data".
+- Denormalised `WorkspaceId` can drift if an app is ever moved between workspaces. Nothing supports
+  that today; if it is added, the move must update its deployments too.
+
+**Next step**
+- Harden the restore shell command (extract-then-swap) — still outstanding from Phase E.
+- Still blocked without a Docker host: real backup→restore round trip and end-to-end deploy.
+
+---
+
 ## 2026-07-28 — Phase E: data-safety hardening + audit trail UI
 
 **The bug this phase exists for**

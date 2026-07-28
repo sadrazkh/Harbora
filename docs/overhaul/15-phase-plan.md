@@ -120,13 +120,16 @@ and the assertions become the precise specification for the real E2E run once a 
 - ✅ Pre-restore snapshot of the volume about to be overwritten.
 - ✅ Audit log UI + CSV export (with formula-injection neutralisation).
 - ✅ Cross-tenant/IDOR tests.
-- ❌ **Centralized workspace scoping** — not done. The tests pin the predicates controllers use
-  today, but nothing structurally prevents a new controller from omitting one. Global query filters
-  are the remaining P13 item.
+- ✅ **Centralized workspace scoping** — global query filters on every tenant-owned entity, driven by
+  an `IWorkspaceScope` that distinguishes a request from system work. A query that forgets to scope
+  now returns nothing instead of another tenant's data. **P13 is complete.**
 
-> See `progress.md`, 2026-07-28. Also outstanding: the restore still runs
-> `rm -rf /data/* && tar xzf …` as one shell command; extract-then-swap would close the window
-> entirely rather than relying on the gates in front of it.
+> See `progress.md`, 2026-07-28. Filtering `Deployment` through its `App` navigation turned out to
+> emit an inner join that hid orphaned deployments from the crash reconciler; `WorkspaceId` is
+> denormalised onto `Deployment` instead (migration + backfill).
+>
+> Still outstanding: the restore runs `rm -rf /data/* && tar xzf …` as one shell command;
+> extract-then-swap would close the window entirely rather than relying on the gates in front of it.
 
 ---
 

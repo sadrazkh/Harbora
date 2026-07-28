@@ -1,3 +1,4 @@
+using Harbora.Application.Abstractions;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Auditing;
 using Harbora.Domain.Backups;
@@ -15,8 +16,26 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Data;
 
-public class HarboraDbContext(DbContextOptions<HarboraDbContext> options) : DbContext(options)
+public class HarboraDbContext : DbContext
 {
+    private readonly IWorkspaceScope _scope;
+
+    /// <summary>
+    /// System context — sees every tenant. Used by background jobs, the deploy pipeline,
+    /// reconcilers and startup seeding, which legitimately operate across workspaces.
+    /// </summary>
+    public HarboraDbContext(DbContextOptions<HarboraDbContext> options)
+        : this(options, SystemWorkspaceScope.Instance) { }
+
+    public HarboraDbContext(DbContextOptions<HarboraDbContext> options, IWorkspaceScope scope)
+        : base(options) => _scope = scope;
+
+    // Referenced by the global query filters below. EF turns property access on the context into
+    // query parameters, so one compiled model serves every workspace.
+    private bool IgnoreWorkspaceFilter => _scope.IsUnscoped;
+    private Guid CurrentWorkspaceId => _scope.WorkspaceId;
+
+
     public DbSet<User> Users => Set<User>();
     public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
@@ -91,6 +110,8 @@ public class HarboraDbContext(DbContextOptions<HarboraDbContext> options) : DbCo
         b.Entity<Deployment>(e =>
         {
             e.HasIndex(x => new { x.AppId, x.Number }).IsUnique();
+            // Every deployment read goes through the workspace filter.
+            e.HasIndex(x => x.WorkspaceId);
             e.HasMany(x => x.Logs).WithOne(l => l.Deployment).HasForeignKey(l => l.DeploymentId).OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -124,6 +145,45 @@ public class HarboraDbContext(DbContextOptions<HarboraDbContext> options) : DbCo
             // Makes two workers claiming the same job a lost update rather than a double execution.
             e.Property(x => x.ClaimStamp).IsConcurrencyToken();
         });
+
+        ApplyWorkspaceFilters(b);
+    }
+
+    /// <summary>
+    /// Tenant isolation as a property of the model (completes P13). Controllers already scope their
+    /// queries by hand; these filters mean a query that forgets to returns nothing instead of
+    /// another tenant's data — the failure mode becomes "missing", not "leaked".
+    ///
+    /// Entities without a tenant (users, workspaces, servers, plans, settings, audit log, jobs,
+    /// templates) are deliberately unfiltered: they are platform-level, and several are needed
+    /// before a workspace is even known (login, setup).
+    /// </summary>
+    private void ApplyWorkspaceFilters(ModelBuilder b)
+    {
+        // Owns a WorkspaceId directly.
+        b.Entity<App>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Route>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<ManagedService>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Backup>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<BackupDestination>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<BackupSchedule>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Alert>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<GitProvider>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<WorkspaceMember>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Tenancy.UsageRecord>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+
+        // Deployment ids appear in URLs, so this is the natural id-guessing target. It carries a
+        // denormalised WorkspaceId rather than being filtered through App: because AppId is
+        // non-nullable, a navigation filter becomes an INNER JOIN, which would hide any deployment
+        // whose app row is missing — including from the crash reconciler whose entire job is to find
+        // stranded deployments. A direct comparison has no such failure mode (and no join cost).
+        b.Entity<Deployment>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+
+        // EnvironmentVariable, Volume, DomainName and DeploymentLog are deliberately NOT filtered.
+        // They are only ever reached through their parent — which is filtered — so a navigation
+        // filter would add a join to every read, and the same inner-join hazard, for no extra
+        // protection.
     }
 
     public override async Task<int> SaveChangesAsync(CancellationToken ct = default)

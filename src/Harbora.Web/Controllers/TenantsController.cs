@@ -28,9 +28,10 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
         var plans = await db.Plans.Where(p => p.IsEnabled).OrderBy(p => p.MonthlyPrice).ToListAsync(ct);
         var planName = plans.ToDictionary(p => p.Id, p => p.Name);
 
-        var appCounts = await db.Apps.GroupBy(a => a.WorkspaceId).Select(g => new { g.Key, C = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.C, ct);
-        var svcCounts = await db.ManagedServices.GroupBy(s => s.WorkspaceId).Select(g => new { g.Key, C = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.C, ct);
-        var memCounts = await db.WorkspaceMembers.GroupBy(m => m.WorkspaceId).Select(g => new { g.Key, C = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.C, ct);
+        // This page IS the cross-tenant view, so it opts out of the workspace filters explicitly.
+        var appCounts = await db.Apps.IgnoreQueryFilters().GroupBy(a => a.WorkspaceId).Select(g => new { g.Key, C = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.C, ct);
+        var svcCounts = await db.ManagedServices.IgnoreQueryFilters().GroupBy(s => s.WorkspaceId).Select(g => new { g.Key, C = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.C, ct);
+        var memCounts = await db.WorkspaceMembers.IgnoreQueryFilters().GroupBy(m => m.WorkspaceId).Select(g => new { g.Key, C = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.C, ct);
 
         var vm = new TenantsPageViewModel { Plans = plans };
         foreach (var w in workspaces)

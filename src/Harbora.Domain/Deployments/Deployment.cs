@@ -10,6 +10,14 @@ namespace Harbora.Domain.Deployments;
 public class Deployment : BaseEntity
 {
     public Guid AppId { get; set; }
+
+    /// <summary>
+    /// Denormalised from the owning app so tenant isolation can be a direct comparison.
+    /// Filtering through the <c>App</c> navigation instead would make EF emit an inner join —
+    /// which silently hides any deployment whose app row is missing, including from the crash
+    /// reconciler that exists precisely to find stranded deployments.
+    /// </summary>
+    public Guid WorkspaceId { get; set; }
     public App? App { get; set; }
 
     /// <summary>Monotonic per-app build number shown in the UI (#1, #2 …).</summary>

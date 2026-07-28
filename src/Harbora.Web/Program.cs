@@ -25,6 +25,9 @@ builder.Services.AddHarboraInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IDeploymentLogStream, SignalRDeploymentLogStream>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUser, HttpCurrentUser>();
+// Drives the DbContext's global query filters. Registered here (not in Infrastructure) because only
+// the web host has requests to scope; background work resolves the system scope and spans tenants.
+builder.Services.AddScoped<IWorkspaceScope, HttpWorkspaceScope>();
 builder.Services.AddScoped<DbSeeder>();
 builder.Services.AddSingleton<ViteManifest>();
 
