@@ -69,9 +69,9 @@ result (success/fail) · decisions · next step.
 **Decision / known limitation**
 - The integration token lacks the GitHub `workflows` permission, so `.github/workflows/ci.yml`
   could not be pushed (403 on tree containing workflow files). The workflow was shipped at
-  **`docs/overhaul/ci-workflow.yml`** with a relocation note. **Manual step after merge:**
-  `git mv docs/overhaul/ci-workflow.yml .github/workflows/ci.yml` (and drop the 4-line note), or
-  re-push it with a token that has the `workflows` scope.
+  **`docs/overhaul/ci-workflow.yml`** with a relocation note. **Resolved at merge time:** the file
+  was moved to `.github/workflows/ci.yml` (note dropped, stale `overhaul` branch trigger removed)
+  in the merge commit for PR #1.
 - Local branch was reset to `origin/overhaul` so local == remote lineage from here on.
 
 **Next step**

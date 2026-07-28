@@ -1,7 +1,3 @@
-# NOTE: move this file to .github/workflows/ci.yml to activate CI.
-# (It was pushed here because the GitHub integration token lacks the
-#  'workflows' permission required to write into .github/workflows/.)
-
 name: CI
 
 # Build + test gate for the whole solution (backend + frontend bundle).
@@ -9,9 +5,9 @@ name: CI
 
 on:
   push:
-    branches: [master, overhaul]
+    branches: [master]
   pull_request:
-    branches: [master, overhaul]
+    branches: [master]
 
 jobs:
   build-test:
