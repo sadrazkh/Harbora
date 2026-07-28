@@ -178,8 +178,18 @@ public sealed class AppsController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        var deploymentId = await deployEngine.QueueDeploymentAsync(
-            new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, gitRef ?? app.GitRef), ct);
+        Guid deploymentId;
+        try
+        {
+            deploymentId = await deployEngine.QueueDeploymentAsync(
+                new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, gitRef ?? app.GitRef), ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // e.g. a rollback is mid-flight — surface the reason instead of a 500.
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
         await audit.LogAsync("app.deploy", "app", id.ToString(), ClientIp, ct: ct);
 
         return RedirectToAction("Details", "Deployments", new { id = deploymentId });
@@ -193,9 +203,19 @@ public sealed class AppsController(
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
-        var newId = await deployEngine.QueueDeploymentAsync(
-            new DeploymentRequest(app.Id, DeploymentTrigger.Rollback, currentUser.UserId ?? Guid.Empty,
-                RollbackToDeploymentId: deploymentId), ct);
+        Guid newId;
+        try
+        {
+            newId = await deployEngine.QueueDeploymentAsync(
+                new DeploymentRequest(app.Id, DeploymentTrigger.Rollback, currentUser.UserId ?? Guid.Empty,
+                    RollbackToDeploymentId: deploymentId), ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // A rollback must never be silently coalesced onto an in-flight deploy — say so.
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
         await audit.LogAsync("app.rollback", "app", id.ToString(), ClientIp,
             metadataJson: $"{{\"toDeploymentId\":\"{deploymentId}\"}}", ct: ct);
         return RedirectToAction("Details", "Deployments", new { id = newId });

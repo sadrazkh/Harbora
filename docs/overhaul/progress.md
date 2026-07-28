@@ -5,6 +5,56 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-28 — PR #1 merged; Phase A (post-merge review fixes)
+
+**What was done**
+- Merged PR #1 into `master` (`a18b217`, `--no-ff`, 12 atomic commits preserved). Activated CI by
+  moving the workflow to `.github/workflows/ci.yml` and dropping the now-merged `overhaul` trigger.
+- Wrote `docs/overhaul/15-phase-plan.md` — actual-vs-claimed state per doc-12 phase, plus a
+  re-sequenced plan for the constraint doc 12 assumed away: **no Docker host is available**.
+- **Phase A — four defects found in post-merge review:**
+  1. **Forwarded headers were never configured** while the shipped topology puts the panel behind
+     Traefik, so every request carried the proxy's IP. The per-IP rate limits added in this overhaul
+     were therefore one platform-wide bucket (10 logins/min for *everyone*), and every audit row
+     recorded the proxy. New `TrustedProxySetup` trusts one hop from configured proxy networks only
+     (`Harbora:TrustedProxyNetworks`, default = Docker's private ranges); `UseForwardedHeaders()`
+     runs before the rate limiter.
+  2. **The single-active-deploy guard swallowed rollbacks.** A rollback requested while a deploy was
+     in flight returned the forward deploy's id and redirected to it — indistinguishable from
+     success, though nothing was queued. Coalescing now applies only when both requests share the
+     same intent; a mismatch throws with a clear message (surfaced as `TempData["Error"]` in the UI,
+     `409 Conflict` on the API, skip-and-continue for webhooks).
+  3. **`Succeeded → RolledBack` was allowed by the state machine but never applied**, so history
+     never showed which version a rollback abandoned. The pipeline now marks the displaced
+     deployment after cutover; the decision is a pure `DeploymentPlanning.ShouldMarkRolledBack`.
+  4. **`CancelAsync` bypassed the state machine** via `ExecuteUpdateAsync`. It now transitions
+     through it, making an already-terminal deployment a no-op instead of a raw column write.
+
+**Files changed**
+- New: `Web/Infrastructure/TrustedProxySetup.cs`, `docs/overhaul/15-phase-plan.md`,
+  `tests/Harbora.Tests/TrustedProxySetupTests.cs`.
+- Edited: `Program.cs`, `appsettings.json`, `DeploymentEngine.cs`, `DeploymentPipeline.cs`,
+  `DeploymentPlanning.cs`, `AppsController.cs`, `ApiV1Controller.cs`, `GitWebhookProcessor.cs`.
+- Tests: +38 → **134 total**, incl. the real `ForwardedHeadersMiddleware` exercised end-to-end
+  (trusted hop adopted, untrusted peer ignored, client-prepended entry not believed).
+
+**Checks run**
+- `dotnet build Harbora.slnx -c Release` → 0 warnings / 0 errors.
+- `dotnet test` → 134/134 passed.
+
+**Decisions**
+- `IPNetwork.TryParse` accepts a non-canonical base (`10.1.2.3/8`) and masks it to the prefix.
+  Rejecting such entries would silently drop proxy trust and reintroduce defect 1, so they are
+  accepted and documented as equivalent to the canonical form rather than treated as errors.
+- Used `KnownIPNetworks` (not the obsolete `KnownNetworks`) to keep the build at 0 warnings.
+
+**Next step**
+- Phase B (`docs/overhaul/15-phase-plan.md`): a recording `FakeDockerEngine` and integration tests
+  over `DeploymentPipeline.ExecuteAsync`, which today has **zero** behavioural coverage — the
+  cutover ordering that this overhaul's headline claim rests on is currently unverified.
+
+---
+
 ## 2026-07-23 — Action-level RBAC + Operator role (H2 / threat 2.12)
 
 **What was done**

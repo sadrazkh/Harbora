@@ -50,9 +50,17 @@ public sealed class GitWebhookProcessor(
 
             if (!shouldDeploy) continue;
 
-            await deployEngine.QueueDeploymentAsync(
-                new DeploymentRequest(app.Id, trigger, Guid.Empty, ev.RefName, ev.Sha), ct);
-            queued++;
+            try
+            {
+                await deployEngine.QueueDeploymentAsync(
+                    new DeploymentRequest(app.Id, trigger, Guid.Empty, ev.RefName, ev.Sha), ct);
+                queued++;
+            }
+            catch (InvalidOperationException)
+            {
+                // A rollback is mid-flight for this app — skip it rather than failing the whole
+                // webhook (other apps in the same push must still deploy). The push is audited below.
+            }
         }
 
         db.AuditLogs.Add(new AuditLog

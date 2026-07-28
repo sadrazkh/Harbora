@@ -44,9 +44,17 @@ public sealed class ApiV1Controller(
         var app = await db.Apps.FirstOrDefaultAsync(a => a.WorkspaceId == WorkspaceId && a.Slug == slug, ct);
         if (app is null) return NotFound(new { error = "App not found." });
 
-        var id = await deployEngine.QueueDeploymentAsync(
-            new DeploymentRequest(app.Id, DeploymentTrigger.Cli, currentUser.UserId ?? Guid.Empty, body?.GitRef ?? app.GitRef), ct);
-        return Ok(new { deploymentId = id });
+        try
+        {
+            var id = await deployEngine.QueueDeploymentAsync(
+                new DeploymentRequest(app.Id, DeploymentTrigger.Cli, currentUser.UserId ?? Guid.Empty, body?.GitRef ?? app.GitRef), ct);
+            return Ok(new { deploymentId = id });
+        }
+        catch (InvalidOperationException ex)
+        {
+            // e.g. a rollback is mid-flight and must not be coalesced onto.
+            return Conflict(new { error = ex.Message });
+        }
     }
 
     [HttpGet("deployments/{id:guid}")]

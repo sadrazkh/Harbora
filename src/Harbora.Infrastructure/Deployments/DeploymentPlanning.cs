@@ -1,4 +1,5 @@
 using Harbora.Application.Abstractions;
+using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 
 namespace Harbora.Infrastructure.Deployments;
@@ -67,4 +68,15 @@ public static class DeploymentPlanning
                 $"Deployment #{target.Number} has no retained image to roll back to.");
         return target.ImageTag!;
     }
+
+    /// <summary>
+    /// Whether a rollback that just cut over should flag the deployment it displaced as
+    /// <see cref="DeploymentStatus.RolledBack"/>. True only for a distinct deployment that is
+    /// currently in a state the state machine allows to be superseded.
+    /// </summary>
+    public static bool ShouldMarkRolledBack(
+        Deployment? superseded, Guid currentDeploymentId) =>
+        superseded is not null &&
+        superseded.Id != currentDeploymentId &&
+        DeploymentStateMachine.CanTransition(superseded.Status, DeploymentStatus.RolledBack);
 }

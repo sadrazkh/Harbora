@@ -64,6 +64,12 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 builder.Services.AddCapabilityAuthorization();
 builder.Services.AddAntiforgery(o => o.HeaderName = "X-CSRF-TOKEN");
 
+// The panel runs behind Traefik, so the connection peer is the proxy. Unwind one forwarded hop from
+// trusted proxy networks only — otherwise the per-IP rate limits below collapse into a single
+// platform-wide bucket and every audit row records the proxy's IP.
+builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(o =>
+    TrustedProxySetup.Configure(o, TrustedProxySetup.NetworksFromConfiguration(builder.Configuration)));
+
 // Per-IP rate limits (doc 10 §2.18): throttle login brute-force and webhook floods. Other traffic
 // is unaffected. 429 on rejection.
 builder.Services.AddRateLimiter(options =>
@@ -94,6 +100,9 @@ if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Home/Error");
     app.UseHsts();
 }
+
+// Must run before anything that reads the client IP (rate limiter, audit logging).
+app.UseForwardedHeaders();
 
 app.UseRequestLocalization(app.Services.GetRequiredService<
     Microsoft.Extensions.Options.IOptions<RequestLocalizationOptions>>().Value);

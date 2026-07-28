@@ -156,6 +156,11 @@ public sealed class DeploymentPipeline(
             await RetireOldContainersAsync(docker, app.Slug, keepContainerName: containerName, Log, ct);
             if (!server.IsLocal) app.PublishedHostPort = publishPort;
 
+            // A rollback supersedes whatever was live: mark that deployment RolledBack so the
+            // history shows which version was abandoned, not just which one replaced it.
+            if (deployment.RolledBackFromId is not null)
+                await MarkSupersededAsRolledBackAsync(app.ActiveDeploymentId, deployment.Id, Log, ct);
+
             app.ActiveDeploymentId = deployment.Id;
             app.Status = AppStatus.Running;
             await SetStatus(DeploymentStatus.Succeeded);
@@ -308,6 +313,23 @@ public sealed class DeploymentPipeline(
         app.EnvironmentVariables.ToDictionary(
             e => e.Key,
             e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
+
+    /// <summary>
+    /// After a rollback cuts over, flag the deployment it displaced as <see cref="DeploymentStatus.RolledBack"/>.
+    /// Only a Succeeded deployment can be superseded this way, and never the rollback itself.
+    /// </summary>
+    private async Task MarkSupersededAsRolledBackAsync(
+        Guid? supersededId, Guid currentDeploymentId, Func<LogStream, string, Task> log, CancellationToken ct)
+    {
+        if (supersededId is not { } id) return;
+
+        var superseded = await db.Deployments.FirstOrDefaultAsync(d => d.Id == id, ct);
+        if (superseded is null) return;
+        if (!DeploymentPlanning.ShouldMarkRolledBack(superseded, currentDeploymentId)) return;
+
+        DeploymentStateMachine.Transition(superseded, DeploymentStatus.RolledBack, clock.UtcNow);
+        await log(LogStream.System, $"Deployment #{superseded.Number} marked rolled back.");
+    }
 
     /// <summary>
     /// Retire this app's previous container(s) after a successful cutover — everything labelled for

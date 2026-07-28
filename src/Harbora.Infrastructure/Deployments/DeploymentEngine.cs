@@ -21,16 +21,32 @@ public sealed class DeploymentEngine(
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == request.AppId, ct)
                   ?? throw new InvalidOperationException("App not found.");
 
-        // At most one active deployment per app (H3): coalesce concurrent triggers (double-clicks,
-        // webhook storms) onto the existing in-flight deployment instead of racing a second build.
+        // At most one active deployment per app (H3). Coalescing is only correct when both the
+        // in-flight deployment and the new request want the SAME thing — deduping double-clicks and
+        // webhook storms. A rollback is a different intent: silently handing back the id of the
+        // forward deploy that is currently running would look like the rollback succeeded while it
+        // was never queued, exactly when the user needs it most. Same in reverse for a deploy
+        // arriving while a rollback runs. Those cases fail loudly instead.
         var inFlightStatuses = DeploymentStateMachine.InFlight.ToArray();
         var inFlight = await db.Deployments
             .Where(d => d.AppId == app.Id && inFlightStatuses.Contains(d.Status))
             .OrderByDescending(d => d.Number)
-            .Select(d => (Guid?)d.Id)
+            .Select(d => new { d.Id, d.Number, d.RolledBackFromId })
             .FirstOrDefaultAsync(ct);
-        if (inFlight is { } activeId)
-            return activeId;
+
+        if (inFlight is not null)
+        {
+            var inFlightIsRollback = inFlight.RolledBackFromId is not null;
+            var requestIsRollback = request.RollbackToDeploymentId is not null;
+
+            if (inFlightIsRollback != requestIsRollback)
+                throw new InvalidOperationException(
+                    requestIsRollback
+                        ? $"Deployment #{inFlight.Number} is still running. Wait for it to finish or cancel it, then roll back."
+                        : $"A rollback (deployment #{inFlight.Number}) is still running. Wait for it to finish, then deploy.");
+
+            return inFlight.Id;
+        }
 
         var nextNumber = await db.Deployments.Where(d => d.AppId == app.Id)
             .Select(d => (int?)d.Number).MaxAsync(ct) ?? 0;
@@ -57,12 +73,18 @@ public sealed class DeploymentEngine(
         return deploymentId;
     }
 
+    /// <summary>
+    /// Cancels a deployment. Goes through <see cref="DeploymentStateMachine"/> like every other
+    /// status change (ADR-004) rather than writing the column directly, so an already-terminal
+    /// deployment is a silent no-op instead of an illegal backwards transition.
+    /// </summary>
     public async Task CancelAsync(Guid deploymentId, CancellationToken ct)
     {
-        await db.Deployments.Where(d => d.Id == deploymentId &&
-                (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Building))
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(d => d.Status, DeploymentStatus.Cancelled)
-                .SetProperty(d => d.FinishedAt, clock.UtcNow), ct);
+        var deployment = await db.Deployments.FirstOrDefaultAsync(d => d.Id == deploymentId, ct);
+        if (deployment is null) return;
+        if (!DeploymentStateMachine.CanTransition(deployment.Status, DeploymentStatus.Cancelled)) return;
+
+        DeploymentStateMachine.Transition(deployment, DeploymentStatus.Cancelled, clock.UtcNow);
+        await db.SaveChangesAsync(ct);
     }
 }

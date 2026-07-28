@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Harbora.Application.Abstractions;
+using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Infrastructure.Deployments;
 using Xunit;
@@ -84,5 +85,43 @@ public class DeploymentPlanningTests
 
         var actNoImage = () => DeploymentPlanning.ResolveRollbackImage(new Deployment { Number = 5, ImageTag = null });
         actNoImage.Should().Throw<InvalidOperationException>().WithMessage("*no retained image*");
+    }
+
+    // ---- superseding a live deployment on rollback ----
+
+    [Fact]
+    public void The_live_deployment_a_rollback_displaces_is_marked_rolled_back()
+    {
+        var live = new Deployment { Id = Guid.NewGuid(), Number = 7, Status = DeploymentStatus.Succeeded };
+
+        DeploymentPlanning.ShouldMarkRolledBack(live, Guid.NewGuid()).Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_rollback_never_marks_itself_rolled_back()
+    {
+        var id = Guid.NewGuid();
+        var self = new Deployment { Id = id, Number = 7, Status = DeploymentStatus.Succeeded };
+
+        DeploymentPlanning.ShouldMarkRolledBack(self, id).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Nothing_is_marked_when_the_app_had_no_live_deployment()
+    {
+        DeploymentPlanning.ShouldMarkRolledBack(null, Guid.NewGuid()).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(DeploymentStatus.Failed)]
+    [InlineData(DeploymentStatus.Cancelled)]
+    [InlineData(DeploymentStatus.RolledBack)]
+    [InlineData(DeploymentStatus.Building)]
+    public void Only_a_succeeded_deployment_can_be_superseded(DeploymentStatus status)
+    {
+        // Anything else would be an illegal transition — the state machine is the authority.
+        var other = new Deployment { Id = Guid.NewGuid(), Number = 7, Status = status };
+
+        DeploymentPlanning.ShouldMarkRolledBack(other, Guid.NewGuid()).Should().BeFalse();
     }
 }
