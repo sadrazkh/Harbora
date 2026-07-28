@@ -1,0 +1,129 @@
+using System.Net;
+using Harbora.Application.Abstractions;
+using Harbora.Domain.Common;
+using Harbora.Domain.Networking;
+
+namespace Harbora.Tests.Fakes;
+
+/// <summary>Records the status transitions the pipeline published, in order.</summary>
+public sealed class RecordingLogStream : IDeploymentLogStream
+{
+    private readonly List<string> _lines = [];
+    private readonly List<DeploymentStatus> _statuses = [];
+    private readonly object _gate = new();
+
+    public IReadOnlyList<DeploymentStatus> Statuses { get { lock (_gate) return _statuses.ToList(); } }
+    public IReadOnlyList<string> Lines { get { lock (_gate) return _lines.ToList(); } }
+
+    public Task PublishLogAsync(Guid deploymentId, LogStream stream, string line, CancellationToken ct)
+    {
+        lock (_gate) _lines.Add(line);
+        return Task.CompletedTask;
+    }
+
+    public Task PublishStatusAsync(Guid deploymentId, DeploymentStatus status, CancellationToken ct)
+    {
+        lock (_gate) _statuses.Add(status);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Records what the proxy was asked to route to, so cutover can be asserted.</summary>
+public sealed class RecordingProxyEngine : IProxyEngine
+{
+    public sealed record Applied(string Host, string TargetService, int TargetPort);
+
+    public List<Applied> Applications { get; } = [];
+    public int ApplyCount { get; private set; }
+    public ProxyApplyResult Result { get; set; } = new(true, null, false);
+
+    public ProxyConfigPreview Preview(IReadOnlyList<Route> routes) => new("yaml", string.Empty);
+    public ProxyValidationResult Validate(IReadOnlyList<Route> routes) => new(true, [], []);
+
+    public Task<ProxyApplyResult> ApplyAsync(IReadOnlyList<Route> routes, CancellationToken ct)
+    {
+        ApplyCount++;
+        Applications.AddRange(routes.Select(r => new Applied(r.Host, r.TargetService ?? "", r.TargetPort)));
+        return Task.FromResult(Result);
+    }
+}
+
+/// <summary>Git service that never touches the network; hands back a fixed checkout.</summary>
+public sealed class FakeGitService(string localPath) : IGitService
+{
+    public int CheckoutCount { get; private set; }
+
+    public Task<GitCheckout> CheckoutAsync(string cloneUrl, string gitRef, string? credentialToken,
+        string workingDir, IProgress<string> log, CancellationToken ct)
+    {
+        CheckoutCount++;
+        log.Report($"checked out {gitRef}");
+        return Task.FromResult(new GitCheckout("abc1234", "test commit", "tester", localPath));
+    }
+
+    public Task<IReadOnlyList<GitRef>> ListRefsAsync(string cloneUrl, string? credentialToken, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<GitRef>>([]);
+}
+
+/// <summary>Identity protector — tests assert on redaction separately (SecurityTests).</summary>
+public sealed class PassthroughProtector : ISecretProtector
+{
+    public string Protect(string plaintext) => plaintext;
+    public string Unprotect(string ciphertext) => ciphertext;
+}
+
+public sealed class PassthroughRedactor : ISecretRedactor
+{
+    public string Redact(string text, IEnumerable<string> secretValues) => text;
+}
+
+/// <summary>Records the notifications raised so failure paths can be asserted.</summary>
+public sealed class RecordingNotificationService : INotificationService
+{
+    public sealed record Sent(AlertEvent Event, AlertSeverity Severity, string Title, string Body);
+
+    public List<Sent> Notifications { get; } = [];
+
+    public Task NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
+    {
+        Notifications.Add(new Sent(evt, severity, title, body));
+        return Task.CompletedTask;
+    }
+
+    public Task SendTestAsync(Guid alertId, CancellationToken ct) => Task.CompletedTask;
+}
+
+public sealed class FixedClock(DateTimeOffset now) : ISystemClock
+{
+    public DateTimeOffset UtcNow { get; set; } = now;
+    public FixedClock() : this(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)) { }
+}
+
+/// <summary>
+/// Serves canned responses to the pipeline's HTTP health probe without opening a socket, and counts
+/// the attempts so "did it actually probe?" is assertable.
+/// </summary>
+public sealed class StubHttpClientFactory(HttpStatusCode status = HttpStatusCode.OK) : IHttpClientFactory
+{
+    private readonly StubHandler _handler = new(status);
+
+    public HttpStatusCode Status { get => _handler.Status; set => _handler.Status = value; }
+    public int Attempts => _handler.Attempts;
+    public IReadOnlyList<string> RequestedUrls => _handler.Urls;
+
+    public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
+
+    private sealed class StubHandler(HttpStatusCode status) : HttpMessageHandler
+    {
+        public HttpStatusCode Status { get; set; } = status;
+        public int Attempts;
+        public readonly List<string> Urls = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Attempts++;
+            lock (Urls) Urls.Add(request.RequestUri!.ToString());
+            return Task.FromResult(new HttpResponseMessage(Status));
+        }
+    }
+}

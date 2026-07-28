@@ -5,6 +5,71 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-28 — Phase B: pipeline integration harness (fake Docker engine)
+
+**What was done**
+- Built `FakeDockerEngine` — an in-memory container runtime that **records every call in order** and
+  simulates a small container world (containers exist, have state, can be removed, can refuse
+  removal). Ordering is the point: "zero-downtime" is a claim about *sequence*, so a fake returning
+  canned values could never falsify it.
+- Added `PipelineHarness`, which wires a **real** `DeploymentPipeline` (real state machine, real EF
+  context, real cutover logic) over fake Docker/git/proxy/HTTP, plus recording fakes for the log
+  stream, proxy and notifications, and a stub `IHttpClientFactory` for the health probe.
+- **20 end-to-end tests** over `DeploymentPipeline.ExecuteAsync`, which previously had **zero**
+  behavioural coverage: start-before-retire ordering, traffic switches only after health passes,
+  failed deploy removes only its own container, container that never reaches `running`, failed
+  build never starts a container, rollback re-releases the artifact without building or checking
+  out source, rollback marks the deployment it displaced, imageless rollback target, remote-node
+  host-port uniqueness, local vs remote proxy targets, unremovable old container, health probe
+  targets the same address the proxy will use.
+
+**Bug found and fixed — DbContext race on build logs**
+The harness immediately failed with *"Collection was modified; enumeration operation may not
+execute"*. Cause: `new Progress<string>(l => _ = Log(...))` — `IProgress` dispatches through the
+thread pool (ASP.NET Core has no `SynchronizationContext`), so build/pull log lines were calling
+`db.DeploymentLogs.Add(...)` **on a thread-pool thread while the pipeline thread was inside
+`SaveChangesAsync`**. `DbContext` is not thread-safe. In production this hits every build that
+emits log lines — the more verbose the build, the likelier the corruption.
+Fix: engine-thread lines enqueue to a `ConcurrentQueue` and are drained onto the DbContext by the
+pipeline thread; live SignalR streaming still happens immediately and never touches the context.
+
+**Health-gate timings made configurable**
+`Task.Delay(2s)` was hardcoded (up to 16s to reach `running`, then 20s of probing), which made the
+suite unusable and gave operators no way to accommodate a slow-booting app. Now
+`HealthPollIntervalSeconds` / `HealthRunningAttempts` / `HealthHttpAttempts` /
+`HealthHttpTimeoutSeconds` on `HarboraRuntimeOptions`, defaulting to exactly the previous
+behaviour. This also closes the "no probe fields" gap doc 12 left owed from P4.
+
+**Files changed**
+- New: `tests/Harbora.Tests/Fakes/{FakeDockerEngine,PipelineFakes,PipelineHarness}.cs`,
+  `tests/Harbora.Tests/DeploymentPipelineCutoverTests.cs`.
+- Edited: `DeploymentPipeline.cs` (log threading + configurable timings),
+  `HarboraRuntimeOptions.cs` (health-gate knobs).
+
+**Checks run**
+- `dotnet build Harbora.slnx -c Release` → 0 warnings / 0 errors.
+- `dotnet test` → **154/154 passed** (was 134), suite still ~1s.
+- **Mutation-tested the new tests** — a green ordering test that cannot fail is worthless:
+  1. retire old containers *before* the health gate → 3 tests fail ✅
+  2. wire the proxy *before* the health gate passes → 1 test fails ✅
+  3. rollback rebuilds instead of re-releasing → 2 tests fail ✅
+  Pipeline restored and re-verified green after each.
+
+**Decisions**
+- `ListContainersAsync` is deliberately **not** recorded by the fake: the health loop polls it
+  repeatedly and it would drown the ordering assertions in noise.
+- Cross-fake ordering (proxy vs docker) is asserted through resulting state plus `ApplyCount`,
+  not a shared clock — a shared call log across unrelated fakes would couple them for little gain.
+
+**Next step**
+- Phase C (image retention + resilient rollback). Note the harness makes the retention work
+  testable: "prune everything except the last k images and the active one" is exactly the kind of
+  ordering/selection claim `FakeDockerEngine` can now verify.
+- Still blocked without a Docker host: the real E2E run. These assertions are the precise
+  specification to execute against once a host exists.
+
+---
+
 ## 2026-07-28 — PR #1 merged; Phase A (post-merge review fixes)
 
 **What was done**

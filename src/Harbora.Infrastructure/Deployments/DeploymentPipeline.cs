@@ -51,9 +51,36 @@ public sealed class DeploymentPipeline(
             .Select(e => SafeUnprotect(e.Value)).Where(v => v.Length > 0).ToList();
         long seq = 0;
 
+        // Build/pull progress arrives on the container engine's own threads (IProgress dispatches
+        // via the thread pool — there is no SynchronizationContext here). A DbContext is NOT
+        // thread-safe, so those lines are queued and persisted on this thread instead; writing them
+        // directly would mutate the change tracker mid-SaveChangesAsync. Live streaming is
+        // unaffected — it happens immediately, off-thread, and never touches the DbContext.
+        var pendingEngineLogs = new System.Collections.Concurrent.ConcurrentQueue<(LogStream Stream, string Message)>();
+
+        void DrainEngineLogs()
+        {
+            while (pendingEngineLogs.TryDequeue(out var pending))
+                db.DeploymentLogs.Add(new DeploymentLog
+                {
+                    DeploymentId = deploymentId, Stream = pending.Stream, Sequence = seq++,
+                    Message = pending.Message, Timestamp = clock.UtcNow
+                });
+        }
+
+        // Safe to call from any thread.
+        async Task LogFromEngine(LogStream s, string message)
+        {
+            var clean = redactor.Redact(message, secrets);
+            pendingEngineLogs.Enqueue((s, clean));
+            await stream.PublishLogAsync(deploymentId, s, clean, ct);
+        }
+
+        // Pipeline-thread logging only.
         async Task Log(LogStream s, string message)
         {
             var clean = redactor.Redact(message, secrets);
+            DrainEngineLogs();
             db.DeploymentLogs.Add(new DeploymentLog
             {
                 DeploymentId = deploymentId, Stream = s, Sequence = seq++,
@@ -68,6 +95,7 @@ public sealed class DeploymentPipeline(
         {
             DeploymentStateMachine.Transition(deployment, status, clock.UtcNow);
             await stream.PublishStatusAsync(deploymentId, status, ct);
+            DrainEngineLogs();
             await db.SaveChangesAsync(ct);
         }
 
@@ -88,7 +116,7 @@ public sealed class DeploymentPipeline(
             else
             {
                 imageTag = $"{_opt.ImagePrefix}/{app.Slug}:build-{deployment.Number}";
-                var buildLog = new Progress<string>(l => _ = Log(LogStream.Build, l));
+                var buildLog = new Progress<string>(l => _ = LogFromEngine(LogStream.Build, l));
                 imageTag = await AcquireImageAsync(docker, app, deployment, imageTag, buildLog, Log, ct);
             }
             deployment.ImageTag = imageTag;
@@ -177,6 +205,7 @@ public sealed class DeploymentPipeline(
                 DeploymentStateMachine.Transition(deployment, DeploymentStatus.Failed, clock.UtcNow);
             deployment.ErrorMessage = ex.Message;
             app.Status = app.ActiveDeploymentId is null ? AppStatus.Failed : AppStatus.Running;
+            DrainEngineLogs();
             await db.SaveChangesAsync(ct);
             await stream.PublishStatusAsync(deploymentId, DeploymentStatus.Failed, ct);
             await Log(LogStream.System, $"❌ Deployment failed: {redactor.Redact(ex.Message, secrets)}");
@@ -371,9 +400,9 @@ public sealed class DeploymentPipeline(
         Func<string, Task> log, CancellationToken ct)
     {
         var running = false;
-        for (var i = 0; i < 8 && !running; i++)
+        for (var i = 0; i < _opt.HealthRunningAttempts && !running; i++)
         {
-            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+            await Task.Delay(_opt.HealthPollInterval, ct);
             var c = (await docker.ListContainersAsync("harbora.app", ct)).FirstOrDefault(x => x.Name == containerName);
             if (c is null) return false;
             if (c.State.Equals("exited", StringComparison.OrdinalIgnoreCase)) return false;
@@ -389,9 +418,9 @@ public sealed class DeploymentPipeline(
         var url = $"http://{upstreamHost}:{upstreamPort}/{healthPath.TrimStart('/')}";
         await log($"HTTP health check → {url}");
         var client = httpFactory.CreateClient();
-        client.Timeout = TimeSpan.FromSeconds(5);
+        client.Timeout = _opt.HealthHttpTimeout;
 
-        for (var attempt = 0; attempt < 10; attempt++)
+        for (var attempt = 0; attempt < _opt.HealthHttpAttempts; attempt++)
         {
             try
             {
@@ -402,7 +431,7 @@ public sealed class DeploymentPipeline(
             {
                 // App still booting / not accepting connections yet — keep trying.
             }
-            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+            await Task.Delay(_opt.HealthPollInterval, ct);
         }
         await log("Health check did not pass within the timeout.");
         return false;

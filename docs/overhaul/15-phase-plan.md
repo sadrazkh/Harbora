@@ -32,10 +32,11 @@ Priority chosen for this stretch: **make what exists trustworthy** before making
   `{prefix}/{slug}:build-{n}` on disk forever. Artifact rollback now *depends* on those images
   surviving, so "instant rollback" currently works only because nothing cleans up — and breaks the
   moment anyone runs `docker image prune`. Retention must become an explicit, owned policy.
-- **R2 — The cutover path has zero behavioural coverage.** Tests cover the pure helpers in
-  `DeploymentPlanning`; `DeploymentPipeline.ExecuteAsync`, which holds the actual ordering guarantee
-  (start new → health → switch proxy → retire old), is never executed by a test. There is no fake
-  `IDockerEngine`.
+- **R2 — The cutover path has zero behavioural coverage.** ✅ *Closed in Phase B.* Tests covered only
+  the pure helpers in `DeploymentPlanning`; `DeploymentPipeline.ExecuteAsync`, which holds the actual
+  ordering guarantee (start new → health → switch proxy → retire old), was never executed by a test
+  and there was no fake `IDockerEngine`. Both now exist — and the first run of the harness surfaced a
+  real `DbContext` threading bug that had been live since the overhaul landed.
 - **R3 — Per-IP rate limiting and audit IPs are defeated by the shipped topology.** The panel runs
   behind Traefik (`deploy/docker-compose.yml`) but nothing configured forwarded headers, so every
   request carried the proxy's IP. Fixed in Phase A.
@@ -54,8 +55,13 @@ Priority chosen for this stretch: **make what exists trustworthy** before making
 
 **AC:** each fix has a test; a spoofed `X-Forwarded-For` from an untrusted source is ignored.
 
-### Phase B — pipeline integration harness with a fake Docker engine ⭐
+### Phase B — pipeline integration harness with a fake Docker engine ⭐ ✅ done
 *Medium · low risk (test-only) · highest confidence per unit of effort*
+
+> **Outcome:** 20 tests over the real `ExecuteAsync`; every mutation tried was caught. Found and
+> fixed a genuine `DbContext` race — build-log lines were written from a thread-pool thread while
+> the pipeline thread was mid-`SaveChangesAsync`. Health-gate timings became configurable as a
+> side effect (closes P4's owed "probe fields"). See `progress.md`, 2026-07-28.
 
 The honest substitute for the E2E run we cannot perform. A recording `FakeDockerEngine` plus
 end-to-end execution of `DeploymentPipeline.ExecuteAsync`, asserting on **call order**, not just
