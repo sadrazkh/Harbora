@@ -71,6 +71,26 @@ public sealed class BackupsController(
         return File(stream, "application/octet-stream", fileName);
     }
 
+    /// <summary>
+    /// Dry run: prove the artifact is intact and readable without touching live data. A backup
+    /// nobody has ever verified is a promise, not a safety net.
+    /// </summary>
+    [HttpPost("{id:guid}/verify")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.BackupsRun)]
+    public async Task<IActionResult> Verify(Guid id, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+
+        var result = await engine.VerifyAsync(id, ct);
+        if (result.IsRestorable)
+            TempData["Message"] = $"Backup verified — restorable ({result.Checks.Count(c => c.Passed)} checks passed).";
+        else
+            TempData["Error"] = $"Backup is NOT restorable: {result.Reason}";
+
+        return RedirectToAction(nameof(Index));
+    }
+
     [HttpPost("{id:guid}/restore")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.BackupsRestore)]
@@ -82,7 +102,16 @@ public sealed class BackupsController(
             TempData["Error"] = "Restore not confirmed.";
             return RedirectToAction(nameof(Index));
         }
-        await engine.RestoreAsync(id, ct);
+        try
+        {
+            await engine.RestoreAsync(id, ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Integrity gate rejected the artifact — say so plainly; live data was not touched.
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Index));
+        }
         TempData["Message"] = "Restore completed.";
         return RedirectToAction(nameof(Index));
     }

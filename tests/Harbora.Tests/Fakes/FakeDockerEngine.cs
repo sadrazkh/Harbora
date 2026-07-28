@@ -218,7 +218,16 @@ public sealed class FakeDockerEngine : IDockerEngine
     }
 
     public Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct)
-        => Task.FromResult(0);
+    {
+        Record(nameof(RunOneOffAsync), request.Image);
+        OneOffCommands.Add(string.Join(' ', request.Command));
+        return Task.FromResult(OneOffExitCode);
+    }
+
+    /// <summary>Every one-off command line, so destructive operations can be asserted on.</summary>
+    public List<string> OneOffCommands { get; } = [];
+
+    public int OneOffExitCode { get; set; }
 
     public Task<HostInfo> GetHostInfoAsync(CancellationToken ct)
         => Task.FromResult(new HostInfo(4, 8L << 30, 100L << 30, 50L << 30, "fake", _containers.Count));

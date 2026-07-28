@@ -61,6 +61,8 @@
             @if (User.IsInRole("Owner") || User.IsInRole("Admin"))
             {
                 <a href="/tenants" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Tenants")">@T["Tenants"]</a>
+                @* Platform-wide trail with actor emails and IPs — administrators only. *@
+                <a href="/audit" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Audit")">@T["Audit log"]</a>
             }
             <a href="/templates" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Templates")">@T["Templates"]</a>
             <a href="/settings" class="flex items-center gap-3 rounded-lg px-3 py-2 @Active("Settings")">@T["Settings"]</a>

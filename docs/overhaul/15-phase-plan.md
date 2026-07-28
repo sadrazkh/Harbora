@@ -109,12 +109,24 @@ and the assertions become the precise specification for the real E2E run once a 
 > Known limitation: the cancellation registry is process-local, so a cancel cannot interrupt a job
 > running on another instance (the flag still persists). Single-instance today.
 
-### Phase E — data-safety hardening
+### Phase E — data-safety hardening ✅ mostly done
 *Large · high risk (data)*
 
-Backup→restore round-trip verification, archive encryption, dry-run restore (P10). Complete P13:
-audit log UI + CSV export (entries are written today but nothing can read them), centralized
-workspace scoping, cross-tenant/IDOR tests.
+- ✅ Restore integrity gate (checksum) **and** archive probe — the checksum column had existed since
+  the first migration and was never read, while the volume restore wipes before it extracts.
+- ✅ Dry-run verification (`VerifyAsync`) with per-check results, surfaced as a "Verify" button.
+- ✅ Archive encryption at rest — streaming chunked AES-GCM, index-bound tags, per-file detection so
+  older artifacts keep restoring.
+- ✅ Pre-restore snapshot of the volume about to be overwritten.
+- ✅ Audit log UI + CSV export (with formula-injection neutralisation).
+- ✅ Cross-tenant/IDOR tests.
+- ❌ **Centralized workspace scoping** — not done. The tests pin the predicates controllers use
+  today, but nothing structurally prevents a new controller from omitting one. Global query filters
+  are the remaining P13 item.
+
+> See `progress.md`, 2026-07-28. Also outstanding: the restore still runs
+> `rm -rf /data/* && tar xzf …` as one shell command; extract-then-swap would close the window
+> entirely rather than relying on the gates in front of it.
 
 ---
 

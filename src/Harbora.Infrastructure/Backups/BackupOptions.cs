@@ -16,4 +16,17 @@ public sealed class BackupOptions
 
     /// <summary>Default retention when a manual backup doesn't specify one.</summary>
     public int DefaultRetentionCount { get; set; } = 7;
+
+    /// <summary>
+    /// Encrypt artifacts before they leave the staging directory. Volume and database archives hold
+    /// raw application data, so anyone who reaches the destination bucket/disk otherwise reads it in
+    /// the clear. Existing unencrypted artifacts stay readable — the format is detected per file.
+    /// </summary>
+    public bool EncryptArchives { get; set; } = true;
+
+    /// <summary>
+    /// Keep a safety copy of the current volume before a destructive restore overwrites it, so a
+    /// restore from a bad archive is itself recoverable. Disable only if disk is tight.
+    /// </summary>
+    public bool SnapshotBeforeRestore { get; set; } = true;
 }

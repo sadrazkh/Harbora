@@ -90,3 +90,19 @@ public sealed record RollbackViewModel(
     string AppName,
     Guid TargetDeploymentId,
     Harbora.Application.Abstractions.RollbackPlan Plan);
+
+/// <summary>Backs the audit log page: a filtered, paged view of the trail.</summary>
+public sealed class AuditPageViewModel
+{
+    public List<Harbora.Domain.Auditing.AuditLog> Entries { get; set; } = new();
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 100;
+    public int TotalCount { get; set; }
+    public string? ActionFilter { get; set; }
+    public string? ActorFilter { get; set; }
+    public List<string> Actions { get; set; } = new();
+
+    public int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalCount / (double)PageSize));
+    public bool HasPrevious => Page > 1;
+    public bool HasNext => Page < TotalPages;
+}

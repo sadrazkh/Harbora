@@ -22,6 +22,7 @@ public sealed class BackupEngine(
     HarboraDbContext db,
     IDockerEngine docker,
     IBackupStorage storage,
+    ISecretProtector protector,
     IJobQueue jobs,
     INotificationService notifications,
     ISystemClock clock,
@@ -66,13 +67,20 @@ public sealed class BackupEngine(
                 _ => await BackupVolumeAsync(backup, stamp, ct) // Database / Volume / Service
             };
 
-            backup.Checksum = await Sha256Async(stagedPath, ct);
-            var (artifactRef, size) = await storage.PutFileAsync(backup.Destination, key, stagedPath, ct);
+            // Encrypt before the artifact leaves staging. The checksum is taken over the file we
+            // actually store, so verification can detect corruption in transit or at rest without
+            // needing the key.
+            var (publishKey, publishPath) = await ProtectArtifactAsync(key, stagedPath, ct);
+
+            backup.Checksum = await Sha256Async(publishPath, ct);
+            var (artifactRef, size) = await storage.PutFileAsync(backup.Destination, publishKey, publishPath, ct);
             backup.ArtifactPath = artifactRef;
             backup.SizeBytes = size;
 
-            // Drop the staging copy if the destination stored it elsewhere (e.g. S3 or custom dir).
-            if (!string.Equals(artifactRef, stagedPath, StringComparison.OrdinalIgnoreCase) && File.Exists(stagedPath))
+            // Drop the staging copies if the destination stored the artifact elsewhere (S3, custom dir).
+            if (!string.Equals(artifactRef, publishPath, StringComparison.OrdinalIgnoreCase) && File.Exists(publishPath))
+                File.Delete(publishPath);
+            if (!string.Equals(publishPath, stagedPath, StringComparison.OrdinalIgnoreCase) && File.Exists(stagedPath))
                 File.Delete(stagedPath);
 
             backup.Status = BackupStatus.Completed;
@@ -150,7 +158,21 @@ public sealed class BackupEngine(
         if (backup.Status != BackupStatus.Completed || backup.ArtifactPath is null)
             throw new InvalidOperationException("Only completed backups can be restored.");
 
-        var localPath = await storage.GetToLocalAsync(backup.Destination!, backup.ArtifactPath, ct);
+        var fetched = await storage.GetToLocalAsync(backup.Destination!, backup.ArtifactPath, ct);
+
+        // Integrity gate. A volume restore does `rm -rf` before untarring, so restoring a corrupt or
+        // truncated archive destroys the live data AND has nothing to put back. The checksum was
+        // recorded at backup time precisely for this moment — verify before touching anything.
+        await RequireIntactAsync(backup, fetched, ct);
+
+        // Decrypt into a working copy; unencrypted legacy artifacts pass through unchanged.
+        var localPath = await UnprotectArtifactAsync(fetched, ct);
+
+        // A checksum only proves these are the bytes we stored — not that they are a usable archive.
+        // That distinction matters here because the volume restore below runs `rm -rf /data/*` and
+        // `tar xzf` as one shell command: the wipe happens FIRST, so discovering the archive is
+        // unreadable at tar time means the data is already gone with nothing to put back.
+        await ProbeArchiveAsync(backup.Type, localPath, ct);
 
         if (backup.Type is BackupType.AppConfig)
         {
@@ -172,6 +194,10 @@ public sealed class BackupEngine(
 
         var containerName = await ContainerForTargetAsync(backup.Type, backup.TargetRef, ct);
         if (containerName is not null) await StopIfRunning(containerName, ct);
+
+        // Last line of defence: keep the data we are about to destroy. Even a verified archive can
+        // turn out to hold the wrong thing, and by then `rm -rf /data/*` has already run.
+        await SnapshotBeforeRestoreAsync(volumeName, ct);
 
         var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
             _opt.HelperImage,
@@ -253,6 +279,191 @@ public sealed class BackupEngine(
             }
         }
         await db.SaveChangesAsync(ct);
+    }
+
+    // --- integrity, encryption + dry run ---
+
+    /// <summary>
+    /// Recompute the stored artifact's checksum and refuse to go further if it doesn't match what
+    /// was recorded when the backup was taken.
+    /// </summary>
+    private async Task RequireIntactAsync(Backup backup, string localPath, CancellationToken ct)
+    {
+        if (!File.Exists(localPath))
+            throw new InvalidOperationException("The backup artifact is missing from its destination.");
+
+        if (string.IsNullOrWhiteSpace(backup.Checksum))
+        {
+            // Backups taken before checksums were recorded. Restoring is still allowed — refusing
+            // would strand old backups — but the operator should know it was not verified.
+            logger.LogWarning("Backup {Id} has no recorded checksum; restoring without verification.", backup.Id);
+            return;
+        }
+
+        var actual = await Sha256Async(localPath, ct);
+        if (!string.Equals(actual, backup.Checksum, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "The backup artifact does not match its recorded checksum — it is corrupt or was modified. " +
+                "Restore aborted; your current data has NOT been touched.");
+    }
+
+    /// <summary>Encrypts a staged artifact when enabled; returns the file to publish.</summary>
+    private async Task<(string Key, string Path)> ProtectArtifactAsync(string key, string stagedPath, CancellationToken ct)
+    {
+        if (!_opt.EncryptArchives) return (key, stagedPath);
+
+        var encryptedPath = stagedPath + ArchiveCipher.Extension;
+        await using (var plain = File.OpenRead(stagedPath))
+        await using (var cipher = File.Create(encryptedPath))
+            await ArchiveCipher.EncryptAsync(plain, cipher, ArchiveKey(), ct);
+
+        return (key + ArchiveCipher.Extension, encryptedPath);
+    }
+
+    /// <summary>Decrypts an artifact if it is one of ours; passes plaintext archives through.</summary>
+    private async Task<string> UnprotectArtifactAsync(string localPath, CancellationToken ct)
+    {
+        if (!await ArchiveCipher.IsEncryptedArchiveAsync(localPath, ct)) return localPath;
+
+        var decryptedPath = localPath.EndsWith(ArchiveCipher.Extension, StringComparison.Ordinal)
+            ? localPath[..^ArchiveCipher.Extension.Length]
+            : localPath + ".plain";
+
+        await using (var cipher = File.OpenRead(localPath))
+        await using (var plain = File.Create(decryptedPath))
+            await ArchiveCipher.DecryptAsync(cipher, plain, ArchiveKey(), ct);
+
+        return decryptedPath;
+    }
+
+    /// <summary>
+    /// Archives are encrypted with a key derived from the platform master key, so an operator who
+    /// already holds the master key can always recover — there is no second secret to lose.
+    /// </summary>
+    private byte[] ArchiveKey() =>
+        SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(protector.Protect("harbora-archive-key")));
+
+    public async Task<BackupVerification> VerifyAsync(Guid backupId, CancellationToken ct)
+    {
+        var backup = await db.Backups.Include(b => b.Destination).AsNoTracking()
+            .FirstOrDefaultAsync(b => b.Id == backupId, ct);
+
+        if (backup is null) return BackupVerification.Failed("Backup not found.");
+        if (backup.Status != BackupStatus.Completed || backup.ArtifactPath is null)
+            return BackupVerification.Failed("Only completed backups can be verified.");
+
+        var checks = new List<BackupCheck>();
+        string fetched;
+        try
+        {
+            fetched = await storage.GetToLocalAsync(backup.Destination!, backup.ArtifactPath, ct);
+        }
+        catch (Exception ex)
+        {
+            checks.Add(new BackupCheck("Artifact present", false, ex.Message));
+            return new BackupVerification(false, $"Could not fetch the artifact: {ex.Message}", 0, checks);
+        }
+
+        var present = File.Exists(fetched);
+        checks.Add(new BackupCheck("Artifact present", present));
+        if (!present)
+            return new BackupVerification(false, "The artifact is missing from its destination.", 0, checks);
+
+        var size = new FileInfo(fetched).Length;
+
+        if (string.IsNullOrWhiteSpace(backup.Checksum))
+        {
+            checks.Add(new BackupCheck("Checksum recorded", false, "taken before checksums were recorded"));
+        }
+        else
+        {
+            var actual = await Sha256Async(fetched, ct);
+            var matches = string.Equals(actual, backup.Checksum, StringComparison.OrdinalIgnoreCase);
+            checks.Add(new BackupCheck("Checksum matches", matches, matches ? null : "artifact is corrupt or was modified"));
+            if (!matches)
+                return new BackupVerification(false, "The artifact does not match its recorded checksum.", size, checks);
+        }
+
+        // Decrypting and reading the archive is the only way to know the bytes are usable — a
+        // checksum only proves they are the bytes we stored, not that they form a valid archive.
+        string readable;
+        try
+        {
+            readable = await UnprotectArtifactAsync(fetched, ct);
+            checks.Add(new BackupCheck("Decrypts", true));
+        }
+        catch (Exception ex)
+        {
+            checks.Add(new BackupCheck("Decrypts", false, ex.Message));
+            return new BackupVerification(false, $"The archive could not be decrypted: {ex.Message}", size, checks);
+        }
+
+        try
+        {
+            await ProbeArchiveAsync(backup.Type, readable, ct);
+            checks.Add(new BackupCheck("Archive readable", true));
+            return new BackupVerification(true, null, size, checks);
+        }
+        catch (Exception ex)
+        {
+            checks.Add(new BackupCheck("Archive readable", false, ex.Message));
+            return new BackupVerification(false, $"The archive is unreadable: {ex.Message}", size, checks);
+        }
+        finally
+        {
+            // Never leave a decrypted copy lying around after a dry run.
+            if (!string.Equals(readable, fetched, StringComparison.OrdinalIgnoreCase) && File.Exists(readable))
+                try { File.Delete(readable); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>Reads the archive far enough to prove it decompresses and has the expected shape.</summary>
+    private async Task ProbeArchiveAsync(BackupType type, string localPath, CancellationToken ct)
+    {
+        if (type is BackupType.AppConfig or BackupType.FullPlatform)
+        {
+            using var doc = JsonDocument.Parse(await ReadGzAsync(localPath, ct));
+            if (!doc.RootElement.TryGetProperty("kind", out _))
+                throw new InvalidOperationException("snapshot is missing its 'kind' marker");
+            return;
+        }
+
+        // Volume/database tarball: decompress the whole stream. This catches truncation and gzip
+        // corruption without needing Docker, which a restore would only discover mid-wipe.
+        await using var file = File.OpenRead(localPath);
+        await using var gz = new GZipStream(file, CompressionMode.Decompress);
+        var buffer = new byte[81920];
+        long total = 0;
+        int read;
+        while ((read = await gz.ReadAsync(buffer, ct)) > 0) total += read;
+        if (total == 0) throw new InvalidOperationException("archive is empty");
+    }
+
+    /// <summary>
+    /// Tars the current volume aside before a restore overwrites it. Best-effort: a restore the
+    /// operator explicitly confirmed should not be blocked because the safety copy failed, but the
+    /// attempt is logged either way.
+    /// </summary>
+    private async Task SnapshotBeforeRestoreAsync(string volumeName, CancellationToken ct)
+    {
+        if (!_opt.SnapshotBeforeRestore) return;
+
+        var name = $"pre-restore-{volumeName}-{clock.UtcNow:yyyyMMdd-HHmmss}.tgz";
+        try
+        {
+            var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
+                _opt.HelperImage,
+                ["sh", "-c", $"tar czf /backup/{name} -C /data ."],
+                [(volumeName, "/data", true), (_opt.StagingVolume, "/backup", false)]),
+                new Progress<string>(l => logger.LogDebug("pre-restore: {Line}", l)), ct);
+
+            if (exit == 0) logger.LogInformation("Pre-restore snapshot written: {Name}", name);
+            else logger.LogWarning("Pre-restore snapshot failed (exit {Exit}); continuing with the restore.", exit);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Pre-restore snapshot could not be taken; continuing with the restore.");
+        }
     }
 
     // --- helpers ---

@@ -5,6 +5,82 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-28 — Phase E: data-safety hardening + audit trail UI
+
+**The bug this phase exists for**
+`Backup.Checksum` has been in the schema since the first migration and is written on every backup —
+and **nothing ever read it**. Meanwhile the volume restore path runs
+`rm -rf /data/* && tar xzf …` as a single shell command: the wipe happens *first*. Restoring a
+corrupt or truncated archive therefore destroyed the live data and had nothing to put back. That is
+the worst failure mode in the product, and it was reachable through a normal, confirmed user action.
+
+**What was done**
+- **Integrity gate before restore.** The stored artifact's checksum is recomputed and compared with
+  the one recorded at backup time; a mismatch aborts with an explicit "your current data has NOT
+  been touched". Backups predating checksums still restore (refusing would strand the oldest
+  backups) but log a warning.
+- **Archive probe before restore.** A second, distinct check — a checksum only proves the bytes are
+  the ones we stored, not that they form a usable archive. A backup that was garbage *when written*
+  has a perfectly valid checksum. Found by a test that failed for exactly this reason.
+- **Dry-run verification** — `IBackupEngine.VerifyAsync` fetches, checksums, decrypts and reads the
+  archive without touching live data, returning per-check results. Wired to a "Verify" button.
+  A backup nobody has ever verified is a promise, not a safety net.
+- **Archive encryption at rest** — new `ArchiveCipher`: streaming, chunked AES-GCM. Chunked
+  deliberately (database dumps don't fit in memory); each chunk carries its own nonce and tag, and
+  the chunk index is bound into the associated data so chunks can't be reordered, duplicated or
+  dropped. Key derived from the platform master key, so there is no second secret to lose. Format
+  is detected per file, so pre-encryption artifacts keep restoring.
+- **Pre-restore snapshot** — the current volume is tarred aside before it is overwritten, so even a
+  verified-but-wrong restore is recoverable. Best-effort: it never blocks a confirmed restore.
+- **Audit log UI + CSV export** (owed from P13). Entries had been written since the overhaul but
+  nothing could read them. Admin-only (the trail spans workspaces and holds actor emails and IPs),
+  filterable by action/actor, paged, with export capped at 50k rows.
+- **Cross-tenant isolation tests** (owed from P13) — apps, backups, deployments, routes, proxy
+  config, container retirement and image retention.
+
+**CSV formula injection**
+Audit fields carry attacker-influenced text (actor emails, target ids) and the export is opened in
+Excel by an administrator investigating an incident. `CsvWriter` prefixes values starting with
+`=`, `+`, `-`, `@` with an apostrophe so they are read as text rather than executed.
+
+**Files changed**
+- New: `Backups/ArchiveCipher.cs`, `Web/Controllers/AuditController.cs`,
+  `Web/Infrastructure/CsvWriter.cs`, `Web/Views/Audit/Index.cshtml`, and four test files
+  (`ArchiveCipherTests`, `BackupSafetyTests`, `AuditExportTests`, `CrossTenantIsolationTests`)
+  plus `Fakes/BackupHarness.cs`.
+- Edited: `PlatformAbstractions.cs` (VerifyAsync + result types), `BackupEngine.cs`,
+  `BackupOptions.cs`, `BackupsController.cs`, `_Layout.cshtml`, `ViewModels.cs`,
+  `appsettings.json`, `Fakes/FakeDockerEngine.cs` (one-off commands now recorded).
+
+**Checks run**
+- `dotnet build Harbora.slnx -c Release` → 0 warnings / 0 errors.
+- `dotnet test` → **244/244 passed** (was 197).
+- **Mutation-tested** — this phase can destroy data, so a weak test here is the most dangerous
+  kind:
+  1. remove the checksum gate before restore → 3 tests fail ✅
+  2. remove the archive probe before the wipe → 1 test fails ✅
+  3. unbind the chunk index from the AES-GCM tag (chunks become reorderable) → 1 test fails ✅
+
+**Honest notes**
+- One test I wrote (`Verification_reads_the_archive_not_just_its_checksum`) did not initially test
+  what its name claimed — it asserted on the wrong backup. Rewritten around a genuinely
+  intact-but-unusable artifact, which is what then exposed the missing probe on the restore path.
+- The restore path still shells out `rm -rf /data/* && tar xzf …` as one command. The two gates in
+  front of it make reaching that command with a bad archive very unlikely, but extracting to a
+  temporary directory and swapping would remove the window entirely. Recorded as follow-up.
+- Centralized workspace scoping (a query-filter refactor) is **not** done — the cross-tenant tests
+  pin the predicates the controllers use today, but nothing yet prevents a future controller from
+  forgetting one. That is the remaining P13 item.
+
+**Next step**
+- Global query filters for workspace scoping, so isolation is structural rather than per-query.
+- Harden the restore shell command (extract-then-swap).
+- Still blocked without a Docker host: an actual backup→restore round trip against a live volume.
+  The verification path is exercised end-to-end against real archives on disk, but the tar/untar
+  legs run through the fake engine.
+
+---
+
 ## 2026-07-28 — Phase D: durable job queue (completes P3)
 
 **What was done**

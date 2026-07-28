@@ -1,0 +1,85 @@
+@using Harbora.Web.ViewModels
+@model AuditPageViewModel
+@inject Microsoft.AspNetCore.Mvc.Localization.IViewLocalizer T
+@{
+    string Query(int page) =>
+        $"/audit?page={page}&action={Uri.EscapeDataString(Model.ActionFilter ?? "")}&actor={Uri.EscapeDataString(Model.ActorFilter ?? "")}";
+}
+
+<div class="flex items-center justify-between mb-4">
+    <div>
+        <h1 class="text-xl font-semibold">@T["Audit log"]</h1>
+        <p class="text-sm text-slate-400">@T["Privileged actions across the platform, newest first."]</p>
+    </div>
+    <a href="/audit/export?action=@Uri.EscapeDataString(Model.ActionFilter ?? "")&actor=@Uri.EscapeDataString(Model.ActorFilter ?? "")"
+       class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@T["Export CSV"]</a>
+</div>
+
+<form method="get" action="/audit" class="flex flex-wrap gap-2 mb-4">
+    <select name="action" class="rounded-lg bg-slate-900 border border-slate-800 px-3 py-2 text-sm">
+        <option value="">@T["All actions"]</option>
+        @foreach (var a in Model.Actions)
+        {
+            <option value="@a" selected="@(a == Model.ActionFilter)">@a</option>
+        }
+    </select>
+    <input type="text" name="actor" value="@Model.ActorFilter" placeholder="@T["Actor email"]"
+           class="rounded-lg bg-slate-900 border border-slate-800 px-3 py-2 text-sm" />
+    <button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@T["Filter"]</button>
+</form>
+
+<section class="rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
+    @if (Model.Entries.Count == 0)
+    {
+        <div class="p-6 text-slate-400 text-sm">@T["No audit entries match this filter."]</div>
+    }
+    else
+    {
+        <table class="w-full text-sm">
+            <thead class="text-xs uppercase tracking-wide text-slate-500 border-b border-slate-800">
+                <tr>
+                    <th class="text-start px-4 py-2">@T["When"]</th>
+                    <th class="text-start px-4 py-2">@T["Actor"]</th>
+                    <th class="text-start px-4 py-2">@T["Action"]</th>
+                    <th class="text-start px-4 py-2">@T["Target"]</th>
+                    <th class="text-start px-4 py-2">@T["IP"]</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+                @foreach (var e in Model.Entries)
+                {
+                    <tr>
+                        <td class="px-4 py-2 whitespace-nowrap text-slate-400">@e.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                        <td class="px-4 py-2">@e.ActorEmail</td>
+                        <td class="px-4 py-2"><code class="text-xs">@e.Action</code></td>
+                        <td class="px-4 py-2 text-slate-400 text-xs">
+                            @if (e.TargetType is not null)
+                            {
+                                @e.TargetType<text> </text><span class="font-mono">@(e.TargetId?[..Math.Min(8, e.TargetId.Length)])</span>
+                            }
+                            else { <text>—</text> }
+                        </td>
+                        <td class="px-4 py-2 text-slate-500 font-mono text-xs">@(e.IpAddress ?? "—")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
+
+@if (Model.TotalPages > 1)
+{
+    <div class="flex items-center justify-between mt-4 text-sm">
+        <span class="text-slate-500">@T["Page"] @Model.Page / @Model.TotalPages · @Model.TotalCount @T["entries"]</span>
+        <div class="flex gap-2">
+            @if (Model.HasPrevious)
+            {
+                <a href="@Query(Model.Page - 1)" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1">@T["Previous"]</a>
+            }
+            @if (Model.HasNext)
+            {
+                <a href="@Query(Model.Page + 1)" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1">@T["Next"]</a>
+            }
+        </div>
+    </div>
+}

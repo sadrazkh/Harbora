@@ -21,12 +21,34 @@ public interface IBackupEngine
     /// <summary>Restore a completed backup. Destructive — callers must confirm first.</summary>
     Task RestoreAsync(Guid backupId, CancellationToken ct);
 
+    /// <summary>
+    /// Dry run: fetch the artifact and check it is intact and readable WITHOUT touching live data.
+    /// A backup nobody has ever verified is a promise, not a safety net.
+    /// </summary>
+    Task<BackupVerification> VerifyAsync(Guid backupId, CancellationToken ct);
+
     /// <summary>Open a completed backup's artifact for download.</summary>
     Task<(Stream Stream, string FileName)> OpenArtifactAsync(Guid backupId, CancellationToken ct);
 
     /// <summary>Apply retention rules (delete artifacts + rows past the keep window/count).</summary>
     Task EnforceRetentionAsync(CancellationToken ct);
 }
+
+/// <summary>
+/// Outcome of a dry-run verification. <paramref name="Checks"/> lists every individual check so the
+/// UI can show what passed, not just a verdict.
+/// </summary>
+public record BackupVerification(
+    bool IsRestorable,
+    string? Reason,
+    long SizeBytes,
+    IReadOnlyList<BackupCheck> Checks)
+{
+    public static BackupVerification Failed(string reason, params BackupCheck[] checks) =>
+        new(false, reason, 0, checks);
+}
+
+public record BackupCheck(string Name, bool Passed, string? Detail = null);
 
 /// <summary>Fan-out for alerts across configured channels (email/Telegram/Discord/webhook).</summary>
 public interface INotificationService
