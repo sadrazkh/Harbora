@@ -5,6 +5,37 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-29 — Clean `update` path verified on the live server
+
+Re-ran the real command users run (`install.sh update`) after the fixes were pushed, to prove the
+recovery wasn't only a hand-patched server.
+
+**Result:** server moved to `b047639` from git alone, panel `healthy`, restarts 0, `/` 200,
+`/account/login` 200, `/nope` 404 themed, SSL certificate valid. No manual steps.
+
+**One more bug, found by watching that run.** The installer reported
+*"Traefik returns 404 for the panel — it didn't pick up the panel's labels"* on a completely healthy
+install. `wait_panel` waited for the container to be `running` — which happens in about a second —
+then slept 5s, while migrations and seeding take closer to a minute. `verify_install` then probed
+once and failed. For a user who has just been through an outage, a false "your install is broken"
+message immediately after a good update is close to the worst possible output.
+
+Fixed both ends:
+- `wait_panel` now waits for the container to report **healthy** (the healthcheck added earlier),
+  falling back to running-plus-grace for images built before it. On failure it prints the panel's
+  last 15 log lines and points at `harbora doctor` instead of a bare "check the logs".
+- `verify_install` retries the panel route for up to a minute before declaring failure.
+
+Second run output: `✓ Panel is ready` → `✓ Panel route via Traefik: OK` → `✓ Valid SSL certificate issued`.
+
+**Data Protection fix confirmed in the field.** The keyring file present before the rebuild
+(`key-a1fca5ca-…`) was still there afterwards — sessions now survive an update, which was the whole
+point of moving the keyring onto a volume.
+
+**Still uncommitted:** `deploy/install.sh` (the readiness fix above). Everything else is on master.
+
+---
+
 ## 2026-07-29 — Live server: outage diagnosed and fixed, first real end-to-end deploy, landing page
 
 Worked directly on the production host (91.99.205.231, Ubuntu 22.04). The panel was returning **502**.

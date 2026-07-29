@@ -239,19 +239,32 @@ start() {
   ok "Containers started."
 }
 
+# Waits for the panel to be READY, not merely started. "running" happens in about a second, while
+# migrations and seeding take the better part of a minute — checking in between made the installer
+# announce a broken install right after a perfectly good update.
 wait_panel() {
-  log "Waiting for the panel container… / در انتظار بالا آمدن پنل…"
-  for _ in $(seq 1 40); do
-    local state; state="$(docker inspect -f '{{.State.Status}}' harbora-panel 2>/dev/null || echo '')"
-    if [ "$state" = "running" ]; then sleep 5; ok "Panel container is running."; return 0; fi
-    if [ "$state" = "exited" ]; then
-      err "پنل هنگام بوت متوقف شد. / Panel exited on boot."
-      err "  بررسی: cd $COMPOSE_DIR && docker compose logs panel"
+  log "Waiting for the panel to become ready… / در انتظار آماده شدن پنل…"
+  local state health
+  for _ in $(seq 1 60); do
+    state="$(docker inspect -f '{{.State.Status}}' harbora-panel 2>/dev/null || echo '')"
+    health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' harbora-panel 2>/dev/null || echo none)"
+
+    if [ "$state" = "exited" ] || [ "$state" = "restarting" ]; then
+      err "پنل هنگام بوت متوقف شد. / Panel failed to boot."
+      err "  دلیل / Reason:"
+      docker logs --tail 15 harbora-panel 2>&1 | sed 's/^/     /'
+      err "  تشخیص / Diagnose:  harbora doctor"
       exit 1
     fi
+
+    case "$health" in
+      healthy) ok "Panel is ready."; return 0 ;;
+      # No healthcheck in this image (older build): fall back to running + a grace period.
+      none)    if [ "$state" = "running" ]; then sleep 20; ok "Panel container is running."; return 0; fi ;;
+    esac
     sleep 3
   done
-  warn "Panel not running yet; check: cd $COMPOSE_DIR && docker compose logs -f panel"
+  warn "Panel not ready yet; check: harbora logs panel"
 }
 
 # ---------------------------------------------------------------------------
@@ -273,9 +286,15 @@ verify_install() {
   ok "Traefik ↔ Docker API سازگار است."
 
   # 2) Panel route through Traefik (resolves the domain to localhost so DNS isn't required).
-  local code
+  # Retry: right after `compose up` Traefik may not have re-read the recreated panel's labels
+  # yet, and a single early probe reports a scary false failure on a healthy install.
+  local code=000 attempt
+  for attempt in $(seq 1 12); do
   code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 15 \
          --resolve "${PANEL_DOMAIN}:443:127.0.0.1" "https://${PANEL_DOMAIN}/healthz" 2>/dev/null || echo 000)
+    [ "$code" = "200" ] && break
+    sleep 5
+  done
   case "$code" in
     200) ok "مسیر پنل از طریق Traefik سالم است. / Panel route via Traefik: OK." ;;
     404)
