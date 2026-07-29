@@ -5,6 +5,56 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-29 — Git deploys were broken since day one; cutover + rollback verified live
+
+Tested a real Git deployment on the server (`heroku/node-js-getting-started` — Node, **no
+Dockerfile**, so Harbora's own buildpack detection had to do the work). It failed:
+
+> No Dockerfile found and the stack couldn't be auto-detected.
+
+But the clone succeeded and `package.json` was plainly there on disk.
+
+**Root cause — pre-existing, not from this overhaul.** `LibGit2GitService` returned the checkout path
+as `Path.GetDirectoryName(Repository.Clone(...))`. `Repository.Clone` returns the path of the **.git
+directory with a trailing separator**, and `GetDirectoryName` only strips that empty trailing segment
+— so it yielded `….../.git`. The pipeline then looked for a Dockerfile, a `package.json`, a `go.mod`
+inside the metadata folder and of course found nothing.
+
+**Every Git-sourced deployment has always failed** — with a Dockerfile or without one. It survived
+because no test could see it: the bug only exists once a real clone has happened, and until now there
+was no Docker host to run one on. Fixed by asking libgit2 for `repo.Info.WorkingDirectory` instead of
+deriving a path by string surgery.
+
+`GitCheckoutTests` clones a genuine local repository (real libgit2, no network) and asserts the
+checkout path is the working tree, that source files are visible there, and that `Buildpacks.Detect`
+recognises the stack from it. Restoring the old line fails 3 of the 4 tests.
+
+**After the fix — full Git deploy, live:** buildpack detected Node → generated Dockerfile built
+(`ENV PORT=3000`) → image `harbora/gitdemo-…:build-1` → container `harbora-gitdemo-…-1` → HTTP health
+check passed → proxy wired → **app served at its own subdomain over HTTPS with real content**.
+
+**Zero-downtime cutover and artifact rollback, verified in production for the first time:**
+- Deploy #2 → live container `…-2` on `build-2`. Versioned naming works against real Docker.
+- Rollback to #1 → confirm screen showed the target and "no rebuild"; deployment #3 succeeded on
+  image **`build-1`**, and its logs contain **zero** `Successfully built` lines — the artifact was
+  re-released, not rebuilt (ADR-006, Phase C).
+- Deployment #2 moved to status **7 = RolledBack** — the Phase B fix that marks the displaced
+  deployment behaves as designed outside of tests.
+- The app answered 200 throughout.
+
+Every claim Phases B and C made about cutover and rollback is now confirmed against real Docker
+rather than a fake engine.
+
+**Checks:** `dotnet build` → 0 warnings / 0 errors · `dotnet test` → **291/291**.
+
+**Uncommitted:** `src/Harbora.Infrastructure/Git/LibGit2GitService.cs` + `tests/…/GitCheckoutTests.cs`.
+
+**Next step**
+- Backup → restore round trip (the last unverified Phase E claim).
+- Harden the restore shell command (extract-then-swap).
+
+---
+
 ## 2026-07-29 — Clean `update` path verified on the live server
 
 Re-ran the real command users run (`install.sh update`) after the fixes were pushed, to prove the

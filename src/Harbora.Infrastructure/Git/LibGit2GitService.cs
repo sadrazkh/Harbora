@@ -35,7 +35,14 @@ public sealed class LibGit2GitService : IGitService
                 commit.Sha,
                 commit.MessageShort,
                 commit.Author.Name,
-                Path.GetDirectoryName(path)!.TrimEnd(Path.DirectorySeparatorChar));
+                // Repository.Clone returns the path to the .git DIRECTORY, with a trailing separator.
+                // Path.GetDirectoryName only strips that empty trailing segment, so it yielded
+                // ".../.git" — the metadata folder, not the source. Every Git deploy then looked for
+                // a Dockerfile (or a buildpack marker) inside .git and found nothing. Ask libgit2 for
+                // the working tree instead of deriving it from a string.
+                repo.Info.WorkingDirectory?
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                ?? workingDir);
         }, ct);
     }
 
