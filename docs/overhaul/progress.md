@@ -5,6 +5,31 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-30 — CLI v0.2.0 released; the installer was deleting the recovery tool
+
+Tagged `v0.2.0` and pushed. The release workflow published six single-file binaries
+(linux/win/macOS × x64/arm64) plus `Harbora.Cli.0.2.0.nupkg`.
+
+**A bug found by running the published installer — on the production server.**
+Both tools are called `harbora`: on a server it is the break-glass admin script (`doctor`,
+`reset-password`, `fix-key`), on a developer machine it is the deploy CLI. Running
+`install-cli.sh` on the server **silently overwrote the recovery command**. `harbora doctor` simply
+stopped existing — on a live host, and precisely the tool you reach for when the panel is down.
+
+I caused this by running the installer on the production server to verify the release. The admin
+command was restored immediately from the server's own checkout, and the installer now detects a
+Harbora server install (or an existing admin script at the target path) and installs the CLI as
+**`harbora-cli`**, saying so. Verified: `harbora doctor` and `harbora-cli --version` now coexist.
+
+The README previously described the two tools as "separate tools for separate machines". That was
+advice, not a guarantee — and the guarantee is what was needed. Both the README and
+`docs/cli-deploy.md` now describe the actual behaviour.
+
+*(The first verification run appeared to fail because `raw.githubusercontent.com` was still serving
+the pre-push script; running the installer from the server's updated checkout confirmed the fix.)*
+
+---
+
 ## 2026-07-30 — CLI 0.2.0: every deploy mode, a config schema, and a compatibility spec
 
 Completing the CapRover-equivalent experience and preparing the CLI release.
