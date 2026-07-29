@@ -1,3 +1,4 @@
+using System.Reflection;
 using Harbora.Cli;
 using Spectre.Console.Cli;
 
@@ -5,6 +6,11 @@ var app = new CommandApp();
 app.Configure(config =>
 {
     config.SetApplicationName("harbora");
+    // `harbora --version` is table stakes for a released CLI and the first thing a bug report needs.
+    config.SetApplicationVersion(
+        System.Reflection.Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?.Split('+')[0] ?? "0.0.0");
     config.AddCommand<InitCommand>("init").WithDescription("Create a harbora.yml in the current folder.");
     config.AddCommand<LoginCommand>("login").WithDescription("Authenticate against a Harbora server.");
     config.AddCommand<WhoAmICommand>("whoami").WithDescription("Show the authenticated user.");

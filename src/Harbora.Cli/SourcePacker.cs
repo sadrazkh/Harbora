@@ -29,10 +29,15 @@ public static class SourcePacker
 
     public sealed record Packed(string ArchivePath, int Files, long Bytes);
 
-    public static async Task<Packed> PackAsync(string projectDir, CancellationToken ct = default)
+    public static Task<Packed> PackAsync(string projectDir, CancellationToken ct = default) =>
+        PackAsync(projectDir, new ProjectConfig(), ct);
+
+    public static async Task<Packed> PackAsync(string projectDir, ProjectConfig config, CancellationToken ct = default)
     {
         var root = Path.GetFullPath(projectDir);
         var ignore = LoadIgnorePatterns(root);
+        // harbora.yml adds to the ignore files rather than replacing them.
+        ignore.AddRange(config.Ignore);
 
         var archivePath = Path.Combine(Path.GetTempPath(), $"harbora-{Guid.NewGuid():N}.tar.gz");
         var files = 0;
@@ -42,6 +47,20 @@ public static class SourcePacker
         await using (var gz = new GZipStream(output, CompressionLevel.Optimal))
         await using (var tar = new TarWriter(gz, TarEntryFormat.Pax, leaveOpen: true))
         {
+            // An inline Dockerfile from harbora.yml is written into the archive, so a project can
+            // describe its build without keeping a Dockerfile in the repository.
+            if (config.DockerfileLines.Count > 0)
+            {
+                var generated = Path.Combine(Path.GetTempPath(), $"harbora-df-{Guid.NewGuid():N}");
+                await File.WriteAllLinesAsync(generated, config.DockerfileLines, ct);
+                try
+                {
+                    await tar.WriteEntryAsync(generated, "Dockerfile.harbora", ct);
+                    files++;
+                }
+                finally { try { File.Delete(generated); } catch { /* temp */ } }
+            }
+
             foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
                 ct.ThrowIfCancellationRequested();

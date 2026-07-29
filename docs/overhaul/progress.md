@@ -5,6 +5,87 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-30 — CLI 0.2.0: every deploy mode, a config schema, and a compatibility spec
+
+Completing the CapRover-equivalent experience and preparing the CLI release.
+
+**Deploy modes** — `DeployPlan` decides the source and prints *why*, so "it deployed the wrong thing"
+is never a mystery:
+
+| Invocation | Source |
+|---|---|
+| `harbora deploy` | Packs the folder and uploads it |
+| `--push` | Same, forced (even inside a Git repo) |
+| `--tar dist.tar.gz` | An archive the caller already built |
+| `--branch main` | `git archive` of **committed** content |
+| `--ref` / `--tag` | The server pulls from the app's remote |
+| `--image nginx:alpine` | Releases the image; builds nothing |
+| `--server` / `--token` | CI, with no interactive login |
+| `--no-follow` | Queue and return |
+
+Precedence: explicit flags → `harbora.yml` → folder shape (no `.git` ⇒ push, `.git` ⇒ server pulls).
+Pinned by `DeployPlanTests`.
+
+**`harbora.yml`** got a real schema and a hand-written parser (`ProjectConfig`) — `app`, `server`,
+`build.dockerfile`, `build.context`, `ignore`, `dockerfileLines`, `image`, `branch`. `harbora init`
+now writes the full commented template. Unknown keys are ignored on purpose, so a file from a newer
+CLI still works with an older one. `dockerfileLines` is the CapRover `captain-definition` equivalent:
+the CLI writes it into the upload and the server prefers it over stack detection.
+
+**Server**: `DeploymentRequest.ImageOverride` + `POST /apps/{slug}/deploy` accepting `{ "image": … }`
+— an explicit image is released as-is, with nothing built.
+
+**`docs/cli-deploy.md`** — the compatibility spec the user asked for: install, every mode, the full
+`harbora.yml` schema, every API endpoint with request/response shapes and status codes, a working
+~20-line Python client, and the stability rules this project holds itself to (fields are added not
+repurposed; unknown fields ignored; status names stable).
+
+**Release prep**: `--version` now works (it didn't), version bumped to **0.2.0**, package metadata
+added, and the unused `YamlDotNet` dependency dropped — `ProjectConfig` parses the small schema by
+hand, which keeps the self-contained binary lean. Both release artifacts were built and run:
+single-file binary and the `dotnet tool` nupkg.
+
+**Two bugs found by actually running the released binary**
+1. **`--version` was unsupported** — Spectre needs `SetApplicationVersion`. First thing any bug
+   report needs, and it printed "Unexpected option".
+2. **The CLI crashed on server text containing brackets**: `Could not find color or style '60vh'`.
+   Server messages went straight into Spectre markup, so an HTML error page — containing
+   `min-h-[60vh]` from our own error view — took the CLI down instead of being displayed. Server
+   strings are now `Markup.Escape`d.
+
+**Verified end to end with the real published binary on the live server**
+```
+harbora --version           → 0.2.0
+harbora login / whoami      → ok
+harbora init                → harbora.yml written
+harbora deploy              → packed, uploaded, built, health-checked, live
+uploaded contents           → Dockerfile.harbora, harbora.yml, package.json, src
+                              (no .env, no node_modules)
+https://clidemo…/           → 200  "CLI-RELEASE-WORKS"
+harbora deploy --image      → pulled and released nginx:alpine
+```
+The ARM64 artifact is what ran — the server is aarch64, which also exercised that release target.
+
+**Zero-downtime confirmed under real failure.** Two deployments failed during this session (a broken
+app, then nginx health-checked on the wrong port) and the app kept serving the previous build
+throughout, 200 the whole time. The failed containers were removed and traffic never moved.
+
+**Checks:** `dotnet build` → 0 warnings / 0 errors · `dotnet test` → **363/363**.
+
+**To publish the release**
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+That runs `.github/workflows/release-cli.yml`, which builds six single-file binaries
+(linux/win/macOS × x64/arm64) plus the nupkg and attaches them to a GitHub release. The installers in
+`deploy/install-cli.{sh,ps1}` download from the latest release, so they start working the moment the
+tag lands.
+
+**Uncommitted:** `ProjectConfig.cs`, `DeployPlan.cs`, CLI command/packer/csproj/Program changes, the
+image-override path (Application/Infrastructure/Web), `docs/cli-deploy.md`, and two test files.
+
+---
+
 ## 2026-07-30 — Push-to-deploy from a developer's machine (CapRover-style)
 
 Until now the server always *pulled* the source: a Git remote it could reach, or a prebuilt image.

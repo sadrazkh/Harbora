@@ -105,7 +105,15 @@ public sealed class DeploymentPipeline(
             await Log(LogStream.System, $"Deployment #{deployment.Number} started ({app.SourceType}).");
 
             string imageTag;
-            if (deployment.RolledBackFromId is { } rollbackTargetId)
+            // An image chosen at deploy time (`harbora deploy --image`) is released as-is: there is
+            // no source to fetch and nothing to build, so pull it and go straight to the cutover.
+            if (deployment.RolledBackFromId is null && !string.IsNullOrWhiteSpace(deployment.ImageTag))
+            {
+                imageTag = deployment.ImageTag!;
+                await Log(LogStream.System, $"Releasing image {imageTag} (nothing to build).");
+                await docker.PullImageAsync(imageTag, new Progress<string>(l => _ = LogFromEngine(LogStream.Build, l)), ct);
+            }
+            else if (deployment.RolledBackFromId is { } rollbackTargetId)
             {
                 // Rollback = re-release a prior artifact. Never rebuild (instant + exact; ADR-006).
                 var target = await db.Deployments.FirstOrDefaultAsync(d => d.Id == rollbackTargetId, ct);
@@ -384,7 +392,15 @@ public sealed class DeploymentPipeline(
         {
             // Use the repo's Dockerfile if present; otherwise auto-detect the stack (buildpack).
             dockerfile = app.DockerfilePath ?? "Dockerfile";
-            if (!File.Exists(Path.Combine(contextPath, dockerfile)))
+            if (!File.Exists(Path.Combine(contextPath, dockerfile)) &&
+                File.Exists(Path.Combine(contextPath, "Dockerfile.harbora")))
+            {
+                // An inline Dockerfile the client supplied (harbora.yml `dockerfileLines`). It is an
+                // explicit instruction, so it outranks stack detection.
+                dockerfile = "Dockerfile.harbora";
+                await log(LogStream.System, "Using the Dockerfile supplied in harbora.yml.");
+            }
+            else if (!File.Exists(Path.Combine(contextPath, dockerfile)))
             {
                 var pack = Buildpacks.Detect(contextPath, app.ContainerPort);
                 if (pack is null)

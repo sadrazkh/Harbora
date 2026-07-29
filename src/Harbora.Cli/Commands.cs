@@ -45,7 +45,7 @@ public sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[red]Login failed:[/] {ex.Message}");
+            AnsiConsole.MarkupLine($"[red]Login failed:[/] {Markup.Escape(ex.Message)}");
             return 1;
         }
     }
@@ -56,7 +56,7 @@ public sealed class WhoAmICommand : AsyncCommand
     protected override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
     {
         var me = await Session.Require().GetAsync("whoami");
-        AnsiConsole.MarkupLine($"[bold]{me.GetProperty("email").GetString()}[/]");
+        AnsiConsole.MarkupLine($"[bold]{Markup.Escape(me.GetProperty("email").GetString() ?? "")}[/]");
         return 0;
     }
 }
@@ -100,78 +100,157 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         [DefaultValue(true)]
         public bool Follow { get; init; }
 
+        [CommandOption("--no-follow"), Description("Queue the deployment and return instead of streaming logs (CI)")]
+        public bool NoFollow { get; init; }
+
         [CommandOption("--push"), Description("Upload this folder's code instead of letting the server pull from Git")]
         public bool Push { get; init; }
 
-        [CommandOption("--path <PATH>"), Description("Folder to push (default: current directory)")]
+        [CommandOption("--path <PATH>"), Description("Folder to deploy (default: current directory)")]
         public string? Path { get; init; }
+
+        [CommandOption("-i|--image <IMAGE>"), Description("Release an existing image, e.g. nginx:alpine (builds nothing)")]
+        public string? Image { get; init; }
+
+        [CommandOption("-t|--tar <FILE>"), Description("Upload an archive you already built (.tar.gz)")]
+        public string? Tar { get; init; }
+
+        [CommandOption("-b|--branch <BRANCH>"), Description("Upload a git branch's committed content (uncommitted changes are excluded)")]
+        public string? Branch { get; init; }
+
+        [CommandOption("--server <URL>"), Description("Panel URL — for CI, instead of `harbora login`")]
+        public string? Server { get; init; }
+
+        [CommandOption("--token <TOKEN>"), Description("API token — for CI, instead of `harbora login`")]
+        public string? Token { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
-        var api = Session.Require();
-        var slug = settings.App ?? HarboraConfig.ReadProjectSlug();
+        var dir = System.IO.Path.GetFullPath(settings.Path ?? Directory.GetCurrentDirectory());
+        var config = ProjectConfig.Load(dir);
+
+        // --server/--token make a deploy self-contained, so CI needs no interactive login step.
+        var api = settings.Server is not null || settings.Token is not null
+            ? new ApiClient(new HarboraConfig
+              {
+                  Server = settings.Server ?? config.Server ?? HarboraConfig.Load().Server,
+                  Token = settings.Token ?? HarboraConfig.Load().Token
+              })
+            : Session.Require();
+
+        var slug = settings.App ?? config.App ?? HarboraConfig.ReadProjectSlug();
         if (string.IsNullOrWhiteSpace(slug))
         {
-            AnsiConsole.MarkupLine("[red]No app specified[/] and no ./harbora.yml found.");
+            AnsiConsole.MarkupLine("[red]No app specified[/] — pass one, or add [yellow]app:[/] to harbora.yml.");
+            AnsiConsole.MarkupLine("[grey]Create the file with:[/] harbora init");
             return 1;
         }
 
-        var deploymentId = settings.Push || ShouldPush(settings, slug)
-            ? await PushAsync(api, slug, settings, ct)
-            : await TriggerAsync(api, slug, settings);
+        var plan = DeployPlan.Decide(
+            settings.Image, settings.Tar, settings.Branch, settings.Tag ?? settings.Ref,
+            settings.Push, config, Directory.Exists(System.IO.Path.Combine(dir, ".git")));
+
+        AnsiConsole.MarkupLine($"[grey]Mode:[/] {plan.Mode} [grey]({plan.Reason})[/]");
+
+        string? deploymentId;
+        try
+        {
+            deploymentId = plan.Mode switch
+            {
+                DeployMode.Image        => await DeployImageAsync(api, slug, plan.Value!),
+                DeployMode.PushTarball  => await UploadAsync(api, slug, plan.Value!, deleteAfter: false),
+                DeployMode.PushGitBranch => await PushBranchAsync(api, slug, dir, plan.Value!, config, ct),
+                DeployMode.PushFolder   => await PushFolderAsync(api, slug, dir, config, ct),
+                _                       => await TriggerAsync(api, slug, plan.Value)
+            };
+        }
+        catch (FileNotFoundException ex)
+        {
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
 
         if (deploymentId is null) return 1;
         AnsiConsole.MarkupLine($"[green]✓[/] Queued deployment [bold]{deploymentId}[/] for [bold]{slug}[/].");
 
-        return settings.Follow ? await StreamLogs(api, deploymentId) : 0;
+        return settings.Follow && !settings.NoFollow ? await StreamLogs(api, deploymentId) : 0;
     }
 
-    /// <summary>
-    /// Push when the folder looks like a project the user means to deploy and they didn't ask for a
-    /// specific Git ref. Asking for a branch or tag is an unambiguous "deploy from Git".
-    /// </summary>
-    private static bool ShouldPush(Settings settings, string slug)
+    private static async Task<string?> TriggerAsync(ApiClient api, string slug, string? gitRef)
     {
-        if (settings.Ref is not null || settings.Tag is not null) return false;
-
-        var dir = settings.Path ?? Directory.GetCurrentDirectory();
-        // No git remote here → the server has nothing to pull, so pushing is the only thing that works.
-        return !Directory.Exists(System.IO.Path.Combine(dir, ".git"));
-    }
-
-    private static async Task<string?> TriggerAsync(ApiClient api, string slug, Settings settings)
-    {
-        var gitRef = settings.Tag ?? settings.Ref;
         var res = await api.PostAsync($"apps/{slug}/deploy", new { gitRef });
         return res.GetProperty("deploymentId").GetString();
     }
 
-    /// <summary>Packs the folder and streams it to the server, CapRover-style.</summary>
-    private static async Task<string?> PushAsync(ApiClient api, string slug, Settings settings, CancellationToken ct)
+    private static async Task<string?> DeployImageAsync(ApiClient api, string slug, string image)
     {
-        var dir = System.IO.Path.GetFullPath(settings.Path ?? Directory.GetCurrentDirectory());
-        if (!Directory.Exists(dir))
+        AnsiConsole.MarkupLine($"[grey]Releasing image[/] {image}");
+        var res = await api.PostAsync($"apps/{slug}/deploy", new { image });
+        return res.GetProperty("deploymentId").GetString();
+    }
+
+    /// <summary>Packs the folder and streams it to the server.</summary>
+    private static async Task<string?> PushFolderAsync(
+        ApiClient api, string slug, string dir, ProjectConfig config, CancellationToken ct)
+    {
+        if (!Directory.Exists(dir)) throw new FileNotFoundException($"Folder not found: {dir}");
+
+        var packed = await SourcePacker.PackAsync(dir, config, ct);
+        AnsiConsole.MarkupLine(
+            $"[grey]Packed[/] {packed.Files} files ({packed.Bytes / 1024.0 / 1024:0.#} MB) [grey]from[/] {dir}");
+        return await UploadAsync(api, slug, packed.ArchivePath, deleteAfter: true);
+    }
+
+    /// <summary>
+    /// Archives a branch's committed content with `git archive` and uploads that. Deliberately not
+    /// the working tree: deploying uncommitted edits is how "works on my machine" reaches production.
+    /// </summary>
+    private static async Task<string?> PushBranchAsync(
+        ApiClient api, string slug, string dir, string branch, ProjectConfig config, CancellationToken ct)
+    {
+        if (!Directory.Exists(System.IO.Path.Combine(dir, ".git")))
+            throw new FileNotFoundException($"--branch needs a git repository; {dir} is not one.");
+
+        var archive = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"harbora-{Guid.NewGuid():N}.tar.gz");
+        var exit = await RunGitAsync(dir, $"archive --format=tar.gz -o \"{archive}\" {branch}", ct);
+        if (exit != 0)
         {
-            AnsiConsole.MarkupLine($"[red]Folder not found:[/] {dir}");
+            AnsiConsole.MarkupLine($"[red]git archive failed[/] — does branch [bold]{branch}[/] exist?");
             return null;
         }
 
-        var packed = await SourcePacker.PackAsync(dir, ct);
+        AnsiConsole.MarkupLine($"[grey]Archived committed content of[/] {branch}");
+        return await UploadAsync(api, slug, archive, deleteAfter: true);
+    }
 
+    private static async Task<string?> UploadAsync(ApiClient api, string slug, string archivePath, bool deleteAfter)
+    {
+        if (!File.Exists(archivePath)) throw new FileNotFoundException($"Archive not found: {archivePath}");
         try
         {
-            AnsiConsole.MarkupLine(
-                $"[grey]Packed[/] {packed.Files} files ({packed.Bytes / 1024.0 / 1024:0.#} MB) [grey]from[/] {dir}");
-            AnsiConsole.MarkupLine("[grey]Uploading…[/]");
-
-            var res = await api.PostFileAsync($"apps/{slug}/deploy/archive", packed.ArchivePath);
+            AnsiConsole.MarkupLine($"[grey]Uploading[/] {new FileInfo(archivePath).Length / 1024.0 / 1024:0.#} MB…");
+            var res = await api.PostFileAsync($"apps/{slug}/deploy/archive", archivePath);
             return res.GetProperty("deploymentId").GetString();
         }
         finally
         {
-            try { File.Delete(packed.ArchivePath); } catch { /* temp file */ }
+            if (deleteAfter) { try { File.Delete(archivePath); } catch { /* temp file */ } }
         }
+    }
+
+    private static async Task<int> RunGitAsync(string workingDir, string args, CancellationToken ct)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git", args)
+        {
+            WorkingDirectory = workingDir,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true
+        };
+        using var process = System.Diagnostics.Process.Start(psi);
+        if (process is null) return -1;
+        await process.WaitForExitAsync(ct);
+        return process.ExitCode;
     }
 
     internal static async Task<int> StreamLogs(ApiClient api, string deploymentId)
@@ -191,7 +270,7 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
             if (terminal.Contains(status))
             {
                 var color = status == "Succeeded" ? "green" : "red";
-                AnsiConsole.MarkupLine($"[{color}]● {status}[/]");
+                AnsiConsole.MarkupLine($"[{color}]● {Markup.Escape(status)}[/]");
                 return status == "Succeeded" ? 0 : 1;
             }
             await Task.Delay(1500);
@@ -248,20 +327,37 @@ public sealed class InitCommand : AsyncCommand<InitCommand.Settings>
 
         var yaml =
             $"""
-            # Harbora project config. Edit as needed, then run:  harbora deploy
+            # Harbora project config — see docs/cli-deploy.md for the full schema.
+            # Deploy with:  harbora deploy
             app: {slug}
 
+            # Panel URL. Omit to use whichever server you last logged into.
+            # server: https://panel.example.com
+
             build:
-              dockerfile: {(hasDockerfile ? "Dockerfile" : "Dockerfile   # add a Dockerfile to this repo, or deploy a prebuilt image from the UI")}
+              # Path to the Dockerfile inside the context. If it doesn't exist, the stack is
+              # auto-detected (Node, .NET, Go, PHP, Python, static) and a Dockerfile is generated.
+              dockerfile: {(hasDockerfile ? "Dockerfile" : "Dockerfile")}
               context: .
 
-            # Environment variables (or set them in the app's page / with `harbora env`):
-            # env:
-            #   NODE_ENV: production
+            # Extra paths to keep out of the upload, on top of .dockerignore / .gitignore.
+            # ignore:
+            #   - coverage
+            #   - "*.log"
 
-            # Domains to route to this app (attach + get SSL automatically):
-            # domains:
-            #   - {slug}.example.com
+            # Define the build inline instead of committing a Dockerfile:
+            # dockerfileLines:
+            #   - FROM node:20-alpine
+            #   - WORKDIR /app
+            #   - COPY . .
+            #   - RUN npm ci --omit=dev
+            #   - CMD ["npm", "start"]
+
+            # Release a prebuilt image instead of building anything:
+            # image: nginx:alpine
+
+            # Deploy a branch's committed content instead of the working folder:
+            # branch: main
 
             """;
 

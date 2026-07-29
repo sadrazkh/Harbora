@@ -106,7 +106,10 @@ public sealed class ApiV1Controller(
         try
         {
             var id = await deployEngine.QueueDeploymentAsync(
-                new DeploymentRequest(app.Id, DeploymentTrigger.Cli, currentUser.UserId ?? Guid.Empty, body?.GitRef ?? app.GitRef), ct);
+                new DeploymentRequest(app.Id, DeploymentTrigger.Cli, currentUser.UserId ?? Guid.Empty,
+                    body?.GitRef ?? app.GitRef,
+                    // An explicit image means "release this, build nothing".
+                    ImageOverride: string.IsNullOrWhiteSpace(body?.Image) ? null : body!.Image), ct);
             return Ok(new { deploymentId = id });
         }
         catch (InvalidOperationException ex)
@@ -138,5 +141,6 @@ public sealed class ApiV1Controller(
         return Ok(lines);
     }
 
-    public sealed record DeployBody(string? GitRef);
+    /// <summary>Body of POST /apps/{slug}/deploy. Both fields optional; see docs/cli-deploy.md.</summary>
+    public sealed record DeployBody(string? GitRef, string? Image = null);
 }

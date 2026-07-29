@@ -20,7 +20,9 @@ public record DeploymentRequest(
     string? CommitSha = null,
     Guid? RollbackToDeploymentId = null,
     /// <summary>Set when the source was pushed from a developer's machine rather than pulled from Git.</summary>
-    string? SourceArchivePath = null);
+    string? SourceArchivePath = null,
+    /// <summary>Release this exact image instead of building anything (`harbora deploy --image`).</summary>
+    string? ImageOverride = null);
 
 /// <summary>Publishes live log lines + status changes to subscribers (SignalR hub, CLI stream).</summary>
 public interface IDeploymentLogStream

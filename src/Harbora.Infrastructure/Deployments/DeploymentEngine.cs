@@ -63,6 +63,8 @@ public sealed class DeploymentEngine(
             TriggeredByUserId = request.TriggeredByUserId,
             RolledBackFromId = request.RollbackToDeploymentId,
             SourceArchivePath = request.SourceArchivePath,
+            // An explicit image is recorded up front so the pipeline releases exactly it.
+            ImageTag = request.ImageOverride,
             CreatedAt = clock.UtcNow
         };
         db.Deployments.Add(deployment);
