@@ -5,6 +5,64 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-30 — Push-to-deploy from a developer's machine (CapRover-style)
+
+Until now the server always *pulled* the source: a Git remote it could reach, or a prebuilt image.
+That misses the common case the user raised — create the app in the panel, then deploy a folder from
+your own machine, with no Git in between (how CapRover works).
+
+**What landed**
+- `AppSourceType.Upload` (appended value 6) — an app can now be created with **no Git URL at all**
+  and simply wait for its first push.
+- `Deployment.SourceArchivePath` — per-deployment, because every push carries its own snapshot of
+  the working directory. Migration `UploadedSourceDeploys`.
+- `POST /api/v1/apps/{slug}/deploy/archive` — streams a gzipped tar straight to disk (a source tree
+  never has to fit in memory), then queues a normal deployment. A rejected push (coalesced onto an
+  in-flight deploy) deletes its upload rather than leaking a file per attempt. 512 MB ceiling.
+- `SourceArchive` — the unpacker. This is the only place a user's bytes are written to the panel's
+  filesystem, so it is deliberately paranoid: entry paths are resolved and must stay inside the
+  destination, links are refused outright, and entry count and uncompressed size are capped.
+- **Pipeline refactor**: `BuildFromGitAsync` was split into "materialise the source" + a shared
+  `BuildFromSourceAsync`. Git checkout and archive extraction now feed *identical* build behaviour —
+  stack detection, generated Dockerfile, cutover, rollback — instead of a parallel implementation.
+  A pushed archive also wins over the app's configured source: the user just sent that exact code.
+- `SourcePacker` in the CLI + `harbora deploy --push`. Pushing is automatic when the folder has no
+  `.git`; `--ref`/`--tag` still mean "deploy from Git".
+
+**Exclusions are a security concern, not just size.** `.dockerignore` is honoured first (it is what
+the build reads), then `.gitignore`, then a built-in list. `.env` is always excluded — it routinely
+holds local database URLs and API keys, and uploading it would ship them to the server.
+
+**Verified live, end to end**
+```
+app created with SourceType=Upload and no Git URL
+token issued, folder packed (471 bytes), POST /deploy/archive → 200
+deployment                → Succeeded
+build dir on the server   → Dockerfile.harbora, package.json, src
+                            (no .env, no node_modules, no .git)
+container                 → harbora-pushed…-1  running the built image
+https://pushed….nip.io/   → 200  "PUSHED-FROM-MY-MACHINE"
+```
+
+**Tests:** `SourceArchiveTests` (traversal refused for `../..`, deep traversal, absolute paths and
+sibling directories sharing a prefix; symlinks skipped; empty/corrupt archives get a readable message
+instead of `EndOfStreamException`) and `SourcePackerTests` (built-in and ignore-file exclusions,
+`.dockerignore` beating `.gitignore`, and a round trip through the server's own extractor asserting
+the `.env` never made it). **341/341 passing**, 0 warnings.
+
+**README** gained a "Push code straight from your machine" section covering the flow, the flags and
+exactly what is excluded.
+
+**Uncommitted:** the domain/migration/pipeline/API/CLI changes above, the create-form source card,
+two new test files, and the README section.
+
+**Next step**
+- The CLI binary on the server is still the old release; `harbora deploy --push` was verified through
+  the API it calls, not through a rebuilt CLI. Worth publishing a new CLI release.
+- Rotate the server's root password (shared in chat).
+
+---
+
 ## 2026-07-29 — Restore is now extract-then-swap (closes Phase E)
 
 The last open item. The restore shell was one line:

@@ -231,6 +231,12 @@ public sealed class DeploymentPipeline(
         IDockerEngine docker, App app, Deployment deployment, string imageTag,
         IProgress<string> buildLog, Func<LogStream, string, Task> log, CancellationToken ct)
     {
+        // A pushed archive always wins, whatever the app's configured source is: the user just sent
+        // this exact code and expects that deployed, not whatever a Git remote happens to hold.
+        if (!string.IsNullOrWhiteSpace(deployment.SourceArchivePath))
+            return await BuildFromUploadAsync(docker, app, deployment, imageTag, buildLog, log,
+                                              forceStatic: app.SourceType == AppSourceType.StaticSite, ct);
+
         switch (app.SourceType)
         {
             case AppSourceType.PrebuiltImage:
@@ -280,6 +286,10 @@ public sealed class DeploymentPipeline(
                 }
             }
 
+            case AppSourceType.Upload:
+                // The app is upload-only and nothing was pushed — BuildFromUploadAsync explains how.
+                return await BuildFromUploadAsync(docker, app, deployment, imageTag, buildLog, log, forceStatic: false, ct);
+
             case AppSourceType.DockerCompose:
                 // Multi-service Compose orchestration is planned (see docs/overhaul/12 P7+) but not
                 // yet implemented; fail with a clear message rather than a raw NotSupported.
@@ -315,8 +325,53 @@ public sealed class DeploymentPipeline(
         deployment.CommitMessage = checkout.CommitMessage;
         deployment.CommitAuthor = checkout.CommitAuthor;
 
-        var contextPath = Path.Combine(checkout.LocalPath, app.BuildContextPath?.TrimStart('.', '/', '\\') ?? "");
-        if (!Directory.Exists(contextPath)) contextPath = checkout.LocalPath;
+        return await BuildFromSourceAsync(docker, app, deployment, imageTag, checkout.LocalPath,
+                                          buildLog, log, forceStatic, ct);
+    }
+
+    /// <summary>
+    /// Unpacks the archive pushed by <c>harbora deploy</c> and builds from it. Same build rules as a
+    /// Git checkout — the only difference is how the source got here.
+    /// </summary>
+    private async Task<string> BuildFromUploadAsync(
+        IDockerEngine docker, App app, Deployment deployment, string imageTag,
+        IProgress<string> buildLog, Func<LogStream, string, Task> log, bool forceStatic, CancellationToken ct)
+    {
+        var archive = deployment.SourceArchivePath;
+        if (string.IsNullOrWhiteSpace(archive) || !File.Exists(archive))
+            throw new InvalidOperationException(
+                "This app deploys from code pushed with `harbora deploy`, but no source archive was " +
+                "uploaded for this deployment. Run `harbora deploy` from your project folder.");
+
+        var workDir = Path.Combine(_opt.WorkDir, app.Slug, deployment.Number.ToString());
+        if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true);
+
+        await log(LogStream.System, "Unpacking uploaded source …");
+        await using (var stream = File.OpenRead(archive))
+        {
+            var result = await SourceArchive.ExtractAsync(stream, workDir, ct);
+            await log(LogStream.System,
+                $"Unpacked {result.Files} entries ({result.Bytes / 1024 / 1024.0:0.#} MB).");
+        }
+
+        // The upload is consumed; keeping it would double the disk cost of every deployment.
+        try { File.Delete(archive); } catch { /* best effort */ }
+
+        return await BuildFromSourceAsync(docker, app, deployment, imageTag, workDir,
+                                          buildLog, log, forceStatic, ct);
+    }
+
+    /// <summary>
+    /// Everything after the source exists on disk: pick the Dockerfile (or generate one from a
+    /// detected stack) and build the image. Shared by the Git and upload paths so both get identical
+    /// build behaviour.
+    /// </summary>
+    private async Task<string> BuildFromSourceAsync(
+        IDockerEngine docker, App app, Deployment deployment, string imageTag, string sourceRoot,
+        IProgress<string> buildLog, Func<LogStream, string, Task> log, bool forceStatic, CancellationToken ct)
+    {
+        var contextPath = Path.Combine(sourceRoot, app.BuildContextPath?.TrimStart('.', '/', '\\') ?? "");
+        if (!Directory.Exists(contextPath)) contextPath = sourceRoot;
 
         string dockerfile;
         if (forceStatic)

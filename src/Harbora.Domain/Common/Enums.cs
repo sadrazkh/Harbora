@@ -27,7 +27,11 @@ public enum AppSourceType
     DockerCompose = 2,
     PrebuiltImage = 3,
     StaticSite = 4,
-    Template = 5
+    Template = 5,
+    // Appended (value 6) so existing persisted values stay stable. Source arrives by upload from a
+    // developer's machine (`harbora deploy`) rather than being pulled by the server — the app is
+    // created first and code is pushed to it afterwards, with no Git remote in between.
+    Upload = 6
 }
 
 public enum AppStatus

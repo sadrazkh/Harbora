@@ -99,6 +99,12 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         [CommandOption("--follow")]
         [DefaultValue(true)]
         public bool Follow { get; init; }
+
+        [CommandOption("--push"), Description("Upload this folder's code instead of letting the server pull from Git")]
+        public bool Push { get; init; }
+
+        [CommandOption("--path <PATH>"), Description("Folder to push (default: current directory)")]
+        public string? Path { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
@@ -111,12 +117,61 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
             return 1;
         }
 
-        var gitRef = settings.Tag ?? settings.Ref;
-        var res = await api.PostAsync($"apps/{slug}/deploy", new { gitRef });
-        var deploymentId = res.GetProperty("deploymentId").GetString();
+        var deploymentId = settings.Push || ShouldPush(settings, slug)
+            ? await PushAsync(api, slug, settings, ct)
+            : await TriggerAsync(api, slug, settings);
+
+        if (deploymentId is null) return 1;
         AnsiConsole.MarkupLine($"[green]✓[/] Queued deployment [bold]{deploymentId}[/] for [bold]{slug}[/].");
 
-        return settings.Follow ? await StreamLogs(api, deploymentId!) : 0;
+        return settings.Follow ? await StreamLogs(api, deploymentId) : 0;
+    }
+
+    /// <summary>
+    /// Push when the folder looks like a project the user means to deploy and they didn't ask for a
+    /// specific Git ref. Asking for a branch or tag is an unambiguous "deploy from Git".
+    /// </summary>
+    private static bool ShouldPush(Settings settings, string slug)
+    {
+        if (settings.Ref is not null || settings.Tag is not null) return false;
+
+        var dir = settings.Path ?? Directory.GetCurrentDirectory();
+        // No git remote here → the server has nothing to pull, so pushing is the only thing that works.
+        return !Directory.Exists(System.IO.Path.Combine(dir, ".git"));
+    }
+
+    private static async Task<string?> TriggerAsync(ApiClient api, string slug, Settings settings)
+    {
+        var gitRef = settings.Tag ?? settings.Ref;
+        var res = await api.PostAsync($"apps/{slug}/deploy", new { gitRef });
+        return res.GetProperty("deploymentId").GetString();
+    }
+
+    /// <summary>Packs the folder and streams it to the server, CapRover-style.</summary>
+    private static async Task<string?> PushAsync(ApiClient api, string slug, Settings settings, CancellationToken ct)
+    {
+        var dir = System.IO.Path.GetFullPath(settings.Path ?? Directory.GetCurrentDirectory());
+        if (!Directory.Exists(dir))
+        {
+            AnsiConsole.MarkupLine($"[red]Folder not found:[/] {dir}");
+            return null;
+        }
+
+        var packed = await SourcePacker.PackAsync(dir, ct);
+
+        try
+        {
+            AnsiConsole.MarkupLine(
+                $"[grey]Packed[/] {packed.Files} files ({packed.Bytes / 1024.0 / 1024:0.#} MB) [grey]from[/] {dir}");
+            AnsiConsole.MarkupLine("[grey]Uploading…[/]");
+
+            var res = await api.PostFileAsync($"apps/{slug}/deploy/archive", packed.ArchivePath);
+            return res.GetProperty("deploymentId").GetString();
+        }
+        finally
+        {
+            try { File.Delete(packed.ArchivePath); } catch { /* temp file */ }
+        }
     }
 
     internal static async Task<int> StreamLogs(ApiClient api, string deploymentId)

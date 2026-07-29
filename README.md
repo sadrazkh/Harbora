@@ -219,6 +219,41 @@ curl -L -o "%USERPROFILE%\harbora.exe" https://github.com/sadrazkh/Harbora/relea
 dotnet tool install --global Harbora.Cli
 ```
 
+### Push code straight from your machine (no Git needed)
+
+If your project isn't in a Git repository the server can reach — a private machine, a work laptop, a
+folder you haven't pushed anywhere — create the app once and send the code yourself:
+
+```bash
+# 1. In the panel: New App → source "Push from my machine" → Save
+# 2. On your machine, once:
+harbora login --server https://panel.example.com --token <token from Settings>
+
+# 3. From the project folder, every time you want to deploy:
+harbora deploy my-app
+```
+
+The folder is packed, uploaded, and built **on the server** — the same build path a Git deploy uses,
+so stack auto-detection, zero-downtime cutover and rollback all behave identically.
+
+`harbora deploy` pushes automatically when the folder has no `.git`. Force it either way:
+
+| Flag | Effect |
+|---|---|
+| `--push` | Always upload this folder, even in a Git repo |
+| `--path <dir>` | Push a different folder than the current one |
+| `--ref <branch>` / `--tag <v1.0>` | Deploy from Git instead (never uploads) |
+
+**What is not uploaded.** `.dockerignore` is honoured first (it is what the build actually reads),
+then `.gitignore`. On top of that these are always skipped, even with no ignore file:
+
+`.git` · `node_modules` · `vendor` · `bin` · `obj` · `dist` · `build` · `.next` · `.venv` ·
+`__pycache__` · `.idea` · `.vs` · `.vscode` · **`.env`** · `.env.local`
+
+`.env` is excluded deliberately: it usually holds local database URLs and API keys. Set production
+values in the app's **Environment Variables**, not by uploading a file.
+
+
 ### Deploy directly
 
 ```bash

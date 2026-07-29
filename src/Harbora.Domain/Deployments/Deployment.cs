@@ -35,6 +35,13 @@ public class Deployment : BaseEntity
     /// <summary>Resulting image tag, e.g. "harbora/myapp:build-42".</summary>
     public string? ImageTag { get; set; }
 
+    /// <summary>
+    /// Path to the source archive uploaded for THIS deployment, when the code was pushed from a
+    /// developer's machine instead of pulled from Git. Per-deployment rather than per-app because
+    /// every push carries its own snapshot of the working directory.
+    /// </summary>
+    public string? SourceArchivePath { get; set; }
+
     /// <summary>When this is a rollback, the deployment whose image we re-released.</summary>
     public Guid? RolledBackFromId { get; set; }
 

@@ -18,7 +18,9 @@ public record DeploymentRequest(
     Guid TriggeredByUserId,
     string? GitRef = null,
     string? CommitSha = null,
-    Guid? RollbackToDeploymentId = null);
+    Guid? RollbackToDeploymentId = null,
+    /// <summary>Set when the source was pushed from a developer's machine rather than pulled from Git.</summary>
+    string? SourceArchivePath = null);
 
 /// <summary>Publishes live log lines + status changes to subscribers (SignalR hub, CLI stream).</summary>
 public interface IDeploymentLogStream

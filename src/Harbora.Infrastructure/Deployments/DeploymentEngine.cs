@@ -62,6 +62,7 @@ public sealed class DeploymentEngine(
             CommitSha = request.CommitSha,
             TriggeredByUserId = request.TriggeredByUserId,
             RolledBackFromId = request.RollbackToDeploymentId,
+            SourceArchivePath = request.SourceArchivePath,
             CreatedAt = clock.UtcNow
         };
         db.Deployments.Add(deployment);

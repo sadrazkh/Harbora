@@ -41,7 +41,32 @@
                     <div class="mt-1 font-semibold">@(isFa ? "سایت استاتیک" : "Static site")</div>
                     <div class="text-xs text-slate-500">@(isFa ? "از مخزن Git، پشت Nginx" : "From a Git repo, served by Nginx")</div>
                 </label>
+                @* No Git remote needed: create the app now, push code from your machine later. *@
+                <label class="cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
+                    <input class="sr-only" type="radio" asp-for="SourceType" value="Upload" data-src />
+                    <div class="text-2xl">⬆️</div>
+                    <div class="mt-1 font-semibold">@(isFa ? "ارسال از ترمینال" : "Push from my machine")</div>
+                    <div class="text-xs text-slate-500">@(isFa ? "بدون Git — با harbora deploy کد را بفرست" : "No Git — send code with harbora deploy")</div>
+                </label>
             </div>
+        </div>
+
+        @* Upload apps have nothing to configure here; they wait for their first push. *@
+        <div data-panel="Upload" class="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-sm text-slate-400">
+            @if (isFa)
+            {
+                <p>بعد از ساختن اپ، از پوشه‌ی پروژه‌تان این را اجرا کنید:</p>
+                <pre class="mt-3 rounded-lg bg-slate-950 p-3 text-xs text-slate-300 overflow-x-auto" dir="ltr"><code>harbora login --server @(Context.Request.Scheme)://@(Context.Request.Host)
+harbora deploy &lt;slug&gt;</code></pre>
+                <p class="mt-3 text-xs">پوشه بسته‌بندی و آپلود می‌شود؛ ساخت روی سرور انجام می‌گیرد. <code>node_modules</code>، <code>.git</code> و <code>.env</code> فرستاده نمی‌شوند.</p>
+            }
+            else
+            {
+                <p>After creating the app, run this from your project folder:</p>
+                <pre class="mt-3 rounded-lg bg-slate-950 p-3 text-xs text-slate-300 overflow-x-auto"><code>harbora login --server @(Context.Request.Scheme)://@(Context.Request.Host)
+harbora deploy &lt;slug&gt;</code></pre>
+                <p class="mt-3 text-xs">The folder is packed and uploaded; the build runs on the server. <code>node_modules</code>, <code>.git</code> and <code>.env</code> are never sent.</p>
+            }
         </div>
 
         @* ---- Essential field per source ---- *@
