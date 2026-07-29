@@ -184,10 +184,10 @@ public sealed class BackupEngine(
         // Decrypt into a working copy; unencrypted legacy artifacts pass through unchanged.
         var localPath = await UnprotectArtifactAsync(fetched, ct);
 
-        // A checksum only proves these are the bytes we stored — not that they are a usable archive.
-        // That distinction matters here because the volume restore below runs `rm -rf /data/*` and
-        // `tar xzf` as one shell command: the wipe happens FIRST, so discovering the archive is
-        // unreadable at tar time means the data is already gone with nothing to put back.
+        // A checksum only proves these are the bytes we stored — not that they form a usable archive.
+        // The restore itself extracts before it swaps (see RestoreScript), so a bad archive is no
+        // longer catastrophic; failing here still means the user learns immediately instead of after
+        // a helper container has run.
         await ProbeArchiveAsync(backup.Type, localPath, ct);
 
         if (backup.Type is BackupType.AppConfig)
@@ -211,16 +211,20 @@ public sealed class BackupEngine(
         var containerName = await ContainerForTargetAsync(backup.Type, backup.TargetRef, ct);
         if (containerName is not null) await StopIfRunning(containerName, ct);
 
-        // Last line of defence: keep the data we are about to destroy. Even a verified archive can
-        // turn out to hold the wrong thing, and by then `rm -rf /data/*` has already run.
+        // The swap below can undo a failed restore, but not a successful restore of the WRONG backup.
+        // This snapshot is what covers that case.
         await SnapshotBeforeRestoreAsync(volumeName, ct);
 
         var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
             _opt.HelperImage,
-            ["sh", "-c", $"rm -rf /data/* && tar xzf /backup/{fileName} -C /data"],
+            ["sh", "-c", RestoreScript.Build(fileName)],
             [(volumeName, "/data", false), (_opt.StagingVolume, "/backup", true)]),
             new Progress<string>(l => logger.LogDebug("restore: {Line}", l)), ct);
 
+        if (exit == RestoreScript.RolledBackExitCode)
+            throw new InvalidOperationException(
+                "The restore could not be completed and the volume's original contents were put back. " +
+                "Nothing was lost; check disk space on the server and try again.");
         if (exit != 0) throw new InvalidOperationException($"Restore failed (exit {exit}).");
         if (containerName is not null) await docker.RestartContainerAsync(await RequireContainerIdAsync(containerName, ct), ct);
     }

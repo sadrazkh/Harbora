@@ -128,8 +128,9 @@ and the assertions become the precise specification for the real E2E run once a 
 > emit an inner join that hid orphaned deployments from the crash reconciler; `WorkspaceId` is
 > denormalised onto `Deployment` instead (migration + backfill).
 >
-> Still outstanding: the restore runs `rm -rf /data/* && tar xzf …` as one shell command;
-> extract-then-swap would close the window entirely rather than relying on the gates in front of it.
+> ✅ The restore no longer wipes before it extracts: `RestoreScript` extracts into staging inside the
+> volume, moves the current contents aside, swaps, and only then discards them — and puts them back
+> if the swap fails. Verified live. **Phase E has no open items.**
 
 ---
 

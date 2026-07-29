@@ -5,6 +5,71 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-29 — Restore is now extract-then-swap (closes Phase E)
+
+The last open item. The restore shell was one line:
+
+```sh
+rm -rf /data/* && tar xzf /backup/ARCHIVE -C /data
+```
+
+The wipe ran **unconditionally and first**. Anything that went wrong afterwards — a truncated
+archive, a full disk, the wrong file — left an empty volume and nothing to put back. The gates added
+earlier (checksum, archive probe) make reaching that state unlikely, but "unlikely" is the wrong
+safety property for the most destructive operation in the product.
+
+**`RestoreScript`** replaces it with four ordered steps:
+1. Extract into a staging directory **inside the same volume** — a failure here cannot touch the
+   live data, and staying on one filesystem keeps the later moves cheap renames.
+2. Move the current contents **aside**, not delete.
+3. Move the extracted tree into place.
+4. Only now discard the set-aside copy.
+
+If a move fails mid-swap the script puts the original contents back and exits `90`, which the engine
+reports as *"the volume's original contents were put back. Nothing was lost."* — the first thing an
+operator wants to know after a failed restore.
+
+Cost: peak disk is roughly double the volume while a restore runs. That is the price of not being
+able to lose the data, and it is paid only during a restore.
+
+**Tests** (`RestoreScriptTests`) pin the properties rather than the text: extraction precedes any
+move or delete, the swap path renames instead of `rm`, the fallback copy is discarded only after the
+new tree is in place, a failed swap restores the original, staging lives inside the volume, the
+script never sweeps up its own working directories, and the archive name is single-quoted with
+embedded quotes escaped.
+
+One test of mine was wrong first: it asserted the injected `; rm -rf /data` text was *absent*, but
+correctly-escaped text still appears — inside quotes. Rewritten to assert the exact safe encoding,
+which is the property that actually matters.
+
+**Verified live**
+```
+data            : GOOD-V1
+backup          : Completed
+data changed to : BAD-V2
+restore         : GOOD-V1          ← recovered
+staging residue : none (no .harbora-* left in the volume)
+```
+PostgreSQL restarted cleanly on the swapped volume — worth noting, since PGDATA is unforgiving about
+stray files.
+
+**Checks:** `dotnet build` → 0 warnings / 0 errors · `dotnet test` → **313/313**. Test service,
+container, volume, backup rows and artifacts removed; staging volume empty; panel 200;
+`harbora doctor` clean.
+
+**Phase E is complete.** Every claim it made — encryption at rest, dry-run verification, the checksum
+gate, the pre-restore snapshot, a real restore, and now a restore that cannot destroy data on
+failure — is verified against real Docker and a real database.
+
+**Uncommitted:** `RestoreScript.cs`, `BackupEngine.cs`, `RestoreScriptTests.cs`.
+
+**Next step**
+- Rotate the server's root password (shared in chat during this work).
+- Doc 15 has no open items left; the remaining roadmap is doc 12's later phases (design system, app
+  detail redesign, Compose, PR previews, in-browser DB client).
+
+---
+
 ## 2026-07-29 — Backup → restore round trip: three bugs, then a real recovery
 
 Tested the last unverified Phase E claim on the server: a real managed PostgreSQL, a canary row, a
