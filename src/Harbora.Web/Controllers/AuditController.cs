@@ -71,7 +71,9 @@ public sealed class AuditController(HarboraDbContext db) : Controller
 
         // UTF-8 BOM so Excel opens non-ASCII actor names correctly.
         var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(csv.ToString())).ToArray();
-        return File(bytes, "text/csv", $"harbora-audit-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.csv");
+        // Invariant calendar: this is a download filename, not something to localise.
+        var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        return File(bytes, "text/csv", $"harbora-audit-{stamp}.csv");
     }
 
     private IQueryable<AuditLog> Filter(string? action, string? actor)

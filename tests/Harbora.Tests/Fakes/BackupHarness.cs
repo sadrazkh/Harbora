@@ -134,9 +134,8 @@ public sealed class BackupHarness : IDisposable
 
     public void DeleteArtifact(Backup backup) => File.Delete(backup.ArtifactPath!);
 
-    /// <summary>Mirrors BackupEngine's key derivation for the passthrough protector used in tests.</summary>
-    private static byte[] ArchiveKey() =>
-        System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("harbora-archive-key"));
+    /// <summary>Mirrors BackupEngine's key derivation for the protector used in tests.</summary>
+    private static byte[] ArchiveKey() => new PassthroughProtector().DeriveKey("backup-archive");
 
     private static async Task<string> Sha256Async(string path)
     {

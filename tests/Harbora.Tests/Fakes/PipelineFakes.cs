@@ -68,8 +68,24 @@ public sealed class FakeGitService(string localPath) : IGitService
 /// <summary>Identity protector — tests assert on redaction separately (SecurityTests).</summary>
 public sealed class PassthroughProtector : ISecretProtector
 {
-    public string Protect(string plaintext) => plaintext;
-    public string Unprotect(string ciphertext) => ciphertext;
+    /// <summary>
+    /// Randomised on purpose. The real protector uses a fresh nonce per call, and a deterministic
+    /// fake hid a production bug: the backup engine derived its archive key from Protect() output,
+    /// which round-tripped fine here and was unreproducible in production.
+    /// </summary>
+    public string Protect(string plaintext) =>
+        plaintext + "|nonce:" + Guid.NewGuid().ToString("N")[..8];
+
+    public string Unprotect(string ciphertext)
+    {
+        var marker = ciphertext.LastIndexOf("|nonce:", StringComparison.Ordinal);
+        return marker >= 0 ? ciphertext[..marker] : ciphertext;
+    }
+
+    /// <summary>Deterministic, like the real HKDF derivation.</summary>
+    public byte[] DeriveKey(string purpose) =>
+        System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes("test-key:" + purpose));
 }
 
 public sealed class PassthroughRedactor : ISecretRedactor

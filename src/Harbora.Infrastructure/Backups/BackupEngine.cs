@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -59,7 +60,10 @@ public sealed class BackupEngine(
             await db.SaveChangesAsync(ct);
 
             Directory.CreateDirectory(_opt.StagingDir);
-            var stamp = clock.UtcNow.ToString("yyyyMMdd-HHmmss");
+            // InvariantCulture: this stamp goes into a FILENAME. The panel's default culture is
+            // Persian, so the ambient calendar would write Jalali years (14050507) into artifact
+            // names — inconsistent with backups taken from a background job, and unsortable.
+            var stamp = clock.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
             var (key, stagedPath) = backup.Type switch
             {
                 BackupType.AppConfig => await BackupAppConfigAsync(backup, stamp, ct),
@@ -147,7 +151,19 @@ public sealed class BackupEngine(
             new Progress<string>(l => logger.LogDebug("backup: {Line}", l)), ct);
 
         if (exit != 0) throw new InvalidOperationException($"Volume archive failed (exit {exit}).");
-        return (key, Path.Combine(_opt.StagingDir, key));
+
+        // The helper container writes into the staging volume BY NAME while the panel reads it via a
+        // mount. If those resolve to different volumes — Compose prefixing the name was exactly this
+        // bug — tar reports success and the archive lands somewhere the panel can never read. Say so,
+        // instead of failing later with a bare "file not found".
+        var staged = Path.Combine(_opt.StagingDir, key);
+        if (!File.Exists(staged))
+            throw new InvalidOperationException(
+                $"The archive was created but is not visible at {staged}. The helper container mounts " +
+                $"the volume '{_opt.StagingVolume}' while the panel reads {_opt.StagingDir}; check that " +
+                "both resolve to the SAME docker volume (`docker volume ls`).");
+
+        return (key, staged);
     }
 
     // --- restore ---
@@ -339,9 +355,10 @@ public sealed class BackupEngine(
     /// <summary>
     /// Archives are encrypted with a key derived from the platform master key, so an operator who
     /// already holds the master key can always recover — there is no second secret to lose.
+    /// It must be DETERMINISTIC: an earlier version derived it from Protect(), which uses a random
+    /// nonce per call, so every archive was encrypted under a key that could never be reproduced.
     /// </summary>
-    private byte[] ArchiveKey() =>
-        SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(protector.Protect("harbora-archive-key")));
+    private byte[] ArchiveKey() => protector.DeriveKey("backup-archive");
 
     public async Task<BackupVerification> VerifyAsync(Guid backupId, CancellationToken ct)
     {
@@ -448,7 +465,10 @@ public sealed class BackupEngine(
     {
         if (!_opt.SnapshotBeforeRestore) return;
 
-        var name = $"pre-restore-{volumeName}-{clock.UtcNow:yyyyMMdd-HHmmss}.tgz";
+        // Restore runs inside a web request, where the culture is Persian — without the invariant
+        // calendar this produced names like "pre-restore-…-14050507-184916.tgz". Observed in production.
+        var name = "pre-restore-" + volumeName + "-" +
+                   clock.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".tgz";
         try
         {
             var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(

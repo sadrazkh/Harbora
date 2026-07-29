@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Harbora.Domain.Common;
 using Harbora.Tests.Fakes;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -123,6 +124,33 @@ public class BackupSafetyTests
 
         result.IsRestorable.Should().BeFalse();
         result.Reason.Should().Contain("not found");
+    }
+
+    [Fact]
+    public async Task An_archive_written_to_the_wrong_volume_is_reported_clearly()
+    {
+        // Production bug: the helper container mounts the staging volume by NAME while the panel
+        // reads it through a mount. Compose prefixed the name with the project directory, so those
+        // were two different volumes — tar exited 0 and the archive landed where the panel could
+        // never see it. Every volume/database backup failed with a bare "file not found", and a
+        // restore would have wiped the target volume before discovering the archive was missing.
+        using var h = new BackupHarness();
+        var backup = new Harbora.Domain.Backups.Backup
+        {
+            Id = Guid.NewGuid(), WorkspaceId = h.WorkspaceId, DestinationId = h.Destination.Id,
+            Type = BackupType.Volume, TargetRef = "some-volume", Status = BackupStatus.Pending
+        };
+        h.Db.Backups.Add(backup);
+        await h.Db.SaveChangesAsync();
+
+        // The fake reports success without producing a file — exactly what the wrong volume looked like.
+        h.Docker.OneOffExitCode = 0;
+        await h.Engine().RunAsync(backup.Id, default);
+
+        var stored = await h.Db.Backups.AsNoTracking().FirstAsync(b => b.Id == backup.Id);
+        stored.Status.Should().Be(BackupStatus.Failed);
+        stored.ErrorMessage.Should().ContainEquivalentOf("same docker volume",
+            "the message must name the cause, not just the missing path");
     }
 
     // ---- the integrity gate in front of restore ----

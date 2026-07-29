@@ -17,10 +17,10 @@ public sealed class AesGcmSecretProtector : ISecretProtector
 
     public AesGcmSecretProtector(string masterKeyBase64)
     {
-        _key = DeriveKey(masterKeyBase64);
+        _key = ParseMasterKey(masterKeyBase64);
     }
 
-    private static byte[] DeriveKey(string material)
+    private static byte[] ParseMasterKey(string material)
     {
         // Accept a raw 32-byte base64 key, or derive one from arbitrary text via SHA-256.
         try
@@ -31,6 +31,14 @@ public sealed class AesGcmSecretProtector : ISecretProtector
         catch (FormatException) { /* fall through to hash */ }
         return SHA256.HashData(Encoding.UTF8.GetBytes(material));
     }
+
+    /// <summary>
+    /// HKDF-SHA256 over the master key, salted by purpose. Same purpose + same master key always
+    /// yields the same 32 bytes, and one purpose's key reveals nothing about another's.
+    /// </summary>
+    public byte[] DeriveKey(string purpose) =>
+        HKDF.DeriveKey(HashAlgorithmName.SHA256, _key, outputLength: 32,
+                       salt: null, info: Encoding.UTF8.GetBytes("harbora:" + purpose));
 
     public string Protect(string plaintext)
     {

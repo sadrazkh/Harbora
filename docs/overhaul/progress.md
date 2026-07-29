@@ -5,6 +5,75 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-29 — Backup → restore round trip: three bugs, then a real recovery
+
+Tested the last unverified Phase E claim on the server: a real managed PostgreSQL, a canary row, a
+backup, then destroy the data and restore it.
+
+**Bug 1 (pre-existing, CRITICAL) — the staging volume was two different volumes.**
+The backup ran `tar` in a helper container that mounts the staging volume **by name**
+(`harbora_backups`), while the panel reads it through a Compose mount. Compose prefixes volume names
+with the project directory, so the panel had `deploy_harbora_backups` and Docker silently
+auto-created a *separate* `harbora_backups` for the helper. tar exited 0, the 6.6 MB archive landed
+in a volume the panel can never read, and the backup failed with "Could not find file".
+
+So **volume and database backups have never worked**. Worse, restore has the same mismatch: it runs
+`rm -rf /data/* && tar xzf …` in that helper — it would have wiped the target volume and then failed
+to find the archive. Fixed by giving the volume an explicit `name:` so Compose doesn't prefix it,
+plus a guard that checks the archive is visible after tar and names the volume mismatch instead of
+failing later with a bare "file not found".
+
+**Bug 2 (mine, from Phase E) — archives were encrypted with an unreproducible key.**
+`ArchiveKey()` was `SHA256(protector.Protect("harbora-archive-key"))`. `Protect` uses a **fresh nonce
+per call**, so the "derived" key was different every time: the archive was sealed with a key nothing
+could ever reproduce. Verification failed with *"the computed authentication tag did not match"*.
+
+The unit tests missed it because the test double returned its input unchanged — deterministic where
+the real thing is not. Fixed with a proper `ISecretProtector.DeriveKey(purpose)` (HKDF-SHA256 over
+the master key), and the test double is now **randomised like the real protector** so this class of
+bug can't hide again. `KeyDerivationTests` pins the determinism contract against the real
+implementation and states plainly that `Protect` is *not* deterministic.
+
+**Bug 3 (minor) — Jalali dates in artifact filenames.**
+The pre-restore snapshot came out as `pre-restore-…-14050507-184916.tgz`. Restore runs inside a web
+request, where the culture is Persian, so the ambient calendar leaked into a machine-facing filename
+— while backups from the background job used Gregorian. Same directory, two calendars, names that no
+longer sort. Filenames now use `InvariantCulture`; `ArtifactNamingTests` demonstrates the hazard is
+real and that every culture now yields the same name.
+
+**Round trip, verified end to end**
+```
+before backup      : ORIGINAL-DATA
+backup             : Completed
+artifact           : …tgz.enc   (magic "HRBENC")
+plaintext leak     : 0 occurrences of the canary in the archive
+verify (dry run)   : "Backup verified — restorable (4 checks passed)"
+data destroyed     : CORRUPTED
+restore            : ORIGINAL-DATA          ← the actual recovery
+artifact corrupted : restore REFUSED — "does not match its recorded checksum … your current data
+                     has NOT been touched"
+data after refusal : ORIGINAL-DATA          ← the gate protected live data
+```
+The pre-restore safety snapshot was also produced, confirming that part of Phase E works too.
+
+Every Phase E claim — encryption at rest, dry-run verification, the checksum gate, the pre-restore
+snapshot, and an actual restore — is now confirmed against real Docker and a real database rather
+than a fake engine.
+
+**Checks:** `dotnet build` → 0 warnings / 0 errors · `dotnet test` → **303/303**. Test services,
+containers, volumes, backup rows and artifacts removed; staging volume empty; panel 200,
+`harbora doctor` clean.
+
+**Uncommitted:** `SecurityAbstractions.cs`, `AesGcmSecretProtector.cs`, `BackupEngine.cs`,
+`AuditController.cs`, `docker-compose.yml`, and three test files.
+
+**Next step**
+- Harden the restore shell command (extract-then-swap) — the last item on the Phase E list.
+- Note for existing installs: any archive written before this fix cannot be decrypted. Since volume
+  backups never completed successfully, there is nothing real to lose.
+
+---
+
 ## 2026-07-29 — Git deploys were broken since day one; cutover + rollback verified live
 
 Tested a real Git deployment on the server (`heroku/node-js-getting-started` — Node, **no

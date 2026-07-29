@@ -5,6 +5,17 @@ public interface ISecretProtector
 {
     string Protect(string plaintext);
     string Unprotect(string ciphertext);
+
+    /// <summary>
+    /// A stable 32-byte key derived from the master key for a named purpose (HKDF). Deterministic by
+    /// contract: callers encrypt with it now and must decrypt with it later.
+    /// <para>
+    /// Do NOT derive a key by hashing <see cref="Protect"/>'s output — it uses a fresh nonce per
+    /// call, so it returns something different every time. Backup archive encryption did exactly
+    /// that and produced an archive nothing could ever decrypt.
+    /// </para>
+    /// </summary>
+    byte[] DeriveKey(string purpose);
 }
 
 /// <summary>Password hashing (PBKDF2). Kept behind an interface so it can be swapped for Argon2.</summary>

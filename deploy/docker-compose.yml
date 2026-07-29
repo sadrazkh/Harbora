@@ -117,4 +117,10 @@ volumes:
   harbora_acme:
   harbora_builds:
   harbora_backups:
+    # Explicit name so Compose does NOT prefix it with the project directory ("deploy_").
+    # The panel mounts this volume, and separately asks Docker to mount it by name into the one-off
+    # tar/untar containers. With prefixing those were two DIFFERENT volumes: every volume backup was
+    # written somewhere the panel could never read, and a restore would have wiped the target volume
+    # and then failed to find the archive.
+    name: harbora_backups
   harbora_keys:
