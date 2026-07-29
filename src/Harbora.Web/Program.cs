@@ -13,6 +13,11 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Break-glass admin commands run before anything else is configured, so they still work when the
+// app itself refuses to start (missing master key, lost admin password). See AdminCommands.
+if (args.Length > 0 && string.Equals(args[0], AdminCommands.Verb, StringComparison.OrdinalIgnoreCase))
+    return await AdminCommands.RunAsync(args, builder.Configuration);
+
 // ---- Persistence ----
 builder.Services.AddDbContext<HarboraDbContext>(o =>
     o.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")
@@ -104,6 +109,11 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+// 404/403/401 never reach an action, so without this the user gets a blank page with a bare status
+// code. Re-executing into the themed page keeps the real status code on the response while giving
+// them something they can act on.
+app.UseStatusCodePagesWithReExecute("/error/{0}");
+
 // Must run before anything that reads the client IP (rate limiter, audit logging).
 app.UseForwardedHeaders();
 
@@ -125,4 +135,5 @@ app.MapControllers(); // attribute-routed API + controllers
 app.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
 app.MapHub<DeploymentHub>("/hubs/deployments");
 
-app.Run();
+await app.RunAsync();
+return 0;

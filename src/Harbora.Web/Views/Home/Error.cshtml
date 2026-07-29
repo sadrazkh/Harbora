@@ -1,0 +1,80 @@
+@using Harbora.Web.Models
+@model ErrorViewModel
+@inject Microsoft.AspNetCore.Mvc.Localization.IViewLocalizer T
+@{
+    // One page for every status code: the copy changes, the shell does not.
+    var (title, detail, icon) = Model.StatusCode switch
+    {
+        404 => (T["Page not found"].Value,
+                T["This address doesn't exist in Harbora. It may have been renamed, or the app or deployment it pointed to was deleted."].Value,
+                "🧭"),
+        403 => (T["You don't have access to this"].Value,
+                T["Your role doesn't include this action. Ask an owner or admin of this workspace to grant it."].Value,
+                "🔒"),
+        401 => (T["Please sign in"].Value,
+                T["Your session has ended. Sign in again to continue."].Value,
+                "🔑"),
+        429 => (T["Too many requests"].Value,
+                T["You've hit the rate limit for this action. Wait a minute and try again."].Value,
+                "⏳"),
+        503 => (T["Harbora is starting up"].Value,
+                T["A required service isn't ready yet. This usually clears within a minute of a restart."].Value,
+                "⚙️"),
+        _ when Model.StatusCode >= 500 => (T["Something went wrong"].Value,
+                T["Harbora hit an unexpected error. The details were written to the panel logs."].Value,
+                "⚠️"),
+        _ => (T["That request couldn't be completed"].Value,
+                T["Harbora couldn't handle that request."].Value,
+                "•")
+    };
+    ViewData["Title"] = title;
+}
+
+<div class="min-h-[60vh] flex items-center justify-center px-4">
+    <div class="w-full max-w-lg text-center">
+        <div class="text-5xl mb-4" aria-hidden="true">@icon</div>
+
+        <div class="text-7xl font-bold tracking-tight text-slate-700 select-none">@Model.StatusCode</div>
+        <h1 class="mt-2 text-xl font-semibold text-slate-100">@title</h1>
+        <p class="mt-3 text-sm text-slate-400 leading-relaxed">@detail</p>
+
+        @if (!string.IsNullOrWhiteSpace(Model.OriginalPath))
+        {
+            <div class="mt-4 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2">
+                <span class="text-xs text-slate-500">@T["Requested"]:</span>
+                <code class="text-xs text-slate-300 break-all">@Model.OriginalPath</code>
+            </div>
+        }
+
+        <div class="mt-6 flex flex-wrap items-center justify-center gap-2">
+            <a href="/" class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-medium text-white">
+                @T["Back to dashboard"]
+            </a>
+            @if (Model.StatusCode == 401)
+            {
+                <a href="/account/login" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@T["Sign in"]</a>
+            }
+            else
+            {
+                <a href="javascript:history.back()" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@T["Go back"]</a>
+            }
+        </div>
+
+        @if (Model.StatusCode >= 500)
+        {
+            @* Recovery path for the case where the panel itself is unhealthy — the operator needs
+               to know there is a terminal command that works even when the UI doesn't. *@
+            <p class="mt-6 text-xs text-slate-500">
+                @T["On the server, run"] <code class="text-slate-400">harbora doctor</code>
+                @T["to check configuration and container health."]
+            </p>
+        }
+
+        @if (Model.ShowRequestId)
+        {
+            <p class="mt-4 text-xs text-slate-600">
+                @T["Reference"]: <code class="select-all">@Model.RequestId</code>
+            </p>
+        }
+    </div>
+</div>

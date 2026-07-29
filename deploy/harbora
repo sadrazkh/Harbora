@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# harbora — server-side admin & recovery command.
+#
+# Installed to /usr/local/bin/harbora by deploy/install.sh.
+#
+# The commands here are split deliberately:
+#   * Host-side (doctor, env, set-domain, fix-key, restart, logs) work purely from the shell, so
+#     they still work when the panel container will not start at all.
+#   * Database-side (info, users, reset-password, make-owner, unlock) run inside a one-off panel
+#     container via `docker compose run`, which does NOT require the running panel to be healthy.
+#
+# NOTE: on a *developer* machine `harbora` is the client CLI (deploy/install-cli.sh). This is the
+# server tool; they are not meant to be installed on the same box.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+HARBORA_DIR="${HARBORA_DIR:-/opt/harbora}"
+COMPOSE_DIR="${COMPOSE_DIR:-$HARBORA_DIR/app/deploy}"
+ENV_FILE="$COMPOSE_DIR/.env"
+
+c_red=$'\033[31m'; c_green=$'\033[32m'; c_yellow=$'\033[33m'; c_dim=$'\033[2m'; c_off=$'\033[0m'
+ok()   { echo "${c_green}✓${c_off} $*"; }
+warn() { echo "${c_yellow}!${c_off} $*"; }
+err()  { echo "${c_red}✗${c_off} $*" >&2; }
+die()  { err "$*"; exit 1; }
+
+need_install() {
+  [ -f "$COMPOSE_DIR/docker-compose.yml" ] ||
+    die "Harbora isn't installed at $HARBORA_DIR. Set HARBORA_DIR if you installed it elsewhere."
+}
+
+compose() { need_install; (cd "$COMPOSE_DIR" && docker compose "$@"); }
+
+# Runs an admin command in a throwaway panel container. The image's entrypoint is
+# `dotnet Harbora.Web.dll`, so the arguments below become admin commands rather than starting a web
+# server — which is why this still works while the real panel is crash-looping.
+panel_admin() {
+  need_install
+  (cd "$COMPOSE_DIR" && docker compose run --rm -T panel admin "$@")
+}
+
+env_get() { [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | head -1 || true; }
+
+# Rewrites one key in .env. Done by filtering rather than sed-in-place because values (base64 keys,
+# connection strings) routinely contain characters that would be interpreted as sed syntax.
+env_set() {
+  local key="$1" value="$2" tmp
+  [ -f "$ENV_FILE" ] || die "No .env at $ENV_FILE."
+  tmp="$(mktemp)"
+  grep -v "^${key}=" "$ENV_FILE" > "$tmp" || true
+  printf '%s=%s\n' "$key" "$value" >> "$tmp"
+  # Preserve permissions on a file that holds every secret the platform has.
+  cat "$tmp" > "$ENV_FILE"
+  rm -f "$tmp"
+  chmod 600 "$ENV_FILE"
+}
+
+# ---------------------------------------------------------------------------
+
+cmd_doctor() {
+  need_install
+  local problems=0
+
+  echo "Harbora doctor"
+  echo "────────────────────────────────────────"
+
+  # 1. The single most common cause of "it won't come up after an update".
+  local key; key="$(env_get HARBORA_MASTER_KEY)"
+  if [ -z "$key" ]; then
+    err "HARBORA_MASTER_KEY is missing from $ENV_FILE"
+    echo "     The panel refuses to start without it, so your secrets can't be silently readable."
+    echo "     Fix:  harbora fix-key      (generates one and restarts)"
+    problems=$((problems+1))
+  elif [[ "$key" == dev-insecure* ]]; then
+    err "HARBORA_MASTER_KEY is the insecure development default"
+    echo "     Fix:  harbora fix-key"
+    problems=$((problems+1))
+  else
+    ok "Master key is set"
+  fi
+
+  # 2. Config the user is most likely to have got wrong.
+  local panel root
+  panel="$(env_get PANEL_DOMAIN)"; root="$(env_get ROOT_DOMAIN)"
+  [ -n "$panel" ] && ok "Panel domain: $panel" || { err "PANEL_DOMAIN is not set"; problems=$((problems+1)); }
+  [ -n "$root" ]  && ok "Apps domain:  $root"  || { err "ROOT_DOMAIN is not set";  problems=$((problems+1)); }
+  [ -n "$(env_get POSTGRES_PASSWORD)" ] && ok "Database password is set" || {
+    err "POSTGRES_PASSWORD is not set"; problems=$((problems+1)); }
+
+  # 3. Containers.
+  echo
+  echo "Containers:"
+  local svc state
+  for svc in harbora-postgres harbora-traefik harbora-panel; do
+    state="$(docker inspect -f '{{.State.Status}}' "$svc" 2>/dev/null || echo 'missing')"
+    case "$state" in
+      running) ok "  $svc: running" ;;
+      missing) err "  $svc: not created"; problems=$((problems+1)) ;;
+      *)       err "  $svc: $state"; problems=$((problems+1)) ;;
+    esac
+  done
+
+  # 4. If the panel is down, its own logs are the most useful thing we can surface.
+  if [ "$(docker inspect -f '{{.State.Status}}' harbora-panel 2>/dev/null || echo missing)" != "running" ]; then
+    echo
+    warn "Last lines from the panel (most recent errors last):"
+    docker logs --tail 20 harbora-panel 2>&1 | sed 's/^/    /' || true
+  fi
+
+  # 5. Ports.
+  echo
+  local p
+  for p in 80 443; do
+    if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}\$"; then
+      ok "Port $p is bound"
+    else
+      warn "Port $p is not bound — Traefik may not be running"
+    fi
+  done
+
+  echo
+  if [ "$problems" -eq 0 ]; then
+    ok "No configuration problems found."
+    echo "  If you still can't sign in:  harbora reset-password"
+  else
+    err "$problems problem(s) found — see the fixes above."
+    return 1
+  fi
+}
+
+cmd_env() {
+  need_install
+  [ -f "$ENV_FILE" ] || die "No .env at $ENV_FILE."
+  echo "Configuration ($ENV_FILE)"
+  echo "────────────────────────────────────────"
+  # Secrets are shown as set/not-set, never printed: this output gets pasted into issues.
+  while IFS='=' read -r k v; do
+    [ -z "${k:-}" ] && continue
+    case "$k" in \#*) continue ;; esac
+    case "$k" in
+      *PASSWORD*|*KEY*|*SECRET*|*TOKEN*)
+        [ -n "$v" ] && echo "$k=${c_dim}(set, hidden)${c_off}" || echo "$k=${c_red}(empty)${c_off}" ;;
+      *) echo "$k=$v" ;;
+    esac
+  done < "$ENV_FILE"
+  echo
+  echo "${c_dim}Change a value:  harbora set-domain <panel> <apps>   |   harbora fix-key${c_off}"
+}
+
+cmd_fix_key() {
+  need_install
+  [ -f "$ENV_FILE" ] || die "No .env at $ENV_FILE."
+  local existing; existing="$(env_get HARBORA_MASTER_KEY)"
+  if [ -n "$existing" ] && [[ "$existing" != dev-insecure* ]]; then
+    warn "A master key is already set."
+    echo "  Replacing it makes every stored secret (env vars, git tokens, agent tokens) unreadable."
+    read -rp "  Type REPLACE to generate a new one anyway: " confirm
+    [ "$confirm" = "REPLACE" ] || { echo "Cancelled."; return 0; }
+  fi
+  env_set HARBORA_MASTER_KEY "$(openssl rand -base64 32)"
+  ok "Master key written to $ENV_FILE."
+  cmd_restart
+}
+
+cmd_set_domain() {
+  need_install
+  local panel="${1:-}" root="${2:-}"
+  [ -n "$panel" ] || die "Usage: harbora set-domain <panel-domain> <apps-domain>
+  e.g. harbora set-domain panel.example.com apps.example.com"
+  [ -n "$root" ] || die "An apps domain is required too (used for *.apps subdomains)."
+
+  env_set PANEL_DOMAIN "$panel"
+  env_set ROOT_DOMAIN "$root"
+  ok "Domains updated: panel=$panel apps=$root"
+  warn "Point DNS at this server for $panel and *.$root, then wait for the certificate."
+  cmd_restart
+}
+
+cmd_restart() { compose up -d; ok "Harbora restarted."; }
+cmd_stop()    { compose stop; ok "Harbora stopped."; }
+cmd_status()  { compose ps; }
+cmd_logs()    { compose logs -f --tail 200 "${1:-panel}"; }
+
+cmd_help() {
+  cat <<'EOF'
+harbora — Harbora server administration
+
+  Diagnose
+    harbora doctor                      Check config, containers and ports; explain any problem
+    harbora status                      Container status
+    harbora logs [panel|traefik|postgres]
+
+  Access recovery (work even when the panel won't start)
+    harbora info                        Show config, DB state and the owner account
+    harbora users                       List accounts and roles
+    harbora reset-password              Reset the owner's password (prompts)
+    harbora reset-password --email you@example.com --password 'new-pass'
+    harbora make-owner --email you@example.com
+    harbora unlock --email you@example.com
+
+  Configuration
+    harbora env                         Show settings (secrets hidden)
+    harbora set-domain <panel> <apps>   Change domains and restart
+    harbora fix-key                     Generate a missing/insecure master key and restart
+
+  Lifecycle
+    harbora restart | stop
+
+  Override the install location with HARBORA_DIR (default /opt/harbora).
+EOF
+}
+
+case "${1:-help}" in
+  doctor)         shift; cmd_doctor "$@" ;;
+  env)            shift; cmd_env "$@" ;;
+  fix-key)        shift; cmd_fix_key "$@" ;;
+  set-domain)     shift; cmd_set_domain "$@" ;;
+  restart)        shift; cmd_restart "$@" ;;
+  stop)           shift; cmd_stop "$@" ;;
+  status)         shift; cmd_status "$@" ;;
+  logs)           shift; cmd_logs "$@" ;;
+  info|users|reset-password|make-owner|unlock)
+                  panel_admin "$@" ;;
+  help|--help|-h) cmd_help ;;
+  *)              err "Unknown command '$1'."; echo; cmd_help; exit 1 ;;
+esac

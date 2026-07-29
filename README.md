@@ -85,6 +85,71 @@ curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/inst
 Or from the checkout: `cd /opt/harbora/app/deploy && docker compose up -d --build` (update),
 `docker compose down` (stop), `docker compose down -v` (also wipe data).
 
+Updating never overwrites `deploy/.env`, but it **does** add settings that newer versions require and
+your file predates — most importantly `HARBORA_MASTER_KEY`. Without that backfill the panel would
+refuse to start after an update (it fails closed rather than leaving secrets decryptable), which looks
+like the update broke everything. If an update ever leaves the panel down, run:
+
+```bash
+harbora doctor
+```
+
+---
+
+## 🆘 `harbora` — server administration & recovery
+
+The installer puts a **`harbora`** command on the server (`/usr/local/bin/harbora`). It exists for the
+moment you can't get into the panel: it shows what the platform is configured with, explains what is
+wrong, and can reset the admin password.
+
+The recovery commands deliberately **do not need a healthy panel** — they run the app as a one-off
+container that never starts the web server, so they still work while the panel is crash-looping.
+
+```bash
+harbora doctor      # ← start here: checks config, containers, ports, and prints the panel's last errors
+```
+
+### Diagnose
+
+| Command | What it does |
+|---|---|
+| `harbora doctor` | Checks the master key, domains, DB password, container states and ports 80/443. Prints the panel's recent log lines when it isn't running, and names the fix for each problem found |
+| `harbora status` | Container status (`docker compose ps`) |
+| `harbora logs [panel\|traefik\|postgres]` | Follow logs; defaults to `panel` |
+| `harbora info` | Configuration as the **app** sees it: master key state, domains, database reachability, pending migrations, user/workspace counts, and the owner's email |
+| `harbora env` | Everything in `deploy/.env`. Secrets are shown as `(set, hidden)` — safe to paste into an issue |
+
+### Get back in
+
+| Command | What it does |
+|---|---|
+| `harbora users` | List accounts, roles and whether they're active |
+| `harbora reset-password` | Reset the **owner's** password (prompts for the new one) |
+| `harbora reset-password --email you@example.com --password 'new-pass'` | Non-interactive form |
+| `harbora make-owner --email you@example.com` | Promote an account to Owner — for when the only owner was deleted or demoted |
+| `harbora unlock --email you@example.com` | Re-enable a deactivated account without changing its password |
+
+Passwords must be at least 8 characters. A reset also re-activates the account, because a locked-out
+admin usually needs both.
+
+### Change settings
+
+| Command | What it does |
+|---|---|
+| `harbora set-domain <panel-domain> <apps-domain>` | Change both domains and restart. Point DNS at the server first |
+| `harbora fix-key` | Generate a `HARBORA_MASTER_KEY` when it's missing or still the insecure development default, then restart |
+| `harbora restart` / `harbora stop` | Lifecycle |
+
+> ⚠️ `harbora fix-key` **replaces** an existing key only if you type `REPLACE` when prompted. Replacing a
+> working key makes every stored secret — env vars, git tokens, agent tokens — permanently unreadable.
+> It is meant for the case where no usable key exists at all.
+
+Installed somewhere other than `/opt/harbora`? Set `HARBORA_DIR=/your/path harbora doctor`.
+
+> On a **developer** machine, `harbora` is the client CLI instead (see *CLI* below). They're separate
+> tools for separate machines — the server one is installed by `install.sh`, the client one by
+> `install-cli.sh`.
+
 ---
 
 ## ▶️ First run
@@ -246,10 +311,14 @@ dotnet run --project src/Harbora.Web                             # auto-migrates
 
 ## 🔧 Troubleshooting
 
-Run all commands from `/opt/harbora/app/deploy`.
+**Start with `harbora doctor`** — it checks everything in the table below and names the fix.
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| **Nothing comes up after an update** — panel container restarts in a loop | `deploy/.env` was created by an older installer and has no `HARBORA_MASTER_KEY`. The panel now *refuses to start* without one rather than leave every stored secret trivially decryptable | `harbora doctor` names it; `harbora fix-key` generates one and restarts. Installer `update` now backfills it automatically |
+| **Can't sign in** / password forgotten / owner account lost | — | `harbora reset-password` (owner), or `harbora make-owner --email you@example.com`. Both work while the panel is down |
+| **Wrong domain** after moving servers or changing DNS | `PANEL_DOMAIN`/`ROOT_DOMAIN` still point at the old name | `harbora set-domain panel.example.com apps.example.com` |
+| Not sure what's configured | — | `harbora info` (as the app sees it) or `harbora env` (raw, secrets hidden) |
 | Panel returns **404** (Traefik default page) | Traefik didn't read the panel container's labels — usually the Docker-API error below, or Traefik started before the panel | `docker compose logs traefik \| tail -50` → then `docker compose restart traefik` |
 | Traefik log: **`client version 1.24 is too old. Minimum supported API version is 1.40`** | Old Traefik (≤ v3.2) with new Docker Engine (27+/29) | This repo pins **traefik:v3.6** (compatible). Update: `docker compose pull traefik && docker compose up -d traefik` |
 | **No SSL certificate** / browser warning persists | DNS doesn't point at the server, or port **80** isn't reachable (HTTP-01 challenge needs it) | Check DNS: `getent hosts panel.your-domain` must return the server IP. Open port 80. ACME log: `docker logs harbora-traefik 2>&1 \| grep -i acme \| tail -20` |

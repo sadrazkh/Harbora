@@ -5,6 +5,74 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-29 — Lockout recovery (`harbora` command), upgrade repair, themed error pages
+
+**Reported:** after running `update`, the panel would no longer come up at all.
+
+**Root cause — the upgrade path, not the domain or the password.**
+`install.sh`'s `write_env()` keeps an existing `.env` untouched, and `cmd_update` never touched it
+either. A `.env` written by an installer older than PR #1 has **no `HARBORA_MASTER_KEY`** — and PR #1
+made the panel *fail closed* without one (correctly: an unset key makes every stored secret trivially
+decryptable). So the update was working as designed and the platform was refusing to boot for a good
+reason it had no way to communicate. Nothing in the product could tell the operator that.
+
+**Fixes**
+1. **Upgrade repair.** `backfill_env`/`repair_env` add any *missing* key to an existing `.env`
+   (existing values never overwritten). `cmd_update` runs it before starting containers.
+2. **`harbora` server command** (`deploy/harbora`, installed to `/usr/local/bin` on install *and*
+   update). Split deliberately by what still works when things are broken:
+   - Host-side — `doctor`, `env`, `set-domain`, `fix-key`, `status`, `logs`, `restart` — pure shell,
+     so they work when the panel container will not start at all. `doctor` checks the master key,
+     domains, DB password, container states and ports, prints the panel's last 20 log lines when it
+     is down, and names the fix for each problem.
+   - Database-side — `info`, `users`, `reset-password`, `make-owner`, `unlock` — run through
+     `docker compose run --rm panel admin …`. The image's entrypoint is `dotnet Harbora.Web.dll`, so
+     these start a one-off container that never starts a web server.
+3. **`AdminCommands`** in the Web host, dispatched from `Program.cs` **before** any service
+   registration. This is the key design point: it never calls `AddHarboraInfrastructure`, because the
+   situations it exists for are exactly the ones where that throws. A recovery tool that needs a
+   healthy app is useless precisely when it is needed.
+4. **Themed error pages.** `HomeController.Error()` rendered `Views/Home/Error.cshtml` — **which did
+   not exist**, so handling an error raised a second error. And nothing handled 404 at all: a mistyped
+   URL gave a blank page with a bare status code. Added the view (site shell, bilingual, per-status
+   copy for 404/403/401/429/503/5xx, request id, and a pointer to `harbora doctor` on 5xx) plus
+   `UseStatusCodePagesWithReExecute`, which keeps the real status code on the response.
+5. **README** — new "🆘 `harbora` — server administration & recovery" section, the lockout row added
+   to Troubleshooting, and the update section now explains the backfill and why it exists.
+
+**Files changed**
+- New: `deploy/harbora`, `Web/Infrastructure/AdminCommands.cs`, `Web/Infrastructure/AdminDiagnostics.cs`,
+  `Web/Views/Home/Error.cshtml`, `tests/…/AdminDiagnosticsTests.cs`, `tests/…/ErrorPageTests.cs`.
+- Edited: `install.sh`, `docker-compose.yml` (panel now sees `PANEL_DOMAIN`/`ROOT_DOMAIN` so
+  `harbora info` can report them), `Program.cs`, `HomeController.cs`, `ErrorViewModel.cs`, `README.md`.
+
+**Checks run**
+- `dotnet build Harbora.slnx -c Release` → 0 warnings / 0 errors.
+- `dotnet test` → **283/283 passed** (was 259).
+- `bash -n` on both shell scripts.
+- Ran the real command: `dotnet Harbora.Web.dll admin help` and `admin info` — the latter correctly
+  reported the insecure dev key, redacted the DB password and exited non-zero on an unreachable
+  database.
+- Deleted `Error.cshtml` and confirmed `The_error_view_exists_on_disk` fails — the guard actually
+  catches the original defect.
+
+**Honest notes**
+- The error pages were **not** verified in a running browser: booting the app needs a reachable
+  Postgres and there is no Docker or usable local DB in this environment. Covered instead by
+  controller-level tests (status code preserved, correct view name and model) plus the on-disk view
+  guard. A real HTTP check is still worth doing on the server.
+- `AdminDiagnostics` (master-key description, connection-string redaction) is unit-tested because that
+  output is what a locked-out operator pastes into a bug report; a leaked DB password there would be a
+  new problem created by the recovery tool.
+- `harbora fix-key` refuses to replace a working key without typing `REPLACE`, since replacing one
+  makes every stored secret permanently unreadable.
+
+**Next step**
+- On the affected server: `harbora doctor`, then `harbora fix-key` if it reports the missing key.
+- Still outstanding from Phase E: harden the restore shell command (extract-then-swap).
+
+---
+
 ## 2026-07-28 — Global query filters: workspace scoping (closes P13)
 
 **What was done**

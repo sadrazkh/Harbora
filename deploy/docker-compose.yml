@@ -74,6 +74,9 @@ services:
       Traefik__DynamicConfigPath: "/dynamic/harbora.yml"
       Runtime__RootDomain: ${ROOT_DOMAIN}
       ASPNETCORE_ENVIRONMENT: Production
+      # Surfaced so `harbora info` can report what the panel is actually configured with.
+      PANEL_DOMAIN: ${PANEL_DOMAIN}
+      ROOT_DOMAIN: ${ROOT_DOMAIN}
     volumes:
       # The panel talks to Docker directly (single-server mode) and writes proxy config.
       - /var/run/docker.sock:/var/run/docker.sock

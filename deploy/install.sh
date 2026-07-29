@@ -170,10 +170,40 @@ configure_domains() {
   fi
 }
 
+# Adds a key to .env only if it is absent. Upgrades depend on this: a .env written by an older
+# installer has no HARBORA_MASTER_KEY, and since the panel now fails closed without one it would
+# refuse to start after an update with no obvious reason. Backfilling is what makes `update` safe.
+backfill_env() {
+  local key="$1" value="$2"
+  if grep -q "^${key}=" .env 2>/dev/null && [ -n "$(sed -n "s/^${key}=//p" .env | head -1)" ]; then
+    return 1
+  fi
+  grep -v "^${key}=" .env > .env.tmp 2>/dev/null || true
+  printf '%s=%s
+' "$key" "$value" >> .env.tmp
+  mv .env.tmp .env
+  chmod 600 .env
+  return 0
+}
+
+repair_env() {
+  local repaired=0
+  backfill_env HARBORA_MASTER_KEY "$(openssl rand -base64 32)" && {
+    warn "HARBORA_MASTER_KEY was missing — generated one. / کلید اصلی نبود؛ ساخته شد."
+    repaired=1; }
+  backfill_env POSTGRES_USER "harbora" && repaired=1
+  backfill_env POSTGRES_DB "harbora" && repaired=1
+  [ "$repaired" -eq 1 ] && ok "Repaired .env (existing values untouched)." || true
+}
+
 write_env() {
   mkdir -p "$COMPOSE_DIR/traefik/dynamic"
   cd "$COMPOSE_DIR"
-  if [ -f .env ]; then ok "Existing .env kept (secrets preserved). / تنظیمات قبلی حفظ شد."; return; fi
+  if [ -f .env ]; then
+    ok "Existing .env kept (secrets preserved). / تنظیمات قبلی حفظ شد."
+    repair_env
+    return
+  fi
 
   configure_domains
 
@@ -285,12 +315,21 @@ next_steps() {
   echo "  2) آدرس setup را باز کنید و حساب مدیر بسازید. / Open the setup URL, create the owner account."
   echo "  3) اولین اپ را بسازید و دیپلوی کنید. / Create and deploy your first app."
   echo
-  echo "Manage:  cd ${COMPOSE_DIR} && docker compose [ps | logs -f panel | logs -f traefik | restart]"
+  echo "Manage:  harbora status | harbora logs | harbora restart"
+  echo "Trouble: harbora doctor          (checks config, containers, ports)"
+  echo "Locked out? harbora reset-password"
+}
+
+# Puts the `harbora` admin command on PATH. It is the documented way back in when the panel is
+# unreachable, so it is installed (and refreshed on update) rather than left in the repo.
+install_command() {
+  install -m 0755 "$COMPOSE_DIR/harbora" /usr/local/bin/harbora
+  ok "Installed the 'harbora' command. Try: harbora doctor"
 }
 
 cmd_install() {
   require_root; check_os; detect_pkg; install_prereqs; install_docker
-  fetch_source; write_env; preflight_ports; start; wait_panel
+  fetch_source; write_env; install_command; preflight_ports; start; wait_panel
   verify_install || true
   next_steps
 }
@@ -298,9 +337,14 @@ cmd_install() {
 cmd_update() {
   require_root; detect_pkg
   [ -d "$APP_DIR/.git" ] || die "Harbora is not installed at $APP_DIR."
-  install_docker; fetch_source; start; wait_panel
+  install_docker; fetch_source
+  # An older .env may predate settings the new code requires — repair before starting, or the
+  # update looks like it "broke everything".
+  (cd "$COMPOSE_DIR" && repair_env)
+  install_command; start; wait_panel
   verify_install || true
   ok "Harbora updated. / به‌روزرسانی انجام شد."
+  echo "  If anything looks wrong:  harbora doctor"
 }
 
 cmd_uninstall() {

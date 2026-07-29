@@ -5,6 +5,7 @@ using Harbora.Domain.Common;
 using Harbora.Web.Models;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -89,8 +90,38 @@ public sealed class HomeController(
         return View(vm);
     }
 
+    /// <summary>Unhandled exception page. Rendered in the app's own shell, not a bare stack of text.</summary>
     [AllowAnonymous]
     [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
-    public IActionResult Error() =>
-        View(new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier });
+    public IActionResult Error()
+    {
+        Response.StatusCode = StatusCodes.Status500InternalServerError;
+        return View("Error", new ErrorViewModel
+        {
+            RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier,
+            StatusCode = StatusCodes.Status500InternalServerError,
+            OriginalPath = HttpContext.Features
+                .Get<IExceptionHandlerPathFeature>()?.Path
+        });
+    }
+
+    /// <summary>
+    /// Status codes that never reached an action (404 above all). Re-executed by
+    /// <c>UseStatusCodePagesWithReExecute</c>, so the response keeps its real status code while the
+    /// body is the themed page — a bare "404" gives the user nothing to act on.
+    /// </summary>
+    [AllowAnonymous]
+    [Route("/error/{code:int}")]
+    [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
+    public IActionResult HttpStatus(int code)
+    {
+        Response.StatusCode = code;
+        return View("Error", new ErrorViewModel
+        {
+            RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier,
+            StatusCode = code,
+            OriginalPath = HttpContext.Features
+                .Get<IStatusCodeReExecuteFeature>()?.OriginalPath
+        });
+    }
 }
