@@ -146,9 +146,10 @@ admin usually needs both.
 
 Installed somewhere other than `/opt/harbora`? Set `HARBORA_DIR=/your/path harbora doctor`.
 
-> On a **developer** machine, `harbora` is the client CLI instead (see *CLI* below). They're separate
-> tools for separate machines — the server one is installed by `install.sh`, the client one by
-> `install-cli.sh`.
+> **Two tools share the name `harbora`.** On a server it is this admin/recovery command (installed by
+> `install.sh`); on a developer machine it is the deploy CLI (installed by `install-cli.sh`).
+> Running the CLI installer *on a server* would overwrite the recovery command, so it detects that
+> case and installs itself as **`harbora-cli`** instead, leaving `harbora doctor` intact.
 
 ---
 

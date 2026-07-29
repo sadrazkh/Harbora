@@ -31,6 +31,11 @@ harbora whoami
 Credentials are stored in `~/.harbora/config.json`. In CI, skip `login` and pass
 `--server` / `--token` to `deploy` instead.
 
+> Installing on a machine that also **runs** a Harbora server? There, `harbora` is the admin/recovery
+> command (`harbora doctor`, `harbora reset-password`). The installer detects this and installs the
+> deploy CLI as **`harbora-cli`**, so the recovery tool is never replaced. Substitute `harbora-cli`
+> for `harbora` in the commands below on such a machine.
+
 ---
 
 ## 2. Deploy

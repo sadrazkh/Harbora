@@ -39,11 +39,23 @@ if ! curl -fsSL "$url" -o "$tmp"; then
   exit 1
 fi
 chmod +x "$tmp"
-${SUDO:-} mv "$tmp" "$dest/harbora"
 
-echo "✓ Installed to $dest/harbora"
+# A Harbora SERVER installs its own `harbora` command — the break-glass admin tool (doctor,
+# reset-password, fix-key). Overwriting it would remove the platform's recovery tooling from the
+# machine, and would do it silently. Install under a distinct name there instead.
+name=harbora
+if [ -f /opt/harbora/app/deploy/docker-compose.yml ] ||
+   { [ -f "$dest/harbora" ] && grep -q 'Harbora server administration' "$dest/harbora" 2>/dev/null; }; then
+  name=harbora-cli
+  echo "! This machine runs a Harbora server, where 'harbora' is the admin/recovery command."
+  echo "  Installing the deploy CLI as 'harbora-cli' so the recovery tool stays intact."
+fi
+
+${SUDO:-} mv "$tmp" "$dest/$name"
+
+echo "✓ Installed to $dest/$name"
 case ":$PATH:" in
   *":$dest:"*) : ;;
   *) echo "! Add to PATH:  export PATH=\"\$PATH:$dest\"  (add this to ~/.bashrc / ~/.zshrc)";;
 esac
-echo "Next:  harbora login --server https://panel.example.com --token <token>"
+echo "Next:  $name login --server https://panel.example.com --token <token>"
