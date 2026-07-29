@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    [Migration("20260728151003_DeploymentWorkspaceScope")]
+    [Migration("20260729161640_DeploymentWorkspaceScope")]
     partial class DeploymentWorkspaceScope
     {
         /// <inheritdoc />
@@ -447,6 +447,8 @@ namespace Harbora.Data.Migrations
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("WorkspaceId");
 
                     b.HasIndex("AppId", "Number")
                         .IsUnique();

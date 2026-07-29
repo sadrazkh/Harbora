@@ -98,7 +98,8 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
         if (ws is null) return NotFound();
         ViewData["Title"] = ws.Name;
 
-        var members = await db.WorkspaceMembers.Where(m => m.WorkspaceId == id)
+        // Platform admin acting on another workspace: scoping to their own would return nothing.
+        var members = await db.WorkspaceMembers.IgnoreQueryFilters().Where(m => m.WorkspaceId == id)
             .Join(db.Users, m => m.UserId, u => u.Id, (m, u) => new TenantMember(u.Id, u.Email, u.DisplayName, m.Role.ToString(), u.IsActive))
             .OrderBy(m => m.Email).ToListAsync(ct);
 
@@ -151,7 +152,7 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
             db.Users.Add(user);
         }
 
-        if (await db.WorkspaceMembers.AnyAsync(m => m.WorkspaceId == id && m.UserId == user.Id, ct))
+        if (await db.WorkspaceMembers.IgnoreQueryFilters().AnyAsync(m => m.WorkspaceId == id && m.UserId == user.Id, ct))
         {
             TempData["Error"] = "This user is already a member.";
             return RedirectToAction(nameof(Details), new { id });
@@ -167,7 +168,8 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId, CancellationToken ct)
     {
-        await db.WorkspaceMembers.Where(m => m.WorkspaceId == id && m.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.WorkspaceMembers.IgnoreQueryFilters()
+            .Where(m => m.WorkspaceId == id && m.UserId == userId).ExecuteDeleteAsync(ct);
         TempData["Message"] = "Member removed.";
         return RedirectToAction(nameof(Details), new { id });
     }

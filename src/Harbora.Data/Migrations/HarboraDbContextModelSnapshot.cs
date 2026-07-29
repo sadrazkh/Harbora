@@ -445,6 +445,8 @@ namespace Harbora.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("WorkspaceId");
+
                     b.HasIndex("AppId", "Number")
                         .IsUnique();
 

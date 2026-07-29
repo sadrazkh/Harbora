@@ -18,8 +18,17 @@ public sealed class HomeController(
     ICurrentUser currentUser,
     ILogger<HomeController> logger) : Controller
 {
+    /// <summary>
+    /// The root URL serves two audiences: a visitor who has never heard of this install gets the
+    /// public site, a signed-in user gets their dashboard. Previously anonymous visitors were bounced
+    /// straight to a login form, which tells them nothing about what they'd be logging into.
+    /// </summary>
+    [AllowAnonymous]
     public async Task<IActionResult> Index(CancellationToken ct)
     {
+        if (!currentUser.IsAuthenticated)
+            return await LandingAsync(ct);
+
         var workspaceId = currentUser.WorkspaceId ?? Guid.Empty;
 
         var vm = new DashboardViewModel
@@ -88,6 +97,20 @@ public sealed class HomeController(
         }
 
         return View(vm);
+    }
+
+    /// <summary>
+    /// Public marketing page. Plans are read from the database so the page describes what this
+    /// installation actually offers rather than a hard-coded price list.
+    /// </summary>
+    private async Task<IActionResult> LandingAsync(CancellationToken ct)
+    {
+        var plans = await db.Plans.Where(p => p.IsEnabled)
+            .OrderBy(p => p.MonthlyPrice)
+            .AsNoTracking()
+            .ToListAsync(ct);
+
+        return View("Landing", new LandingViewModel { Plans = plans });
     }
 
     /// <summary>Unhandled exception page. Rendered in the app's own shell, not a bare stack of text.</summary>

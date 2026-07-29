@@ -7,6 +7,7 @@ using Harbora.Web.Data;
 using Harbora.Web.Infrastructure;
 using Harbora.Web.Realtime;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -72,6 +73,26 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 builder.Services.AddCapabilityAuthorization();
 builder.Services.AddAntiforgery(o => o.HeaderName = "X-CSRF-TOKEN");
 
+// Auth cookies and antiforgery tokens are encrypted with the Data Protection keyring. By default it
+// lives inside the container, so rebuilding the image — i.e. every update — destroys it and signs
+// every user out, mid-session, with antiforgery failures on the way. Persist it to a mounted volume
+// so a deploy is invisible to logged-in users. SetApplicationName keeps the purpose string stable
+// across container names.
+var keyRingPath = builder.Configuration["Harbora:DataProtectionKeysPath"] ?? "/var/lib/harbora/keys";
+try
+{
+    var keyRing = Directory.CreateDirectory(keyRingPath);
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(keyRing)
+        .SetApplicationName("Harbora");
+}
+catch (Exception ex)
+{
+    // Development machines (and any host where that path isn't writable) keep the framework
+    // default. Losing the keyring there costs a re-login, not a production incident.
+    Console.Error.WriteLine($"⚠ Data Protection keys stay in their default location ({ex.Message}).");
+}
+
 // The panel runs behind Traefik, so the connection peer is the proxy. Unwind one forwarded hop from
 // trusted proxy networks only — otherwise the per-IP rate limits below collapse into a single
 // platform-wide bucket and every audit row records the proxy's IP.
@@ -96,11 +117,25 @@ builder.Services.AddRateLimiter(options =>
 var app = builder.Build();
 
 // ---- Migrate + seed on boot (safe to rerun) ----
-using (var scope = app.Services.CreateScope())
+// Startup failures are fatal and must EXIT, not throw into the void: an unhandled exception here
+// once left the process alive spinning a full CPU core, so Docker still reported the container as
+// running, the restart policy never fired, and every request returned 502 with nothing to explain
+// why. Exiting non-zero makes the failure visible (restart count) and recoverable (restart policy).
+try
 {
+    using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
     await db.Database.MigrateAsync();
     await scope.ServiceProvider.GetRequiredService<DbSeeder>().SeedAsync();
+}
+catch (Exception ex)
+{
+    var log = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+    log.LogCritical(ex, "Harbora could not start: database migration or seeding failed.");
+    Console.Error.WriteLine();
+    Console.Error.WriteLine("✗ Harbora could not start — " + ex.Message);
+    Console.Error.WriteLine("  Diagnose on the server with:  harbora doctor");
+    return 1;
 }
 
 if (!app.Environment.IsDevelopment())

@@ -5,6 +5,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Backups;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
+using Harbora.Domain.Identity;
 using Harbora.Domain.Networking;
 using Harbora.Domain.Services;
 using Harbora.Infrastructure.Deployments;
@@ -221,6 +222,59 @@ public class WorkspaceQueryFilterTests
         var all = await db.Apps.IgnoreQueryFilters().CountAsync();
 
         all.Should().Be(2);
+    }
+
+    // ---- bootstrap queries: the ones that ESTABLISH scope ----
+
+    [Fact]
+    public async Task Sign_in_can_resolve_the_users_workspace_before_they_have_one()
+    {
+        // The bug this pins cost a production outage. Login reads WorkspaceMembers to decide which
+        // workspace the caller belongs to — but at that moment the request has no workspace claim,
+        // so the scope is Guid.Empty. With the filter applied, that query returns nothing, every
+        // user signs in scoped to an empty workspace, their dashboard is blank, and any app they
+        // create is stamped Guid.Empty and can never be deployed.
+        var userId = Guid.NewGuid();
+        using (var seed = AsSystem())
+        {
+            seed.WorkspaceMembers.Add(new WorkspaceMember
+            { Id = Guid.NewGuid(), WorkspaceId = TenantA, UserId = userId });
+            await seed.SaveChangesAsync();
+        }
+
+        // Exactly the state of a login request: an HttpContext exists, no workspace claim yet.
+        using var duringLogin = AsTenant(Guid.Empty);
+
+        var resolved = await duringLogin.WorkspaceMembers.IgnoreQueryFilters()
+            .Where(m => m.UserId == userId)
+            .Select(m => m.WorkspaceId)
+            .FirstOrDefaultAsync();
+
+        resolved.Should().Be(TenantA,
+            "the query that decides the caller's workspace cannot itself be scoped by that workspace");
+    }
+
+    [Fact]
+    public async Task Without_the_bypass_the_sign_in_lookup_finds_nothing()
+    {
+        // States the trap plainly: the same query without IgnoreQueryFilters is silently empty —
+        // no exception, no error, just a user with no workspace.
+        var userId = Guid.NewGuid();
+        using (var seed = AsSystem())
+        {
+            seed.WorkspaceMembers.Add(new WorkspaceMember
+            { Id = Guid.NewGuid(), WorkspaceId = TenantA, UserId = userId });
+            await seed.SaveChangesAsync();
+        }
+
+        using var duringLogin = AsTenant(Guid.Empty);
+
+        var resolved = await duringLogin.WorkspaceMembers
+            .Where(m => m.UserId == userId)
+            .Select(m => m.WorkspaceId)
+            .FirstOrDefaultAsync();
+
+        resolved.Should().Be(Guid.Empty, "this is the failure mode the bypass exists to prevent");
     }
 
     // ---- deny by default ----

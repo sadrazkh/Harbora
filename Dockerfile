@@ -22,7 +22,8 @@ RUN dotnet publish src/Harbora.Web/Harbora.Web.csproj -c Release -o /app --no-re
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 # LibGit2Sharp needs libgit2's native deps; git is handy for diagnostics.
-RUN apt-get update && apt-get install -y --no-install-recommends libssl3 && rm -rf /var/lib/apt/lists/*
+# curl is required by the container healthcheck (and is what you reach for first when debugging).
+RUN apt-get update && apt-get install -y --no-install-recommends libssl3 curl && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app ./
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080

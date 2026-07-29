@@ -77,6 +77,14 @@ services:
       # Surfaced so `harbora info` can report what the panel is actually configured with.
       PANEL_DOMAIN: ${PANEL_DOMAIN}
       ROOT_DOMAIN: ${ROOT_DOMAIN}
+    # Without this a panel whose process has died or hung stays "running" forever: Docker never
+    # restarts it, and every request gets a 502 with nothing to explain why. Observed in production.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
     volumes:
       # The panel talks to Docker directly (single-server mode) and writes proxy config.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -84,6 +92,8 @@ services:
       - harbora_builds:/var/lib/harbora/builds
       # Shared with one-off tar containers so backup artifacts are visible to both.
       - harbora_backups:/var/lib/harbora/backups
+      # Data Protection keyring. Without this, rebuilding the image signs every user out.
+      - harbora_keys:/var/lib/harbora/keys
     labels:
       - traefik.enable=true
       # Pin the network Traefik uses to reach the panel — it joins tenant networks too, and
@@ -107,3 +117,4 @@ volumes:
   harbora_acme:
   harbora_builds:
   harbora_backups:
+  harbora_keys:

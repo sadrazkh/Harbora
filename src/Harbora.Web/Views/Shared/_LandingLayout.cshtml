@@ -1,0 +1,120 @@
+@using System.Globalization
+@inject ViteManifest Vite
+@inject Microsoft.AspNetCore.Mvc.Localization.IViewLocalizer T
+@{
+    var culture = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+    var isRtl = culture == "fa";
+    var dir = isRtl ? "rtl" : "ltr";
+    var (viteJs, viteCss) = Vite.Resolve("Scripts/main.ts");
+}
+<!DOCTYPE html>
+<html lang="@culture" dir="@dir" class="h-full scroll-smooth">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>@ViewData["Title"] · Harbora</title>
+    <meta name="description" content="@T["Deploy any app from Git in seconds — with automatic SSL, databases, backups and monitoring. Your own platform, on your own servers."]" />
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="icon" href="~/favicon.ico" />
+    @if (Vite.UseDevServer)
+    {
+        <script type="module" src="@(Vite.DevServerUrl)/@@vite/client"></script>
+        <script type="module" src="@(Vite.DevServerUrl)/Scripts/main.ts"></script>
+    }
+    else
+    {
+        foreach (var css in viteCss) { <link rel="stylesheet" href="@css" /> }
+        <link rel="stylesheet" href="~/css/fallback.css" />
+        if (viteJs is not null) { <script type="module" src="@viteJs"></script> }
+    }
+    <style>
+        /* Ambient gradient wash behind the hero. Kept in the page rather than Tailwind because it
+           is one bespoke decoration, not a reusable utility. */
+        .hb-aurora {
+            background:
+                radial-gradient(60rem 32rem at 15% -10%, rgba(99,102,241,.28), transparent 60%),
+                radial-gradient(48rem 28rem at 85% 0%, rgba(168,85,247,.20), transparent 60%),
+                radial-gradient(40rem 24rem at 50% 40%, rgba(56,189,248,.12), transparent 65%);
+        }
+        .hb-grid {
+            background-image:
+                linear-gradient(to right, rgba(148,163,184,.07) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(148,163,184,.07) 1px, transparent 1px);
+            background-size: 56px 56px;
+            mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+        }
+        .hb-card { backdrop-filter: blur(10px); }
+        @@keyframes hb-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+        .hb-rise { animation: hb-rise .6s cubic-bezier(.21,.6,.35,1) both; }
+        /* Respect users who asked the OS not to animate. */
+        @@media (prefers-reduced-motion: reduce) { .hb-rise { animation: none; } }
+    </style>
+</head>
+<body class="min-h-full bg-slate-950 text-slate-200 antialiased selection:bg-brand-500/30">
+
+<header class="sticky top-0 z-50 border-b border-slate-800/60 bg-slate-950/80 hb-card">
+    <div class="mx-auto max-w-6xl px-4 h-16 flex items-center justify-between gap-4">
+        <a href="/" class="flex items-center gap-2 font-semibold text-white">
+            <span class="inline-grid place-items-center w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 text-white text-sm font-bold">H</span>
+            Harbora
+        </a>
+
+        <nav class="hidden md:flex items-center gap-6 text-sm text-slate-400">
+            <a href="#features" class="hover:text-white transition">@T["Features"]</a>
+            <a href="#how" class="hover:text-white transition">@T["How it works"]</a>
+            <a href="#plans" class="hover:text-white transition">@T["Plans"]</a>
+            <a href="#faq" class="hover:text-white transition">@T["FAQ"]</a>
+        </nav>
+
+        <div class="flex items-center gap-2">
+            <a href="/account/login" class="text-sm px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800/60 transition">@T["Sign in"]</a>
+            <a href="/account/login" class="text-sm px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white font-medium transition">@T["Get started"]</a>
+        </div>
+    </div>
+</header>
+
+@RenderBody()
+
+<footer class="border-t border-slate-800/60 mt-24">
+    <div class="mx-auto max-w-6xl px-4 py-12 grid gap-8 sm:grid-cols-2 md:grid-cols-4 text-sm">
+        <div class="sm:col-span-2 md:col-span-1">
+            <div class="flex items-center gap-2 font-semibold text-white mb-3">
+                <span class="inline-grid place-items-center w-7 h-7 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 text-xs font-bold">H</span>
+                Harbora
+            </div>
+            <p class="text-slate-500 leading-relaxed">@T["Your own deployment platform — on your own servers."]</p>
+        </div>
+        <div>
+            <div class="text-slate-300 font-medium mb-3">@T["Product"]</div>
+            <ul class="space-y-2 text-slate-500">
+                <li><a href="#features" class="hover:text-slate-300 transition">@T["Features"]</a></li>
+                <li><a href="#plans" class="hover:text-slate-300 transition">@T["Plans"]</a></li>
+                <li><a href="#how" class="hover:text-slate-300 transition">@T["How it works"]</a></li>
+            </ul>
+        </div>
+        <div>
+            <div class="text-slate-300 font-medium mb-3">@T["Resources"]</div>
+            <ul class="space-y-2 text-slate-500">
+                <li><a href="https://github.com/sadrazkh/Harbora" rel="noopener" class="hover:text-slate-300 transition">@T["Documentation"]</a></li>
+                <li><a href="#faq" class="hover:text-slate-300 transition">@T["FAQ"]</a></li>
+                <li><a href="/healthz" class="hover:text-slate-300 transition">@T["Status"]</a></li>
+            </ul>
+        </div>
+        <div>
+            <div class="text-slate-300 font-medium mb-3">@T["Account"]</div>
+            <ul class="space-y-2 text-slate-500">
+                <li><a href="/account/login" class="hover:text-slate-300 transition">@T["Sign in"]</a></li>
+            </ul>
+        </div>
+    </div>
+    <div class="border-t border-slate-800/60">
+        <div class="mx-auto max-w-6xl px-4 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+            <span>© @DateTime.UtcNow.Year Harbora</span>
+            <span>@T["Built with Docker, Traefik and .NET"]</span>
+        </div>
+    </div>
+</footer>
+
+@await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

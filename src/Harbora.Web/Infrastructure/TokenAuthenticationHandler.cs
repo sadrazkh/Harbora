@@ -38,7 +38,9 @@ public sealed class TokenAuthenticationHandler(
         if (user is null)
             return AuthenticateResult.Fail("User not found or inactive.");
 
-        var workspace = await db.WorkspaceMembers.AsNoTracking()
+        // Same bootstrap as cookie login: establishes the caller's workspace, so it must bypass the
+        // workspace filter.
+        var workspace = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
             .Where(m => m.UserId == user.Id).Select(m => m.WorkspaceId).FirstOrDefaultAsync(Context.RequestAborted);
 
         var claims = new List<Claim>

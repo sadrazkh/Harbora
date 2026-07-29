@@ -106,3 +106,53 @@ public sealed class AuditPageViewModel
     public bool HasPrevious => Page > 1;
     public bool HasNext => Page < TotalPages;
 }
+
+/// <summary>
+/// The public landing page. Marketing copy is static (it describes the product), but plans come
+/// from the database so the page reflects what this installation actually offers.
+/// </summary>
+public sealed class LandingViewModel
+{
+    public List<Harbora.Domain.Tenancy.Plan> Plans { get; set; } = new();
+
+    public IReadOnlyList<LandingFeature> Features { get; } =
+    [
+        new("🚀", "Deploy from anywhere",
+            "Git repository, Dockerfile, prebuilt image, static site or a one-click template. The stack is auto-detected when there's no Dockerfile."),
+        new("🔒", "SSL without the paperwork",
+            "Every app gets a domain and a Let's Encrypt certificate, renewed automatically. HTTP redirects to HTTPS by default."),
+        new("♻️", "Zero-downtime releases",
+            "The new container starts alongside the old one. Traffic switches only after health checks pass, so a failed deploy never takes the site down."),
+        new("⏪", "Instant rollback",
+            "Rollback re-releases the previous image instead of rebuilding — you get the exact bytes that were working, in seconds."),
+        new("🗄", "Databases & backups",
+            "Provision PostgreSQL, MySQL, Redis and more in one click. Scheduled backups are encrypted, checksummed and verifiable before you restore."),
+        new("📊", "Logs & monitoring",
+            "Live build and runtime logs, CPU and memory per app, and alerts to email, Telegram or a webhook when something breaks.")
+    ];
+
+    public IReadOnlyList<LandingStep> Steps { get; } =
+    [
+        new("Connect your source", "Link a Git repository or point at an image. Harbora detects the stack and prepares the build."),
+        new("Pick a size and a domain", "Choose CPU and memory, then use the free subdomain you get or bring your own."),
+        new("Deploy", "Watch the build stream live. When health checks pass, traffic switches over — and stays on the old version if they don't.")
+    ];
+
+    public IReadOnlyList<LandingFaq> Faqs { get; } =
+    [
+        new("Do I need to know Docker?",
+            "No. If your repository has no Dockerfile, the stack is detected and a production image is generated for you. If you do have one, it's used as-is."),
+        new("What happens if a deployment fails?",
+            "Nothing visible to your users. The new container is removed and the previous version keeps serving traffic — it is never stopped before the replacement is healthy."),
+        new("Can I move away later?",
+            "Yes. Everything runs as standard Docker containers behind Traefik on your own server, and your images and volumes stay on that machine."),
+        new("Is my data isolated from other users?",
+            "Each workspace gets its own Docker network, and every query is scoped to the workspace at the database level, not just in the UI."),
+        new("How are backups protected?",
+            "Archives are encrypted before they leave the server and checksummed. A restore verifies the archive first and refuses to run if it doesn't match.")
+    ];
+}
+
+public sealed record LandingFeature(string Icon, string Title, string Body);
+public sealed record LandingStep(string Title, string Body);
+public sealed record LandingFaq(string Question, string Answer);

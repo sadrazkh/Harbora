@@ -28,7 +28,6 @@ namespace Harbora.Data.Migrations
                 WHERE a."Id" = d."AppId";
                 """);
 
-            // The filter compares this column on every deployment read.
             migrationBuilder.CreateIndex(
                 name: "IX_Deployments_WorkspaceId",
                 table: "Deployments",

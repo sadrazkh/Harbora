@@ -5,6 +5,73 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-29 — Live server: outage diagnosed and fixed, first real end-to-end deploy, landing page
+
+Worked directly on the production host (91.99.205.231, Ubuntu 22.04). The panel was returning **502**.
+
+**Five bugs found — four of them mine, introduced by this overhaul.**
+
+1. **CRITICAL — panel could not start.** `PendingModelChangesWarning`: I hand-edited the
+   `DeploymentWorkspaceScope` migration to add an index while *also* adding `HasIndex` to
+   `OnModelCreating`, so the model and the snapshot disagreed. `MigrateAsync` refuses to run in that
+   state, so the app died on boot, before serving anything. The database was still two migrations
+   behind. Fixed by regenerating the migration (EF now emits the index itself) and re-applying the
+   backfill SQL. **My earlier diagnosis — a missing master key — was wrong for this server;** its
+   `.env` had one all along.
+2. **HIGH — a dead panel looked healthy.** The process didn't exit on that fatal exception: it sat
+   at 99% CPU for 39 minutes while Docker still reported `running`, `restarts=0`. The restart policy
+   never fired. Now startup failures log and `return 1`, and the panel has a healthcheck.
+3. **HIGH — every user was signed out by every update.** Data Protection keys lived in the
+   container's filesystem, so rebuilding the image destroyed the keyring: cookies invalid,
+   antiforgery failures mid-session. Now persisted to a `harbora_keys` volume with a stable
+   application name.
+4. **CRITICAL — login could not resolve a user's workspace.** The global query filter I added in the
+   previous session also applied to `WorkspaceMember` — but the query that *decides* the caller's
+   workspace runs before they have one, so it matched nothing. Every user signed in scoped to
+   `Guid.Empty`: blank dashboard, and any app they created was stamped `Guid.Empty` and could never
+   deploy. This is what made the E2E test fail with "Sequence contains no elements". Same trap fixed
+   in `TokenAuthenticationHandler` (API/CLI auth) and three `TenantsController` admin queries.
+5. **MEDIUM — logs were unusable.** EF logged every SQL statement at Information and the job worker
+   polls on a timer: **1028 lines in 7 minutes**, burying real errors. EF command logging set to
+   Warning → 40 lines. (First attempt at this broke startup: a `_comment` key inside `LogLevel` is
+   parsed as a log level. Caught on the server, fixed.)
+
+**First real end-to-end deployment.** Every phase so far recorded "blocked without a Docker host".
+With one available, the full path was exercised: sign in → create app → deploy → verify. Result:
+`Succeeded`, container `harbora-e2e-nginx-…-1` running `nginx:alpine`, job row `Succeeded` after one
+attempt. The versioned-container naming (Phase B) and durable job queue (Phase D) are confirmed
+working against real Docker, not a fake.
+
+**Guard added.** `MigrationConsistencyTests` compares the EF model against the migration snapshot at
+test time — the same check the runtime does, but before it can reach production. Verified by
+re-introducing the exact mistake (an index in `OnModelCreating` with no migration): the test fails.
+
+**Public landing page.** The root URL served a login form to anonymous visitors, which says nothing
+about the product. `/` now renders a marketing page for signed-out visitors and the dashboard for
+signed-in users, on its own layout: hero with a live-looking deploy terminal, feature grid, three-step
+flow, plans **read from the database** so the page reflects what this installation actually offers,
+FAQ and CTA. Bilingual and RTL-aware like the rest of the panel.
+
+**Verified on the live server**
+- `harbora doctor` → no problems; panel `healthy`, restarts 0.
+- `/` → 200 (landing), `/account/login` → 200, `/nope` → **404 with the themed page**.
+- Login verified end to end with a fresh password set via `harbora reset-password`.
+- Both pending migrations applied; keyring file present in the volume.
+- `dotnet build` → 0 warnings / 0 errors · `dotnet test` → **287/287**.
+
+**Honest note**
+The server currently runs these fixes applied directly to its checkout, so its working tree is dirty
+and one migration file differs from `origin/master`. The same changes are staged locally and must be
+committed and pushed, or the next `install.sh update` (`git reset --hard`) will revert the server to
+the broken state.
+
+**Next step**
+- Commit + push these fixes, then re-run `update` on the server to confirm the clean path.
+- Rotate the server's root password — it was shared in chat.
+- Still open from Phase E: harden the restore shell command (extract-then-swap).
+
+---
+
 ## 2026-07-29 — Lockout recovery (`harbora` command), upgrade repair, themed error pages
 
 **Reported:** after running `update`, the panel would no longer come up at all.

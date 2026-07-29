@@ -43,7 +43,12 @@ public sealed class AccountController(
         }
 
         user.LastLoginAt = clock.UtcNow;
-        var workspaceId = await db.WorkspaceMembers.Where(m => m.UserId == user.Id)
+        // Bootstrap query: this is what DECIDES the caller's workspace, so it must not be filtered by
+        // it. At this point the request has no workspace claim, so the global filter would match
+        // nothing and every user would sign in scoped to an empty workspace — an empty dashboard,
+        // and any app they create stamped with Guid.Empty.
+        var workspaceId = await db.WorkspaceMembers.IgnoreQueryFilters()
+            .Where(m => m.UserId == user.Id)
             .Select(m => m.WorkspaceId).FirstOrDefaultAsync();
         await db.SaveChangesAsync();
 
