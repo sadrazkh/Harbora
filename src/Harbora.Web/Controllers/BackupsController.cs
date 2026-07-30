@@ -16,10 +16,12 @@ namespace Harbora.Web.Controllers;
 /// </summary>
 [Authorize]
 [Route("backups")]
-public sealed class BackupsController(
+public sealed partial class BackupsController(
     HarboraDbContext db,
     IBackupEngine engine,
     ISecretProtector protector,
+    Harbora.Infrastructure.Backups.BackupDeliveryService delivery,
+    IHttpClientFactory httpFactory,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -37,6 +39,7 @@ public sealed class BackupsController(
                 .OrderByDescending(b => b.CreatedAt).Take(50).ToListAsync(ct),
             Destinations = await db.BackupDestinations.Where(d => d.WorkspaceId == WorkspaceId).ToListAsync(ct),
             Schedules = await db.BackupSchedules.Where(s => s.WorkspaceId == WorkspaceId).ToListAsync(ct),
+            Deliveries = await db.BackupDeliveries.Where(d => d.WorkspaceId == WorkspaceId).ToListAsync(ct),
         };
 
         vm.Targets.Add(($"{BackupType.FullPlatform}|platform", "🌐 Full platform"));

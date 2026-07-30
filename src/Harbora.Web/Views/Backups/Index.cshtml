@@ -94,6 +94,90 @@
             </form>
         </details>
     </section>
+
+    <!-- Delivery: a copy of every scheduled backup, sent where you can reach it -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 class="font-semibold mb-1">@(isFa ? "ارسال بکاپ" : "Send backups to")</h2>
+        <p class="text-xs text-slate-400 mb-3">
+            @(isFa
+                ? "از هر بکاپ (زمان‌بندی‌شده یا دستی) یک کپی به این مقصدها فرستاده می‌شود. نسخه‌ی اصلی همان‌جا که هست می‌ماند، چون بازگردانی از روی چت یا ایمیل ممکن نیست."
+                : "A copy of every backup — scheduled or run by hand — is sent here. The stored artifact stays where it is — a chat or a mailbox is not something a restore can read from.")
+        </p>
+
+        <div class="space-y-2 mb-3 text-sm">
+            @if (Model.Deliveries.Count == 0){<p class="text-slate-500">—</p>}
+            @foreach (var d in Model.Deliveries)
+            {
+                <div class="rounded-lg bg-slate-800/50 px-3 py-2">
+                    <div class="flex items-center justify-between">
+                        <span>
+                            @d.Name <span class="text-slate-500">· @d.Channel</span>
+                            @if (d.LastError is not null)
+                            {
+                                <span class="text-xs text-red-400">· @(isFa ? "ناموفق" : "failing")</span>
+                            }
+                            else if (d.LastAttemptAt is not null)
+                            {
+                                <span class="text-xs text-emerald-400">· @(isFa ? "سالم" : "delivering")</span>
+                            }
+                        </span>
+                        <div class="flex items-center gap-2">
+                            <form asp-controller="Backups" asp-action="TestDelivery" asp-route-id="@d.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-brand-400">test</button></form>
+                            <form asp-controller="Backups" asp-action="DeleteDelivery" asp-route-id="@d.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                        </div>
+                    </div>
+                    @if (d.LastError is not null)
+                    {
+                        <p class="mt-1 text-xs text-red-300/90 break-all">@d.LastError</p>
+                    }
+                </div>
+            }
+        </div>
+
+        <details>
+            <summary class="cursor-pointer text-sm text-brand-400">+ @(isFa ? "افزودن مقصد ارسال" : "Add a delivery channel")</summary>
+            <form asp-controller="Backups" asp-action="CreateDelivery" method="post" class="mt-3 space-y-2" data-delivery-form>
+                @Html.AntiForgeryToken()
+                <input name="name" placeholder="@(isFa ? "نام" : "Name")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                <select name="channel" data-delivery-channel class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                    <option value="Telegram">Telegram</option>
+                    <option value="Email">Email</option>
+                </select>
+
+                <div data-channel="Telegram" class="space-y-2">
+                    <p class="text-xs text-slate-400">
+                        @(isFa
+                            ? "۱) در تلگرام از @@BotFather یک ربات بساز و توکنش را اینجا بگذار. ۲) ربات را باز کن و Start را بزن. ۳) دکمه‌ی زیر آی‌دی چت را پیدا می‌کند."
+                            : "1) Create a bot with @@BotFather and paste its token. 2) Open the bot and press Start. 3) The button below finds your chat id.")
+                    </p>
+                    <input name="botToken" data-bot-token placeholder="123456:ABC-DEF..." class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm font-mono" />
+                    <div class="flex gap-2">
+                        <input name="chatId" data-chat-id placeholder="@(isFa ? "آی‌دی چت" : "Chat id")" class="flex-1 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm font-mono" />
+                        <button type="button" data-find-chats class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm whitespace-nowrap">@(isFa ? "پیدا کن" : "Find")</button>
+                    </div>
+                    <p data-chat-hint class="text-xs text-slate-400 hidden"></p>
+                </div>
+
+                <div data-channel="Email" class="space-y-2 hidden">
+                    <div class="flex gap-2">
+                        <input name="smtpHost" placeholder="smtp.example.com" class="flex-1 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                        <input name="smtpPort" type="number" value="587" class="w-24 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    </div>
+                    <input name="smtpUser" placeholder="@(isFa ? "نام کاربری" : "SMTP user")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="smtpPassword" type="password" placeholder="@(isFa ? "رمز" : "SMTP password")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="emailFrom" placeholder="backups@@example.com" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="emailTo" placeholder="you@@example.com" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                </div>
+
+                <label class="block text-xs text-slate-400">
+                    @(isFa ? "بیشترین حجم (مگابایت، خالی = پیش‌فرض کانال)" : "Max size (MB, blank = the channel's own limit)")
+                    <input name="maxSizeMb" type="number" min="0" placeholder="0" class="mt-1 w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                </label>
+
+                <button class="w-full rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@(isFa ? "افزودن" : "Add")</button>
+            </form>
+        </details>
+    </section>
 </div>
 
 <!-- History -->
@@ -153,5 +237,47 @@
             form.querySelector('input[name=confirm]').value = 'RESTORE';
         });
     });
+</script>
+}
+
+@section Scripts {
+<script>
+// Show only the fields for the chosen channel, and look up Telegram chat ids on request.
+(function () {
+    const form = document.querySelector('[data-delivery-form]');
+    if (!form) return;
+
+    const select = form.querySelector('[data-delivery-channel]');
+    const panels = form.querySelectorAll('[data-channel]');
+    const show = () => panels.forEach(p => p.classList.toggle('hidden', p.dataset.channel !== select.value));
+    select.addEventListener('change', show);
+    show();
+
+    form.querySelector('[data-find-chats]').addEventListener('click', async () => {
+        const token = form.querySelector('[data-bot-token]').value.trim();
+        const hint = form.querySelector('[data-chat-hint]');
+        hint.classList.remove('hidden');
+        hint.textContent = 'Asking Telegram...';
+
+        const body = new FormData();
+        body.append('botToken', token);
+        body.append('__RequestVerificationToken', form.querySelector('input[name="__RequestVerificationToken"]').value);
+
+        try {
+            const res = await fetch('/backups/deliveries/chat-ids', { method: 'POST', body });
+            const data = await res.json();
+            if (data.error) { hint.textContent = data.error; return; }
+            if (!data.chats || data.chats.length === 0) { hint.textContent = data.hint || 'Nothing found yet.'; return; }
+
+            // One chat is the normal case: fill it in rather than making someone copy a number.
+            form.querySelector('[data-chat-id]').value = data.chats[0].id;
+            hint.textContent = data.chats.length === 1
+                ? 'Found ' + data.chats[0].title + ' (' + data.chats[0].id + ').'
+                : 'Found: ' + data.chats.map(c => c.title + ' = ' + c.id).join(', ');
+        } catch (e) {
+            hint.textContent = 'Could not reach the server: ' + e.message;
+        }
+    });
+})();
 </script>
 }

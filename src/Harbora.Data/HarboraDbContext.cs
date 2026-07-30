@@ -56,6 +56,7 @@ public class HarboraDbContext : DbContext
     public DbSet<BackupDestination> BackupDestinations => Set<BackupDestination>();
     public DbSet<Backup> Backups => Set<Backup>();
     public DbSet<BackupSchedule> BackupSchedules => Set<BackupSchedule>();
+    public DbSet<BackupDelivery> BackupDeliveries => Set<BackupDelivery>();
     public DbSet<MonitoringMetric> MonitoringMetrics => Set<MonitoringMetric>();
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();

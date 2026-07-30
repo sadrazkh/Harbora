@@ -26,6 +26,7 @@ public sealed class BackupEngine(
     ISecretProtector protector,
     IJobQueue jobs,
     INotificationService notifications,
+    BackupDeliveryService delivery,
     ISystemClock clock,
     IOptions<BackupOptions> options,
     ILogger<BackupEngine> logger) : IBackupEngine
@@ -80,6 +81,11 @@ public sealed class BackupEngine(
             var (artifactRef, size) = await storage.PutFileAsync(backup.Destination, publishKey, publishPath, ct);
             backup.ArtifactPath = artifactRef;
             backup.SizeBytes = size;
+
+            // A copy goes out to Telegram/email before the staging file is removed. Delivery cannot
+            // fail the backup: the artifact is already stored, and a chat being unreachable is not a
+            // reason to call a successful backup failed.
+            await delivery.DeliverAsync(backup, publishPath, ct);
 
             // Drop the staging copies if the destination stored the artifact elsewhere (S3, custom dir).
             if (!string.Equals(artifactRef, publishPath, StringComparison.OrdinalIgnoreCase) && File.Exists(publishPath))

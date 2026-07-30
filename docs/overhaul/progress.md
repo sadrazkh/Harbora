@@ -5,6 +5,51 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-31 — Backups that arrive where you can see them: Telegram, email, S3
+
+Scheduled backups already existed — every N hours, with retention, to a local directory or any
+S3-compatible bucket. What was missing is the part that makes people actually trust them: a copy that
+lands somewhere you look every day.
+
+**Delivery is not storage, and the model says so.** A destination is where the artifact *lives*:
+restore reads from it, retention deletes from it. A chat or a mailbox can do neither — nothing fetches
+a file back out of a sent email. So `BackupDelivery` sends a *copy*, and the stored artifact remains
+the one a restore can read. Choosing the other design would have quietly broken restore for anyone who
+picked Telegram.
+
+**The size check is the point.** Telegram refuses documents over 50 MB and mail servers refuse
+attachments long before that, so a channel that simply tries and fails is a channel that looks
+configured and protects nothing. The artifact is measured first and refused with both numbers and
+somewhere to go: *"The backup is 180 MB, and Telegram accepts at most 50 MB. Keep using a storage
+destination for artifacts this size."* Never "make your backup smaller".
+
+**Failures are visible where the channel is offered.** Delivery cannot fail a backup — the artifact is
+already stored by then, and an unreachable chat is not a reason to record a successful backup as failed
+— but the outcome is written onto the channel row, so a delivery that quietly stopped working shows on
+the backups page with the reason. Same treatment the alert rules got.
+
+**The Telegram step people get stuck on is handled.** A bot cannot open a conversation, so the
+recipient must message it first, and Telegram then reports the numeric chat id only through
+`getUpdates`. Rather than sending someone to a third-party "what is my id" bot, the panel asks for
+them: paste the token, press Start in Telegram, click Find, and the chat id fills itself in. An empty
+answer says exactly what to do rather than looking broken.
+
+**Verified on the live server**, with a deliberately invalid token so the chain could be proven without
+anyone's real bot:
+
+| Step | Result |
+|---|---|
+| Add a Telegram channel, press test | uploaded, and recorded `Telegram returned 401 Unauthorized — {"ok":false,…}` |
+| Run a real backup | completed, and the channel's last attempt moved — delivery fires on the real artifact |
+| The backup itself | unaffected by the delivery failure, as designed |
+
+**Tests:** 560 → 575. Nine mutations, all caught — the last only after a real one: removing the
+engine's delivery call was *rejected by the compiler* rather than caught by a test, which proves
+nothing about behaviour. An end-to-end test now runs a genuine backup through the engine and asserts
+the channel received it.
+
+---
+
 ## 2026-07-30 — Deploying a real project: the port it listens on, and what "healthy" means
 
 Pushing an actual ASP.NET Core project with `harbora deploy` got all the way through: packed, uploaded,

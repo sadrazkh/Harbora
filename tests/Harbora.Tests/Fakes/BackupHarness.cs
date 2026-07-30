@@ -51,9 +51,16 @@ public sealed class BackupHarness : IDisposable
         Db.SaveChanges();
     }
 
+    /// <summary>Records what each finished backup was handed to a delivery channel.</summary>
+    public StubHttpClientFactory DeliveryHttp { get; } = new(System.Net.HttpStatusCode.OK);
+
+    public BackupDeliveryService Delivery() => new(
+        Db, new PassthroughProtector(), DeliveryHttp, Clock,
+        NullLogger<BackupDeliveryService>.Instance);
+
     public BackupEngine Engine() => new(
         Db, Docker, Storage, new PassthroughProtector(), new NoopJobQueue(),
-        Notifications, Clock, Options.AsOptions(), NullLogger<BackupEngine>.Instance);
+        Notifications, Delivery(), Clock, Options.AsOptions(), NullLogger<BackupEngine>.Instance);
 
     /// <summary>Writes a real gzipped JSON snapshot artifact and the row that points at it.</summary>
     public async Task<Backup> SeedAppConfigBackupAsync(bool encrypt = true, string kind = "app-config")

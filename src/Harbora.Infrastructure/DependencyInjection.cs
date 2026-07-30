@@ -92,6 +92,8 @@ public static class DependencyInjection
         services.Configure<Backups.BackupOptions>(config.GetSection("Backups"));
         services.AddSingleton<IBackupStorage, Backups.BackupStorage>();
         services.AddScoped<Backups.BackupEngine>();
+        // Sends a copy of each finished backup to Telegram/email, alongside the stored artifact.
+        services.AddScoped<Backups.BackupDeliveryService>();
         // Runs before migrations at startup: an upgrade of an existing install gets a restore point.
         services.AddScoped<Backups.UpgradeSafetyService>();
         services.AddScoped<IBackupEngine>(sp => sp.GetRequiredService<Backups.BackupEngine>());

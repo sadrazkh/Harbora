@@ -332,6 +332,9 @@ whichever node has room. Optional **mTLS** (client certificate) hardens the pane
 - **Managed databases**: PostgreSQL, MySQL, MariaDB, Redis, MongoDB — provisioned with encrypted
   credentials, safe connection info, one-click attach to an app.
 - **Backups**: app config, volume/database, full platform; local + S3-compatible; scheduled; retention;
+  a copy of every backup can also be **sent to Telegram or email** (Backups → *Send backups to*) — the
+  panel finds your Telegram chat id for you, and refuses an artifact too large for the channel instead
+  of failing silently;
   download; restore (with a typed confirm).
 - **Monitoring + alerts**: host/container metrics, live CPU chart, app health, disk/backup/crash
   warnings; notify via email / Telegram / Discord / custom webhook.

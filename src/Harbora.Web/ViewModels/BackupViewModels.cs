@@ -9,6 +9,9 @@ public sealed class BackupsPageViewModel
     public List<BackupDestination> Destinations { get; set; } = new();
     public List<BackupSchedule> Schedules { get; set; } = new();
 
+    /// <summary>Channels that receive a copy of each finished backup (Telegram, email).</summary>
+    public List<BackupDelivery> Deliveries { get; set; } = new();
+
     /// <summary>Selectable backup targets encoded as "Type|ref" with a friendly label.</summary>
     public List<(string Value, string Label)> Targets { get; set; } = new();
 }
