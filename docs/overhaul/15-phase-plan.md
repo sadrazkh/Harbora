@@ -22,7 +22,8 @@ Priority chosen for this stretch: **make what exists trustworthy** before making
 | P6 Create/Detail redesign | partial | Static-site source card + staged progress bar ✅. App Detail tabs ❌. |
 | P7 Compose · Template · Static | partial | Static ✅, single-container Template ✅, **Compose ✅** (allowlist parser, multi-service, network aliases — verified on real Docker). Multi-service templates ❌. |
 | P8 domains/SSL/logs | ✅ | Runtime log viewer ✅. **Real domain readiness ✅** — DNS + live TLS handshake per domain, replacing the "SSL" badge that only reflected a checkbox; verified on the server against a working domain, an unresolvable one, and one pointing elsewhere. |
-| P9–P12 | — | Not started. |
+| P9 managed DB verify + attach | ✅ | Provision, reveal, attach, inject, resolve, authenticate — all verified on the live server. Attach was a 500 until the child-entity tracking fix. |
+| P10–P12 | — | Not started. |
 | P13 RBAC + audit | partial | Capability policies, `Operator` role, audit writes ✅. **Audit UI/CSV export ❌**, centralized workspace scoping ❌, IDOR/cross-tenant tests ❌. |
 | P14 API/OpenAPI/webhooks | partial | Per-IP rate limiting landed early ✅. Rest ❌. |
 

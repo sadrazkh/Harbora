@@ -136,18 +136,101 @@ public class DeploymentPipelineCutoverTests
     }
 
     [Fact]
-    public async Task A_container_that_never_reaches_running_fails_the_deploy()
+    public async Task A_container_that_exits_reports_why_instead_of_just_failing()
     {
         using var h = new PipelineHarness();
         h.WithPreviousDeployment(number: 1);
         h.Docker.StartedContainerState = "exited";   // crashes immediately on boot
+        h.Docker.StartedContainerStatus = "Exited (1) 2 seconds ago";
+        h.Docker.ContainerLogs = "Error: database is uninitialized and superuser password is not specified";
         var deployment = h.QueueDeployment(number: 2);
 
         var result = await h.RunAsync(deployment);
 
         result.Status.Should().Be(DeploymentStatus.Failed);
-        result.ErrorMessage.Should().Contain("health check");
+        // The old message was "Container failed its health check." — true, and no help at all. The
+        // cause is in the container's own output, which is the one place the user cannot look once
+        // the failed container has been cleaned up.
+        result.ErrorMessage.Should().Contain("exited")
+            .And.Contain("Exited (1)")
+            .And.Contain("superuser password is not specified");
         h.Docker.LiveContainerNames.Should().Equal(h.ContainerFor(1));
+    }
+
+    [Fact]
+    public async Task A_crash_looping_container_fails_fast_with_the_crash_as_the_reason()
+    {
+        // The real-world case: `unless-stopped` means Docker restarts a container that dies on
+        // startup, so it is reported as "restarting". Waiting for the health path to answer would
+        // burn the whole timeout and then blame the wrong thing.
+        using var h = new PipelineHarness().WithDomain().WithHealthPath("/healthz");
+        h.WithPreviousDeployment(number: 1);
+        h.Docker.StartedContainerState = "restarting";
+        h.Docker.StartedContainerStatus = "Restarting (1) 3 seconds ago";
+        h.Docker.ContainerLogs = "Error: Database is uninitialized and superuser password is not specified.";
+        var deployment = h.QueueDeployment(number: 2);
+
+        var result = await h.RunAsync(deployment);
+
+        result.Status.Should().Be(DeploymentStatus.Failed);
+        result.ErrorMessage.Should().Contain("crashing").And.Contain("Restarting (1)")
+            .And.Contain("superuser password is not specified");
+        h.Http.Attempts.Should().Be(0, "there is no point probing a container that is still crashing");
+        h.Docker.LiveContainerNames.Should().Equal(h.ContainerFor(1));
+    }
+
+    [Fact]
+    public async Task A_container_that_runs_but_never_answers_says_what_was_probed()
+    {
+        using var h = new PipelineHarness().WithDomain().WithHealthPath("/healthz");
+        h.WithPreviousDeployment(number: 1);
+        h.Http.Status = System.Net.HttpStatusCode.InternalServerError;   // up, but unhealthy
+        var deployment = h.QueueDeployment(number: 2);
+
+        var result = await h.RunAsync(deployment);
+
+        result.Status.Should().Be(DeploymentStatus.Failed);
+        // A running container that fails its probe is a different problem from one that died, and
+        // sending the user to look for a crash would waste their time.
+        result.ErrorMessage.Should().Contain("/healthz").And.Contain("running");
+        result.ErrorMessage.Should().NotContain("exited");
+    }
+
+    [Fact]
+    public async Task An_app_that_dies_while_being_probed_reports_the_crash_not_the_silence()
+    {
+        // The ordinary shape of a bad deploy: the container comes up, the health path never answers
+        // because the process is already falling over, and it is gone by the time we give up. The
+        // unanswered probe is the symptom; the exit is the cause, so the exit is what to report.
+        using var h = new PipelineHarness().WithDomain().WithHealthPath("/healthz");
+        h.WithPreviousDeployment(number: 1);
+        h.Http.Status = System.Net.HttpStatusCode.ServiceUnavailable;
+        h.Docker.ContainerLogs = "panic: cannot open config file";
+        var deployment = h.QueueDeployment(number: 2);
+        h.Http.OnProbe = () => h.Docker.MarkExited(h.ContainerFor(2), "Exited (2) 5 seconds ago");
+
+        var result = await h.RunAsync(deployment);
+
+        result.Status.Should().Be(DeploymentStatus.Failed);
+        result.ErrorMessage.Should().Contain("exited").And.Contain("Exited (2)")
+            .And.Contain("panic: cannot open config file");
+    }
+
+    [Fact]
+    public async Task A_container_removed_by_something_else_is_not_called_a_crash()
+    {
+        // Distinct cause, distinct fix: nothing is wrong with the image, so pointing the user at
+        // their environment variables would send them looking in the wrong place.
+        using var h = new PipelineHarness();
+        h.WithPreviousDeployment(number: 1);
+        h.Docker.DropStartedContainers = true;
+        var deployment = h.QueueDeployment(number: 2);
+
+        var result = await h.RunAsync(deployment);
+
+        result.Status.Should().Be(DeploymentStatus.Failed);
+        result.ErrorMessage.Should().Contain("disappeared");
+        result.ErrorMessage.Should().NotContain("never reached the running state");
     }
 
     [Fact]

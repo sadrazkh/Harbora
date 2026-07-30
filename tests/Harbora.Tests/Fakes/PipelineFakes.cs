@@ -124,6 +124,9 @@ public sealed class StubHttpClientFactory(HttpStatusCode status = HttpStatusCode
     private readonly StubHandler _handler = new(status);
 
     public HttpStatusCode Status { get => _handler.Status; set => _handler.Status = value; }
+
+    /// <summary>Runs on every probe, so a test can make the container die while it is being polled.</summary>
+    public Action? OnProbe { get => _handler.OnProbe; set => _handler.OnProbe = value; }
     public int Attempts => _handler.Attempts;
     public IReadOnlyList<string> RequestedUrls => _handler.Urls;
 
@@ -133,12 +136,14 @@ public sealed class StubHttpClientFactory(HttpStatusCode status = HttpStatusCode
     {
         public HttpStatusCode Status { get; set; } = status;
         public int Attempts;
+        public Action? OnProbe;
         public readonly List<string> Urls = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             Attempts++;
             lock (Urls) Urls.Add(request.RequestUri!.ToString());
+            OnProbe?.Invoke();
             return Task.FromResult(new HttpResponseMessage(Status));
         }
     }

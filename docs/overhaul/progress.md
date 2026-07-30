@@ -5,6 +5,61 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-30 — Managed databases proven end to end, and a failed deploy that says why (P9)
+
+P9 asked for one thing that had never been done: **verify the managed-database path on a real host**.
+Attaching a database was, until yesterday, a 500 — it used the add-to-a-loaded-parent pattern fixed
+in the previous phase — so nothing downstream of it had ever run.
+
+**The whole chain, on the live server:**
+
+| Step | Result |
+|---|---|
+| Provision PostgreSQL 16 | container `harbora-svc-p9db` up on the tenant network `harbora-ws-default` |
+| The connection string the panel reveals | `psql` connected with it verbatim, from that network |
+| Attach to an app | six env rows written, every one encrypted and marked secret |
+| Redeploy | all six present in the running container |
+| DNS from the app container | `harbora-svc-p9db` → `172.19.0.3` |
+| TCP + auth from the app container's own credentials | authenticated as `harbora` |
+
+So "attach wires env with no copy-paste" is now a demonstrated fact rather than a claim. No secret
+values were printed at any point — the checks assert on lengths, names, and a live authentication.
+
+**What the verification turned up: a failed deploy could not be diagnosed.** Deploying
+`postgres:16-alpine` without `POSTGRES_PASSWORD` — an ordinary mistake — produced exactly one
+sentence: *"Container failed its health check."* True, and useless. The reason was sitting in the
+container's own log, in the one place the user cannot look, because the failed container is removed
+moments later.
+
+Four distinct failures had collapsed into that sentence: the container exited, it never started, it
+was removed by something else, or it was running and never answered. Each needs a different next
+step, so each now gets its own verdict, the runtime's status line (which carries the exit code), and
+the container's last output — collected *before* cleanup removes it.
+
+**Then the real host corrected me.** My first version watched for state `exited`. App containers run
+under `unless-stopped`, so Docker revives a crashing container within moments and it reports
+`restarting` — `exited` is almost unreachable in production. The live deploy came back as *"running
+but never returned a success response"*, which is the opposite of what was happening, and only after
+burning the full health-check timeout. Added `CrashLooping`; the same deploy now fails in **8
+seconds** with:
+
+> The container keeps crashing and being restarted (Restarting (1) …). It is failing during startup —
+> usually a missing environment variable or a service it cannot reach. Its last output was: … Error:
+> Database is uninitialized and superuser password is not specified.
+
+The log window was sized from that same failure, not guessed: at 600 characters it kept Postgres's
+*advice* and cut the error line above it. It is 1500 now, and a test pins the error surviving.
+
+**Tests:** 426 → 429. Nine mutations across the diagnosis and the gate; the first sweep left two
+alive — a container that dies *during* probing, and a vanished container reported as never-started —
+both now covered by tests written against the fake Docker engine. The last three (restarting isn't a
+crash, crash-loop worded as an unanswered probe, log window shrunk back) were caught.
+
+Unchanged and worth stating: a crash-looping container never took traffic, and the previous
+deployment stayed live throughout.
+
+---
+
 ## 2026-07-30 — Domain readiness: what the browser actually gets (P8)
 
 The Domains panel showed an "SSL" badge whenever the auto-SSL checkbox was ticked. That is the

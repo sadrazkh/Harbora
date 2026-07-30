@@ -28,6 +28,23 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// <summary>Container state reported to the health gate for newly started containers.</summary>
     public string StartedContainerState { get; set; } = "running";
 
+    /// <summary>Status line reported for newly started containers — carries the exit code when one exits.</summary>
+    public string StartedContainerStatus { get; set; } = "Up";
+
+    /// <summary>What the container "printed". The health gate reads this to explain a failure.</summary>
+    public string ContainerLogs { get; set; } = string.Empty;
+
+    /// <summary>When set, a started container is never listed — as if something removed it.</summary>
+    public bool DropStartedContainers { get; set; }
+
+    /// <summary>Transitions a live container to exited, the way a crash mid-health-check would.</summary>
+    public void MarkExited(string containerName, string status = "Exited (1) 1 second ago")
+    {
+        foreach (var (id, c) in _containers)
+            if (c.Name == containerName)
+                _containers[id] = c with { State = "exited", Status = status };
+    }
+
     /// <summary>When set, <see cref="BuildImageAsync"/> throws — simulates a failing build.</summary>
     public Exception? BuildFailure { get; set; }
 
@@ -142,9 +159,10 @@ public sealed class FakeDockerEngine : IDockerEngine
         if (RunFailure is not null) throw RunFailure;
 
         var id = $"container-{Interlocked.Increment(ref _idSeq):D4}-{request.ContainerName}";
-        _containers[id] = new ContainerInfo(
-            id, request.ContainerName, request.Image, StartedContainerState, "Up",
-            request.Labels.ToDictionary(kv => kv.Key, kv => kv.Value));
+        if (!DropStartedContainers)
+            _containers[id] = new ContainerInfo(
+                id, request.ContainerName, request.Image, StartedContainerState, StartedContainerStatus,
+                request.Labels.ToDictionary(kv => kv.Key, kv => kv.Value));
         RunRequests.Add(request);
         return Task.FromResult(id);
     }
@@ -178,7 +196,7 @@ public sealed class FakeDockerEngine : IDockerEngine
         => Task.CompletedTask;
 
     public Task<string> GetLogsAsync(string containerId, int tailLines, CancellationToken ct)
-        => Task.FromResult(string.Empty);
+        => Task.FromResult(ContainerLogs);
 
     public Task<IReadOnlyList<ContainerInfo>> ListContainersAsync(string? labelFilter, CancellationToken ct)
     {

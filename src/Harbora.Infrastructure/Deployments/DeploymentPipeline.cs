@@ -208,11 +208,12 @@ public sealed class DeploymentPipeline(
                 keepContainers = web.AllContainerNames;
 
                 await SetStatus(DeploymentStatus.HealthChecking);
-                var stackHealthy = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort,
+                var stackHealth = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort,
                     web.ContainerName, app.HealthCheckPath, msg => Log(LogStream.System, msg), ct);
-                if (!stackHealthy)
+                if (!stackHealth.IsHealthy)
                     throw new InvalidOperationException(
-                        $"The '{web.ServiceName}' service failed its health check.");
+                        $"The '{web.ServiceName}' service did not become healthy. " +
+                        HealthDiagnosis.Explain(stackHealth, web.ContainerName));
 
                 await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
                 await RetireOldContainersAsync(docker, app.Slug, keepContainers, Log, ct);
@@ -238,10 +239,10 @@ public sealed class DeploymentPipeline(
 
             await Log(LogStream.System, $"Container {containerId[..12]} is up. Verifying health …");
             await SetStatus(DeploymentStatus.HealthChecking);
-            var healthy = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort, containerName, app.HealthCheckPath,
+            var health = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort, containerName, app.HealthCheckPath,
                 msg => Log(LogStream.System, msg), ct);
-            if (!healthy)
-                throw new InvalidOperationException("Container failed its health check.");
+            if (!health.IsHealthy)
+                throw new InvalidOperationException(HealthDiagnosis.Explain(health, containerName));
 
             // New container is healthy → switch traffic to it, THEN retire the old container(s).
             await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
@@ -768,23 +769,25 @@ public sealed class DeploymentPipeline(
     /// until it returns a success status. Remote nodes fall back to liveness (the panel can't reach
     /// their containers by name without an overlay network).
     /// </summary>
-    private async Task<bool> WaitForHealthyAsync(
+    private async Task<HealthReport> WaitForHealthyAsync(
         IDockerEngine docker, string upstreamHost, int upstreamPort, string containerName, string? healthPath,
         Func<string, Task> log, CancellationToken ct)
     {
+        ContainerInfo? last = null;
         var running = false;
         for (var i = 0; i < _opt.HealthRunningAttempts && !running; i++)
         {
             await Task.Delay(_opt.HealthPollInterval, ct);
             var c = (await docker.ListContainersAsync("harbora.app", ct)).FirstOrDefault(x => x.Name == containerName);
-            if (c is null) return false;
-            if (c.State.Equals("exited", StringComparison.OrdinalIgnoreCase)) return false;
+            if (c is null) return new HealthReport(HealthFailure.Vanished);
+            last = c;
+            if (CrashFailure(c) is { } crash) return await FailedAsync(docker, crash, c, ct);
             running = c.State.Equals("running", StringComparison.OrdinalIgnoreCase);
         }
-        if (!running) return false;
+        if (!running) return await FailedAsync(docker, HealthFailure.NeverStarted, last, ct);
 
         if (string.IsNullOrWhiteSpace(healthPath))
-            return true;
+            return HealthReport.Healthy;
 
         // Probe the same address the proxy will use: container name on the local network, or the
         // node's host:publishedPort for a remote node.
@@ -798,7 +801,7 @@ public sealed class DeploymentPipeline(
             try
             {
                 using var res = await client.GetAsync(url, ct);
-                if ((int)res.StatusCode < 400) return true;
+                if ((int)res.StatusCode < 400) return HealthReport.Healthy;
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
             {
@@ -807,7 +810,44 @@ public sealed class DeploymentPipeline(
             await Task.Delay(_opt.HealthPollInterval, ct);
         }
         await log("Health check did not pass within the timeout.");
-        return false;
+
+        // Re-read the container: an app that fails its health path has often died in the meantime,
+        // and the crash is a far more useful thing to report than the unanswered probe.
+        var current = (await docker.ListContainersAsync("harbora.app", ct)).FirstOrDefault(x => x.Name == containerName);
+        if (current is not null && CrashFailure(current) is { } lateCrash)
+            return await FailedAsync(docker, lateCrash, current, ct);
+
+        return await FailedAsync(docker, HealthFailure.NoHealthyResponse, current, ct, url);
+    }
+
+    /// <summary>
+    /// Whether the container is dead or dying, and in which way.
+    ///
+    /// App containers run under <c>unless-stopped</c>, so a container that crashes on startup is
+    /// revived by Docker within moments: in practice it reports "restarting", and almost never
+    /// "exited". Watching only for "exited" is why a crash-looping app was reported as a container
+    /// that was "running but never answered" — the opposite of what was happening.
+    /// </summary>
+    private static HealthFailure? CrashFailure(ContainerInfo c) =>
+        c.State.Equals("exited", StringComparison.OrdinalIgnoreCase) ? HealthFailure.Exited
+        : c.State.Equals("restarting", StringComparison.OrdinalIgnoreCase) ? HealthFailure.CrashLooping
+        : null;
+
+    /// <summary>
+    /// Collects the container's own account of what happened, while it still exists — the failure
+    /// path removes it moments later.
+    /// </summary>
+    private static async Task<HealthReport> FailedAsync(
+        IDockerEngine docker, HealthFailure failure, ContainerInfo? container, CancellationToken ct,
+        string? probeUrl = null)
+    {
+        string? tail = null;
+        if (container is not null)
+        {
+            try { tail = await docker.GetLogsAsync(container.Id, 30, ct); }
+            catch { /* diagnostics must never replace the failure they describe */ }
+        }
+        return new HealthReport(failure, container?.Status, tail, probeUrl);
     }
 
     /// <summary>Materialise a Route per domain then re-apply the whole workspace's proxy config.</summary>
