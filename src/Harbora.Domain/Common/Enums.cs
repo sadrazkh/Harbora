@@ -20,6 +20,26 @@ public enum WorkspaceRole
 }
 
 /// <summary>How an application is built/sourced.</summary>
+/// <summary>
+/// What a deployable unit is for. Everything that exists today is <see cref="Web"/>, which is why it
+/// is 0 — the column backfills to the current behaviour without touching a single row's meaning.
+/// </summary>
+public enum ServiceKind
+{
+    /// <summary>Serves HTTP; can have domains and a public URL.</summary>
+    Web = 0,
+    /// <summary>Reachable only from inside the project's network — no domain, no public port.</summary>
+    Private = 1,
+    /// <summary>Long-running process with no inbound traffic.</summary>
+    Worker = 2,
+    /// <summary>Runs on a schedule and exits.</summary>
+    Cron = 3,
+    /// <summary>Runs once before a release is switched live; a failure keeps the current version.</summary>
+    ReleaseTask = 4,
+    /// <summary>Built to static files and served by the proxy.</summary>
+    Static = 5
+}
+
 public enum AppSourceType
 {
     GitRepository = 0,

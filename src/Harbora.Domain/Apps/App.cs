@@ -13,6 +13,21 @@ namespace Harbora.Domain.Apps;
 public class App : BaseEntity
 {
     public Guid WorkspaceId { get; set; }
+
+    /// <summary>
+    /// Which project environment this belongs to. Nullable during the transition: every existing app
+    /// is backfilled to its workspace's default project, and the column becomes required only once
+    /// every read path has moved.
+    /// </summary>
+    public Guid? EnvironmentId { get; set; }
+    public Harbora.Domain.Projects.Environment? Environment { get; set; }
+
+    /// <summary>
+    /// What this unit is for. Everything that existed before this column is <see cref="ServiceKind.Web"/>,
+    /// which is the default, so the deploy engine's behaviour is unchanged for every current app.
+    /// </summary>
+    public ServiceKind Kind { get; set; } = ServiceKind.Web;
+
     public Guid ServerId { get; set; }
 
     public string Name { get; set; } = string.Empty;

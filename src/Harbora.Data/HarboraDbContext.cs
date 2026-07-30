@@ -40,6 +40,8 @@ public class HarboraDbContext : DbContext
     public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<WorkspaceMember> WorkspaceMembers => Set<WorkspaceMember>();
+    public DbSet<Harbora.Domain.Projects.Project> Projects => Set<Harbora.Domain.Projects.Project>();
+    public DbSet<Harbora.Domain.Projects.Environment> Environments => Set<Harbora.Domain.Projects.Environment>();
     public DbSet<Server> Servers => Set<Server>();
     public DbSet<HostPortAllocation> HostPortAllocations => Set<HostPortAllocation>();
     public DbSet<GitProvider> GitProviders => Set<GitProvider>();
@@ -108,6 +110,27 @@ public class HarboraDbContext : DbContext
         });
 
         b.Entity<EnvironmentVariable>(e => e.HasIndex(x => new { x.AppId, x.Key }).IsUnique());
+
+        b.Entity<Harbora.Domain.Projects.Project>(e =>
+        {
+            e.HasIndex(x => new { x.WorkspaceId, x.Slug }).IsUnique();
+            e.Property(x => x.Slug).HasMaxLength(63).IsRequired();
+            e.HasMany(x => x.Environments).WithOne(v => v.Project)
+                .HasForeignKey(v => v.ProjectId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<Harbora.Domain.Projects.Environment>(e =>
+        {
+            e.HasIndex(x => new { x.ProjectId, x.Slug }).IsUnique();
+            e.Property(x => x.Slug).HasMaxLength(63).IsRequired();
+        });
+
+        // Deliberately SetNull, not Cascade: deleting an environment must never silently take a
+        // customer's running apps and databases with it. Detaching them surfaces the mistake instead.
+        b.Entity<App>(e => e.HasOne(x => x.Environment).WithMany()
+            .HasForeignKey(x => x.EnvironmentId).OnDelete(DeleteBehavior.SetNull));
+        b.Entity<ManagedService>(e => e.HasOne(x => x.Environment).WithMany()
+            .HasForeignKey(x => x.EnvironmentId).OnDelete(DeleteBehavior.SetNull));
 
         b.Entity<Deployment>(e =>
         {
@@ -207,6 +230,12 @@ public class HarboraDbContext : DbContext
         b.Entity<GitProvider>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<WorkspaceMember>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Harbora.Domain.Tenancy.UsageRecord>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Projects.Project>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        // Environments carry a denormalised WorkspaceId for the same reason deployments do: filtering
+        // through the parent turns into a join that can hide rows whose parent is momentarily absent.
+        b.Entity<Harbora.Domain.Projects.Environment>()
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
 
         // Deployment ids appear in URLs, so this is the natural id-guessing target. It carries a
