@@ -24,6 +24,7 @@ public sealed partial class DatabasesController(
     IManagedServiceEngine engine,
     IQuotaService quota,
     ISecretProtector protector,
+    Harbora.Infrastructure.Projects.ProjectService projects,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -68,9 +69,11 @@ public sealed partial class DatabasesController(
         }
 
         var serverId = await db.Servers.Where(s => s.IsLocal).Select(s => s.Id).FirstAsync(ct);
+        var environment = await projects.EnsureDefaultEnvironmentAsync(WorkspaceId, ct);
         var service = new ManagedService
         {
             WorkspaceId = WorkspaceId,
+            EnvironmentId = environment.Id,
             ServerId = serverId,
             Name = model.Name,
             Type = model.Type,

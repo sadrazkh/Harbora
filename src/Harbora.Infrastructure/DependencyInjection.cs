@@ -99,6 +99,9 @@ public static class DependencyInjection
         services.AddScoped<IBackupEngine>(sp => sp.GetRequiredService<Backups.BackupEngine>());
         services.AddHostedService<Backups.BackupScheduler>();
 
+        // Projects + environments: the grouping every screen and the private network hang off.
+        services.AddScoped<Projects.ProjectService>();
+
         // Tenancy quotas + node capacity (PaaS).
         services.AddScoped<IQuotaService, Tenancy.QuotaService>();
         services.AddScoped<INodeCapacityService, Tenancy.NodeCapacityService>();

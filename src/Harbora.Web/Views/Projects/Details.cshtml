@@ -1,0 +1,120 @@
+@model ProjectDetailsViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
+    var selected = Model.Selected;
+}
+
+<div class="mb-6">
+    <a href="/projects" class="text-brand-400 text-sm">← @(isFa ? "پروژه‌ها" : "Projects")</a>
+    <div class="mt-1 flex flex-wrap items-center justify-between gap-3">
+        <div>
+            <h1 class="text-2xl font-bold">@Model.Project.Name</h1>
+            <p class="text-slate-400 text-sm">@Model.Project.Slug</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="/apps/create" class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">
+                + @(isFa ? "سرویس" : "Service")
+            </a>
+            <a href="/databases/create" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">
+                + @(isFa ? "دیتابیس" : "Database")
+            </a>
+        </div>
+    </div>
+</div>
+
+@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
+
+@* Environments as tabs: the same project, a different independent copy. *@
+<div class="mb-6 flex flex-wrap items-center gap-2 border-b border-slate-800 pb-2">
+    @foreach (var e in Model.Environments)
+    {
+        var active = selected is not null && e.Id == selected.Id;
+        <a href="/projects/@Model.Project.Id?environmentId=@e.Id"
+           class="rounded-lg px-3 py-1.5 text-sm @(active ? "bg-slate-800 text-slate-100" : "text-slate-400 hover:text-slate-200")">
+            @e.Name
+            @if (e.IsDefault){<span class="text-[10px] text-slate-500">@(isFa ? "پیش‌فرض" : "default")</span>}
+        </a>
+    }
+    <details class="relative ms-auto">
+        <summary class="cursor-pointer text-sm text-brand-400 list-none">+ @(isFa ? "محیط" : "Environment")</summary>
+        <form asp-controller="Projects" asp-action="AddEnvironment" asp-route-id="@Model.Project.Id" method="post"
+              class="absolute end-0 mt-2 w-64 rounded-xl border border-slate-800 bg-slate-900 p-3 shadow-xl z-10 space-y-2">
+            @Html.AntiForgeryToken()
+            <input name="name" required placeholder="Staging"
+                   class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            <p class="text-xs text-slate-500">
+                @(isFa
+                    ? "یک نسخه‌ی مستقل با متغیرها، دامنه‌ها و دیتابیس خودش."
+                    : "An independent copy with its own variables, domains and databases.")
+            </p>
+            <button class="w-full rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">@(isFa ? "افزودن" : "Add")</button>
+        </form>
+    </details>
+</div>
+
+<div class="grid lg:grid-cols-2 gap-6">
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60">
+        <div class="px-4 py-3 border-b border-slate-800 font-semibold">@(isFa ? "سرویس‌ها" : "Services")</div>
+        <div class="divide-y divide-slate-800">
+            @if (Model.Services.Count == 0)
+            {
+                <div class="p-6 text-center text-sm text-slate-500">
+                    @(isFa ? "هنوز سرویسی در این محیط نیست." : "No services in this environment yet.")
+                </div>
+            }
+            @foreach (var s in Model.Services)
+            {
+                <a href="/apps/details/@s.Id" class="flex items-center justify-between p-3 hover:bg-slate-800/40">
+                    <div class="min-w-0">
+                        <div class="text-sm font-medium truncate">@s.Name</div>
+                        <div class="text-xs text-slate-500 truncate">@s.Kind · @s.SourceType</div>
+                    </div>
+                    <partial name="_StatusBadge" model="s.Status" />
+                </a>
+            }
+        </div>
+    </section>
+
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60">
+        <div class="px-4 py-3 border-b border-slate-800 font-semibold">@(isFa ? "دیتابیس‌ها" : "Databases")</div>
+        <div class="divide-y divide-slate-800">
+            @if (Model.Databases.Count == 0)
+            {
+                <div class="p-6 text-center text-sm text-slate-500">
+                    @(isFa ? "دیتابیسی در این محیط نیست." : "No databases in this environment.")
+                </div>
+            }
+            @foreach (var d in Model.Databases)
+            {
+                <a href="/databases/@d.Id" class="flex items-center justify-between p-3 hover:bg-slate-800/40">
+                    <div class="min-w-0">
+                        <div class="text-sm font-medium truncate">@d.Name</div>
+                        <div class="text-xs text-slate-500 truncate">@d.Type · @d.Version</div>
+                    </div>
+                    <span class="text-xs @(d.Status == Harbora.Domain.Common.ServiceStatus.Running ? "text-emerald-400" : "text-slate-500")">
+                        @(d.Status == Harbora.Domain.Common.ServiceStatus.Running ? "● " : "○ ")@d.Status
+                    </span>
+                </a>
+            }
+        </div>
+    </section>
+</div>
+
+@if (Model.Services.Count == 0 && Model.Databases.Count == 0)
+{
+    <section class="mt-6 rounded-xl border border-red-900/50 bg-red-950/10 p-4">
+        <div class="font-semibold text-red-300 mb-1">@(isFa ? "منطقه‌ی خطر" : "Danger zone")</div>
+        <p class="text-xs text-slate-400 mb-3">
+            @(isFa ? "این پروژه خالی است و می‌تواند حذف شود." : "This project is empty and can be deleted.")
+        </p>
+        <form asp-controller="Projects" asp-action="Delete" asp-route-id="@Model.Project.Id" method="post"
+              onsubmit="return confirm('@(isFa ? "این پروژه حذف شود؟" : "Delete this project?")')">
+            @Html.AntiForgeryToken()
+            <button class="rounded-lg bg-red-900/40 hover:bg-red-900/60 text-red-300 px-4 py-2 text-sm font-semibold">
+                🗑 @(isFa ? "حذف پروژه" : "Delete project")
+            </button>
+        </form>
+    </section>
+}

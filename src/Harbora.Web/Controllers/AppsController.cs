@@ -24,6 +24,7 @@ public sealed class AppsController(
     IAuditLogger audit,
     IRollbackPlanner rollbackPlanner,
     IDomainInspector domains,
+    Harbora.Infrastructure.Projects.ProjectService projects,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -85,9 +86,16 @@ public sealed class AppsController(
         }
 
         var serverId = placement.ServerId!.Value;
+
+        // Everything belongs to a project from the moment it is created. Until the create-project
+        // wizard lands, that is the workspace's default environment — the same one the migration
+        // backfilled existing apps into, so old and new apps are indistinguishable.
+        var environment = await projects.EnsureDefaultEnvironmentAsync(WorkspaceId, ct);
+
         var app = new App
         {
             WorkspaceId = WorkspaceId,
+            EnvironmentId = environment.Id,
             ServerId = serverId,
             Name = model.Name,
             Slug = slug,
