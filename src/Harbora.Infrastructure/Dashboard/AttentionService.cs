@@ -1,0 +1,129 @@
+using Harbora.Application.Abstractions;
+using Harbora.Data;
+using Harbora.Domain.Common;
+using Microsoft.EntityFrameworkCore;
+
+namespace Harbora.Infrastructure.Dashboard;
+
+/// <summary>
+/// Reads the workspace's state and hands it to <see cref="AttentionRules"/>.
+///
+/// Everything here is a stored fact. Nothing probes the network on a page load: a dashboard that waits
+/// on DNS and TLS for every domain is a dashboard nobody opens. The certificate facts come from the
+/// daily watcher, which does perform real handshakes and records what it found.
+/// </summary>
+public sealed class AttentionService(HarboraDbContext db, ISystemClock clock)
+{
+    /// <summary>How far back a failure still counts as news.</summary>
+    private static readonly TimeSpan RecentWindow = TimeSpan.FromDays(7);
+
+    public async Task<IReadOnlyList<AttentionItem>> BuildAsync(Guid workspaceId, CancellationToken ct)
+    {
+        var since = clock.UtcNow - RecentWindow;
+
+        // A failed deployment matters while it is still the app's most recent one. A failure that was
+        // followed by a success is history, and history does not belong on a dashboard.
+        var failedDeployments = await db.Deployments
+            .Where(d => d.WorkspaceId == workspaceId && d.Status == DeploymentStatus.Failed
+                        && d.CreatedAt >= since
+                        && !db.Deployments.Any(later => later.AppId == d.AppId && later.Number > d.Number
+                                                        && later.Status == DeploymentStatus.Succeeded))
+            .OrderByDescending(d => d.CreatedAt)
+            .Select(d => new { App = d.App!.Name, d.Id, d.ErrorMessage })
+            .Take(5)
+            .ToListAsync(ct);
+
+        var crashed = await db.Apps
+            .Where(a => a.WorkspaceId == workspaceId && a.Status == AppStatus.Crashed)
+            .Select(a => new { a.Name, a.Id })
+            .Take(5)
+            .ToListAsync(ct);
+
+        var failedBackups = await db.Backups
+            .Where(b => b.WorkspaceId == workspaceId && b.Status == BackupStatus.Failed && b.CreatedAt >= since)
+            .OrderByDescending(b => b.CreatedAt)
+            .Select(b => new { b.TargetRef, b.Type, b.ErrorMessage })
+            .Take(3)
+            .ToListAsync(ct);
+
+        var brokenAlerts = await db.Alerts
+            .Where(a => a.WorkspaceId == workspaceId && a.IsEnabled && a.LastError != null)
+            .Select(a => new { a.Name, a.LastError })
+            .Take(3)
+            .ToListAsync(ct);
+
+        var brokenDeliveries = await db.BackupDeliveries
+            .Where(d => d.WorkspaceId == workspaceId && d.IsEnabled && d.LastError != null)
+            .Select(d => new { d.Name, d.LastError })
+            .Take(3)
+            .ToListAsync(ct);
+
+        // Recorded by the certificate watcher's daily TLS handshake, not probed here.
+        var hosts = await db.Domains
+            .Where(d => d.SslEnabled && d.App!.WorkspaceId == workspaceId)
+            .Select(d => d.Host)
+            .ToListAsync(ct);
+
+        var certificates = hosts.Count == 0
+            ? []
+            : await db.Certificates
+                .Where(c => hosts.Contains(c.Host)
+                            && (c.Status == CertificateStatus.Failed || c.Status == CertificateStatus.Expired
+                                || (c.ExpiresAt != null && c.ExpiresAt < clock.UtcNow.AddDays(14))))
+                .Select(c => new { c.Host, c.Status, c.ExpiresAt, c.LastError })
+                .Take(5)
+                .ToListAsync(ct);
+
+        var appIds = await db.Apps.Where(a => a.WorkspaceId == workspaceId).Select(a => a.Id).ToListAsync(ct);
+        var neverDeployed = await db.Apps
+            .Where(a => a.WorkspaceId == workspaceId && a.ActiveDeploymentId == null)
+            .Select(a => new { a.Name, a.Id })
+            .Take(3)
+            .ToListAsync(ct);
+
+        var disk = await DiskRatioAsync(ct);
+
+        return AttentionRules.Build(new AttentionFacts
+        {
+            FailedDeployments = failedDeployments.Select(d => (d.App, d.Id, d.ErrorMessage)).ToList(),
+            CrashedApps = crashed.Select(a => (a.Name, a.Id)).ToList(),
+            FailedBackups = failedBackups.Select(b =>
+                (string.IsNullOrWhiteSpace(b.TargetRef) ? b.Type.ToString() : b.TargetRef, b.ErrorMessage)).ToList(),
+            BrokenChannels =
+                brokenAlerts.Select(a => (a.Name, "Alert channel", a.LastError!))
+                    .Concat(brokenDeliveries.Select(d => (d.Name, "Backup delivery", d.LastError!)))
+                    .ToList(),
+            CertificateProblems = certificates.Select(c => (c.Host, DescribeCertificate(c.Status, c.ExpiresAt, c.LastError))).ToList(),
+            DiskUsedRatio = disk,
+            NeverDeployed = neverDeployed.Select(a => (a.Name, a.Id)).ToList(),
+            HasAnyApp = appIds.Count > 0,
+            HasAnyBackupSchedule = await db.BackupSchedules.AnyAsync(s => s.WorkspaceId == workspaceId && s.IsEnabled, ct)
+        });
+    }
+
+    private string DescribeCertificate(CertificateStatus status, DateTimeOffset? expiresAt, string? error)
+    {
+        if (status == CertificateStatus.Failed)
+            return AttentionRules.Summarise(error) ?? "The certificate could not be issued.";
+        if (status == CertificateStatus.Expired || (expiresAt is not null && expiresAt <= clock.UtcNow))
+            return $"The certificate expired on {expiresAt:yyyy-MM-dd}.";
+
+        var days = expiresAt is null ? 0 : (int)(expiresAt.Value - clock.UtcNow).TotalDays;
+        return $"The certificate expires in {days} days and has not renewed yet.";
+    }
+
+    /// <summary>Latest disk sample from the collector; 0 when nothing has been sampled yet.</summary>
+    private async Task<double> DiskRatioAsync(CancellationToken ct)
+    {
+        var used = await LatestAsync("disk.used", ct);
+        var total = await LatestAsync("disk.total", ct);
+        return total > 0 ? used / total : 0;
+    }
+
+    private async Task<double> LatestAsync(string name, CancellationToken ct) =>
+        await db.MonitoringMetrics
+            .Where(m => m.Name == name && m.ResourceRef == null)
+            .OrderByDescending(m => m.Timestamp)
+            .Select(m => m.Value)
+            .FirstOrDefaultAsync(ct);
+}

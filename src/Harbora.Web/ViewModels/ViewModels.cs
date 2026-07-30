@@ -56,6 +56,12 @@ public sealed class CreateServiceViewModel
 
 public sealed class DashboardViewModel
 {
+    /// <summary>What needs a person's attention, most serious first. Empty is the good case.</summary>
+    public IReadOnlyList<Harbora.Infrastructure.Dashboard.AttentionItem> Attention { get; set; } = [];
+
+    /// <summary>The workspace's projects, which are now the way into everything else.</summary>
+    public List<ProjectSummary> Projects { get; set; } = [];
+
     public int AppCount { get; set; }
     public int RunningCount { get; set; }
     public int FailedDeployments { get; set; }

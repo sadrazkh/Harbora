@@ -99,6 +99,9 @@ public static class DependencyInjection
         services.AddScoped<IBackupEngine>(sp => sp.GetRequiredService<Backups.BackupEngine>());
         services.AddHostedService<Backups.BackupScheduler>();
 
+        // What the dashboard opens with: findings a person can act on, from stored facts only.
+        services.AddScoped<Dashboard.AttentionService>();
+
         // Projects + environments: the grouping every screen and the private network hang off.
         services.AddScoped<Projects.ProjectService>();
 

@@ -15,6 +15,7 @@ namespace Harbora.Web.Controllers;
 public sealed class HomeController(
     HarboraDbContext db,
     IDockerEngine docker,
+    Harbora.Infrastructure.Dashboard.AttentionService attention,
     ICurrentUser currentUser,
     ILogger<HomeController> logger) : Controller
 {
@@ -31,8 +32,24 @@ public sealed class HomeController(
 
         var workspaceId = currentUser.WorkspaceId ?? Guid.Empty;
 
+        // The list the page opens with: only findings someone can act on.
         var vm = new DashboardViewModel
         {
+            Attention = await attention.BuildAsync(workspaceId, ct),
+            Projects = await db.Projects
+                .Where(p => p.WorkspaceId == workspaceId)
+                .OrderBy(p => p.Name)
+                .Select(p => new ProjectSummary
+                {
+                    Id = p.Id, Name = p.Name, Slug = p.Slug,
+                    Environments = p.Environments.Count,
+                    Services = db.Apps.Count(a => a.Environment!.ProjectId == p.Id),
+                    Databases = db.ManagedServices.Count(s => s.Environment!.ProjectId == p.Id),
+                    Unhealthy = db.Apps.Count(a => a.Environment!.ProjectId == p.Id
+                                                   && (a.Status == AppStatus.Crashed || a.Status == AppStatus.Failed))
+                })
+                .Take(6)
+                .ToListAsync(ct),
             Apps = await db.Apps.Where(a => a.WorkspaceId == workspaceId)
                 .OrderByDescending(a => a.UpdatedAt).Take(8).ToListAsync(ct),
             RecentDeployments = await db.Deployments
