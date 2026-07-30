@@ -117,7 +117,15 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
             HostConfig = hostConfig,
             NetworkingConfig = new NetworkingConfig
             {
-                EndpointsConfig = new Dictionary<string, EndpointSettings> { [r.NetworkName] = new() }
+                EndpointsConfig = new Dictionary<string, EndpointSettings>
+                {
+                    [r.NetworkName] = new()
+                    {
+                        // Aliases are how a compose service reaches "db" rather than the versioned
+                        // container name — without them, every inter-service connection string breaks.
+                        Aliases = r.NetworkAliases?.ToList()
+                    }
+                }
             }
         };
 

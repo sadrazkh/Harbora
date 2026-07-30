@@ -27,14 +27,26 @@ public static class DeploymentPlanning
     /// legacy (unversioned) container is retired too.
     /// </summary>
     public static IReadOnlyList<string> ContainersToRetire(
-        IEnumerable<ContainerInfo> all, string slug, string keepContainerName)
+        IEnumerable<ContainerInfo> all, string slug, string keepContainerName) =>
+        ContainersToRetire(all, slug, new[] { keepContainerName });
+
+    /// <summary>
+    /// Multi-container form. A Compose stack replaces several containers at once, so the cutover has
+    /// to keep the whole new set — retiring per-service would tear down half the stack it just built.
+    /// </summary>
+    public static IReadOnlyList<string> ContainersToRetire(
+        IEnumerable<ContainerInfo> all, string slug, IReadOnlyCollection<string> keepContainerNames)
     {
         return all
             .Where(c => c.Labels.TryGetValue(AppLabel, out var s) && s == slug)
-            .Where(c => c.Name != keepContainerName)
+            .Where(c => !keepContainerNames.Contains(c.Name))
             .Select(c => c.Id)
             .ToList();
     }
+
+    /// <summary>Versioned name for one service of a Compose stack: harbora-{slug}-{service}-{number}.</summary>
+    public static string ComposeContainerName(string slug, string service, int number) =>
+        $"harbora-{slug}-{service}-{number}";
 
     /// <summary>Pick this app's current serving container id: the running one, else any match.</summary>
     public static string? CurrentContainerId(IEnumerable<ContainerInfo> all, string slug)

@@ -104,6 +104,15 @@ public sealed class DeploymentPipeline(
             await SetStatus(DeploymentStatus.Building);
             await Log(LogStream.System, $"Deployment #{deployment.Number} started ({app.SourceType}).");
 
+            // A Compose app is resolved up front: the file is parsed and validated BEFORE anything is
+            // built or started, so an unsupported directive is a plain rejection rather than a
+            // half-deployed stack.
+            var stackBuildLog = new Progress<string>(l => _ = LogFromEngine(LogStream.Build, l));
+            ComposeParseResult? composeStack = null;
+            if (app.SourceType == AppSourceType.DockerCompose)
+                composeStack = await LoadComposeAsync(app, deployment, stackBuildLog, Log, ct);
+
+            IReadOnlyCollection<string> keepContainers = [];
             string imageTag;
             // An image chosen at deploy time (`harbora deploy --image`) is released as-is: there is
             // no source to fetch and nothing to build, so pull it and go straight to the cutover.
@@ -134,7 +143,11 @@ public sealed class DeploymentPipeline(
             {
                 imageTag = $"{_opt.ImagePrefix}/{app.Slug}:build-{deployment.Number}";
                 var buildLog = new Progress<string>(l => _ = LogFromEngine(LogStream.Build, l));
-                imageTag = await AcquireImageAsync(docker, app, deployment, imageTag, buildLog, Log, ct);
+                // A Compose stack has no single image; its services are built or pulled by the
+                // deployer below. The recorded tag names the stack so history still reads sensibly.
+                imageTag = composeStack is null
+                    ? await AcquireImageAsync(docker, app, deployment, imageTag, buildLog, Log, ct)
+                    : $"{_opt.ImagePrefix}/{app.Slug}:compose-{deployment.Number}";
             }
             deployment.ImageTag = imageTag;
 
@@ -181,6 +194,40 @@ public sealed class DeploymentPipeline(
                 ["harbora.app"] = app.Slug,
                 ["harbora.deployment"] = deployment.Number.ToString()
             };
+
+            // A Compose stack starts several containers instead of one, so it takes over from here
+            // and returns the name + port the proxy should target. The guarantees are the same:
+            // everything new starts alongside the old stack, health is checked before any cutover.
+            if (composeStack is not null)
+            {
+                var web = await StartComposeStackAsync(
+                    docker, app, deployment, composeStack, network, labels, server, stackBuildLog, Log, ct);
+                containerName = web.ContainerName;
+                upstreamHost = server.IsLocal ? web.ContainerName : server.Hostname;
+                upstreamPort = server.IsLocal ? web.Port : publishPort ?? web.Port;
+                keepContainers = web.AllContainerNames;
+
+                await SetStatus(DeploymentStatus.HealthChecking);
+                var stackHealthy = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort,
+                    web.ContainerName, app.HealthCheckPath, msg => Log(LogStream.System, msg), ct);
+                if (!stackHealthy)
+                    throw new InvalidOperationException(
+                        $"The '{web.ServiceName}' service failed its health check.");
+
+                await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
+                await RetireOldContainersAsync(docker, app.Slug, keepContainers, Log, ct);
+
+                if (deployment.RolledBackFromId is not null)
+                    await MarkSupersededAsRolledBackAsync(app.ActiveDeploymentId, deployment.Id, Log, ct);
+
+                app.ActiveDeploymentId = deployment.Id;
+                app.Status = AppStatus.Running;
+                await SetStatus(DeploymentStatus.Succeeded);
+                await Log(LogStream.System,
+                    $"✅ Deployment #{deployment.Number} succeeded ({composeStack.Services.Count} services).");
+                await PruneOldImagesAsync(docker, app, Log, ct);
+                return;
+            }
 
             await Log(LogStream.System, $"Starting container {containerName} …");
             var containerId = await docker.RunContainerAsync(new DockerRunRequest(
@@ -338,6 +385,204 @@ public sealed class DeploymentPipeline(
     }
 
     /// <summary>
+    /// Materialises the source, reads its compose file and validates it. Runs before anything is
+    /// built or started so an unsupported directive rejects the deployment cleanly instead of
+    /// leaving half a stack running.
+    /// </summary>
+    private async Task<ComposeParseResult> LoadComposeAsync(
+        App app, Deployment deployment, IProgress<string> buildLog,
+        Func<LogStream, string, Task> log, CancellationToken ct)
+    {
+        var sourceRoot = await MaterialiseSourceAsync(app, deployment, buildLog, log, ct);
+        var candidates = string.IsNullOrWhiteSpace(app.ComposeFilePath)
+            ? new[] { "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml" }
+            : [app.ComposeFilePath!];
+
+        var path = candidates
+            .Select(c => Path.Combine(sourceRoot, c))
+            .FirstOrDefault(File.Exists);
+
+        if (path is null)
+            throw new InvalidOperationException(
+                $"No compose file found in the source (looked for {string.Join(", ", candidates)}).");
+
+        await log(LogStream.System, $"Reading {Path.GetFileName(path)} …");
+        var stack = ComposeFile.Parse(await File.ReadAllTextAsync(path, ct));
+
+        // Surface warnings before deciding: the operator should see what was ignored even on success.
+        foreach (var warning in stack.Warnings)
+            await log(LogStream.System, $"⚠ {warning}");
+
+        if (!stack.IsValid)
+        {
+            foreach (var error in stack.Errors)
+                await log(LogStream.System, $"✗ {error}");
+            throw new InvalidOperationException(
+                "The compose file uses directives Harbora can't run safely: " + string.Join(" ", stack.Errors));
+        }
+
+        // Where each service's build context lives, resolved once.
+        foreach (var service in stack.Services)
+            if (service.Build is not null)
+                service.Build = Path.Combine(sourceRoot, service.Build.TrimStart('.', '/', '\\'));
+
+        await log(LogStream.System,
+            $"Stack: {string.Join(", ", stack.Services.Select(s => s.Name))} " +
+            $"(web = {stack.Web!.Name}:{stack.Web.Port}).");
+        return stack;
+    }
+
+    /// <summary>
+    /// Builds/pulls every service and starts the whole stack under versioned names, alongside
+    /// whatever is currently running. Returns the service the proxy should target.
+    /// </summary>
+    private async Task<(string ServiceName, string ContainerName, int Port, IReadOnlyCollection<string> AllContainerNames)>
+        StartComposeStackAsync(
+            IDockerEngine docker, App app, Deployment deployment, ComposeParseResult stack,
+            string network, Dictionary<string, string> labels, Domain.Servers.Server server,
+            IProgress<string> buildLog, Func<LogStream, string, Task> log, CancellationToken ct)
+    {
+        var started = new List<string>();
+
+        // Dependencies first, so a service that needs its database finds it already running. Not a
+        // full topological sort: compose's depends_on doesn't wait for readiness either, and the
+        // health gate below is what actually decides whether the stack works.
+        foreach (var service in stack.Services.OrderByDescending(s => s.DependsOn.Count == 0))
+        {
+            var containerName = DeploymentPlanning.ComposeContainerName(app.Slug, service.Name, deployment.Number);
+
+            string image;
+            if (service.Build is not null)
+            {
+                image = $"{_opt.ImagePrefix}/{app.Slug}-{service.Name}:build-{deployment.Number}";
+                var dockerfile = service.Dockerfile ?? "Dockerfile";
+                if (!File.Exists(Path.Combine(service.Build, dockerfile)))
+                {
+                    var pack = Buildpacks.Detect(service.Build, service.Port ?? app.ContainerPort);
+                    if (pack is null)
+                        throw new InvalidOperationException(
+                            $"Service '{service.Name}' builds from '{service.Build}' but has no Dockerfile " +
+                            "and no recognisable stack.");
+                    dockerfile = "Dockerfile.harbora";
+                    await File.WriteAllTextAsync(Path.Combine(service.Build, dockerfile), pack.Value.Dockerfile, ct);
+                    await log(LogStream.System, $"Service '{service.Name}': detected {pack.Value.Stack}.");
+                }
+
+                await log(LogStream.System, $"Building {service.Name} → {image} …");
+                image = await docker.BuildImageAsync(
+                    new DockerBuildRequest(service.Build, dockerfile, image, new Dictionary<string, string>()),
+                    buildLog, ct);
+            }
+            else
+            {
+                image = service.Image!;
+                await log(LogStream.System, $"Pulling {image} for '{service.Name}' …");
+                await docker.PullImageAsync(image, buildLog, ct);
+            }
+
+            foreach (var (volume, _) in service.Volumes)
+                await docker.EnsureVolumeAsync(VolumeNameFor(app, volume), ct);
+
+            // The app's own env vars apply to every service, with the compose file's values winning
+            // for that service — the file is the more specific statement.
+            var env = BuildEnv(app);
+            foreach (var (key, value) in service.Environment) env[key] = value;
+
+            env.TryAdd("HARBORA_SERVICE", service.Name);
+
+            // Under compose, services reach each other by service name. Two deployments of the same
+            // app coexist during a cutover, so the alias is scoped per deployment as well: the bare
+            // name resolves within a stack, and the versioned one is unambiguous across stacks.
+            var aliases = new List<string> { service.Name, $"{service.Name}-{deployment.Number}" };
+
+            // Also export SERVICE_HOST for each sibling, for stacks that prefer configuration over
+            // DNS conventions.
+            foreach (var sibling in stack.Services)
+                env.TryAdd($"{Sanitize(sibling.Name).ToUpperInvariant()}_HOST", sibling.Name);
+
+            var serviceLabels = new Dictionary<string, string>(labels) { ["harbora.compose.service"] = service.Name };
+
+            // Only the web service needs a published host port, and only on a remote node.
+            int? publish = service.IsWeb && !server.IsLocal
+                ? DeploymentPlanning.HostPort(app.Slug, deployment.Number)
+                : null;
+
+            await log(LogStream.System, $"Starting {containerName} …");
+            await docker.RunContainerAsync(new DockerRunRequest(
+                image, containerName, network, env, serviceLabels,
+                service.Volumes.Select(v => (VolumeNameFor(app, v.Volume), v.MountPath, false)).ToList(),
+                service.Port, app.MemoryLimitBytes, app.CpuLimit,
+                service.IsWeb ? app.HealthCheckPath : null,
+                Command: service.Command.Count > 0 ? service.Command : null,
+                PublishToHostPort: publish,
+                NetworkAliases: aliases), ct);
+
+            started.Add(containerName);
+
+            // Aliases would be the proper way for services to resolve each other by bare name; until
+            // the engine exposes them, the versioned name is what works and is what we route to.
+            if (service.IsWeb)
+                await log(LogStream.System, $"'{service.Name}' will receive inbound traffic.");
+        }
+
+        var web = stack.Web!;
+        return (web.Name,
+                DeploymentPlanning.ComposeContainerName(app.Slug, web.Name, deployment.Number),
+                web.Port ?? app.ContainerPort,
+                started);
+    }
+
+    /// <summary>
+    /// Compose volume names are namespaced per app, so two tenants both using "pgdata" don't share
+    /// one volume.
+    /// </summary>
+    private static string VolumeNameFor(App app, string composeVolume) => $"harbora-{app.Slug}-{composeVolume}";
+
+    /// <summary>Service names become env var names, so anything not alphanumeric becomes '_'.</summary>
+    private static string Sanitize(string name) =>
+        new(name.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+
+    /// <summary>
+    /// Gets the source on disk for whichever way this app supplies it, without building anything.
+    /// Shared by the compose path, which has to read a file from the tree before it can plan.
+    /// </summary>
+    private async Task<string> MaterialiseSourceAsync(
+        App app, Deployment deployment, IProgress<string> buildLog,
+        Func<LogStream, string, Task> log, CancellationToken ct)
+    {
+        var workDir = Path.Combine(_opt.WorkDir, app.Slug, deployment.Number.ToString());
+
+        if (!string.IsNullOrWhiteSpace(deployment.SourceArchivePath))
+        {
+            if (!File.Exists(deployment.SourceArchivePath))
+                throw new InvalidOperationException("The uploaded source archive is missing.");
+            if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true);
+
+            await log(LogStream.System, "Unpacking uploaded source …");
+            await using var stream = File.OpenRead(deployment.SourceArchivePath);
+            await SourceArchive.ExtractAsync(stream, workDir, ct);
+            try { File.Delete(deployment.SourceArchivePath); } catch { /* best effort */ }
+            return workDir;
+        }
+
+        if (app.GitRepository is null)
+            throw new InvalidOperationException(
+                "This app has no source: link a Git repository, or push one with `harbora deploy`.");
+
+        var token = app.GitRepository.Provider?.EncryptedCredential is { } enc && enc.Length > 0
+            ? SafeUnprotect(enc) : null;
+        var gitRef = deployment.GitRef ?? app.GitRepository.DefaultBranch;
+
+        await log(LogStream.System, $"Checking out {app.GitRepository.FullName}@{gitRef} …");
+        var checkout = await git.CheckoutAsync(app.GitRepository.CloneUrl, gitRef, token, workDir, buildLog, ct);
+
+        deployment.CommitSha = checkout.CommitSha;
+        deployment.CommitMessage = checkout.CommitMessage;
+        deployment.CommitAuthor = checkout.CommitAuthor;
+        return checkout.LocalPath;
+    }
+
+    /// <summary>
     /// Unpacks the archive pushed by <c>harbora deploy</c> and builds from it. Same build rules as a
     /// Git checkout — the only difference is how the source got here.
     /// </summary>
@@ -486,11 +731,17 @@ public sealed class DeploymentPipeline(
     /// Retire this app's previous container(s) after a successful cutover — everything labelled for
     /// the app except the just-deployed container (incl. any legacy unversioned container).
     /// </summary>
+    private Task RetireOldContainersAsync(
+        IDockerEngine docker, string slug, string keepContainerName, Func<LogStream, string, Task> log, CancellationToken ct) =>
+        RetireOldContainersAsync(docker, slug, new[] { keepContainerName }, log, ct);
+
+    /// <summary>Stack form: keeps every container of the new set (see <c>ContainersToRetire</c>).</summary>
     private async Task RetireOldContainersAsync(
-        IDockerEngine docker, string slug, string keepContainerName, Func<LogStream, string, Task> log, CancellationToken ct)
+        IDockerEngine docker, string slug, IReadOnlyCollection<string> keepContainerNames,
+        Func<LogStream, string, Task> log, CancellationToken ct)
     {
         var existing = await docker.ListContainersAsync(DeploymentPlanning.AppLabel, ct);
-        var toRetire = DeploymentPlanning.ContainersToRetire(existing, slug, keepContainerName);
+        var toRetire = DeploymentPlanning.ContainersToRetire(existing, slug, keepContainerNames);
         foreach (var id in toRetire)
         {
             await log(LogStream.System, $"Retiring previous container {id[..12]} …");

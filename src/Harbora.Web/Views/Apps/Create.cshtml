@@ -41,6 +41,12 @@
                     <div class="mt-1 font-semibold">@(isFa ? "سایت استاتیک" : "Static site")</div>
                     <div class="text-xs text-slate-500">@(isFa ? "از مخزن Git، پشت Nginx" : "From a Git repo, served by Nginx")</div>
                 </label>
+                <label class="cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
+                    <input class="sr-only" type="radio" asp-for="SourceType" value="DockerCompose" data-src />
+                    <div class="text-2xl">🧩</div>
+                    <div class="mt-1 font-semibold">@(isFa ? "Docker Compose" : "Docker Compose")</div>
+                    <div class="text-xs text-slate-500">@(isFa ? "چند سرویس از یک فایل compose" : "Multi-service from a compose file")</div>
+                </label>
                 @* No Git remote needed: create the app now, push code from your machine later. *@
                 <label class="cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="Upload" data-src />
@@ -49,6 +55,22 @@
                     <div class="text-xs text-slate-500">@(isFa ? "بدون Git — با harbora deploy کد را بفرست" : "No Git — send code with harbora deploy")</div>
                 </label>
             </div>
+        </div>
+
+        @* Compose: the file comes from the source, so only its path is configurable. *@
+        <div data-panel="DockerCompose" class="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-sm text-slate-400">
+            @if (isFa)
+            {
+                <p>فایل compose از خود سورس خوانده می‌شود (<code>docker-compose.yml</code> یا <code>compose.yml</code>).</p>
+                <p class="mt-2 text-xs">سرویسی که ترافیک می‌گیرد باید پورت منتشر کند؛ اگر چند سرویس پورت دارند، آن را <code>web</code> نام بگذارید.</p>
+                <p class="mt-2 text-xs">دستورهایی که ایزوله‌سازی را می‌شکنند (<code>privileged</code>، <code>network_mode</code>، bind mount) رد می‌شوند و دلیلش گفته می‌شود.</p>
+            }
+            else
+            {
+                <p>The compose file is read from your source (<code>docker-compose.yml</code> or <code>compose.yml</code>).</p>
+                <p class="mt-2 text-xs">The service that receives traffic must publish a port; if several do, name it <code>web</code>.</p>
+                <p class="mt-2 text-xs">Directives that break isolation (<code>privileged</code>, <code>network_mode</code>, bind mounts) are refused, and the reason is shown.</p>
+            }
         </div>
 
         @* Upload apps have nothing to configure here; they wait for their first push. *@
@@ -70,7 +92,7 @@ harbora deploy &lt;slug&gt;</code></pre>
         </div>
 
         @* ---- Essential field per source ---- *@
-        <div data-panel="GitRepository,StaticSite">
+        <div data-panel="GitRepository,StaticSite,DockerCompose">
             <label class="block text-sm text-slate-400 mb-1">@(isFa ? "آدرس Git" : "Git repository URL")</label>
             <input asp-for="CloneUrl" placeholder="https://github.com/user/repo.git" class="@input" />
         </div>
@@ -88,13 +110,13 @@ harbora deploy &lt;slug&gt;</code></pre>
                         <label class="block text-sm text-slate-400 mb-1">Slug</label>
                         <input asp-for="Slug" placeholder="@(isFa ? "خودکار از نام" : "auto from name")" class="@input" />
                     </div>
-                    <div data-panel="GitRepository,StaticSite">
+                    <div data-panel="GitRepository,StaticSite,DockerCompose">
                         <label class="block text-sm text-slate-400 mb-1">@T["Branch or Tag"]</label>
                         <input asp-for="GitRef" class="@input" />
                     </div>
                 </div>
 
-                <div data-panel="GitRepository,StaticSite" class="grid sm:grid-cols-2 gap-4">
+                <div data-panel="GitRepository,StaticSite,DockerCompose" class="grid sm:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">@(isFa ? "توکن دسترسی (مخزن خصوصی)" : "Access token (private repo)")</label>
                         <input asp-for="GitToken" type="password" class="@input" />

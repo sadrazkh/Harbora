@@ -5,6 +5,58 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-30 — Docker Compose deploys, working on real Docker
+
+The last "advertised but missing" feature. The README promised docker-compose; the pipeline threw
+"not supported yet".
+
+**Wired into the pipeline.** A Compose app is resolved *before* anything is built or started:
+the source is materialised, the file parsed and validated, and an unsupported directive rejects the
+deployment cleanly rather than leaving half a stack running. The stack then gets the same guarantees
+as a single container — every service starts under a versioned name alongside whatever is currently
+running, the web service is health-checked, and only then does traffic switch and the old stack
+retire.
+
+`ContainersToRetire` gained a multi-container form. Retiring per-service would have torn down half
+the stack it had just built.
+
+**Service-to-service DNS — the thing that would have made this nominal.** My first pass routed to
+versioned container names, which means a service written to connect to `db:5432` cannot find `db`.
+Almost every real compose file does exactly that, so the feature would have "worked" in a demo and
+failed for users. `DockerRunRequest` now carries `NetworkAliases`, and each service is registered
+under both its bare compose name and a per-deployment name — the bare name resolves within a stack,
+the versioned one stays unambiguous while two stacks overlap during a cutover.
+
+**Verified end to end on the server**, pushed with the released CLI:
+
+*A valid two-service stack* (built web + `redis:7-alpine`, named volume, `depends_on`):
+```
+Stack: web, cache (web = web:3000)
+containers  harbora-stack…-web-1     harbora/stack…-web:build-1
+            harbora-stack…-cache-1   redis:7-alpine
+https://stack….nip.io/  →  200  "compose-works + cache reachable"
+docker inspect cache     →  aliases [cache cache-1]
+```
+The response text is the proof: the web service opened a socket to `cache:6379` **by service name**.
+
+*An unsafe stack* (`privileged: true` plus a `/etc:/host-etc` bind mount) → **Failed**, with both
+refusals named and explained, and **zero containers started**.
+
+**Checks:** `dotnet build` → 0 warnings / 0 errors · `dotnet test` → **387/387**.
+
+**Honest notes**
+- `depends_on` orders startup but does not wait for readiness — neither does compose. The health gate
+  on the web service is what actually decides whether the stack works.
+- Compose volume names are namespaced per app (`harbora-{slug}-{volume}`), so two tenants both using
+  `pgdata` don't share one volume.
+- Only the web service is health-checked. A background worker that crash-loops will not fail the
+  deployment; that needs per-service checks, which compose's own `healthcheck:` key would supply.
+- A wasted 16 minutes during testing: the test script called a CLI binary I had deleted in an earlier
+  cleanup, so the pushes silently did nothing and the poll loop ran to its timeout. The script now
+  fails fast when a push produces no deployment.
+
+---
+
 ## 2026-07-30 — CLI v0.2.0 released; the installer was deleting the recovery tool
 
 Tagged `v0.2.0` and pushed. The release workflow published six single-file binaries

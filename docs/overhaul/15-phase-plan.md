@@ -20,7 +20,7 @@ Priority chosen for this stretch: **make what exists trustworthy** before making
 | P4 cutover + artifact rollback | ✅ | Versioned-container cutover ✅, artifact rollback ✅. **No image retention/prune policy** ❌. No pre-confirm rollback diff ❌. No probe fields ❌. |
 | P5 design system | — | Not started. |
 | P6 Create/Detail redesign | partial | Static-site source card + staged progress bar ✅. App Detail tabs ❌. |
-| P7 Compose · Template · Static | partial | Static ✅, single-container Template ✅. **Compose ❌**, multi-service templates ❌. |
+| P7 Compose · Template · Static | partial | Static ✅, single-container Template ✅, **Compose ✅** (allowlist parser, multi-service, network aliases — verified on real Docker). Multi-service templates ❌. |
 | P8 domains/SSL/logs | — | Not started. |
 | P9–P12 | — | Not started. |
 | P13 RBAC + audit | partial | Capability policies, `Operator` role, audit writes ✅. **Audit UI/CSV export ❌**, centralized workspace scoping ❌, IDOR/cross-tenant tests ❌. |

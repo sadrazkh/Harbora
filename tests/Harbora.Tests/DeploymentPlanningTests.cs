@@ -87,6 +87,43 @@ public class DeploymentPlanningTests
         actNoImage.Should().Throw<InvalidOperationException>().WithMessage("*no retained image*");
     }
 
+    // ---- compose: a stack replaces several containers at once ----
+
+    [Fact]
+    public void A_compose_cutover_keeps_every_container_of_the_new_stack()
+    {
+        // Retiring per-service would tear down half the stack it had just built.
+        var containers = new[]
+        {
+            C("harbora-shop-web-1", "shop"), C("harbora-shop-db-1", "shop"),
+            C("harbora-shop-web-2", "shop"), C("harbora-shop-db-2", "shop")
+        };
+
+        var retire = DeploymentPlanning.ContainersToRetire(
+            containers, "shop", new[] { "harbora-shop-web-2", "harbora-shop-db-2" });
+
+        retire.Should().HaveCount(2);
+        retire.Should().BeEquivalentTo(["id-harbora-shop-web-1", "id-harbora-shop-db-1"]);
+    }
+
+    [Fact]
+    public void A_compose_cutover_still_ignores_other_apps()
+    {
+        var containers = new[] { C("harbora-shop-web-1", "shop"), C("harbora-blog-1", "blog") };
+
+        var retire = DeploymentPlanning.ContainersToRetire(containers, "shop", new[] { "harbora-shop-web-2" });
+
+        retire.Should().Equal("id-harbora-shop-web-1");
+    }
+
+    [Fact]
+    public void Compose_container_names_are_versioned_per_service()
+    {
+        // Old and new must coexist during the cutover, so the number is part of the name.
+        DeploymentPlanning.ComposeContainerName("shop", "web", 7).Should().Be("harbora-shop-web-7");
+        DeploymentPlanning.ComposeContainerName("shop", "db", 7).Should().Be("harbora-shop-db-7");
+    }
+
     // ---- superseding a live deployment on rollback ----
 
     [Fact]
