@@ -246,11 +246,11 @@ folder you haven't pushed anywhere — create the app once and send the code you
 
 ```bash
 # 1. In the panel: New App → source "Push from my machine" → Save
-# 2. On your machine, once:
-harbora login --server https://panel.example.com --token <token from Settings>
+# 2. On your machine, once — your panel account is enough, no token to create first:
+harbora login --email you@example.com --server https://panel.example.com
 
-# 3. From the project folder, every time you want to deploy:
-harbora deploy my-app
+# 3. From the project folder:
+harbora deploy            # asks which app, then remembers it in harbora.yml
 ```
 
 The folder is packed, uploaded, and built **on the server** — the same build path a Git deploy uses,
@@ -277,7 +277,11 @@ values in the app's **Environment Variables**, not by uploading a file.
 ### Deploy directly
 
 ```bash
-harbora login --server https://panel.example.com --token hbr_cli_xxx   # token from Settings → API Tokens
+harbora login                                  # asks: email + password, or an API token
+harbora login --token hbr_cli_xxx --server https://panel.example.com   # non-interactive (CI)
+
+# Signed in to more than one panel? They all stay signed in:
+harbora accounts                               # list them; deploy asks which to use
 
 # In ANY project folder, scaffold the config in one command (slug = folder name):
 harbora init                                   # writes ./harbora.yml (uses the folder name; detects Dockerfile)

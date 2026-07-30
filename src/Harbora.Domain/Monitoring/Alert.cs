@@ -21,4 +21,13 @@ public class Alert : BaseEntity
     public bool OnBackupFailed { get; set; } = true;
 
     public bool IsEnabled { get; set; } = true;
+
+    /// <summary>When this channel was last attempted — blank means it has never been used.</summary>
+    public DateTimeOffset? LastAttemptAt { get; set; }
+
+    /// <summary>
+    /// Why the last attempt failed, or null if it succeeded. Kept on the rule rather than only in the
+    /// log because the person who needs to know is looking at the alerts page, not at the panel logs.
+    /// </summary>
+    public string? LastError { get; set; }
 }

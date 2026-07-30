@@ -108,6 +108,7 @@ public static class DependencyInjection
 
         // Monitoring + notifications.
         services.AddHttpClient();
+        services.Configure<Notifications.NotificationOptions>(config.GetSection("Notifications"));
         services.AddScoped<INotificationService, Notifications.NotificationService>();
         // Survives the collector's per-pass scope, so a recurring condition alerts once per interval.
         services.AddSingleton<Monitoring.AlertThrottle>();

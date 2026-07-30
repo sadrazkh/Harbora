@@ -65,8 +65,14 @@ public sealed class AlertsController(
     [Authorize(Policy = Capabilities.AlertsManage)]
     public async Task<IActionResult> Test(Guid id, CancellationToken ct)
     {
-        if (await Owns(id, ct)) await notifications.SendTestAsync(id, ct);
-        TempData["Message"] = "Test notification sent.";
+        // "Sent" used to be printed unconditionally — even when the rule wasn't ours, and even when
+        // the channel rejected the message. A test that cannot fail tests nothing.
+        if (!await Owns(id, ct)) return NotFound();
+
+        var result = await notifications.SendTestAsync(id, ct);
+        if (result.Delivered) TempData["Message"] = "Test notification delivered.";
+        else TempData["Error"] = $"The test notification was not delivered: {result.Error}";
+
         return RedirectToAction("Index", "Monitoring");
     }
 

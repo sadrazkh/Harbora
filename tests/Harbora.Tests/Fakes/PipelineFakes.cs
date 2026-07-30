@@ -106,7 +106,8 @@ public sealed class RecordingNotificationService : INotificationService
         return Task.CompletedTask;
     }
 
-    public Task SendTestAsync(Guid alertId, CancellationToken ct) => Task.CompletedTask;
+    public Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct) =>
+        Task.FromResult(NotificationResult.Ok);
 }
 
 public sealed class FixedClock(DateTimeOffset now) : ISystemClock

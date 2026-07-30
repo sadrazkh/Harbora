@@ -7,16 +7,20 @@ namespace Harbora.Cli;
 
 internal static class Session
 {
-    public static ApiClient Require()
+    /// <summary>The account to act as, asking when several are signed in and nobody said which.</summary>
+    public static Profile RequireProfile(string? account = null)
     {
         var cfg = HarboraConfig.Load();
-        if (string.IsNullOrWhiteSpace(cfg.Server) || string.IsNullOrWhiteSpace(cfg.Token))
+        var profile = Interactive.ChooseAccount(cfg, account);
+        if (profile is null)
         {
             AnsiConsole.MarkupLine("[red]Not logged in.[/] Run [yellow]harbora login[/] first.");
             throw new InvalidOperationException("Not authenticated.");
         }
-        return new ApiClient(cfg);
+        return profile;
     }
+
+    public static ApiClient Require(string? account = null) => new(RequireProfile(account));
 }
 
 public sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
@@ -28,26 +32,89 @@ public sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
 
         [CommandOption("-t|--token <TOKEN>"), Description("API token created in Settings → API Tokens")]
         public string? Token { get; init; }
+
+        [CommandOption("-e|--email <EMAIL>"), Description("Sign in with your panel account instead of a token")]
+        public string? Email { get; init; }
+
+        [CommandOption("-p|--password <PASSWORD>"), Description("Password for --email (prompted if omitted)")]
+        public string? Password { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
-        var server = settings.Server ?? AnsiConsole.Ask<string>("Server URL:");
-        var token = settings.Token ?? AnsiConsole.Prompt(new TextPrompt<string>("API token:").Secret());
+        var server = settings.Server
+                     ?? (Interactive.IsAvailable ? AnsiConsole.Ask<string>("Server URL:") : null);
+        if (string.IsNullOrWhiteSpace(server))
+        {
+            AnsiConsole.MarkupLine("[red]No server given.[/] Use [yellow]--server[/].");
+            return 1;
+        }
 
-        var cfg = new HarboraConfig { Server = server, Token = token };
+        // Email and password are the way in that needs nothing prepared in advance; a token still
+        // works, and is what CI should use.
+        var useEmail = settings.Email is not null
+                       || (settings.Token is null && Interactive.IsAvailable && AnsiConsole.Prompt(
+                           new SelectionPrompt<string>()
+                               .Title("How do you want to sign in?")
+                               .AddChoices("Email and password", "API token")) == "Email and password");
+
         try
         {
-            var me = await new ApiClient(cfg).GetAsync("whoami");
+            var (token, who) = useEmail
+                ? await SignInWithPasswordAsync(server, settings, ct)
+                : (settings.Token ?? Secret("API token:"), null);
+
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                AnsiConsole.MarkupLine("[red]No credentials given.[/]");
+                return 1;
+            }
+
+            var api = new ApiClient(server, token);
+            var me = await api.GetAsync("whoami");
+            var email = who ?? me.GetProperty("email").GetString() ?? server;
+
+            var cfg = HarboraConfig.Load();
+            cfg.Upsert(email, server, token);
             cfg.Save();
-            AnsiConsole.MarkupLine($"[green]✓[/] Logged in as [bold]{me.GetProperty("email").GetString()}[/].");
+
+            AnsiConsole.MarkupLine($"[green]✓[/] Signed in as [bold]{Markup.Escape(email)}[/] on [grey]{Markup.Escape(server)}[/].");
+            if (cfg.NeedsAccountChoice)
+                AnsiConsole.MarkupLine($"[grey]{cfg.Profiles.Count} accounts signed in — deploy will ask which one, or pass --account.[/]");
             return 0;
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[red]Login failed:[/] {Markup.Escape(ex.Message)}");
+            AnsiConsole.MarkupLine($"[red]Login failed:[/] {Markup.Escape(Clean(ex.Message))}");
             return 1;
         }
+    }
+
+    /// <summary>Exchanges the panel account for a CLI token, so nothing has to be created by hand first.</summary>
+    private static async Task<(string Token, string Email)> SignInWithPasswordAsync(
+        string server, Settings settings, CancellationToken ct)
+    {
+        var email = settings.Email ?? AnsiConsole.Ask<string>("Email:");
+        var password = settings.Password ?? Secret("Password:");
+        var label = $"harbora CLI on {Environment.MachineName}";
+
+        var res = await new ApiClient(server, null)
+            .PostAsync("auth/token", new { email, password, name = label });
+
+        return (res.GetProperty("token").GetString()!, res.GetProperty("email").GetString() ?? email);
+    }
+
+    private static string Secret(string prompt) =>
+        Interactive.IsAvailable ? AnsiConsole.Prompt(new TextPrompt<string>(prompt).Secret()) : "";
+
+    /// <summary>Turns the raw HTTP error into the sentence the server meant to say.</summary>
+    private static string Clean(string message)
+    {
+        var marker = message.IndexOf("{\"error\":\"", StringComparison.Ordinal);
+        if (marker < 0) return message;
+        var start = marker + 10;
+        var end = message.IndexOf('"', start);
+        return end > start ? message[start..end] : message;
     }
 }
 
@@ -123,6 +190,9 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
 
         [CommandOption("--token <TOKEN>"), Description("API token — for CI, instead of `harbora login`")]
         public string? Token { get; init; }
+
+        [CommandOption("--account <EMAIL>"), Description("Which signed-in account to use, when several are")]
+        public string? Account { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
@@ -131,25 +201,73 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         var config = ProjectConfig.Load(dir);
 
         // --server/--token make a deploy self-contained, so CI needs no interactive login step.
-        var api = settings.Server is not null || settings.Token is not null
-            ? new ApiClient(new HarboraConfig
-              {
-                  Server = settings.Server ?? config.Server ?? HarboraConfig.Load().Server,
-                  Token = settings.Token ?? HarboraConfig.Load().Token
-              })
-            : Session.Require();
+        ApiClient api;
+        if (settings.Server is not null || settings.Token is not null)
+        {
+            var stored = HarboraConfig.Load().Resolve(settings.Account);
+            var server = settings.Server ?? config.Server ?? stored?.Server;
+            if (string.IsNullOrWhiteSpace(server))
+            {
+                AnsiConsole.MarkupLine("[red]No server.[/] Pass [yellow]--server[/] with [yellow]--token[/].");
+                return 1;
+            }
+            api = new ApiClient(server, settings.Token ?? stored?.Token);
+        }
+        else api = new ApiClient(Session.RequireProfile(settings.Account));
 
         var slug = settings.App ?? config.App ?? HarboraConfig.ReadProjectSlug();
+
+        // What the server knows about this account's apps. Fetched even when the slug is already
+        // known, because whether the app has a Git remote decides how the code has to get there —
+        // and guessing that from the local folder is what made a deploy fail with nothing uploaded.
+        IReadOnlyList<RemoteApp> apps;
+        try { apps = await Interactive.ListAppsAsync(api); }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Could not reach the server:[/] {Markup.Escape(ex.Message)}");
+            return 1;
+        }
+
+
         if (string.IsNullOrWhiteSpace(slug))
         {
-            AnsiConsole.MarkupLine("[red]No app specified[/] — pass one, or add [yellow]app:[/] to harbora.yml.");
-            AnsiConsole.MarkupLine("[grey]Create the file with:[/] harbora init");
+            // Nothing said which app. Everything needed to answer is already here, so ask instead of
+            // failing with "App not found." — which named neither the problem nor the way out.
+            if (!Interactive.IsAvailable)
+            {
+                AnsiConsole.MarkupLine("[red]No app specified[/] — pass one, or add [yellow]app:[/] to harbora.yml.");
+                if (apps.Count > 0)
+                    AnsiConsole.MarkupLine($"[grey]Available:[/] {Markup.Escape(string.Join(", ", apps.Select(a => a.Slug)))}");
+                return 1;
+            }
+
+            var picked = Interactive.ChooseApp(apps);
+            if (picked is null) return 1;
+            slug = picked.Slug;
+
+        }
+
+        var app = apps.FirstOrDefault(a => a.Slug.Equals(slug, StringComparison.OrdinalIgnoreCase));
+        if (app is null)
+        {
+            AnsiConsole.MarkupLine($"[red]No app called[/] [bold]{Markup.Escape(slug!)}[/] [red]on this account.[/]");
+            if (apps.Count > 0)
+                AnsiConsole.MarkupLine($"[grey]Available:[/] {Markup.Escape(string.Join(", ", apps.Select(a => a.Slug)))}");
             return 1;
         }
 
         var plan = DeployPlan.Decide(
             settings.Image, settings.Tar, settings.Branch, settings.Tag ?? settings.Ref,
-            settings.Push, config, Directory.Exists(System.IO.Path.Combine(dir, ".git")));
+            settings.Push, config, Directory.Exists(System.IO.Path.Combine(dir, ".git")),
+            serverCanPull: app.CanServerPull);
+
+        // Save the answer so this folder never has to be asked — or told — again. Whether the app was
+        // picked from a list or typed once on the command line, repeating it is work the CLI can do.
+        // RememberApp never overwrites: a project that already has a config has already decided.
+        if (Interactive.RememberApp(dir, slug!, api.Server))
+            AnsiConsole.MarkupLine(
+                $"[grey]Wrote {ProjectConfig.DefaultFileName} — next time just run[/] harbora deploy");
+        
 
         AnsiConsole.MarkupLine($"[grey]Mode:[/] {plan.Mode} [grey]({plan.Reason})[/]");
 
@@ -378,5 +496,65 @@ public sealed class InitCommand : AsyncCommand<InitCommand.Settings>
         var slug = new string(chars).Trim('-');
         while (slug.Contains("--")) slug = slug.Replace("--", "-");
         return string.IsNullOrWhiteSpace(slug) ? "app" : slug;
+    }
+}
+
+/// <summary>Shows which accounts are signed in, and switches between them.</summary>
+public sealed class AccountsCommand : AsyncCommand<AccountsCommand.Settings>
+{
+    public sealed class Settings : CommandSettings
+    {
+        [CommandArgument(0, "[account]"), Description("Switch to this account (email)")]
+        public string? Account { get; init; }
+
+        [CommandOption("--logout <EMAIL>"), Description("Forget an account's token")]
+        public string? Logout { get; init; }
+    }
+
+    protected override Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    {
+        var cfg = HarboraConfig.Load();
+
+        if (settings.Logout is not null)
+        {
+            var gone = cfg.Resolve(settings.Logout);
+            if (gone is null)
+            {
+                AnsiConsole.MarkupLine($"[yellow]![/] No account matching [bold]{Markup.Escape(settings.Logout)}[/].");
+                return Task.FromResult(1);
+            }
+            cfg.Remove(gone);
+            cfg.Save();
+            AnsiConsole.MarkupLine($"[green]✓[/] Signed out of [bold]{Markup.Escape(gone.Name)}[/].");
+            return Task.FromResult(0);
+        }
+
+        if (settings.Account is not null)
+        {
+            var next = cfg.Resolve(settings.Account);
+            if (next is null)
+            {
+                AnsiConsole.MarkupLine($"[yellow]![/] Not signed in as [bold]{Markup.Escape(settings.Account)}[/].");
+                return Task.FromResult(1);
+            }
+            cfg.Current = HarboraConfig.Key(next);
+            cfg.Save();
+            AnsiConsole.MarkupLine($"[green]✓[/] Now using [bold]{Markup.Escape(next.Name)}[/].");
+            return Task.FromResult(0);
+        }
+
+        if (!cfg.HasAny)
+        {
+            AnsiConsole.MarkupLine("[yellow]No accounts.[/] Run [yellow]harbora login[/].");
+            return Task.FromResult(1);
+        }
+
+        var table = new Table().Border(TableBorder.Rounded);
+        table.AddColumns("", "Account", "Server");
+        foreach (var p in cfg.Profiles)
+            table.AddRow(HarboraConfig.Key(p) == cfg.Current ? "[green]*[/]" : " ",
+                Markup.Escape(p.Name), Markup.Escape(p.Server));
+        AnsiConsole.Write(table);
+        return Task.FromResult(0);
     }
 }

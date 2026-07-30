@@ -27,7 +27,7 @@ Priority chosen for this stretch: **make what exists trustworthy** before making
 | P12 multi-server reliability | ✅ | Hash-derived host ports replaced by tracked `HostPortAllocation` (unique per server+port, backfilled, released on cutover/failure/delete). Multi-server itself verified for the first time: a real agent node, two apps on it with sequential ports, both served through Traefik. Agent version negotiation ❌. |
 | P11 monitoring + alerting | ✅ | Per-app metrics were already collected. Crash detection missed crash-looping containers (`restarting`, not `exited`) and never cleared `Crashed`; both fixed and verified live. `SslExpiring` had a checkbox and a router branch but nothing ever raised it — `CertificateWatcher` now does, proven against a really-expired certificate. Threshold CPU/memory alerts ❌. |
 | P13 RBAC + audit | partial | Capability policies, `Operator` role, audit writes ✅. **Audit UI/CSV export ❌**, centralized workspace scoping ❌, IDOR/cross-tenant tests ❌. |
-| P14 API/OpenAPI/webhooks | partial | Per-IP rate limiting landed early ✅. Rest ❌. |
+| P14 API/OpenAPI/webhooks | partial | Per-IP rate limiting ✅. Outgoing notification channels ✅ — delivery is now verified (status checked, bounded timeout, failure shown on the rule); found that no channel had ever delivered anything, because targets were stored camelCase and read PascalCase. OpenAPI document ❌. |
 
 ## 2. Risks found in review that doc 12 did not anticipate
 

@@ -101,12 +101,29 @@
         @if (Model.Alerts.Count == 0){<p class="text-slate-400 text-sm">—</p>}
         @foreach (var a in Model.Alerts)
         {
-            <div class="flex items-center justify-between rounded-lg bg-slate-800/50 px-3 py-2 text-sm">
-                <span>@a.Name <span class="text-slate-500">· @a.Channel · ≥@a.MinSeverity</span></span>
+            @* A channel that is failing says so here, rather than only in the panel logs — the person
+               who needs to know is the one looking at this list. *@
+            <div class="rounded-lg bg-slate-800/50 px-3 py-2 text-sm">
+              <div class="flex items-center justify-between">
+                <span>@a.Name <span class="text-slate-500">· @a.Channel · ≥@a.MinSeverity</span>
+                    @if (a.LastError is not null)
+                    {
+                        <span class="text-xs text-red-400">· @(isFa ? "ناموفق" : "failing")</span>
+                    }
+                    else if (a.LastAttemptAt is not null)
+                    {
+                        <span class="text-xs text-emerald-400">· @(isFa ? "سالم" : "delivering")</span>
+                    }
+                </span>
                 <div class="flex items-center gap-2">
                     <form asp-controller="Alerts" asp-action="Test" asp-route-id="@a.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-brand-400">test</button></form>
                     <form asp-controller="Alerts" asp-action="Delete" asp-route-id="@a.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
                 </div>
+              </div>
+              @if (a.LastError is not null)
+              {
+                  <p class="mt-1 text-xs text-red-300/90 break-all">@a.LastError</p>
+              }
             </div>
         }
     </div>

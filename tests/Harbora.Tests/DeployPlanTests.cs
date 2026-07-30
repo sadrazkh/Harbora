@@ -95,4 +95,48 @@ public class DeployPlanTests
             choice.Reason.Should().NotBeNullOrWhiteSpace();
         }
     }
+
+    // ---- what the app on the server actually is ----
+    //
+    // Reported from a real session: `harbora deploy test` from a git checkout queued a deployment
+    // that failed with "no source archive was uploaded". The folder had a .git, so the CLI chose
+    // "let the server pull" — but the app had been created without a repository, so there was
+    // nothing to pull. Whether the server can pull is a fact about the app, not about the folder.
+
+    [Fact]
+    public void A_git_folder_still_uploads_when_the_app_has_no_remote()
+    {
+        var choice = DeployPlan.Decide(null, null, null, null, false, new ProjectConfig(),
+            folderIsGitRepo: true, serverCanPull: false);
+
+        choice.Mode.Should().Be(DeployMode.PushFolder);
+        choice.Reason.Should().Contain("no Git remote");
+    }
+
+    [Fact]
+    public void A_git_folder_lets_the_server_pull_when_the_app_has_a_remote()
+    {
+        DeployPlan.Decide(null, null, null, null, false, new ProjectConfig(),
+            folderIsGitRepo: true, serverCanPull: true).Mode.Should().Be(DeployMode.ServerGit);
+    }
+
+    [Fact]
+    public void An_unknown_server_answer_keeps_the_previous_behaviour()
+    {
+        // An older panel does not report this. Changing what a deploy means based on a missing field
+        // would be worse than the guess it replaces.
+        DeployPlan.Decide(null, null, null, null, false, new ProjectConfig(),
+            folderIsGitRepo: true, serverCanPull: null).Mode.Should().Be(DeployMode.ServerGit);
+    }
+
+    [Fact]
+    public void An_explicit_flag_still_wins_over_what_the_server_says()
+    {
+        // --image means "release this and build nothing", whatever the app is configured as.
+        DeployPlan.Decide("nginx:alpine", null, null, null, false, new ProjectConfig(),
+            folderIsGitRepo: true, serverCanPull: false).Mode.Should().Be(DeployMode.Image);
+
+        DeployPlan.Decide(null, null, null, "v1.2.0", false, new ProjectConfig(),
+            folderIsGitRepo: true, serverCanPull: false).Mode.Should().Be(DeployMode.ServerGit);
+    }
 }

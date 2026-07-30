@@ -38,12 +38,35 @@ Credentials are stored in `~/.harbora/config.json`. In CI, skip `login` and pass
 
 ---
 
-## 2. Deploy
+## 2. Sign in
+
+Either your panel account, or a token created in **Settings → API Tokens**:
 
 ```bash
-harbora init          # writes harbora.yml (safe to commit)
+harbora login                                   # asks which, then for the details
+harbora login --email you@example.com           # prompts for the password
+harbora login --token hbr_cli_xxxx --server https://panel.example.com   # CI
+```
+
+Signing in to a second panel does not replace the first:
+
+```bash
+harbora accounts                    # list; * marks the one in use
+harbora accounts you@example.com    # switch
+harbora accounts --logout you@example.com
+```
+
+When several accounts are signed in, `harbora deploy` asks which one to use — or pass
+`--account you@example.com`.
+
+## 3. Deploy
+
+```bash
 harbora deploy        # deploys, then streams the build log
 ```
+
+With no `harbora.yml` and no app name, it lists your apps and asks which to deploy, then writes
+`harbora.yml` so the next run needs nothing. `harbora init` still writes the fuller commented file.
 
 ### Every deploy mode
 
@@ -84,7 +107,7 @@ Exit code is `0` on success and non-zero on failure, so it gates a pipeline dire
 
 ---
 
-## 3. `harbora.yml`
+## 4. `harbora.yml`
 
 Written by `harbora init`, read by `harbora deploy`. Every field is optional.
 
@@ -144,13 +167,26 @@ equivalents work without configuration.
 
 ---
 
-## 4. HTTP API
+## 5. HTTP API
 
 Base URL `https://<panel>/api/v1`. Authenticate with a bearer token:
 
 ```
 Authorization: Bearer hbr_cli_xxxxxxxx
 ```
+
+### `POST /auth/token`
+Exchanges a panel account for a CLI token, so a client never has to ask a user to create one by hand.
+Unauthenticated; rate-limited per IP like the panel's own login.
+
+```json
+{ "email": "you@example.com", "password": "…", "name": "my-tool on laptop" }
+```
+```json
+{ "token": "hbr_cli_xxxxxxxx", "email": "you@example.com", "name": "my-tool on laptop" }
+```
+`401 {"error":"Invalid email or password."}` — deliberately the same for a wrong password and an
+unknown address, so this cannot be used to discover who has an account.
 
 ### `GET /whoami`
 ```json
@@ -159,8 +195,15 @@ Authorization: Bearer hbr_cli_xxxxxxxx
 
 ### `GET /apps`
 ```json
-[ { "id": "0199…", "name": "My API", "slug": "my-api", "status": "Running", "source": "Upload" } ]
+[ { "id": "0199…", "name": "My API", "slug": "my-api", "status": "Running",
+    "source": "Upload", "canServerPull": false } ]
 ```
+
+`canServerPull` says whether the app has a Git repository the server could pull from. **Decide how to
+deploy from this, not from whether the client's folder happens to be a git checkout.** An app created
+without a repository — the flow this CLI exists for — will accept a plain deploy request and then fail
+with *"no source archive was uploaded"*, because there was nothing for the server to fetch. Older
+panels omit the field; treat a missing value as "upload", which works for every app type.
 
 ### `POST /apps/{slug}/deploy`
 Server-side deploy. Body optional:
@@ -225,7 +268,7 @@ Poll with the highest `seq` you have seen to follow a build. `stream` is `System
 
 ---
 
-## 5. Writing your own client
+## 6. Writing your own client
 
 A minimal integration is three calls:
 
@@ -267,7 +310,7 @@ while True:
 
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|

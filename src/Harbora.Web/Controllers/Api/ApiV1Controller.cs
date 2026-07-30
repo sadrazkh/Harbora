@@ -5,6 +5,7 @@ using Harbora.Domain.Common;
 using Harbora.Web.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Web.Controllers.Api;
@@ -20,6 +21,9 @@ public sealed class ApiV1Controller(
     HarboraDbContext db,
     IDeploymentEngine deployEngine,
     Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Deployments.HarboraRuntimeOptions> runtime,
+    IPasswordHasher passwordHasher,
+    ITokenService tokens,
+    IAuditLogger audit,
     ICurrentUser currentUser) : ControllerBase
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -82,6 +86,57 @@ public sealed class ApiV1Controller(
         try { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); } catch { /* best effort */ }
     }
 
+    /// <summary>
+    /// Exchanges an email and password for a CLI token.
+    ///
+    /// Without this, `harbora login` could only be completed by opening the panel in a browser,
+    /// creating a token by hand and pasting it into a terminal — the one step of the CapRover-style
+    /// flow that could not be done from the command line.
+    ///
+    /// Held to the same rules as the web login: the same per-IP limiter, a password check that runs
+    /// even for an unknown address so timing cannot confirm who has an account, and one audit entry
+    /// either way. The reply is a real token, so it is exactly as sensitive as the password.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpPost("auth/token")]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> IssueToken([FromBody] TokenRequest? body, CancellationToken ct)
+    {
+        var email = (body?.Email ?? "").Trim().ToLowerInvariant();
+        var password = body?.Password ?? "";
+
+        var user = await db.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Email == email && u.IsActive, ct);
+        var ok = user is not null && passwordHasher.Verify(password, user.PasswordHash);
+
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        if (!ok || user is null)
+        {
+            await audit.LogAsync("user.login_failed", "user", user?.Id.ToString(), ip,
+                actorEmailOverride: email, userIdOverride: user?.Id);
+            // Deliberately the same wording as the panel: which half was wrong is not the caller's
+            // business, and saying so turns this into an account-enumeration endpoint.
+            return Unauthorized(new { error = "Invalid email or password." });
+        }
+
+        var label = string.IsNullOrWhiteSpace(body!.Name) ? "CLI login" : body.Name!.Trim();
+        var issued = tokens.Issue(user.Id, label, TokenType.Cli, null);
+        db.ApiTokens.Add(new Harbora.Domain.Identity.ApiToken
+        {
+            UserId = user.Id, Name = label, Prefix = issued.Prefix,
+            TokenHash = issued.Hash, Type = TokenType.Cli
+        });
+        user.LastLoginAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("token.issued", "token", issued.Prefix, ip,
+            actorEmailOverride: user.Email, userIdOverride: user.Id);
+
+        return Ok(new { token = issued.PlaintextToken, email = user.Email, name = label });
+    }
+
+    /// <summary>Body of POST /auth/token.</summary>
+    public sealed record TokenRequest(string? Email, string? Password, string? Name = null);
+
     [HttpGet("whoami")]
     public IActionResult WhoAmI() =>
         Ok(new { email = currentUser.Email, workspaceId = WorkspaceId });
@@ -91,7 +146,16 @@ public sealed class ApiV1Controller(
     {
         var apps = await db.Apps.Where(a => a.WorkspaceId == WorkspaceId)
             .OrderBy(a => a.Name)
-            .Select(a => new { a.Id, a.Name, a.Slug, status = a.Status.ToString(), source = a.SourceType.ToString() })
+            .Select(a => new
+             {
+                 a.Id, a.Name, a.Slug,
+                 status = a.Status.ToString(),
+                 source = a.SourceType.ToString(),
+                 // Whether the server has a repository it could pull from. The CLI used to assume that
+                 // a local .git meant "let the server pull", which silently deployed nothing for an
+                 // app created without a repository.
+                 canServerPull = a.GitRepositoryId != null
+             })
             .ToListAsync(ct);
         return Ok(apps);
     }

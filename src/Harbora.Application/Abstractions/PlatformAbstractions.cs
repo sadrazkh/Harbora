@@ -50,6 +50,19 @@ public record BackupVerification(
 
 public record BackupCheck(string Name, bool Passed, string? Detail = null);
 
+/// <summary>
+/// What happened when a notification was handed to a channel.
+///
+/// The point of returning this is that "sent" used to mean "we called something and did not crash":
+/// a webhook answering 404 counted as delivered, and the panel's Test button reported success
+/// unconditionally. A channel nobody can tell is broken is worse than no channel.
+/// </summary>
+public sealed record NotificationResult(bool Delivered, string? Error = null)
+{
+    public static readonly NotificationResult Ok = new(true);
+    public static NotificationResult Failed(string error) => new(false, error);
+}
+
 /// <summary>Fan-out for alerts across configured channels (email/Telegram/Discord/webhook).</summary>
 public interface INotificationService
 {
@@ -60,5 +73,9 @@ public interface INotificationService
     Task NotifyAsync(Guid workspaceId, Domain.Common.AlertEvent evt, Domain.Common.AlertSeverity severity, string title, string body, CancellationToken ct);
 
     /// <summary>Send a one-off test message to a single alert (for the "test" button).</summary>
-    Task SendTestAsync(Guid alertId, CancellationToken ct);
+    /// <summary>
+    /// Sends a test notification and reports what actually happened, so the panel can say "that URL
+    /// returned 404" instead of "sent".
+    /// </summary>
+    Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct);
 }

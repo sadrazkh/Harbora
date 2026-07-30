@@ -9,12 +9,18 @@ public sealed class ApiClient
 {
     private readonly HttpClient _http;
 
-    public ApiClient(HarboraConfig config)
+    public ApiClient(string server, string? token)
     {
         // Generous timeout: a push uploads the project and waits for the server to accept it.
-        _http = new HttpClient { BaseAddress = new Uri(config.Server!.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(10) };
-        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", config.Token);
+        _http = new HttpClient { BaseAddress = new Uri(server.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(10) };
+        if (!string.IsNullOrWhiteSpace(token))
+            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
+
+    public ApiClient(Profile profile) : this(profile.Server, profile.Token) { }
+
+    /// <summary>Which server this client talks to — used when writing a project config.</summary>
+    public string Server => _http.BaseAddress!.ToString().TrimEnd('/');
 
     public async Task<JsonElement> GetAsync(string path)
     {

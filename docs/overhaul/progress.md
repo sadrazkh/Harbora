@@ -5,6 +5,107 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-30 — `harbora deploy` from a developer's machine, actually working
+
+Reported from a real terminal: `harbora deploy` answered *"404 Not Found: App not found."*, and
+`harbora deploy test` queued a deployment that failed.
+
+**Why the deploy failed.** The CLI chose its mode from the local folder: a `.git` directory meant
+"let the server pull from its remote". But whether the server has anything to pull is a fact about
+the **app**, not about the folder. The app had been created for pushed source — the CapRover-style
+flow this CLI exists for — so it had no remote, and the server correctly reported *"no source archive
+was uploaded"*. Any user working from a git checkout hit this. The CLI now asks the server
+(`canServerPull` on `GET /apps`) and uploads when there is nothing to pull; explicit flags still win.
+
+**Why the first command said nothing useful.** With no `harbora.yml`, the CLI had no app name and
+returned the server's 404 verbatim — naming neither the problem nor a way out, while the list of apps
+was one request away. Now it lists them and asks; in CI, where there is nobody to ask, it prints the
+available slugs instead of blocking.
+
+**Then it remembers.** Whichever way the app was resolved, if the folder has no config one is
+written, so the next deploy is just `harbora deploy`. It never overwrites an existing file.
+
+**Signing in no longer requires the browser.** `POST /api/v1/auth/token` exchanges a panel account for
+a CLI token, so `harbora login --email you@example.com` works from a terminal — previously the only
+way in was to open the panel, create a token by hand and paste it. The endpoint is held to the same
+rules as the web login: same per-IP limiter, the password verified even for unknown addresses so
+timing cannot confirm who has an account, one audit entry either way, and identical wording for both
+kinds of failure.
+
+**And several accounts can be signed in at once.** The config held one server and one token, so a
+second `harbora login` silently replaced the first. It now keeps a profile per account, asks which to
+use when more than one is signed in, and adds `harbora accounts` to list, switch and log out.
+
+Testing this on a real machine immediately produced a bug of its own: a migrated config is named
+after its server (the old file did not record who it belonged to), so the first login afterwards filed
+the *same* account a second time and every command started asking which of two identical accounts to
+use. Signing in now adopts that placeholder instead.
+
+**Verified against the live server, from Windows:**
+
+| Step | Result |
+|---|---|
+| `harbora login --email …` | signed in, no token created by hand |
+| `harbora deploy` with no config, no TTY | lists `test` instead of a bare 404 |
+| `harbora deploy test` in a git folder | `PushFolder (this app has no Git remote on the server)` → built and deployed |
+| the app itself | `hello from harbora deploy` over HTTPS, `200` |
+| `harbora deploy` with no arguments afterwards | deploys, using the config it wrote |
+
+**Tests:** 496 → 511. Seven mutations across the mode decision and the account store, all caught —
+one only after the test stopped asserting through a fallback that hid a stale pointer.
+
+---
+
+## 2026-07-30 — Notifications that admit when they fail — and have never once worked (P11/P14)
+
+Last phase made the SSL and crash alerts fire. This phase asked the obvious next question: does
+anything actually receive them?
+
+**Three things were wrong before the answer even arrived.** The HTTP response from a webhook, Discord
+or Telegram was discarded, so a 404 was indistinguishable from success. There was no timeout, so one
+unresponsive endpoint held the caller for the handler's 100-second default — per alert rule — while a
+failed deploy waited to report that it had failed. And the panel's Test button set *"Test notification
+sent."* unconditionally: before the delivery was judged, and even for a rule belonging to another
+workspace. A test that cannot fail is worse than no test button; it is an assurance issued without
+looking.
+
+**Then checking the response found the real one.** The first live test came back:
+
+> Refusing to call webhook URL: not an absolute URL.
+
+`AlertsController` serialises the channel target from an anonymous object, so it is stored as
+`{"url": "..."}`, `{"botToken": "..."}`. The service reads it into `UrlTarget`/`TelegramTarget`, whose
+properties are PascalCase — and `System.Text.Json` matches **case-sensitively** by default. Every
+field came back null, every channel failed at the SSRF guard, and **no notification of any kind has
+ever been delivered** — not a deploy failure, not a crash, not a backup failure. It stayed invisible
+for exactly the reason this phase existed: the failure was swallowed and the button reported success.
+
+Fixed by reading targets case-insensitively, which also repairs every target already stored. The
+regression test uses the exact JSON the controller writes, so the two halves cannot drift apart again.
+
+**Live, on the server, both directions:**
+
+| Rule | Reported |
+|---|---|
+| webhook → a receiver deployed on the platform itself | `delivered ok` — the first notification Harbora has ever delivered |
+| webhook → a URL that 404s | `The webhook returned 404 Not Found` |
+
+The failing rule now says so on the alerts page, with the reason, instead of only in the panel logs.
+The receiver was hosted on the platform, so no test payload left the machine.
+
+Along the way the first receiver image (`kennethreitz/httpbin`) crash-looped, and the health diagnosis
+from two phases ago named it immediately: *"exec /usr/local/bin/gunicorn: exec format error"* — an
+amd64-only image on an ARM server. That is the message that used to read "Container failed its health
+check."
+
+**Tests:** 479 → 496. Ten mutations, all caught, but only after two rounds: a stale-error test built a
+second context and so never watched a rule recover, and the timeout test passed while taking 100
+seconds because it asserted the wording rather than that the attempt ended promptly. Both were tests
+that did not test what their names claimed. The delivery timeout is configurable for the same reason
+the health-gate timings are — a real ten-second wait belongs in production, not in a test suite.
+
+---
+
 ## 2026-07-30 — Host ports are reserved, not guessed; multi-server verified for the first time (P12)
 
 Remote nodes have no shared overlay, so the proxy reaches an app at `node-host:published-port`. That
