@@ -1,3 +1,4 @@
+using System.Globalization;
 using Harbora.Application.Abstractions;
 
 namespace Harbora.Infrastructure.Networking;
@@ -14,6 +15,9 @@ public static class DomainDiagnosis
 {
     /// <summary>A certificate this close to expiry is reported even while still technically valid.</summary>
     public static readonly TimeSpan RenewalWindow = TimeSpan.FromDays(14);
+
+    /// <summary>A calendar the message's English wording matches, regardless of the UI culture.</summary>
+    private static string Day(DateTimeOffset value) => value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     public static DomainStatus Diagnose(string host, DomainProbe probe, DateTimeOffset now)
     {
@@ -57,7 +61,7 @@ public static class DomainDiagnosis
 
         if (probe.CertificateExpiresAt <= now)
             return new(host, DomainReadiness.AwaitingCertificate,
-                $"The certificate expired on {probe.CertificateExpiresAt:yyyy-MM-dd}.",
+                $"The certificate expired on {Day(probe.CertificateExpiresAt.Value)}.",
                 "Renewal is automatic; if it hasn't happened, check that port 80 is still reachable.",
                 probe);
 

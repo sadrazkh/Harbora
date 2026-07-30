@@ -5,6 +5,53 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-30 — Monitoring that tells the truth about app health (P11)
+
+Started by looking at what the live server actually holds rather than at the roadmap. Metrics
+collection turned out to be healthy — 690 samples in the last hour, host and per-container. Three
+other things were not.
+
+**1. A crash-looping app kept its green Running badge.** Crash detection watched only for containers
+in state `exited`. App containers run under `unless-stopped`, so Docker revives one that dies on
+startup and it reports `restarting` — the same root cause as the health-gate bug in the previous
+phase, in a second place. Proven on the server before touching any code: a container left
+crash-looping for two collector passes, and the panel still said the app was running, with no alert.
+
+**2. Nothing ever cleared `Crashed`.** Once marked, an app that recovered on its own stayed marked
+until someone deployed again. Both directions were wrong, so the reconciliation now goes both ways.
+
+**3. `SslExpiring` could never fire.** The event existed in the enum, the checkbox existed in the
+alert-rule UI, and the notification router had a branch for it — but nothing in the codebase ever
+raised it. Ticking "tell me when SSL is expiring" promised something that could not happen.
+`CertificateWatcher` now checks each SSL domain daily and raises it, reusing the domain inspector
+built two phases ago. The 14-day threshold is meaningful rather than arbitrary: Let's Encrypt issues
+for 90 days and Traefik renews at 30 remaining, so a certificate still inside that window is evidence
+that renewal is *failing*, not pending — a healthy one never gets there, which is what keeps the
+alert from becoming noise.
+
+Also fixed: the disk warning throttled through a `static` field on a scoped service — one timestamp
+shared by every server and workspace, so the first node to fill up silenced the warning for all the
+others for an hour. Now keyed per node.
+
+**Verified live, all three:**
+
+| Check | Before | After |
+|---|---|---|
+| Container left crash-looping | app status `Running` (2) indefinitely | `Crashed` (5) within one pass |
+| Container healthy again, no deploy | stayed `Crashed` | back to `Running`, logged "App p11app recovered" |
+| `expired.badssl.com` added as a domain | nothing, ever | `Certificate for expired.badssl.com expires 2015-04-12` |
+
+The expiry check was proven against a real expired certificate rather than a mocked date, and it
+stayed silent about the healthy `nip.io` domain (89 days) in the same pass — both halves of the
+decision, on live infrastructure.
+
+**Tests:** 429 → 450. Eleven mutations across the three decisions; ten caught, one rejected by the
+compiler. Dates in alerts are pinned to the invariant calendar with a test that runs under `fa-IR` —
+these go out to webhooks and email, where a Jalali date is unreadable to everything downstream. The
+same fix was applied to the domain checker's expiry line for consistency.
+
+---
+
 ## 2026-07-30 — Managed databases proven end to end, and a failed deploy that says why (P9)
 
 P9 asked for one thing that had never been done: **verify the managed-database path on a real host**.

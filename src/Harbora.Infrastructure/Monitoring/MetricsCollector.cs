@@ -15,12 +15,13 @@ public sealed class MetricsCollector(
     HarboraDbContext db,
     IServerEngineFactory engineFactory,
     INotificationService notifications,
+    AlertThrottle throttle,
     ISystemClock clock,
     ILogger<MetricsCollector> logger) : IMetricsCollector
 {
     private const double DiskWarnRatio = 0.85;
     private static readonly TimeSpan Retention = TimeSpan.FromHours(24);
-    private static DateTimeOffset _lastDiskAlert = DateTimeOffset.MinValue;
+    private static readonly TimeSpan DiskAlertInterval = TimeSpan.FromHours(1);
 
     public async Task CollectAsync(CancellationToken ct)
     {
@@ -61,7 +62,7 @@ public sealed class MetricsCollector(
             server.LastHeartbeatAt = now;
 
             if (host.TotalDiskBytes > 0 && (double)diskUsed / host.TotalDiskBytes >= DiskWarnRatio)
-                await MaybeDiskAlert(diskUsed, host.TotalDiskBytes, now, ct);
+                await MaybeDiskAlert(server, diskUsed, host.TotalDiskBytes, now, ct);
         }
         catch (Exception ex)
         {
@@ -74,24 +75,17 @@ public sealed class MetricsCollector(
         {
             var containers = await docker.ListContainersAsync("harbora.app", ct);
             double totalCpu = 0;
-            foreach (var c in containers)
+            foreach (var c in containers.Where(c => c.State.Equals("running", StringComparison.OrdinalIgnoreCase)))
             {
-                if (c.State.Equals("running", StringComparison.OrdinalIgnoreCase))
-                {
-                    var stats = await docker.GetStatsAsync(c.Id, ct);
-                    if (stats is not null)
-                    {
-                        totalCpu += stats.CpuPercent;
-                        samples.Add(Metric(server.Id, "cpu.percent", c.Name, stats.CpuPercent, now));
-                        samples.Add(Metric(server.Id, "mem.used", c.Name, stats.MemoryUsedBytes, now));
-                    }
-                }
-                else if (c.State.Equals("exited", StringComparison.OrdinalIgnoreCase))
-                {
-                    await DetectCrashAsync(c.Labels, now, ct);
-                }
+                var stats = await docker.GetStatsAsync(c.Id, ct);
+                if (stats is null) continue;
+                totalCpu += stats.CpuPercent;
+                samples.Add(Metric(server.Id, "cpu.percent", c.Name, stats.CpuPercent, now));
+                samples.Add(Metric(server.Id, "mem.used", c.Name, stats.MemoryUsedBytes, now));
             }
             samples.Add(Metric(server.Id, "cpu.percent", null, Math.Round(totalCpu, 2), now));
+
+            await ReconcileAppStatusesAsync(containers, now, ct);
         }
         catch (Exception ex)
         {
@@ -101,31 +95,59 @@ public sealed class MetricsCollector(
         db.MonitoringMetrics.AddRange(samples);
     }
 
-    private async Task DetectCrashAsync(IReadOnlyDictionary<string, string> labels, DateTimeOffset now, CancellationToken ct)
+    /// <summary>
+    /// Brings each app's status in line with its containers, in both directions: an app whose
+    /// container is crash-looping stops being advertised as running, and one that has recovered stops
+    /// being advertised as crashed.
+    /// </summary>
+    private async Task ReconcileAppStatusesAsync(
+        IReadOnlyList<ContainerInfo> containers, DateTimeOffset now, CancellationToken ct)
     {
-        if (!labels.TryGetValue("harbora.app", out var slug)) return;
-        var app = await db.Apps.FirstOrDefaultAsync(a => a.Slug == slug, ct);
-        if (app is null || app.Status == AppStatus.Crashed || app.Status == AppStatus.Stopped) return;
+        var bySlug = containers
+            .Where(c => c.Labels.ContainsKey("harbora.app"))
+            .GroupBy(c => c.Labels["harbora.app"], StringComparer.Ordinal);
 
-        app.Status = AppStatus.Crashed;
-        app.UpdatedAt = now;
-        await db.SaveChangesAsync(ct);
-        await notifications.NotifyAsync(app.WorkspaceId, AlertEvent.AppCrashed, AlertSeverity.Critical,
-            $"App crashed: {app.Name}", $"The container for '{app.Name}' exited unexpectedly.", ct);
+        foreach (var group in bySlug)
+        {
+            var app = await db.Apps.FirstOrDefaultAsync(a => a.Slug == group.Key, ct);
+            if (app is null) continue;
+
+            var observed = AppHealthDiagnosis.Observe(group);
+            if (AppHealthDiagnosis.NextStatus(app.Status, observed) is not { } next) continue;
+
+            var wasCrashed = app.Status == AppStatus.Crashed;
+            app.Status = next;
+            app.UpdatedAt = now;
+            await db.SaveChangesAsync(ct);
+
+            if (next == AppStatus.Crashed)
+            {
+                var how = observed == ObservedAppState.CrashLooping
+                    ? "keeps crashing and being restarted"
+                    : "exited unexpectedly";
+                await notifications.NotifyAsync(app.WorkspaceId, AlertEvent.AppCrashed, AlertSeverity.Critical,
+                    $"App crashed: {app.Name}", $"The container for '{app.Name}' {how}.", ct);
+            }
+            else if (wasCrashed)
+            {
+                logger.LogInformation("App {Slug} recovered; status returned to Running.", app.Slug);
+            }
+        }
     }
 
-    private async Task MaybeDiskAlert(long used, long total, DateTimeOffset now, CancellationToken ct)
+    private async Task MaybeDiskAlert(
+        Domain.Servers.Server server, long used, long total, DateTimeOffset now, CancellationToken ct)
     {
-        // Throttle to once per hour so a full disk doesn't spam every tick.
-        if (now - _lastDiskAlert < TimeSpan.FromHours(1)) return;
-        _lastDiskAlert = now;
+        // Once per hour per node, so a full disk doesn't spam every tick — and so one node filling
+        // up doesn't silence the warning for every other node.
+        if (!throttle.ShouldFire($"disk:{server.Id}", now, DiskAlertInterval)) return;
 
         var pct = (int)((double)used / total * 100);
         foreach (var wsId in await db.Alerts.Where(a => a.IsEnabled && a.OnDiskWarning)
                      .Select(a => a.WorkspaceId).Distinct().ToListAsync(ct))
         {
             await notifications.NotifyAsync(wsId, AlertEvent.DiskWarning, AlertSeverity.Warning,
-                "Low disk space", $"Disk usage is at {pct}%.", ct);
+                "Low disk space", $"Disk usage on {server.Name} is at {pct}%.", ct);
         }
     }
 
