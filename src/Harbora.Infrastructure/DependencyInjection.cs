@@ -99,6 +99,9 @@ public static class DependencyInjection
         services.AddScoped<ISchedulerService, Tenancy.SchedulerService>();
         services.AddHostedService<Tenancy.MeteringService>();
 
+        // Tells the truth about custom domains: where DNS points and what certificate is live.
+        services.AddScoped<IDomainInspector, Networking.DomainInspector>();
+
         // Monitoring + notifications.
         services.AddHttpClient();
         services.AddScoped<INotificationService, Notifications.NotificationService>();

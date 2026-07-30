@@ -104,19 +104,34 @@
             </section>
         }
 
-        @* ---- Domains ---- *@
+        @* ---- Domains ----
+           The status shown here is probed, not configured: DNS is resolved and a real TLS handshake
+           is made. The old "SSL" badge only meant a checkbox was ticked, so a domain that had never
+           been pointed at this server still advertised SSL while browsers showed a certificate error. *@
         <section class="rounded-xl border border-slate-800 bg-slate-900/60">
             <div class="px-4 py-3 border-b border-slate-800 font-semibold">@T["Domains"]</div>
             <div class="divide-y divide-slate-800">
                 @if (!Model.Domains.Any()){<div class="p-4 text-slate-400 text-sm">—</div>}
                 @foreach (var dom in Model.Domains)
                 {
-                    <div class="flex items-center justify-between p-3 text-sm">
-                        <a href="https://@dom.Host" target="_blank" class="text-brand-400 truncate">@dom.Host</a>
-                        <div class="flex items-center gap-2">
-                            @if (dom.SslEnabled){<span class="text-xs text-emerald-400">SSL</span>}
-                            <form asp-controller="Apps" asp-action="DeleteDomain" asp-route-id="@Model.Id" asp-route-domainId="@dom.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                    @* The failure message travels as an attribute, not inside the script: Razor
+                       HTML-encodes it either way, and entities are decoded in attributes but not in
+                       a <script> body, where they would render as literal &#x…; escapes. *@
+                    <div class="p-3 text-sm" data-domain-row data-check-url="/apps/@Model.Id/domains/@dom.Id/check"
+                         data-check-failed="@(isFa ? "بررسی دامنه انجام نشد." : "The domain check could not run.")">
+                        <div class="flex items-center justify-between gap-2">
+                            <a href="@(dom.SslEnabled ? "https" : "http")://@dom.Host" target="_blank" rel="noopener" class="text-brand-400 truncate">@dom.Host</a>
+                            <div class="flex items-center gap-2 shrink-0">
+                                @if (!dom.SslEnabled){<span class="text-[10px] rounded bg-slate-800 px-1 text-slate-400">HTTP</span>}
+                                <span data-domain-state class="text-xs text-slate-500" title="@(isFa ? "در حال بررسی" : "Checking")">…</span>
+                                <button type="button" data-domain-recheck class="text-xs text-slate-500 hover:text-slate-300"
+                                        title="@(isFa ? "بررسی مجدد" : "Re-check")">↻</button>
+                                <form asp-controller="Apps" asp-action="DeleteDomain" asp-route-id="@Model.Id" asp-route-domainId="@dom.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                            </div>
                         </div>
+                        @* Filled in by the check: the verdict, and the single action that fixes it. *@
+                        <p data-domain-summary class="mt-1 text-xs text-slate-400 hidden"></p>
+                        <p data-domain-action class="mt-1 text-xs text-amber-300/90 hidden"></p>
                     </div>
                 }
             </div>
@@ -143,3 +158,57 @@
         </section>
     </div>
 </div>
+
+@section Scripts {
+<script>
+// Domain readiness. Each check makes a live DNS lookup and TLS handshake, so it runs here after the
+// page has rendered instead of blocking Details on the slowest domain.
+(function () {
+    const dot = {
+        Ready:               ['●', 'text-emerald-400'],
+        AwaitingCertificate: ['●', 'text-amber-400'],
+        DnsMissing:          ['●', 'text-red-400'],
+        DnsNotPointingHere:  ['●', 'text-red-400'],
+        Unreachable:         ['●', 'text-red-400'],
+        Unknown:             ['●', 'text-slate-500']
+    };
+
+    async function check(row) {
+        const state = row.querySelector('[data-domain-state]');
+        const summary = row.querySelector('[data-domain-summary]');
+        const action = row.querySelector('[data-domain-action]');
+        state.className = 'text-xs text-slate-500';
+        state.textContent = '…';
+
+        try {
+            const res = await fetch(row.dataset.checkUrl, { headers: { 'Accept': 'application/json' } });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const s = await res.json();
+
+            const [glyph, colour] = dot[s.readiness] || dot.Unknown;
+            state.textContent = glyph;
+            state.className = 'text-xs ' + colour;
+            state.title = s.readiness;
+
+            summary.textContent = s.summary;
+            summary.classList.remove('hidden');
+            if (s.action) { action.textContent = s.action; action.classList.remove('hidden'); }
+            else { action.textContent = ''; action.classList.add('hidden'); }
+        } catch (e) {
+            // Say the check failed rather than implying the domain is broken.
+            state.textContent = '?';
+            state.className = 'text-xs text-slate-500';
+            state.title = e.message;
+            summary.textContent = row.dataset.checkFailed;
+            summary.classList.remove('hidden');
+        }
+    }
+
+    const rows = document.querySelectorAll('[data-domain-row]');
+    rows.forEach(row => {
+        row.querySelector('[data-domain-recheck]').addEventListener('click', () => check(row));
+        check(row);
+    });
+})();
+</script>
+}

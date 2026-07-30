@@ -146,7 +146,32 @@ public class HarboraDbContext : DbContext
             e.Property(x => x.ClaimStamp).IsConcurrencyToken();
         });
 
+        DeclareApplicationGeneratedKeys(b);
         ApplyWorkspaceFilters(b);
+    }
+
+    /// <summary>
+    /// Every <see cref="BaseEntity"/> assigns its own Id, so the store never generates one. EF's
+    /// default for a Guid key assumes the opposite, and under that assumption a key that already holds
+    /// a value can only mean the row exists: a child added to a parent that is already loaded was
+    /// tracked as Modified and saved as an UPDATE matching no row.
+    ///
+    /// Observed in production as a 500 when adding a domain to an existing app
+    /// ("expected to affect 1 row(s), but actually affected 0"). Creating an app hid it, because
+    /// db.Apps.Add cascades Added through the whole graph. Fixed here rather than at each call site so
+    /// the next collection someone appends to cannot bring it back. See ChildEntityTrackingTests.
+    /// </summary>
+    private static void DeclareApplicationGeneratedKeys(ModelBuilder b)
+    {
+        foreach (var entity in b.Model.GetEntityTypes())
+        {
+            if (!typeof(BaseEntity).IsAssignableFrom(entity.ClrType)) continue;
+
+            // Only the simple Id key: a composite or shadow key is not BaseEntity's Guid.
+            if (entity.FindPrimaryKey() is { Properties: [{ Name: nameof(BaseEntity.Id) } key] }
+                && key.ClrType == typeof(Guid))
+                key.ValueGenerated = Microsoft.EntityFrameworkCore.Metadata.ValueGenerated.Never;
+        }
     }
 
     /// <summary>

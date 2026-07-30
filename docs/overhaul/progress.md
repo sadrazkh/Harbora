@@ -5,6 +5,68 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-30 — Domain readiness: what the browser actually gets (P8)
+
+The Domains panel showed an "SSL" badge whenever the auto-SSL checkbox was ticked. That is the
+*intent*, not reality: a domain whose DNS had never been pointed here displayed "SSL" while every
+browser showed a certificate error, and nothing in the panel said why.
+
+**Now it probes.** `DomainInspector` resolves the name and completes a real TLS handshake with SNI,
+then `DomainDiagnosis` turns those facts into one verdict and one concrete next step. Validation is
+deliberately not enforced during the handshake — an expired or untrusted certificate is precisely
+the condition worth reporting, so it has to be inspected rather than rejected. Traefik's self-signed
+default is read as "no certificate for this host yet", because otherwise a host with no certificate
+reports one valid for three years.
+
+DNS is diagnosed **before** the certificate. With DNS wrong, "waiting for a certificate" is a
+symptom, and following it costs an afternoon waiting for a certificate that can never be issued.
+
+The check runs from the browser after the page renders, not inside `Details` — it is a live network
+call per domain, and the app page should not wait on the slowest one.
+
+**Verified on the live server**, three domains, three verdicts:
+
+| Domain | Verdict |
+|---|---|
+| `domcheck.91.99.205.231.nip.io` | Ready — "Certificate valid for 89 more days (YR2)", matching `openssl s_client` exactly |
+| `harbora-does-not-exist-9f3a.example.com` | DnsMissing — "Add a DNS A record … pointing to 91.99.205.231" |
+| `www.wikipedia.org` | DnsNotPointingHere — names the addresses it *does* resolve to, and that no certificate can be issued until it changes |
+
+**Four bugs found, three of them mine.**
+
+1. **Adding a domain to an existing app returned a 500** (pre-existing, and the reason this phase
+   couldn't be tested at first). `BaseEntity` assigns its own Id, so every new entity arrives with a
+   populated key; EF's default for a Guid key is "the store generates it", and under that assumption
+   a key that already has a value can only mean the row exists. A child added to a loaded parent was
+   tracked as Modified and saved as an `UPDATE` matching no row —
+   `DbUpdateConcurrencyException: expected to affect 1 row(s), but actually affected 0`. Creating an
+   app hid it, because `db.Apps.Add` cascades Added through the whole graph.
+   Fixed in the model (`DeclareApplicationGeneratedKeys`) rather than at the call sites, because the
+   same pattern appears in five places and the next collection someone appends to would bring it
+   back. Annotation-only: `has-pending-model-changes` reports none, so no migration.
+   **This also broke config restore** whenever a backup contained an env var the app no longer had —
+   `RestoreAppConfigAsync` inserts exactly that way.
+2. **Every TLS probe threw.** I supplied the certificate callback to both the `SslStream`
+   constructor and the authenticate options; .NET rejects that. My catch-all then reported it as
+   "nothing answered on HTTPS" — a broken probe reading as a broken deployment. `ProbeFailures` now
+   separates "the far end didn't answer" (a verdict) from "our code faulted" (an error, reported as
+   Unknown). Found only because I compared the verdict against `curl` from inside the container.
+3. **The Persian failure message rendered as `&#x628;&#x631;…`.** Razor HTML-encodes it either way,
+   and entities are decoded in attributes but not inside a `<script>` body. Moved to a data
+   attribute.
+4. A test passed alone and failed in the suite: my mutation script restored sources with their
+   original timestamps, so MSBuild kept the mutated build output. The source was innocent.
+
+**Tests:** 405 → 416. Five mutations applied to the diagnosis (DNS-after-certificate,
+dropped unknown-server guard, Traefik default treated as real, all-addresses-must-match, expired
+reported ready) — all five caught. The certificate reading and the failure classifier are covered
+because both were wrong-answer risks the pure tests could not see.
+
+**Left running on the server**: the panel is serving this build. The repo checkout there is back to
+`c23f535` and clean, so `harbora update` after the push rebuilds the same thing from source.
+
+---
+
 ## 2026-07-30 — Docker Compose deploys, working on real Docker
 
 The last "advertised but missing" feature. The README promised docker-compose; the pipeline threw

@@ -21,7 +21,7 @@ Priority chosen for this stretch: **make what exists trustworthy** before making
 | P5 design system | — | Not started. |
 | P6 Create/Detail redesign | partial | Static-site source card + staged progress bar ✅. App Detail tabs ❌. |
 | P7 Compose · Template · Static | partial | Static ✅, single-container Template ✅, **Compose ✅** (allowlist parser, multi-service, network aliases — verified on real Docker). Multi-service templates ❌. |
-| P8 domains/SSL/logs | — | Not started. |
+| P8 domains/SSL/logs | ✅ | Runtime log viewer ✅. **Real domain readiness ✅** — DNS + live TLS handshake per domain, replacing the "SSL" badge that only reflected a checkbox; verified on the server against a working domain, an unresolvable one, and one pointing elsewhere. |
 | P9–P12 | — | Not started. |
 | P13 RBAC + audit | partial | Capability policies, `Operator` role, audit writes ✅. **Audit UI/CSV export ❌**, centralized workspace scoping ❌, IDOR/cross-tenant tests ❌. |
 | P14 API/OpenAPI/webhooks | partial | Per-IP rate limiting landed early ✅. Rest ❌. |
@@ -141,4 +141,5 @@ Recorded, not dropped. Revisit as soon as a host is available:
 - Real install + deploy E2E verification (P2).
 - Docker Compose deploys (P7) — cannot be honestly verified without a host.
 - Testcontainers-based Postgres integration tests (P1) — Testcontainers itself needs Docker.
-- ACME/SSL path against a real domain (P8).
+- ~~ACME/SSL path against a real domain (P8).~~ Done: a real Let's Encrypt certificate was issued
+  and read back by the domain checker on the live server (2026-07-30).

@@ -23,6 +23,7 @@ public sealed class AppsController(
     ISecretProtector protector,
     IAuditLogger audit,
     IRollbackPlanner rollbackPlanner,
+    IDomainInspector domains,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -309,6 +310,34 @@ public sealed class AppsController(
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
         return Content(await ops.GetLogsAsync(id, tail, ct), "text/plain");
+    }
+
+    /// <summary>
+    /// Checks what a browser would actually get for this domain: where DNS points, and which
+    /// certificate is live. The Domains list otherwise shows "SSL" because a checkbox was ticked.
+    /// </summary>
+    [HttpGet("/apps/{id:guid}/domains/{domainId:guid}/check")]
+    public async Task<IActionResult> CheckDomain(Guid id, Guid domainId, CancellationToken ct)
+    {
+        var host = await db.Domains
+            .Where(d => d.Id == domainId && d.AppId == id && d.App!.WorkspaceId == WorkspaceId)
+            .Select(d => d.Host)
+            .FirstOrDefaultAsync(ct);
+        if (host is null) return NotFound();
+
+        var status = await domains.InspectAsync(host, ct);
+        return Ok(new
+        {
+            host = status.Host,
+            readiness = status.Readiness.ToString(),
+            ready = status.IsReady,
+            summary = status.Summary,
+            action = status.Action,
+            resolvedIps = status.Probe.ResolvedIps,
+            expectedIps = status.Probe.ExpectedIps,
+            issuer = status.Probe.CertificateIssuer,
+            expiresAt = status.Probe.CertificateExpiresAt
+        });
     }
 
     // ---- environment variables ----
