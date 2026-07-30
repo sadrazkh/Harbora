@@ -171,9 +171,16 @@ public sealed class DeploymentPipeline(
             // network and routes by container name. On a remote node there is no shared overlay, so
             // we publish the container port to a per-deployment host port (lets old + new coexist).
             var server = await db.Servers.FirstAsync(s => s.Id == app.ServerId, ct);
+
+            // What the image says about itself beats what the app was configured with. A stock
+            // ASP.NET Core project listens on 8080 and declares it, so an app created with port 80
+            // built, started, logged "Application started" — and then failed a health check aimed at
+            // a port nothing was listening on.
+            var containerPort = await ResolveContainerPortAsync(docker, app, imageTag, Log, ct);
+
             int? publishPort = null;
             string upstreamHost = containerName;
-            var upstreamPort = app.ContainerPort;
+            var upstreamPort = containerPort;
             if (!server.IsLocal)
             {
                 // Reserved, not derived: a hashed port consulted nothing about what was already
@@ -237,7 +244,7 @@ public sealed class DeploymentPipeline(
             var containerId = await docker.RunContainerAsync(new DockerRunRequest(
                 imageTag, containerName, network, env, labels,
                 app.Volumes.Select(v => (v.Name, v.MountPath, v.ReadOnly)).ToList(),
-                app.ContainerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath,
+                containerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath,
                 Command: null, PublishToHostPort: publishPort), ct);
 
             await Log(LogStream.System, $"Container {containerId[..12]} is up. Verifying health …");
@@ -816,7 +823,13 @@ public sealed class DeploymentPipeline(
             try
             {
                 using var res = await client.GetAsync(url, ct);
-                if ((int)res.StatusCode < 400) return HealthReport.Healthy;
+                var status = (int)res.StatusCode;
+                if (HealthProbeRule.Accepts(healthPath, status))
+                {
+                    if (HealthProbeRule.ExplainAcceptance(healthPath, status) is { } note)
+                        await log($"Health check → {url} {note}");
+                    return HealthReport.Healthy;
+                }
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
             {
@@ -833,6 +846,31 @@ public sealed class DeploymentPipeline(
             return await FailedAsync(docker, lateCrash, current, ct);
 
         return await FailedAsync(docker, HealthFailure.NoHealthyResponse, current, ct, url);
+    }
+
+    /// <summary>
+    /// Reconciles the app's configured port with the one the image declares.
+    ///
+    /// The app is updated when they disagree, so the panel stops showing a number that cannot work —
+    /// a Details page promising port 80 for a container listening on 8080 is its own small lie.
+    /// </summary>
+    private async Task<int> ResolveContainerPortAsync(
+        IDockerEngine docker, App app, string imageTag, Func<LogStream, string, Task> log, CancellationToken ct)
+    {
+        IReadOnlyList<int> exposed;
+        try { exposed = await docker.GetImagePortsAsync(imageTag, ct); }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not read the ports for {Image}.", imageTag);
+            return app.ContainerPort;
+        }
+
+        var choice = PortSelection.Choose(app.ContainerPort, exposed);
+        if (!choice.Changed) return choice.Port;
+
+        await log(LogStream.System, $"Port: {choice.Reason}.");
+        app.ContainerPort = choice.Port;
+        return choice.Port;
     }
 
     /// <summary>

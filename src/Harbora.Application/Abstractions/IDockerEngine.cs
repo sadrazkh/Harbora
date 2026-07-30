@@ -22,6 +22,12 @@ public interface IDockerEngine
     /// <summary>Best-effort image removal. An image still in use by a container is left alone.</summary>
     Task RemoveImageAsync(string imageRef, CancellationToken ct);
 
+    /// <summary>
+    /// The container ports an image declares (its <c>EXPOSE</c> lines). Empty when it declares none,
+    /// which is common and means "we cannot tell" rather than "it listens nowhere".
+    /// </summary>
+    Task<IReadOnlyList<int>> GetImagePortsAsync(string imageRef, CancellationToken ct);
+
     Task<string> RunContainerAsync(DockerRunRequest request, CancellationToken ct);
     Task StopContainerAsync(string containerId, CancellationToken ct);
     Task RemoveContainerAsync(string containerId, bool force, CancellationToken ct);

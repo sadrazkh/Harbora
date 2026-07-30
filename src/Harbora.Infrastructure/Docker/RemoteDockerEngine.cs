@@ -75,6 +75,24 @@ public sealed class RemoteDockerEngine(
         return doc.GetProperty("exists").GetBoolean();
     }
 
+    public async Task<IReadOnlyList<int>> GetImagePortsAsync(string imageRef, CancellationToken ct)
+    {
+        try
+        {
+            var res = await Client().GetAsync($"agent/images/ports?image={Uri.EscapeDataString(imageRef)}", ct);
+            if (!res.IsSuccessStatusCode) return [];
+            var doc = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
+            return doc.TryGetProperty("ports", out var ports)
+                ? ports.EnumerateArray().Select(p => p.GetInt32()).ToList()
+                : [];
+        }
+        catch (Exception)
+        {
+            // An agent that predates this endpoint simply has no opinion.
+            return [];
+        }
+    }
+
     public Task RemoveImageAsync(string imageRef, CancellationToken ct) =>
         PostJson("agent/images/remove", new { image = imageRef }, ct);
 

@@ -84,6 +84,29 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         catch (DockerApiException ex) when ((int)ex.StatusCode == 404) { return false; }
     }
 
+    public async Task<IReadOnlyList<int>> GetImagePortsAsync(string imageRef, CancellationToken ct)
+    {
+        try
+        {
+            var image = await client.Images.InspectImageAsync(imageRef, ct);
+            var exposed = image.Config?.ExposedPorts;
+            if (exposed is null) return [];
+
+            // Keys look like "8080/tcp". UDP ports are not somewhere HTTP traffic could be served.
+            return exposed.Keys
+                .Where(k => !k.Contains("udp", StringComparison.OrdinalIgnoreCase))
+                .Select(k => int.TryParse(k.Split('/')[0], out var p) ? p : 0)
+                .Where(p => p > 0)
+                .Distinct()
+                .ToList();
+        }
+        catch (Exception)
+        {
+            // Not knowing is a normal answer here; the caller keeps the configured port.
+            return [];
+        }
+    }
+
     public async Task RemoveImageAsync(string imageRef, CancellationToken ct)
     {
         try

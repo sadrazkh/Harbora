@@ -34,6 +34,12 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// <summary>What the container "printed". The health gate reads this to explain a failure.</summary>
     public string ContainerLogs { get; set; } = string.Empty;
 
+    /// <summary>Ports the built/pulled image declares. Empty means the image says nothing.</summary>
+    public List<int> ImagePorts { get; } = [];
+
+    public Task<IReadOnlyList<int>> GetImagePortsAsync(string imageRef, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<int>>(ImagePorts.ToList());
+
     /// <summary>When set, a started container is never listed — as if something removed it.</summary>
     public bool DropStartedContainers { get; set; }
 

@@ -1,0 +1,14 @@
+<Project>
+
+  <!--
+    One version for the whole product.
+
+    The panel reports this at GET /api/v1/version and the CLI compares its own against it, so
+    "your CLI is older than this server" is only a meaningful sentence while both numbers come
+    from the same place. Bump it here; tagging v<this> publishes the CLI binaries.
+  -->
+  <PropertyGroup>
+    <Version>0.2.0</Version>
+  </PropertyGroup>
+
+</Project>

@@ -378,6 +378,78 @@ public class DeploymentPipelineCutoverTests
     }
 
     [Fact]
+    public async Task An_api_with_no_root_route_still_deploys()
+    {
+        // The reported case, end to end: a healthy ASP.NET Core API answers 404 at "/" because no
+        // root route exists. Nothing asked for one, so the probe has only proved the app is serving.
+        using var h = new PipelineHarness().WithDomain().WithHealthPath("/");
+        h.Http.Status = System.Net.HttpStatusCode.NotFound;
+        var deployment = h.QueueDeployment(number: 1);
+
+        var result = await h.RunAsync(deployment);
+
+        result.Status.Should().Be(DeploymentStatus.Succeeded);
+        h.Proxy.ApplyCount.Should().Be(1, "traffic must reach an app that is up");
+    }
+
+    [Fact]
+    public async Task A_404_on_a_health_path_someone_chose_still_fails_the_deploy()
+    {
+        // Choosing a path is an assertion that it works; letting it slide would make the setting
+        // decorative and hand traffic to an app that is not what its owner described.
+        using var h = new PipelineHarness().WithDomain().WithHealthPath("/healthz");
+        h.WithPreviousDeployment(number: 1);
+        h.Http.Status = System.Net.HttpStatusCode.NotFound;
+
+        var result = await h.RunAsync(h.QueueDeployment(number: 2));
+
+        result.Status.Should().Be(DeploymentStatus.Failed);
+        h.Proxy.ApplyCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task The_container_is_started_on_the_port_the_image_listens_on()
+    {
+        // End to end for the reported failure: an app configured for port 80, an image that says 8080.
+        // The container, the health probe and the proxy must all agree on 8080, or the deploy fails
+        // with the app running perfectly.
+        using var h = new PipelineHarness().WithDomain().WithHealthPath("/").WithContainerPort(80);
+        h.Docker.ImagePorts.Add(8080);
+        var deployment = h.QueueDeployment(number: 1);
+
+        var result = await h.RunAsync(deployment);
+
+        result.Status.Should().Be(DeploymentStatus.Succeeded);
+        h.Docker.RunRequests.Should().ContainSingle().Which.ContainerPort.Should().Be(8080);
+        h.Proxy.Applications.Should().ContainSingle().Which.TargetPort.Should().Be(8080);
+        h.Http.RequestedUrls.Should().Contain(u => u.Contains(":8080/"),
+            "probing the configured port would time out against a container that is serving");
+    }
+
+    [Fact]
+    public async Task The_apps_port_is_corrected_so_the_panel_stops_showing_the_wrong_one()
+    {
+        using var h = new PipelineHarness().WithContainerPort(80);
+        h.Docker.ImagePorts.Add(8080);
+
+        await h.RunAsync(h.QueueDeployment(number: 1));
+
+        var app = await h.Db.Apps.AsNoTracking().FirstAsync(a => a.Id == h.App.Id);
+        app.ContainerPort.Should().Be(8080, "the panel must stop advertising a port nothing listens on");
+    }
+
+    [Fact]
+    public async Task An_image_that_declares_nothing_leaves_the_configured_port_alone()
+    {
+        using var h = new PipelineHarness().WithContainerPort(3000);
+        var configured = h.App.ContainerPort;
+
+        await h.RunAsync(h.QueueDeployment(number: 1));
+
+        h.Docker.RunRequests.Should().ContainSingle().Which.ContainerPort.Should().Be(configured);
+    }
+
+    [Fact]
     public async Task On_a_local_node_the_proxy_routes_by_container_name()
     {
         using var h = new PipelineHarness().WithDomain();

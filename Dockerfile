@@ -12,6 +12,9 @@ RUN npm run build
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY Harbora.slnx ./
+# The shared product version. Without it the published assembly falls back to 1.0.0, and the panel
+# would report a version the CLI has no way to match.
+COPY Directory.Build.props ./
 COPY src/ ./src/
 # Bring in the frontend build output so it's included in publish.
 COPY --from=frontend /web/wwwroot/build ./src/Harbora.Web/wwwroot/build

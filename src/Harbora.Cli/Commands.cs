@@ -250,10 +250,22 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         var app = apps.FirstOrDefault(a => a.Slug.Equals(slug, StringComparison.OrdinalIgnoreCase));
         if (app is null)
         {
-            AnsiConsole.MarkupLine($"[red]No app called[/] [bold]{Markup.Escape(slug!)}[/] [red]on this account.[/]");
-            if (apps.Count > 0)
-                AnsiConsole.MarkupLine($"[grey]Available:[/] {Markup.Escape(string.Join(", ", apps.Select(a => a.Slug)))}");
-            return 1;
+            AnsiConsole.MarkupLine($"[yellow]![/] No app called [bold]{Markup.Escape(slug!)}[/] on this account.");
+
+            // A name that does not exist is the same situation as no name at all — the list is
+            // already in hand, so offer it rather than making someone go and look the slug up.
+            if (!Interactive.IsAvailable || apps.Count == 0)
+            {
+                if (apps.Count > 0)
+                    AnsiConsole.MarkupLine($"[grey]Available:[/] {Markup.Escape(string.Join(", ", apps.Select(a => a.Slug)))}");
+                else
+                    AnsiConsole.MarkupLine("[grey]This account has no apps yet. Create one in the panel first.[/]");
+                return 1;
+            }
+
+            app = Interactive.ChooseApp(apps);
+            if (app is null) return 1;
+            slug = app.Slug;
         }
 
         var plan = DeployPlan.Decide(
@@ -291,6 +303,7 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
 
         if (deploymentId is null) return 1;
         AnsiConsole.MarkupLine($"[green]✓[/] Queued deployment [bold]{deploymentId}[/] for [bold]{slug}[/].");
+        await VersionNotice.MaybeWarnAsync(api);
 
         return settings.Follow && !settings.NoFollow ? await StreamLogs(api, deploymentId) : 0;
     }
@@ -412,6 +425,7 @@ public sealed class StatusCommand : AsyncCommand
 {
     protected override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
     {
+        AnsiConsole.MarkupLine($"[grey]CLI:[/] {SelfUpdate.CurrentVersion}");
         var me = await Session.Require().GetAsync("whoami");
         AnsiConsole.MarkupLine($"[green]● online[/]  user: [bold]{me.GetProperty("email").GetString()}[/]");
         return 0;
@@ -556,5 +570,154 @@ public sealed class AccountsCommand : AsyncCommand<AccountsCommand.Settings>
                 Markup.Escape(p.Name), Markup.Escape(p.Server));
         AnsiConsole.Write(table);
         return Task.FromResult(0);
+    }
+}
+
+/// <summary>
+/// Replaces this binary with the newest published one.
+///
+/// Without it, updating meant re-running an install script people had to go and find — so an install
+/// that broke, or simply aged, tended to stay that way. Downloads from the project's GitHub releases,
+/// which is where the binaries are published; the panel only says which version it expects.
+/// </summary>
+public sealed class UpdateCommand : AsyncCommand<UpdateCommand.Settings>
+{
+    public sealed class Settings : CommandSettings
+    {
+        [CommandOption("--check"), Description("Only report whether a newer version exists")]
+        public bool CheckOnly { get; init; }
+    }
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    {
+        var current = SelfUpdate.CurrentVersion;
+        AnsiConsole.MarkupLine($"[grey]Installed:[/] {current}");
+
+        var asset = SelfUpdate.AssetNameForThisMachine();
+        if (asset is null)
+        {
+            AnsiConsole.MarkupLine("[yellow]![/] No published binary for this platform. Build from source instead.");
+            return 1;
+        }
+
+        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd($"harbora-cli/{current}");
+
+        JsonElement release;
+        try
+        {
+            var body = await http.GetStringAsync(
+                $"https://api.github.com/repos/{SelfUpdate.Repository}/releases/latest", ct);
+            release = JsonSerializer.Deserialize<JsonElement>(body);
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Could not check for updates:[/] {Markup.Escape(ex.Message)}");
+            return 1;
+        }
+
+        var latest = release.TryGetProperty("tag_name", out var tag) ? tag.GetString() : null;
+        if (!SelfUpdate.IsNewer(latest, current))
+        {
+            AnsiConsole.MarkupLine($"[green]✓[/] Already up to date ([bold]{Markup.Escape(latest ?? current)}[/]).");
+            return 0;
+        }
+
+        AnsiConsole.MarkupLine($"[yellow]→[/] A newer version is available: [bold]{Markup.Escape(latest!)}[/]");
+        if (settings.CheckOnly) return 0;
+
+        var url = FindAsset(release, asset);
+        if (url is null)
+        {
+            AnsiConsole.MarkupLine($"[yellow]![/] Release {Markup.Escape(latest!)} has no [bold]{asset}[/] build.");
+            return 1;
+        }
+
+        var executable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(executable))
+        {
+            AnsiConsole.MarkupLine("[red]Could not locate this executable to replace it.[/]");
+            return 1;
+        }
+
+        try
+        {
+            var staged = executable + ".new";
+            await using (var download = await http.GetStreamAsync(url, ct))
+            await using (var file = File.Create(staged))
+                await download.CopyToAsync(file, ct);
+
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(staged,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                    UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                    UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+            // A running executable cannot be overwritten on Windows, but it can be renamed out of the
+            // way. The leftover is deleted the next time the CLI starts.
+            var retired = SelfUpdate.RetiredPathFor(executable);
+            if (File.Exists(retired)) File.Delete(retired);
+            File.Move(executable, retired);
+            File.Move(staged, executable);
+
+            AnsiConsole.MarkupLine($"[green]✓[/] Updated to [bold]{Markup.Escape(latest!)}[/].");
+            return 0;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // The usual case: installed to /usr/local/bin by root. Name the command rather than the error.
+            AnsiConsole.MarkupLine($"[red]No permission to replace[/] {Markup.Escape(executable)}");
+            AnsiConsole.MarkupLine($"[grey]Try:[/] sudo harbora update");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Update failed:[/] {Markup.Escape(ex.Message)}");
+            return 1;
+        }
+    }
+
+    private static string? FindAsset(JsonElement release, string name)
+    {
+        if (!release.TryGetProperty("assets", out var assets)) return null;
+        foreach (var a in assets.EnumerateArray())
+            if (a.TryGetProperty("name", out var n) && n.GetString() == name)
+                return a.TryGetProperty("browser_download_url", out var u) ? u.GetString() : null;
+        return null;
+    }
+}
+
+/// <summary>
+/// Tells the user when their CLI is older than the panel it just talked to.
+///
+/// A stale CLI does not announce itself: it fails in ways that look like server bugs, or quietly
+/// misses whatever the panel learned to do since. The panel already knows its own version, so the
+/// check costs one small request — made only after the real work has succeeded, given a short
+/// deadline, and never allowed to turn a good command into a bad one.
+/// </summary>
+internal static class VersionNotice
+{
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(3);
+
+    public static async Task MaybeWarnAsync(ApiClient api)
+    {
+        try
+        {
+            using var deadline = new CancellationTokenSource(Timeout);
+            var payload = await api.GetAsync("version", deadline.Token);
+            var server = payload.TryGetProperty("cli", out var cli) ? cli.GetString() : null;
+            var current = SelfUpdate.CurrentVersion;
+
+            if (!SelfUpdate.IsNewer(server, current)) return;
+
+            AnsiConsole.MarkupLine(
+                $"[yellow]![/] This CLI is [bold]{Markup.Escape(current)}[/]; the server expects " +
+                $"[bold]{Markup.Escape(server!)}[/]. Run [yellow]harbora update[/].");
+        }
+        catch
+        {
+            // An older panel has no /version, and a network hiccup is not the user's problem right
+            // now. Saying nothing is the correct outcome of a check that could not be made.
+        }
     }
 }

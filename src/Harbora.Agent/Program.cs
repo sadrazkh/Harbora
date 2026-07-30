@@ -92,6 +92,9 @@ app.MapPost("/agent/images/pull", async (ImageBody body, HttpContext ctx, IDocke
 app.MapGet("/agent/images", (string? prefix, IDockerEngine e, CancellationToken ct) =>
     e.ListImagesAsync(string.IsNullOrEmpty(prefix) ? null : prefix, ct));
 
+app.MapGet("/agent/images/ports", async (string image, IDockerEngine e, CancellationToken ct) =>
+    Results.Ok(new { ports = await e.GetImagePortsAsync(image, ct) }));
+
 app.MapGet("/agent/images/exists", async (string image, IDockerEngine e, CancellationToken ct) =>
     Results.Ok(new { exists = await e.ImageExistsAsync(image, ct) }));
 

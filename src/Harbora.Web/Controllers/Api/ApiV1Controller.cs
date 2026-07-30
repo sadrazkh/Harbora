@@ -5,6 +5,7 @@ using Harbora.Domain.Common;
 using Harbora.Web.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Reflection;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
@@ -136,6 +137,30 @@ public sealed class ApiV1Controller(
 
     /// <summary>Body of POST /auth/token.</summary>
     public sealed record TokenRequest(string? Email, string? Password, string? Name = null);
+
+    /// <summary>
+    /// What this panel is, so a client can tell whether it is older than the server it is talking to.
+    ///
+    /// Anonymous on purpose: `harbora update` has to work before, and regardless of, being signed in.
+    /// The version comes from the assembly, which is stamped from the one number the whole product
+    /// shares — a panel and a CLI reporting versions from different places could never be compared.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpGet("version")]
+    public IActionResult Version() => Ok(new
+    {
+        server = ProductVersion,
+        // The CLI is released from this repository at the same version, so this is also the newest
+        // CLI that is known to match this panel.
+        cli = ProductVersion
+    });
+
+    private static string ProductVersion =>
+        typeof(ApiV1Controller).Assembly
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion.Split('+')[0]
+        ?? typeof(ApiV1Controller).Assembly.GetName().Version?.ToString(3)
+        ?? "0.0.0";
 
     [HttpGet("whoami")]
     public IActionResult WhoAmI() =>

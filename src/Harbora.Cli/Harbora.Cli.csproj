@@ -23,7 +23,6 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>harbora</ToolCommandName>
     <PackageId>Harbora.Cli</PackageId>
-    <Version>0.2.0</Version>
     <Description>Harbora CLI — deploy and manage apps on a Harbora platform.</Description>
     <PackageProjectUrl>https://github.com/sadrazkh/Harbora</PackageProjectUrl>
     <RepositoryUrl>https://github.com/sadrazkh/Harbora</RepositoryUrl>

@@ -22,9 +22,9 @@ public sealed class ApiClient
     /// <summary>Which server this client talks to — used when writing a project config.</summary>
     public string Server => _http.BaseAddress!.ToString().TrimEnd('/');
 
-    public async Task<JsonElement> GetAsync(string path)
+    public async Task<JsonElement> GetAsync(string path, CancellationToken ct = default)
     {
-        var res = await _http.GetAsync("api/v1/" + path);
+        var res = await _http.GetAsync("api/v1/" + path, ct);
         return await ReadAsync(res);
     }
 

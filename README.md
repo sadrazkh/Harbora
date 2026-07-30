@@ -283,6 +283,9 @@ harbora login --token hbr_cli_xxx --server https://panel.example.com   # non-int
 # Signed in to more than one panel? They all stay signed in:
 harbora accounts                               # list them; deploy asks which to use
 
+# Keep the CLI current — it also tells you when it is behind the panel:
+harbora update
+
 # In ANY project folder, scaffold the config in one command (slug = folder name):
 harbora init                                   # writes ./harbora.yml (uses the folder name; detects Dockerfile)
 

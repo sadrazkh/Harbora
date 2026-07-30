@@ -5,6 +5,92 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-30 — Deploying a real project: the port it listens on, and what "healthy" means
+
+Pushing an actual ASP.NET Core project with `harbora deploy` got all the way through: packed, uploaded,
+built on the server, container started, *"Application started"* in the log — and then failed. Twice, for
+two different reasons, both of them ours.
+
+**1. Harbora probed a port nothing was on.** The app had been created with port 80. .NET 8 listens on
+8080, and the image says so (`EXPOSE 8080`). The image knows where it listens and the configured number
+was simply wrong, so the deploy spent its whole health window talking to a closed port.
+
+The image is now asked. When it declares ports and the configured one is not among them, the declared
+one is used and the app row is corrected, so the panel stops advertising a port that cannot work. An
+image that declares nothing, or that agrees, changes nothing — overriding on no information would be a
+guess rather than a fix. Among several exposed ports a recognisable web port wins over a debug or
+metrics one, and among equals the lowest, so the answer is deterministic instead of an artefact of list
+order.
+
+**2. Then it refused a working app for answering 404.** With the port fixed, the probe reached the app —
+which returned `404` for `/`, because it is an API with no root route. The gate demanded a status below
+400 and failed the deploy on a service that was serving perfectly.
+
+A configured health path and the default root are different questions. A path someone chose is an
+assertion about health and is still held to it. The root is only ever asking "is anything serving
+here?", and a 404 answers that as clearly as a 200 — while a 5xx does not, because that is the app
+failing rather than a route being absent. When a 404 is accepted the log says why, so the leniency is
+visible rather than silent.
+
+**Also, from the same session:** `harbora deploy` in a folder whose `harbora.yml` named an app that does
+not exist just refused. The list was already in hand, so it now offers it — the same treatment as no
+name at all.
+
+**Verified with the user's own project, on the live server:**
+
+| Deployment | Outcome |
+|---|---|
+| #7 (before) | built and started, then failed probing `:80` |
+| #8 (port fix) | probed `:8080` correctly, failed on the 404 at `/` |
+| #9 (both fixes) | **succeeded**; `server: Kestrel` behind the domain, so traffic reaches the app |
+
+**Tests:** 543 → 560. Eleven mutations across the port choice and the probe rule. The first sweep left
+three alive, and all three were tests that proved nothing: the pipeline harness already defaulted to
+port 8080, so asserting "the port is 8080" asserted the default back to itself, and no case
+distinguished a preferred web port from the lowest one. Fixed by making the configured port disagree
+with the image, which is the entire situation being tested.
+
+---
+
+## 2026-07-30 — A CLI that can update itself, and says when it needs to
+
+Two things were missing once `harbora deploy` worked: there was no way to update the CLI except
+finding the install script again, and nothing ever told anyone their CLI was old. A stale CLI does
+not announce itself — it fails in ways that look like server bugs.
+
+**One version for the product.** The panel and the CLI now take their version from a single
+`Directory.Build.props`. Without that, "your CLI is older than this server" compares two numbers from
+different places and means nothing — the panel's assembly was reporting the .NET default of `1.0.0`,
+which would have told every user, forever, that they were behind. The Dockerfile has to copy that
+file into the build context or the published panel falls back to `1.0.0` again; found by checking the
+live endpoint rather than by assuming.
+
+**`GET /api/v1/version`** (anonymous, so it works before signing in) reports what the panel is and
+which CLI matches it. **`harbora update`** downloads the matching asset from the project's GitHub
+releases and replaces the running binary — renaming the old one aside first, because Windows will not
+overwrite a running executable, and clearing that leftover on the next start.
+
+**The notice** appears after a deploy has already been queued, gives up after three seconds, and stays
+silent when the panel is too old to answer or the version cannot be read. A check that cries wolf is
+worse than no check.
+
+**Verified from Windows against the live panel:**
+
+| Step | Result |
+|---|---|
+| `GET /api/v1/version` | `{"server":"0.2.0","cli":"0.2.0"}` |
+| `harbora update --check` on 0.2.0 | `Already up to date (v0.2.0)` |
+| a 0.1.0 build deploying | deploy succeeded, then `! This CLI is 0.1.0; the server expects 0.2.0` |
+| `harbora update` on that 0.1.0 build | fetched v0.2.0, replaced itself, `--version` → 0.2.0 |
+| leftover `.old` binary | cleared on the next run |
+
+**Tests:** 511 → 533. Seven mutations across version comparison and asset naming, all caught. One
+test earned its place immediately: `"2026-07-30"` was being cut at the dash and read as version
+**2026**, so any date-versioned panel would have told every user they were years behind. A version
+string with no dot is no longer treated as a version at all.
+
+---
+
 ## 2026-07-30 — `harbora deploy` from a developer's machine, actually working
 
 Reported from a real terminal: `harbora deploy` answered *"404 Not Found: App not found."*, and

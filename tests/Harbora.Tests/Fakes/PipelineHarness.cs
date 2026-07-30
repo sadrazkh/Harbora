@@ -178,6 +178,14 @@ public sealed class PipelineHarness : IDisposable
         return deployment;
     }
 
+    /// <summary>Configures the app with a port, so a test can make it disagree with the image.</summary>
+    public PipelineHarness WithContainerPort(int port)
+    {
+        App.ContainerPort = port;
+        Db.SaveChanges();
+        return this;
+    }
+
     public DeploymentPipeline BuildPipeline() => new(
         Db,
         new SingleEngineFactory(Docker),

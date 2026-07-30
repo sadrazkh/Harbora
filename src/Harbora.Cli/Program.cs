@@ -2,6 +2,10 @@ using System.Reflection;
 using Harbora.Cli;
 using Spectre.Console.Cli;
 
+// An update renames the old binary aside rather than overwriting a running file; this is where the
+// leftover goes away.
+if (Environment.ProcessPath is { Length: > 0 } self) SelfUpdate.CleanUpPreviousBinary(self);
+
 var app = new CommandApp();
 app.Configure(config =>
 {
@@ -19,6 +23,7 @@ app.Configure(config =>
     config.AddCommand<AppsCommand>("apps").WithDescription("List applications.");
     config.AddCommand<DeployCommand>("deploy").WithDescription("Deploy an app and follow the logs.");
     config.AddCommand<LogsCommand>("logs").WithDescription("Stream logs for a deployment.");
+    config.AddCommand<UpdateCommand>("update").WithDescription("Update this CLI to the latest release.");
 
 #if DEBUG
     config.PropagateExceptions();

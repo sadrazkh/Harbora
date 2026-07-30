@@ -59,7 +59,23 @@ harbora accounts --logout you@example.com
 When several accounts are signed in, `harbora deploy` asks which one to use — or pass
 `--account you@example.com`.
 
-## 3. Deploy
+## 3. Keeping the CLI current
+
+```bash
+harbora update            # replace this binary with the latest release
+harbora update --check    # just say whether one exists
+```
+
+After a deploy the CLI compares itself with the panel and says so when it is behind:
+
+```
+! This CLI is 0.1.0; the server expects 0.2.0. Run harbora update.
+```
+
+The check is best-effort — it runs after the work has succeeded, gives up after three seconds, and
+says nothing at all if the panel is older than this endpoint or the version cannot be read.
+
+## 4. Deploy
 
 ```bash
 harbora deploy        # deploys, then streams the build log
@@ -107,7 +123,7 @@ Exit code is `0` on success and non-zero on failure, so it gates a pipeline dire
 
 ---
 
-## 4. `harbora.yml`
+## 5. `harbora.yml`
 
 Written by `harbora init`, read by `harbora deploy`. Every field is optional.
 
@@ -167,13 +183,21 @@ equivalents work without configuration.
 
 ---
 
-## 5. HTTP API
+## 6. HTTP API
 
 Base URL `https://<panel>/api/v1`. Authenticate with a bearer token:
 
 ```
 Authorization: Bearer hbr_cli_xxxxxxxx
 ```
+
+### `GET /version`
+Unauthenticated, so a client can check compatibility before signing in.
+```json
+{ "server": "0.2.0", "cli": "0.2.0" }
+```
+`cli` is the newest CLI known to match this panel. Compare it with your own version and tell the user
+when they are behind — but treat anything you cannot parse as "no opinion" rather than as out of date.
 
 ### `POST /auth/token`
 Exchanges a panel account for a CLI token, so a client never has to ask a user to create one by hand.
@@ -268,7 +292,7 @@ Poll with the highest `seq` you have seen to follow a build. `stream` is `System
 
 ---
 
-## 6. Writing your own client
+## 7. Writing your own client
 
 A minimal integration is three calls:
 
@@ -310,7 +334,7 @@ while True:
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
