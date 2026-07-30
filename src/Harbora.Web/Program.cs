@@ -3,6 +3,7 @@ using System.Threading.RateLimiting;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Infrastructure;
+using Harbora.Infrastructure.Backups;
 using Harbora.Web.Data;
 using Harbora.Web.Infrastructure;
 using Harbora.Web.Realtime;
@@ -125,6 +126,9 @@ try
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+    // A restore point first, when this boot is an upgrade of an existing install. Migrating with no
+    // way back to the previous data is the one step of an upgrade that cannot be undone.
+    await scope.ServiceProvider.GetRequiredService<UpgradeSafetyService>().EnsureRestorePointAsync(default);
     await db.Database.MigrateAsync();
     await scope.ServiceProvider.GetRequiredService<DbSeeder>().SeedAsync();
 }

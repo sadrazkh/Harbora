@@ -23,7 +23,8 @@ Priority chosen for this stretch: **make what exists trustworthy** before making
 | P7 Compose · Template · Static | partial | Static ✅, single-container Template ✅, **Compose ✅** (allowlist parser, multi-service, network aliases — verified on real Docker). Multi-service templates ❌. |
 | P8 domains/SSL/logs | ✅ | Runtime log viewer ✅. **Real domain readiness ✅** — DNS + live TLS handshake per domain, replacing the "SSL" badge that only reflected a checkbox; verified on the server against a working domain, an unresolvable one, and one pointing elsewhere. |
 | P9 managed DB verify + attach | ✅ | Provision, reveal, attach, inject, resolve, authenticate — all verified on the live server. Attach was a 500 until the child-entity tracking fix. |
-| P10, P12 | — | Not started. |
+| P10 backup/restore hardening | ✅ | Phase E covered encryption, integrity and extract-then-swap. Now: an automatic restore point before every schema migration (fail-closed), plus `harbora backups` / `backup-db` / `restore-db` — rehearsed end to end on the server against scratch databases. Dry-run restore ✅ (Phase E). |
+| P12 | — | Not started. |
 | P11 monitoring + alerting | ✅ | Per-app metrics were already collected. Crash detection missed crash-looping containers (`restarting`, not `exited`) and never cleared `Crashed`; both fixed and verified live. `SslExpiring` had a checkbox and a router branch but nothing ever raised it — `CertificateWatcher` now does, proven against a really-expired certificate. Threshold CPU/memory alerts ❌. |
 | P13 RBAC + audit | partial | Capability policies, `Operator` role, audit writes ✅. **Audit UI/CSV export ❌**, centralized workspace scoping ❌, IDOR/cross-tenant tests ❌. |
 | P14 API/OpenAPI/webhooks | partial | Per-IP rate limiting landed early ✅. Rest ❌. |

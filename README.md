@@ -85,6 +85,24 @@ curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/inst
 Or from the checkout: `cd /opt/harbora/app/deploy && docker compose up -d --build` (update),
 `docker compose down` (stop), `docker compose down -v` (also wipe data).
 
+### An update can always be undone
+
+Before an update applies any database migration, Harbora dumps the database first and **refuses to
+migrate if that dump fails**. A schema changed with no way back is the one step of an update that
+cannot be reversed, so the moment the restore point can still be taken is the moment to insist on it.
+Nothing is dumped on a fresh install (there is nothing to lose) or on an ordinary restart (nothing
+changes).
+
+```bash
+harbora backups                     # list restore points; pre-upgrade-* are automatic
+harbora backup-db                   # take one now, before doing something risky yourself
+harbora restore-db <file>           # put the database back (asks you to type the database name)
+```
+
+`restore-db` saves the current database as `pre-restore-*` before replacing it, so restoring from the
+wrong file is survivable too. If a host genuinely cannot run the dump, `HARBORA_SKIP_UPGRADE_BACKUP=1`
+lets the update proceed without one.
+
 Updating never overwrites `deploy/.env`, but it **does** add settings that newer versions require and
 your file predates — most importantly `HARBORA_MASTER_KEY`. Without that backfill the panel would
 refuse to start after an update (it fails closed rather than leaving secrets decryptable), which looks
@@ -139,6 +157,7 @@ admin usually needs both.
 | `harbora set-domain <panel-domain> <apps-domain>` | Change both domains and restart. Point DNS at the server first |
 | `harbora fix-key` | Generate a `HARBORA_MASTER_KEY` when it's missing or still the insecure development default, then restart |
 | `harbora restart` / `harbora stop` | Lifecycle |
+| `harbora backups` / `harbora backup-db` / `harbora restore-db <file>` | Database restore points — see [An update can always be undone](#an-update-can-always-be-undone) |
 
 > ⚠️ `harbora fix-key` **replaces** an existing key only if you type `REPLACE` when prompted. Replacing a
 > working key makes every stored secret — env vars, git tokens, agent tokens — permanently unreadable.

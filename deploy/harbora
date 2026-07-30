@@ -182,6 +182,74 @@ cmd_stop()    { compose stop; ok "Harbora stopped."; }
 cmd_status()  { compose ps; }
 cmd_logs()    { compose logs -f --tail 200 "${1:-panel}"; }
 
+# --- database restore points -------------------------------------------------
+# Deliberately host-side: `docker compose exec postgres` needs only the database container, so these
+# still work while the panel is crash-looping — which is exactly when you want a copy before surgery.
+# The panel takes one of these automatically before any upgrade that migrates the schema; these are
+# for the times you are about to do something risky yourself.
+
+BACKUP_DIR="/var/lib/docker/volumes/harbora_backups/_data"
+
+db_env() { grep -E "^POSTGRES_(USER|DB|PASSWORD)=" "$ENV_FILE" | sed 's/^/export /'; }
+
+cmd_backup_db() {
+  need_install
+  eval "$(db_env)"
+  local name="manual-$(date -u +%Y%m%d-%H%M%S).sql.gz"
+  echo "Dumping database '$POSTGRES_DB' …"
+  # pipefail matters: without it the exit code is gzip's, so a dump that died halfway still looks
+  # like a success and leaves a valid archive of a truncated dump.
+  ( set -o pipefail
+    compose exec -T postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --no-privileges       | gzip -c > "$BACKUP_DIR/$name" ) || { rm -f "$BACKUP_DIR/$name"; die "Dump failed; nothing was written."; }
+  ok "Restore point written: $name ($(du -h "$BACKUP_DIR/$name" | cut -f1))"
+  echo "  Restore it with:  harbora restore-db $name"
+}
+
+cmd_backups() {
+  need_install
+  [ -d "$BACKUP_DIR" ] || die "No backup volume found at $BACKUP_DIR."
+  echo "Restore points in $BACKUP_DIR:"
+  ls -1t "$BACKUP_DIR" 2>/dev/null | grep -E '\.sql\.gz$' |
+    while read -r f; do printf '  %-40s %s\n' "$f" "$(du -h "$BACKUP_DIR/$f" | cut -f1)"; done
+  echo "  (pre-upgrade-* are taken automatically before a schema migration)"
+}
+
+cmd_restore_db() {
+  need_install
+  local file="${1:-}"
+  [ -n "$file" ] || die "Usage: harbora restore-db <file>   (see: harbora backups)"
+  [ -f "$BACKUP_DIR/$file" ] || die "No such restore point: $BACKUP_DIR/$file"
+  eval "$(db_env)"
+
+  warn "This REPLACES the current database '$POSTGRES_DB' with $file."
+  warn "Everything created since that point — apps, deployments, users — will be gone."
+  read -r -p "Type the database name to confirm: " reply
+  [ "$reply" = "$POSTGRES_DB" ] || die "Not confirmed; nothing was changed."
+
+  # A copy of what we are about to destroy. Restoring from the wrong file has to be survivable too.
+  local safety="pre-restore-$(date -u +%Y%m%d-%H%M%S).sql.gz"
+  ( set -o pipefail
+    compose exec -T postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --no-privileges       | gzip -c > "$BACKUP_DIR/$safety" ) || die "Could not copy the current database; refusing to restore."
+  ok "Current state saved as $safety"
+
+  echo "Stopping the panel so nothing writes during the restore …"
+  compose stop panel >/dev/null
+
+  # Drop and recreate rather than restoring over the top: leftover rows from the newer schema would
+  # otherwise survive into a database that no longer has columns for them.
+  compose exec -T postgres psql -U "$POSTGRES_USER" -d postgres     -c "DROP DATABASE IF EXISTS \"$POSTGRES_DB\";" -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\";" >/dev/null
+
+  if gunzip -c "$BACKUP_DIR/$file" | compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q >/dev/null; then
+    ok "Database restored from $file"
+  else
+    err "Restore failed. The database may be incomplete."
+    echo "  Put it back with:  harbora restore-db $safety"
+  fi
+
+  compose start panel >/dev/null
+  ok "Panel started. Check it with: harbora doctor"
+}
+
 cmd_help() {
   cat <<'EOF'
 harbora — Harbora server administration
@@ -204,6 +272,11 @@ harbora — Harbora server administration
     harbora set-domain <panel> <apps>   Change domains and restart
     harbora fix-key                     Generate a missing/insecure master key and restart
 
+  Database restore points
+    harbora backups                     List restore points (pre-upgrade-* are automatic)
+    harbora backup-db                   Take one now, before doing something risky
+    harbora restore-db <file>           Replace the database with a restore point (prompts)
+
   Lifecycle
     harbora restart | stop
 
@@ -220,6 +293,9 @@ case "${1:-help}" in
   stop)           shift; cmd_stop "$@" ;;
   status)         shift; cmd_status "$@" ;;
   logs)           shift; cmd_logs "$@" ;;
+  backups)        shift; cmd_backups "$@" ;;
+  backup-db)      shift; cmd_backup_db "$@" ;;
+  restore-db)     shift; cmd_restore_db "$@" ;;
   info|users|reset-password|make-owner|unlock)
                   panel_admin "$@" ;;
   help|--help|-h) cmd_help ;;

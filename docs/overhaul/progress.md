@@ -5,6 +5,61 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-30 — An update you can undo: restore point before every migration (P10)
+
+`harbora update` pulled new code, rebuilt, and the panel applied migrations on boot — with nothing
+captured beforehand. Additive migrations are harmless, but a destructive one, or a new version that
+turns out to be broken, left no route back to the data as it was. This project has already had one
+update that took the panel down; the missing piece was never the diagnosis, it was the way back.
+
+**The panel now takes a restore point before it migrates, and refuses to migrate if it cannot.**
+Refusing is the deliberate choice: migrating anyway and logging a warning spends the one moment the
+restore point can still be taken. A panel that declines to start is recoverable — the previous image
+and the data are both still there — while a schema migrated with no way back is not.
+`HARBORA_SKIP_UPGRADE_BACKUP=1` exists for a host where the dump genuinely cannot run.
+
+It fires only where it matters: an existing install with pending migrations. A fresh install has
+everything pending and nothing to lose; an ordinary restart changes nothing.
+
+Two details that decide whether the artifact is worth having:
+
+- `set -o pipefail` in the dump. `pg_dump | gzip` reports **gzip's** exit code, so without it a dump
+  that died halfway still succeeds and leaves a valid gzip of a truncated dump — the worst kind of
+  restore point, because it looks fine until the moment it is needed.
+- The password goes in the helper's environment, never on the command line, which is visible in
+  `docker inspect` and in the host's process list.
+
+`DockerOneOffRequest` gained `Env` and `NetworkMode` for this. The dump helper runs with
+`container:harbora-panel`, sharing the panel's network namespace — so whatever host the panel's own
+connection string uses resolves identically, with no second copy of the network configuration to drift.
+
+**A restore point nobody can restore is theatre**, so the break-glass tool grew the other half:
+`harbora backups`, `harbora backup-db`, `harbora restore-db <file>`. These are host-side, like the
+rest of the recovery commands, so they still work while the panel is crash-looping — which is exactly
+when you want a copy before surgery. `restore-db` saves the current database as `pre-restore-*` before
+replacing it, and asks you to type the database name.
+
+**Rehearsed on the live server, on scratch copies rather than production data:**
+
+| Step | Result |
+|---|---|
+| Copy the database, rewind it one migration | 7 applied, 1 pending, real data |
+| Start the panel against it — a genuine upgrade | "Upgrade detected: 1 pending migrations. Taking a restore point first." |
+| Dump produced | 415 KB, visible to the panel, then migrated to 8 |
+| Restore it into a fresh database | 1 user preserved, 7 migrations, and **no** post-migration column — it captured the state *before* the upgrade |
+| `harbora restore-db` against a scratch database | marker row gone, users kept, `pre-restore-*` safety copy written, production database untouched |
+
+The redirection used for that last test was proven with a non-destructive `backup-db` first — a
+`DROP DATABASE` that silently targeted the wrong name would have been an unacceptable way to find out.
+
+**Tests:** 450 → 466. Nine mutations across the plan (back up on a fresh install, back up on every
+restart, drop `pipefail`, password on the command line, no shell quoting, prune everything, prune
+newest first, drop `--no-owner`, local calendar in the file name) — all nine caught. The file name is
+pinned to the invariant calendar by a test that runs under `fa-IR`, because retention orders by name
+and a Jalali year would sort a brand-new restore point as the oldest and delete it.
+
+---
+
 ## 2026-07-30 — Monitoring that tells the truth about app health (P11)
 
 Started by looking at what the live server actually holds rather than at the roadmap. Metrics

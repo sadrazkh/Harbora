@@ -254,9 +254,11 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         {
             Image = request.Image,
             Cmd = request.Command.ToList(),
+            Env = request.Env?.Select(kv => $"{kv.Key}={kv.Value}").ToList(),
             HostConfig = new HostConfig
             {
                 Binds = request.Binds.Select(b => $"{b.Source}:{b.Target}{(b.ReadOnly ? ":ro" : "")}").ToList(),
+                NetworkMode = request.NetworkMode,
                 AutoRemove = false
             }
         };

@@ -53,7 +53,15 @@ public interface IDockerEngine
 public record DockerOneOffRequest(
     string Image,
     IReadOnlyList<string> Command,
-    IReadOnlyList<(string Source, string Target, bool ReadOnly)> Binds);
+    IReadOnlyList<(string Source, string Target, bool ReadOnly)> Binds,
+    /// <summary>Environment for the helper — a database dump needs the password here.</summary>
+    IReadOnlyDictionary<string, string>? Env = null,
+    /// <summary>
+    /// Docker network mode. Tar helpers need none, but a helper that must reach another container
+    /// does: <c>container:harbora-panel</c> gives it exactly the panel's own connectivity, so a
+    /// hostname that works for the panel works here without restating any network configuration.
+    /// </summary>
+    string? NetworkMode = null);
 
 public record DockerBuildRequest(
     string ContextPath,
