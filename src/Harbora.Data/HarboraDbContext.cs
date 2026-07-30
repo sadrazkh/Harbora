@@ -41,6 +41,7 @@ public class HarboraDbContext : DbContext
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<WorkspaceMember> WorkspaceMembers => Set<WorkspaceMember>();
     public DbSet<Server> Servers => Set<Server>();
+    public DbSet<HostPortAllocation> HostPortAllocations => Set<HostPortAllocation>();
     public DbSet<GitProvider> GitProviders => Set<GitProvider>();
     public DbSet<GitRepository> GitRepositories => Set<GitRepository>();
     public DbSet<App> Apps => Set<App>();
@@ -124,6 +125,15 @@ public class HarboraDbContext : DbContext
         });
 
         b.Entity<Route>(e => e.HasIndex(x => new { x.Host, x.PathPrefix }));
+
+        b.Entity<HostPortAllocation>(e =>
+        {
+            // The reservation itself. Checking before inserting cannot stop two concurrent deploys
+            // choosing the same number; this can.
+            e.HasIndex(x => new { x.ServerId, x.Port }).IsUnique();
+            e.HasIndex(x => new { x.ServerId, x.AppId, x.DeploymentNumber });
+            e.HasOne(x => x.Server).WithMany().HasForeignKey(x => x.ServerId).OnDelete(DeleteBehavior.Cascade);
+        });
         b.Entity<Certificate>(e => e.HasIndex(x => x.Host));
         b.Entity<ManagedService>(e => e.HasIndex(x => x.ContainerName).IsUnique());
         b.Entity<MonitoringMetric>(e => e.HasIndex(x => new { x.ServerId, x.Name, x.Timestamp }));

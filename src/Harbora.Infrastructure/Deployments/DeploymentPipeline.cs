@@ -27,6 +27,7 @@ public sealed class DeploymentPipeline(
     IHttpClientFactory httpFactory,
     ISystemClock clock,
     IOptions<HarboraRuntimeOptions> options,
+    HostPortAllocator hostPorts,
     ILogger<DeploymentPipeline> logger)
 {
     private readonly HarboraRuntimeOptions _opt = options.Value;
@@ -175,7 +176,9 @@ public sealed class DeploymentPipeline(
             var upstreamPort = app.ContainerPort;
             if (!server.IsLocal)
             {
-                publishPort = DeploymentPlanning.HostPort(app.Slug, deployment.Number);
+                // Reserved, not derived: a hashed port consulted nothing about what was already
+                // in use, and a port reused across apps aims one app's route at another's container.
+                publishPort = await hostPorts.AllocateAsync(server.Id, app.Id, deployment.Number, ct);
                 upstreamHost = server.Hostname;
                 upstreamPort = publishPort.Value;
             }
@@ -247,7 +250,13 @@ public sealed class DeploymentPipeline(
             // New container is healthy → switch traffic to it, THEN retire the old container(s).
             await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
             await RetireOldContainersAsync(docker, app.Slug, keepContainerName: containerName, Log, ct);
-            if (!server.IsLocal) app.PublishedHostPort = publishPort;
+            if (!server.IsLocal)
+            {
+                app.PublishedHostPort = publishPort;
+                // Only now: releasing before the cutover would offer another app a port that is
+                // still carrying this one's live traffic.
+                await hostPorts.ReleaseAllButAsync(server.Id, app.Id, deployment.Number, ct);
+            }
 
             // A rollback supersedes whatever was live: mark that deployment RolledBack so the
             // history shows which version was abandoned, not just which one replaced it.
@@ -269,6 +278,10 @@ public sealed class DeploymentPipeline(
             // Zero-downtime guarantee: remove only the just-started (failed) container; the previous
             // version — if any — keeps serving untouched.
             await TryRemoveContainerByNameAsync(docker, DeploymentPlanning.ContainerName(app.Slug, deployment.Number), ct);
+            // The container is gone, so the port it reserved must go too — otherwise a node loses a
+            // port to every failed deploy until the range runs out.
+            try { await hostPorts.ReleaseAsync(app.ServerId, app.Id, deployment.Number, ct); }
+            catch (Exception releaseError) { logger.LogWarning(releaseError, "Could not release the host port."); }
             // Failed is reachable from any in-flight state; guard against a double-terminal write.
             if (DeploymentStateMachine.IsInFlight(deployment.Status))
                 DeploymentStateMachine.Transition(deployment, DeploymentStatus.Failed, clock.UtcNow);
@@ -504,8 +517,10 @@ public sealed class DeploymentPipeline(
             var serviceLabels = new Dictionary<string, string>(labels) { ["harbora.compose.service"] = service.Name };
 
             // Only the web service needs a published host port, and only on a remote node.
+            // Same reservation as the single-container path: one port per deployment, held for the
+            // web service. AllocateAsync returns the existing one if this deployment already has it.
             int? publish = service.IsWeb && !server.IsLocal
-                ? DeploymentPlanning.HostPort(app.Slug, deployment.Number)
+                ? await hostPorts.AllocateAsync(server.Id, app.Id, deployment.Number, ct)
                 : null;
 
             await log(LogStream.System, $"Starting {containerName} …");

@@ -28,17 +28,6 @@ public class DeploymentPlanningTests
     }
 
     [Fact]
-    public void Host_port_is_in_range_deterministic_and_varies_by_number()
-    {
-        var p1 = DeploymentPlanning.HostPort("blog", 1);
-        var p2 = DeploymentPlanning.HostPort("blog", 2);
-        p1.Should().BeInRange(20000, 29999);
-        p2.Should().BeInRange(20000, 29999);
-        p1.Should().NotBe(p2, "consecutive deployments need distinct ports to overlap during cutover");
-        DeploymentPlanning.HostPort("blog", 1).Should().Be(p1, "must be deterministic");
-    }
-
-    [Fact]
     public void ContainersToRetire_keeps_new_and_ignores_other_apps()
     {
         var keep = DeploymentPlanning.ContainerName("blog", 3);

@@ -5,6 +5,49 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-30 — Host ports are reserved, not guessed; multi-server verified for the first time (P12)
+
+Remote nodes have no shared overlay, so the proxy reaches an app at `node-host:published-port`. That
+port came from `20000 + sha256(slug#number) % 10000` — deterministic, and blind to everything already
+running.
+
+**Ten thousand slots picked at random collide far sooner than the number suggests.** A coin flip at
+about 119 deployments on one node, and every redeploy draws again, so it is ordinary usage rather than
+a distant edge case: `app78` and `app138` both land on 22585 at their first deployment.
+
+The consequence was worse than a failed deploy. Routes store host **and** port, so a port belonging to
+a retired deployment that is later handed to another app quietly points the first app's traffic at the
+second app's container.
+
+Now a tracked reservation: `HostPortAllocation`, unique on (server, port). The unique index — not a
+check-then-insert — is what actually stops two concurrent deploys agreeing on the same number; the
+allocator retries when it loses the race. Ports are released after the cutover (never before: an
+early release would offer another app a port still carrying live traffic), when a deploy fails, and
+when an app is deleted. The migration **backfills** reservations for apps already serving on a remote
+node — without it the allocator would have considered exactly those ports free.
+
+**Multi-server had never been verified.** The README has advertised helper nodes since the beginning.
+So this phase ran a real one: the agent built and joined as a node — bound to the Docker bridge
+address only, never exposed publicly — and reported genuine host info (2 cores, 4 GB).
+
+| Check | Result |
+|---|---|
+| Two apps deployed to the node | ports **20000** and **20001** — sequential, not two dice rolls |
+| Both through Traefik | `200` on each domain, routed to `node-host:port` |
+| Redeploy of the first | took **20002** while 20000 was still serving; 20000 released only after cutover; the other app's 20001 untouched |
+| Both apps deleted | every reservation freed (the FK hangs off the server, so nothing cascaded them away — the app-delete path releases them explicitly) |
+
+**The previous phase proved itself in production along the way.** This migration made the panel's own
+restart a genuine upgrade, and the automatic restore point fired unprompted: *"Upgrade detected: 1
+pending migrations. Taking a restore point first."* → 415 KB written, then migrated.
+
+**Tests:** 466 → 479. Seven mutations; the first sweep left two alive — a failed deploy keeping its
+port, and superseded ports never being released — both were pipeline-level rather than allocator-level,
+and now have pipeline tests. `ExecuteDelete` gave way to load-and-remove so the reservation lifecycle
+is exercisable by the suite's provider at all; the row counts are per-app and tiny.
+
+---
+
 ## 2026-07-30 — An update you can undo: restore point before every migration (P10)
 
 `harbora update` pulled new code, rebuilt, and the panel applied migrations on boot — with nothing

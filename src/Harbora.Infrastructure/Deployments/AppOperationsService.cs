@@ -12,6 +12,7 @@ public sealed class AppOperationsService(
     HarboraDbContext db,
     IServerEngineFactory engineFactory,
     IProxyEngine proxy,
+    HostPortAllocator hostPorts,
     ILogger<AppOperationsService> logger) : IAppOperationsService
 {
     public async Task RestartAsync(Guid appId, CancellationToken ct)
@@ -49,6 +50,9 @@ public sealed class AppOperationsService(
         // Drop this app's routes, then re-apply the workspace's remaining routes.
         var workspaceId = app.WorkspaceId;
         await db.Routes.Where(r => r.AppId == appId).ExecuteDeleteAsync(ct);
+        // Host-port reservations hang off the server, not the app, so nothing cascades them away.
+        // Left behind they would retire a port from the node permanently, once per deleted app.
+        await hostPorts.ReleaseAppAsync(appId, ct);
         db.Apps.Remove(app); // cascades env vars, domains, deployments, volumes
         await db.SaveChangesAsync(ct);
 

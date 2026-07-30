@@ -190,6 +190,9 @@ public sealed class PipelineHarness : IDisposable
         Http,
         Clock,
         Microsoft.Extensions.Options.Options.Create(Options),
+        // The real allocator over the same in-memory context: host ports are a database reservation
+        // now, so a fake would test the fake rather than the guarantee.
+        new HostPortAllocator(Db, NullLogger<HostPortAllocator>.Instance),
         NullLogger<DeploymentPipeline>.Instance);
 
     /// <summary>Runs the real pipeline end-to-end for the given deployment.</summary>

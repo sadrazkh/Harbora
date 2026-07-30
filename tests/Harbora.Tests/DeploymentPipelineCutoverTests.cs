@@ -348,6 +348,36 @@ public class DeploymentPipelineCutoverTests
     }
 
     [Fact]
+    public async Task A_superseded_deployments_port_is_released_only_after_the_cutover()
+    {
+        // Held until traffic has moved, then given back: releasing early would offer another app a
+        // port still carrying live traffic, and never releasing would drain the node's range.
+        using var h = new PipelineHarness(localServer: false);
+        h.WithPreviousDeployment(number: 1);
+        await h.RunAsync(h.QueueDeployment(number: 2));
+        await h.RunAsync(h.QueueDeployment(number: 3));
+
+        var live = h.Docker.RunRequests[^1].PublishToHostPort;
+        h.Db.HostPortAllocations.Should().ContainSingle()
+            .Which.Port.Should().Be(live!.Value, "only the deployment now serving keeps its port");
+    }
+
+    [Fact]
+    public async Task A_failed_deployment_on_a_remote_node_gives_its_port_back()
+    {
+        // Otherwise every failed deploy costs the node a port permanently, and a repeatedly failing
+        // app quietly consumes the whole range.
+        using var h = new PipelineHarness(localServer: false);
+        h.Docker.StartedContainerState = "exited";
+        var deployment = h.QueueDeployment(number: 1);
+
+        var result = await h.RunAsync(deployment);
+
+        result.Status.Should().Be(DeploymentStatus.Failed);
+        h.Db.HostPortAllocations.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task On_a_local_node_the_proxy_routes_by_container_name()
     {
         using var h = new PipelineHarness().WithDomain();

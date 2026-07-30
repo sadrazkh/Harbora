@@ -78,6 +78,8 @@ public static class DependencyInjection
         services.AddScoped<DeploymentPipeline>();
         services.AddScoped<IAppOperationsService, AppOperationsService>();
         services.AddScoped<IRollbackPlanner, Deployments.RollbackPlanner>();
+        // Remote-node host ports are reserved, not guessed (see HostPortRange).
+        services.AddScoped<Deployments.HostPortAllocator>();
         // Crash recovery: reconcile in-flight deployments on startup (ADR-005).
         services.AddHostedService<Deployments.DeploymentReconciler>();
 

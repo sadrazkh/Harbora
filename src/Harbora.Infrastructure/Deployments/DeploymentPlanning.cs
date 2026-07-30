@@ -57,17 +57,6 @@ public static class DeploymentPlanning
     }
 
     /// <summary>
-    /// Deterministic-but-per-deployment host port (20000–29999) for a remote node, so a new
-    /// deployment can publish alongside the old one during cutover without a collision.
-    /// </summary>
-    public static int HostPort(string slug, int number)
-    {
-        var hash = System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes($"{slug}#{number}"));
-        return 20000 + (int)(BitConverter.ToUInt32(hash, 0) % 10000);
-    }
-
-    /// <summary>
     /// The image to re-release on a rollback: the target deployment's built image. Throws if the
     /// target has no retained image (so we never silently rebuild something different).
     /// </summary>
