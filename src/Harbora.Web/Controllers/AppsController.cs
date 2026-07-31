@@ -39,9 +39,12 @@ public sealed class AppsController(
 
     [HttpGet]
     [Authorize(Policy = Capabilities.AppsCreate)]
-    public async Task<IActionResult> Create(CancellationToken ct)
+    public async Task<IActionResult> Create(Guid? environmentId, CancellationToken ct)
     {
+        await projects.EnsureDefaultEnvironmentAsync(WorkspaceId, ct);
         await PopulateTemplates(ct);
+        // Arriving from a project page pre-selects that environment.
+        ViewData["EnvironmentId"] = environmentId;
         return View(new CreateAppViewModel());
     }
 
@@ -87,10 +90,9 @@ public sealed class AppsController(
 
         var serverId = placement.ServerId!.Value;
 
-        // Everything belongs to a project from the moment it is created. Until the create-project
-        // wizard lands, that is the workspace's default environment — the same one the migration
-        // backfilled existing apps into, so old and new apps are indistinguishable.
-        var environment = await projects.EnsureDefaultEnvironmentAsync(WorkspaceId, ct);
+        // Everything belongs to a project from the moment it is created. Ownership of a chosen
+        // environment is checked inside the service — see ResolveEnvironmentAsync.
+        var environment = await projects.ResolveEnvironmentAsync(WorkspaceId, model.EnvironmentId, ct);
 
         var app = new App
         {
@@ -417,6 +419,14 @@ public sealed class AppsController(
 
     private async Task PopulateTemplates(CancellationToken ct)
     {
+        // Every project's environments, so a service can be created where it belongs rather than
+        // always landing in the default one.
+        ViewBag.Environments = await db.Environments
+            .Where(e => e.WorkspaceId == WorkspaceId)
+            .OrderBy(e => e.Project!.Name).ThenByDescending(e => e.IsDefault).ThenBy(e => e.Name)
+            .Select(e => new SelectListItem($"{e.Project!.Name} · {e.Name}", e.Id.ToString()))
+            .ToListAsync(ct);
+
         var templates = await db.AppTemplates.Where(t => t.IsEnabled)
             .OrderBy(t => t.Category).ThenBy(t => t.Name).ToListAsync(ct);
         ViewBag.Templates = templates.Select(t => new SelectListItem($"{t.Name}", t.Id.ToString())).ToList();

@@ -4,6 +4,7 @@
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? new();
     var servers = ViewBag.Servers as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? new();
+    var environments = ViewBag.Environments as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? new();
     var input = "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 focus:ring-2 focus:ring-brand-500 focus:outline-none";
 }
 <div class="max-w-2xl mx-auto">
@@ -127,6 +128,19 @@ harbora deploy &lt;slug&gt;</code></pre>
                         <span class="text-xs text-slate-500">@(isFa ? "نبود؟ استک خودکار تشخیص داده می‌شود." : "None? The stack is auto-detected.")</span>
                     </div>
                 </div>
+
+                @if (environments.Count > 0)
+                {
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">@(isFa ? "محیط" : "Environment")</label>
+                        <select asp-for="EnvironmentId" asp-items="environments" class="@input"></select>
+                        <span class="text-xs text-slate-500">
+                            @(isFa
+                                ? "سرویس داخل همین پروژه و محیط ساخته می‌شود."
+                                : "The service is created inside this project and environment.")
+                        </span>
+                    </div>
+                }
 
                 @if (sizes.Count > 0)
                 {

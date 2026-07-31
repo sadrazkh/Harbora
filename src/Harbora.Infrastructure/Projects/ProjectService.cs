@@ -42,6 +42,29 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
     }
 
     /// <summary>
+    /// Resolves the environment a new resource should be created in.
+    ///
+    /// The id arrives from a form field or a query string, which is the most obvious thing on the page
+    /// to change by hand. It is honoured only after it is shown to belong to this workspace; anything
+    /// else — another tenant's id, a stale bookmark, nothing at all — falls back to this workspace's
+    /// own default rather than failing, or far worse, succeeding somewhere it should not.
+    ///
+    /// This lives here rather than in the controller so the guarantee is one testable thing, not a
+    /// pattern each caller has to remember to repeat.
+    /// </summary>
+    public async Task<Environment> ResolveEnvironmentAsync(Guid workspaceId, Guid? requested, CancellationToken ct)
+    {
+        if (requested is { } wanted)
+        {
+            var owned = await db.Environments
+                .FirstOrDefaultAsync(e => e.Id == wanted && e.WorkspaceId == workspaceId, ct);
+            if (owned is not null) return owned;
+        }
+
+        return await EnsureDefaultEnvironmentAsync(workspaceId, ct);
+    }
+
+    /// <summary>
     /// Creates a project with its first environment. The two are made together because a project
     /// with nowhere to deploy is not a state worth being able to represent.
     /// </summary>

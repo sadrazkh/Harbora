@@ -39,6 +39,12 @@ public sealed class CreateAppViewModel
     public int ContainerPort { get; set; } = 80;
     public string? Domain { get; set; }
     public Guid? TemplateId { get; set; }
+
+    /// <summary>
+    /// Which project environment to create this in. Null falls back to the workspace's default, so a
+    /// link that predates projects — or a CLI that has never heard of them — still works.
+    /// </summary>
+    public Guid? EnvironmentId { get; set; }
     /// <summary>Target node; defaults to the local server when unset.</summary>
     public Guid? ServerId { get; set; }
     /// <summary>Resource tier; sets the container CPU/memory limits and is quota-checked.</summary>
@@ -49,6 +55,9 @@ public sealed class CreateAppViewModel
 
 public sealed class CreateServiceViewModel
 {
+    /// <summary>Which project environment to create the database in; null uses the default.</summary>
+    public Guid? EnvironmentId { get; set; }
+
     [Required] public string Name { get; set; } = string.Empty;
     public ManagedServiceType Type { get; set; } = ManagedServiceType.PostgreSql;
     public string Version { get; set; } = string.Empty;

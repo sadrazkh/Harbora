@@ -69,7 +69,7 @@ public sealed partial class DatabasesController(
         }
 
         var serverId = await db.Servers.Where(s => s.IsLocal).Select(s => s.Id).FirstAsync(ct);
-        var environment = await projects.EnsureDefaultEnvironmentAsync(WorkspaceId, ct);
+        var environment = await projects.ResolveEnvironmentAsync(WorkspaceId, model.EnvironmentId, ct);
         var service = new ManagedService
         {
             WorkspaceId = WorkspaceId,

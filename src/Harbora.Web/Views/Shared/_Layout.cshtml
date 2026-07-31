@@ -32,9 +32,20 @@
     <script>
         // Apply persisted theme before paint to avoid a flash. Values: dark | light | system.
         (function () {
-            var t = localStorage.getItem('harbora-theme');
-            var dark = t === 'dark' || ((t === 'system' || !t) && matchMedia('(prefers-color-scheme: dark)').matches);
+            var t = localStorage.getItem('harbora-theme') || 'system';
+            var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
             document.documentElement.classList.toggle('dark', dark);
+            document.documentElement.dataset.themeChoice = t;
+
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute('content', dark ? '#0f172a' : '#e2e8f0');
+
+            // "System" has to keep meaning system: follow the OS while that is the choice.
+            matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function (e) {
+                if ((localStorage.getItem('harbora-theme') || 'system') !== 'system') return;
+                document.documentElement.classList.toggle('dark', e.matches);
+                if (meta) meta.setAttribute('content', e.matches ? '#0f172a' : '#e2e8f0');
+            });
         })();
     </script>
 </head>
@@ -78,7 +89,18 @@
                        class="w-full max-w-md rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
             </div>
 
-            <button data-theme-toggle class="p-2 rounded-lg hover:bg-slate-800" title="@T["Dark mode"]">◐</button>
+            <div class="flex items-center rounded-lg bg-slate-800 p-0.5" role="group" aria-label="@T["Theme"]">
+                @foreach (var (value, glyph, label) in new[]
+                {
+                    ("system", "◐", T["System"].Value),
+                    ("light",  "☀", T["Light"].Value),
+                    ("dark",   "☾", T["Dark"].Value)
+                })
+                {
+                    <button type="button" data-theme-choice="@value" title="@label" aria-label="@label"
+                            class="px-2 py-1 rounded-md text-sm text-slate-400">@glyph</button>
+                }
+            </div>
 
             <form asp-controller="Account" asp-action="SetLanguage" method="post" class="flex items-center">
                 <input type="hidden" name="returnUrl" value="@Context.Request.Path" />
@@ -104,10 +126,40 @@
     <script type="module" src="@viteJs"></script>
 }
 <script>
-    document.querySelector('[data-theme-toggle]')?.addEventListener('click', function () {
-        var el = document.documentElement, dark = el.classList.toggle('dark');
-        localStorage.setItem('harbora-theme', dark ? 'dark' : 'light');
-    });
+    // Theme: system / light / dark. The pre-paint script above resolves it; this only records the
+    // choice and applies it immediately, so switching never needs a reload.
+    (function () {
+        var root = document.documentElement;
+        var buttons = document.querySelectorAll('[data-theme-choice]');
+
+        function paint() {
+            var choice = root.dataset.themeChoice || 'system';
+            var dark = choice === 'dark' || (choice === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+            root.classList.toggle('dark', dark);
+
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute('content', dark ? '#0f172a' : '#e2e8f0');
+
+            buttons.forEach(function (b) {
+                var on = b.dataset.themeChoice === choice;
+                // Selected state is a filled chip plus aria-pressed, not colour alone.
+                b.classList.toggle('bg-slate-900', on);
+                b.classList.toggle('text-slate-100', on);
+                b.classList.toggle('text-slate-400', !on);
+                b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            });
+        }
+
+        buttons.forEach(function (b) {
+            b.addEventListener('click', function () {
+                root.dataset.themeChoice = b.dataset.themeChoice;
+                localStorage.setItem('harbora-theme', b.dataset.themeChoice);
+                paint();
+            });
+        });
+
+        paint();
+    })();
 
     // Mobile slide-over sidebar.
     (function () {
