@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Backups;
@@ -124,8 +124,19 @@ public sealed partial class BackupsController(
     [Authorize(Policy = Capabilities.BackupsManage)]
     public async Task<IActionResult> CreateDestination(
         string name, BackupDestinationType type, string? localPath,
-        string? endpoint, string? bucket, string? region, string? accessKey, string? secretKey, CancellationToken ct)
+        string? endpoint, string? bucket, string? region, string? accessKey, string? secretKey,
+        string? sftpHost, int sftpPort, string? sftpUsername, string? sftpPassword,
+        string? sftpDirectory, string? sftpHostKey, CancellationToken ct)
     {
+        // Refused at the point of creation rather than at the first backup: a destination Harbora
+        // cannot verify the identity of would be handed the backup and the password to reach it.
+        if (type == BackupDestinationType.Sftp
+            && Harbora.Infrastructure.Backups.SftpTransfer.WhyUnusable(sftpHost, sftpUsername, sftpHostKey) is { } refusal)
+        {
+            TempData["Error"] = refusal;
+            return RedirectToAction(nameof(Index));
+        }
+
         db.BackupDestinations.Add(new BackupDestination
         {
             WorkspaceId = WorkspaceId,
@@ -136,7 +147,13 @@ public sealed partial class BackupsController(
             Bucket = bucket,
             Region = region,
             AccessKey = accessKey,
-            EncryptedSecretKey = string.IsNullOrWhiteSpace(secretKey) ? null : protector.Protect(secretKey)
+            EncryptedSecretKey = string.IsNullOrWhiteSpace(secretKey) ? null : protector.Protect(secretKey),
+            SftpHost = sftpHost,
+            SftpPort = sftpPort <= 0 ? 22 : sftpPort,
+            SftpUsername = sftpUsername,
+            EncryptedSftpPassword = string.IsNullOrWhiteSpace(sftpPassword) ? null : protector.Protect(sftpPassword),
+            SftpDirectory = sftpDirectory,
+            SftpHostKey = sftpHostKey?.Trim()
         });
         await db.SaveChangesAsync(ct);
         return RedirectToAction(nameof(Index));

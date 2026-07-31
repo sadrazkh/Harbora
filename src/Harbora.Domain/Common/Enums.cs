@@ -1,4 +1,4 @@
-namespace Harbora.Domain.Common;
+﻿namespace Harbora.Domain.Common;
 
 /// <summary>Coarse RBAC roles. Fine-grained project permissions layer on top via WorkspaceMember.</summary>
 public enum SystemRole
@@ -169,7 +169,9 @@ public enum BackupStatus
 public enum BackupDestinationType
 {
     Local = 0,
-    S3 = 1
+    S3 = 1,
+    /// <summary>Appended: existing rows keep the values they were stored with.</summary>
+    Sftp = 2
 }
 
 public enum AlertChannel

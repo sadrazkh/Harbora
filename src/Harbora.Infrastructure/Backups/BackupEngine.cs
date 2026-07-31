@@ -512,6 +512,30 @@ public sealed class BackupEngine(
 
     public async Task<BackupVerification> VerifyAsync(Guid backupId, CancellationToken ct)
     {
+        var verification = await RunVerificationAsync(backupId, ct);
+        await RecordVerificationAsync(backupId, verification, ct);
+        return verification;
+    }
+
+    /// <summary>
+    /// Keeps the verdict on the backup itself. "Has anyone confirmed this would restore, and how
+    /// long ago" is the question a list of backups cannot otherwise answer — and a year of nightly
+    /// backups nobody ever checked is a year of assumption.
+    /// </summary>
+    private async Task RecordVerificationAsync(Guid backupId, BackupVerification verification, CancellationToken ct)
+    {
+        var row = await db.Backups.FirstOrDefaultAsync(b => b.Id == backupId, ct);
+        if (row is null) return;
+
+        row.VerifiedAt = clock.UtcNow;
+        row.VerifiedRestorable = verification.IsRestorable;
+        row.VerificationNote = Deployments.LogText.Clean(
+            verification.Reason ?? verification.Checks.FirstOrDefault(c => c.Skipped)?.Detail);
+        await db.SaveChangesAsync(ct);
+    }
+
+    private async Task<BackupVerification> RunVerificationAsync(Guid backupId, CancellationToken ct)
+    {
         var backup = await db.Backups.Include(b => b.Destination).AsNoTracking()
             .FirstOrDefaultAsync(b => b.Id == backupId, ct);
 
@@ -569,7 +593,27 @@ public sealed class BackupEngine(
         {
             await ProbeArchiveAsync(backup.Type, readable, ct);
             checks.Add(new BackupCheck("Archive readable", true));
-            return new BackupVerification(true, null, size, checks);
+
+            // The question none of the checks above answers: would it restore? A gzip full of SQL
+            // that references a missing extension, or was cut short mid-write, passes every one of
+            // them and is worthless. So it is restored into a database created for the purpose and
+            // dropped afterwards — the live one is never touched.
+            var (rehearsed, rehearsalDetail, restorable) = await RehearseRestoreAsync(backup, readable, ct);
+            if (rehearsed is not null)
+            {
+                checks.Add(new BackupCheck("Restores into a scratch database", rehearsed.Value, rehearsalDetail));
+                if (!rehearsed.Value)
+                    return new BackupVerification(false, rehearsalDetail, size, checks);
+            }
+            else if (rehearsalDetail is not null)
+            {
+                // Recorded as skipped rather than failed: a Redis snapshot has no dump to load, and
+                // that is not a fault in the backup. Silence would be worse — "not checked" and
+                // "checked and fine" must never look the same.
+                checks.Add(new BackupCheck("Restore rehearsal", false, rehearsalDetail, Skipped: true));
+            }
+
+            return new BackupVerification(restorable, null, size, checks);
         }
         catch (Exception ex)
         {
@@ -581,6 +625,78 @@ public sealed class BackupEngine(
             // Never leave a decrypted copy lying around after a dry run.
             if (!string.Equals(readable, fetched, StringComparison.OrdinalIgnoreCase) && File.Exists(readable))
                 try { File.Delete(readable); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>
+    /// Restores the dump into a throwaway database on the same server and counts what arrived.
+    ///
+    /// Returns (null, reason, true) when this kind of backup cannot be rehearsed — a Redis snapshot
+    /// or a volume tarball — so the screen can say "not checked" instead of implying it passed.
+    /// The scratch database is dropped whatever happens, including when the restore fails.
+    /// </summary>
+    private async Task<(bool? Rehearsed, string? Detail, bool Restorable)> RehearseRestoreAsync(
+        Backup backup, string localDumpPath, CancellationToken ct)
+    {
+        // Nothing to say for a config snapshot or a volume archive: rehearsing a restore is not a
+        // concept that applies to them, so the screen shows no line at all rather than a caveat.
+        if (backup.Type is not (BackupType.Database or BackupType.Service)
+            || BackupArtifact.IsVolumeArchive(backup.ArtifactPath))
+            return (null, null, true);
+
+        var svc = await db.ManagedServices.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == Guid.Parse(backup.TargetRef), ct);
+        if (svc is null) return (null, "the database this came from no longer exists", true);
+
+        if (RestoreRehearsal.WhyUnsupported(svc.Type) is { } unsupported) return (null, unsupported, true);
+
+        var definition = Services.ServiceCatalog.All[svc.Type];
+        var creds = new Services.ServiceCreds(
+            svc.ContainerName, definition.Port, svc.Username, RevealPassword(svc.EncryptedPassword), svc.DatabaseName);
+
+        var fileName = Path.GetFileName(localDumpPath);
+        var stagedCopy = Path.Combine(_opt.StagingDir, fileName);
+        if (!string.Equals(Path.GetFullPath(localDumpPath), Path.GetFullPath(stagedCopy), StringComparison.OrdinalIgnoreCase))
+            File.Copy(localDumpPath, stagedCopy, overwrite: true);
+
+        var plan = RestoreRehearsal.For(svc.Type, creds, $"/backup/{fileName}", backup.Id)!;
+        var image = $"{definition.ImageRepo}:{svc.Version}";
+        var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
+        var network = _runtime.WorkspaceNetwork(wsSlug);
+
+        async Task<(int Exit, string Output)> RunAsync(IReadOnlyList<string> command, bool mountBackups)
+        {
+            var output = new System.Text.StringBuilder();
+            var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
+                image, command,
+                mountBackups ? [(_opt.StagingVolume, "/backup", true)] : [],
+                Env: plan.Env, NetworkMode: network),
+                new Deployments.InlineProgress<string>(l => { lock (output) output.AppendLine(l); }), ct);
+            return (exit, Deployments.LogText.Clean(output.ToString()).Trim());
+        }
+
+        try
+        {
+            var created = await RunAsync(plan.Create, mountBackups: false);
+            if (created.Exit != 0)
+                return (false, $"A scratch database could not be created, so the backup was not rehearsed. {created.Output}", false);
+
+            var restored = await RunAsync(plan.Restore, mountBackups: true);
+            if (restored.Exit != 0)
+                return (false, $"This backup does not restore. {restored.Output}", false);
+
+            var counted = await RunAsync(plan.Count, mountBackups: false);
+            var tables = RestoreRehearsal.ReadCount(counted.Output);
+            if (RestoreRehearsal.Explain(tables) is { } problem) return (false, problem, false);
+
+            return (true, $"restored {tables} table(s) into {plan.ScratchDatabase}", true);
+        }
+        finally
+        {
+            // Dropped whatever happened, or a failed rehearsal leaves a database behind on the
+            // server and the next one collides with it.
+            try { await RunAsync(plan.Drop, mountBackups: false); }
+            catch (Exception ex) { logger.LogWarning(ex, "Could not drop the scratch database {Name}.", plan.ScratchDatabase); }
         }
     }
 

@@ -49,7 +49,7 @@
                 @Html.AntiForgeryToken()
                 <input name="name" placeholder="Name" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
                 <select name="type" data-dest-type class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
-                    <option value="Local">Local</option><option value="S3">S3-compatible</option>
+                    <option value="Local">Local</option><option value="S3">S3-compatible</option><option value="Sftp">SFTP</option>
                 </select>
                 <div data-when-local><input name="localPath" placeholder="/var/lib/harbora/backups" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" /></div>
                 <div data-when-s3 class="space-y-2" style="display:none">
@@ -73,6 +73,21 @@
                 <div class="flex items-center justify-between">
                     <span>@s.Type · every @s.IntervalHours h · keep @s.RetentionCount</span>
                     <form asp-controller="Backups" asp-action="DeleteSchedule" asp-route-id="@s.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                </div>
+                <div data-when-sftp class="space-y-2" style="display:none">
+                    <input name="sftpHost" placeholder="backup.example.com" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="sftpPort" type="number" value="22" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="sftpUsername" placeholder="harbora" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="sftpPassword" type="password" placeholder="password" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="sftpDirectory" placeholder="/srv/harbora-backups" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <textarea name="sftpHostKey" rows="2" dir="ltr" placeholder="backup.example.com ssh-ed25519 AAAA…" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-xs font-mono"></textarea>
+                    @* Required, not optional: without it Harbora cannot tell the real server from
+                       anything else answering on that address. *@
+                    <p class="text-xs text-slate-500">
+                        @(isFa
+                            ? "کلید میزبان لازم است. با «ssh-keyscan your-host» بگیرید — بدون آن نمی‌توان مطمئن شد بکاپ به سرور درست می‌رود."
+                            : "The host key is required. Get it with `ssh-keyscan your-host` — without it there is no way to know the backup is going to the right server.")
+                    </p>
                 </div>
             }
         </div>
@@ -187,7 +202,7 @@
         <thead class="text-slate-400 border-b border-slate-800">
             <tr>
                 <th class="p-3 text-start">@T["Target"]</th><th class="p-3 text-start">@T["Type"]</th>
-                <th class="p-3 text-start">@T["Status"]</th><th class="p-3 text-start">Size</th>
+                <th class="p-3 text-start">@T["Status"]</th><th class="p-3 text-start">@(isFa ? "بازیابی" : "Restore check")</th><th class="p-3 text-start">Size</th>
                 <th class="p-3 text-start">@T["Destination"]</th><th class="p-3 text-end">@T["Actions"]</th>
             </tr>
         </thead>
@@ -199,6 +214,28 @@
                     <td class="p-3 font-mono text-xs">@b.TargetRef</td>
                     <td class="p-3">@b.Type</td>
                     <td class="p-3"><span class="rounded-full px-2 py-0.5 text-xs @StatusClass(b.Status)">@b.Status</span></td>
+                    @* What matters about a backup is not that it ran, which is already visible, but
+                       whether anyone has confirmed it would restore — and how long ago. *@
+                    <td class="p-3">
+                        @if (b.VerifiedRestorable == true)
+                        {
+                            <span class="rounded-full px-2 py-0.5 text-xs bg-emerald-500/15 text-emerald-400"
+                                  title="@b.VerifiedAt?.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC">
+                                @(isFa ? "بازیابی تأیید شد" : "Restore checked")</span>
+                        }
+                        else if (b.VerifiedRestorable == false)
+                        {
+                            <span class="rounded-full px-2 py-0.5 text-xs bg-red-500/15 text-red-400" title="@b.VerificationNote">
+                                @(isFa ? "بازیابی نمی‌شود" : "Will not restore")</span>
+                        }
+                        else if (b.Status == Harbora.Domain.Common.BackupStatus.Completed)
+                        {
+                            @* Deliberately not blank: "not checked yet" and "checked and fine" are
+                               different things and must not look the same. *@
+                            <span class="rounded-full px-2 py-0.5 text-xs bg-slate-500/15 text-slate-400">
+                                @(isFa ? "بررسی نشده" : "Not checked yet")</span>
+                        }
+                    </td>
                     <td class="p-3 text-slate-400">@Size(b.SizeBytes)</td>
                     <td class="p-3 text-slate-400">@b.Destination?.Name</td>
                     <td class="p-3">
@@ -226,7 +263,8 @@
     document.querySelectorAll('[data-dest-form]').forEach(function (form) {
         var sel = form.querySelector('[data-dest-type]');
         function sync(){ form.querySelector('[data-when-local]').style.display = sel.value==='Local'?'':'none';
-                         form.querySelector('[data-when-s3]').style.display = sel.value==='S3'?'':'none'; }
+                         form.querySelector('[data-when-s3]').style.display = sel.value==='S3'?'':'none';
+                         form.querySelector('[data-when-sftp]').style.display = sel.value==='Sftp'?'':'none'; }
         sel.addEventListener('change', sync); sync();
     });
     // Restore: require typing RESTORE

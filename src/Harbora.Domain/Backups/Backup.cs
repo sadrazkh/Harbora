@@ -1,4 +1,4 @@
-using Harbora.Domain.Common;
+﻿using Harbora.Domain.Common;
 
 namespace Harbora.Domain.Backups;
 
@@ -17,6 +17,15 @@ public class BackupDestination : BaseEntity
     public string? Region { get; set; }
     public string? AccessKey { get; set; }
     public string? EncryptedSecretKey { get; set; }
+
+    // SFTP settings. The host key is not optional — without it Harbora cannot tell the real server
+    // from anything else answering on that address, and would hand it the backup and the password.
+    public string? SftpHost { get; set; }
+    public int SftpPort { get; set; } = 22;
+    public string? SftpUsername { get; set; }
+    public string? EncryptedSftpPassword { get; set; }
+    public string? SftpDirectory { get; set; }
+    public string? SftpHostKey { get; set; }
 
     public bool IsDefault { get; set; }
 }
@@ -62,4 +71,15 @@ public class Backup : BaseEntity
     public string? ErrorMessage { get; set; }
 
     public bool IsScheduled { get; set; }
+
+    /// <summary>
+    /// When this backup was last checked, and what the check concluded.
+    ///
+    /// Recorded because the interesting question is not "did the backup run" — that is already
+    /// visible — but "has anyone confirmed it would restore, and how long ago". A backup taken
+    /// nightly for a year and never verified is a year of assumption.
+    /// </summary>
+    public DateTimeOffset? VerifiedAt { get; set; }
+    public bool? VerifiedRestorable { get; set; }
+    public string? VerificationNote { get; set; }
 }

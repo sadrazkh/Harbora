@@ -105,6 +105,9 @@ public static class DependencyInjection
         services.AddScoped<Backups.UpgradeSafetyService>();
         services.AddScoped<IBackupEngine>(sp => sp.GetRequiredService<Backups.BackupEngine>());
         services.AddHostedService<Backups.BackupScheduler>();
+        // Checks backups on its own, so a backup that will not restore is found on an ordinary
+        // afternoon rather than during an incident.
+        services.AddHostedService<Backups.BackupVerifier>();
 
         // What the dashboard opens with: findings a person can act on, from stored facts only.
         services.AddScoped<Dashboard.AttentionService>();

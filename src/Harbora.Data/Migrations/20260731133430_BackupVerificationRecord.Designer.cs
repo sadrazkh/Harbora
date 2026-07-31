@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260731133430_BackupVerificationRecord")]
+    partial class BackupVerificationRecord
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -418,9 +421,6 @@ namespace Harbora.Data.Migrations
                     b.Property<string>("EncryptedSecretKey")
                         .HasColumnType("text");
 
-                    b.Property<string>("EncryptedSftpPassword")
-                        .HasColumnType("text");
-
                     b.Property<string>("Endpoint")
                         .HasColumnType("text");
 
@@ -435,21 +435,6 @@ namespace Harbora.Data.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("Region")
-                        .HasColumnType("text");
-
-                    b.Property<string>("SftpDirectory")
-                        .HasColumnType("text");
-
-                    b.Property<string>("SftpHost")
-                        .HasColumnType("text");
-
-                    b.Property<string>("SftpHostKey")
-                        .HasColumnType("text");
-
-                    b.Property<int>("SftpPort")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("SftpUsername")
                         .HasColumnType("text");
 
                     b.Property<int>("Type")

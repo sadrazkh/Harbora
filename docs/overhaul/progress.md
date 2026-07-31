@@ -5,6 +5,62 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-31 — Phase 6: backups that have been proven to restore
+
+Verification could already say an artifact was present, matched its checksum, decrypted, and was a
+readable archive. None of that answers the only question anyone actually has. **A gzip full of SQL
+that references a missing extension, or was cut short while the database was mid-write, passes every
+one of those checks and is worthless** — and it is discovered during an incident, which is the one
+moment it must not be.
+
+Phase 3 made the real answer possible by replacing the file-level copy with a logical dump. This
+phase uses it.
+
+**Restore rehearsal**
+
+- `RestoreRehearsal` restores the dump into a scratch database created for the purpose, counts the
+  tables that arrived, and drops it — whatever happened. The live database is never touched.
+- The scratch name is derived from the backup id, so a rehearsal interrupted halfway leaves one
+  droppable leftover rather than a new one on every attempt.
+- **A restore that produces no tables is a failure**, however cleanly it ran: that is exactly what an
+  empty or truncated dump looks like. So is a rehearsal that reports nothing at all.
+- Engines that cannot be rehearsed (Redis has no dump; MongoDB's tooling changed name) say so, and
+  are recorded as *skipped* rather than passed or failed — `BackupCheck` gained a `Skipped` flag
+  because "not checked" and "checked and fine" must never look the same on a screen.
+
+**Verification that happens on its own**
+
+- `VerificationSchedule` picks what to check: never-verified before stale, newest backup of each
+  target only, one at a time. Verifying an artifact retention will prune tomorrow spends a real
+  restore on a question nobody will ask.
+- `BackupVerifier` runs hourly, five minutes after startup, and raises a **critical alert** when a
+  backup turns out not to restore — this is a backup someone believes they have.
+- The verdict is stored on the backup itself and shown in the list. A completed backup nobody has
+  checked says "not checked yet" rather than nothing.
+
+**SFTP destinations**
+
+- Done through a one-off container running `sftp`, not a new SSH dependency: that path is well
+  exercised now, and it keeps a network client with its own key handling out of the panel process.
+- **The host key is required, and a destination without one is refused at creation** with the command
+  to obtain it. Accepting whatever answers on the address — the usual shortcut — means handing the
+  backup, and the password used to send it, to anyone who can reach that address first.
+- The password reaches `sshpass` through the environment; `-p` would put it in the process list.
+
+**Tests / checks**
+
+- Suite **865 passing**, 0 errors / 0 warnings (from 827).
+- Mutation testing: **18 mutations, 18 caught** — one after fixing a weak test of mine. The upload
+  script also runs `mkdir -p ~/.ssh` for the host key, so asserting the command "contains mkdir"
+  passed even with the remote `-mkdir` removed. It now asserts the remote one specifically.
+
+**Honest gaps**
+
+- The rehearsal covers PostgreSQL, MySQL and MariaDB. Redis and MongoDB are marked skipped, not
+  checked.
+- SFTP is password-authenticated only; key-based auth is not offered yet.
+- Not deployed to the server.
+
 ## 2026-07-31 — Phase 5: templates that mean what they say
 
 **The manifest was documentation dressed as configuration.** Every built-in template already

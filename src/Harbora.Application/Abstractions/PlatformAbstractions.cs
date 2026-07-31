@@ -1,4 +1,4 @@
-namespace Harbora.Application.Abstractions;
+﻿namespace Harbora.Application.Abstractions;
 
 /// <summary>Testable clock.</summary>
 public interface ISystemClock
@@ -48,7 +48,14 @@ public record BackupVerification(
         new(false, reason, 0, checks);
 }
 
-public record BackupCheck(string Name, bool Passed, string? Detail = null);
+/// <summary>
+/// One thing that was checked about a backup.
+///
+/// <paramref name="Skipped"/> exists because "not checked" and "checked and fine" must never look
+/// the same on a screen — a Redis snapshot cannot be restored into a scratch database, and saying so
+/// is honest, while showing a failed check would be alarming and showing a passed one would be a lie.
+/// </summary>
+public record BackupCheck(string Name, bool Passed, string? Detail = null, bool Skipped = false);
 
 /// <summary>
 /// What happened when a notification was handed to a channel.
