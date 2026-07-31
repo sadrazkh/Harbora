@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
@@ -18,7 +18,12 @@ public sealed class DeploymentEngine(
 {
     public async Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct)
     {
-        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == request.AppId, ct)
+        // Queuing runs for whoever asked: a controller that has already checked ownership and
+        // capability, or a webhook, which has no session at all. Under the tenant filter that second
+        // caller sees no apps, so a push deployed nothing and said "App not found" about an app that
+        // exists. The workspace is not assumed — it is read off the app below and stamped on the
+        // deployment, so the row still belongs to exactly one tenant.
+        var app = await db.Apps.IgnoreQueryFilters().FirstOrDefaultAsync(a => a.Id == request.AppId, ct)
                   ?? throw new InvalidOperationException("App not found.");
 
         // At most one active deployment per app (H3). Coalescing is only correct when both the
@@ -28,7 +33,7 @@ public sealed class DeploymentEngine(
         // was never queued, exactly when the user needs it most. Same in reverse for a deploy
         // arriving while a rollback runs. Those cases fail loudly instead.
         var inFlightStatuses = DeploymentStateMachine.InFlight.ToArray();
-        var inFlight = await db.Deployments
+        var inFlight = await db.Deployments.IgnoreQueryFilters()
             .Where(d => d.AppId == app.Id && inFlightStatuses.Contains(d.Status))
             .OrderByDescending(d => d.Number)
             .Select(d => new { d.Id, d.Number, d.RolledBackFromId })
@@ -48,7 +53,9 @@ public sealed class DeploymentEngine(
             return inFlight.Id;
         }
 
-        var nextNumber = await db.Deployments.Where(d => d.AppId == app.Id)
+        // Filtered, this returns nothing for a webhook and every push is "deployment #1", colliding
+        // with the numbers the panel already showed.
+        var nextNumber = await db.Deployments.IgnoreQueryFilters().Where(d => d.AppId == app.Id)
             .Select(d => (int?)d.Number).MaxAsync(ct) ?? 0;
 
         var deployment = new Deployment

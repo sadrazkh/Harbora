@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
@@ -15,6 +15,11 @@ namespace Harbora.Infrastructure.Projects;
 /// own deployment history — created from the parent's configuration minus its secrets, and taken
 /// away again when the branch goes. The two halves have to be equally reliable: an environment that
 /// is created automatically and removed by hand is a slow leak of somebody's quota.
+///
+/// Every read here bypasses the tenant filter, and has to. This runs inside a webhook request, which
+/// carries no session, so the filter resolves to "no workspace" and every query comes back empty —
+/// the whole feature would report success and do nothing. The tenant is not being widened: it is
+/// taken from the parent app, which the webhook's signature has already proven the caller owns.
 /// </summary>
 public sealed class PreviewEnvironmentService(
     HarboraDbContext db,
@@ -32,11 +37,11 @@ public sealed class PreviewEnvironmentService(
     {
         if (parent.EnvironmentId is not { } parentEnvironmentId) return null;
 
-        var projectId = await db.Environments.Where(e => e.Id == parentEnvironmentId)
+        var projectId = await db.Environments.IgnoreQueryFilters().Where(e => e.Id == parentEnvironmentId)
             .Select(e => e.ProjectId).FirstOrDefaultAsync(ct);
         if (projectId == Guid.Empty) return null;
 
-        var existing = await db.Apps
+        var existing = await db.Apps.IgnoreQueryFilters()
             .FirstOrDefaultAsync(a => a.PreviewOfAppId == parent.Id && a.PreviewBranch == branch, ct);
 
         if (existing is not null)
@@ -71,35 +76,29 @@ public sealed class PreviewEnvironmentService(
     /// </summary>
     public async Task RemoveAsync(Guid previewAppId, CancellationToken ct)
     {
-        var preview = await db.Apps.FirstOrDefaultAsync(a => a.Id == previewAppId, ct);
+        var preview = await db.Apps.IgnoreQueryFilters().FirstOrDefaultAsync(a => a.Id == previewAppId, ct);
         if (preview is null || preview.PreviewOfAppId is null) return;
 
-        var environmentId = preview.EnvironmentId;
-
         // Volumes go too. A preview's data is by definition throwaway, and leaving it behind is the
-        // leak this method exists to prevent.
+        // leak this method exists to prevent. Deleting the app also drops the environment it was
+        // created in once that is empty — the same rule whether the branch went away or somebody
+        // removed the preview from the panel, so it lives there rather than being repeated here.
         await operations.DeleteAsync(preview.Id, removeVolumes: true, ct);
 
-        // The environment is removed only once nothing is left in it — a preview environment holds
-        // one service, but a person may have added another and it is not ours to delete.
-        if (environmentId is { } id
-            && !await db.Apps.AnyAsync(a => a.EnvironmentId == id, ct)
-            && !await db.ManagedServices.AnyAsync(s => s.EnvironmentId == id, ct))
-        {
-            var environment = await db.Environments.FirstOrDefaultAsync(e => e.Id == id, ct);
-            if (environment is not null && !environment.IsDefault)
-            {
-                db.Environments.Remove(environment);
-                await db.SaveChangesAsync(ct);
-            }
-        }
+        // Checked, not assumed. Deletion runs through another service that returns nothing and, on a
+        // path like this one, used to find no app and return quietly — leaving the container running
+        // while this line announced it was gone. A sweeper that reports removals it did not perform
+        // is worse than one that fails loudly, because the leak it exists to stop goes unnoticed.
+        if (await db.Apps.IgnoreQueryFilters().AnyAsync(a => a.Id == previewAppId, ct))
+            throw new InvalidOperationException(
+                $"Preview '{preview.PreviewBranch}' could not be removed: the app row is still there.");
 
         logger.LogInformation("Removed preview {Branch}.", preview.PreviewBranch);
     }
 
     /// <summary>The preview of this branch, if there is one.</summary>
     public Task<App?> FindAsync(Guid parentAppId, string branch, CancellationToken ct) =>
-        db.Apps.FirstOrDefaultAsync(a => a.PreviewOfAppId == parentAppId && a.PreviewBranch == branch, ct);
+        db.Apps.IgnoreQueryFilters().FirstOrDefaultAsync(a => a.PreviewOfAppId == parentAppId && a.PreviewBranch == branch, ct);
 
     /// <summary>Previews that have gone quiet for longer than the policy allows.</summary>
     public async Task<IReadOnlyList<App>> ExpiredAsync(CancellationToken ct)
@@ -120,7 +119,7 @@ public sealed class PreviewEnvironmentService(
     {
         var slug = PreviewNaming.Slug(branch);
 
-        var existing = await db.Environments
+        var existing = await db.Environments.IgnoreQueryFilters()
             .FirstOrDefaultAsync(e => e.ProjectId == projectId && e.Slug == slug, ct);
         if (existing is not null) return existing;
 
@@ -139,7 +138,14 @@ public sealed class PreviewEnvironmentService(
 
     private async Task<App> CreatePreviewAsync(App parent, Guid environmentId, string branch, CancellationToken ct)
     {
-        var config = PreviewPolicy.ConfigFor(parent.EnvironmentVariables);
+        // Read here rather than trusting the caller's Include. The webhook loads the parent to decide
+        // whether it wants previews at all, so it has no reason to bring the variables along — and an
+        // unloaded collection is not empty, it is unknown. Believing it produced a preview with no
+        // configuration whatsoever, which starts, looks healthy, and behaves like nothing else.
+        var parentVariables = await db.Set<EnvironmentVariable>().IgnoreQueryFilters()
+            .Where(v => v.AppId == parent.Id).ToListAsync(ct);
+
+        var config = PreviewPolicy.ConfigFor(parentVariables);
 
         var preview = new App
         {
@@ -169,7 +175,7 @@ public sealed class PreviewEnvironmentService(
         foreach (var (key, value) in config.Copied)
             preview.EnvironmentVariables.Add(new EnvironmentVariable { Key = key, Value = value, IsSecret = false });
 
-        var rootDomain = await db.Settings
+        var rootDomain = await db.Settings.IgnoreQueryFilters()
             .Where(s => s.Key == Domain.Settings.SettingKeys.PlatformRootDomain)
             .Select(s => s.Value).FirstOrDefaultAsync(ct);
 
@@ -177,7 +183,7 @@ public sealed class PreviewEnvironmentService(
         // would be the worst possible outcome of this feature.
         if (Deployments.ServicePlan.HasPublicTraffic(parent.Kind)
             && PreviewNaming.Host(parent.Slug, branch, rootDomain) is { } host
-            && !await db.Domains.AnyAsync(d => d.Host == host, ct))
+            && !await db.Domains.IgnoreQueryFilters().AnyAsync(d => d.Host == host, ct))
         {
             preview.Domains.Add(new DomainName { Host = host, SslEnabled = true, ForceHttps = true, IsPrimary = true });
         }

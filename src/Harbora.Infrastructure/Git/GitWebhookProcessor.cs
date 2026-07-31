@@ -26,7 +26,12 @@ public sealed class GitWebhookProcessor(
 {
     public async Task<WebhookResult> ProcessAsync(Guid repositoryId, WebhookRequest request, CancellationToken ct)
     {
-        var repo = await db.GitRepositories.Include(r => r.Provider)
+        // A webhook has no session, so the tenant filter resolves to "no workspace" and hides
+        // everything. Worse, the provider behind a repository is required, so filtering the provider
+        // takes the repository with it and the endpoint answers "Unknown repository" about a row
+        // that is plainly there. Authenticity here is the HMAC below, not a signed-in user, and the
+        // scope is pinned by the repository id in the URL — so the filter is bypassed deliberately.
+        var repo = await db.GitRepositories.IgnoreQueryFilters().Include(r => r.Provider)
             .FirstOrDefaultAsync(r => r.Id == repositoryId, ct);
         if (repo is null) return new WebhookResult(false, "Unknown repository.", 0);
 
@@ -39,12 +44,20 @@ public sealed class GitWebhookProcessor(
         if (!TryParse(request.RawBody, out var ev))
             return new WebhookResult(true, "Event ignored (no ref).", 0);
 
-        var apps = await db.Apps.Include(a => a.GitRepository)
+        // Same reasoning, and the same trap: finding the repository is useless if every app hanging
+        // off it is hidden, which turns the 401 into a quiet "queued 0 deployments". The apps are
+        // still confined to this one repository, which the signature has just proven the caller owns.
+        var apps = await db.Apps.IgnoreQueryFilters().Include(a => a.GitRepository)
             .Where(a => a.GitRepositoryId == repositoryId).ToListAsync(ct);
 
         var queued = 0;
         foreach (var app in apps)
         {
+            // A preview is an app on the same repository, tracking the very branch that was just
+            // pushed — so this loop would deploy it a second time, on top of the deployment its
+            // parent just queued for it. It is driven by its parent or not at all.
+            if (app.PreviewOfAppId is not null) continue;
+
             // A branch that is not the tracked one belongs to previews, if this app wants them.
             if (!ev.IsTag && PreviewPolicy.ShouldPreview(
                     app.PreviewsEnabled, ev.RefName, ev.IsTag, app.GitRef ?? app.GitRepository?.DefaultBranch))
