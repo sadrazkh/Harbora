@@ -59,7 +59,32 @@ phase uses it.
 - The rehearsal covers PostgreSQL, MySQL and MariaDB. Redis and MongoDB are marked skipped, not
   checked.
 - SFTP is password-authenticated only; key-based auth is not offered yet.
-- Not deployed to the server.
+
+**Verified live on the server**
+
+- A PostgreSQL database with two tables was backed up and verified: the rehearsal restored it into
+  a scratch database, the scratch database was gone afterwards, and the live database was untouched.
+- The negative case, which is the whole point: a backup of an **empty** database completed normally
+  — checksum, gzip and decryption all fine — and verification failed it with *"restored without
+  error but contained no tables. It is empty."* That is a backup the old checks would have called
+  good.
+- The scheduled verifier ran on its own and picked a never-verified backup, without anyone pressing
+  anything.
+- SFTP end to end against a throwaway SSH server on the internal network (no published port): a
+  destination without a host key was refused with the command to obtain one; with the key, a real
+  backup was uploaded and appears on the server as a file of exactly the recorded size; verifying it
+  fetched it back, decrypted it and rehearsed the restore — 5 checks passed.
+
+**A defect the live run found**
+
+The SFTP transfer container ran on Docker's default bridge, so it had different connectivity from
+the panel: a destination the panel could resolve failed with *"Name does not resolve"*, which reads
+like a typo in the address rather than a difference in networking. It now shares the panel's network
+namespace — the same idiom the pre-upgrade dump already used. Only reachable by testing against a
+server that was not on the public internet.
+
+Test artifacts removed afterwards: no test databases, no SFTP destinations, no leftover volumes,
+overcommit back to 1.0.
 
 ## 2026-07-31 — Phase 5: templates that mean what they say
 

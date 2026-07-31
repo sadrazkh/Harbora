@@ -15,10 +15,12 @@ namespace Harbora.Infrastructure.Backups;
 /// </summary>
 public sealed class BackupStorage(
     IOptions<BackupOptions> options,
+    IOptions<Deployments.HarboraRuntimeOptions> runtime,
     ISecretProtector protector,
     IDockerEngine docker) : IBackupStorage
 {
     private readonly BackupOptions _opt = options.Value;
+    private readonly Deployments.HarboraRuntimeOptions _runtime = runtime.Value;
 
     public string LocalStagingDir => _opt.StagingDir;
 
@@ -126,7 +128,12 @@ public sealed class BackupStorage(
         var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
             SftpTransfer.ClientImage, command.Command,
             [(_opt.StagingVolume, "/backup", what == "upload" || what == "delete")],
-            Env: env),
+            Env: env,
+            // The panel's own connectivity, rather than whatever the default bridge can reach: a
+            // destination the panel can resolve must be resolvable here too. Found live — a server
+            // on an internal network failed with "Name does not resolve", which reads like a typo
+            // in the address rather than a difference in networking.
+            NetworkMode: $"container:{_runtime.PanelContainerName}"),
             new Deployments.InlineProgress<string>(l => { lock (output) output.AppendLine(l); }), ct);
 
         if (exit != 0)
