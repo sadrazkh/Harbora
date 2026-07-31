@@ -249,13 +249,24 @@ public sealed class DeploymentPipeline(
 
             await Log(LogStream.System, $"Container {containerId[..12]} is up. Verifying health …");
             await SetStatus(DeploymentStatus.HealthChecking);
-            var health = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort, containerName, app.HealthCheckPath,
+
+            // A worker answers no HTTP, forever, and that is correct behaviour — so it is checked for
+            // being alive, not for replying. Only services that serve HTTP get the probe.
+            var probePath = ServicePlan.HasHttpHealthCheck(app.Kind) ? app.HealthCheckPath : null;
+            var health = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort, containerName, probePath,
                 msg => Log(LogStream.System, msg), ct);
             if (!health.IsHealthy)
                 throw new InvalidOperationException(HealthDiagnosis.Explain(health, containerName));
 
             // New container is healthy → switch traffic to it, THEN retire the old container(s).
-            await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
+            if (ServicePlan.HasPublicTraffic(app.Kind))
+                await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
+            else
+                await Log(LogStream.System,
+                    $"{app.Kind} service — no public route. " +
+                    (ServicePlan.JoinsInternalNetwork(app.Kind)
+                        ? $"Reachable inside this project at {containerName}."
+                        : "Not reachable from other services."));
             await RetireOldContainersAsync(docker, app.Slug, keepContainerName: containerName, Log, ct);
             if (!server.IsLocal)
             {

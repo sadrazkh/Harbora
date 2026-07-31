@@ -102,6 +102,7 @@ public sealed class AppsController(
             Name = model.Name,
             Slug = slug,
             SourceType = model.SourceType,
+            Kind = model.Kind,
             ContainerPort = model.ContainerPort <= 0 ? 80 : model.ContainerPort,
             DockerfilePath = model.DockerfilePath,
             PrebuiltImage = model.PrebuiltImage,
@@ -136,13 +137,9 @@ public sealed class AppsController(
         }
 
         // Domain: use the one given, else auto-assign {slug}.{root domain} so the app is instantly reachable.
-        var host = model.Domain?.Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(host))
-        {
-            var root = await db.Settings.Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.PlatformRootDomain)
-                .Select(s => s.Value).FirstOrDefaultAsync(ct);
-            if (!string.IsNullOrWhiteSpace(root)) host = $"{slug}.{root.Trim()}";
-        }
+        var rootDomain = await db.Settings.Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.PlatformRootDomain)
+            .Select(s => s.Value).FirstOrDefaultAsync(ct);
+        var host = Harbora.Infrastructure.Deployments.ServicePlan.HostFor(model.Kind, model.Domain, slug, rootDomain);
         if (!string.IsNullOrWhiteSpace(host) && !await db.Domains.AnyAsync(d => d.Host == host, ct))
             app.Domains.Add(new DomainName { Host = host, SslEnabled = true, ForceHttps = true, IsPrimary = true });
 

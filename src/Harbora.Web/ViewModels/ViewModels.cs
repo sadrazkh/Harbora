@@ -45,6 +45,12 @@ public sealed class CreateAppViewModel
     /// link that predates projects — or a CLI that has never heard of them — still works.
     /// </summary>
     public Guid? EnvironmentId { get; set; }
+
+    /// <summary>
+    /// What the service is for. Web is the default and is exactly what every app created before this
+    /// existed already was.
+    /// </summary>
+    public ServiceKind Kind { get; set; } = ServiceKind.Web;
     /// <summary>Target node; defaults to the local server when unset.</summary>
     public Guid? ServerId { get; set; }
     /// <summary>Resource tier; sets the container CPU/memory limits and is quota-checked.</summary>

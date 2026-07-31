@@ -1,0 +1,143 @@
+@model ProjectDetailsViewModel
+@using Harbora.Domain.Common
+@using Harbora.Infrastructure.Deployments
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var selected = Model.Selected;
+
+    // Which databases a service is wired to, read from its own environment variables rather than
+    // guessed: an attached database writes PGHOST/MYSQL_HOST/etc, and those name the container.
+    var databaseHosts = Model.Databases.ToDictionary(d => d.ContainerName, d => d);
+}
+
+<div class="mb-6">
+    <a href="/projects/@Model.Project.Id" class="text-brand-400 text-sm">← @Model.Project.Name</a>
+    <h1 class="text-2xl font-bold mt-1">@(isFa ? "معماری" : "Architecture")</h1>
+    <p class="text-slate-400 text-sm">
+        @(isFa
+            ? "اجزای این محیط و اینکه چه چیزی به چه چیزی وصل است."
+            : "What this environment is made of, and what talks to what.")
+    </p>
+</div>
+
+@if (selected is null || (Model.Services.Count == 0 && Model.Databases.Count == 0))
+{
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-10 text-center">
+        <p class="text-slate-300 font-medium">@(isFa ? "این محیط خالی است" : "Nothing here yet")</p>
+        <p class="text-slate-500 text-sm mt-1">
+            @(isFa ? "یک سرویس یا دیتابیس اضافه کنید تا نمودار ساخته شود." : "Add a service or a database and this fills in.")
+        </p>
+    </div>
+}
+else
+{
+    @* An indented, structured list rather than a pannable canvas: it reads the same on a phone, and
+       nothing about the network changes because something was dragged. *@
+    <div class="space-y-4">
+        @foreach (var s in Model.Services)
+        {
+            var publicTraffic = ServicePlan.HasPublicTraffic(s.Kind);
+            var connected = s.EnvironmentVariables
+                .Select(v => v.Value)
+                .Where(v => v is not null)
+                .SelectMany(v => databaseHosts.Keys.Where(h => v!.Contains(h, StringComparison.OrdinalIgnoreCase)))
+                .Distinct()
+                .ToList();
+
+            <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <a href="/apps/details/@s.Id" class="font-semibold hover:underline">@s.Name</a>
+                        <div class="text-xs text-slate-500 mt-0.5">
+                            @s.Kind · @s.SourceType
+                            @if (publicTraffic)
+                            {
+                                <span class="text-slate-400">· @(isFa ? "عمومی" : "public")</span>
+                            }
+                            else
+                            {
+                                <span class="text-slate-400">· @(isFa ? "فقط داخلی" : "internal only")</span>
+                            }
+                        </div>
+                    </div>
+                    <partial name="_StatusBadge" model="s.Status" />
+                </div>
+
+                <div class="mt-3 space-y-1 text-sm">
+                    @if (publicTraffic && s.Domains.Count > 0)
+                    {
+                        foreach (var d in s.Domains)
+                        {
+                            <div class="flex items-center gap-2 text-slate-400">
+                                <span class="text-slate-600">↳</span>
+                                <span>@(isFa ? "دامنه" : "domain")</span>
+                                <a href="https://@d.Host" target="_blank" rel="noopener" class="text-brand-400">@d.Host</a>
+                            </div>
+                        }
+                    }
+
+                    @if (ServicePlan.JoinsInternalNetwork(s.Kind))
+                    {
+                        <div class="flex items-center gap-2 text-slate-400">
+                            <span class="text-slate-600">↳</span>
+                            <span>@(isFa ? "آدرس داخلی" : "internal")</span>
+                            <code class="text-slate-300">@s.Slug</code>
+                        </div>
+                    }
+
+                    @foreach (var host in connected)
+                    {
+                        var db = databaseHosts[host];
+                        <div class="flex items-center gap-2 text-slate-400">
+                            <span class="text-slate-600">↳</span>
+                            <span>@(isFa ? "متصل به" : "uses")</span>
+                            <a href="/databases/@db.Id" class="text-brand-400">@db.Name</a>
+                            <span class="text-xs text-slate-500">@db.Type</span>
+                        </div>
+                    }
+
+                    @if (connected.Count == 0 && Model.Databases.Count > 0)
+                    {
+                        <div class="text-xs text-slate-500">
+                            @(isFa ? "به دیتابیسی وصل نیست." : "Not connected to any database.")
+                        </div>
+                    }
+                </div>
+            </section>
+        }
+
+        @if (Model.Databases.Count > 0)
+        {
+            <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                <div class="font-semibold mb-2">@(isFa ? "دیتابیس‌ها" : "Databases")</div>
+                <div class="space-y-2">
+                    @foreach (var d in Model.Databases)
+                    {
+                        var users = Model.Services.Count(s => s.EnvironmentVariables
+                            .Any(v => v.Value is not null && v.Value.Contains(d.ContainerName, StringComparison.OrdinalIgnoreCase)));
+                        <div class="flex items-center justify-between text-sm">
+                            <div class="min-w-0">
+                                <a href="/databases/@d.Id" class="hover:underline">@d.Name</a>
+                                <span class="text-xs text-slate-500">· @d.Type @d.Version</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-xs text-slate-500">
+                                    @users @(isFa ? "سرویس متصل" : users == 1 ? "service" : "services")
+                                </span>
+                                <span class="text-xs @(d.Status == ServiceStatus.Running ? "text-emerald-400" : "text-slate-500")">
+                                    @(d.Status == ServiceStatus.Running ? "●" : "○") @d.Status
+                                </span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+        }
+    </div>
+
+    <p class="mt-4 text-xs text-slate-500">
+        @(isFa
+            ? "اتصال‌ها از روی متغیرهای محیطی هر سرویس خوانده می‌شوند — یعنی آنچه واقعاً تنظیم شده، نه آنچه قرار بوده باشد."
+            : "Connections are read from each service's own environment variables — what is actually configured, not what was intended.")
+    </p>
+}

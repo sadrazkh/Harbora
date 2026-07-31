@@ -129,6 +129,17 @@ harbora deploy &lt;slug&gt;</code></pre>
                     </div>
                 </div>
 
+                <div>
+                    <label class="block text-sm text-slate-400 mb-1">@(isFa ? "نوع سرویس" : "Service type")</label>
+                    <select asp-for="Kind" data-service-kind class="@input">
+                        @foreach (var k in Enum.GetValues<Harbora.Domain.Common.ServiceKind>())
+                        {
+                            <option value="@k" data-help="@Harbora.Infrastructure.Deployments.ServicePlan.Describe(k)">@k</option>
+                        }
+                    </select>
+                    <span class="text-xs text-slate-500" data-kind-help></span>
+                </div>
+
                 @if (environments.Count > 0)
                 {
                     <div>

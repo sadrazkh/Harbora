@@ -57,29 +57,55 @@ public sealed class ProjectsController(
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> Details(Guid id, Guid? environmentId, CancellationToken ct)
     {
+        var vm = await LoadAsync(id, environmentId, ct);
+        if (vm is null) return NotFound();
+
+        ViewData["Title"] = vm.Project.Name;
+        return View(vm);
+    }
+
+    /// <summary>
+    /// Loads a project and one environment's contents. Scoped by workspace, so a project id in the
+    /// URL — the obvious thing to change by hand — cannot reach another tenant's data.
+    /// </summary>
+    private async Task<ProjectDetailsViewModel?> LoadAsync(Guid id, Guid? environmentId, CancellationToken ct)
+    {
         var project = await db.Projects
             .Include(p => p.Environments)
             .FirstOrDefaultAsync(p => p.Id == id && p.WorkspaceId == WorkspaceId, ct);
-        if (project is null) return NotFound();
+        if (project is null) return null;
 
         var environments = project.Environments.OrderByDescending(e => e.IsDefault).ThenBy(e => e.Name).ToList();
         var selected = environments.FirstOrDefault(e => e.Id == environmentId) ?? environments.FirstOrDefault();
 
-        ViewData["Title"] = project.Name;
-        return View(new ProjectDetailsViewModel
+        return new ProjectDetailsViewModel
         {
             Project = project,
             Environments = environments,
             Selected = selected,
+            // Variables and domains are loaded because the architecture view reads connections from
+            // what each service is actually configured with.
             Services = selected is null
                 ? []
                 : await db.Apps.Where(a => a.EnvironmentId == selected.Id)
+                    .Include(a => a.EnvironmentVariables)
+                    .Include(a => a.Domains)
                     .OrderBy(a => a.Name).ToListAsync(ct),
             Databases = selected is null
                 ? []
                 : await db.ManagedServices.Where(s => s.EnvironmentId == selected.Id)
                     .OrderBy(s => s.Name).ToListAsync(ct)
-        });
+        };
+    }
+
+    [HttpGet("{id:guid}/architecture")]
+    public async Task<IActionResult> Architecture(Guid id, Guid? environmentId, CancellationToken ct)
+    {
+        var vm = await LoadAsync(id, environmentId, ct);
+        if (vm is null) return NotFound();
+
+        ViewData["Title"] = $"{vm.Project.Name} — architecture";
+        return View(vm);
     }
 
     [HttpPost("")]
