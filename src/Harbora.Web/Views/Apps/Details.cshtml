@@ -1,4 +1,5 @@
 ﻿@model App
+@using Harbora.Infrastructure.Projects
 @{
     ViewData["Title"] = Model.Name;
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -203,6 +204,72 @@
                 <code class="block break-all rounded bg-black/50 px-2 py-1 text-xs mt-1">@Context.Request.Scheme://@Context.Request.Host/webhooks/git/@Model.GitRepository.Id</code>
                 <div class="text-xs text-slate-400 mt-2">@(isFa ? "سکرت:" : "Secret:") <code class="text-slate-300 break-all">@Model.GitRepository.WebhookSecret</code></div>
                 <p class="text-[11px] text-slate-500 mt-2">@(isFa ? "Content-Type را application/json بگذارید. GitHub/Gitea با امضای HMAC و GitLab با هدر توکن تأیید می‌شوند." : "Use Content-Type application/json. GitHub/Gitea verify by HMAC; GitLab by token header.")</p>
+            </section>
+
+            @* ---- Branch previews ----
+               Shown next to auto-deploy because they are the same mechanism pointed at a different
+               branch. A preview is a real service on a real address, so it is listed rather than
+               left to be discovered in the app list looking like something somebody created. *@
+            @if (Model.PreviewOfAppId is null)
+            {
+                var previews = ViewBag.Previews as List<Harbora.Domain.Apps.App> ?? [];
+                <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <div class="font-semibold">@(isFa ? "پیش‌نمایش شاخه‌ها" : "Branch previews")</div>
+                        <form method="post" asp-action="TogglePreviews" asp-route-id="@Model.Id">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="text-xs rounded-lg px-3 py-1 border @(Model.PreviewsEnabled ? "border-emerald-700 text-emerald-300" : "border-slate-700 text-slate-400")">
+                                @(Model.PreviewsEnabled ? (isFa ? "روشن ✓" : "On ✓") : (isFa ? "خاموش" : "Off"))
+                            </button>
+                        </form>
+                    </div>
+
+                    <p class="text-xs text-slate-400">
+                        @(isFa
+                            ? "هر push روی شاخه‌ای غیر از شاخهٔ اصلی، محیط و آدرس مخصوص خودش را می‌گیرد. سکرت‌ها کپی نمی‌شوند — برای هر پیش‌نمایش جداگانه تنظیم کنید."
+                            : "A push to any branch other than the tracked one gets an environment and address of its own. Secrets are not copied — set them per preview.")
+                    </p>
+                    <p class="text-[11px] text-slate-500 mt-1">
+                        @(isFa
+                            ? $"پیش‌نمایشی که {PreviewPolicy.IdleLifetime.TotalDays:0} روز push نگیرد یا شاخه‌اش حذف شود، خودش برداشته می‌شود."
+                            : $"A preview whose branch is deleted, or which goes {PreviewPolicy.IdleLifetime.TotalDays:0} days without a push, is removed on its own.")
+                    </p>
+
+                    @if (previews.Count > 0)
+                    {
+                        <div class="mt-3 divide-y divide-slate-800 border-t border-slate-800">
+                            @foreach (var preview in previews)
+                            {
+                                <div class="py-2 flex items-center justify-between gap-2 text-sm">
+                                    <a asp-action="Details" asp-route-id="@preview.Id" class="text-brand-400 truncate">@preview.PreviewBranch</a>
+                                    <span class="text-xs text-slate-500 shrink-0">
+                                        @(preview.PreviewLastPushedAt is { } pushed
+                                            ? (isFa ? $"آخرین push: {pushed.LocalDateTime:yyyy-MM-dd}" : $"last push {pushed.LocalDateTime:yyyy-MM-dd}")
+                                            : "—")
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </section>
+            }
+        }
+
+        @* A preview says so, and says what of. Otherwise it looks like an ordinary service that
+           somebody will be surprised to find gone in a week. *@
+        @if (Model.PreviewOfAppId is { } parentId)
+        {
+            <section class="rounded-xl border border-amber-900/60 bg-amber-950/20 p-4">
+                <div class="font-semibold mb-1">@(isFa ? "این یک پیش‌نمایش است" : "This is a preview")</div>
+                <div class="text-xs text-slate-400">
+                    @(isFa ? "شاخهٔ" : "Branch") <code class="text-slate-300">@Model.PreviewBranch</code>
+                    @(isFa ? "از" : "of") <a asp-action="Details" asp-route-id="@parentId" class="text-brand-400">@(isFa ? "سرویس اصلی" : "the parent service")</a>.
+                </div>
+                <div class="text-[11px] text-slate-500 mt-2">
+                    @(isFa
+                        ? $"سکرت‌ها از سرویس اصلی کپی نشده‌اند. اگر شاخه حذف شود یا {PreviewPolicy.IdleLifetime.TotalDays:0} روز push نگیرد، این سرویس و داده‌هایش برداشته می‌شوند."
+                        : $"Secrets were not copied from the parent. If the branch is deleted, or goes {PreviewPolicy.IdleLifetime.TotalDays:0} days without a push, this service and its data are removed.")
+                </div>
             </section>
         }
 

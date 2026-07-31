@@ -35,6 +35,19 @@ public class App : BaseEntity
     /// </summary>
     public string? ReleaseCommand { get; set; }
 
+    /// <summary>
+    /// Whether a push to any other branch gets an environment of its own. Off by default: every
+    /// branch quietly becoming a running service is a surprise, and a bill.
+    /// </summary>
+    public bool PreviewsEnabled { get; set; }
+
+    /// <summary>The service this one is a preview of, or null for an ordinary service.</summary>
+    public Guid? PreviewOfAppId { get; set; }
+
+    /// <summary>The branch a preview follows, and when it last saw a push.</summary>
+    public string? PreviewBranch { get; set; }
+    public DateTimeOffset? PreviewLastPushedAt { get; set; }
+
     /// <summary>Five-field cron expression for <see cref="ServiceKind.Cron"/> services.</summary>
     public string? CronExpression { get; set; }
 

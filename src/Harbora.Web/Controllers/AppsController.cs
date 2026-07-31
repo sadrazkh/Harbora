@@ -131,6 +131,10 @@ public sealed class AppsController(
             Command = model.Kind == ServiceKind.Cron && !string.IsNullOrWhiteSpace(model.Command)
                 ? model.Command.Trim()
                 : null,
+            // Only meaningful for a service built from a repository — there is no branch to
+            // preview otherwise.
+            PreviewsEnabled = model.PreviewsEnabled && model.SourceType is AppSourceType.GitRepository
+                or AppSourceType.Dockerfile or AppSourceType.StaticSite,
             ContainerPort = model.ContainerPort <= 0 ? 80 : model.ContainerPort,
             DockerfilePath = model.DockerfilePath,
             PrebuiltImage = model.PrebuiltImage,
@@ -253,6 +257,14 @@ public sealed class AppsController(
         // A scheduled job has no container to look at, so its history IS the app: whether it ran,
         // whether it worked, and what it said. Loaded only for cron services — every other kind
         // would pay for a query that returns nothing.
+        // The previews this app has spawned. Without this the branches exist only in the app list,
+        // indistinguishable from services somebody meant to create.
+        if (app.GitRepositoryId is not null)
+            ViewBag.Previews = await db.Apps
+                .Where(a => a.PreviewOfAppId == app.Id)
+                .OrderBy(a => a.PreviewBranch)
+                .ToListAsync(ct);
+
         if (app.Kind == ServiceKind.Cron)
             ViewBag.CronRuns = await db.CronRuns
                 .Where(r => r.AppId == app.Id)
@@ -261,6 +273,27 @@ public sealed class AppsController(
                 .ToListAsync(ct);
 
         return View(app);
+    }
+
+    /// <summary>
+    /// Turns branch previews on or off. Turning them off leaves the existing ones alone — they are
+    /// running services, and deleting somebody's work because a switch moved is not a decision a
+    /// checkbox should make. They expire on their own.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
+    public async Task<IActionResult> TogglePreviews(Guid id, CancellationToken ct)
+    {
+        if (!await MayAsync(id, Capabilities.AppsDeploy, ct)) return NotFound();
+
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null || app.GitRepositoryId is null) return NotFound();
+
+        app.PreviewsEnabled = !app.PreviewsEnabled;
+        await db.SaveChangesAsync(ct);
+
+        return RedirectToAction(nameof(Details), new { id });
     }
 
     [HttpPost]

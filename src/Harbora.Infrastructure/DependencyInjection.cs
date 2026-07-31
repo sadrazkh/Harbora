@@ -116,6 +116,10 @@ public static class DependencyInjection
 
         // Projects + environments: the grouping every screen and the private network hang off.
         services.AddScoped<Projects.ProjectService>();
+        // A branch gets an environment of its own, and loses it again when the branch goes.
+        services.AddScoped<Projects.PreviewEnvironmentService>();
+        // Branches get abandoned rather than deleted, so the webhook alone would leak services.
+        services.AddHostedService<Projects.PreviewSweeper>();
 
         // Tenancy quotas + node capacity (PaaS).
         services.AddScoped<IQuotaService, Tenancy.QuotaService>();

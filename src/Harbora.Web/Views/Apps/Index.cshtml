@@ -1,4 +1,4 @@
-@model List<App>
+﻿@model List<App>
 @{
     ViewData["Title"] = "Applications";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -39,6 +39,12 @@ else
                     <partial name="_StatusBadge" model="app.Status" />
                 </div>
                 <div class="mt-2 text-sm text-slate-400">@app.Slug</div>
+                @* A preview is temporary and has no secrets. Left unmarked it reads as a service
+                   somebody created, and its disappearance a week later reads as a fault. *@
+                @if (app.PreviewBranch is { } branch)
+                {
+                    <div class="mt-1 text-[11px] text-amber-400/80 truncate">@(isFa ? "پیش‌نمایش" : "preview") · @branch</div>
+                }
                 <div class="mt-1 text-xs text-slate-500">@app.SourceType · port @app.ContainerPort @(string.IsNullOrEmpty(app.InstanceSizeKey) ? "" : "· " + app.InstanceSizeKey)</div>
             </a>
         }

@@ -160,6 +160,21 @@ harbora deploy &lt;slug&gt;</code></pre>
                     </span>
                 </div>
 
+                @* Only a repository has branches to preview. *@
+                <div data-git-only class="hidden">
+                    <label class="flex items-start gap-2 text-sm text-slate-300">
+                        <input asp-for="PreviewsEnabled" type="checkbox" class="mt-1" />
+                        <span>
+                            @(isFa ? "برای هر برنچ دیگر یک محیط پیش‌نمایش بساز" : "Give every other branch a preview environment")
+                            <span class="block text-xs text-slate-500">
+                                @(isFa
+                                    ? "سکرت‌ها کپی نمی‌شوند — پیش‌نمایش را هرکسی که بتواند push کند می‌سازد."
+                                    : "Secrets are not copied: a preview is created by anyone who can push a branch.")
+                            </span>
+                        </span>
+                    </label>
+                </div>
+
                 <div>
                     <label class="block text-sm text-slate-400 mb-1">@(isFa ? "دستور پیش از انتشار" : "Release command")</label>
                     <input asp-for="ReleaseCommand" placeholder="dotnet ef database update" class="@input" />
@@ -235,6 +250,44 @@ harbora deploy &lt;slug&gt;</code></pre>
         });
     }
     document.querySelectorAll('[data-src]').forEach(function (r) { r.addEventListener('change', syncSource); });
+
+    // The service type decides which fields mean anything. Without this the schedule and command
+    // inputs stay hidden for ever — and since the server refuses a cron service without them, a
+    // scheduled job could not be created from this form at all.
+    var kind = document.querySelector('[data-service-kind]');
+    var kindHelp = document.querySelector('[data-kind-help]');
+
+    function syncKind() {
+        var value = kind ? kind.value : 'Web';
+
+        document.querySelectorAll('[data-cron-only]').forEach(function (el) {
+            el.classList.toggle('hidden', value !== 'Cron');
+        });
+
+        // One line explaining the choice, from the same rule the deploy engine uses.
+        if (kindHelp && kind) {
+            var option = kind.options[kind.selectedIndex];
+            kindHelp.textContent = option ? (option.getAttribute('data-help') || '') : '';
+        }
+    }
+
+    if (kind) kind.addEventListener('change', syncKind);
+
+    // Previews only exist for a service built from a repository: there is no branch otherwise.
+    function syncPreview() {
+        var source = document.querySelector('[data-src]:checked');
+        var value = source ? source.value : 'GitRepository';
+        // GitRepository only, matching AppsController: a branch is what a preview is of, and a
+        // checkbox the server quietly ignores is worse than no checkbox.
+        var isGit = value === 'GitRepository';
+        document.querySelectorAll('[data-git-only]').forEach(function (el) {
+            el.classList.toggle('hidden', !isGit);
+        });
+    }
+    document.querySelectorAll('[data-src]').forEach(function (r) { r.addEventListener('change', syncPreview); });
+
     syncSource();
+    syncKind();
+    syncPreview();
 </script>
 }

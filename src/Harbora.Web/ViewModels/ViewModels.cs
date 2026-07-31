@@ -58,6 +58,9 @@ public sealed class CreateAppViewModel
     /// <summary>Five-field cron expression, for a Cron service.</summary>
     public string? CronExpression { get; set; }
 
+    /// <summary>Give every other branch an environment of its own.</summary>
+    public bool PreviewsEnabled { get; set; }
+
     /// <summary>What a scheduled job runs each time it fires.</summary>
     public string? Command { get; set; }
     /// <summary>Target node; defaults to the local server when unset.</summary>

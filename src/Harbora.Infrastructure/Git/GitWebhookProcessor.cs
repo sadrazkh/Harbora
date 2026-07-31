@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -8,6 +8,8 @@ using Harbora.Domain.Auditing;
 using Harbora.Domain.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+
+using Harbora.Infrastructure.Projects;
 
 namespace Harbora.Infrastructure.Git;
 
@@ -19,6 +21,7 @@ namespace Harbora.Infrastructure.Git;
 public sealed class GitWebhookProcessor(
     HarboraDbContext db,
     IDeploymentEngine deployEngine,
+    Projects.PreviewEnvironmentService previews,
     ILogger<GitWebhookProcessor> logger) : IGitWebhookProcessor
 {
     public async Task<WebhookResult> ProcessAsync(Guid repositoryId, WebhookRequest request, CancellationToken ct)
@@ -42,6 +45,14 @@ public sealed class GitWebhookProcessor(
         var queued = 0;
         foreach (var app in apps)
         {
+            // A branch that is not the tracked one belongs to previews, if this app wants them.
+            if (!ev.IsTag && PreviewPolicy.ShouldPreview(
+                    app.PreviewsEnabled, ev.RefName, ev.IsTag, app.GitRef ?? app.GitRepository?.DefaultBranch))
+            {
+                queued += await HandlePreviewAsync(app, ev, ct);
+                continue;
+            }
+
             var trigger = ev.IsTag ? DeploymentTrigger.GitTag : DeploymentTrigger.GitPush;
             var shouldDeploy = ev.IsTag
                 ? !string.IsNullOrWhiteSpace(app.DeployOnTagPattern) && GlobMatch(app.DeployOnTagPattern!, ev.RefName)
@@ -74,6 +85,32 @@ public sealed class GitWebhookProcessor(
         await db.SaveChangesAsync(ct);
 
         return new WebhookResult(true, $"Queued {queued} deployment(s) for {ev.RefName}.", queued);
+    }
+
+    /// <summary>
+    /// Creates or refreshes the preview of a branch, or takes it away when the branch is deleted.
+    /// Failures are logged and swallowed: one branch's preview must not fail the whole webhook and
+    /// stop the other apps in the push from deploying.
+    /// </summary>
+    private async Task<int> HandlePreviewAsync(Domain.Apps.App app, PushEvent ev, CancellationToken ct)
+    {
+        try
+        {
+            if (ev.Deleted)
+            {
+                if (await previews.FindAsync(app.Id, ev.RefName, ct) is { } existing)
+                    await previews.RemoveAsync(existing.Id, ct);
+                return 0;
+            }
+
+            var deployment = await previews.EnsureAsync(app, ev.RefName, ev.Sha, ct);
+            return deployment is null ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Preview for {Branch} could not be handled.", ev.RefName);
+            return 0;
+        }
     }
 
     // --- verification ---
@@ -120,7 +157,11 @@ public sealed class GitWebhookProcessor(
             if (root.TryGetProperty("head_commit", out var hc) && hc.ValueKind == JsonValueKind.Object)
                 sha ??= TryString(hc, "id");
 
-            ev = new PushEvent(name, isTag, sha);
+            // A deleted branch arrives as a push whose "deleted" flag is set — the only signal that
+            // a preview should be taken away rather than redeployed.
+            var deleted = root.TryGetProperty("deleted", out var del) && del.ValueKind == JsonValueKind.True;
+
+            ev = new PushEvent(name, isTag, sha, deleted);
             return true;
         }
         catch (JsonException) { return false; }
@@ -136,5 +177,5 @@ public sealed class GitWebhookProcessor(
         return Regex.IsMatch(value, regex, RegexOptions.IgnoreCase);
     }
 
-    private readonly record struct PushEvent(string RefName, bool IsTag, string? Sha);
+    private readonly record struct PushEvent(string RefName, bool IsTag, string? Sha, bool Deleted);
 }
