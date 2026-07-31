@@ -5,6 +5,101 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-31 — Phase 7: what changed, and finding it in the logs
+
+### Deployment config snapshots
+
+A deployment recorded its commit and its image and **nothing about how the app was configured**. So
+the most common question after a bad release — *"it worked yesterday, what changed?"* — had no
+answer anywhere in the platform. Someone edits a variable, redeploys, the app breaks, and the
+history shows two identical-looking rows.
+
+- `DeploymentConfig` is taken **before anything runs**, so it records what a version was released
+  with even when the deploy fails: comparing a failed release against the last good one is the whole
+  point.
+- `ConfigDiff` reports what moved between two releases — variables, port, health path, instance
+  size, release task, schedule, volumes, domains — and states outright when the configuration was
+  identical, which narrows the search to the code.
+- **A secret is never stored, and never shown.** The snapshot keeps a keyed hash instead of the
+  value, so a change is visible and the value is not recoverable. The key is derived from the
+  platform master key rather than being a plain SHA-256, which for a short password is guessable by
+  trying candidates. A changed secret reads "changed (secret)" and nothing more: showing the old
+  value to explain a break would put every rotated password permanently in the deployment history.
+
+### Log search, filter and download
+
+The logs screen showed a tail and nothing else. That is fine until something goes wrong, and then
+the line that explains it is somewhere in four hundred — and the browser's own find only searches
+what happens to be rendered.
+
+- Filtering happens on the server, over the whole tail.
+- A stack trace stays with the line that introduced it. A message without its trace explains
+  nothing, and the trace on its own matches no search anyone would think to type.
+- "Problems only" matches the usual words at the **start of a word**, not anywhere in one. Caught by
+  a test I wrote to check exactly that: "terror management is fine" contains "error", and a filter
+  that fires on ordinary prose is one people stop trusting after the first time.
+- Plain text matching rather than regular expressions: a mistyped pattern silently matching nothing
+  is worse than no filter, and nobody debugging an outage wants to debug their regex too.
+- Download carries whatever is on screen, named for the app and the moment — the second thing anyone
+  does with a log file is send it to someone.
+- An empty result says so, because an empty pane looks the same as a broken one.
+
+**Tests / checks**
+
+- Suite **919 passing**, 0 errors / 0 warnings (from 865).
+- Mutation testing: **32 mutations, 32 caught** (18 on the diff and log filter, 14 on the
+  rollups). Two survivors first: a duplicate *daily* summary my tests only covered hourly, and a
+  summary that forgot which resource it described — the exact pair the per-app chart looks up by.
+
+**Honest gaps**
+
+### Metrics depth
+
+Raw samples were kept for 24 hours and then deleted, so every question about last week — "was memory
+creeping up?", "when did this start?" — had no data behind it. That is the shape of most real
+capacity problems.
+
+- Completed hours are summarised, then completed days from those. Raw points still expire after a
+  day; hourly summaries last a month, daily ones a year.
+- **Summarised before pruned, never the other way round.** Getting that order wrong loses history
+  silently: the charts keep working, on data quietly missing a week. The collector now rolls up
+  first and skips its prune entirely if that fails.
+- Two arithmetic traps, both pinned by tests: a day's extremes come from the hourly **extremes**,
+  not the hourly averages — otherwise the spike, which is the thing being looked for, is exactly
+  what gets averaged away; and a day's average is **weighted by sample count**, because an average
+  of averages is wrong the moment two hours hold different numbers of samples, which is every
+  restart and every gap in collection.
+- The chart endpoint picks its source from the window asked about, and can now be asked for a year.
+  A summarised point carries its range as well as its average.
+
+- The diff compares a deployment with the one before it. Comparing any two releases, which is what
+  you want when a break went unnoticed for a week, is not offered yet.
+- Comparing any two releases (rather than a release and the one before it) is not offered yet.
+
+**Verified live on the server**
+
+- Five deploys of one app, each recording its configuration:
+  - adding a plain variable and a secret showed *"Variable LOG_LEVEL — added: info"* and
+    *"Variable API_TOKEN — added (secret)"*;
+  - rotating the secret and changing nothing else showed *"changed (secret)"* — and **neither the
+    old nor the new value appeared anywhere on the page or in the stored snapshot**;
+  - redeploying with nothing changed said the configuration was identical.
+- Log search narrowed 1327 bytes of output to 236; "problems only" to 27; a search matching nothing
+  said so rather than falling back to everything; download returned a stamped attachment.
+- Metrics: the rollup service had already summarised **176 hours and 11 days** unprompted. A
+  one-week window returned summarised points carrying their range; a one-hour window returned raw
+  samples.
+
+**A defect the live run found**
+
+The downloaded log file was named `p7app-logs-14050509-152739.txt` — a **Jalali** year, because the
+panel runs in Persian and the ambient calendar leaked into the filename. The project had already
+learned this exact lesson for backup artifact names, and I reintroduced it. Unit tests could not
+catch it: the test runner's culture is invariant, which is why the first version looked correct.
+There is now a test that forces `fa-IR` and pins the date.
+
+Test app removed afterwards; overcommit back to 1.0.
+
 ## 2026-07-31 — Phase 6: backups that have been proven to restore
 
 Verification could already say an artifact was present, matched its checksum, decrypted, and was a

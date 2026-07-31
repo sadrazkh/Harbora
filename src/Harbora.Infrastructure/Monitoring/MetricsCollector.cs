@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Monitoring;
@@ -17,10 +17,12 @@ public sealed class MetricsCollector(
     INotificationService notifications,
     AlertThrottle throttle,
     ISystemClock clock,
+    MetricsRollupService rollups,
     ILogger<MetricsCollector> logger) : IMetricsCollector
 {
     private const double DiskWarnRatio = 0.85;
-    private static readonly TimeSpan Retention = TimeSpan.FromHours(24);
+    /// <summary>How long raw samples are kept. Beyond this, the summaries answer instead.</summary>
+    private static readonly TimeSpan Retention = MetricRollups.RawRetention;
     private static readonly TimeSpan DiskAlertInterval = TimeSpan.FromHours(1);
 
     public async Task CollectAsync(CancellationToken ct)
@@ -34,6 +36,11 @@ public sealed class MetricsCollector(
             var docker = await engineFactory.ResolveAsync(server.Id, ct);
             await CollectServerAsync(server, docker, now, ct);
         }
+
+        // Summarise BEFORE pruning, never the other way round. Getting that order wrong loses the
+        // history silently: the charts keep working, on data quietly missing a week.
+        try { await rollups.RunAsync(ct); }
+        catch (Exception ex) { logger.LogError(ex, "Rolling up metrics failed; raw samples were kept."); return; }
 
         var cutoff = now - Retention;
         await db.MonitoringMetrics.Where(m => m.Timestamp < cutoff).ExecuteDeleteAsync(ct);

@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Web.ViewModels;
@@ -89,12 +89,40 @@ public sealed class MonitoringController(
         return View(vm);
     }
 
-    /// <summary>Time-series points for a metric, oldest→newest, for the dashboard charts.</summary>
+    /// <summary>
+    /// Time-series points for a metric, oldest→newest.
+    ///
+    /// Reads raw samples for a recent window and summaries beyond it — raw points only exist for a
+    /// day, and asking for a month of them would return tens of thousands of rows to draw a few
+    /// hundred pixels. A summarised point carries its range as well as its average, because a chart
+    /// of averages hides exactly the spike someone is looking for.
+    /// </summary>
     [HttpGet("metrics")]
     public async Task<IActionResult> Metrics(string name, string? resource, int minutes = 60, CancellationToken ct = default)
     {
         var server = await db.Servers.Where(s => s.IsLocal).Select(s => s.Id).FirstOrDefaultAsync(ct);
-        var since = DateTimeOffset.UtcNow.AddMinutes(-Math.Clamp(minutes, 5, 1440));
+
+        // A year, so "is this a trend" is answerable at all.
+        var window = TimeSpan.FromMinutes(Math.Clamp(minutes, 5, 60 * 24 * 365));
+        var since = DateTimeOffset.UtcNow - window;
+
+        if (Harbora.Infrastructure.Monitoring.MetricRollups.BestSourceFor(window) is { } period)
+        {
+            var summarised = await db.MetricRollups
+                .Where(r => r.ServerId == server && r.Name == name && r.ResourceRef == resource
+                            && r.Period == period && r.PeriodStart >= since)
+                .OrderBy(r => r.PeriodStart)
+                .Select(r => new
+                {
+                    t = r.PeriodStart.ToUnixTimeSeconds(),
+                    v = r.Average,
+                    lo = r.Minimum,
+                    hi = r.Maximum
+                })
+                .ToListAsync(ct);
+
+            return Json(summarised);
+        }
 
         var points = await db.MonitoringMetrics
             .Where(m => m.ServerId == server && m.Name == name && m.ResourceRef == resource && m.Timestamp >= since)

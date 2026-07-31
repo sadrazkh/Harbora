@@ -1,4 +1,4 @@
-@model App
+﻿@model App
 @{
     ViewData["Title"] = Model.Name + " · Logs";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -8,9 +8,20 @@
         <a href="/apps/details/@Model.Id" class="text-brand-400 text-sm">← @Model.Name</a>
         <h1 class="text-2xl font-bold">@(isFa ? "لاگ‌های کانتینر" : "Container logs")</h1>
     </div>
-    <label class="flex items-center gap-2 text-sm text-slate-400">
-        <input type="checkbox" id="autorefresh" checked> @(isFa ? "به‌روزرسانی خودکار" : "Auto-refresh")
-    </label>
+    <div class="flex flex-wrap items-center gap-3">
+        @* Filtered on the server, over the whole tail: the line that explains an outage is usually
+           not the one already on screen, which is all the browser's own find can reach. *@
+        <input id="search" type="search" placeholder="@(isFa ? "جست‌وجو در لاگ‌ها" : "Search the logs")"
+               class="rounded-lg bg-slate-950 border border-slate-800 px-3 py-1.5 text-sm w-56" />
+        <label class="flex items-center gap-2 text-sm text-slate-400">
+            <input type="checkbox" id="problems"> @(isFa ? "فقط خطاها و هشدارها" : "Problems only")
+        </label>
+        <label class="flex items-center gap-2 text-sm text-slate-400">
+            <input type="checkbox" id="autorefresh" checked> @(isFa ? "به‌روزرسانی خودکار" : "Auto-refresh")
+        </label>
+        <a id="download" href="/apps/@Model.Id/logs/download"
+           class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-sm">@(isFa ? "دانلود" : "Download")</a>
+    </div>
 </div>
 
 <div class="rounded-xl border border-slate-800 bg-black/70 font-mono text-xs">
@@ -30,9 +41,28 @@
     el.parentElement.addEventListener('scroll', () => {
         atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     });
+    const search = document.getElementById('search');
+    const problems = document.getElementById('problems');
+    const download = document.getElementById('download');
+
+    function query() {
+        const parts = ['tail=400'];
+        if (search.value.trim()) parts.push('search=' + encodeURIComponent(search.value.trim()));
+        if (problems.checked) parts.push('problems=true');
+        return parts.join('&');
+    }
+
+    // The download carries whatever is on screen: sending someone the filtered view is the point.
+    function syncDownload() {
+        download.href = '/apps/@Model.Id/logs/download?' + query().replace('tail=400', 'tail=2000');
+    }
+    search.addEventListener('input', function () { syncDownload(); load(); });
+    problems.addEventListener('change', function () { syncDownload(); load(); });
+    syncDownload();
+
     async function load() {
         try {
-            const r = await fetch('/apps/@Model.Id/logs/data?tail=400');
+            const r = await fetch('/apps/@Model.Id/logs/data?' + query());
             const t = await r.text();
             el.textContent = t || '@(isFa ? "لاگی موجود نیست (کانتینر در حال اجرا نیست)." : "No logs (container not running).")';
             if (atBottom) el.scrollTop = el.scrollHeight;

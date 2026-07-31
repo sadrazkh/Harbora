@@ -426,11 +426,40 @@ public sealed class AppsController(
         return View(app);
     }
 
+    /// <summary>
+    /// The tail, filtered before it is sent. Done here rather than in the browser because the line
+    /// that explains an outage is usually not the one on screen.
+    /// </summary>
     [HttpGet("/apps/{id:guid}/logs/data")]
-    public async Task<IActionResult> LogsData(Guid id, int tail = 200, CancellationToken ct = default)
+    public async Task<IActionResult> LogsData(
+        Guid id, int tail = 200, string? search = null, bool problems = false, CancellationToken ct = default)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
-        return Content(await ops.GetLogsAsync(id, tail, ct), "text/plain");
+
+        var text = await ops.GetLogsAsync(id, tail, ct);
+        if (string.IsNullOrWhiteSpace(search) && !problems) return Content(text, "text/plain");
+
+        var lines = Harbora.Infrastructure.Deployments.LogFilter.Apply(text, search, problems);
+
+        // Said plainly, because an empty pane looks the same as a broken one.
+        return Content(lines.Count == 0
+            ? "No lines match that filter."
+            : string.Join('\n', lines), "text/plain");
+    }
+
+    /// <summary>Downloads the tail as a file — the second thing anyone does is send it to someone.</summary>
+    [HttpGet("/apps/{id:guid}/logs/download")]
+    public async Task<IActionResult> LogsDownload(
+        Guid id, int tail = 2000, string? search = null, bool problems = false, CancellationToken ct = default)
+    {
+        var app = await db.Apps.AsNoTracking().FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        var text = await ops.GetLogsAsync(id, tail, ct);
+        var lines = Harbora.Infrastructure.Deployments.LogFilter.Apply(text, search, problems);
+
+        return File(System.Text.Encoding.UTF8.GetBytes(string.Join('\n', lines)), "text/plain",
+            Harbora.Infrastructure.Deployments.LogFilter.FileName(app.Slug, DateTimeOffset.UtcNow));
     }
 
     /// <summary>

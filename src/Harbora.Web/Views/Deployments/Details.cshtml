@@ -1,4 +1,4 @@
-@model Deployment
+﻿@model Deployment
 @{ ViewData["Title"] = $"Deployment #{Model.Number}"; }
 <div class="mb-4 flex items-center justify-between">
     <div>
@@ -12,6 +12,44 @@
 
 @* Staged progress (server-rendered; the Vue island updates it live in production). *@
 <partial name="_DeployProgress" model="Model.Status" />
+
+@{
+    var changes = ViewBag.ConfigChanges as IReadOnlyList<Harbora.Infrastructure.Deployments.ConfigChange> ?? [];
+    var comparedWith = ViewBag.ComparedWith as int?;
+    var identical = ViewBag.ConfigIdentical is true;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+
+@* ---- what changed since the previous release ----
+   The question people ask after a bad deploy. Until deployments recorded their configuration, a
+   settings change and a code change looked identical in this list. *@
+@if (comparedWith is { } previousNumber)
+{
+    <section class="mb-6 rounded-xl border border-slate-800 bg-slate-900/60">
+        <div class="px-4 py-3 border-b border-slate-800 font-semibold">
+            @(isFa ? $"تغییرات نسبت به #{previousNumber}" : $"Changed since #{previousNumber}")
+        </div>
+        @if (identical)
+        {
+            @* Worth stating outright: it narrows the search to the code. *@
+            <div class="p-4 text-sm text-slate-400">
+                @(isFa ? "پیکربندی دقیقاً همان بود — تفاوت در کد است." : "The configuration was identical — the difference is in the code.")
+            </div>
+        }
+        else
+        {
+            <div class="divide-y divide-slate-800">
+                @foreach (var change in changes)
+                {
+                    <div class="flex flex-wrap items-baseline justify-between gap-3 p-3 text-sm">
+                        <span class="text-slate-300">@change.What</span>
+                        <span dir="ltr" class="font-mono text-xs text-slate-400">@change.Detail</span>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+}
 
 @* Vue island: connects to SignalR and renders live logs. Mount point carries its config. *@
 <div id="deployment-logs"

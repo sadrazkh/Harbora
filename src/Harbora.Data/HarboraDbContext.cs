@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Auditing;
 using Harbora.Domain.Backups;
@@ -61,6 +61,7 @@ public class HarboraDbContext : DbContext
     public DbSet<BackupSchedule> BackupSchedules => Set<BackupSchedule>();
     public DbSet<BackupDelivery> BackupDeliveries => Set<BackupDelivery>();
     public DbSet<MonitoringMetric> MonitoringMetrics => Set<MonitoringMetric>();
+    public DbSet<MetricRollup> MetricRollups => Set<MetricRollup>();
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();

@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
@@ -27,6 +27,22 @@ public sealed class DeploymentsController(HarboraDbContext db, ICurrentUser curr
             .Include(d => d.App)
             .FirstOrDefaultAsync(d => d.Id == id && d.App!.WorkspaceId == WorkspaceId, ct);
         if (deployment is null) return NotFound();
+
+        // What changed since the version before this one — the question people actually ask after a
+        // bad release, and one the history could not answer until deployments recorded their config.
+        var previous = await db.Deployments
+            .Where(d => d.AppId == deployment.AppId && d.Number < deployment.Number && d.ConfigJson != null)
+            .OrderByDescending(d => d.Number)
+            .FirstOrDefaultAsync(ct);
+
+        var before = Harbora.Infrastructure.Deployments.DeploymentConfig.FromJson(previous?.ConfigJson);
+        var after = Harbora.Infrastructure.Deployments.DeploymentConfig.FromJson(deployment.ConfigJson);
+
+        ViewBag.ComparedWith = previous?.Number;
+        ViewBag.ConfigChanges = Harbora.Infrastructure.Deployments.ConfigDiff.Between(before, after);
+        ViewBag.ConfigIdentical = Harbora.Infrastructure.Deployments.ConfigDiff.AreIdentical(before, after);
+        ViewBag.Config = after;
+
         return View(deployment);
     }
 

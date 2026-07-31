@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260731144710_DeploymentConfigSnapshot")]
+    partial class DeploymentConfigSnapshot
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -961,50 +964,6 @@ namespace Harbora.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Alerts");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Monitoring.MetricRollup", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<double>("Average")
-                        .HasColumnType("double precision");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<double>("Maximum")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("Minimum")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("Period")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("PeriodStart")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("ResourceRef")
-                        .HasColumnType("text");
-
-                    b.Property<int>("SampleCount")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("ServerId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("MetricRollups");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Monitoring.MonitoringMetric", b =>

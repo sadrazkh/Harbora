@@ -100,6 +100,12 @@ public sealed class DeploymentPipeline(
             await db.SaveChangesAsync(ct);
         }
 
+        // Taken before anything runs, so it records what this version was released with even if the
+        // deploy fails: comparing a failed release against the last good one is the whole point.
+        deployment.ConfigJson = DeploymentConfig
+            .From(app, v => v.IsSecret ? SafeUnprotect(v.Value) : v.Value, protector.DeriveKey("config-fingerprint"))
+            .ToJson();
+
         try
         {
             await SetStatus(DeploymentStatus.Building);

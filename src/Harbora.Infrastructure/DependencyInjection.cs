@@ -130,6 +130,8 @@ public static class DependencyInjection
         services.AddScoped<INotificationService, Notifications.NotificationService>();
         // Survives the collector's per-pass scope, so a recurring condition alerts once per interval.
         services.AddSingleton<Monitoring.AlertThrottle>();
+        // Summarises finished hours and days so history outlives the raw samples.
+        services.AddScoped<Monitoring.MetricsRollupService>();
         services.AddScoped<IMetricsCollector, Monitoring.MetricsCollector>();
         services.AddHostedService<Monitoring.MetricsCollectorHostedService>();
         // Raises the SSL-expiry alert the rule engine has always offered but nothing ever fired.

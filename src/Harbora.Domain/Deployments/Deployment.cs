@@ -1,4 +1,4 @@
-using Harbora.Domain.Common;
+﻿using Harbora.Domain.Common;
 using Harbora.Domain.Apps;
 
 namespace Harbora.Domain.Deployments;
@@ -50,6 +50,14 @@ public class Deployment : BaseEntity
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? FinishedAt { get; set; }
     public string? ErrorMessage { get; set; }
+
+    /// <summary>
+    /// The configuration this version ran with, as JSON. Recorded because "it worked yesterday,
+    /// what changed?" had no answer anywhere: a settings change and a code change looked identical
+    /// in the history. Secret values are never stored here — only a keyed fingerprint, so a change
+    /// is visible without the value being recoverable.
+    /// </summary>
+    public string? ConfigJson { get; set; }
 
     public ICollection<DeploymentLog> Logs { get; set; } = new List<DeploymentLog>();
 }
