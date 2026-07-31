@@ -38,8 +38,8 @@ nobody can read is a permission nobody audits.
 
 **Tests / checks**
 
-- Suite **945 passing**, 0 errors / 0 warnings (from 920).
-- Mutation testing: **20 mutations, 19 caught, 1 equivalent.** Two findings worth recording:
+- Suite **961 passing**, 0 errors / 0 warnings (from 920).
+- Mutation testing: **30 mutations, 29 caught, 1 equivalent.** Two findings worth recording:
   the equivalent one was a redundant early return no test could distinguish, so it was **deleted**
   rather than left in with a test written to justify it; and a survivor showed that dropping the
   caller from the grant query would make **one person's grant apply to everyone in the workspace** —
@@ -60,9 +60,46 @@ the server:
 - Lists — apps, databases, projects — show only what the caller can act on, and the project page
   checks on its own rather than relying on the list not linking to it.
 
+**Verified live on the server**
+
+- A plan created **with** a 1 GB disk limit — the form sends the field it always displayed.
+- With a database measured at 3 GB against that plan, creating an app **and** creating another
+  database were both refused with *"This plan allows 1 GB of disk and 3 GB is already in use"* —
+  both figures named, on both screens.
+- Withdrawing a plan that still had a tenant on it was refused and the plan stayed enabled.
+- Editing the plan to 10 GB took effect, and a database could be created again immediately after.
+- Test artifacts removed; the workspace is back on the default plan, three seeded plans remain,
+  overcommit back to 1.0, and the `test` app is untouched after nine hours up.
+
 **Honest gaps**
-- The other two Phase 8 items — plan/quota shape and the platform admin area — are untouched. Both
-  partly exist already (Plans and Tenants screens, `QuotaService`).
+### Plan and quota shape
+
+**`MaxDiskBytes` sat on the plan, appeared on the pricing screen, and was checked nowhere** — a
+limit that could be sold and was never applied. The create-plan form did not even send it, so every
+plan carried a disk limit of zero underneath a column promising one.
+
+Making it real also meant being honest about what real can mean: a Docker volume has no size of its
+own, so nothing stops a process writing. What the platform can do is measure what is there and
+refuse to hand out more room to a workspace already over.
+
+- `DiskQuota` decides, counting databases and app volumes together — both take room on the same
+  disk, and counting one is a limit that half applies.
+- **A volume nobody has measured is reported as unknown, never as empty.** Assuming zero is how a
+  quota quietly stops being one, and the figure carries that caveat wherever it is shown.
+- Nothing measured yet does not block anyone: refusing on a measurement nobody took would make the
+  platform unusable for a reason nobody could see.
+- `StorageMeasurer` measures one volume every ten minutes, oldest first — a quota that depends on
+  somebody remembering to press refresh is not a quota, and measuring everything at once competes
+  with the work the server is there to do.
+
+### Platform administration
+
+- **Plans could only be created.** A wrong limit or a changed price meant making a new plan and
+  moving every tenant across by hand. They can now be corrected and withdrawn.
+- Withdrawing is refused while tenants are still on it: a workspace whose plan vanishes silently
+  falls back to the default one, which changes what they are allowed without anybody deciding to.
+- Lowering a limit **takes nothing away** — no app is deleted — so the screen now lists the tenants
+  a change is already biting. Without it the effect of the decision is invisible.
 **Verified live on the server**
 
 A second account, limited to projects, with no grants:

@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
@@ -44,6 +44,12 @@ public sealed class QuotaService(HarboraDbContext db) : IQuotaService
         if (plan.MaxCpuCores > 0 && cpu + addCpu > plan.MaxCpuCores)
             return QuotaCheck.Deny("CPU quota exceeded for this plan.");
 
+        // The disk limit used to sit on the plan, appear on the pricing screen, and be checked
+        // nowhere at all.
+        var disk = await DiskUsageAsync(workspaceId, ct);
+        if (!DiskQuota.Allows(plan.MaxDiskBytes, disk))
+            return QuotaCheck.Deny(DiskQuota.Explain(plan.MaxDiskBytes, disk));
+
         return QuotaCheck.Ok;
     }
 
@@ -54,7 +60,37 @@ public sealed class QuotaService(HarboraDbContext db) : IQuotaService
         if (plan is null) return QuotaCheck.Ok;
         if (plan.MaxServices > 0 && services >= plan.MaxServices)
             return QuotaCheck.Deny($"Service limit reached ({plan.MaxServices}).");
+
+        var disk = await DiskUsageAsync(workspaceId, ct);
+        if (!DiskQuota.Allows(plan.MaxDiskBytes, disk))
+            return QuotaCheck.Deny(DiskQuota.Explain(plan.MaxDiskBytes, disk));
+
         return QuotaCheck.Ok;
+    }
+
+    /// <summary>
+    /// What this workspace is measured to be using, and how much has never been measured.
+    ///
+    /// Both halves matter: a volume nobody has measured is reported as unknown rather than counted
+    /// as empty, because assuming zero is how a quota quietly stops being one.
+    /// </summary>
+    public async Task<DiskUsage> DiskUsageAsync(Guid workspaceId, CancellationToken ct)
+    {
+        var databases = await db.ManagedServices.AsNoTracking()
+            .Where(s => s.WorkspaceId == workspaceId)
+            .Select(s => s.StorageBytes)
+            .ToListAsync(ct);
+
+        var volumes = await db.Volumes.AsNoTracking()
+            .Where(v => v.App!.WorkspaceId == workspaceId)
+            .Select(v => v.StorageBytes)
+            .ToListAsync(ct);
+
+        var all = databases.Concat(volumes).ToList();
+
+        return new DiskUsage(
+            all.Where(b => b is not null).Sum(b => b!.Value),
+            all.Count(b => b is null));
     }
 
     // --- helpers ---

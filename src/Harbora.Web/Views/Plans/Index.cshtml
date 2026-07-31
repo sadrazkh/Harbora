@@ -1,4 +1,4 @@
-@model PlansPageViewModel
+﻿@model PlansPageViewModel
 @{
     ViewData["Title"] = "Plans";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -81,9 +81,80 @@
             <input name="maxServices" type="number" value="1" placeholder="Max services" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
             <input name="maxMemoryMb" type="number" value="1024" placeholder="Max memory (MB)" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
             <input name="maxCpu" type="number" step="0.25" value="1" placeholder="Max CPU cores" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+            @* This field existed on the plan and on this screen, and the form never sent it — so
+               every plan carried a disk limit of zero while a column promised one. *@
+            <input name="maxDiskGb" type="number" value="0" placeholder="Max disk (GB)" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
             <input name="allowedSizeKeys" placeholder="nano,micro,small" class="sm:col-span-2 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm font-mono" />
             <div class="sm:col-span-2"><button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@(isFa ? "ذخیره" : "Save")</button></div>
         </form>
         <p class="mt-2 text-xs text-slate-500">@(isFa ? "۰ یعنی نامحدود." : "0 means unlimited.")</p>
     </section>
+
+    @* ---- correcting a plan ----
+       Plans could only be created, so a wrong limit or a changed price meant a new plan and moving
+       every tenant across by hand. *@
+    <section class="mt-8 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 class="font-semibold mb-3">@(isFa ? "ویرایش پلن‌ها" : "Edit plans")</h2>
+        <div class="space-y-4">
+            @foreach (var p in Model.Plans)
+            {
+                <form asp-controller="Plans" asp-action="UpdatePlan" asp-route-id="@p.Id" method="post"
+                      class="grid sm:grid-cols-4 gap-2 items-center">
+                    @Html.AntiForgeryToken()
+                    <input name="name" value="@p.Name" class="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm" />
+                    <input name="monthlyPrice" type="number" step="0.01" value="@p.MonthlyPrice" class="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm" />
+                    <input name="maxApps" type="number" value="@p.MaxApps" class="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm" />
+                    <input name="maxServices" type="number" value="@p.MaxServices" class="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm" />
+                    <input name="maxMemoryMb" type="number" value="@(p.MaxMemoryBytes / 1024 / 1024)" class="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm" />
+                    <input name="maxCpu" type="number" step="0.25" value="@p.MaxCpuCores" class="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm" />
+                    <input name="maxDiskGb" type="number" value="@(p.MaxDiskBytes / 1024 / 1024 / 1024)" class="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm" />
+                    <input name="allowedSizeKeys" value="@p.AllowedSizeKeys" class="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm font-mono" />
+                    <div class="sm:col-span-4 flex items-center gap-2">
+                        <button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-sm">@(isFa ? "ذخیره" : "save")</button>
+                        @if (!p.IsDefault)
+                        {
+                            <span></span>
+                        }
+                        <span class="text-xs text-slate-500">
+                            @(isFa ? "نام / قیمت / اپ / دیتابیس / حافظه(MB) / CPU / دیسک(GB) / سایزها"
+                                   : "name / price / apps / databases / memory MB / cpu / disk GB / sizes")
+                        </span>
+                    </div>
+                </form>
+                <form asp-controller="Plans" asp-action="SetEnabled" asp-route-id="@p.Id" method="post">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="enabled" value="@((!p.IsEnabled).ToString().ToLowerInvariant())" />
+                    <button class="text-xs @(p.IsEnabled ? "text-amber-400" : "text-emerald-400")">
+                        @(p.IsEnabled
+                            ? (isFa ? "برداشتن از فهرست پلن‌های جدید" : "withdraw from new tenants")
+                            : (isFa ? "در دسترس کردن دوباره" : "make available again"))
+                    </button>
+                </form>
+            }
+        </div>
+    </section>
+
+    @* ---- who a limit change is already biting ----
+       Lowering a limit takes nothing away from anyone, so without this the effect is invisible. *@
+    var over = ViewBag.OverPlan as List<(string Tenant, string Plan, string Problem)> ?? new();
+    @if (over.Count > 0)
+    {
+        <section class="mt-8 rounded-xl border border-amber-700 bg-amber-900/10 p-5">
+            <h2 class="font-semibold text-amber-200 mb-2">@(isFa ? "بالاتر از سقف پلن" : "Over their plan")</h2>
+            <p class="text-xs text-amber-200/70 mb-3">
+                @(isFa
+                    ? "چیزی از آن‌ها گرفته نشده — فقط نمی‌توانند مورد جدیدی اضافه کنند."
+                    : "Nothing has been taken away from them; they simply cannot add anything new.")
+            </p>
+            <div class="space-y-1 text-sm">
+                @foreach (var row in over)
+                {
+                    <div class="flex flex-wrap justify-between gap-2">
+                        <span class="text-slate-300">@row.Tenant <span class="text-slate-500">· @row.Plan</span></span>
+                        <span class="text-amber-300">@row.Problem</span>
+                    </div>
+                }
+            </div>
+        </section>
+    }
 }

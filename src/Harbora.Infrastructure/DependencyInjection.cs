@@ -122,6 +122,8 @@ public static class DependencyInjection
         services.AddScoped<INodeCapacityService, Tenancy.NodeCapacityService>();
         services.AddScoped<ISchedulerService, Tenancy.SchedulerService>();
         services.AddHostedService<Tenancy.MeteringService>();
+        // Measures one volume at a time, so the disk quota is checked against something real.
+        services.AddHostedService<Tenancy.StorageMeasurer>();
 
         // Tells the truth about custom domains: where DNS points and what certificate is live.
         services.AddScoped<IDomainInspector, Networking.DomainInspector>();
