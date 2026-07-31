@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Domain.Common;
 using Harbora.Infrastructure.Deployments;
 using Harbora.Tests.Fakes;
@@ -150,6 +150,46 @@ public class ServicePlanTests
         result.Status.Should().Be(DeploymentStatus.Succeeded);
         h.Http.Attempts.Should().BeGreaterThan(0, "it serves HTTP to its siblings");
         h.Proxy.ApplyCount.Should().Be(0, "but nothing public points at it");
+    }
+
+    [Fact]
+    public async Task Deploying_a_scheduled_job_starts_nothing_and_still_succeeds()
+    {
+        // Observed on a live server: creating a cron service reported "Failed" while the job went on
+        // running its schedule successfully underneath. The pipeline started its image as if it were
+        // a web service, the container exited — as a scheduled job's container must — and the health
+        // gate called that a broken deploy.
+        using var h = new PipelineHarness();
+        h.App.Kind = ServiceKind.Cron;
+        h.App.CronExpression = "0 3 * * *";
+        h.Db.SaveChanges();
+
+        var result = await h.RunAsync(h.QueueDeployment(number: 1));
+
+        result.Status.Should().Be(DeploymentStatus.Succeeded);
+        h.Docker.OperationsOn(h.ContainerFor(1)).Should().NotContain("RunContainerAsync",
+            "a scheduled job has nothing to keep running between its runs");
+        h.Http.Attempts.Should().Be(0);
+        h.Proxy.ApplyCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Deploying_a_scheduled_job_leaves_it_ready_to_run()
+    {
+        // The deployment exists to produce the image the runs use, so it has to be the active one —
+        // otherwise every run reports "this job has never been deployed".
+        using var h = new PipelineHarness();
+        h.App.Kind = ServiceKind.Cron;
+        h.App.CronExpression = "0 3 * * *";
+        h.App.NextRunAt = new DateTimeOffset(2020, 1, 1, 3, 0, 0, TimeSpan.Zero);
+        h.Db.SaveChanges();
+
+        var deployment = await h.RunAsync(h.QueueDeployment(number: 1));
+
+        h.App.ActiveDeploymentId.Should().Be(deployment.Id);
+        h.App.Status.Should().Be(AppStatus.Running, "enabled — Stop is what disables the schedule");
+        h.App.NextRunAt.Should().BeNull(
+            "a deploy that changed the expression must not keep firing at the old time");
     }
 
     [Fact]

@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
@@ -72,7 +72,7 @@ public sealed class DeploymentPipeline(
         // Safe to call from any thread.
         async Task LogFromEngine(LogStream s, string message)
         {
-            var clean = redactor.Redact(message, secrets);
+            var clean = LogText.Clean(redactor.Redact(message, secrets));
             pendingEngineLogs.Enqueue((s, clean));
             await stream.PublishLogAsync(deploymentId, s, clean, ct);
         }
@@ -80,7 +80,7 @@ public sealed class DeploymentPipeline(
         // Pipeline-thread logging only.
         async Task Log(LogStream s, string message)
         {
-            var clean = redactor.Redact(message, secrets);
+            var clean = LogText.Clean(redactor.Redact(message, secrets));
             DrainEngineLogs();
             db.DeploymentLogs.Add(new DeploymentLog
             {
@@ -162,6 +162,35 @@ public sealed class DeploymentPipeline(
             foreach (var v in app.Volumes)
                 await docker.EnsureVolumeAsync(v.Name, ct);
 
+            // A scheduled job has no long-running container: releasing it means having the image its
+            // runs will use, and nothing more. Starting one and health-gating it fails every deploy
+            // of a service that is behaving exactly as designed — which is what happened the first
+            // time a cron service was created here. It reported "Failed", and went on running its
+            // schedule successfully every minute underneath that.
+            if (!ServicePlan.IsLongRunning(app.Kind))
+            {
+                await RetireOldContainersAsync(docker, app.Slug, [], Log, ct);
+
+                if (deployment.RolledBackFromId is not null)
+                    await MarkSupersededAsRolledBackAsync(app.ActiveDeploymentId, deployment.Id, Log, ct);
+
+                app.ActiveDeploymentId = deployment.Id;
+                // Here "Running" means enabled rather than "a process is up": Stop disables the
+                // schedule and the runner skips it. There is no container to describe.
+                app.Status = AppStatus.Running;
+                // Cleared so the next tick recomputes from the schedule as it stands now — a deploy
+                // that changed the expression must not keep firing at the old time.
+                app.NextRunAt = null;
+                await SetStatus(DeploymentStatus.Succeeded);
+                await Log(LogStream.System,
+                    $"✅ Deployment #{deployment.Number} succeeded. " +
+                    (app.Kind == ServiceKind.Cron
+                        ? $"Nothing is started now — this job runs on its schedule ({app.CronExpression})."
+                        : "Nothing is started now — this service runs on demand."));
+                await PruneOldImagesAsync(docker, app, Log, ct);
+                return;
+            }
+
             // Zero-downtime cutover (ADR-007): the new container gets a versioned name and starts
             // ALONGSIDE the currently-serving one. We only retire the old container(s) AFTER the new
             // one is healthy and traffic has been switched — so a failed deploy never drops traffic.
@@ -240,6 +269,12 @@ public sealed class DeploymentPipeline(
                 return;
             }
 
+            // The release task runs from the NEW image, with this app's environment and network, but
+            // before anything is started or switched. A failure here fails the deployment while the
+            // current version is still serving — which is the whole reason it does not live inside the
+            // container's own start-up, where a failed migration takes the site down with it.
+            await RunReleaseTaskAsync(docker, app, imageTag, network, env, Log, LogFromEngine, ct);
+
             await Log(LogStream.System, $"Starting container {containerName} …");
             var containerId = await docker.RunContainerAsync(new DockerRunRequest(
                 imageTag, containerName, network, env, labels,
@@ -303,14 +338,20 @@ public sealed class DeploymentPipeline(
             // Failed is reachable from any in-flight state; guard against a double-terminal write.
             if (DeploymentStateMachine.IsInFlight(deployment.Status))
                 DeploymentStateMachine.Transition(deployment, DeploymentStatus.Failed, clock.UtcNow);
-            deployment.ErrorMessage = ex.Message;
+            // Cleaned as well as redacted, and before it is stored rather than only on its way to the
+            // log. A failure message quotes the failing command's own output, so it carries the same
+            // unstorable bytes — and a write that throws here leaves the deployment unable to record
+            // that it failed at all. Redacting the stored copy too: it is shown on the deployment
+            // page, so a build error that echoes a secret would otherwise keep it in the database.
+            var reason = LogText.Clean(redactor.Redact(ex.Message, secrets));
+            deployment.ErrorMessage = reason;
             app.Status = app.ActiveDeploymentId is null ? AppStatus.Failed : AppStatus.Running;
             DrainEngineLogs();
             await db.SaveChangesAsync(ct);
             await stream.PublishStatusAsync(deploymentId, DeploymentStatus.Failed, ct);
-            await Log(LogStream.System, $"❌ Deployment failed: {redactor.Redact(ex.Message, secrets)}");
+            await Log(LogStream.System, $"❌ Deployment failed: {reason}");
             await notifications.NotifyAsync(app.WorkspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical,
-                $"Deploy failed: {app.Name} #{deployment.Number}", redactor.Redact(ex.Message, secrets), ct);
+                $"Deploy failed: {app.Name} #{deployment.Number}", reason, ct);
         }
     }
 
@@ -857,6 +898,81 @@ public sealed class DeploymentPipeline(
             return await FailedAsync(docker, lateCrash, current, ct);
 
         return await FailedAsync(docker, HealthFailure.NoHealthyResponse, current, ct, url);
+    }
+
+    /// <summary>
+    /// Runs the app's release command, if it has one. Throws on a non-zero exit so the caller's
+    /// failure path — which leaves the previous container untouched — handles it like any other.
+    /// </summary>
+    private async Task RunReleaseTaskAsync(
+        IDockerEngine docker, App app, string imageTag, string network,
+        IReadOnlyDictionary<string, string> env, Func<LogStream, string, Task> log,
+        Func<LogStream, string, Task> logFromEngine, CancellationToken ct)
+    {
+        var command = app.ReleaseCommand?.Trim();
+        if (string.IsNullOrEmpty(command)) return;
+
+        await log(LogStream.System, $"Release task: {command}");
+
+        var output = new System.Text.StringBuilder();
+
+        // Bounded, so a command that waits for input cannot leave the deployment in progress for
+        // ever. The linked source keeps a real cancellation (the user pressing stop) distinguishable
+        // from the timeout below.
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(_opt.ReleaseTaskTimeout);
+
+        int exit;
+        try
+        {
+            exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
+                imageTag,
+                // Through a shell so an ordinary command line works, rather than only an exec-form array.
+                ["sh", "-c", command],
+                [],
+                Env: env,
+                NetworkMode: network),
+                // Reported inline, and through the engine-safe logger. Progress<T> hands the
+                // callback to the thread pool, so the tail could still be empty when the failure
+                // message below is built — a command that printed plenty would be reported as
+                // having produced no output. Running inline also means this callback arrives on
+                // the engine's own thread, where only the queueing logger may be used: the
+                // pipeline's logger writes to the DbContext, which is not thread-safe.
+                new InlineProgress<string>(line =>
+                {
+                    lock (output) output.AppendLine(line);
+                    _ = logFromEngine(LogStream.Build, line);
+                }), limit.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                $"The release task was still running after {_opt.ReleaseTaskTimeout.TotalMinutes:0} minutes " +
+                $"and was given up on, so this version was not released and the current one is still serving.");
+        }
+        catch (Exception ex) when (ex.Message.Contains("executable file not found", StringComparison.OrdinalIgnoreCase))
+        {
+            // Scratch and distroless images have no shell, so there is nothing to run the command
+            // line with. Worth saying plainly: the raw Docker error blames "sh", which reads like a
+            // fault in the command rather than in the choice of base image.
+            throw new InvalidOperationException(
+                "The release task could not start because this image has no shell, so there is nothing " +
+                "to run the command with. Use a base image that includes /bin/sh, or clear the release " +
+                "command. This version was not released and the current one is still serving.");
+        }
+
+        if (exit != 0)
+        {
+            var tail = output.ToString().Trim();
+            if (tail.Length > 600) tail = "…" + tail[^600..];
+
+            throw new InvalidOperationException(
+                $"The release task failed (exit {exit}), so this version was not released and the " +
+                $"current one is still serving." +
+                (tail.Length > 0 ? $" Its last output was: {tail}" : " It produced no output."));
+        }
+
+        await log(LogStream.System, "Release task finished.");
     }
 
     /// <summary>

@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Xunit;
@@ -35,6 +35,20 @@ public class DeploymentStateMachineTests
     [InlineData(DeploymentStatus.Building, DeploymentStatus.Building)]      // self-transition
     public void Rejects_illegal_transitions(DeploymentStatus from, DeploymentStatus to)
         => DeploymentStateMachine.CanTransition(from, to).Should().BeFalse();
+
+    [Fact]
+    public void A_deployment_with_nothing_to_health_check_may_finish_from_deploying()
+    {
+        // A scheduled job and a release task have no container to probe. Routing them through
+        // HealthChecking to keep the happy path uniform would record a check that never ran.
+        DeploymentStateMachine.CanTransition(DeploymentStatus.Deploying, DeploymentStatus.Succeeded)
+            .Should().BeTrue();
+
+        DeploymentStateMachine.CanTransition(DeploymentStatus.Building, DeploymentStatus.Succeeded)
+            .Should().BeFalse("nothing has been released yet at that point");
+        DeploymentStateMachine.CanTransition(DeploymentStatus.Queued, DeploymentStatus.Succeeded)
+            .Should().BeFalse();
+    }
 
     [Fact]
     public void InFlight_and_Terminal_partition_all_states()

@@ -48,6 +48,15 @@ public sealed class HarboraRuntimeOptions
     /// <summary>Per-request timeout for a single HTTP health probe.</summary>
     public double HealthHttpTimeoutSeconds { get; set; } = 5;
 
+    /// <summary>
+    /// How long a release task may run before the deployment gives up on it. Generous, because a
+    /// migration against a large database legitimately takes minutes; bounded, because a command
+    /// that waits for input otherwise leaves a deployment "in progress" for ever, with nothing on
+    /// the screen to click and no way to tell a slow migration from a stuck one.
+    /// </summary>
+    public double ReleaseTaskTimeoutMinutes { get; set; } = 30;
+
     internal TimeSpan HealthPollInterval => TimeSpan.FromSeconds(Math.Max(0, HealthPollIntervalSeconds));
     internal TimeSpan HealthHttpTimeout => TimeSpan.FromSeconds(Math.Max(0.001, HealthHttpTimeoutSeconds));
+    internal TimeSpan ReleaseTaskTimeout => TimeSpan.FromMinutes(Math.Max(0.0001, ReleaseTaskTimeoutMinutes));
 }

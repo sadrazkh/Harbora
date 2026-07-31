@@ -1,4 +1,4 @@
-using Harbora.Domain.Common;
+﻿using Harbora.Domain.Common;
 using Harbora.Domain.Git;
 using Harbora.Domain.Networking;
 using Harbora.Domain.Deployments;
@@ -27,6 +27,26 @@ public class App : BaseEntity
     /// which is the default, so the deploy engine's behaviour is unchanged for every current app.
     /// </summary>
     public ServiceKind Kind { get; set; } = ServiceKind.Web;
+
+    /// <summary>
+    /// A command run once from the new image before traffic moves to it — database migrations, most
+    /// often. A non-zero exit fails the deployment and the current version keeps serving, which is the
+    /// entire reason this runs before the cutover rather than inside the container's own start-up.
+    /// </summary>
+    public string? ReleaseCommand { get; set; }
+
+    /// <summary>Five-field cron expression for <see cref="ServiceKind.Cron"/> services.</summary>
+    public string? CronExpression { get; set; }
+
+    /// <summary>
+    /// What a scheduled job actually runs. Separate from <see cref="BuildCommand"/> on purpose: for a
+    /// job built from a repository those are two different commands, and running the build command on
+    /// a schedule is not what anyone means. Empty runs the image as its author intended.
+    /// </summary>
+    public string? Command { get; set; }
+
+    /// <summary>Computed by the cron runner so a due job can be found without re-parsing everything.</summary>
+    public DateTimeOffset? NextRunAt { get; set; }
 
     public Guid ServerId { get; set; }
 

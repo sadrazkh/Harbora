@@ -80,6 +80,8 @@ public static class DependencyInjection
         services.AddScoped<IRollbackPlanner, Deployments.RollbackPlanner>();
         // Remote-node host ports are reserved, not guessed (see HostPortRange).
         services.AddScoped<Deployments.HostPortAllocator>();
+        // Scheduled jobs: each run is a short-lived container, and the history it leaves is the point.
+        services.AddHostedService<Deployments.CronRunner>();
         // Crash recovery: reconcile in-flight deployments on startup (ADR-005).
         services.AddHostedService<Deployments.DeploymentReconciler>();
 

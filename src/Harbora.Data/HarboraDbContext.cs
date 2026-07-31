@@ -50,6 +50,7 @@ public class HarboraDbContext : DbContext
     public DbSet<EnvironmentVariable> EnvironmentVariables => Set<EnvironmentVariable>();
     public DbSet<Volume> Volumes => Set<Volume>();
     public DbSet<Deployment> Deployments => Set<Deployment>();
+    public DbSet<CronRun> CronRuns => Set<CronRun>();
     public DbSet<DeploymentLog> DeploymentLogs => Set<DeploymentLog>();
     public DbSet<DomainName> Domains => Set<DomainName>();
     public DbSet<Route> Routes => Set<Route>();
@@ -142,6 +143,13 @@ public class HarboraDbContext : DbContext
 
         b.Entity<DeploymentLog>(e => e.HasIndex(x => new { x.DeploymentId, x.Sequence }));
 
+        b.Entity<CronRun>(e =>
+        {
+            // The history page reads newest-first for one job; the runner counts recent failures.
+            e.HasIndex(x => new { x.AppId, x.StartedAt });
+            e.HasOne(x => x.App).WithMany().HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         b.Entity<DomainName>(e =>
         {
             e.HasIndex(x => x.Host).IsUnique();
@@ -233,6 +241,7 @@ public class HarboraDbContext : DbContext
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Harbora.Domain.Projects.Project>()
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<CronRun>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         // Environments carry a denormalised WorkspaceId for the same reason deployments do: filtering
         // through the parent turns into a join that can hide rows whose parent is momentarily absent.
         b.Entity<Harbora.Domain.Projects.Environment>()

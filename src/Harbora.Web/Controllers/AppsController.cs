@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Authorization;
@@ -63,6 +63,18 @@ public sealed class AppsController(
         if (model.SourceType == AppSourceType.PrebuiltImage && string.IsNullOrWhiteSpace(model.PrebuiltImage))
             ModelState.AddModelError(nameof(model.PrebuiltImage), "An image reference is required.");
 
+        // Checked here so an unreadable schedule is a form error rather than a job that silently
+        // never runs and is only noticed weeks later.
+        if (model.Kind == ServiceKind.Cron
+            && !Harbora.Infrastructure.Deployments.CronSchedule.TryParse(model.CronExpression, out _, out var cronError))
+            ModelState.AddModelError(nameof(model.CronExpression), cronError!);
+
+        // A schedule with nothing to run is the quietest possible failure: the job fires on time,
+        // the image starts and exits, and the history fills with successful runs that did nothing.
+        if (model.Kind == ServiceKind.Cron && string.IsNullOrWhiteSpace(model.Command))
+            ModelState.AddModelError(nameof(model.Command),
+                "Enter the command this job should run, for example \"php artisan backup:run\".");
+
         // Resolve the instance size (drives container limits + scheduling).
         var size = string.IsNullOrWhiteSpace(model.InstanceSizeKey)
             ? null
@@ -103,6 +115,13 @@ public sealed class AppsController(
             Slug = slug,
             SourceType = model.SourceType,
             Kind = model.Kind,
+            ReleaseCommand = string.IsNullOrWhiteSpace(model.ReleaseCommand) ? null : model.ReleaseCommand.Trim(),
+            CronExpression = model.Kind == ServiceKind.Cron && !string.IsNullOrWhiteSpace(model.CronExpression)
+                ? model.CronExpression.Trim()
+                : null,
+            Command = model.Kind == ServiceKind.Cron && !string.IsNullOrWhiteSpace(model.Command)
+                ? model.Command.Trim()
+                : null,
             ContainerPort = model.ContainerPort <= 0 ? 80 : model.ContainerPort,
             DockerfilePath = model.DockerfilePath,
             PrebuiltImage = model.PrebuiltImage,
@@ -168,6 +187,17 @@ public sealed class AppsController(
             .Include(a => a.GitRepository)
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
+
+        // A scheduled job has no container to look at, so its history IS the app: whether it ran,
+        // whether it worked, and what it said. Loaded only for cron services — every other kind
+        // would pay for a query that returns nothing.
+        if (app.Kind == ServiceKind.Cron)
+            ViewBag.CronRuns = await db.CronRuns
+                .Where(r => r.AppId == app.Id)
+                .OrderByDescending(r => r.StartedAt)
+                .Take(20)
+                .ToListAsync(ct);
+
         return View(app);
     }
 

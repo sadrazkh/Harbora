@@ -7,7 +7,8 @@ namespace Harbora.Domain.Deployments;
 /// Deployment status must only change through <see cref="Transition"/> so the lifecycle stays
 /// observable, testable, and recoverable — no ad-hoc field writes scattered across the pipeline.
 ///
-/// Flow: Queued → Building → (Pushing) → Deploying → HealthChecking → Succeeded.
+/// Flow: Queued → Building → (Pushing) → Deploying → HealthChecking → Succeeded, with the health
+/// step skipped for services that have no container to check (scheduled jobs, release tasks).
 /// Any in-flight state may go to Failed or Cancelled. A Succeeded deployment may later be marked
 /// RolledBack when a rollback re-releases a different image.
 /// </summary>
@@ -19,7 +20,10 @@ public static class DeploymentStateMachine
             [DeploymentStatus.Queued]         = [DeploymentStatus.Building, DeploymentStatus.Cancelled, DeploymentStatus.Failed],
             [DeploymentStatus.Building]       = [DeploymentStatus.Pushing, DeploymentStatus.Deploying, DeploymentStatus.Failed, DeploymentStatus.Cancelled],
             [DeploymentStatus.Pushing]        = [DeploymentStatus.Deploying, DeploymentStatus.Failed, DeploymentStatus.Cancelled],
-            [DeploymentStatus.Deploying]      = [DeploymentStatus.HealthChecking, DeploymentStatus.Failed, DeploymentStatus.Cancelled],
+            // Succeeded is reachable directly from Deploying for a service with no long-running
+            // container — a scheduled job or a release task. There is nothing to health-check, and
+            // passing through HealthChecking would record a check that never happened.
+            [DeploymentStatus.Deploying]      = [DeploymentStatus.HealthChecking, DeploymentStatus.Succeeded, DeploymentStatus.Failed, DeploymentStatus.Cancelled],
             [DeploymentStatus.HealthChecking] = [DeploymentStatus.Succeeded, DeploymentStatus.Failed, DeploymentStatus.Cancelled],
             [DeploymentStatus.Succeeded]      = [DeploymentStatus.RolledBack],
             [DeploymentStatus.Failed]         = [],

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using Harbora.Application.Abstractions;
 
 namespace Harbora.Tests.Fakes;
@@ -241,17 +241,38 @@ public sealed class FakeDockerEngine : IDockerEngine
         return Task.CompletedTask;
     }
 
-    public Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct)
+    public async Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct)
     {
         Record(nameof(RunOneOffAsync), request.Image);
         OneOffCommands.Add(string.Join(' ', request.Command));
-        return Task.FromResult(OneOffExitCode);
+        OneOffRequests.Add(request);
+
+        foreach (var line in OneOffOutput) log?.Report(line);
+
+        if (OneOffThrows is not null) throw OneOffThrows;
+        // A container that never exits — the caller is expected to bound its own wait.
+        if (OneOffNeverFinishes) await Task.Delay(Timeout.Infinite, ct);
+
+        return OneOffExitCode;
     }
 
     /// <summary>Every one-off command line, so destructive operations can be asserted on.</summary>
     public List<string> OneOffCommands { get; } = [];
 
+    /// <summary>The full requests, for asserting on environment and network as well as the command.</summary>
+    public List<DockerOneOffRequest> OneOffRequests { get; } = [];
+
     public int OneOffExitCode { get; set; }
+
+    /// <summary>A one-off that runs for ever — a command waiting for input, or one that was never
+    /// actually started because the image's entrypoint swallowed it.</summary>
+    public bool OneOffNeverFinishes { get; set; }
+
+    /// <summary>Raised instead of running, for the failures Docker itself reports.</summary>
+    public Exception? OneOffThrows { get; set; }
+
+    /// <summary>What the one-off prints, exactly as the engine hands it over — framing bytes and all.</summary>
+    public List<string> OneOffOutput { get; } = [];
 
     public Task<HostInfo> GetHostInfoAsync(CancellationToken ct)
         => Task.FromResult(new HostInfo(4, 8L << 30, 100L << 30, 50L << 30, "fake", _containers.Count));

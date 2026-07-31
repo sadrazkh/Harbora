@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
@@ -51,6 +51,15 @@ public sealed class CreateAppViewModel
     /// existed already was.
     /// </summary>
     public ServiceKind Kind { get; set; } = ServiceKind.Web;
+
+    /// <summary>Command run from the new image before traffic switches; a failure keeps the old version.</summary>
+    public string? ReleaseCommand { get; set; }
+
+    /// <summary>Five-field cron expression, for a Cron service.</summary>
+    public string? CronExpression { get; set; }
+
+    /// <summary>What a scheduled job runs each time it fires.</summary>
+    public string? Command { get; set; }
     /// <summary>Target node; defaults to the local server when unset.</summary>
     public Guid? ServerId { get; set; }
     /// <summary>Resource tier; sets the container CPU/memory limits and is quota-checked.</summary>

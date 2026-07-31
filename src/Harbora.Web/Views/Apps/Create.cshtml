@@ -1,4 +1,4 @@
-@model CreateAppViewModel
+﻿@model CreateAppViewModel
 @{
     ViewData["Title"] = "Create Application";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -138,6 +138,36 @@ harbora deploy &lt;slug&gt;</code></pre>
                         }
                     </select>
                     <span class="text-xs text-slate-500" data-kind-help></span>
+                </div>
+
+                <div data-cron-only class="hidden">
+                    <label class="block text-sm text-slate-400 mb-1">@(isFa ? "دستوری که اجرا می‌شود" : "Command to run")</label>
+                    <input asp-for="Command" placeholder="php artisan backup:run" class="@input" />
+                    <span asp-validation-for="Command" class="text-xs text-red-400"></span>
+                    <span class="text-xs text-slate-500">
+                        @(isFa ? "هر بار که زمان‌بندی فرا برسد همین دستور در یک کانتینر تازه اجرا می‌شود."
+                               : "Runs in a fresh container each time the schedule comes round.")
+                    </span>
+                </div>
+
+                <div data-cron-only class="hidden">
+                    <label class="block text-sm text-slate-400 mb-1">@(isFa ? "زمان‌بندی (cron)" : "Schedule (cron)")</label>
+                    <input asp-for="CronExpression" placeholder="0 3 * * *" class="@input" />
+                    <span asp-validation-for="CronExpression" class="text-xs text-red-400"></span>
+                    <span class="text-xs text-slate-500">
+                        @(isFa ? "پنج فیلد: دقیقه ساعت روز ماه روزهفته — مثلاً «0 3 * * *» یعنی هر روز ۳ بامداد."
+                               : "Five fields: minute hour day month weekday — \"0 3 * * *\" is 03:00 every day.")
+                    </span>
+                </div>
+
+                <div>
+                    <label class="block text-sm text-slate-400 mb-1">@(isFa ? "دستور پیش از انتشار" : "Release command")</label>
+                    <input asp-for="ReleaseCommand" placeholder="dotnet ef database update" class="@input" />
+                    <span class="text-xs text-slate-500">
+                        @(isFa
+                            ? "قبل از جابه‌جایی ترافیک از روی ایمیج جدید اجرا می‌شود. اگر شکست بخورد، نسخه‌ی فعلی سر جایش می‌ماند."
+                            : "Runs from the new image before traffic switches. If it fails, the current version keeps serving.")
+                    </span>
                 </div>
 
                 @if (environments.Count > 0)

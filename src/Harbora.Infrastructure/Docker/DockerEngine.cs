@@ -273,10 +273,15 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
     {
         await PullImageAsync(request.Image, new Progress<string>(l => log?.Report(l)), ct);
 
+        // The image's entrypoint is replaced rather than argued with — see OneOffLaunch for why
+        // leaving it in place silently turns the command into arguments the image ignores.
+        var (entrypoint, arguments) = OneOffLaunch.From(request.Command);
+
         var create = new CreateContainerParameters
         {
             Image = request.Image,
-            Cmd = request.Command.ToList(),
+            Entrypoint = entrypoint,
+            Cmd = arguments,
             Env = request.Env?.Select(kv => $"{kv.Key}={kv.Value}").ToList(),
             HostConfig = new HostConfig
             {

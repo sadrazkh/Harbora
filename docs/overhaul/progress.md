@@ -1,9 +1,104 @@
-# Harbora Overhaul — Progress Log
+﻿# Harbora Overhaul — Progress Log
 
 Newest entries on top. Every entry records: what was done · files changed · tests/checks run ·
 result (success/fail) · decisions · next step.
 
 ---
+
+## 2026-07-31 — Scheduled jobs and release tasks (Cron + Release Task)
+
+Two things a real PaaS is expected to have and Harbora did not: a command that runs *before* a new
+version goes live (database migrations, almost always), and services that run on a schedule instead
+of staying up.
+
+**What was built**
+
+- `CronSchedule` — a five-field cron parser answering one question: when next? Written rather than
+  taken from a library because the surface needed is one method, and a scheduler that drifts or
+  double-fires is invisible until a nightly job has been dead for a month. Includes cron’s own
+  or-rule when both day fields are restricted, Sunday-as-7, and a bounded search so an impossible
+  schedule (31 February) answers "never" instead of spinning.
+- `CronRunner` — a one-minute tick. Each run is a short-lived container; the `CronRun` row it leaves
+  is the feature. First sight of a job schedules it rather than firing it; the schedule advances
+  *before* the run so a slow job is not started twice; missed runs are not replayed.
+- `App.Command` + migration — what a scheduled job actually runs, deliberately separate from
+  `BuildCommand`: for a job built from a repository those are two different commands.
+- `RunReleaseTaskAsync` — runs from the **new** image, with the app’s environment and network,
+  before the new container starts. If it fails the deployment fails and the version already serving
+  keeps serving. That ordering is the entire reason it does not live in the container’s own
+  start-up, where a failed migration takes the site down with it.
+- Cron run history and the job’s command on the app page; schedule and command validated server-side.
+
+**Five defects, every one found by running it on the live server rather than by review**
+
+1. **A release task could not run at all on most real images.** The command was sent as the
+   container’s *command*, which for any image with an `ENTRYPOINT` (`dotnet App.dll` — nearly every
+   application image) makes it *arguments* the image ignores. Proven on the server: with an
+   entrypoint that ignores its arguments the run returned **exit 0** — a migration that never ran,
+   reported as a successful release. With one that does not, the deployment hung indefinitely.
+   Fixed in `OneOffLaunch`: the command replaces the entrypoint. Affected scheduled jobs and every
+   other one-off container too.
+2. **A release task had no time limit,** so a command waiting for input left the deployment "in
+   progress" for ever with nothing to click. Now bounded (`ReleaseTaskTimeoutMinutes`, default 30),
+   and a shell-less image is reported as "this image has no shell" rather than Docker’s complaint
+   about `sh`, which reads like a typo in the command.
+3. **Deploying a cron service always reported Failed.** `ServicePlan.IsLongRunning` existed but was
+   referenced nowhere — the rule was on paper only. The pipeline started the job’s image like a web
+   service, the container exited as a scheduled job’s container must, and the health gate called
+   that a broken deploy. The panel said "Failed" while the job ran successfully every minute
+   underneath. Non-long-running kinds now finish at the image, with a matching
+   `Deploying → Succeeded` transition added to the state machine — passing through `HealthChecking`
+   would record a check that never ran.
+4. **Captured output could not be stored at all.** Docker frames the output of a container with no
+   TTY: eight bytes per chunk, NUL bytes included. PostgreSQL cannot hold a NUL in a text column,
+   so the write threw — and because it threw *inside* `SaveChanges`, the pipeline could not even
+   record that it had failed. The deployment sat "in progress" indefinitely, which is worse than a
+   plain failure. Fixed in `LogText`, applied to deployment logs, the stored failure message and
+   cron run output. The stored failure message was also being saved **unredacted** while only the
+   log line was redacted — a build error echoing a secret kept it in the database. Now both.
+5. **A scheduled job could not be given a command,** and nothing said so. The runner read a field
+   the create form never captured, so a job fired exactly on time, ran the image’s default
+   entrypoint, exited 0 and did nothing — a history full of successful runs that accomplished
+   nothing. Now a required field for cron services, refused at the form.
+
+Also fixed along the way: a cron run did not join the workspace network (a job got the environment
+variables naming its database and no route to reach it — indistinguishable from wrong credentials),
+and `Progress<T>` was used to capture output it hands over asynchronously, so the last lines were
+lost — a run recorded the image pull and nothing the job printed, and a failure message said "It
+produced no output" about a command that printed plenty. `InlineProgress` reports on the calling
+thread.
+
+**Tests / checks**
+
+- Suite **690 passing**, 0 errors / 0 warnings (from 663 at the start of this work).
+- `CronRunner`: 13 tests, previously **none** — it had only ever been checked by watching production.
+- `CronSchedule` 24 · release task 11 · `LogText` 8 · `OneOffLaunch` 4.
+- Mutation testing: **23 mutations, 23 caught.** One (removing the release-task timeout) was caught
+  by the suite hanging, which is the bug it reintroduces.
+- Live on the server, after deploying each fix:
+  - a release task that succeeds — its real output (`MIGRATION_STARTED`/`MIGRATION_DONE`) captured
+    from an image with an `ENTRYPOINT`, finishing **before** the container starts;
+  - a release task that fails — deployment **Failed** with a readable reason quoting the command’s
+    own output, version 1 still **Up** and answering **HTTP 200**, app still Running;
+  - a cron service — deployment **Succeeded**, then three runs exactly one minute apart, exit 0,
+    with `NIGHTLY_JOB_RAN` and its timestamp in the history;
+  - a cron service with no command — refused at the form;
+  - the migration applied with an automatic restore point taken first
+    (`pre-upgrade-20260731-092101.sql.gz`, 537 KB).
+
+**Server left clean**
+
+- Test apps (`nightly`, `nightly2`, `nightly3`, `reltest`, `reltest2`) deleted; 0 cron runs left.
+- `CpuOvercommitFactor` back to `1.0` — raised to `2.0` with the owner’s approval only to fit a test
+  app on a two-core node whose entire CPU is committed to the one real app.
+- The `test` app is Running and serving; its 404 at `/` is the application’s own routing — Traefik
+  reaches the container.
+
+**Next step**
+
+- A "Run now" button for scheduled jobs: without it a nightly job cannot be checked until tomorrow.
+- Editing the schedule, command and release command after creation — they are set at create time only.
+- A notification when a scheduled job fails; nothing currently tells anyone.
 
 ## 2026-07-31 — Backups that arrive where you can see them: Telegram, email, S3
 

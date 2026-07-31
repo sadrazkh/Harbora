@@ -1,4 +1,4 @@
-using Harbora.Data;
+﻿using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
@@ -29,6 +29,7 @@ public sealed class PipelineHarness : IDisposable
     public FakeGitService Git { get; }
     public FixedClock Clock { get; } = new();
     public HarboraRuntimeOptions Options { get; }
+    public PassthroughProtector Protector { get; } = new();
 
     public Workspace Workspace { get; }
     public Server Server { get; }
@@ -192,8 +193,10 @@ public sealed class PipelineHarness : IDisposable
         Git,
         Proxy,
         Stream,
-        new PassthroughProtector(),
-        new PassthroughRedactor(),
+        Protector,
+        // The real redactor, not a passthrough: what reaches a stored field or a notification is a
+        // guarantee about secrets, and a fake that redacts nothing cannot show it holding.
+        new Harbora.Infrastructure.Security.SecretRedactor(),
         Notifications,
         Http,
         Clock,
