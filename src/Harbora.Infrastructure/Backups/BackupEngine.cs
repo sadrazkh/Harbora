@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -29,9 +29,11 @@ public sealed class BackupEngine(
     BackupDeliveryService delivery,
     ISystemClock clock,
     IOptions<BackupOptions> options,
+    IOptions<Deployments.HarboraRuntimeOptions> runtime,
     ILogger<BackupEngine> logger) : IBackupEngine
 {
     private readonly BackupOptions _opt = options.Value;
+    private readonly Deployments.HarboraRuntimeOptions _runtime = runtime.Value;
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
 
     public async Task<Guid> QueueBackupAsync(Guid workspaceId, BackupType type, string targetRef, Guid destinationId, bool scheduled, CancellationToken ct)
@@ -69,7 +71,8 @@ public sealed class BackupEngine(
             {
                 BackupType.AppConfig => await BackupAppConfigAsync(backup, stamp, ct),
                 BackupType.FullPlatform => await BackupPlatformAsync(backup, stamp, ct),
-                _ => await BackupVolumeAsync(backup, stamp, ct) // Database / Volume / Service
+                BackupType.Database or BackupType.Service => await BackupDatabaseAsync(backup, stamp, ct),
+                _ => await BackupVolumeAsync(backup, stamp, ct)
             };
 
             // Encrypt before the artifact leaves staging. The checksum is taken over the file we
@@ -145,6 +148,60 @@ public sealed class BackupEngine(
         return (key, await WriteGzJsonAsync(key, snapshot, ct));
     }
 
+    /// <summary>
+    /// Asks the database for its contents, rather than copying its files while it is running.
+    ///
+    /// Tarring a live data directory is not a backup of PostgreSQL or MySQL: the files are being
+    /// written to as they are read, so what comes out may be torn — and nothing discovers that until
+    /// someone tries to restore it, which is the worst moment to find out. Engines with no logical
+    /// dump (Redis, whose own snapshot file is the sensible artifact) still take the volume copy.
+    /// </summary>
+    private async Task<(string Key, string Path)> BackupDatabaseAsync(Backup backup, string stamp, CancellationToken ct)
+    {
+        var svc = await db.ManagedServices.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == Guid.Parse(backup.TargetRef), ct);
+        if (svc is null) throw new InvalidOperationException("That database no longer exists.");
+
+        var definition = Services.ServiceCatalog.All[svc.Type];
+        var creds = new Services.ServiceCreds(
+            svc.ContainerName, definition.Port, svc.Username, RevealPassword(svc.EncryptedPassword), svc.DatabaseName);
+
+        var key = $"database-{svc.Name}-{stamp}";
+        var plan = DatabaseDumpPlan.For(svc.Type, creds, $"/backup/{key}");
+        if (plan is null) return await BackupVolumeAsync(backup, stamp, ct);
+
+        key += plan.FileExtension;
+        plan = DatabaseDumpPlan.For(svc.Type, creds, $"/backup/{key}")!;
+
+        // Run the dump from the database's OWN image, so the client tools match the server version —
+        // pg_dump refuses to dump a server newer than itself, which is exactly what happens when a
+        // fixed helper image is used against a database someone upgraded.
+        var image = $"{definition.ImageRepo}:{svc.Version}";
+        var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
+
+        var output = new System.Text.StringBuilder();
+        var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
+            image,
+            plan.Command,
+            [(_opt.StagingVolume, "/backup", false)],
+            Env: plan.Env,
+            NetworkMode: _runtime.WorkspaceNetwork(wsSlug)),
+            new Deployments.InlineProgress<string>(line => { lock (output) output.AppendLine(line); }), ct);
+
+        if (exit != 0)
+            throw new InvalidOperationException(
+                $"The database export failed (exit {exit}). {Deployments.LogText.Clean(output.ToString()).Trim()}");
+
+        var staged = Path.Combine(_opt.StagingDir, key);
+        if (!File.Exists(staged))
+            throw new InvalidOperationException(
+                $"The export reported success but no file arrived at {staged}. The helper mounts the " +
+                $"volume '{_opt.StagingVolume}' while the panel reads {_opt.StagingDir}; check that both " +
+                "resolve to the SAME docker volume (`docker volume ls`).");
+
+        return (key, staged);
+    }
+
     private async Task<(string Key, string Path)> BackupVolumeAsync(Backup backup, string stamp, CancellationToken ct)
     {
         var (volumeName, label) = await ResolveVolumeAsync(backup.Type, backup.TargetRef, ct);
@@ -207,7 +264,17 @@ public sealed class BackupEngine(
             return;
         }
 
-        // Volume/database restore: stop the container, wipe + untar the volume, restart.
+        // A logical dump is put back by the engine that produced it, not untarred into a data
+        // directory. Which one this is comes from the artifact itself, so backups taken before
+        // database exports existed still restore the way they were made.
+        if (backup.Type is BackupType.Database or BackupType.Service
+            && !BackupArtifact.IsVolumeArchive(backup.ArtifactPath))
+        {
+            await RestoreDatabaseAsync(backup, localPath, ct);
+            return;
+        }
+
+        // Volume restore: stop the container, wipe + untar the volume, restart.
         var (volumeName, _) = await ResolveVolumeAsync(backup.Type, backup.TargetRef, ct);
         var fileName = Path.GetFileName(localPath);
         var stagedCopy = Path.Combine(_opt.StagingDir, fileName);
@@ -233,6 +300,66 @@ public sealed class BackupEngine(
                 "Nothing was lost; check disk space on the server and try again.");
         if (exit != 0) throw new InvalidOperationException($"Restore failed (exit {exit}).");
         if (containerName is not null) await docker.RestartContainerAsync(await RequireContainerIdAsync(containerName, ct), ct);
+    }
+
+    /// <summary>
+    /// Puts a logical dump back through the database's own client, into the running database.
+    ///
+    /// A safety dump is taken first. The volume path can undo a failed restore by swapping
+    /// directories back; a logical restore writes into a live database and has no such move, so the
+    /// only protection is having the previous contents on disk before it starts.
+    /// </summary>
+    private async Task RestoreDatabaseAsync(Backup backup, string localPath, CancellationToken ct)
+    {
+        var svc = await db.ManagedServices.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == Guid.Parse(backup.TargetRef), ct);
+        if (svc is null) throw new InvalidOperationException("That database no longer exists.");
+
+        var definition = Services.ServiceCatalog.All[svc.Type];
+        var creds = new Services.ServiceCreds(
+            svc.ContainerName, definition.Port, svc.Username, RevealPassword(svc.EncryptedPassword), svc.DatabaseName);
+        var image = $"{definition.ImageRepo}:{svc.Version}";
+        var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
+        var network = _runtime.WorkspaceNetwork(wsSlug);
+
+        var stamp = clock.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+        var safetyKey = $"pre-restore-{svc.Name}-{stamp}";
+        var safety = DatabaseDumpPlan.For(svc.Type, creds, $"/backup/{safetyKey}");
+        if (safety is not null)
+        {
+            safetyKey += safety.FileExtension;
+            safety = DatabaseDumpPlan.For(svc.Type, creds, $"/backup/{safetyKey}")!;
+            var safetyExit = await docker.RunOneOffAsync(new DockerOneOffRequest(
+                image, safety.Command, [(_opt.StagingVolume, "/backup", false)],
+                Env: safety.Env, NetworkMode: network), null, ct);
+
+            if (safetyExit != 0)
+                throw new InvalidOperationException(
+                    "The database could not be exported before restoring, so the restore was not " +
+                    "started — there would have been nothing to go back to.");
+            logger.LogInformation("Pre-restore dump of {Name} written to {Key}.", svc.Name, safetyKey);
+        }
+
+        // The artifact has to be where the helper can see it: the staging volume, by name.
+        var fileName = Path.GetFileName(localPath);
+        var stagedCopy = Path.Combine(_opt.StagingDir, fileName);
+        if (!string.Equals(Path.GetFullPath(localPath), Path.GetFullPath(stagedCopy), StringComparison.OrdinalIgnoreCase))
+            File.Copy(localPath, stagedCopy, overwrite: true);
+
+        var plan = DatabaseDumpPlan.RestoreFor(svc.Type, creds, $"/backup/{fileName}")
+                   ?? throw new InvalidOperationException($"{svc.Type} has no restore command.");
+
+        var output = new System.Text.StringBuilder();
+        var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
+            image, plan.Command, [(_opt.StagingVolume, "/backup", true)],
+            Env: plan.Env, NetworkMode: network),
+            new Deployments.InlineProgress<string>(line => { lock (output) output.AppendLine(line); }), ct);
+
+        if (exit != 0)
+            throw new InvalidOperationException(
+                $"The restore failed (exit {exit}). The database may be partly restored; the export " +
+                $"taken just before it is stored as {safetyKey}. " +
+                Deployments.LogText.Clean(output.ToString()).Trim());
     }
 
     private async Task RestoreAppConfigAsync(Backup backup, string localPath, CancellationToken ct)
@@ -368,6 +495,19 @@ public sealed class BackupEngine(
     /// It must be DETERMINISTIC: an earlier version derived it from Protect(), which uses a random
     /// nonce per call, so every archive was encrypted under a key that could never be reproduced.
     /// </summary>
+    /// <summary>A password that cannot be decrypted fails loudly: a dump attempted with an empty
+    /// one produces an authentication error nobody could trace back to a key problem.</summary>
+    private string RevealPassword(string encrypted)
+    {
+        try { return protector.Unprotect(encrypted); }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "This database's stored password could not be decrypted, so it cannot be exported. " +
+                "The master key most likely changed since it was created.", ex);
+        }
+    }
+
     private byte[] ArchiveKey() => protector.DeriveKey("backup-archive");
 
     public async Task<BackupVerification> VerifyAsync(Guid backupId, CancellationToken ct)

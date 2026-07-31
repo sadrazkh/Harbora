@@ -1,4 +1,4 @@
-@model BackupsPageViewModel
+﻿@model BackupsPageViewModel
 @{
     ViewData["Title"] = "Backups";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -238,9 +238,9 @@
         });
     });
 </script>
-}
+@* Two script blocks, one section: Razor allows a section name only once per view, and
+   the second one made this whole page throw. *@
 
-@section Scripts {
 <script>
 // Show only the fields for the chosen channel, and look up Telegram chat ids on request.
 (function () {

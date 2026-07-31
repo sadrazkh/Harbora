@@ -85,7 +85,7 @@ public sealed partial class DatabasesController(
             InternalPort = entry!.InternalPort,
             Username = "harbora",
             DatabaseName = entry.HasDatabaseName ? slug.Replace('-', '_') : string.Empty,
-            EncryptedPassword = protector.Protect(GeneratePassword())
+            EncryptedPassword = protector.Protect(Harbora.Infrastructure.Services.ServiceCredentials.Generate())
         };
         db.ManagedServices.Add(service);
         await db.SaveChangesAsync(ct);
@@ -106,6 +106,18 @@ public sealed partial class DatabasesController(
         ViewBag.Reveal = reveal;
         ViewBag.Apps = await db.Apps.Where(a => a.WorkspaceId == WorkspaceId)
             .Select(a => new { a.Id, a.Name }).ToListAsync(ct);
+
+        // Which private network this address only works on. Saying it plainly is the difference
+        // between "the host is wrong" and "the service is somewhere else".
+        ViewBag.Network = service.EnvironmentId is { } environmentId
+            ? await db.Environments.Where(e => e.Id == environmentId)
+                .Select(e => Harbora.Infrastructure.Networking.EnvironmentNetwork.For(e.Project!.Slug, e.Slug, e.Id))
+                .FirstOrDefaultAsync(ct)
+            : null;
+
+        // Which services actually hold this database's address — from their real environment, not
+        // from a list of who once pressed Attach.
+        ViewBag.UsedBy = (await usage.AppsUsingAsync(id, ct)).Select(a => a.Name).ToList();
         return View(service);
     }
 
@@ -165,6 +177,61 @@ public sealed partial class DatabasesController(
     }
 
     /// <summary>Injects the service's connection env into an app (secret, encrypted). Applies on next deploy.</summary>
+    /// <summary>
+    /// Connects to the database from its own private network. Everything else on the page is
+    /// configuration; this is the only part that can say whether it works.
+    /// </summary>
+    [HttpPost("{id:guid}/test")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> TestConnection(Guid id, CancellationToken ct)
+    {
+        await Guard(id, ct);
+        var failure = await engine.TestConnectionAsync(id, ct);
+        TempData[failure is null ? "Message" : "Error"] =
+            failure ?? "Connected. Credentials accepted and the database answered.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>Measures the data volume now. Explicit, because it walks the whole directory.</summary>
+    [HttpPost("{id:guid}/measure")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> Measure(Guid id, CancellationToken ct)
+    {
+        await Guard(id, ct);
+        var bytes = await engine.MeasureStorageAsync(id, ct);
+        TempData[bytes is null ? "Error" : "Message"] = bytes is null
+            ? "The size could not be measured. The data volume may not exist yet."
+            : $"Data size: {Harbora.Infrastructure.Services.StorageMeasurement.Describe(bytes)}.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// Replaces the password and rewrites it into every service that was attached to this database.
+    /// Those services keep the old value until they are redeployed, which is what the message says.
+    /// </summary>
+    [HttpPost("{id:guid}/rotate")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> Rotate(Guid id, CancellationToken ct)
+    {
+        await Guard(id, ct);
+        try
+        {
+            var updated = await engine.RotatePasswordAsync(id, ct);
+            TempData["Message"] = updated.Count == 0
+                ? "The password was changed. No service had it stored."
+                : $"The password was changed and written into: {string.Join(", ", updated)}. " +
+                  "Redeploy them to pick it up — until then they are still using the old one.";
+        }
+        catch (InvalidOperationException ex)
+        {
+            TempData["Error"] = ex.Message;
+        }
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
     [HttpPost("{id:guid}/attach")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
@@ -194,8 +261,6 @@ public sealed partial class DatabasesController(
         if (!owns) throw new UnauthorizedAccessException();
     }
 
-    private static string GeneratePassword() =>
-        Convert.ToBase64String(RandomNumberGenerator.GetBytes(18)).Replace("+", "").Replace("/", "").Replace("=", "");
 
     private static string Slugify(string name)
     {

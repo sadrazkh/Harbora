@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using Harbora.Application.Abstractions;
@@ -60,7 +60,12 @@ public sealed class BackupHarness : IDisposable
 
     public BackupEngine Engine() => new(
         Db, Docker, Storage, new PassthroughProtector(), new NoopJobQueue(),
-        Notifications, Delivery(), Clock, Options.AsOptions(), NullLogger<BackupEngine>.Instance);
+        Notifications, Delivery(), Clock, Options.AsOptions(),
+        Microsoft.Extensions.Options.Options.Create(Runtime),
+        NullLogger<BackupEngine>.Instance);
+
+    /// <summary>Networking the database export needs — it runs on the tenant's own network.</summary>
+    public Harbora.Infrastructure.Deployments.HarboraRuntimeOptions Runtime { get; } = new();
 
     /// <summary>Writes a real gzipped JSON snapshot artifact and the row that points at it.</summary>
     public async Task<Backup> SeedAppConfigBackupAsync(bool encrypt = true, string kind = "app-config")

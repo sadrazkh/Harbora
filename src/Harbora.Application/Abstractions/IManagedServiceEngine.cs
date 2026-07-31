@@ -1,4 +1,4 @@
-using Harbora.Domain.Common;
+﻿using Harbora.Domain.Common;
 
 namespace Harbora.Application.Abstractions;
 
@@ -18,6 +18,24 @@ public interface IManagedServiceEngine
     Task StartAsync(Guid serviceId, CancellationToken ct);
     Task StopAsync(Guid serviceId, CancellationToken ct);
     Task RemoveAsync(Guid serviceId, bool deleteData, CancellationToken ct);
+
+    /// <summary>
+    /// Measures the data volume and records the figure with the moment it was taken. Explicit rather
+    /// than automatic: it walks the whole directory, which is minutes on a large database.
+    /// </summary>
+    Task<long?> MeasureStorageAsync(Guid serviceId, CancellationToken ct);
+
+    /// <summary>
+    /// Replaces the database password and rewrites it into every app that was attached to it.
+    /// Returns the apps that must be redeployed before they will use the new one.
+    /// </summary>
+    Task<IReadOnlyList<string>> RotatePasswordAsync(Guid serviceId, CancellationToken ct);
+
+    /// <summary>
+    /// Connects to the database from its own private network, the way a service would. Returns null
+    /// on success, or a sentence describing what to go and fix.
+    /// </summary>
+    Task<string?> TestConnectionAsync(Guid serviceId, CancellationToken ct);
 
     /// <summary>Builds connection info (decrypting the password) for the details screen / attach flow.</summary>
     Task<ServiceConnectionInfo> GetConnectionInfoAsync(Guid serviceId, CancellationToken ct);

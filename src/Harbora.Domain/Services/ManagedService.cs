@@ -1,4 +1,4 @@
-using Harbora.Domain.Common;
+﻿using Harbora.Domain.Common;
 
 namespace Harbora.Domain.Services;
 
@@ -17,7 +17,12 @@ public class ManagedService : BaseEntity
 
     public string Name { get; set; } = string.Empty;
     public ManagedServiceType Type { get; set; }
-    public string Version { get; set; } = "latest";
+    /// <summary>
+    /// The version asked for. Not defaulted to "latest": a database that silently jumps a major
+    /// version when its container is recreated will refuse to start on the data directory it already
+    /// has, and that is discovered at the worst possible moment.
+    /// </summary>
+    public string Version { get; set; } = string.Empty;
     public ServiceStatus Status { get; set; } = ServiceStatus.Provisioning;
 
     public string ContainerName { get; set; } = string.Empty;
@@ -29,4 +34,20 @@ public class ManagedService : BaseEntity
     public string DatabaseName { get; set; } = string.Empty;
 
     public string VolumeName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Size of the data volume when it was last measured, and when that was. Stored rather than read
+    /// on demand because measuring means walking the whole directory in a container — cheap for a
+    /// small database, minutes for a large one. A figure with no timestamp beside it is the kind of
+    /// number people trust for longer than they should.
+    /// </summary>
+    public long? StorageBytes { get; set; }
+    public DateTimeOffset? StorageMeasuredAt { get; set; }
+
+    /// <summary>
+    /// The image tag the container is actually running, as opposed to <see cref="Version"/>, which is
+    /// what was asked for. They differ after someone pulls a moving tag, and a database that quietly
+    /// changed major version is the one failure here nobody recovers from quickly.
+    /// </summary>
+    public string? RunningImage { get; set; }
 }

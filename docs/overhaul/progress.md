@@ -5,6 +5,103 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-31 — Phase 3 finished, Phase 4 done (database hardening + per-environment networking)
+
+### Phase 3 — the rest of database hardening
+
+**The one that mattered: a "database backup" was not a backup.** It fell through to tarring the data
+directory of a *running* database. For PostgreSQL or MySQL those files are being written to as they
+are read, so what comes out may be torn — and nothing discovers that until someone tries to restore
+it, which is the worst possible moment. The panel reported success either way.
+
+- `DatabaseDumpPlan` asks each engine for its contents the way it supports: `pg_dump`,
+  `mysqldump --single-transaction`, `mongodump`. Redis is the deliberate exception and says why —
+  a cache's own snapshot file is the honest artifact.
+- `set -o pipefail` throughout, because otherwise the pipeline reports gzip's exit code and a dump
+  that failed becomes a valid archive of an error message.
+- Restore is symmetrical, stops at the first error (`ON_ERROR_STOP=1`), and takes a dump of the
+  current contents *before* it starts — the volume path can swap directories back, a logical restore
+  writes into a live database and has no such move.
+- `BackupArtifact` reads the shape from the file name, so backups taken before this change still
+  restore the way they were made. Feeding a tarball to psql, or untarring SQL into a data directory,
+  is the failure that avoids.
+- Passwords travel in the environment, never on a command line.
+
+**Storage** — `du` from inside a container, stored with the moment it was taken. Explicit rather than
+automatic because it walks the whole directory. An unmeasured database shows "—", never "0 B": a
+plausible-looking figure is read as fact.
+
+**Version** — the entity no longer defaults to `latest`. The page shows the version asked for, the
+image actually running, and warns when they differ or when the tag is one that can move. A database
+that changes major version on a recreate will not start on the data it already has.
+
+**Rotation** — `CredentialRotationPlan`, engine by engine, and honest about the differences: SQL
+engines alter it live, Redis reads its password from its own command line and is recreated, MongoDB
+says it is not supported rather than shipping a command that works on one version and silently fails
+on the other. Nothing is stored unless the database accepted it — the other order locks every
+attached service out of a database whose password never changed. Every attached service is rewritten
+and the message says they keep the old value until redeployed.
+
+### Phase 4 — per project+environment networking
+
+Until now every service a tenant owned shared one network, so staging could reach production's
+database by name: isolation stopped at the tenant and went no further.
+
+- `EnvironmentNetwork` names a private network per environment. The environment id is part of the
+  name, so two projects whose names reduce to the same slug cannot end up sharing one — the same
+  isolation failure, reintroduced by a naming collision. Names are bounded to Docker's 63 characters
+  and trimmed from the descriptive part, never the id.
+- `NetworkPlan` is the staged rollout, and the reason this is safe to ship to a running platform: a
+  container joins **both** networks during the move. A service that has redeployed must stay
+  reachable by the ones that have not — otherwise the hostname still resolves in the configuration
+  and simply answers nowhere. A service with no environment stays exactly where it is.
+- `ConnectionProbe` answers the only question the rest of the page cannot: not "is it configured"
+  but "does it work". It authenticates rather than opening a socket — a port that accepts TCP proves
+  nothing about credentials — and it runs **from the database's own private network**, because the
+  failure being looked for is usually the network. Failures are translated into the thing to go and
+  fix: not on the same network, password rotated but not redeployed, container stopped.
+- The database page now states which private network its address resolves on, that it is not
+  reachable from the internet, and which services actually hold it.
+
+**Tests / checks**
+
+- Suite **788 passing**, 0 errors / 0 warnings (from 712).
+- The pipeline harness now creates its app inside a project and environment, as every real app has
+  been since they were introduced — the fixture had drifted from the product.
+
+**Verified live on the server**
+
+- A real PostgreSQL 16 database, created through the panel, came up on **both** networks:
+  `harbora-env-default-production-afc2c4ef` and `harbora-ws-default` — the dual-attach working as
+  designed, so nothing that has not redeployed loses its database.
+- The running image was recorded and matched the configured version (no drift).
+- Full cycle: a row written, backed up (a `.sql.gz` **logical dump**, not a tar), the row deleted,
+  restored — and the row came back. A pre-restore dump was taken automatically first.
+- Connection test, storage measurement (46 MB), and password rotation all confirmed. After rotation
+  the connection test passed with the new password, which is what proves the database role itself
+  was altered rather than only the stored value.
+
+**Three defects the live run found that the tests did not**
+
+1. **`pg_dump` without `--clean` produces a dump that only restores into an empty database.** Every
+   `CREATE TABLE` fails on the objects already there and `ON_ERROR_STOP` halts at the first one. So
+   the restore failed — correctly and loudly, but the backup was much less useful than it looked.
+   Now `--clean --if-exists`.
+2. **The size came back as unknown.** Docker frames the output of a container with no TTY, so the
+   digits arrived with control bytes stuck to them and the parser rejected them. It now strips them,
+   and still refuses any line that is not purely digits — `sha256:16…` has digits too.
+3. **The backups page had been returning 500 since the delivery feature was added** — two
+   `@section Scripts` blocks in one view, which Razor rejects. Not from this work; found because a
+   restore's error message never appeared. Merged into one.
+
+**Honest gaps**
+
+- MongoDB has no automated rotation or connection test, and says so on screen rather than offering a
+  button that does nothing.
+- The workspace network is still attached alongside the environment one. Dropping it is a separate,
+  deliberate step once every service has redeployed — `NetworkPlan` already takes the flag.
+- Storage is measured on request, not on a schedule.
+
 ## 2026-07-31 — Run now, and the start of Phase 3 (database hardening)
 
 **Run now** — a nightly job nobody can try until tomorrow is a nightly job nobody trusts.

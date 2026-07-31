@@ -157,8 +157,16 @@ public sealed class DeploymentPipeline(
             // Per-tenant isolation: each workspace gets its own network. Apps + their attached
             // services share it; other tenants can't reach them.
             var wsSlug = await db.Workspaces.Where(w => w.Id == app.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
-            var network = _opt.WorkspaceNetwork(wsSlug);
-            await docker.EnsureNetworkAsync(network, ct);
+            var workspaceNetwork = _opt.WorkspaceNetwork(wsSlug);
+
+            // Each environment gets its own private network, so staging cannot reach production's
+            // database by name. During the move both are attached — see NetworkPlan: a service that
+            // has redeployed must stay reachable by the ones that have not.
+            var environmentNetwork = await ResolveEnvironmentNetworkAsync(app, ct);
+            var networks = Networking.NetworkPlan.For(environmentNetwork, workspaceNetwork, keepWorkspaceNetwork: true);
+            var network = Networking.NetworkPlan.Primary(environmentNetwork, workspaceNetwork);
+
+            foreach (var name in networks) await docker.EnsureNetworkAsync(name, ct);
             foreach (var v in app.Volumes)
                 await docker.EnsureVolumeAsync(v.Name, ct);
 
@@ -222,8 +230,11 @@ public sealed class DeploymentPipeline(
             {
                 // Give the local Traefik ingress into this tenant's network, and the panel reach
                 // for HTTP health checks by container name (both idempotent, best-effort).
-                await docker.ConnectNetworkAsync(_opt.ProxyContainerName, network, ct);
-                await docker.ConnectNetworkAsync(_opt.PanelContainerName, network, ct);
+                foreach (var name in networks)
+                {
+                    await docker.ConnectNetworkAsync(_opt.ProxyContainerName, name, ct);
+                    await docker.ConnectNetworkAsync(_opt.PanelContainerName, name, ct);
+                }
             }
 
             var env = BuildEnv(app);
@@ -281,6 +292,11 @@ public sealed class DeploymentPipeline(
                 app.Volumes.Select(v => (v.Name, v.MountPath, v.ReadOnly)).ToList(),
                 containerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath,
                 Command: null, PublishToHostPort: publishPort), ct);
+
+            // A container is created on one network; the rest are attached now. Both are needed
+            // only while the platform moves to per-environment networks (see NetworkPlan).
+            foreach (var extra in networks.Skip(1))
+                await docker.ConnectNetworkAsync(containerName, extra, ct);
 
             await Log(LogStream.System, $"Container {containerId[..12]} is up. Verifying health …");
             await SetStatus(DeploymentStatus.HealthChecking);
@@ -353,6 +369,25 @@ public sealed class DeploymentPipeline(
             await notifications.NotifyAsync(app.WorkspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical,
                 $"Deploy failed: {app.Name} #{deployment.Number}", reason, ct);
         }
+    }
+
+    /// <summary>
+    /// The private network for this service's environment, or null while it has none — an app
+    /// created before projects existed and never reassigned. Null keeps it on the workspace network
+    /// rather than inventing a boundary it was never placed inside.
+    /// </summary>
+    private async Task<string?> ResolveEnvironmentNetworkAsync(App app, CancellationToken ct)
+    {
+        if (app.EnvironmentId is not { } environmentId) return null;
+
+        var placement = await db.Environments
+            .Where(e => e.Id == environmentId)
+            .Select(e => new { e.Slug, ProjectSlug = e.Project!.Slug })
+            .FirstOrDefaultAsync(ct);
+
+        return placement is null
+            ? null
+            : Networking.EnvironmentNetwork.For(placement.ProjectSlug, placement.Slug, environmentId);
     }
 
     private async Task<string> AcquireImageAsync(

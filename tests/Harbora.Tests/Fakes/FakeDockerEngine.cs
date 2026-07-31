@@ -226,7 +226,16 @@ public sealed class FakeDockerEngine : IDockerEngine
     public Task ConnectNetworkAsync(string containerNameOrId, string network, CancellationToken ct)
     {
         Record(nameof(ConnectNetworkAsync), containerNameOrId);
+        lock (_gate) _attachments.Add((containerNameOrId, network));
         return Task.CompletedTask;
+    }
+
+    private readonly List<(string Container, string Network)> _attachments = [];
+
+    /// <summary>Networks a container was attached to after it was created — the dual-attach path.</summary>
+    public IReadOnlyList<string> ConnectedNetworks(string containerName)
+    {
+        lock (_gate) return _attachments.Where(a => a.Container == containerName).Select(a => a.Network).ToList();
     }
 
     public Task EnsureVolumeAsync(string name, CancellationToken ct)

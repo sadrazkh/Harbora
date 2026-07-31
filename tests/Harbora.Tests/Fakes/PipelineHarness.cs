@@ -34,6 +34,8 @@ public sealed class PipelineHarness : IDisposable
     public Workspace Workspace { get; }
     public Server Server { get; }
     public App App { get; }
+    public Harbora.Domain.Projects.Project Project { get; }
+    public Harbora.Domain.Projects.Environment Environment { get; }
 
     private readonly string _workDir;
 
@@ -63,9 +65,21 @@ public sealed class PipelineHarness : IDisposable
             Id = Guid.NewGuid(), Name = localServer ? "local" : "node-2",
             Hostname = localServer ? "localhost" : "node2.internal", IsLocal = localServer
         };
+        // Every service has lived inside a project and environment since they were introduced, and
+        // the network it is deployed onto is derived from them — so the harness has them too.
+        Project = new Harbora.Domain.Projects.Project
+        {
+            Id = Guid.NewGuid(), WorkspaceId = Workspace.Id, Name = "Blog", Slug = "blog"
+        };
+        Environment = new Harbora.Domain.Projects.Environment
+        {
+            Id = Guid.NewGuid(), WorkspaceId = Workspace.Id, ProjectId = Project.Id,
+            Name = "Production", Slug = "production", IsDefault = true
+        };
         App = new App
         {
             Id = Guid.NewGuid(), WorkspaceId = Workspace.Id, ServerId = Server.Id,
+            EnvironmentId = Environment.Id,
             Name = "Blog", Slug = "blog", SourceType = sourceType,
             PrebuiltImage = sourceType == AppSourceType.PrebuiltImage ? "nginx:1.27" : null,
             ContainerPort = 8080, HealthCheckPath = null
@@ -73,6 +87,8 @@ public sealed class PipelineHarness : IDisposable
 
         Db.Workspaces.Add(Workspace);
         Db.Servers.Add(Server);
+        Db.Projects.Add(Project);
+        Db.Environments.Add(Environment);
         Db.Apps.Add(App);
         Db.SaveChanges();
     }
