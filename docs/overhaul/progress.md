@@ -5,6 +5,59 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-31 — Phase 9 (started): promotion
+
+**Promoting a release means moving the artifact, not building it again.** Building twice from one
+commit does not reliably produce the same image — a floating base tag, a dependency published in
+between — so "we tested this in staging" only means something if the bytes that reach production
+are the bytes that passed. The platform already kept every build image for rollback and already had
+`ImageOverride` for releasing an exact image; promotion is those two facts joined up.
+
+**What it deliberately does not do**
+
+Configuration does not travel. The target keeps its own variables, its own database, its own
+domains — copying staging's environment into production is how this feature becomes an outage. The
+text next to the button says so, because people expect the opposite.
+
+**What it refuses, and why each one is a real failure avoided**
+
+- A deployment that did not succeed: promoting a failed release is how the thing that broke staging
+  reaches production.
+- A deployment with no image: nothing to promote.
+- The same service: promotion moves a release to a *different* environment.
+- A different project: those are different applications that happen to share a platform.
+- **A built image going to a different node.** `harbora/shop:build-7` exists only on the machine
+  that built it, so this would fail at pull time, halfway through a deployment, with an error about
+  a missing image. A registry image is promotable anywhere, and the two are told apart by the tag
+  shape — a registry tag that merely starts with "build-" is not one of ours.
+
+The picker only lists targets the rule would actually accept, and asks the permission service about
+the *target* as well: promoting into a service someone cannot deploy would otherwise be a way
+around the permission on it.
+
+**Tests / checks**
+
+- Suite **974 passing**, 0 errors / 0 warnings (from 961).
+- Mutation testing: **8 mutations, 8 caught** — one after adding the case it exposed: with both
+  services unplaced, `null == null` reads as "same project" and would have allowed a promotion
+  between two services nothing connects.
+
+**Not done in Phase 9**
+
+- **Preview environments** — a branch or pull request getting its own environment, deployed on push
+  and torn down on merge. The pieces exist (environments, per-environment networks, Git webhooks)
+  but the lifecycle does not.
+- **AI assistants** — not started, and not something to start without asking: it needs a paid
+  external service, which is on the approval list.
+
+**Verified live on the server**
+
+Two environments of one project, a service in each: staging on `nginx:1.27-alpine`, production on
+`nginx:alpine`. After promoting, production's deployment recorded `nginx:1.27-alpine` **and the
+container actually running it was `nginx:1.27-alpine`** — the artifact travelled and nothing was
+rebuilt. The picker offered only services the rule accepts. Test services and the extra environment
+were removed afterwards.
+
 ## 2026-07-31 — Phase 8: permissions that stop at a project
 
 Roles were workspace-wide. Anyone who could deploy could deploy **everything the tenant owned**,

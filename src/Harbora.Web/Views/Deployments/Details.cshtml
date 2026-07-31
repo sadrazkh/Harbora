@@ -18,6 +18,38 @@
     var comparedWith = ViewBag.ComparedWith as int?;
     var identical = ViewBag.ConfigIdentical is true;
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var targets = ViewBag.PromotionTargets as IReadOnlyList<(Guid Id, string Name, string Environment)> ?? [];
+}
+
+@* ---- promote ----
+   The same artifact, released elsewhere. Building twice from one commit does not reliably produce
+   the same image, so "we tested this in staging" only means something if the bytes that reach
+   production are the bytes that passed. *@
+@if (targets.Count > 0 && !string.IsNullOrWhiteSpace(Model.ImageTag))
+{
+    <section class="mb-6 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="flex flex-wrap items-center gap-3">
+            <span class="font-semibold">@(isFa ? "ترفیع این نسخه" : "Promote this release")</span>
+            <form asp-controller="Deployments" asp-action="Promote" asp-route-id="@Model.Id" method="post"
+                  class="flex flex-wrap items-center gap-2">
+                @Html.AntiForgeryToken()
+                <select name="targetAppId" class="rounded-lg bg-slate-950 border border-slate-800 px-3 py-1.5 text-sm">
+                    @foreach (var t in targets)
+                    {
+                        <option value="@t.Id">@t.Name · @t.Environment</option>
+                    }
+                </select>
+                <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-3 py-1.5 text-sm font-semibold">
+                    @(isFa ? "ترفیع بده" : "Promote")</button>
+            </form>
+        </div>
+        @* The half people get wrong: a promotion moves the code, not the settings. *@
+        <p class="mt-2 text-xs text-slate-500">
+            @(isFa
+                ? $"دقیقاً همین ایمیج منتشر می‌شود: {Model.ImageTag} — چیزی دوباره ساخته نمی‌شود، و مقصد متغیرها، دیتابیس و دامنه‌های خودش را نگه می‌دارد."
+                : Harbora.Infrastructure.Deployments.PromotionPlan.Describe(Model.ImageTag!, "the target"))
+        </p>
+    </section>
 }
 
 @* ---- what changed since the previous release ----
