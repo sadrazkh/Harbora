@@ -164,6 +164,13 @@ public sealed class AppsController(
         if (!string.IsNullOrWhiteSpace(host) && !await db.Domains.AnyAsync(d => d.Host == host, ct))
             app.Domains.Add(new DomainName { Host = host, SslEnabled = true, ForceHttps = true, IsPrimary = true });
 
+        // A template describes more than an image and a port. Until this was applied, an app
+        // created from one arrived without the volume it declared — a static site whose content
+        // vanished on every redeploy — and without the variables it said it needed.
+        string? templateAdvice = null;
+        if (model.TemplateId is { } templateId)
+            templateAdvice = await ApplyTemplateAsync(app, templateId, ct);
+
         db.Apps.Add(app);
         await db.SaveChangesAsync(ct);
 
@@ -177,7 +184,49 @@ public sealed class AppsController(
             return RedirectToAction("Details", "Deployments", new { id = deploymentId });
         }
 
+        if (templateAdvice is not null) TempData["Message"] = templateAdvice;
         return RedirectToAction(nameof(Details), new { id = app.Id });
+    }
+
+    /// <summary>
+    /// Gives the app what its template declares: the volumes its data lives in, and the variables it
+    /// needs — secrets generated, plain ones left for a person and named in the message.
+    /// </summary>
+    private async Task<string?> ApplyTemplateAsync(App app, Guid templateId, CancellationToken ct)
+    {
+        var template = await db.AppTemplates.AsNoTracking().FirstOrDefaultAsync(t => t.Id == templateId, ct);
+        if (template is null) return null;
+
+        if (!Harbora.Infrastructure.Templates.TemplateManifest.TryParse(
+                template.ManifestJson, out var manifest, out _))
+            return null;
+
+        var plan = Harbora.Infrastructure.Templates.TemplateSetup.Prepare(
+            manifest!, () => Harbora.Infrastructure.Services.ServiceCredentials.Generate());
+
+        foreach (var mount in plan.VolumeMounts)
+            app.Volumes.Add(new Volume
+            {
+                // Named after the app, not the template: two apps from one template must not share
+                // a volume and therefore each other's data.
+                Name = $"harbora-vol-{app.Slug}-{Slugify(mount.Trim('/'))}",
+                MountPath = mount
+            });
+
+        foreach (var variable in plan.Variables)
+            app.EnvironmentVariables.Add(new EnvironmentVariable
+            {
+                Key = variable.Key,
+                Value = variable.Secret && variable.Value is not null
+                    ? protector.Protect(variable.Value)
+                    : variable.Value ?? "",
+                IsSecret = variable.Secret
+            });
+
+        if (!string.IsNullOrWhiteSpace(manifest!.Image)) app.PrebuiltImage ??= manifest.Image;
+        if (manifest.Port is { } port && app.ContainerPort <= 0) app.ContainerPort = port;
+
+        return Harbora.Infrastructure.Templates.TemplateSetup.Advice(plan);
     }
 
     public async Task<IActionResult> Details(Guid id, CancellationToken ct)
@@ -489,8 +538,12 @@ public sealed class AppsController(
             .Select(e => new SelectListItem($"{e.Project!.Name} · {e.Name}", e.Id.ToString()))
             .ToListAsync(ct);
 
-        var templates = await db.AppTemplates.Where(t => t.IsEnabled)
-            .OrderBy(t => t.Category).ThenBy(t => t.Name).ToListAsync(ct);
+        // The same visibility rule the catalog screen uses: offering a template another tenant
+        // wrote and nobody reviewed would run their image inside this one's private network.
+        var templates = (await db.AppTemplates
+                .OrderBy(t => t.Category).ThenBy(t => t.Name).ToListAsync(ct))
+            .Where(t => Harbora.Infrastructure.Templates.TemplateCatalog.IsVisibleTo(t, WorkspaceId))
+            .ToList();
         ViewBag.Templates = templates.Select(t => new SelectListItem($"{t.Name}", t.Id.ToString())).ToList();
 
         ViewBag.Servers = await db.Servers.OrderByDescending(s => s.IsLocal).ThenBy(s => s.Name)

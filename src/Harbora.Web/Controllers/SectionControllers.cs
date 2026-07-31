@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Web.Infrastructure;
@@ -13,14 +13,123 @@ namespace Harbora.Web.Controllers;
 /// a shared placeholder so navigation is complete and honest rather than dead links.
 /// </summary>
 [Authorize]
-public sealed class TemplatesController(HarboraDbContext db) : Controller
+public sealed class TemplatesController(HarboraDbContext db, ICurrentUser currentUser) : Controller
 {
+    private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
+    private bool IsReviewer => User.IsInRole("Owner") || User.IsInRole("Admin");
+
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         ViewData["Title"] = "Templates";
-        var templates = await db.AppTemplates.Where(t => t.IsEnabled)
-            .OrderBy(t => t.Category).ThenBy(t => t.Name).ToListAsync(ct);
-        return View(templates);
+
+        // Filtered in memory against one rule rather than a Where clause repeated per screen —
+        // "who may see this" decides whether one tenant's unreviewed image is offered to another.
+        var all = await db.AppTemplates.OrderBy(t => t.Category).ThenBy(t => t.Name).ToListAsync(ct);
+        ViewBag.WorkspaceId = WorkspaceId;
+        ViewBag.Reviewing = IsReviewer
+            ? all.Where(t => t.Status == Harbora.Domain.Templates.TemplateStatus.Submitted).ToList()
+            : [];
+
+        return View(all.Where(t => Harbora.Infrastructure.Templates.TemplateCatalog.IsVisibleTo(t, WorkspaceId)).ToList());
+    }
+
+    /// <summary>
+    /// Saves a template this workspace owns, refusing a manifest that cannot work. Checked here
+    /// rather than at deploy time, which is an hour later and much more expensive to unpick.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Save(Guid? id, string name, string category, string manifestJson, CancellationToken ct)
+    {
+        if (!Harbora.Infrastructure.Templates.TemplateManifest.TryParse(manifestJson, out _, out var errors))
+        {
+            TempData["Error"] = string.Join(" ", errors);
+            return RedirectToAction(nameof(Index));
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            TempData["Error"] = "A template needs a name.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var template = id is { } existingId
+            ? await db.AppTemplates.FirstOrDefaultAsync(t => t.Id == existingId, ct)
+            : null;
+
+        if (template is null)
+        {
+            template = new Harbora.Domain.Templates.AppTemplate
+            {
+                WorkspaceId = WorkspaceId,
+                Key = Guid.NewGuid().ToString("N")[..8],
+                Status = Harbora.Domain.Templates.TemplateStatus.Private
+            };
+            db.AppTemplates.Add(template);
+        }
+        else if (!Harbora.Infrastructure.Templates.TemplateCatalog.CanEdit(template, WorkspaceId))
+        {
+            // Editing behind an approval would make review meaningless: submit something harmless,
+            // then change it afterwards.
+            TempData["Error"] = "This template cannot be changed.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        template.Name = name.Trim();
+        template.Category = string.IsNullOrWhiteSpace(category) ? "app" : category.Trim();
+        template.ManifestJson = manifestJson;
+        await db.SaveChangesAsync(ct);
+
+        TempData["Message"] = "Saved.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Submit(Guid id, CancellationToken ct)
+    {
+        var template = await db.AppTemplates.FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (template is null) return NotFound();
+
+        if (!Harbora.Infrastructure.Templates.TemplateCatalog.CanSubmit(template, WorkspaceId))
+        {
+            TempData["Error"] = "This template cannot be sent for review right now.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        template.Status = Harbora.Domain.Templates.TemplateStatus.Submitted;
+        template.ReviewNote = null;
+        await db.SaveChangesAsync(ct);
+        TempData["Message"] = "Sent for review. It stays usable by you in the meantime.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>An admin decides whether a template is offered to every tenant.</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Review(Guid id, bool approve, string? note, CancellationToken ct)
+    {
+        if (!IsReviewer) return Forbid();
+
+        var template = await db.AppTemplates.FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (template is null) return NotFound();
+
+        // A rejection with no reason is a wall: the author cannot act on it.
+        if (!approve && string.IsNullOrWhiteSpace(note))
+        {
+            TempData["Error"] = "Say why it is being sent back — the author cannot act on silence.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        template.Status = approve
+            ? Harbora.Domain.Templates.TemplateStatus.Approved
+            : Harbora.Domain.Templates.TemplateStatus.Rejected;
+        template.ReviewNote = note;
+        template.ReviewedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        TempData["Message"] = approve ? "Approved and added to the catalog." : "Sent back to its author.";
+        return RedirectToAction(nameof(Index));
     }
 }
 

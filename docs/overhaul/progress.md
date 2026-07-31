@@ -5,6 +5,73 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-31 — Phase 5: templates that mean what they say
+
+**The manifest was documentation dressed as configuration.** Every built-in template already
+described its volumes and its environment variables, and the platform read the manifest for an image
+and a port and nothing else. So:
+
+- the static-site template declared a volume for its content, and an app created from it got none —
+  the site was empty again after every redeploy;
+- the Laravel template declared `APP_KEY (secret)`, and the app was created without it;
+- the WordPress template declared `requires: [mariadb]`, and nothing said so anywhere.
+
+Nothing failed. The template simply did not do what it said, and the only symptom was data that did
+not survive.
+
+**What was built**
+
+- `TemplateManifest` — the manifest read into something typed, and validated **where it is written**
+  rather than an hour later when a deploy fails on it. Every problem is reported at once, because
+  fixing one typo per save is how people give up on a form. A port that is text, a duplicate
+  variable, a relative mount path, a `source` Harbora cannot build: each is refused by name.
+- `TemplateSetup` — what an app is actually created with. A secret with no default is generated (a
+  framework that will not boot without an application key should not require the person deploying it
+  to know that); a plain variable with no default is left empty, flagged, and **named in the message**
+  — inventing a database hostname would produce an app that looks configured and cannot work.
+- Volumes declared by a template are now created on the app, named after the app rather than the
+  template so two apps from one template never share each other's data.
+- `TemplateCatalog` — one rule for who may see, use and change a template. A template runs someone
+  else's container image inside a tenant's private network, next to their database, so reaching the
+  shared catalog is a decision a person makes, not a side effect of saving a form.
+- Custom templates, with review: **Private → Submitted → Approved / Rejected**. Your own stay usable
+  throughout — you wrote them. An approved template cannot be edited behind the approval, or review
+  would mean nothing: submit something harmless, change it afterwards. A rejection requires a reason,
+  because a rejection with no reason is a wall.
+- The app-creation picker uses the same visibility rule as the catalog screen. It previously offered
+  every enabled template, which after this change would have meant offering another tenant's
+  unreviewed image.
+
+**Tests / checks**
+
+- Suite **827 passing**, 0 errors / 0 warnings (from 791).
+- Mutation testing: **17 mutations, 17 caught.**
+- The seeded manifests are parsed verbatim in a test: a schema the built-in templates fail is a
+  schema that is wrong.
+
+**Honest gaps**
+
+- Multi-service templates (WordPress + MariaDB as one click) are still not deployable as a unit. The
+  requirement is now surfaced to the person creating the app instead of being silent, which is an
+  improvement on nothing, but it is not the feature.
+- Custom templates have no edit form yet — saving with an existing id works, the screen only offers
+  create.
+
+**Verified live on the server**
+
+- A manifest with four separate problems was refused with all four named at once, and nothing was
+  saved.
+- An app created from a custom template arrived with: the declared volume
+  (`harbora-vol-notes-var-www-notes` at `/var/www/notes`, named after the app so two apps from one
+  template cannot share data), `APP_KEY` generated and marked secret, `APP_ENV` set from its default,
+  and `DB_HOST` deliberately empty — with the message "Set DB_HOST before deploying" on the screen.
+  Image and port came from the manifest. That is the whole gap this phase existed to close, on real
+  data.
+- Review flow end to end: submitted → appeared in the reviewer's queue → rejection with no reason
+  refused and the status unchanged → approved, with the review timestamp recorded.
+- Migration applied with an automatic restore point first (`pre-upgrade-20260731-131438.sql.gz`).
+- Test artifacts removed afterwards; 7 built-in templates, 0 custom left, overcommit back to 1.0.
+
 ## 2026-07-31 — Phase 3 finished, Phase 4 done (database hardening + per-environment networking)
 
 ### Phase 3 — the rest of database hardening
