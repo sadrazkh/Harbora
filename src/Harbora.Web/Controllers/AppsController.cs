@@ -35,8 +35,14 @@ public sealed class AppsController(
 
     public async Task<IActionResult> Index(CancellationToken ct)
     {
-        var apps = await db.Apps.Where(a => a.WorkspaceId == WorkspaceId)
-            .OrderByDescending(a => a.UpdatedAt).ToListAsync(ct);
+        var query = db.Apps.Where(a => a.WorkspaceId == WorkspaceId);
+
+        // A list that shows what the buttons refuse is worse than a shorter list. Null means "every
+        // project", which is the common case and must not be confused with an empty list.
+        if (await access.VisibleProjectIdsAsync(ct) is { } visible)
+            query = query.Where(a => a.EnvironmentId != null && visible.Contains(a.Environment!.ProjectId));
+
+        var apps = await query.OrderByDescending(a => a.UpdatedAt).ToListAsync(ct);
         return View(apps);
     }
 
@@ -232,6 +238,10 @@ public sealed class AppsController(
 
     public async Task<IActionResult> Details(Guid id, CancellationToken ct)
     {
+        // Visibility, not an action capability: a viewer is allowed to read, and gating this on
+        // "may you operate it" would lock them out of something the list is still showing them.
+        if (!await access.CanSeeAppAsync(id, ct)) return NotFound();
+
         var app = await db.Apps
             .Include(a => a.EnvironmentVariables)
             .Include(a => a.Domains)
@@ -426,6 +436,8 @@ public sealed class AppsController(
     [HttpGet("/apps/{id:guid}/logs")]
     public async Task<IActionResult> Logs(Guid id, CancellationToken ct)
     {
+        if (!await access.CanSeeAppAsync(id, ct)) return NotFound();
+
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
         return View(app);
@@ -439,7 +451,7 @@ public sealed class AppsController(
     public async Task<IActionResult> LogsData(
         Guid id, int tail = 200, string? search = null, bool problems = false, CancellationToken ct = default)
     {
-        if (!await OwnsAsync(id, ct)) return NotFound();
+        if (!await access.CanSeeAppAsync(id, ct)) return NotFound();
 
         var text = await ops.GetLogsAsync(id, tail, ct);
         if (string.IsNullOrWhiteSpace(search) && !problems) return Content(text, "text/plain");

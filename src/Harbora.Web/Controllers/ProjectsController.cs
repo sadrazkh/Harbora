@@ -23,6 +23,7 @@ public sealed class ProjectsController(
     HarboraDbContext db,
     ProjectService projects,
     Harbora.Infrastructure.Services.ServiceUsageService usage,
+    Harbora.Infrastructure.Security.ProjectAccessService access,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -36,8 +37,14 @@ public sealed class ProjectsController(
         // here rather than showing an empty page that no button can fix.
         await projects.EnsureDefaultEnvironmentAsync(WorkspaceId, ct);
 
-        var list = await db.Projects
-            .Where(p => p.WorkspaceId == WorkspaceId)
+        var query = db.Projects.Where(p => p.WorkspaceId == WorkspaceId);
+
+        // Only the projects this person has been put on. Null means every project — the common
+        // case, and not the same thing as an empty list.
+        if (await access.VisibleProjectIdsAsync(ct) is { } visible)
+            query = query.Where(p => visible.Contains(p.Id));
+
+        var list = await query
             .OrderBy(p => p.Name)
             .Select(p => new ProjectSummary
             {
@@ -75,6 +82,11 @@ public sealed class ProjectsController(
             .Include(p => p.Environments)
             .FirstOrDefaultAsync(p => p.Id == id && p.WorkspaceId == WorkspaceId, ct);
         if (project is null) return null;
+
+        // Typing the id into the URL is the obvious thing to try, so the page checks rather than
+        // relying on the list not linking to it.
+        if (await access.VisibleProjectIdsAsync(ct) is { } visible && !visible.Contains(project.Id))
+            return null;
 
         var environments = project.Environments.OrderByDescending(e => e.IsDefault).ThenBy(e => e.Name).ToList();
         var selected = environments.FirstOrDefault(e => e.Id == environmentId) ?? environments.FirstOrDefault();

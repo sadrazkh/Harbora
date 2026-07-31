@@ -5,7 +5,7 @@ result (success/fail) · decisions · next step.
 
 ---
 
-## 2026-07-31 — Phase 8 (started): permissions that stop at a project
+## 2026-07-31 — Phase 8: permissions that stop at a project
 
 Roles were workspace-wide. Anyone who could deploy could deploy **everything the tenant owned**,
 which makes "let the contractor work on the marketing site" impossible to say without also handing
@@ -38,22 +38,54 @@ nobody can read is a permission nobody audits.
 
 **Tests / checks**
 
-- Suite **932 passing**, 0 errors / 0 warnings (from 920).
-- Mutation testing: **11 mutations, 10 caught, 1 equivalent.** The survivor was a redundant early
-  return that no test could distinguish because the code below already handled the case; it was
-  deleted rather than left in with a test written to justify it.
+- Suite **945 passing**, 0 errors / 0 warnings (from 920).
+- Mutation testing: **20 mutations, 19 caught, 1 equivalent.** Two findings worth recording:
+  the equivalent one was a redundant early return no test could distinguish, so it was **deleted**
+  rather than left in with a test written to justify it; and a survivor showed that dropping the
+  caller from the grant query would make **one person's grant apply to everyone in the workspace** —
+  every test with a single user still passed. There is now a test with a colleague in it.
 
-**Honest gaps — this phase is started, not finished**
+**Enforcement, everywhere it matters**
 
-- Enforcement is wired into apps (deploy, delete, environment, domains, operate) and the service is
-  ready for managed databases, but the databases, backups and routes controllers still check
-  workspace ownership only. **Half-enforced access control is dangerous to describe as done**: a
-  scoped member can still reach those screens.
-- Lists are not filtered yet — `VisibleProjectIdsAsync` exists and nothing calls it, so a scoped
-  member sees projects they cannot act on.
+Half-enforced access control is worse than none, so this was finished before it went anywhere near
+the server:
+
+- Apps: deploy, delete, environment variables, domains, day-2 operations.
+- Databases: every action, through the same guard.
+- Backups: judged by **what the backup is of** — an export of production's database is production's
+  data whatever list it appears in. A platform-wide snapshot belongs to no project and is therefore
+  out of reach of a scoped member, which is the right answer: it contains every project.
+- Routes: the designer saves the whole workspace's routing at once and deletes anything missing
+  from the list, so it is a workspace-wide tool and a scoped member is refused with that reason.
+- Lists — apps, databases, projects — show only what the caller can act on, and the project page
+  checks on its own rather than relying on the list not linking to it.
+
+**Honest gaps**
 - The other two Phase 8 items — plan/quota shape and the platform admin area — are untouched. Both
   partly exist already (Plans and Tenants screens, `QuotaService`).
-- Not deployed to the server.
+**Verified live on the server**
+
+A second account, limited to projects, with no grants:
+
+- the apps list, the projects list and the app page all showed nothing / 404;
+- a direct POST to deploy was refused and **no deployment started** — the check is on the action,
+  not on the button being hidden.
+
+Then granted **Viewer on the project**:
+
+- the app and the project appeared in the lists, the app page opened,
+- and deploy was still refused. A viewer may read; a viewer may not deploy.
+
+The administrator was unaffected throughout, and the account was removed afterwards.
+
+**A defect the live run found**
+
+Reading was gated on an *action* capability (`apps.operate`), so a viewer with a perfectly good
+grant saw the app in the list and got a 404 opening it — the "list shows what the buttons refuse"
+problem, inverted. Reading now follows the same visibility the list uses, so the two always agree.
+Only reachable by logging in as a viewer, which is why the unit tests were happy.
+
+**Honest gaps**
 
 ## 2026-07-31 — Phase 7: what changed, and finding it in the logs
 

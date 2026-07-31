@@ -1,3 +1,4 @@
+﻿using Harbora.Domain.Authorization;
 ﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Web.ViewModels;
@@ -8,7 +9,10 @@ using Microsoft.EntityFrameworkCore;
 namespace Harbora.Web.Controllers;
 
 [Authorize]
-public sealed class DeploymentsController(HarboraDbContext db, ICurrentUser currentUser) : Controller
+public sealed class DeploymentsController(
+    HarboraDbContext db,
+    Harbora.Infrastructure.Security.ProjectAccessService access,
+    ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 
@@ -27,6 +31,9 @@ public sealed class DeploymentsController(HarboraDbContext db, ICurrentUser curr
             .Include(d => d.App)
             .FirstOrDefaultAsync(d => d.Id == id && d.App!.WorkspaceId == WorkspaceId, ct);
         if (deployment is null) return NotFound();
+
+        // The build log and the configuration diff belong to the app, so they follow its visibility.
+        if (!await access.CanSeeAppAsync(deployment.AppId, ct)) return NotFound();
 
         // What changed since the version before this one — the question people actually ask after a
         // bad release, and one the history could not answer until deployments recorded their config.
@@ -50,8 +57,11 @@ public sealed class DeploymentsController(HarboraDbContext db, ICurrentUser curr
     [HttpGet("/deployments/{id:guid}/logs")]
     public async Task<IActionResult> Logs(Guid id, long after = -1, CancellationToken ct = default)
     {
-        var owns = await db.Deployments.AnyAsync(d => d.Id == id && d.App!.WorkspaceId == WorkspaceId, ct);
-        if (!owns) return NotFound();
+        var deployment = await db.Deployments.AsNoTracking()
+            .Where(d => d.Id == id && d.App!.WorkspaceId == WorkspaceId)
+            .Select(d => new { d.AppId }).FirstOrDefaultAsync(ct);
+        if (deployment is null) return NotFound();
+        if (!await access.CanSeeAppAsync(deployment.AppId, ct)) return NotFound();
 
         var lines = await db.DeploymentLogs
             .Where(l => l.DeploymentId == id && l.Sequence > after)

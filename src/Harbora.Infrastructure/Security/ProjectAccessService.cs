@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
@@ -48,6 +48,106 @@ public sealed class ProjectAccessService(HarboraDbContext db, ICurrentUser curre
 
         return ProjectAccess.Allows(role, scoped, grants,
             new ResourcePlacement(service.ProjectId, service.EnvironmentId), capability);
+    }
+
+    /// <summary>
+    /// Whether the caller may act on this backup, judged by what it is a backup <i>of</i>.
+    ///
+    /// A backup is only as private as the thing it came from: an export of production's database is
+    /// production's data whatever list it appears in.
+    /// </summary>
+    public async Task<bool> CanTouchBackupAsync(Guid backupId, string capability, CancellationToken ct)
+    {
+        var backup = await db.Backups.AsNoTracking()
+            .Where(b => b.Id == backupId && b.WorkspaceId == currentUser.WorkspaceId)
+            .Select(b => new { b.Type, b.TargetRef })
+            .FirstOrDefaultAsync(ct);
+
+        if (backup is null) return false;
+
+        // A platform-wide snapshot belongs to no project, so only someone unscoped can act on it —
+        // which is the right answer: it contains every project.
+        if (backup.Type == BackupType.FullPlatform)
+            return await AllowsAsync(new ResourcePlacement(null, null), capability, ct);
+
+        if (!Guid.TryParse(backup.TargetRef, out var targetId))
+            return await AllowsAsync(new ResourcePlacement(null, null), capability, ct);
+
+        return backup.Type switch
+        {
+            BackupType.Database or BackupType.Service => await CanTouchServiceAsync(targetId, capability, ct),
+            _ => await CanTouchAppAsync(targetId, capability, ct)
+        };
+    }
+
+    /// <summary>
+    /// Whether the caller may act on this route, judged by the app it points at. A route with no app
+    /// behind it is workspace-level and only an unscoped member can change it — a rule that reaches
+    /// every project should be edited by someone who can see every project.
+    /// </summary>
+    public async Task<bool> CanTouchRouteAsync(Guid routeId, string capability, CancellationToken ct)
+    {
+        var route = await db.Routes.AsNoTracking()
+            .Where(r => r.Id == routeId && r.WorkspaceId == currentUser.WorkspaceId)
+            .Select(r => new { r.AppId })
+            .FirstOrDefaultAsync(ct);
+
+        if (route is null) return false;
+
+        return route.AppId is { } appId
+            ? await CanTouchAppAsync(appId, capability, ct)
+            : await AllowsAsync(new ResourcePlacement(null, null), capability, ct);
+    }
+
+    /// <summary>
+    /// Whether the caller may <i>look at</i> this app.
+    ///
+    /// Deliberately not an action capability: a viewer is allowed to read, and gating a page on
+    /// "may you operate this" locks them out of something the list is still showing them. Reading
+    /// follows the same visibility as the list, so the two always agree.
+    /// </summary>
+    public async Task<bool> CanSeeAppAsync(Guid appId, CancellationToken ct)
+    {
+        var projectId = await db.Apps.AsNoTracking()
+            .Where(a => a.Id == appId && a.WorkspaceId == currentUser.WorkspaceId)
+            .Select(a => (Guid?)a.Environment!.ProjectId)
+            .FirstOrDefaultAsync(ct);
+
+        if (!await db.Apps.AsNoTracking().AnyAsync(a => a.Id == appId && a.WorkspaceId == currentUser.WorkspaceId, ct))
+            return false;
+
+        return await CanSeeProjectAsync(projectId, ct);
+    }
+
+    /// <summary>The same question for a managed database.</summary>
+    public async Task<bool> CanSeeServiceAsync(Guid serviceId, CancellationToken ct)
+    {
+        var exists = await db.ManagedServices.AsNoTracking()
+            .AnyAsync(s => s.Id == serviceId && s.WorkspaceId == currentUser.WorkspaceId, ct);
+        if (!exists) return false;
+
+        var projectId = await db.ManagedServices.AsNoTracking()
+            .Where(s => s.Id == serviceId && s.WorkspaceId == currentUser.WorkspaceId)
+            .Select(s => (Guid?)s.Environment!.ProjectId)
+            .FirstOrDefaultAsync(ct);
+
+        return await CanSeeProjectAsync(projectId, ct);
+    }
+
+    private async Task<bool> CanSeeProjectAsync(Guid? projectId, CancellationToken ct)
+    {
+        var visible = await VisibleProjectIdsAsync(ct);
+        if (visible is null) return true;
+
+        // Belongs to no project, and the caller only reaches projects: nothing covers it.
+        return projectId is { } id && visible.Contains(id);
+    }
+
+    /// <summary>The rule, asked about a placement the caller has already worked out.</summary>
+    public async Task<bool> AllowsAsync(ResourcePlacement placement, string capability, CancellationToken ct)
+    {
+        var (role, scoped, grants) = await CallerAsync(ct);
+        return ProjectAccess.Allows(role, scoped, grants, placement, capability);
     }
 
     /// <summary>

@@ -26,6 +26,7 @@ public sealed partial class DatabasesController(
     ISecretProtector protector,
     Harbora.Infrastructure.Projects.ProjectService projects,
     Harbora.Infrastructure.Services.ServiceUsageService usage,
+    Harbora.Infrastructure.Security.ProjectAccessService access,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -34,8 +35,12 @@ public sealed partial class DatabasesController(
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         ViewData["Title"] = "Databases";
-        var services = await db.ManagedServices.Where(s => s.WorkspaceId == WorkspaceId)
-            .OrderByDescending(s => s.CreatedAt).ToListAsync(ct);
+
+        var query = db.ManagedServices.Where(s => s.WorkspaceId == WorkspaceId);
+        if (await access.VisibleProjectIdsAsync(ct) is { } visible)
+            query = query.Where(s => s.EnvironmentId != null && visible.Contains(s.Environment!.ProjectId));
+
+        var services = await query.OrderByDescending(s => s.CreatedAt).ToListAsync(ct);
         return View(services);
     }
 
@@ -97,6 +102,9 @@ public sealed partial class DatabasesController(
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> Details(Guid id, bool reveal = false, CancellationToken ct = default)
     {
+        // Visibility rather than a management capability: a viewer on this project may look.
+        if (!await access.CanSeeServiceAsync(id, ct)) return NotFound();
+
         var service = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
         if (service is null) return NotFound();
 
@@ -255,10 +263,14 @@ public sealed partial class DatabasesController(
         return RedirectToAction(nameof(Details), new { id });
     }
 
+    /// <summary>
+    /// Ownership is not the whole question: a member scoped to projects belongs to the tenant that
+    /// owns this database and still must not touch a project nobody put them on.
+    /// </summary>
     private async Task Guard(Guid id, CancellationToken ct)
     {
-        var owns = await db.ManagedServices.AnyAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
-        if (!owns) throw new UnauthorizedAccessException();
+        if (!await access.CanTouchServiceAsync(id, Capabilities.DatabasesManage, ct))
+            throw new UnauthorizedAccessException();
     }
 
 

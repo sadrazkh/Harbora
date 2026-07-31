@@ -22,6 +22,7 @@ public sealed partial class BackupsController(
     ISecretProtector protector,
     Harbora.Infrastructure.Backups.BackupDeliveryService delivery,
     IHttpClientFactory httpFactory,
+    Harbora.Infrastructure.Security.ProjectAccessService access,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -99,7 +100,7 @@ public sealed partial class BackupsController(
     [Authorize(Policy = Capabilities.BackupsRestore)]
     public async Task<IActionResult> Restore(Guid id, string confirm, CancellationToken ct)
     {
-        if (!await OwnsAsync(id, ct)) return NotFound();
+        if (!await MayRestoreAsync(id, ct)) return NotFound();
         if (confirm != "RESTORE")
         {
             TempData["Error"] = "Restore not confirmed.";
@@ -189,8 +190,16 @@ public sealed partial class BackupsController(
 
     // --- helpers ---
 
+    /// <summary>
+    /// Judged by what the backup is a backup <i>of</i>: an export of production's database is
+    /// production's data whatever list it appears in.
+    /// </summary>
     private Task<bool> OwnsAsync(Guid backupId, CancellationToken ct) =>
-        db.Backups.AnyAsync(b => b.Id == backupId && b.WorkspaceId == WorkspaceId, ct);
+        access.CanTouchBackupAsync(backupId, Capabilities.BackupsRun, ct);
+
+    /// <summary>The same question for the destructive action.</summary>
+    private Task<bool> MayRestoreAsync(Guid backupId, CancellationToken ct) =>
+        access.CanTouchBackupAsync(backupId, Capabilities.BackupsRestore, ct);
 
     private async Task EnsureDefaultDestinationAsync(CancellationToken ct)
     {

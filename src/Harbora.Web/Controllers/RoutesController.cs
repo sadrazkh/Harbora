@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Web.ViewModels;
@@ -22,6 +22,7 @@ public sealed class RoutesController(
     IProxyEngine proxy,
     ISecretProtector protector,
     ICurrentUser currentUser,
+    Harbora.Infrastructure.Security.ProjectAccessService access,
     IAntiforgery antiforgery) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -68,6 +69,30 @@ public sealed class RoutesController(
     [Authorize(Policy = Capabilities.RoutesManage)]
     public async Task<IActionResult> Save([FromBody] List<RouteDto> routes, CancellationToken ct)
     {
+        // The designer saves the whole workspace's routing at once — anything missing from the
+        // list is deleted. That makes it a workspace-wide tool, so somebody limited to certain
+        // projects must not use it: they would silently remove rules belonging to projects they
+        // cannot even see. Asked as "may you act on something that belongs to no project", which is
+        // exactly what a workspace-wide rule is.
+        if (!await access.AllowsAsync(
+                new Harbora.Domain.Authorization.ResourcePlacement(null, null), Capabilities.RoutesManage, ct))
+        {
+            return Json(new
+            {
+                saved = false,
+                validation = new
+                {
+                    IsValid = false,
+                    Errors = new[]
+                    {
+                        "Routing covers every project in this workspace, so it can only be edited by " +
+                        "someone who is not limited to specific projects."
+                    },
+                    Warnings = Array.Empty<string>()
+                }
+            });
+        }
+
         // Validate before touching the DB so a bad config never persists.
         var validation = proxy.Validate(routes.Select(d => d.ToTransientEntity()).ToList());
         if (!validation.IsValid)
