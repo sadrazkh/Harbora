@@ -5,6 +5,56 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-31 — Phase 8 (started): permissions that stop at a project
+
+Roles were workspace-wide. Anyone who could deploy could deploy **everything the tenant owned**,
+which makes "let the contractor work on the marketing site" impossible to say without also handing
+them production.
+
+**The split that makes it teachable**
+
+- The **workspace role** says *what* someone may do. **Project grants** say *where*.
+- The two are **intersected, never unioned**. A grant cannot hand out a capability the role does not
+  already carry, so the worst a mistaken grant can do is give someone access to a project — never a
+  power they did not have. That is what makes this safe to hand to a tenant to administer.
+- A grant may *narrow* the role for one project ("you are a developer, but here you only restart
+  things"), and an environment-specific grant beats the project-wide one — which is how "deploy
+  staging, look at production" is written, and the request behind most of these.
+- Scoping is **off by default**, so nobody loses access to anything they had; turning it off again
+  restores exactly the previous behaviour.
+- An owner or admin is never scoped: administering a workspace you can only see half of is not
+  administering it. The screen says so instead of offering a switch that quietly does nothing.
+- A resource that belongs to no project — created before projects existed — is **out of reach** of a
+  scoped member. There is no grant that could cover it, and guessing in favour of access is the
+  wrong way to be wrong.
+
+**Enforcement**
+
+`ProjectAccessService` asks the one rule on behalf of every screen, because access control that
+lives in twenty places is access control that is wrong in one of them. Each guarded action asks
+about **its own capability** rather than a generic "do you own this", so a narrowed grant narrows
+the right thing. Grants are managed on the tenant page and written out as sentences — a permission
+nobody can read is a permission nobody audits.
+
+**Tests / checks**
+
+- Suite **932 passing**, 0 errors / 0 warnings (from 920).
+- Mutation testing: **11 mutations, 10 caught, 1 equivalent.** The survivor was a redundant early
+  return that no test could distinguish because the code below already handled the case; it was
+  deleted rather than left in with a test written to justify it.
+
+**Honest gaps — this phase is started, not finished**
+
+- Enforcement is wired into apps (deploy, delete, environment, domains, operate) and the service is
+  ready for managed databases, but the databases, backups and routes controllers still check
+  workspace ownership only. **Half-enforced access control is dangerous to describe as done**: a
+  scoped member can still reach those screens.
+- Lists are not filtered yet — `VisibleProjectIdsAsync` exists and nothing calls it, so a scoped
+  member sees projects they cannot act on.
+- The other two Phase 8 items — plan/quota shape and the platform admin area — are untouched. Both
+  partly exist already (Plans and Tenants screens, `QuotaService`).
+- Not deployed to the server.
+
 ## 2026-07-31 — Phase 7: what changed, and finding it in the logs
 
 ### Deployment config snapshots

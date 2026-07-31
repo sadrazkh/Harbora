@@ -1,4 +1,4 @@
-using Harbora.Domain.Tenancy;
+﻿using Harbora.Domain.Tenancy;
 
 namespace Harbora.Web.ViewModels;
 
@@ -38,5 +38,12 @@ public sealed class TenantDetailsViewModel
     public List<TenantMember> Members { get; set; } = new();
 }
 
-public sealed record TenantMember(Guid UserId, string Email, string DisplayName, string WorkspaceRole, bool Active);
+public sealed record TenantMember(Guid UserId, string Email, string DisplayName, string WorkspaceRole, bool Active)
+{
+    /// <summary>When true, this person only reaches the projects listed below.</summary>
+    public bool ScopedToProjects { get; init; }
+
+    /// <summary>Their grants, already written out as sentences — see ProjectAccess.Describe.</summary>
+    public IReadOnlyList<(Guid Id, string Text)> Grants { get; init; } = [];
+}
 

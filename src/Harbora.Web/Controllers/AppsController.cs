@@ -26,6 +26,7 @@ public sealed class AppsController(
     IRollbackPlanner rollbackPlanner,
     IDomainInspector domains,
     Harbora.Infrastructure.Projects.ProjectService projects,
+    Harbora.Infrastructure.Security.ProjectAccessService access,
     IJobQueue jobs,
     ICurrentUser currentUser) : Controller
 {
@@ -257,6 +258,10 @@ public sealed class AppsController(
     [Authorize(Policy = Capabilities.AppsDeploy)]
     public async Task<IActionResult> Deploy(Guid id, string? gitRef, CancellationToken ct)
     {
+        // The capability this action is authorised with, asked again against this particular
+        // project: a member scoped away from production must not be able to deploy it.
+        if (!await MayAsync(id, Capabilities.AppsDeploy, ct)) return NotFound();
+
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
@@ -408,7 +413,7 @@ public sealed class AppsController(
     [Authorize(Policy = Capabilities.AppsDelete)]
     public async Task<IActionResult> Delete(Guid id, bool removeVolumes, CancellationToken ct)
     {
-        if (!await OwnsAsync(id, ct)) return NotFound();
+        if (!await MayAsync(id, Capabilities.AppsDelete, ct)) return NotFound();
         await ops.DeleteAsync(id, removeVolumes, ct);
         await audit.LogAsync("app.delete", "app", id.ToString(), ClientIp,
             metadataJson: $"{{\"removeVolumes\":{removeVolumes.ToString().ToLowerInvariant()}}}", ct: ct);
@@ -516,7 +521,7 @@ public sealed class AppsController(
     [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> DeleteEnv(Guid id, Guid envId, CancellationToken ct)
     {
-        if (!await OwnsAsync(id, ct)) return NotFound();
+        if (!await MayAsync(id, Capabilities.AppsEnv, ct)) return NotFound();
         await db.EnvironmentVariables.Where(e => e.Id == envId && e.AppId == id).ExecuteDeleteAsync(ct);
         TempData["Message"] = "Variable removed. Redeploy to apply.";
         return RedirectToAction(nameof(Details), new { id });
@@ -546,7 +551,7 @@ public sealed class AppsController(
     [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> DeleteDomain(Guid id, Guid domainId, CancellationToken ct)
     {
-        if (!await OwnsAsync(id, ct)) return NotFound();
+        if (!await MayAsync(id, Capabilities.AppsEnv, ct)) return NotFound();
         var host = await db.Domains.Where(d => d.Id == domainId && d.AppId == id).Select(d => d.Host).FirstOrDefaultAsync(ct);
         await db.Domains.Where(d => d.Id == domainId && d.AppId == id).ExecuteDeleteAsync(ct);
         if (host is not null) await db.Routes.Where(r => r.AppId == id && r.Host == host).ExecuteDeleteAsync(ct);
@@ -554,8 +559,17 @@ public sealed class AppsController(
         return RedirectToAction(nameof(Details), new { id });
     }
 
+    /// <summary>
+    /// Whether the caller may act on this app. Ownership is not the whole question any more: a
+    /// member scoped to projects owns the workspace's apps in the sense that their tenant does, and
+    /// still must not touch a project nobody put them on.
+    /// </summary>
     private Task<bool> OwnsAsync(Guid appId, CancellationToken ct) =>
-        db.Apps.AnyAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
+        access.CanTouchAppAsync(appId, Capabilities.AppsOperate, ct);
+
+    /// <summary>The same question for an action that is not day-2 operations.</summary>
+    private Task<bool> MayAsync(Guid appId, string capability, CancellationToken ct) =>
+        access.CanTouchAppAsync(appId, capability, ct);
 
     private async Task PopulateTemplates(CancellationToken ct)
     {

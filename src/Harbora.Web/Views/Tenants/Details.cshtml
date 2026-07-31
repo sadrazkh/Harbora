@@ -1,4 +1,4 @@
-@model TenantDetailsViewModel
+﻿@model TenantDetailsViewModel
 @{
     ViewData["Title"] = Model.Name;
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -66,7 +66,66 @@
                             <div class="font-medium">@m.DisplayName</div>
                             <div class="text-xs text-slate-500">@m.Email</div>
                         </td>
-                        <td class="p-3"><span class="text-xs rounded bg-slate-800 px-2 py-0.5 text-slate-300">@m.WorkspaceRole</span></td>
+                        <td class="p-3">
+                            <span class="text-xs rounded bg-slate-800 px-2 py-0.5 text-slate-300">@m.WorkspaceRole</span>
+
+                            @* Which projects that role reaches. The role says what someone may do;
+                               this says where — and a permission nobody can read is one nobody audits. *@
+                            @if (m.ScopedToProjects)
+                            {
+                                <div class="mt-2 space-y-1">
+                                    @if (m.Grants.Count == 0)
+                                    {
+                                        <div class="text-xs text-amber-400">
+                                            @(isFa ? "به هیچ پروژه‌ای دسترسی ندارد" : "no project access yet")
+                                        </div>
+                                    }
+                                    @foreach (var g in m.Grants)
+                                    {
+                                        <div class="flex items-center gap-2 text-xs text-slate-400">
+                                            <span>@g.Text</span>
+                                            <form asp-controller="Tenants" asp-action="RemoveGrant" asp-route-id="@Model.WorkspaceId" asp-route-grantId="@g.Id" method="post">
+                                                @Html.AntiForgeryToken()
+                                                <button class="text-red-400">✕</button>
+                                            </form>
+                                        </div>
+                                    }
+
+                                    @{ var projects = ViewBag.Projects as List<Harbora.Domain.Projects.Project> ?? new(); }
+                                    <form asp-controller="Tenants" asp-action="AddGrant" asp-route-id="@Model.WorkspaceId" asp-route-userId="@m.UserId"
+                                          method="post" class="flex flex-wrap items-center gap-1 pt-1">
+                                        @Html.AntiForgeryToken()
+                                        <select name="projectId" class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs">
+                                            @foreach (var p in projects){<option value="@p.Id">@p.Name</option>}
+                                        </select>
+                                        <select name="environmentId" class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs">
+                                            <option value="">@(isFa ? "همهٔ محیط‌ها" : "all environments")</option>
+                                            @foreach (var p in projects)
+                                            {
+                                                foreach (var e in p.Environments){<option value="@e.Id">@p.Name · @e.Name</option>}
+                                            }
+                                        </select>
+                                        <select name="role" class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs">
+                                            <option value="Member">Member</option>
+                                            <option value="Operator">Operator</option>
+                                            <option value="Viewer">Viewer</option>
+                                        </select>
+                                        <button class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1 text-xs">
+                                            @(isFa ? "افزودن" : "grant")</button>
+                                    </form>
+                                </div>
+                            }
+
+                            <form asp-controller="Tenants" asp-action="SetScope" asp-route-id="@Model.WorkspaceId" asp-route-userId="@m.UserId" method="post" class="mt-2">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="scoped" value="@((!m.ScopedToProjects).ToString().ToLowerInvariant())" />
+                                <button class="text-xs text-brand-400">
+                                    @(m.ScopedToProjects
+                                        ? (isFa ? "دسترسی به همهٔ پروژه‌ها" : "give access to every project")
+                                        : (isFa ? "محدود به پروژه‌های مشخص" : "limit to specific projects"))
+                                </button>
+                            </form>
+                        </td>
                         <td class="p-3 text-end">
                             <form asp-controller="Tenants" asp-action="RemoveMember" asp-route-id="@Model.WorkspaceId" asp-route-userId="@m.UserId" method="post"
                                   onsubmit="return confirm('@(isFa ? "حذف عضو؟" : "Remove member?")')">

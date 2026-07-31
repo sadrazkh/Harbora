@@ -61,6 +61,8 @@ public static class DependencyInjection
         services.AddSingleton<ISecretRedactor, SecretRedactor>();
         services.AddScoped<ITokenService, TokenService>();
         services.AddScoped<IAuditLogger, Auditing.AuditLogger>();
+        // "May this person do this here" — asked the same way by every screen.
+        services.AddScoped<Security.ProjectAccessService>();
 
         // Platform services
         services.AddSingleton<ISystemClock, SystemClock>();

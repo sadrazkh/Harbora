@@ -40,6 +40,7 @@ public class HarboraDbContext : DbContext
     public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<WorkspaceMember> WorkspaceMembers => Set<WorkspaceMember>();
+    public DbSet<Harbora.Domain.Authorization.ProjectGrant> ProjectGrants => Set<Harbora.Domain.Authorization.ProjectGrant>();
     public DbSet<Harbora.Domain.Projects.Project> Projects => Set<Harbora.Domain.Projects.Project>();
     public DbSet<Harbora.Domain.Projects.Environment> Environments => Set<Harbora.Domain.Projects.Environment>();
     public DbSet<Server> Servers => Set<Server>();
