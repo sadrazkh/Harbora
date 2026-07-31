@@ -1,4 +1,4 @@
-@model ProjectDetailsViewModel
+﻿@model ProjectDetailsViewModel
 @using Harbora.Domain.Common
 @using Harbora.Infrastructure.Deployments
 @{
@@ -37,12 +37,9 @@ else
         @foreach (var s in Model.Services)
         {
             var publicTraffic = ServicePlan.HasPublicTraffic(s.Kind);
-            var connected = s.EnvironmentVariables
-                .Select(v => v.Value)
-                .Where(v => v is not null)
-                .SelectMany(v => databaseHosts.Keys.Where(h => v!.Contains(h, StringComparison.OrdinalIgnoreCase)))
-                .Distinct()
-                .ToList();
+            @* Computed in the controller: these variables are encrypted, so matching the stored
+               value against a hostname compares ciphertext and always finds nothing. *@
+            var connected = Model.Connections.TryGetValue(s.Id, out var hosts) ? hosts : [];
 
             <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
                 <div class="flex flex-wrap items-start justify-between gap-3">
@@ -113,8 +110,8 @@ else
                 <div class="space-y-2">
                     @foreach (var d in Model.Databases)
                     {
-                        var users = Model.Services.Count(s => s.EnvironmentVariables
-                            .Any(v => v.Value is not null && v.Value.Contains(d.ContainerName, StringComparison.OrdinalIgnoreCase)));
+                        var users = Model.Services.Count(s =>
+                            Model.Connections.TryGetValue(s.Id, out var hosts) && hosts.Contains(d.ContainerName));
                         <div class="flex items-center justify-between text-sm">
                             <div class="min-w-0">
                                 <a href="/databases/@d.Id" class="hover:underline">@d.Name</a>

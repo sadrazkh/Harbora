@@ -1,4 +1,4 @@
-@model Harbora.Domain.Services.ManagedService
+﻿@model Harbora.Domain.Services.ManagedService
 @{
     ViewData["Title"] = Model.Name;
     var conn = ViewBag.Connection as string ?? "";
@@ -24,7 +24,7 @@
     <div class="flex gap-2">
         <form asp-controller="Databases" asp-action="Start" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-sm">▶ @T["Start"]</button></form>
         <form asp-controller="Databases" asp-action="Stop" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-sm">⏸ @T["Stop"]</button></form>
-        <form asp-controller="Databases" asp-action="Remove" asp-route-id="@Model.Id" method="post" onsubmit="return confirm('@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "حذف سرویس؟" : "Remove service?")')">@Html.AntiForgeryToken()<button class="rounded-lg bg-red-900/40 hover:bg-red-900/60 text-red-300 px-3 py-1.5 text-sm">🗑 @T["Remove"]</button></form>
+        <a href="/databases/@Model.Id/remove" class="rounded-lg bg-red-900/40 hover:bg-red-900/60 text-red-300 px-3 py-1.5 text-sm">🗑 @T["Remove"]</a>
     </div>
 </div>
 

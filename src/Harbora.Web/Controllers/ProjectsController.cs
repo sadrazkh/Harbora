@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
@@ -22,6 +22,7 @@ namespace Harbora.Web.Controllers;
 public sealed class ProjectsController(
     HarboraDbContext db,
     ProjectService projects,
+    Harbora.Infrastructure.Services.ServiceUsageService usage,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -78,7 +79,7 @@ public sealed class ProjectsController(
         var environments = project.Environments.OrderByDescending(e => e.IsDefault).ThenBy(e => e.Name).ToList();
         var selected = environments.FirstOrDefault(e => e.Id == environmentId) ?? environments.FirstOrDefault();
 
-        return new ProjectDetailsViewModel
+        var vm = new ProjectDetailsViewModel
         {
             Project = project,
             Environments = environments,
@@ -96,6 +97,11 @@ public sealed class ProjectsController(
                 : await db.ManagedServices.Where(s => s.EnvironmentId == selected.Id)
                     .OrderBy(s => s.Name).ToListAsync(ct)
         };
+
+        // Worked out here, where the protector is: a connection string is stored encrypted, so the
+        // page cannot answer "what is this connected to?" by reading the value itself.
+        vm.Connections = usage.ConnectionsFor(vm.Services, vm.Databases.Select(d => d.ContainerName));
+        return vm;
     }
 
     [HttpGet("{id:guid}/architecture")]

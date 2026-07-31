@@ -1,4 +1,4 @@
-using Harbora.Domain.Apps;
+﻿using Harbora.Domain.Apps;
 using Harbora.Domain.Services;
 using Environment = Harbora.Domain.Projects.Environment;
 using Project = Harbora.Domain.Projects.Project;
@@ -29,4 +29,12 @@ public sealed class ProjectDetailsViewModel
 
     public List<App> Services { get; set; } = [];
     public List<ManagedService> Databases { get; set; } = [];
+
+    /// <summary>
+    /// Which database container names each service connects to, by app id. Computed rather than read
+    /// off the page because the variables that hold a connection string are encrypted — matching the
+    /// stored value against a hostname compares ciphertext and always answers "no connection".
+    /// </summary>
+    public IReadOnlyDictionary<Guid, IReadOnlyList<string>> Connections { get; set; } =
+        new Dictionary<Guid, IReadOnlyList<string>>();
 }

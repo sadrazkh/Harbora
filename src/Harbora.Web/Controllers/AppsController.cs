@@ -4,6 +4,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Git;
+using Harbora.Domain.Jobs;
 using Harbora.Domain.Networking;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
@@ -25,6 +26,7 @@ public sealed class AppsController(
     IRollbackPlanner rollbackPlanner,
     IDomainInspector domains,
     Harbora.Infrastructure.Projects.ProjectService projects,
+    IJobQueue jobs,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -286,6 +288,39 @@ public sealed class AppsController(
 
     // ---- lifecycle ----
 
+    /// <summary>
+    /// Runs a scheduled job now, without disturbing its schedule.
+    ///
+    /// Queued rather than run inline: a job can take minutes, and the request that started it must
+    /// not be what keeps it alive. Going through the durable queue also means a restart mid-run
+    /// resumes from the database instead of losing it.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
+    public async Task<IActionResult> RunNow(Guid id, CancellationToken ct)
+    {
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        if (app.Kind != ServiceKind.Cron)
+        {
+            TempData["Error"] = "Only a scheduled job can be run this way.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        // Said here rather than discovered as a run that quietly never appears.
+        if (await db.CronRuns.AnyAsync(r => r.AppId == id && r.FinishedAt == null, ct))
+        {
+            TempData["Error"] = "This job is already running.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await jobs.EnqueueAsync(JobKind.CronRun, app.Id, ct);
+        await audit.LogAsync("app.cron.run", "app", id.ToString(), ClientIp, ct: ct);
+        TempData["Message"] = "Started. The run will appear below when it finishes.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
     [HttpPost]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.AppsOperate)]

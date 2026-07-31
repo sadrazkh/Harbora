@@ -1,4 +1,4 @@
-using Harbora.Domain.Common;
+﻿using Harbora.Domain.Common;
 
 namespace Harbora.Domain.Jobs;
 
@@ -7,7 +7,9 @@ public enum JobKind
 {
     Deployment = 0,
     Backup = 1,
-    ServiceProvision = 2
+    ServiceProvision = 2,
+    /// <summary>A scheduled job run on demand — durable, so "run now" survives a restart.</summary>
+    CronRun = 3
 }
 
 public enum JobStatus

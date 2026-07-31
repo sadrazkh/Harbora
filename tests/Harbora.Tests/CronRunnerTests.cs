@@ -39,6 +39,10 @@ public class CronRunnerTests : IDisposable
         services.AddSingleton<ISecretProtector>(new PassthroughProtector());
         services.AddSingleton<IServerEngineFactory>(new SingleEngine(_docker));
         services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new HarboraRuntimeOptions()));
+        // The real runner over the real context: the schedule and the button share this path, so a
+        // fake here would test the fake rather than the guarantee.
+        services.AddScoped<CronJobRunner>();
+        services.AddLogging();
         _sp = services.BuildServiceProvider();
     }
 
@@ -53,6 +57,10 @@ public class CronRunnerTests : IDisposable
 
     private CronRunner Runner() =>
         new(_sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CronRunner>.Instance);
+
+    /// <summary>The run itself, as the "run now" button and the job queue reach it.</summary>
+    private CronJobRunner JobRunner(IServiceScope scope) =>
+        scope.ServiceProvider.GetRequiredService<CronJobRunner>();
 
     private App Given(string cron, DateTimeOffset? nextRunAt = null, AppStatus status = AppStatus.Running,
                       string? command = "backup.sh", string image = "alpine:3.20")
@@ -274,6 +282,110 @@ public class CronRunnerTests : IDisposable
             .Which.NetworkMode.Should().Be("harbora-ws-acme");
     }
 
+
+    [Fact]
+    public async Task Running_a_job_by_hand_does_not_move_its_schedule()
+    {
+        // The whole point of a "run now" button is to try tonight's job now. Shifting the schedule
+        // would mean testing a backup quietly cancels the one that mattered.
+        var app = Given("0 3 * * *", nextRunAt: new DateTimeOffset(2026, 7, 31, 3, 0, 0, TimeSpan.Zero));
+
+        using (var scope = _sp.CreateScope())
+            await JobRunner(scope).RunAsync(app.Id, default);
+
+        var (reloaded, runs) = Reload(app.Id);
+        reloaded.NextRunAt.Should().Be(new DateTimeOffset(2026, 7, 31, 3, 0, 0, TimeSpan.Zero));
+        runs.Should().ContainSingle().Which.IsManual.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_scheduled_run_is_not_recorded_as_one_someone_asked_for()
+    {
+        // The guard on the flag above: if everything looked manual it would explain nothing.
+        var app = Given("0 3 * * *", nextRunAt: _clock.UtcNow.AddMinutes(-1));
+
+        await Runner().TickAsync(default);
+
+        Reload(app.Id).Runs.Should().ContainSingle().Which.IsManual.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_job_that_is_already_running_is_not_started_a_second_time()
+    {
+        // A held-down button would otherwise start a container per press, and a job that outlasts its
+        // own interval would overlap itself.
+        var app = Given("0 3 * * *", nextRunAt: _clock.UtcNow.AddMinutes(-1));
+        using (var scope = _sp.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+            db.CronRuns.Add(new CronRun { WorkspaceId = _workspaceId, AppId = app.Id, StartedAt = _clock.UtcNow });
+            db.SaveChanges();
+        }
+
+        using (var scope = _sp.CreateScope())
+            await JobRunner(scope).RunAsync(app.Id, default);
+
+        _docker.OneOffCommands.Should().BeEmpty();
+        Reload(app.Id).Runs.Should().ContainSingle("the run in flight is the only one");
+    }
+
+    [Fact]
+    public async Task A_run_a_restart_interrupted_is_settled_rather_than_left_running_for_ever()
+    {
+        // A row with no finish time is shown as still running — and would block the job from ever
+        // starting again, because of the guard above.
+        var app = Given("0 3 * * *", nextRunAt: _clock.UtcNow.AddMinutes(-1));
+        using (var scope = _sp.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+            db.CronRuns.Add(new CronRun
+            {
+                WorkspaceId = _workspaceId, AppId = app.Id, StartedAt = _clock.UtcNow.AddHours(-2)
+            });
+            db.SaveChanges();
+        }
+
+        using (var scope = _sp.CreateScope())
+            await JobRunner(scope).ReconcileAsync(default);
+
+        var settled = Reload(app.Id).Runs.Should().ContainSingle().Subject;
+        settled.FinishedAt.Should().NotBeNull();
+        settled.Error.Should().Contain("Interrupted");
+
+        // And the job can run again afterwards, which is the reason for settling it.
+        using (var scope = _sp.CreateScope())
+            await JobRunner(scope).RunAsync(app.Id, default);
+        Reload(app.Id).Runs.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task A_queued_run_whose_service_is_no_longer_a_scheduled_job_is_dropped()
+    {
+        // The queue is durable: a request can be claimed long after it was made. By then the service
+        // may be something that has no business being started as a one-off container.
+        var app = Given("0 3 * * *", nextRunAt: _clock.UtcNow.AddMinutes(-1));
+        using (var scope = _sp.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+            db.Apps.Single(a => a.Id == app.Id).Kind = ServiceKind.Web;
+            db.SaveChanges();
+        }
+
+        using (var scope = _sp.CreateScope())
+            await JobRunner(scope).RunAsync(app.Id, default);
+
+        _docker.OneOffCommands.Should().BeEmpty();
+        Reload(app.Id).Runs.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Running_a_job_that_does_not_exist_does_nothing()
+    {
+        using var scope = _sp.CreateScope();
+        var act = async () => await JobRunner(scope).RunAsync(Guid.NewGuid(), default);
+
+        await act.Should().NotThrowAsync("a deleted job must not fail the queue that carries it");
+    }
     [Fact]
     public async Task Only_scheduled_services_are_considered()
     {

@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
@@ -25,6 +25,7 @@ public sealed partial class DatabasesController(
     IQuotaService quota,
     ISecretProtector protector,
     Harbora.Infrastructure.Projects.ProjectService projects,
+    Harbora.Infrastructure.Services.ServiceUsageService usage,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -123,8 +124,45 @@ public sealed partial class DatabasesController(
     [HttpPost("{id:guid}/remove")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
-    public async Task<IActionResult> Remove(Guid id, CancellationToken ct)
-    { await Guard(id, ct); await engine.RemoveAsync(id, deleteData: false, ct); return RedirectToAction(nameof(Index)); }
+    public async Task<IActionResult> Remove(Guid id, bool deleteData, string? confirmName, CancellationToken ct)
+    {
+        await Guard(id, ct);
+        var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
+        if (svc is null) return NotFound();
+
+        // Typing the name is asked for only when the data goes with it — see ServiceRemovalPlan.
+        if (!Harbora.Infrastructure.Services.ServiceRemovalPlan.IsConfirmed(deleteData, confirmName, svc.Name))
+        {
+            TempData["Error"] = $"To delete the data, type the name exactly: {svc.Name}";
+            return RedirectToAction(nameof(ConfirmRemove), new { id, deleteData });
+        }
+
+        await engine.RemoveAsync(id, deleteData, ct);
+        TempData["Message"] = deleteData
+            ? $"{svc.Name} and its data were deleted."
+            : $"{svc.Name} was removed. Its data is still on the server in volume \"{svc.VolumeName}\".";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// What removing this database will actually do — which apps stop working, and what becomes of
+    /// the data. It replaced a browser dialog that asked "Remove service?" and said nothing else.
+    /// </summary>
+    [HttpGet("{id:guid}/remove")]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> ConfirmRemove(Guid id, bool deleteData, CancellationToken ct)
+    {
+        var svc = await db.ManagedServices.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
+        if (svc is null) return NotFound();
+
+        var users = await usage.AppsUsingAsync(id, ct);
+        ViewBag.Service = svc;
+        ViewBag.Plan = Harbora.Infrastructure.Services.ServiceRemovalPlan.Describe(
+            deleteData, svc.VolumeName, users.Select(a => a.Name).ToList());
+        ViewData["Title"] = $"Remove {svc.Name}";
+        return View();
+    }
 
     /// <summary>Injects the service's connection env into an app (secret, encrypted). Applies on next deploy.</summary>
     [HttpPost("{id:guid}/attach")]

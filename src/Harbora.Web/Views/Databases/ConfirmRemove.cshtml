@@ -1,0 +1,77 @@
+﻿@{
+    var svc = (Harbora.Domain.Services.ManagedService)ViewBag.Service;
+    var plan = (Harbora.Infrastructure.Services.ServiceRemoval)ViewBag.Plan;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+}
+<div class="max-w-2xl">
+    <a href="/databases/@svc.Id" class="text-brand-400 text-sm">← @svc.Name</a>
+    <h1 class="text-2xl font-bold mt-1 mb-4">@(isFa ? "حذف پایگاه داده" : "Remove database")</h1>
+
+    @if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
+
+    @* The one sentence that used to be missing entirely: what happens to the data. *@
+    <div class="rounded-xl border @(plan.DeletesData ? "border-red-700 bg-red-900/10" : "border-slate-800 bg-slate-900/60") p-4 mb-4">
+        <p class="text-sm @(plan.DeletesData ? "text-red-300" : "text-slate-300")">
+            @if (plan.DeletesData)
+            {
+                @(isFa ? "پایگاه داده و همهٔ داده‌هایش حذف می‌شوند. این کار برگشت‌پذیر نیست."
+                       : "The database and all of its data will be deleted. This cannot be undone.")
+            }
+            else if (plan.OrphanedVolume is { } volume)
+            {
+                @* Concrete about the volume: promising the data is kept means nothing without saying where. *@
+                @(isFa
+                    ? $"کانتینر حذف می‌شود و داده‌ها روی سرور در ولیوم «{volume}» می‌مانند. هاربورا دیگر آن را دنبال نمی‌کند، پس اگر روزی داده‌ها را خواستید همین نام را نگه دارید."
+                    : $"The container is removed and the data is left on the server in volume \"{volume}\". " +
+                      "Harbora will no longer track it, so keep that name if you want the data back.")
+            }
+            else
+            {
+                @(isFa ? "کانتینر حذف می‌شود. دادهٔ ذخیره‌شده‌ای برای نگه‌داشتن وجود ندارد."
+                       : "The container is removed. There is no stored data to keep.")
+            }
+        </p>
+    </div>
+
+    @if (plan.BreaksApps.Count > 0)
+    {
+        @* Nothing checked this before: a database could be removed out from under the apps using it. *@
+        <div class="rounded-xl border border-amber-700 bg-amber-900/10 p-4 mb-4">
+            <div class="text-sm font-semibold text-amber-300 mb-2">
+                @(isFa ? "این سرویس‌ها به آن وصل‌اند و کار نخواهند کرد:" : "These services use it and will stop working:")
+            </div>
+            <ul class="text-sm text-amber-200 list-disc ms-5">
+                @foreach (var name in plan.BreaksApps){<li>@name</li>}
+            </ul>
+        </div>
+    }
+
+    <form asp-controller="Databases" asp-action="Remove" asp-route-id="@svc.Id" method="post" class="space-y-4">
+        @Html.AntiForgeryToken()
+        <label class="flex items-start gap-2 text-sm text-slate-300">
+            <input type="checkbox" name="deleteData" value="true" class="mt-1"
+                   onchange="document.getElementById('confirm-name').classList.toggle('hidden', !this.checked)"
+                   @(plan.DeletesData ? "checked" : "") />
+            <span>@(isFa ? "داده‌ها هم حذف شوند (برگشت‌ناپذیر)" : "Delete the data as well (cannot be undone)")</span>
+        </label>
+
+        <div id="confirm-name" class="@(plan.DeletesData ? "" : "hidden")">
+            <label class="block text-sm text-slate-400 mb-1">
+                @(isFa ? "برای تأیید، نام را دقیقاً بنویسید:" : "To confirm, type the name exactly:")
+                <code class="text-slate-300">@svc.Name</code>
+            </label>
+            <input name="confirmName" autocomplete="off"
+                   class="w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm" />
+        </div>
+
+        <div class="flex gap-2">
+            <button class="rounded-lg bg-red-900/40 hover:bg-red-900/60 text-red-300 px-4 py-2 text-sm font-semibold">
+                @(isFa ? "حذف کن" : "Remove")
+            </button>
+            <a href="/databases/@svc.Id" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">
+                @(isFa ? "انصراف" : "Cancel")
+            </a>
+        </div>
+    </form>
+</div>

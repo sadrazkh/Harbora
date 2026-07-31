@@ -1,4 +1,4 @@
-using Docker.DotNet;
+﻿using Docker.DotNet;
 using Harbora.Application.Abstractions;
 using Harbora.Infrastructure.Common;
 using Harbora.Infrastructure.Deployments;
@@ -81,6 +81,9 @@ public static class DependencyInjection
         // Remote-node host ports are reserved, not guessed (see HostPortRange).
         services.AddScoped<Deployments.HostPortAllocator>();
         // Scheduled jobs: each run is a short-lived container, and the history it leaves is the point.
+        // The run itself is registered on its own too — the schedule and the "run now" button
+        // share one path, so a job tested by hand behaves exactly as it will at 03:00.
+        services.AddScoped<Deployments.CronJobRunner>();
         services.AddHostedService<Deployments.CronRunner>();
         // Crash recovery: reconcile in-flight deployments on startup (ADR-005).
         services.AddHostedService<Deployments.DeploymentReconciler>();
@@ -88,6 +91,8 @@ public static class DependencyInjection
         // Managed services (databases/caches). Concrete type is registered too so background
         // jobs can resolve ProvisionAsync directly.
         services.AddScoped<Services.ManagedServiceEngine>();
+        // Who is actually using a database — needed before deleting one, and by the architecture view.
+        services.AddScoped<Services.ServiceUsageService>();
         services.AddScoped<IManagedServiceEngine>(sp => sp.GetRequiredService<Services.ManagedServiceEngine>());
 
         // Backups (config + volume/db), storage (local + S3), and the schedule runner.

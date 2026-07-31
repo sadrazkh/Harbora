@@ -1,4 +1,4 @@
-using Harbora.Domain.Common;
+﻿using Harbora.Domain.Common;
 
 namespace Harbora.Domain.Apps;
 
@@ -26,6 +26,12 @@ public class CronRun : BaseEntity
 
     /// <summary>Set when the run could not be started at all, as opposed to running and failing.</summary>
     public string? Error { get; set; }
+
+    /// <summary>
+    /// True when someone pressed "run now". Recorded because "why did this run at 14:32 when it is
+    /// scheduled for 03:00?" cannot be answered otherwise.
+    /// </summary>
+    public bool IsManual { get; set; }
 
     public bool Succeeded => ExitCode == 0;
 }

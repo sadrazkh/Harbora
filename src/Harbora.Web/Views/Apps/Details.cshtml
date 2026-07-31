@@ -15,6 +15,12 @@
     </div>
     <div class="flex flex-wrap gap-2">
         <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Deploy"]</button></form>
+        @if (Model.Kind == ServiceKind.Cron)
+        {
+            @* Without this a nightly job cannot be checked until tomorrow. It takes the same path the
+               schedule does, so what is tested here is what will happen at 03:00. *@
+            <form asp-controller="Apps" asp-action="RunNow" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">▶ @T["Run now"]</button></form>
+        }
         <form asp-controller="Apps" asp-action="Restart" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">↻ @T["Restart"]</button></form>
         @if (running)
         {
@@ -68,7 +74,14 @@
                         var stillRunning = r.FinishedAt is null;
                         <div class="p-3">
                             <div class="flex items-center justify-between gap-3 text-sm">
-                                <span class="text-slate-300">@r.StartedAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
+                                <span class="text-slate-300">
+                                    @r.StartedAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss") UTC
+                                    @if (r.IsManual)
+                                    {
+                                        @* Otherwise a run at 14:32 on an 03:00 schedule looks like a bug. *@
+                                        <span class="text-[10px] rounded bg-slate-800 px-1 text-slate-400">@T["run by hand"]</span>
+                                    }
+                                </span>
                                 <div class="flex items-center gap-3">
                                     @if (r.FinishedAt is { } done)
                                     {

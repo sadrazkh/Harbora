@@ -1,4 +1,4 @@
-using Harbora.Domain.Jobs;
+﻿using Harbora.Domain.Jobs;
 using Harbora.Infrastructure.Backups;
 using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Services;
@@ -23,6 +23,9 @@ public static class JobDispatcher
 
         JobKind.ServiceProvision =>
             scope.GetRequiredService<ManagedServiceEngine>().ProvisionAsync(job.TargetId, ct),
+
+        JobKind.CronRun =>
+            scope.GetRequiredService<CronJobRunner>().RunAsync(job.TargetId, ct),
 
         _ => throw new NotSupportedException($"No handler is registered for job kind {job.Kind}.")
     };

@@ -5,6 +5,81 @@ result (success/fail) · decisions · next step.
 
 ---
 
+## 2026-07-31 — Run now, and the start of Phase 3 (database hardening)
+
+**Run now** — a nightly job nobody can try until tomorrow is a nightly job nobody trusts.
+
+- The execution moved out of `CronRunner` into `CronJobRunner`, so the schedule and the button take
+  exactly the same path: what someone tests by hand is what happens at 03:00.
+- Queued through the existing durable job queue (`JobKind.CronRun`) rather than run inline — a job
+  can take minutes, and the request that started it must not be what keeps it alive.
+- A run started by hand does **not** move the schedule. Testing tonight's backup must not quietly
+  cancel the one that mattered.
+- Runs are marked as started by hand, because "why did this run at 14:32 when it is scheduled for
+  03:00?" is otherwise unanswerable.
+- One at a time: a held-down button would otherwise start a container per press.
+- **Interrupted runs are now settled at startup.** A row with no finish time is shown as still
+  running, so a job killed mid-run was reported as running for ever — and with the guard above it
+  could never have started again.
+- The queue path checks the kind itself, not only the button: a request can be claimed long after it
+  was made, by which time the service may have been deleted or changed.
+
+**Phase 3 — database hardening, first slice: deleting a database tells the truth**
+
+Two linked defects, both found by reading what the code actually did rather than what it claimed:
+
+1. **The architecture view never showed a database connection.** It searched each app's stored
+   environment values for the database's container name — but attaching a database always stores
+   those variables **encrypted**, so it was searching ciphertext. An app with a database attached
+   was drawn with no connections at all, which is precisely the case the view exists for.
+2. **Removing a database asked "Remove service?" in a browser dialog and nothing else.** It never
+   checked which apps were using it, and it deleted the row while leaving the volume on the node —
+   the code comment said the data was kept, but nothing recorded where, so "kept" meant unreachable
+   and untracked.
+
+Both need the same answer — who is using this database — so it is built once (`ServiceUsage`,
+`ServiceUsageService`) and used by both. A deliberate asymmetry: a value that will not decrypt is
+still read rather than skipped, because the two mistakes are not equal. Missing a user is what lets
+a database be deleted out from under a running app; a spurious one only makes a warning too
+cautious. (The first version skipped it — mutation testing showed the test could not tell the
+difference, and thinking about why showed the choice was wrong.)
+
+The delete button now leads to a page that says what will happen to the data, names the volume if it
+is kept, lists the apps that will stop working, and asks for the name to be typed — but only when
+the data goes too, since asking for it on a reversible action teaches people to type it without
+reading.
+
+**Tests / checks**
+
+- Suite **712 passing**, 0 errors / 0 warnings.
+- Mutation testing: **15 mutations, 15 caught** (6 on "run now", 9 on the database work).
+- Two weak tests found and replaced along the way: the usage tests used a passthrough protector
+  whose "ciphertext" still contained the plain text, so they would have passed without anything
+  being decrypted — the one thing they exist to check. They use the real protector now.
+
+**Not yet done in Phase 3**
+
+- Storage usage per database (how big is it, is the disk about to fill).
+- Version pinning surfaced in the UI: the catalog offers explicit versions, but the entity still
+  defaults to `latest`, and nothing shows the version actually running versus the one configured.
+- Rotation of credentials; per-engine restore beyond the existing dump/restore.
+
+**Verified live on the server**
+
+- Pressed "run now" on a job scheduled for 03:00: the run appeared marked as done by hand, with the
+  job's own output, and `NextRunAt` was still 2026-08-01 03:00 — the schedule was not disturbed.
+- Created a Postgres database, attached it to a service, and opened the remove page: it listed the
+  attached service by name (the encrypted-value bug, proven fixed on real data) and named the volume.
+- Delete protection: refused with no typed name, refused with the wrong name, and only removed the
+  database — and its volume — on an exact match.
+- Migration applied with an automatic restore point first (`pre-upgrade-20260731-100653.sql.gz`).
+- One thing the live run caught that the tests could not: the removal sentence was English-only while
+  the page around it rendered Persian. The wording moved into the view, which is bilingual; the plan
+  now carries only the decision.
+
+Test state removed afterwards: no test apps, no managed services, no cron runs, and
+`CpuOvercommitFactor` back to `1.0`.
+
 ## 2026-07-31 — Scheduled jobs and release tasks (Cron + Release Task)
 
 Two things a real PaaS is expected to have and Harbora did not: a command that runs *before* a new
