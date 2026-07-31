@@ -137,6 +137,7 @@ public sealed class TemplatesController(HarboraDbContext db, ICurrentUser curren
 public sealed class SettingsController(
     HarboraDbContext db,
     ITokenService tokens,
+    Harbora.Infrastructure.Assistant.AssistantService assistant,
     ICurrentUser currentUser) : Controller
 {
     private bool IsProvider => User.IsInRole("Owner") || User.IsInRole("Admin");
@@ -154,6 +155,16 @@ public sealed class SettingsController(
         ViewBag.RootDomain = settings.GetValueOrDefault(Harbora.Domain.Settings.SettingKeys.PlatformRootDomain, "");
         ViewBag.AcmeEmail = settings.GetValueOrDefault(Harbora.Domain.Settings.SettingKeys.AcmeEmail, "");
         ViewBag.Culture = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+
+        // The key is never sent back to the page — only whether one is stored. A settings screen
+        // that renders a secret so it can be re-saved is a settings screen that leaks it into every
+        // browser cache and screen recording.
+        var assistantConfig = await assistant.GetConfigAsync(ct);
+        ViewBag.Assistant = assistantConfig;
+        ViewBag.AssistantHasKey = !string.IsNullOrWhiteSpace(assistantConfig.ApiKey);
+        ViewBag.AssistantUnavailable =
+            Harbora.Infrastructure.Assistant.AssistantAvailability.Check(assistantConfig)?.Reason;
+
         return View();
     }
 
@@ -168,6 +179,32 @@ public sealed class SettingsController(
         await SetAsync(Harbora.Domain.Settings.SettingKeys.AcmeEmail, acmeEmail ?? "", ct);
         await db.SaveChangesAsync(ct);
         TempData["Message"] = "Settings saved.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Provider-only: configure the AI assistant. Leaving the key box blank keeps the stored one,
+    /// so saving a model change does not silently disable the feature.
+    /// </summary>
+    [HttpPost("/settings/assistant")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.PlatformManage)]
+    public async Task<IActionResult> UpdateAssistant(
+        bool enabled, string? provider, string? model, string? apiKey, string? baseUrl, CancellationToken ct)
+    {
+        await assistant.SaveConfigAsync(enabled, provider, model, apiKey, baseUrl, ct);
+        TempData["Message"] = "Settings saved.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>Provider-only: forget the stored API key. Its own action because it cannot be undone.</summary>
+    [HttpPost("/settings/assistant/key/clear")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.PlatformManage)]
+    public async Task<IActionResult> ClearAssistantKey(CancellationToken ct)
+    {
+        await assistant.ClearApiKeyAsync(ct);
+        TempData["Message"] = "The AI provider key was removed.";
         return RedirectToAction(nameof(Index));
     }
 

@@ -1,4 +1,4 @@
-@{
+﻿@{
     ViewData["Title"] = "Settings";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var isProvider = (bool)(ViewBag.IsProvider ?? false);
@@ -41,6 +41,91 @@
             }
         </form>
         <p class="mt-3 text-xs text-slate-500">@(isFa ? "دامنه‌ی پنل در نصب تنظیم می‌شود و نیاز به بازراه‌اندازی دارد." : "The panel domain is set at install time and requires a restart to change.")</p>
+    </section>
+
+    @* ---- AI assistant ----
+       Off, with nothing configured, is the shipped state. It stays off until an operator brings
+       their own key, because turning it on means deployment logs start leaving this server. *@
+    @{
+        var assistant = ViewBag.Assistant as Harbora.Infrastructure.Assistant.AssistantConfig;
+        var hasKey = (bool)(ViewBag.AssistantHasKey ?? false);
+        var unavailable = ViewBag.AssistantUnavailable as string;
+    }
+    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 class="font-semibold mb-1">@(isFa ? "دستیار هوش مصنوعی" : "AI assistant")</h2>
+        <p class="text-xs text-slate-400 mb-3">
+            @(isFa
+                ? "خطای یک استقرار را توضیح می‌دهد. لاگ پیش از ارسال پاکسازی می‌شود و کاربر دقیقاً همان متن را پیش از ارسال می‌بیند."
+                : "Explains a failed deployment. The log is redacted first, and whoever asks sees the exact text before it is sent.")
+        </p>
+
+        <form asp-controller="Settings" asp-action="UpdateAssistant" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <label class="flex items-center gap-2 text-sm">
+                <input type="checkbox" name="enabled" value="true" @(assistant?.Enabled == true ? "checked" : "") @(isProvider ? "" : "disabled") />
+                <span>@(isFa ? "روشن" : "Enabled")</span>
+            </label>
+
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">@(isFa ? "ارائه‌دهنده" : "Provider")</label>
+                <select name="provider" @(isProvider ? "" : "disabled")
+                        class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm disabled:opacity-60">
+                    <option value="">—</option>
+                    <option value="anthropic" selected="@(assistant?.Provider == "anthropic")">Anthropic (Claude)</option>
+                    <option value="openai" selected="@(assistant?.Provider == "openai")">OpenAI-compatible</option>
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">@(isFa ? "مدل" : "Model")</label>
+                <input name="model" value="@assistant?.Model" placeholder="claude-sonnet-5" @(isProvider ? "" : "disabled")
+                       class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm disabled:opacity-60" />
+            </div>
+
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">
+                    @(isFa ? "کلید API" : "API key")
+                    <span class="text-xs text-slate-500">@(hasKey ? (isFa ? "· ذخیره شده" : "· stored") : (isFa ? "· تنظیم نشده" : "· not set"))</span>
+                </label>
+                @* Never rendered back, only replaced. Blank leaves the stored key alone. *@
+                <input name="apiKey" type="password" autocomplete="off"
+                       placeholder="@(hasKey ? (isFa ? "برای تغییر، کلید تازه را بنویسید" : "type a new key to replace it") : "sk-…")"
+                       @(isProvider ? "" : "disabled")
+                       class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm disabled:opacity-60" />
+            </div>
+
+            <div>
+                <label class="block text-sm text-slate-400 mb-1">
+                    @(isFa ? "آدرس سرویس (اختیاری)" : "Base URL (optional)")
+                </label>
+                <input name="baseUrl" value="@assistant?.BaseUrl" placeholder="http://localhost:11434" @(isProvider ? "" : "disabled")
+                       class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm disabled:opacity-60" />
+                <p class="mt-1 text-[11px] text-slate-500">
+                    @(isFa
+                        ? "برای مدل محلی روی همین ماشین، کلید لازم نیست."
+                        : "A model running on this machine needs no key.")
+                </p>
+            </div>
+
+            @if (isProvider)
+            {
+                <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Save"]</button>
+            }
+        </form>
+
+        @if (isProvider && hasKey)
+        {
+            <form asp-controller="Settings" asp-action="ClearAssistantKey" method="post" class="mt-2">
+                @Html.AntiForgeryToken()
+                <button class="text-xs text-red-400 hover:text-red-300">@(isFa ? "کلید ذخیره‌شده را حذف کن" : "Remove the stored key")</button>
+            </form>
+        }
+
+        @* Says why it is not available, rather than leaving a switch that appears on and does nothing. *@
+        @if (unavailable is not null)
+        {
+            <p class="mt-3 text-xs text-amber-400/80">@unavailable</p>
+        }
     </section>
 
     @* ---- Appearance & language ---- *@

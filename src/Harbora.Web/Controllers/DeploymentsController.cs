@@ -12,6 +12,7 @@ namespace Harbora.Web.Controllers;
 public sealed class DeploymentsController(
     HarboraDbContext db,
     Harbora.Infrastructure.Security.ProjectAccessService access,
+    Harbora.Infrastructure.Assistant.AssistantService assistant,
     IDeploymentEngine deployEngine,
     IAuditLogger audit,
     ICurrentUser currentUser) : Controller
@@ -56,6 +57,13 @@ public sealed class DeploymentsController(
         // Where this exact release could go next: other services in the same project, in another
         // environment. Offered only when it is genuinely possible — see PromotionPlan.
         ViewBag.PromotionTargets = await PromotionTargetsAsync(deployment, ct);
+
+        // Offered only where it could help, and only when an administrator has actually configured
+        // it. The check lives in one place so the button and the endpoint cannot disagree.
+        ViewBag.AssistantAvailable =
+            deployment.Status == Harbora.Domain.Common.DeploymentStatus.Failed
+            && Harbora.Infrastructure.Assistant.AssistantAvailability.IsAvailable(
+                await assistant.GetConfigAsync(ct));
 
         return View(deployment);
     }
@@ -157,6 +165,62 @@ public sealed class DeploymentsController(
         }
 
         return allowed;
+    }
+
+    /// <summary>
+    /// Shows exactly what would be sent to the AI provider, and sends nothing.
+    ///
+    /// The whole reason the assistant is two steps: the text that leaves this server has to be text
+    /// somebody has read. Building the preview and building the request are the same function, so a
+    /// preview cannot drift from what is actually sent.
+    /// </summary>
+    [HttpGet("/deployments/{id:guid}/assistant/preview")]
+    public async Task<IActionResult> AssistantPreview(Guid id, CancellationToken ct)
+    {
+        if (await MayAskAboutAsync(id, ct) is { } failure) return failure;
+
+        var ask = await assistant.PrepareAsync(id, ct);
+        if (ask is null) return NotFound();
+
+        return Json(new { text = ask.UserPrompt, removed = ask.Removed, truncated = ask.Truncated });
+    }
+
+    /// <summary>Sends the question the person has just been shown.</summary>
+    [HttpPost("/deployments/{id:guid}/assistant/ask")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> AssistantAsk(Guid id, CancellationToken ct)
+    {
+        if (await MayAskAboutAsync(id, ct) is { } failure) return failure;
+
+        var ask = await assistant.PrepareAsync(id, ct);
+        if (ask is null) return NotFound();
+
+        var answer = await assistant.AskAsync(ask, ct);
+
+        // Audited because it is the moment data left this server, and how much of it was removed
+        // first is exactly what somebody would want to reconstruct later.
+        await audit.LogAsync("assistant.asked", "deployment", id.ToString(), ClientIp, ct: ct);
+
+        return Json(new { ok = answer.Ok, text = answer.Text });
+    }
+
+    /// <summary>
+    /// Visibility plus configuration, in one place. Reading a deployment is enough to ask about it —
+    /// the same people who can read the log, which is all the assistant is shown.
+    /// </summary>
+    private async Task<IActionResult?> MayAskAboutAsync(Guid deploymentId, CancellationToken ct)
+    {
+        var deployment = await db.Deployments.AsNoTracking()
+            .Where(d => d.Id == deploymentId && d.App!.WorkspaceId == WorkspaceId)
+            .Select(d => new { d.AppId }).FirstOrDefaultAsync(ct);
+        if (deployment is null) return NotFound();
+        if (!await access.CanSeeAppAsync(deployment.AppId, ct)) return NotFound();
+
+        if (Harbora.Infrastructure.Assistant.AssistantAvailability.Check(
+                await assistant.GetConfigAsync(ct)) is { } unavailable)
+            return BadRequest(new { message = unavailable.Reason });
+
+        return null;
     }
 
     /// <summary>Backfills already-persisted log lines before the SignalR stream takes over.</summary>

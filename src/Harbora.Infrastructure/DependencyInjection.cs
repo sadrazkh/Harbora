@@ -121,6 +121,11 @@ public static class DependencyInjection
         // Branches get abandoned rather than deleted, so the webhook alone would leak services.
         services.AddHostedService<Projects.PreviewSweeper>();
 
+        // Explaining a failed deployment, behind a flag and an administrator's own API key. The
+        // redaction boundary it depends on is a pure rule — see AssistantRedaction.
+        services.AddScoped<Assistant.AssistantClient>();
+        services.AddScoped<Assistant.AssistantService>();
+
         // Tenancy quotas + node capacity (PaaS).
         services.AddScoped<IQuotaService, Tenancy.QuotaService>();
         services.AddScoped<INodeCapacityService, Tenancy.NodeCapacityService>();

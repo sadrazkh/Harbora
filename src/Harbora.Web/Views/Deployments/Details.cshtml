@@ -83,6 +83,48 @@
     </section>
 }
 
+@* ---- explain this failure ----
+   Two steps on purpose. The first shows the exact text that would leave this server, with the
+   count of what was removed from it; nothing is sent until somebody has read it and pressed send.
+   A one-click version would be friendlier and would ship somebody's logs to a third party before
+   they knew there was a third party. *@
+@if (ViewBag.AssistantAvailable == true)
+{
+    <section class="mb-6 rounded-xl border border-slate-800 bg-slate-900/60" data-assistant data-id="@Model.Id">
+        @* Its own token. The promote form above also renders one, but only when a promotion is
+           possible — relying on that would make sending work or fail depending on an unrelated
+           feature's visibility. *@
+        @Html.AntiForgeryToken()
+        <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-800">
+            <span class="font-semibold">@(isFa ? "توضیح این خطا" : "Explain this failure")</span>
+            <button type="button" data-assistant-preview
+                    class="text-xs rounded-lg border border-slate-700 px-3 py-1 hover:border-brand-600">
+                @(isFa ? "ببین چه چیزی ارسال می‌شود" : "See what would be sent")
+            </button>
+        </div>
+
+        <div class="p-4 text-xs text-slate-400" data-assistant-intro>
+            @(isFa
+                ? "لاگ پیش از ارسال پاکسازی می‌شود، ولی پیش از ارسال خودتان هم آن را می‌بینید. هیچ چیزی بدون تأیید شما از این سرور خارج نمی‌شود."
+                : "The log is redacted first, and you see it before it goes. Nothing leaves this server until you send it.")
+        </div>
+
+        <div class="hidden p-4 space-y-3" data-assistant-panel>
+            <div class="text-xs text-slate-400" data-assistant-summary></div>
+            <pre dir="ltr" class="max-h-64 overflow-auto rounded bg-black/60 p-3 font-mono text-[11px] whitespace-pre-wrap" data-assistant-text></pre>
+            <div class="flex items-center gap-2">
+                <button type="button" data-assistant-send
+                        class="rounded-lg bg-brand-600 hover:bg-brand-500 px-3 py-1.5 text-sm font-semibold">
+                    @(isFa ? "همین را بفرست" : "Send this")
+                </button>
+                <span class="text-xs text-slate-500" data-assistant-status></span>
+            </div>
+        </div>
+
+        <div class="hidden border-t border-slate-800 p-4 text-sm whitespace-pre-wrap" data-assistant-answer></div>
+    </section>
+}
+
 @* Vue island: connects to SignalR and renders live logs. Mount point carries its config. *@
 <div id="deployment-logs"
      data-deployment-id="@Model.Id"
@@ -115,6 +157,58 @@
         }
         if (terminal.indexOf('@Model.Status') === -1) setTimeout(poll, 800);
         else setTimeout(function(){ if(!window.__harboraLogsMounted) poll(); }, 800);
+    })();
+
+    // The assistant: preview, then send. Two requests, because the first one deliberately sends
+    // nothing anywhere — it only shows what the second one would.
+    (function () {
+        var root = document.querySelector('[data-assistant]');
+        if (!root) return;
+
+        var id = root.getAttribute('data-id');
+        var panel = root.querySelector('[data-assistant-panel]');
+        var text = root.querySelector('[data-assistant-text]');
+        var summary = root.querySelector('[data-assistant-summary]');
+        var status = root.querySelector('[data-assistant-status]');
+        var answer = root.querySelector('[data-assistant-answer]');
+        var previewButton = root.querySelector('[data-assistant-preview]');
+        var sendButton = root.querySelector('[data-assistant-send]');
+        var fa = @(isFa ? "true" : "false");
+
+        previewButton.addEventListener('click', function () {
+            previewButton.disabled = true;
+            fetch('/deployments/' + id + '/assistant/preview')
+                .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+                .then(function (r) {
+                    if (!r.ok) { summary.textContent = r.body.message || ''; panel.classList.remove('hidden'); return; }
+                    text.textContent = r.body.text;
+                    // The count is the evidence that redaction ran at all.
+                    var parts = [fa ? (r.body.removed + ' مورد حساس حذف شد') : (r.body.removed + ' sensitive item(s) removed')];
+                    if (r.body.truncated) parts.push(fa ? 'فقط انتهای لاگ' : 'only the end of the log');
+                    summary.textContent = parts.join(' · ');
+                    panel.classList.remove('hidden');
+                })
+                .catch(function () { summary.textContent = fa ? 'آماده‌سازی انجام نشد.' : 'The preview could not be built.'; })
+                .finally(function () { previewButton.disabled = false; });
+        });
+
+        sendButton.addEventListener('click', function () {
+            sendButton.disabled = true;
+            status.textContent = fa ? 'در حال پرسیدن…' : 'asking…';
+            var token = document.querySelector('input[name="__RequestVerificationToken"]');
+            var body = new FormData();
+            if (token) body.append('__RequestVerificationToken', token.value);
+
+            fetch('/deployments/' + id + '/assistant/ask', { method: 'POST', body: body })
+                .then(function (r) { return r.json(); })
+                .then(function (b) {
+                    answer.textContent = b.text || '';
+                    answer.classList.remove('hidden');
+                    status.textContent = '';
+                })
+                .catch(function () { status.textContent = fa ? 'پاسخی نرسید.' : 'No answer came back.'; })
+                .finally(function () { sendButton.disabled = false; });
+        });
     })();
 </script>
 }
