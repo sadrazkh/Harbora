@@ -11,7 +11,7 @@
         return pct.ToString("0");
     }
 }
-<h1 class="text-2xl font-bold mb-1">@(isFa ? "پلن و مصرف" : "Plan & Usage")</h1>
+<h1 class="text-2xl font-bold tracking-tight text-ink mb-1">@(isFa ? "پلن و مصرف" : "Plan & Usage")</h1>
 <p class="text-ink-muted text-sm mb-6">@(isFa ? "پلن فعلی:" : "Current plan:") <span class="text-ink font-medium">@u.PlanName</span>
     @if (u.Suspended){<span class="ms-2 text-xs rounded bg-danger/15 text-danger px-2 py-0.5">@(isFa ? "معلق" : "suspended")</span>}
 </p>
@@ -38,7 +38,7 @@
     }
 </div>
 
-<h2 class="text-lg font-semibold mb-3">@(isFa ? "پلن‌های ارائه‌شده" : "Offered plans")</h2>
+<h2 class="text-lg font-semibold text-ink mb-3">@(isFa ? "پلن‌های ارائه‌شده" : "Offered plans")</h2>
 <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
     @foreach (var p in Model.Plans)
     {
@@ -58,7 +58,7 @@
     }
 </div>
 
-<h2 class="text-lg font-semibold mb-3">@(isFa ? "اندازه‌های منبع" : "Instance sizes")</h2>
+<h2 class="text-lg font-semibold text-ink mb-3">@(isFa ? "اندازه‌های منبع" : "Instance sizes")</h2>
 <div class="rounded-xl border border-line bg-surface divide-y divide-line mb-8">
     @foreach (var s in Model.Sizes)
     {
@@ -72,7 +72,7 @@
 @if (Model.IsProvider)
 {
     <section class="rounded-xl border border-line bg-surface p-5 max-w-2xl">
-        <h2 class="font-semibold mb-3">@(isFa ? "ساخت پلن جدید" : "Create a plan")</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "ساخت پلن جدید" : "Create a plan")</h2>
         <form asp-controller="Plans" asp-action="CreatePlan" method="post" class="grid sm:grid-cols-2 gap-3">
             @Html.AntiForgeryToken()
             <input name="name" placeholder="Name" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
@@ -94,7 +94,7 @@
        Plans could only be created, so a wrong limit or a changed price meant a new plan and moving
        every tenant across by hand. *@
     <section class="mt-8 rounded-xl border border-line bg-surface p-5">
-        <h2 class="font-semibold mb-3">@(isFa ? "ویرایش پلن‌ها" : "Edit plans")</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "ویرایش پلن‌ها" : "Edit plans")</h2>
         <div class="space-y-4">
             @foreach (var p in Model.Plans)
             {

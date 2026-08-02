@@ -20,7 +20,7 @@
 <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
     <div>
         <a href="/databases" class="text-accent-text text-sm">← @T["Databases"]</a>
-        <h1 class="text-2xl font-bold flex items-center gap-3">@Model.Name
+        <h1 class="text-2xl font-bold tracking-tight text-ink flex items-center gap-3">@Model.Name
             <span class="rounded-full px-2.5 py-0.5 text-xs font-medium @StatusClass(Model.Status)">@Model.Status</span>
         </h1>
         <p class="text-ink-muted text-sm">
@@ -121,7 +121,7 @@ else if (moving)
     </section>
 
     <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="font-semibold mb-3">@T["Attach to app"]</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@T["Attach to app"]</h2>
         <p class="text-sm text-ink-muted mb-3">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "متغیرهای اتصال به‌صورت رمزنگاری‌شده به اپ اضافه می‌شوند." : "Connection variables are added to the app, encrypted.")</p>
         <form asp-controller="Databases" asp-action="Attach" asp-route-id="@Model.Id" method="post" class="flex gap-2">
             @Html.AntiForgeryToken()

@@ -6,7 +6,7 @@
 }
 <div class="mb-6">
     <a href="/tenants" class="text-accent-text text-sm">← @(isFa ? "مستأجرها" : "Tenants")</a>
-    <h1 class="text-2xl font-bold">@Model.Name <span class="text-sm text-ink-faint font-mono">@Model.Slug</span></h1>
+    <h1 class="text-2xl font-bold tracking-tight text-ink">@Model.Name <span class="text-sm text-ink-faint font-mono">@Model.Slug</span></h1>
 </div>
 
 @if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
@@ -44,7 +44,7 @@
 </div>
 
 <div class="rounded-xl border border-line bg-surface p-5 mb-6">
-    <h2 class="font-semibold mb-3">@(isFa ? "مصرف متری این ماه" : "Metered usage this month") <span class="text-ink-faint text-sm">· @Model.PeriodLabel</span></h2>
+    <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "مصرف متری این ماه" : "Metered usage this month") <span class="text-ink-faint text-sm">· @Model.PeriodLabel</span></h2>
     <div class="grid grid-cols-3 gap-4 text-sm">
         <div><div class="text-ink-muted">@(isFa ? "گیگ‌بایت-ساعت (RAM)" : "GB-hours (RAM)")</div><div class="mt-1 text-xl font-bold">@Model.MemoryGbHours.ToString("0.0")</div></div>
         <div><div class="text-ink-muted">@(isFa ? "هسته-ساعت (CPU)" : "vCPU-hours")</div><div class="mt-1 text-xl font-bold">@Model.CpuCoreHours.ToString("0.0")</div></div>
@@ -140,7 +140,7 @@
     </section>
 
     <section class="rounded-xl border border-line bg-surface p-5 h-fit">
-        <h2 class="font-semibold mb-3">@(isFa ? "افزودن کاربر" : "Add a user")</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "افزودن کاربر" : "Add a user")</h2>
         <form asp-controller="Tenants" asp-action="AddMember" asp-route-id="@Model.WorkspaceId" method="post" class="space-y-3">
             @Html.AntiForgeryToken()
             <input name="email" type="email" placeholder="@(isFa ? "ایمیل" : "Email")" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />

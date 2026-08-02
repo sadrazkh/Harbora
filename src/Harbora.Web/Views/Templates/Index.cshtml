@@ -10,7 +10,7 @@
     var workspaceId = ViewBag.WorkspaceId is Guid ws ? ws : Guid.Empty;
     var input = "w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm";
 }
-<h1 class="text-2xl font-bold mb-6">@T["Templates"]</h1>
+<h1 class="text-2xl font-bold tracking-tight text-ink mb-6">@T["Templates"]</h1>
 
 @if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
 @if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
@@ -79,7 +79,7 @@
    The manifest is checked here, where it is written. A deploy failing on it an hour later is the
    expensive moment to find a typo. *@
 <section class="mt-8 rounded-xl border border-line bg-surface p-5 max-w-3xl">
-    <h2 class="font-semibold mb-3">@(isFa ? "قالب خودت را بساز" : "Add your own template")</h2>
+    <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "قالب خودت را بساز" : "Add your own template")</h2>
     <form asp-controller="Templates" asp-action="Save" method="post" class="space-y-3">
         @Html.AntiForgeryToken()
         <div class="grid sm:grid-cols-2 gap-3">

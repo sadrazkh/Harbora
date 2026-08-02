@@ -9,7 +9,7 @@
 <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
     <div>
         <a href="/apps" class="text-accent-text text-sm">← @T["Applications"]</a>
-        <h1 class="text-2xl font-bold flex items-center gap-3">@Model.Name <partial name="_StatusBadge" model="Model.Status" /></h1>
+        <h1 class="text-2xl font-bold tracking-tight text-ink flex items-center gap-3">@Model.Name <partial name="_StatusBadge" model="Model.Status" /></h1>
         <p class="text-ink-muted text-sm">@Model.Slug · @Model.SourceType @(Model.GitRepository is not null ? "· " + Model.GitRepository.FullName : "")
             @if (!string.IsNullOrEmpty(Model.InstanceSizeKey)){<span>· @Model.InstanceSizeKey</span>}
         </p>

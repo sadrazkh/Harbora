@@ -5,7 +5,7 @@
     var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
 }
 <div class="mb-6">
-    <h1 class="text-2xl font-bold">@(isFa ? "مستأجرها" : "Tenants")</h1>
+    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "مستأجرها" : "Tenants")</h1>
     <p class="text-ink-muted text-sm">@(isFa ? "workspaceهای مشتریان روی این پلتفرم و پلن هرکدام." : "Customer workspaces hosted on this platform and their plans.")</p>
 </div>
 
@@ -68,7 +68,7 @@
     </section>
 
     <section class="rounded-xl border border-line bg-surface p-5 h-fit">
-        <h2 class="font-semibold mb-3">@(isFa ? "مستأجر جدید" : "New tenant")</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "مستأجر جدید" : "New tenant")</h2>
         <form asp-controller="Tenants" asp-action="Create" method="post" class="space-y-3">
             @Html.AntiForgeryToken()
             <input name="name" placeholder="@(isFa ? "نام" : "Name")" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />

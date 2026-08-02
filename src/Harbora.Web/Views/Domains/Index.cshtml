@@ -1,48 +1,194 @@
 ﻿@model List<DomainRow>
+@using Harbora.Domain.Common
+@using Harbora.Infrastructure.Monitoring
+@using Harbora.Web.ViewModels
 @{
     ViewData["Title"] = "Domains";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var serverIp = ViewBag.ServerIp as string ?? "?";
+    var now = DateTimeOffset.UtcNow;
+
+    var secured = Model.Count(d => d.CertificateStatus == CertificateStatus.Issued);
+    var expiring = Model
+        .Where(d => d.DaysLeft(now) is { } days && days <= 30)
+        .OrderBy(d => d.CertificateExpiresAt)
+        .ToList();
+    var wildcards = Model.Where(d => d.Host.StartsWith('*')).ToList();
+
+    // Coverage is only a percentage when there is something to divide by. Zero domains is not
+    // "0% secured", it is a platform with no domains.
+    double? coverage = Model.Count > 0 ? (double)secured / Model.Count * 100 : null;
+
+    (string Text, string Tone) CertificateState(DomainRow d) => d.CertificateStatus switch
+    {
+        CertificateStatus.Issued when d.DaysLeft(now) is { } days && days < 0 =>
+            (isFa ? "منقضی" : "expired", Tone.Error),
+        CertificateStatus.Issued when d.DaysLeft(now) is { } days && days <= 14 =>
+            (isFa ? "رو به انقضا" : "expiring", Tone.Warn),
+        CertificateStatus.Issued => (isFa ? "فعال" : "active", Tone.Ok),
+        CertificateStatus.Pending => (isFa ? "در انتظار" : "pending", Tone.Warn),
+        CertificateStatus.Expired => (isFa ? "منقضی" : "expired", Tone.Error),
+        CertificateStatus.Failed => (isFa ? "ناموفق" : "failed", Tone.Error),
+        CertificateStatus.Revoked => (isFa ? "باطل" : "revoked", Tone.Error),
+        // No certificate row at all. The SSL checkbox alone only says somebody asked for TLS.
+        _ => d.Ssl ? (isFa ? "صادر نشده" : "not issued", Tone.Idle) : (isFa ? "بدون SSL" : "no SSL", Tone.Idle)
+    };
+
+    var header = new PageHeaderModel(
+        isFa ? "دامنه‌ها و SSL" : "Domains & SSL",
+        isFa
+            ? $"برای هر دامنه یک رکورد A بسازید که به {serverIp} اشاره کند."
+            : $"Point an A record for each domain at {serverIp}.");
 }
+
 <div class="mb-6">
-    <h1 class="text-2xl font-bold">@(isFa ? "دامنه‌ها و SSL" : "Domains & SSL")</h1>
-    <p class="text-ink-muted text-sm">
-        @(isFa ? "برای هر دامنه یک رکورد A بسازید که به IP این سرور اشاره کند:" : "Point an A record for each domain at this server's IP:")
-        <code class="text-accent-text">@serverIp</code>
-    </p>
+    <partial name="Design/_PageHeader" model="header" />
 </div>
 
+@{
+    var listPanel = new PanelModel(isFa ? $"{Model.Count} دامنه" : $"{Model.Count} domains");
+}
+<partial name="Design/_PanelStart" model="listPanel" />
 @if (Model.Count == 0)
 {
-    <div class="rounded-xl border border-dashed border-line-strong p-12 text-center text-ink-muted">
-        @(isFa ? "هنوز دامنه‌ای وصل نشده. از صفحه‌ی هر اپ دامنه اضافه کنید." : "No domains yet. Add one from an app's page.")
-    </div>
+    var empty = new EmptyStateModel("globe",
+        isFa ? "هنوز دامنه‌ای وصل نشده. از صفحهٔ هر سرویس دامنه اضافه کنید." : "No domains yet. Add one from a service's page.",
+        T["Applications"].Value, "/apps");
+    <partial name="Design/_EmptyState" model="empty" />
 }
 else
 {
-    <div class="space-y-3">
-        @foreach (var d in Model)
-        {
-            <div class="rounded-xl border border-line bg-surface p-4" data-host="@d.Host">
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                    <div class="min-w-0">
-                        <a href="https://@d.Host" target="_blank" class="font-mono font-semibold text-accent-text">@d.Host</a>
-                        <div class="text-xs text-ink-faint">@(isFa ? "اپ:" : "app:") <a href="/apps/details/@d.AppId" class="hover:text-ink">@d.AppName</a>
-                            @if (d.Primary){<span class="ms-1 rounded bg-surface-2 px-1.5 py-0.5 text-[10px]">primary</span>}</div>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        @if (d.Ssl){<span class="text-xs text-ok">🔒 SSL</span>}
-                        <button data-test="dns" class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5">@(isFa ? "تست DNS" : "Test DNS")</button>
-                        <button data-test="ssl" class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5">@(isFa ? "تست SSL" : "Test SSL")</button>
-                    </div>
-                </div>
-                <div class="mt-2 text-xs font-mono text-ink-muted">
-                    @(isFa ? "رکورد لازم:" : "Required record:") <span class="text-ink">A&nbsp;&nbsp;@d.Host&nbsp;&nbsp;→&nbsp;&nbsp;@serverIp</span>
-                </div>
-                <div data-result class="mt-2 text-xs"></div>
-            </div>
-        }
+    <div class="-mx-5 -my-5 overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-line text-xs text-ink-faint">
+                    <th class="px-5 py-3 text-start font-medium">@(isFa ? "دامنه" : "Domain")</th>
+                    <th class="px-5 py-3 text-start font-medium">@(isFa ? "سرویس" : "Mapped to")</th>
+                    <th class="px-5 py-3 text-start font-medium">@(isFa ? "وضعیت گواهی" : "SSL status")</th>
+                    <th class="px-5 py-3 text-start font-medium">@(isFa ? "انقضا" : "Expires")</th>
+                    <th class="px-5 py-3 text-end font-medium">@(isFa ? "بررسی زنده" : "Live check")</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-line">
+                @foreach (var d in Model)
+                {
+                    var state = CertificateState(d);
+                    <tr data-host="@d.Host" class="align-top">
+                        <td class="px-5 py-3">
+                            <a href="https://@d.Host" target="_blank" rel="noopener" dir="ltr"
+                               class="font-mono font-medium text-accent-text hover:underline">@d.Host</a>
+                            @if (d.Primary)
+                            {
+                                <span class="ms-2 rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink-muted">primary</span>
+                            }
+                            <div dir="ltr" class="mt-1 font-mono text-[11px] text-ink-faint">A @d.Host → @serverIp</div>
+                            <div data-result class="mt-1 text-xs"></div>
+                        </td>
+                        <td class="px-5 py-3">
+                            <a href="/apps/details/@d.AppId" class="text-ink hover:text-accent-text">@d.AppName</a>
+                        </td>
+                        <td class="px-5 py-3">
+                            <partial name="Design/_StatusPill" model="new StatusPillModel(state.Text, state.Tone)" />
+                        </td>
+                        <td class="px-5 py-3 text-ink-muted">
+                            @if (d.CertificateExpiresAt is { } expiry)
+                            {
+                                <div dir="ltr">@expiry.LocalDateTime.ToString("yyyy-MM-dd")</div>
+                                @if (d.DaysLeft(now) is { } days)
+                                {
+                                    <div class="text-xs text-ink-faint">
+                                        @(days < 0
+                                            ? (isFa ? $"{-days} روز پیش" : $"{-days} days ago")
+                                            : (isFa ? $"{days} روز" : $"{days} days"))
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                @* No certificate is not an expiry of "never" — say what it is. *@
+                                <span class="text-ink-faint">@(isFa ? "گواهی ندارد" : "no certificate")</span>
+                            }
+                        </td>
+                        <td class="px-5 py-3">
+                            <div class="flex justify-end gap-1.5">
+                                <button data-test="dns" class="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-2">DNS</button>
+                                <button data-test="ssl" class="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-2">SSL</button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
     </div>
+}
+<partial name="Design/_PanelEnd" />
+
+@section RightRail {
+    @{
+        var coveragePanel = new PanelModel(isFa ? "پوشش گواهی" : "Certificate coverage");
+        var coverageMetric = new MetricModel(MetricDisplay.For(coverage, "%"),
+            isFa ? $"{secured} از {Model.Count} دامنه" : $"{secured} of {Model.Count} domains");
+    }
+    <partial name="Design/_PanelStart" model="coveragePanel" />
+    <partial name="Design/_Metric" model="coverageMetric" />
+    @if (coverage is { } percent)
+    {
+        <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2">
+            <div class="h-full rounded-full bg-accent" style="width:@percent.ToString("0", System.Globalization.CultureInfo.InvariantCulture)%"></div>
+        </div>
+    }
+    <partial name="Design/_PanelEnd" />
+
+    @{
+        var expiringPanel = new PanelModel(isFa ? "گواهی‌های رو به انقضا" : "Expiring certificates");
+    }
+    <partial name="Design/_PanelStart" model="expiringPanel" />
+    @if (expiring.Count == 0)
+    {
+        <p class="text-sm text-ink-faint">
+            @(isFa ? "هیچ گواهی‌ای در ۳۰ روز آینده منقضی نمی‌شود." : "Nothing expires in the next 30 days.")
+        </p>
+    }
+    else
+    {
+        <div class="-my-2 divide-y divide-line">
+            @foreach (var d in expiring)
+            {
+                var days = d.DaysLeft(now)!.Value;
+                var expiryPill = new StatusPillModel(
+                    days < 0 ? (isFa ? "منقضی" : "expired") : (isFa ? $"{days} روز" : $"{days}d"),
+                    days < 0 ? Tone.Error : Tone.Warn);
+                <div class="flex items-center justify-between gap-2 py-2.5">
+                    <span dir="ltr" class="truncate font-mono text-xs text-ink">@d.Host</span>
+                    <partial name="Design/_StatusPill" model="expiryPill" />
+                </div>
+            }
+        </div>
+    }
+    <partial name="Design/_PanelEnd" />
+
+    @if (wildcards.Count > 0)
+    {
+        var wildcardPanel = new PanelModel(isFa ? "دامنه‌های Wildcard" : "Wildcard domains");
+        <partial name="Design/_PanelStart" model="wildcardPanel" />
+        <div class="space-y-2">
+            @foreach (var w in wildcards)
+            {
+                <div dir="ltr" class="font-mono text-xs text-ink">@w.Host</div>
+            }
+        </div>
+        <partial name="Design/_PanelEnd" />
+    }
+
+    @{
+        var dnsPanel = new PanelModel(isFa ? "رکورد لازم" : "Required record");
+    }
+    <partial name="Design/_PanelStart" model="dnsPanel" />
+    <p class="text-xs text-ink-muted">
+        @(isFa ? "هر دامنه به این IP اشاره کند:" : "Every domain points here:")
+    </p>
+    <code dir="ltr" class="mt-2 block break-all rounded bg-code px-2 py-1.5 text-xs text-code-ink">A @@ → @serverIp</code>
+    <partial name="Design/_PanelEnd" />
 }
 
 @section Scripts {
@@ -52,10 +198,10 @@ else
         const cls = ok ? 'text-ok' : 'text-danger';
         return `<span class="${cls}">${ok ? '✓' : '✗'} ${txt}</span>`;
     }
-    document.querySelectorAll('[data-host]').forEach(card => {
-        const host = card.dataset.host;
-        const out = card.querySelector('[data-result]');
-        card.querySelectorAll('[data-test]').forEach(btn => {
+    document.querySelectorAll('[data-host]').forEach(row => {
+        const host = row.dataset.host;
+        const out = row.querySelector('[data-result]');
+        row.querySelectorAll('[data-test]').forEach(btn => {
             btn.addEventListener('click', async () => {
                 const kind = btn.dataset.test;
                 out.innerHTML = fa ? 'در حال بررسی…' : 'Checking…';
@@ -64,7 +210,7 @@ else
                     const j = await r.json();
                     if (kind === 'dns') {
                         const resolved = (j.resolved || []).join(', ') || (fa ? 'رزولوو نشد' : 'not resolvable');
-                        out.innerHTML = tag(j.ok, (fa ? 'DNS → ' : 'DNS → ') + resolved) +
+                        out.innerHTML = tag(j.ok, 'DNS → ' + resolved) +
                             (j.ok ? '' : ` <span class="text-ink-faint">(${fa ? 'انتظار' : 'expected'} ${j.expected})</span>`);
                     } else {
                         out.innerHTML = j.ok

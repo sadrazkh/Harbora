@@ -6,14 +6,14 @@
     var newToken = TempData["NewToken"] as string;
     var msg = TempData["Message"] as string;
 }
-<h1 class="text-2xl font-bold mb-6">@T["Settings"]</h1>
+<h1 class="text-2xl font-bold tracking-tight text-ink mb-6">@T["Settings"]</h1>
 
 @if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
 
 <div class="grid lg:grid-cols-2 gap-6">
     @* ---- Platform ---- *@
     <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="font-semibold mb-3">@(isFa ? "پلتفرم" : "Platform")</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "پلتفرم" : "Platform")</h2>
         <form asp-controller="Settings" asp-action="UpdatePlatform" method="post" class="space-y-3">
             @Html.AntiForgeryToken()
             <div>
@@ -130,7 +130,7 @@
 
     @* ---- Appearance & language ---- *@
     <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="font-semibold mb-3">@(isFa ? "ظاهر و زبان" : "Appearance & language")</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "ظاهر و زبان" : "Appearance & language")</h2>
 
         <label class="block text-sm text-ink-muted mb-2">@T["Dark mode"]</label>
         <div class="inline-flex rounded-lg bg-surface-2 p-1 text-sm mb-5" id="themeCtl">
@@ -153,7 +153,7 @@
 
     @* ---- API tokens ---- *@
     <section class="rounded-xl border border-line bg-surface p-5 lg:col-span-2">
-        <h2 class="font-semibold mb-3">@T["API Tokens"]</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@T["API Tokens"]</h2>
         @if (newToken is not null)
         {
             <div class="rounded-lg bg-ok-soft border border-ok p-3 text-sm mb-3">

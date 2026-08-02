@@ -6,7 +6,7 @@
     var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
 }
 <div class="mb-6">
-    <h1 class="text-2xl font-bold">@(isFa ? "اتصال Git" : "Git Providers")</h1>
+    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "اتصال Git" : "Git Providers")</h1>
     <p class="text-ink-muted text-sm">@(isFa ? "مخازن را وصل کنید و با هر push یا tag به‌صورت خودکار مستقر کنید." : "Connect repositories and deploy automatically on every push or tag.")</p>
 </div>
 
@@ -16,7 +16,7 @@
 <div class="grid lg:grid-cols-3 gap-6">
     <!-- Connect a provider -->
     <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="font-semibold mb-3">@(isFa ? "اتصال provider" : "Connect a provider")</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "اتصال provider" : "Connect a provider")</h2>
 
         @* OAuth one-click connect (shown per provider once its OAuth app is configured) *@
         @if (oauthConfigured.Count > 0)

@@ -13,7 +13,57 @@
         _ => "bg-slate-500/15 text-ink"
     };
 }
-<h1 class="text-2xl font-bold mb-6">@T["Backups"]</h1>
+@{
+    // Every figure here is counted from real backup rows. The mockup also shows a success rate,
+    // deduplication savings and a retention policy; none of those are recorded, so none appear.
+    var completed = Model.Backups.Count(b => b.Status == Harbora.Domain.Common.BackupStatus.Completed);
+    var failedCount = Model.Backups.Count(b => b.Status == Harbora.Domain.Common.BackupStatus.Failed);
+    var storedBytes = Model.Backups.Sum(b => b.SizeBytes);
+    var latest = Model.Backups
+        .Where(b => b.Status == Harbora.Domain.Common.BackupStatus.Completed)
+        .OrderByDescending(b => b.CreatedAt)
+        .FirstOrDefault();
+
+    var backupsHeader = new Harbora.Web.ViewModels.PageHeaderModel(
+        T["Backups"].Value,
+        isFa ? "پشتیبان‌گیری و بازگردانی داده‌ها." : "Protect your data with automated backups.");
+
+    var totalCard = new Harbora.Web.ViewModels.StatCardModel("archive",
+        T["Backups"].Value,
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(Model.Backups.Count),
+        isFa ? $"{completed} موفق" : $"{completed} completed");
+
+    var failedCard = new Harbora.Web.ViewModels.StatCardModel("rocket",
+        isFa ? "ناموفق" : "Failed",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(failedCount),
+        failedCount == 0 ? (isFa ? "همه سالم" : "all healthy") : (isFa ? "نیاز به بررسی" : "needs attention"));
+
+    // Unknown size is not zero bytes: a backup whose size was never recorded is not an empty one.
+    var sizeCard = new Harbora.Web.ViewModels.StatCardModel("layers",
+        isFa ? "حجم ذخیره‌شده" : "Stored",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(
+            storedBytes > 0 ? storedBytes / 1048576.0 : null, " MB"),
+        isFa ? $"{Model.Destinations.Count} مقصد" : $"{Model.Destinations.Count} destinations");
+
+    var lastCard = new Harbora.Web.ViewModels.StatCardModel("activity",
+        isFa ? "آخرین پشتیبان" : "Last backup",
+        latest is null
+            ? Harbora.Infrastructure.Monitoring.MetricDisplay.For(null)
+            : Harbora.Infrastructure.Monitoring.MetricDisplay.For(
+                (DateTimeOffset.UtcNow - latest.CreatedAt).TotalHours, isFa ? " ساعت" : "h"),
+        latest?.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm"));
+}
+
+<div class="mb-6">
+    <partial name="Design/_PageHeader" model="backupsHeader" />
+</div>
+
+<div class="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
+    <partial name="Design/_StatCard" model="totalCard" />
+    <partial name="Design/_StatCard" model="failedCard" />
+    <partial name="Design/_StatCard" model="sizeCard" />
+    <partial name="Design/_StatCard" model="lastCard" />
+</div>
 
 @if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
 @if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
@@ -21,7 +71,7 @@
 <div class="grid lg:grid-cols-3 gap-6">
     <!-- Run a backup -->
     <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="font-semibold mb-3">@T["Run backup"]</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@T["Run backup"]</h2>
         <form asp-controller="Backups" asp-action="Run" method="post" class="space-y-3">
             @Html.AntiForgeryToken()
             <select name="target" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
@@ -36,7 +86,7 @@
 
     <!-- Destinations -->
     <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="font-semibold mb-3">@T["Destinations"]</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@T["Destinations"]</h2>
         <div class="space-y-1 mb-3 text-sm">
             @foreach (var d in Model.Destinations)
             {
@@ -66,7 +116,7 @@
 
     <!-- Schedules -->
     <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="font-semibold mb-3">@T["Schedules"]</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@T["Schedules"]</h2>
         <div class="space-y-1 mb-3 text-sm">
             @foreach (var s in Model.Schedules)
             {
@@ -196,7 +246,7 @@
 </div>
 
 <!-- History -->
-<h2 class="text-lg font-semibold mt-8 mb-3">@T["History"]</h2>
+<h2 class="text-lg font-semibold text-ink mt-8 mb-3">@T["History"]</h2>
 <div class="rounded-xl border border-line bg-surface overflow-hidden">
     <table class="w-full text-sm">
         <thead class="text-ink-muted border-b border-line">

@@ -3,7 +3,7 @@
 <div class="mb-4 flex items-center justify-between">
     <div>
         <a href="/apps/details/@Model.AppId" class="text-accent-text text-sm">← @Model.App?.Name</a>
-        <h1 class="text-2xl font-bold flex items-center gap-3">
+        <h1 class="text-2xl font-bold tracking-tight text-ink flex items-center gap-3">
             @T["Deployments"] #@Model.Number
             <span data-status><partial name="_DeployStatusBadge" model="Model.Status" /></span>
         </h1>

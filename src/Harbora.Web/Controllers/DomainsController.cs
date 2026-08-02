@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using Harbora.Application.Abstractions;
@@ -30,7 +30,12 @@ public sealed class DomainsController(
         ViewData["Title"] = "Domains";
         var rows = await db.Domains.Where(d => d.App!.WorkspaceId == WorkspaceId)
             .OrderBy(d => d.Host)
-            .Select(d => new DomainRow(d.Id, d.Host, d.App!.Id, d.App.Name, d.SslEnabled, d.IsPrimary))
+            .Select(d => new DomainRow(
+                d.Id, d.Host, d.App!.Id, d.App.Name, d.SslEnabled, d.IsPrimary,
+                // Read from the certificate the watcher records, not assumed from SslEnabled: the
+                // checkbox says somebody asked for TLS, the certificate says whether they have it.
+                d.Certificate != null ? d.Certificate.Status : null,
+                d.Certificate != null ? d.Certificate.ExpiresAt : null))
             .ToListAsync(ct);
         ViewBag.ServerIp = await PublicIpAsync(ct);
         return View(rows);
