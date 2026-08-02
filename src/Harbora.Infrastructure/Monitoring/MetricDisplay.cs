@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 
 namespace Harbora.Infrastructure.Monitoring;
 
@@ -37,6 +37,28 @@ public static class MetricDisplay
         if (series is not { Count: > 0 }) return new MetricView(false, string.Empty, []);
 
         return new MetricView(true, Format(series[^1]) + unit, series);
+    }
+
+    /// <summary>
+    /// A throughput, scaled to a unit a person reads without counting zeros.
+    ///
+    /// Goes through the same gate as everything else: null is "not collected yet", and stays that
+    /// way. A rate is null when the counters could not be compared — most often because a container
+    /// restarted — and rendering 0 B/s there would draw a flat line across an outage.
+    /// </summary>
+    public static MetricView ForThroughput(double? bytesPerSecond)
+    {
+        if (bytesPerSecond is not { } rate || rate < 0) return new MetricView(false, string.Empty, []);
+
+        string[] units = ["B/s", "KB/s", "MB/s", "GB/s"];
+        var unit = 0;
+        while (rate >= 1024 && unit < units.Length - 1)
+        {
+            rate /= 1024;
+            unit++;
+        }
+
+        return new MetricView(true, Format(rate) + " " + units[unit], []);
     }
 
     /// <summary>

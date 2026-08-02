@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Tests.Fakes;
@@ -26,6 +26,7 @@ public class ErrorPageTests
 
         return new HomeController(db, new FakeDockerEngine(),
             new Harbora.Infrastructure.Dashboard.AttentionService(db, new FixedClock()),
+            new Harbora.Infrastructure.Monitoring.NetworkHistory(db),
             new AnonymousUser(), NullLogger<HomeController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }

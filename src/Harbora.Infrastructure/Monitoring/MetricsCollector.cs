@@ -82,6 +82,12 @@ public sealed class MetricsCollector(
         {
             var containers = await docker.ListContainersAsync("harbora.app", ct);
             double totalCpu = 0;
+            long totalRx = 0, totalTx = 0;
+            // Whether anything was actually read this tick. Docker's stats call fails intermittently,
+            // and without this the loop falls through with its totals still at zero and records them
+            // as a measurement — which reads as "no traffic" and, on the next tick, as a spike back
+            // up to the real counter. Unknown is not zero, here least of all.
+            var measured = 0;
             foreach (var c in containers.Where(c => c.State.Equals("running", StringComparison.OrdinalIgnoreCase)))
             {
                 var stats = await docker.GetStatsAsync(c.Id, ct);
@@ -89,8 +95,28 @@ public sealed class MetricsCollector(
                 totalCpu += stats.CpuPercent;
                 samples.Add(Metric(server.Id, "cpu.percent", c.Name, stats.CpuPercent, now));
                 samples.Add(Metric(server.Id, "mem.used", c.Name, stats.MemoryUsedBytes, now));
+
+                // Stored raw, as the counters Docker gives us. They are cumulative since the
+                // container started, so the rate is worked out at read time by NetworkThroughput —
+                // which is also where a restart is recognised as a reset rather than a spike.
+                // Recording a rate here instead would bake this tick's interval into the row and
+                // lose the ability to tell "no traffic" from "no measurement".
+                samples.Add(Metric(server.Id, "net.rx", c.Name, stats.NetRxBytes, now));
+                samples.Add(Metric(server.Id, "net.tx", c.Name, stats.NetTxBytes, now));
+
+                totalRx += stats.NetRxBytes;
+                totalTx += stats.NetTxBytes;
+                measured++;
             }
-            samples.Add(Metric(server.Id, "cpu.percent", null, Math.Round(totalCpu, 2), now));
+
+            // Host totals, so the dashboard has a series without summing every container. Written
+            // only when at least one container answered — see `measured`.
+            if (measured > 0)
+            {
+                samples.Add(Metric(server.Id, "cpu.percent", null, Math.Round(totalCpu, 2), now));
+                samples.Add(Metric(server.Id, "net.rx", null, totalRx, now));
+                samples.Add(Metric(server.Id, "net.tx", null, totalTx, now));
+            }
 
             await ReconcileAppStatusesAsync(containers, now, ct);
         }

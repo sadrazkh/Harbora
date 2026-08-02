@@ -102,6 +102,13 @@ public sealed class DashboardViewModel
     public string DockerVersion { get; set; } = "—";
     public bool DockerAvailable { get; set; }
 
+    /// <summary>
+    /// Bytes per second in and out, or null when it could not be worked out — no samples yet, or a
+    /// container restarted and the counters are not comparable across it. Never 0 for "unknown".
+    /// </summary>
+    public double? NetworkInPerSecond { get; set; }
+    public double? NetworkOutPerSecond { get; set; }
+
     // Platform health strip
     public int ServersOnline { get; set; }
     public int ServersTotal { get; set; }

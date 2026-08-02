@@ -126,6 +126,10 @@ public static class DependencyInjection
         services.AddScoped<Assistant.AssistantClient>();
         services.AddScoped<Assistant.AssistantService>();
 
+        // Turns the stored cumulative counters into a rate — see NetworkThroughput for why a
+        // restart has to read as a gap rather than a spike.
+        services.AddScoped<Monitoring.NetworkHistory>();
+
         // Tenancy quotas + node capacity (PaaS).
         services.AddScoped<IQuotaService, Tenancy.QuotaService>();
         services.AddScoped<INodeCapacityService, Tenancy.NodeCapacityService>();

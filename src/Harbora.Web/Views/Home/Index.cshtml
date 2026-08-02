@@ -226,6 +226,13 @@
         <partial name="Design/_Metric" model="memoryMetric" />
         @{ var diskMetric = new MetricModel(MetricDisplay.For(diskPercent, "%"), T["Disk"].Value); }
         <partial name="Design/_Metric" model="diskMetric" />
+
+        @* Network throughput. Blank until the collector has two comparable samples, which is the
+           honest state rather than a zero. *@
+        @{ var inMetric = new MetricModel(MetricDisplay.ForThroughput(Model.NetworkInPerSecond), isFa ? "شبکه ورودی" : "Network in"); }
+        <partial name="Design/_Metric" model="inMetric" />
+        @{ var outMetric = new MetricModel(MetricDisplay.ForThroughput(Model.NetworkOutPerSecond), isFa ? "شبکه خروجی" : "Network out"); }
+        <partial name="Design/_Metric" model="outMetric" />
     </div>
     <partial name="Design/_PanelEnd" />
 

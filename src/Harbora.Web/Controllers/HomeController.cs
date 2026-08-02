@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
@@ -16,6 +16,7 @@ public sealed class HomeController(
     HarboraDbContext db,
     IDockerEngine docker,
     Harbora.Infrastructure.Dashboard.AttentionService attention,
+    Harbora.Infrastructure.Monitoring.NetworkHistory network,
     ICurrentUser currentUser,
     ILogger<HomeController> logger) : Controller
 {
@@ -111,6 +112,29 @@ public sealed class HomeController(
             logger.LogWarning(ex, "Docker host info unavailable.");
             vm.DockerAvailable = false;
             vm.TraefikRunning = null;
+        }
+
+        // Throughput comes from stored counters, not from the live daemon, so it survives Docker
+        // being briefly unreachable — and stays null rather than zero when there is nothing to work
+        // it out from.
+        try
+        {
+            var server = await db.Servers.IgnoreQueryFilters()
+                .Where(s => s.IsLocal).Select(s => (Guid?)s.Id).FirstOrDefaultAsync(ct);
+
+            if (server is { } serverId)
+            {
+                var since = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(30);
+                vm.NetworkInPerSecond = Harbora.Infrastructure.Monitoring.NetworkHistory.Latest(
+                    await network.ForAsync(serverId, "net.rx", since, null, ct));
+                vm.NetworkOutPerSecond = Harbora.Infrastructure.Monitoring.NetworkHistory.Latest(
+                    await network.ForAsync(serverId, "net.tx", since, null, ct));
+            }
+        }
+        catch (Exception ex)
+        {
+            // A missing rate is a blank panel, never a wrong number.
+            logger.LogWarning(ex, "Network throughput unavailable.");
         }
 
         return View(vm);

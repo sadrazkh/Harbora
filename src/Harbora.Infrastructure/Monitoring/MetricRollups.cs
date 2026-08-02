@@ -1,4 +1,4 @@
-using Harbora.Domain.Monitoring;
+﻿using Harbora.Domain.Monitoring;
 
 namespace Harbora.Infrastructure.Monitoring;
 
@@ -39,6 +39,7 @@ public static class MetricRollups
         var currentHour = HourOf(now);
 
         return samples
+            .Where(s => !IsCumulative(s.Name))
             .Where(s => HourOf(s.Timestamp) < currentHour)
             .GroupBy(s => (s.ServerId, s.Name, s.ResourceRef, Hour: HourOf(s.Timestamp)))
             .Select(g => new MetricRollup
@@ -90,6 +91,18 @@ public static class MetricRollups
     /// How long each shape of data is worth keeping. Raw points answer "what is happening now",
     /// hourly answers "what happened this month", daily answers "is this a trend".
     /// </summary>
+    /// <summary>
+    /// Counters that only climb, rather than measurements of a moment.
+    ///
+    /// They are deliberately left out of the summaries. A minimum, maximum and average of a counter
+    /// are three numbers that all look like measurements and none of them are throughput — the
+    /// average in particular is just "roughly where the counter had got to", which would be charted
+    /// as network usage and believed. The rate is worked out from raw samples instead, which is why
+    /// network history reaches exactly as far back as those are kept.
+    /// </summary>
+    public static bool IsCumulative(string name) =>
+        name.StartsWith("net.", StringComparison.Ordinal);
+
     public static readonly TimeSpan RawRetention = TimeSpan.FromHours(24);
     public static readonly TimeSpan HourlyRetention = TimeSpan.FromDays(31);
     public static readonly TimeSpan DailyRetention = TimeSpan.FromDays(365);
