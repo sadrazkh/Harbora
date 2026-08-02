@@ -32,3 +32,14 @@ public sealed record MetricModel(MetricView View, string Label);
 
 /// <summary>The title block every page opens with.</summary>
 public sealed record PageHeaderModel(string Title, string? Description = null, string? Badge = null);
+
+/// <summary>One row of the users table.</summary>
+/// <param name="LastLoginAt">Null for an account that has never been used — not a date of zero.</param>
+public sealed record UserRow(
+    Guid Id,
+    string Email,
+    string DisplayName,
+    Harbora.Domain.Common.SystemRole Role,
+    bool IsActive,
+    bool ScopedToProjects,
+    DateTimeOffset? LastLoginAt);

@@ -1,0 +1,231 @@
+@model List<UserRow>
+@using Harbora.Domain.Authorization
+@using Harbora.Domain.Common
+@using Harbora.Web.ViewModels
+@{
+    ViewData["Title"] = "Users";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+
+    var actorRole = (SystemRole)(ViewBag.ActorRole ?? SystemRole.Viewer);
+    var actorId = (Guid)(ViewBag.ActorId ?? Guid.Empty);
+    var activeOwners = (int)(ViewBag.ActiveOwners ?? 0);
+
+    UserAdminContext Ctx(UserRow u) => new(actorId, actorRole, u.Id, u.Role, u.IsActive, activeOwners);
+
+    string RoleLabel(SystemRole r) => (r, isFa) switch
+    {
+        (SystemRole.Owner, true) => "مالک",        (SystemRole.Owner, false) => "Owner",
+        (SystemRole.Admin, true) => "مدیر",         (SystemRole.Admin, false) => "Admin",
+        (SystemRole.Member, true) => "توسعه‌دهنده", (SystemRole.Member, false) => "Developer",
+        (SystemRole.Operator, true) => "اپراتور",   (SystemRole.Operator, false) => "Operator",
+        (SystemRole.Viewer, true) => "بیننده",      (SystemRole.Viewer, false) => "Viewer",
+        _ => r.ToString()
+    };
+
+    var header = new PageHeaderModel(
+        isFa ? "کاربران و تیم" : "Users & Team",
+        isFa ? "دسترسی افراد به این پلتفرم." : "Who can reach this platform, and with what powers.");
+
+    var assignable = Enum.GetValues<SystemRole>()
+        .Where(r => UserAdministration.RefuseCreation(actorRole, r) is null)
+        .ToList();
+
+    var listPanel = new PanelModel(isFa ? $"{Model.Count} کاربر" : $"{Model.Count} users");
+    var createPanel = new PanelModel(isFa ? "کاربر تازه" : "New user");
+    var rolesPanel = new PanelModel(isFa ? "نقش‌ها یعنی چه" : "What the roles mean");
+}
+
+<div class="mb-6">
+    <partial name="Design/_PageHeader" model="header" />
+</div>
+
+@if (msg is not null)
+{
+    <div class="mb-4 rounded-lg border border-ok bg-ok-soft px-4 py-2 text-sm text-ok">@msg</div>
+}
+@if (err is not null)
+{
+    @* The refusal is shown, never swallowed: a form that silently declines is the defect this
+       codebase has spent its recent history removing. *@
+    <div class="mb-4 rounded-lg border border-danger bg-danger-soft px-4 py-2 text-sm text-danger">@err</div>
+}
+
+<partial name="Design/_PanelStart" model="listPanel" />
+<div class="-mx-5 -my-5 overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead>
+            <tr class="border-b border-line text-xs text-ink-faint">
+                <th class="px-5 py-3 text-start font-medium">@(isFa ? "کاربر" : "User")</th>
+                <th class="px-5 py-3 text-start font-medium">@(isFa ? "نقش" : "Role")</th>
+                <th class="px-5 py-3 text-start font-medium">@(isFa ? "وضعیت" : "Status")</th>
+                <th class="px-5 py-3 text-start font-medium">@(isFa ? "آخرین ورود" : "Last login")</th>
+                <th class="px-5 py-3 text-end font-medium">@(isFa ? "اقدام" : "Actions")</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-line">
+            @foreach (var u in Model)
+            {
+                var context = Ctx(u);
+                var mayChangeRole = UserAdministration.RefuseRoleChange(context, SystemRole.Member) is null;
+                var maySuspend = UserAdministration.RefuseDeactivation(context) is null;
+                var mayRestore = UserAdministration.RefuseReactivation(context) is null;
+                var mayResetPassword = UserAdministration.RefusePasswordReset(context) is null;
+                var statusPill = u.IsActive
+                    ? new StatusPillModel(isFa ? "فعال" : "active", Tone.Ok)
+                    : new StatusPillModel(isFa ? "معلق" : "suspended", Tone.Error);
+
+                <tr class="align-top">
+                    <td class="px-5 py-3">
+                        <div class="font-medium text-ink">@u.DisplayName</div>
+                        <div dir="ltr" class="text-xs text-ink-faint">@u.Email</div>
+                        @if (u.Id == actorId)
+                        {
+                            <span class="mt-1 inline-block rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink-muted">@(isFa ? "شما" : "you")</span>
+                        }
+                        @if (u.ScopedToProjects)
+                        {
+                            <span class="mt-1 inline-block rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink-muted">@(isFa ? "محدود به پروژه" : "project-scoped")</span>
+                        }
+                    </td>
+                    <td class="px-5 py-3">
+                        @if (mayChangeRole)
+                        {
+                            <form asp-action="ChangeRole" asp-route-id="@u.Id" method="post" class="flex items-center gap-1.5">
+                                @Html.AntiForgeryToken()
+                                <select name="role" class="rounded-lg border border-line bg-surface-2 px-2 py-1 text-xs text-ink">
+                                    @foreach (var r in Enum.GetValues<SystemRole>())
+                                    {
+                                        @* Only roles this actor may actually grant are offered. *@
+                                        @if (UserAdministration.RefuseRoleChange(context, r) is null || r == u.Role)
+                                        {
+                                            <option value="@r" selected="@(r == u.Role)">@RoleLabel(r)</option>
+                                        }
+                                    }
+                                </select>
+                                <button class="rounded-lg border border-line px-2 py-1 text-xs text-ink-muted hover:bg-surface-2">@(isFa ? "ذخیره" : "Save")</button>
+                            </form>
+                        }
+                        else
+                        {
+                            <span class="text-ink">@RoleLabel(u.Role)</span>
+                        }
+                    </td>
+                    <td class="px-5 py-3">
+                        <partial name="Design/_StatusPill" model="statusPill" />
+                    </td>
+                    <td class="px-5 py-3 text-ink-muted">
+                        @if (u.LastLoginAt is { } seen)
+                        {
+                            <span dir="ltr">@seen.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</span>
+                        }
+                        else
+                        {
+                            @* Never signed in is not a login at the epoch. *@
+                            <span class="text-ink-faint">@(isFa ? "هرگز" : "never")</span>
+                        }
+                    </td>
+                    <td class="px-5 py-3">
+                        <div class="flex flex-wrap justify-end gap-1.5">
+                            @if (u.IsActive && maySuspend)
+                            {
+                                <form asp-action="SetActive" asp-route-id="@u.Id" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="active" value="false" />
+                                    <button class="rounded-lg border border-line px-2.5 py-1 text-xs text-danger hover:bg-surface-2">@(isFa ? "تعلیق" : "Suspend")</button>
+                                </form>
+                            }
+                            @if (!u.IsActive && mayRestore)
+                            {
+                                <form asp-action="SetActive" asp-route-id="@u.Id" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="active" value="true" />
+                                    <button class="rounded-lg border border-line px-2.5 py-1 text-xs text-ok hover:bg-surface-2">@(isFa ? "بازگرداندن" : "Restore")</button>
+                                </form>
+                            }
+                            @if (mayResetPassword)
+                            {
+                                <form asp-action="ResetPassword" asp-route-id="@u.Id" method="post" class="flex items-center gap-1">
+                                    @Html.AntiForgeryToken()
+                                    <input type="password" name="password" autocomplete="new-password" required minlength="8"
+                                           placeholder="@(isFa ? "رمز تازه" : "new password")"
+                                           class="w-32 rounded-lg border border-line bg-surface-2 px-2 py-1 text-xs text-ink placeholder:text-ink-faint" />
+                                    <button class="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-2">@(isFa ? "تنظیم" : "Set")</button>
+                                </form>
+                            }
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+<partial name="Design/_PanelEnd" />
+
+@section RightRail {
+    <partial name="Design/_PanelStart" model="createPanel" />
+    @if (assignable.Count == 0)
+    {
+        <p class="text-sm text-ink-faint">@(isFa ? "شما اجازهٔ ساخت کاربر ندارید." : "You cannot create users.")</p>
+    }
+    else
+    {
+        <form asp-action="Create" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <div>
+                <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "ایمیل" : "Email")</label>
+                <input name="email" type="email" required dir="ltr"
+                       class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink" />
+            </div>
+            <div>
+                <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "نام نمایشی" : "Display name")</label>
+                <input name="displayName"
+                       class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink" />
+            </div>
+            <div>
+                <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "رمز موقت" : "Temporary password")</label>
+                <input name="password" type="password" required minlength="8" autocomplete="new-password" dir="ltr"
+                       class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink" />
+                <p class="mt-1 text-[11px] text-ink-faint">@(isFa ? "حداقل ۸ کاراکتر." : "At least 8 characters.")</p>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "نقش" : "Role")</label>
+                <select name="role" class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink">
+                    @foreach (var r in assignable)
+                    {
+                        <option value="@r" selected="@(r == SystemRole.Member)">@RoleLabel(r)</option>
+                    }
+                </select>
+            </div>
+            <button class="w-full rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover">
+                @(isFa ? "ساخت کاربر" : "Create user")
+            </button>
+        </form>
+    }
+    <partial name="Design/_PanelEnd" />
+
+    <partial name="Design/_PanelStart" model="rolesPanel" />
+    <div class="space-y-2.5 text-xs">
+        @foreach (var r in Enum.GetValues<SystemRole>())
+        {
+            var granted = RolePermissions.CapabilitiesFor(r).Count();
+            <div class="flex items-start justify-between gap-2">
+                <span class="text-ink">@RoleLabel(r)</span>
+                <span class="shrink-0 text-ink-faint">
+                    @(r is SystemRole.Owner or SystemRole.Admin
+                        ? (isFa ? "همه‌چیز" : "everything")
+                        : granted == 0
+                            ? (isFa ? "فقط خواندن" : "read only")
+                            : (isFa ? $"{granted} اجازه" : $"{granted} permissions"))
+                </span>
+            </div>
+        }
+    </div>
+    <p class="mt-3 text-[11px] text-ink-faint">
+        @(isFa
+            ? "این اعداد از همان جدولی خوانده می‌شوند که درخواست‌ها با آن سنجیده می‌شوند."
+            : "Read from the same matrix that authorizes every request.")
+    </p>
+    <partial name="Design/_PanelEnd" />
+}

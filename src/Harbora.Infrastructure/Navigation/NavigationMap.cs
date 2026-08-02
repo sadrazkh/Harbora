@@ -1,4 +1,4 @@
-using Harbora.Domain.Authorization;
+﻿using Harbora.Domain.Authorization;
 
 namespace Harbora.Infrastructure.Navigation;
 
@@ -46,6 +46,7 @@ public static class NavigationMap
             new("git", "Git", "Index", "git-branch", Capabilities.GitManage)
         ]),
         new("platform", [
+            new("users", "Users", "Index", "users", Capabilities.TenantsManage),
             new("servers", "Servers", "Index", "server", Capabilities.ServersManage),
             new("plans", "Plans", "Index", "credit-card", Capabilities.PlansManage),
             new("tenants", "Tenants", "Index", "building-2", Capabilities.TenantsManage),

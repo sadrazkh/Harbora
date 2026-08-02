@@ -1,4 +1,4 @@
-@using Harbora.Infrastructure.Navigation
+﻿@using Harbora.Infrastructure.Navigation
 @using Harbora.Web.Infrastructure
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -31,6 +31,7 @@
         ("audit",        true) => "گزارش رخدادها",  ("audit",        false) => "Audit log",
         ("templates",    true) => "قالب‌ها",         ("templates",    false) => "Templates",
         ("git",          _)    => "Git",
+        ("users",        true) => "کاربران و تیم", ("users",        false) => "Users & Team",
         ("servers",      true) => "سرورها",         ("servers",      false) => "Servers",
         ("plans",        true) => "پلن‌ها",          ("plans",        false) => "Plans",
         ("tenants",      true) => "مستأجرها",       ("tenants",      false) => "Tenants",

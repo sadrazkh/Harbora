@@ -54,11 +54,13 @@ import {
     createIcons,
     Activity, Archive, Boxes, Building2, CreditCard, GitBranch, Globe, Layers, LayoutDashboard,
     Menu, Monitor, Moon, Network, Rocket, Route, ScrollText, Search, Server, Settings, Shapes, Sun,
+    Users,
 } from 'lucide';
 
 const usedIcons = {
     Activity, Archive, Boxes, Building2, CreditCard, GitBranch, Globe, Layers, LayoutDashboard,
     Menu, Monitor, Moon, Network, Rocket, Route, ScrollText, Search, Server, Settings, Shapes, Sun,
+    Users,
 };
 
 function renderIcons() {
