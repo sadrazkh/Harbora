@@ -1,0 +1,61 @@
+@using Harbora.Infrastructure.Navigation
+@using Harbora.Web.Infrastructure
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var groups = NavigationMap.VisibleTo(NavigationCapabilities.For(User));
+    var currentController = (string?)ViewContext.RouteData.Values["controller"];
+
+    string GroupLabel(string key) => (key, isFa) switch
+    {
+        ("overview", true) => "نمای کلی",   ("overview", false) => "Overview",
+        ("deploy",   true) => "استقرار",     ("deploy",   false) => "Deploy",
+        ("connect",  true) => "اتصال",       ("connect",  false) => "Connect",
+        ("data",     true) => "داده",        ("data",     false) => "Data",
+        ("insight",  true) => "بینش",        ("insight",  false) => "Insight",
+        ("build",    true) => "ساخت",        ("build",    false) => "Build",
+        ("platform", true) => "پلتفرم",      ("platform", false) => "Platform",
+        _ => key
+    };
+
+    string ItemLabel(string key) => (key, isFa) switch
+    {
+        ("dashboard",    true) => "داشبورد",       ("dashboard",    false) => "Dashboard",
+        ("applications", true) => "برنامه‌ها",      ("applications", false) => "Applications",
+        ("services",     true) => "سرویس‌ها",       ("services",     false) => "Services",
+        ("deployments",  true) => "استقرارها",      ("deployments",  false) => "Deployments",
+        ("networks",     true) => "شبکه‌ها",        ("networks",     false) => "Networks",
+        ("domains",      true) => "دامنه‌ها و SSL", ("domains",      false) => "Domains & SSL",
+        ("routing",      true) => "مسیریابی",       ("routing",      false) => "Routing",
+        ("backups",      true) => "پشتیبان‌ها",     ("backups",      false) => "Backups",
+        ("monitoring",   true) => "پایش",           ("monitoring",   false) => "Monitoring",
+        ("audit",        true) => "گزارش رخدادها",  ("audit",        false) => "Audit log",
+        ("templates",    true) => "قالب‌ها",         ("templates",    false) => "Templates",
+        ("git",          _)    => "Git",
+        ("servers",      true) => "سرورها",         ("servers",      false) => "Servers",
+        ("plans",        true) => "پلن‌ها",          ("plans",        false) => "Plans",
+        ("tenants",      true) => "مستأجرها",       ("tenants",      false) => "Tenants",
+        ("settings",     true) => "تنظیمات",        ("settings",     false) => "Settings",
+        _ => key
+    };
+}
+<nav class="flex-1 overflow-y-auto px-3 py-4 space-y-5 scrollbar-thin">
+    @foreach (var group in groups)
+    {
+        <div>
+            <div class="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">
+                @GroupLabel(group.Key)
+            </div>
+            <div class="space-y-0.5">
+                @foreach (var item in group.Items)
+                {
+                    var active = string.Equals(currentController, item.Controller, StringComparison.OrdinalIgnoreCase);
+                    <a asp-controller="@item.Controller" asp-action="@item.Action"
+                       class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition @(active ? "bg-accent-soft text-accent-text font-medium" : "text-ink-muted hover:bg-surface-2 hover:text-ink")">
+                        <i data-lucide="@item.Icon" class="h-4 w-4 shrink-0"></i>
+                        <span class="truncate">@ItemLabel(item.Key)</span>
+                    </a>
+                }
+            </div>
+        </div>
+    }
+</nav>

@@ -1,0 +1,20 @@
+@model Harbora.Web.ViewModels.MetricModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+@* The only component permitted to print a measured number.
+
+   When nothing was collected it says so, in words, rather than printing a zero — a zero here is a
+   claim that something was observed and found to be none, which is a different and much stronger
+   statement than "we have not looked yet". *@
+<div class="space-y-0.5">
+    <div class="text-xs text-ink-muted">@Model.Label</div>
+    @if (Model.View.HasData)
+    {
+        <div dir="ltr" class="text-2xl font-semibold text-ink tabular-nums">@Model.View.Text</div>
+    }
+    else
+    {
+        <div class="text-sm text-ink-faint">@(isFa ? "هنوز جمع‌آوری نشده" : "not collected yet")</div>
+    }
+</div>

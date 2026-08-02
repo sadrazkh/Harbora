@@ -1,4 +1,4 @@
-@model Harbora.Domain.Common.DeploymentStatus
+﻿@model Harbora.Domain.Common.DeploymentStatus
 @{
     // Staged progress visualization (docs/overhaul/08). Server-rendered from the current status
     // (accurate on load/refresh); the DeploymentLogs Vue island updates it live in production.
@@ -23,7 +23,7 @@
     var cancelled = Model is DeploymentStatus.Cancelled;
     var done = Model is DeploymentStatus.Succeeded or DeploymentStatus.RolledBack;
 }
-<div class="mb-4 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-4" data-deploy-progress
+<div class="mb-4 rounded-xl border border-line bg-surface px-4 py-4" data-deploy-progress
      data-status="@Model">
     <ol class="flex items-center gap-2">
         @for (var i = 0; i < labels.Length; i++)
@@ -33,20 +33,20 @@
             string circle, text, line;
             if (done || (active > i && active >= 0))
             {
-                circle = "bg-emerald-500 text-white"; text = "text-emerald-300"; line = "bg-emerald-500";
+                circle = "bg-ok text-white"; text = "text-ok"; line = "bg-ok";
             }
             else if (active == i && !failed && !cancelled)
             {
-                circle = "bg-brand-500 text-white animate-pulse"; text = "text-brand-300"; line = "bg-slate-700";
+                circle = "bg-accent-hover text-white animate-pulse"; text = "text-accent-text"; line = "bg-surface-2";
             }
             else if ((failed || cancelled) && i == 0)
             {
-                circle = failed ? "bg-red-500 text-white" : "bg-slate-600 text-white";
-                text = failed ? "text-red-300" : "text-slate-400"; line = "bg-slate-700";
+                circle = failed ? "bg-danger text-white" : "bg-slate-600 text-white";
+                text = failed ? "text-danger" : "text-ink-muted"; line = "bg-surface-2";
             }
             else
             {
-                circle = "bg-slate-800 text-slate-500 border border-slate-700"; text = "text-slate-500"; line = "bg-slate-700";
+                circle = "bg-surface-2 text-ink-faint border border-line-strong"; text = "text-ink-faint"; line = "bg-surface-2";
             }
 
             <li class="flex items-center @(i < labels.Length - 1 ? "flex-1" : "")">
@@ -65,10 +65,10 @@
     </ol>
     @if (failed)
     {
-        <p class="mt-3 text-sm text-red-300">@(isFa ? "استقرار ناموفق بود — نسخه‌ی قبلی همچنان در حال سرویس‌دهی است. می‌توانید دوباره تلاش یا rollback کنید." : "Deploy failed — the previous version is still serving. You can retry or roll back.")</p>
+        <p class="mt-3 text-sm text-danger">@(isFa ? "استقرار ناموفق بود — نسخه‌ی قبلی همچنان در حال سرویس‌دهی است. می‌توانید دوباره تلاش یا rollback کنید." : "Deploy failed — the previous version is still serving. You can retry or roll back.")</p>
     }
     else if (cancelled)
     {
-        <p class="mt-3 text-sm text-slate-400">@(isFa ? "استقرار لغو شد." : "Deployment was cancelled.")</p>
+        <p class="mt-3 text-sm text-ink-muted">@(isFa ? "استقرار لغو شد." : "Deployment was cancelled.")</p>
     }
 </div>

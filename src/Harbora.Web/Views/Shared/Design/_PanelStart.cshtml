@@ -1,0 +1,11 @@
+@model Harbora.Web.ViewModels.PanelModel
+@* Split into a start and an end partial because a Razor partial cannot call RenderBody. *@
+<section class="rounded-xl border border-line bg-surface shadow-panel">
+    <header class="flex items-center justify-between gap-2 px-5 py-3.5 border-b border-line">
+        <h2 class="text-[15px] font-semibold text-ink">@Model.Title</h2>
+        @if (Model.LinkUrl is not null && Model.LinkText is not null)
+        {
+            <a href="@Model.LinkUrl" class="text-xs text-accent-text hover:underline">@Model.LinkText</a>
+        }
+    </header>
+    <div class="p-5">

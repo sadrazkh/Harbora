@@ -8,35 +8,35 @@
 }
 <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
     <div>
-        <a href="/apps" class="text-brand-400 text-sm">← @T["Applications"]</a>
+        <a href="/apps" class="text-accent-text text-sm">← @T["Applications"]</a>
         <h1 class="text-2xl font-bold flex items-center gap-3">@Model.Name <partial name="_StatusBadge" model="Model.Status" /></h1>
-        <p class="text-slate-400 text-sm">@Model.Slug · @Model.SourceType @(Model.GitRepository is not null ? "· " + Model.GitRepository.FullName : "")
+        <p class="text-ink-muted text-sm">@Model.Slug · @Model.SourceType @(Model.GitRepository is not null ? "· " + Model.GitRepository.FullName : "")
             @if (!string.IsNullOrEmpty(Model.InstanceSizeKey)){<span>· @Model.InstanceSizeKey</span>}
         </p>
     </div>
     <div class="flex flex-wrap gap-2">
-        <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Deploy"]</button></form>
+        <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">@T["Deploy"]</button></form>
         @if (Model.Kind == ServiceKind.Cron)
         {
             @* Without this a nightly job cannot be checked until tomorrow. It takes the same path the
                schedule does, so what is tested here is what will happen at 03:00. *@
-            <form asp-controller="Apps" asp-action="RunNow" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">▶ @T["Run now"]</button></form>
+            <form asp-controller="Apps" asp-action="RunNow" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">▶ @T["Run now"]</button></form>
         }
-        <form asp-controller="Apps" asp-action="Restart" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">↻ @T["Restart"]</button></form>
+        <form asp-controller="Apps" asp-action="Restart" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">↻ @T["Restart"]</button></form>
         @if (running)
         {
-            <form asp-controller="Apps" asp-action="Stop" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">⏸ @T["Stop"]</button></form>
+            <form asp-controller="Apps" asp-action="Stop" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">⏸ @T["Stop"]</button></form>
         }
         else
         {
-            <form asp-controller="Apps" asp-action="Start" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">▶ @T["Start"]</button></form>
+            <form asp-controller="Apps" asp-action="Start" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">▶ @T["Start"]</button></form>
         }
-        <a href="/apps/@Model.Id/logs" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">📜 @T["Logs"]</a>
+        <a href="/apps/@Model.Id/logs" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">📜 @T["Logs"]</a>
     </div>
 </div>
 
-@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
-@if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
+@if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
 
 <div class="grid lg:grid-cols-3 gap-6">
     <div class="lg:col-span-2 space-y-6">
@@ -47,27 +47,27 @@
         @if (Model.Kind == ServiceKind.Cron)
         {
             var runs = ViewBag.CronRuns as List<Harbora.Domain.Apps.CronRun> ?? new();
-            <section class="rounded-xl border border-slate-800 bg-slate-900/60">
-                <div class="px-4 py-3 border-b border-slate-800 flex flex-wrap items-baseline justify-between gap-2">
+            <section class="rounded-xl border border-line bg-surface">
+                <div class="px-4 py-3 border-b border-line flex flex-wrap items-baseline justify-between gap-2">
                     <span class="font-semibold">@T["Scheduled runs"]</span>
                     @if (!string.IsNullOrWhiteSpace(Model.Command))
                     {
                         @* What it runs, on the page where its results are — the two are meaningless apart. *@
-                        <code dir="ltr" class="rounded bg-black/50 px-2 py-0.5 text-xs text-slate-300">@Model.Command</code>
+                        <code dir="ltr" class="rounded bg-code text-code-ink px-2 py-0.5 text-xs text-ink">@Model.Command</code>
                     }
-                    <span class="text-xs text-slate-400">
+                    <span class="text-xs text-ink-muted">
                         <span class="font-mono">@Model.CronExpression</span>
                         @{ var described = Harbora.Infrastructure.Deployments.CronSchedule.Describe(Model.CronExpression ?? ""); }
                         @if (described.Length > 0){<span>· @described</span>}
                         @if (Model.NextRunAt is { } next){<span>· @T["Next"]: @next.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC</span>}
                     </span>
                 </div>
-                <div class="divide-y divide-slate-800">
+                <div class="divide-y divide-line">
                     @if (runs.Count == 0)
                     {
                         @* Deliberately not "—": a job that has never run looks identical to a broken
                            one unless the screen says which it is. *@
-                        <div class="p-4 text-slate-400 text-sm">@T["This job has not run yet."]</div>
+                        <div class="p-4 text-ink-muted text-sm">@T["This job has not run yet."]</div>
                     }
                     @foreach (var r in runs)
                     {
@@ -75,44 +75,44 @@
                         var stillRunning = r.FinishedAt is null;
                         <div class="p-3">
                             <div class="flex items-center justify-between gap-3 text-sm">
-                                <span class="text-slate-300">
+                                <span class="text-ink">
                                     @r.StartedAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss") UTC
                                     @if (r.IsManual)
                                     {
                                         @* Otherwise a run at 14:32 on an 03:00 schedule looks like a bug. *@
-                                        <span class="text-[10px] rounded bg-slate-800 px-1 text-slate-400">@T["run by hand"]</span>
+                                        <span class="text-[10px] rounded bg-surface-2 px-1 text-ink-muted">@T["run by hand"]</span>
                                     }
                                 </span>
                                 <div class="flex items-center gap-3">
                                     @if (r.FinishedAt is { } done)
                                     {
-                                        <span class="text-xs text-slate-500">@((done - r.StartedAt).TotalSeconds.ToString("0.0"))s</span>
+                                        <span class="text-xs text-ink-faint">@((done - r.StartedAt).TotalSeconds.ToString("0.0"))s</span>
                                     }
                                     @if (stillRunning)
                                     {
-                                        <span class="text-xs rounded-full bg-sky-900/40 text-sky-300 px-2 py-0.5">@T["Running"]</span>
+                                        <span class="text-xs rounded-full bg-info-soft text-info px-2 py-0.5">@T["Running"]</span>
                                     }
                                     else if (failed)
                                     {
-                                        <span class="text-xs rounded-full bg-red-900/40 text-red-300 px-2 py-0.5">
+                                        <span class="text-xs rounded-full bg-danger-soft text-danger px-2 py-0.5">
                                             @if (r.Error is not null){@T["Could not run"]}else{@T["Exit"]<text> </text>@r.ExitCode}
                                         </span>
                                     }
                                     else
                                     {
-                                        <span class="text-xs rounded-full bg-emerald-900/40 text-emerald-300 px-2 py-0.5">@T["Succeeded"]</span>
+                                        <span class="text-xs rounded-full bg-ok-soft text-ok px-2 py-0.5">@T["Succeeded"]</span>
                                     }
                                 </div>
                             </div>
                             @if (r.Error is not null)
                             {
-                                <div class="mt-2 text-xs text-red-300">@r.Error</div>
+                                <div class="mt-2 text-xs text-danger">@r.Error</div>
                             }
                             @if (!string.IsNullOrWhiteSpace(r.Output))
                             {
                                 @* The tail is where the reason for a failure actually lives, so it is
                                    on the page rather than behind another click. *@
-                                <pre dir="ltr" class="mt-2 max-h-40 overflow-auto rounded-lg bg-slate-950/60 p-2 text-[11px] leading-relaxed text-slate-400 whitespace-pre-wrap">@r.Output</pre>
+                                <pre dir="ltr" class="mt-2 max-h-40 overflow-auto rounded-lg bg-canvas p-2 text-[11px] leading-relaxed text-ink-muted whitespace-pre-wrap">@r.Output</pre>
                             }
                         </div>
                     }
@@ -120,16 +120,16 @@
             </section>
         }
 
-        <section class="rounded-xl border border-slate-800 bg-slate-900/60">
-            <div class="px-4 py-3 border-b border-slate-800 font-semibold">@T["Deployments"]</div>
-            <div class="divide-y divide-slate-800">
-                @if (!Model.Deployments.Any()){<div class="p-4 text-slate-400 text-sm">—</div>}
+        <section class="rounded-xl border border-line bg-surface">
+            <div class="px-4 py-3 border-b border-line font-semibold">@T["Deployments"]</div>
+            <div class="divide-y divide-line">
+                @if (!Model.Deployments.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
                 @foreach (var d in Model.Deployments.OrderByDescending(x => x.Number))
                 {
                     <div class="flex items-center justify-between p-3">
                         <a href="/deployments/details/@d.Id" class="min-w-0">
                             <div class="text-sm font-medium">#@d.Number · @d.Trigger</div>
-                            <div class="text-xs text-slate-500 truncate">@(d.CommitMessage ?? d.GitRef) @(d.CommitSha is not null ? "· " + d.CommitSha[..Math.Min(7, d.CommitSha.Length)] : "")</div>
+                            <div class="text-xs text-ink-faint truncate">@(d.CommitMessage ?? d.GitRef) @(d.CommitSha is not null ? "· " + d.CommitSha[..Math.Min(7, d.CommitSha.Length)] : "")</div>
                         </a>
                         <div class="flex items-center gap-3">
                             <partial name="_DeployStatusBadge" model="d.Status" />
@@ -138,7 +138,7 @@
                                 @* Confirmation step shows the exact commit/image being restored and
                                    blocks up front if retention already pruned that artifact. *@
                                 <a href="/apps/confirmrollback/@Model.Id?deploymentId=@d.Id"
-                                   class="text-xs rounded-lg bg-slate-800 hover:bg-slate-700 px-2 py-1">@T["Rollback"]</a>
+                                   class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-2 py-1">@T["Rollback"]</a>
                             }
                         </div>
                     </div>
@@ -147,27 +147,27 @@
         </section>
 
         @* ---- Environment variables ---- *@
-        <section class="rounded-xl border border-slate-800 bg-slate-900/60">
-            <div class="px-4 py-3 border-b border-slate-800 font-semibold">@T["Environment Variables"]</div>
-            <div class="divide-y divide-slate-800">
-                @if (!Model.EnvironmentVariables.Any()){<div class="p-4 text-slate-400 text-sm">—</div>}
+        <section class="rounded-xl border border-line bg-surface">
+            <div class="px-4 py-3 border-b border-line font-semibold">@T["Environment Variables"]</div>
+            <div class="divide-y divide-line">
+                @if (!Model.EnvironmentVariables.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
                 @foreach (var e in Model.EnvironmentVariables.OrderBy(x => x.Key))
                 {
                     <div class="flex items-center justify-between p-3 text-sm font-mono">
-                        <span class="text-slate-300">@e.Key @if (e.IsSecret){<span class="text-[10px] not-italic rounded bg-slate-800 px-1 text-amber-400 font-sans">secret</span>}@if (e.AvailableAtBuild){<span class="text-[10px] rounded bg-slate-800 px-1 text-sky-400 font-sans">build</span>}</span>
+                        <span class="text-ink">@e.Key @if (e.IsSecret){<span class="text-[10px] not-italic rounded bg-surface-2 px-1 text-warn font-sans">secret</span>}@if (e.AvailableAtBuild){<span class="text-[10px] rounded bg-surface-2 px-1 text-info font-sans">build</span>}</span>
                         <div class="flex items-center gap-2">
-                            <span class="text-slate-500">@(e.IsSecret ? "••••••" : e.Value)</span>
-                            <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@Model.Id" asp-route-envId="@e.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                            <span class="text-ink-faint">@(e.IsSecret ? "••••••" : e.Value)</span>
+                            <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@Model.Id" asp-route-envId="@e.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger">✕</button></form>
                         </div>
                     </div>
                 }
             </div>
-            <form asp-controller="Apps" asp-action="AddEnv" asp-route-id="@Model.Id" method="post" class="p-3 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-6 gap-2">
+            <form asp-controller="Apps" asp-action="AddEnv" asp-route-id="@Model.Id" method="post" class="p-3 border-t border-line grid grid-cols-1 sm:grid-cols-6 gap-2">
                 @Html.AntiForgeryToken()
-                <input name="key" placeholder="KEY" class="sm:col-span-2 rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm font-mono" />
-                <input name="value" placeholder="value" class="sm:col-span-2 rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm font-mono" />
+                <input name="key" placeholder="KEY" class="sm:col-span-2 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm font-mono" />
+                <input name="value" placeholder="value" class="sm:col-span-2 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm font-mono" />
                 <label class="flex items-center gap-1 text-xs"><input type="checkbox" name="isSecret" value="true"> secret</label>
-                <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-3 py-1.5 text-sm font-semibold">+ @T["Save"]</button>
+                <button class="rounded-lg bg-accent hover:bg-accent-hover px-3 py-1.5 text-sm font-semibold">+ @T["Save"]</button>
             </form>
         </section>
     </div>
@@ -178,10 +178,10 @@
            invisible, it is a command nobody remembers is there until it breaks a release. *@
         @if (!string.IsNullOrWhiteSpace(Model.ReleaseCommand))
         {
-            <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <section class="rounded-xl border border-line bg-surface p-4">
                 <div class="font-semibold mb-2">@(isFa ? "دستور پیش از انتشار" : "Release task")</div>
-                <code dir="ltr" class="block break-all rounded bg-black/50 px-2 py-1 text-xs">@Model.ReleaseCommand</code>
-                <p class="text-[11px] text-slate-500 mt-2">
+                <code dir="ltr" class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs">@Model.ReleaseCommand</code>
+                <p class="text-[11px] text-ink-faint mt-2">
                     @(isFa
                         ? "پیش از راه‌اندازی نسخهٔ جدید اجرا می‌شود. اگر شکست بخورد، نسخهٔ فعلی همچنان سرویس می‌دهد."
                         : "Runs before the new version starts. If it fails, the current version keeps serving.")
@@ -192,18 +192,18 @@
         @* ---- Git auto-deploy ---- *@
         @if (Model.GitRepository is not null)
         {
-            <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <section class="rounded-xl border border-line bg-surface p-4">
                 <div class="font-semibold mb-2">@(isFa ? "استقرار خودکار (Git)" : "Auto-deploy (Git)")</div>
-                <div class="text-xs text-slate-400 mb-2">
-                    @(isFa ? "با هر push به" : "On push to") <code class="text-slate-300">@(Model.GitRef ?? Model.GitRepository.DefaultBranch)</code>
+                <div class="text-xs text-ink-muted mb-2">
+                    @(isFa ? "با هر push به" : "On push to") <code class="text-ink">@(Model.GitRef ?? Model.GitRepository.DefaultBranch)</code>
                     @(Model.AutoDeployOnPush
                         ? (isFa ? "خودکار دیپلوی می‌شود ✓" : "auto-deploys ✓")
                         : (isFa ? "غیرفعال است" : "is off"))
                 </div>
-                <div class="text-xs text-slate-400">@(isFa ? "آدرس Webhook (در تنظیمات مخزن قرار دهید):" : "Webhook URL (add it in your repo settings):")</div>
-                <code class="block break-all rounded bg-black/50 px-2 py-1 text-xs mt-1">@Context.Request.Scheme://@Context.Request.Host/webhooks/git/@Model.GitRepository.Id</code>
-                <div class="text-xs text-slate-400 mt-2">@(isFa ? "سکرت:" : "Secret:") <code class="text-slate-300 break-all">@Model.GitRepository.WebhookSecret</code></div>
-                <p class="text-[11px] text-slate-500 mt-2">@(isFa ? "Content-Type را application/json بگذارید. GitHub/Gitea با امضای HMAC و GitLab با هدر توکن تأیید می‌شوند." : "Use Content-Type application/json. GitHub/Gitea verify by HMAC; GitLab by token header.")</p>
+                <div class="text-xs text-ink-muted">@(isFa ? "آدرس Webhook (در تنظیمات مخزن قرار دهید):" : "Webhook URL (add it in your repo settings):")</div>
+                <code class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs mt-1">@Context.Request.Scheme://@Context.Request.Host/webhooks/git/@Model.GitRepository.Id</code>
+                <div class="text-xs text-ink-muted mt-2">@(isFa ? "سکرت:" : "Secret:") <code class="text-ink break-all">@Model.GitRepository.WebhookSecret</code></div>
+                <p class="text-[11px] text-ink-faint mt-2">@(isFa ? "Content-Type را application/json بگذارید. GitHub/Gitea با امضای HMAC و GitLab با هدر توکن تأیید می‌شوند." : "Use Content-Type application/json. GitHub/Gitea verify by HMAC; GitLab by token header.")</p>
             </section>
 
             @* ---- Branch previews ----
@@ -213,23 +213,23 @@
             @if (Model.PreviewOfAppId is null)
             {
                 var previews = ViewBag.Previews as List<Harbora.Domain.Apps.App> ?? [];
-                <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                <section class="rounded-xl border border-line bg-surface p-4">
                     <div class="flex items-center justify-between gap-2 mb-2">
                         <div class="font-semibold">@(isFa ? "پیش‌نمایش شاخه‌ها" : "Branch previews")</div>
                         <form method="post" asp-action="TogglePreviews" asp-route-id="@Model.Id">
                             @Html.AntiForgeryToken()
-                            <button type="submit" class="text-xs rounded-lg px-3 py-1 border @(Model.PreviewsEnabled ? "border-emerald-700 text-emerald-300" : "border-slate-700 text-slate-400")">
+                            <button type="submit" class="text-xs rounded-lg px-3 py-1 border @(Model.PreviewsEnabled ? "border-ok text-ok" : "border-line-strong text-ink-muted")">
                                 @(Model.PreviewsEnabled ? (isFa ? "روشن ✓" : "On ✓") : (isFa ? "خاموش" : "Off"))
                             </button>
                         </form>
                     </div>
 
-                    <p class="text-xs text-slate-400">
+                    <p class="text-xs text-ink-muted">
                         @(isFa
                             ? "هر push روی شاخه‌ای غیر از شاخهٔ اصلی، محیط و آدرس مخصوص خودش را می‌گیرد. سکرت‌ها کپی نمی‌شوند — برای هر پیش‌نمایش جداگانه تنظیم کنید."
                             : "A push to any branch other than the tracked one gets an environment and address of its own. Secrets are not copied — set them per preview.")
                     </p>
-                    <p class="text-[11px] text-slate-500 mt-1">
+                    <p class="text-[11px] text-ink-faint mt-1">
                         @(isFa
                             ? $"پیش‌نمایشی که {PreviewPolicy.IdleLifetime.TotalDays:0} روز push نگیرد یا شاخه‌اش حذف شود، خودش برداشته می‌شود."
                             : $"A preview whose branch is deleted, or which goes {PreviewPolicy.IdleLifetime.TotalDays:0} days without a push, is removed on its own.")
@@ -237,12 +237,12 @@
 
                     @if (previews.Count > 0)
                     {
-                        <div class="mt-3 divide-y divide-slate-800 border-t border-slate-800">
+                        <div class="mt-3 divide-y divide-line border-t border-line">
                             @foreach (var preview in previews)
                             {
                                 <div class="py-2 flex items-center justify-between gap-2 text-sm">
-                                    <a asp-action="Details" asp-route-id="@preview.Id" class="text-brand-400 truncate">@preview.PreviewBranch</a>
-                                    <span class="text-xs text-slate-500 shrink-0">
+                                    <a asp-action="Details" asp-route-id="@preview.Id" class="text-accent-text truncate">@preview.PreviewBranch</a>
+                                    <span class="text-xs text-ink-faint shrink-0">
                                         @(preview.PreviewLastPushedAt is { } pushed
                                             ? (isFa ? $"آخرین push: {pushed.LocalDateTime:yyyy-MM-dd}" : $"last push {pushed.LocalDateTime:yyyy-MM-dd}")
                                             : "—")
@@ -259,13 +259,13 @@
            somebody will be surprised to find gone in a week. *@
         @if (Model.PreviewOfAppId is { } parentId)
         {
-            <section class="rounded-xl border border-amber-900/60 bg-amber-950/20 p-4">
+            <section class="rounded-xl border border-warn bg-amber-950/20 p-4">
                 <div class="font-semibold mb-1">@(isFa ? "این یک پیش‌نمایش است" : "This is a preview")</div>
-                <div class="text-xs text-slate-400">
-                    @(isFa ? "شاخهٔ" : "Branch") <code class="text-slate-300">@Model.PreviewBranch</code>
-                    @(isFa ? "از" : "of") <a asp-action="Details" asp-route-id="@parentId" class="text-brand-400">@(isFa ? "سرویس اصلی" : "the parent service")</a>.
+                <div class="text-xs text-ink-muted">
+                    @(isFa ? "شاخهٔ" : "Branch") <code class="text-ink">@Model.PreviewBranch</code>
+                    @(isFa ? "از" : "of") <a asp-action="Details" asp-route-id="@parentId" class="text-accent-text">@(isFa ? "سرویس اصلی" : "the parent service")</a>.
                 </div>
-                <div class="text-[11px] text-slate-500 mt-2">
+                <div class="text-[11px] text-ink-faint mt-2">
                     @(isFa
                         ? $"سکرت‌ها از سرویس اصلی کپی نشده‌اند. اگر شاخه حذف شود یا {PreviewPolicy.IdleLifetime.TotalDays:0} روز push نگیرد، این سرویس و داده‌هایش برداشته می‌شوند."
                         : $"Secrets were not copied from the parent. If the branch is deleted, or goes {PreviewPolicy.IdleLifetime.TotalDays:0} days without a push, this service and its data are removed.")
@@ -277,10 +277,10 @@
            The status shown here is probed, not configured: DNS is resolved and a real TLS handshake
            is made. The old "SSL" badge only meant a checkbox was ticked, so a domain that had never
            been pointed at this server still advertised SSL while browsers showed a certificate error. *@
-        <section class="rounded-xl border border-slate-800 bg-slate-900/60">
-            <div class="px-4 py-3 border-b border-slate-800 font-semibold">@T["Domains"]</div>
-            <div class="divide-y divide-slate-800">
-                @if (!Model.Domains.Any()){<div class="p-4 text-slate-400 text-sm">—</div>}
+        <section class="rounded-xl border border-line bg-surface">
+            <div class="px-4 py-3 border-b border-line font-semibold">@T["Domains"]</div>
+            <div class="divide-y divide-line">
+                @if (!Model.Domains.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
                 @foreach (var dom in Model.Domains)
                 {
                     @* The failure message travels as an attribute, not inside the script: Razor
@@ -289,40 +289,40 @@
                     <div class="p-3 text-sm" data-domain-row data-check-url="/apps/@Model.Id/domains/@dom.Id/check"
                          data-check-failed="@(isFa ? "بررسی دامنه انجام نشد." : "The domain check could not run.")">
                         <div class="flex items-center justify-between gap-2">
-                            <a href="@(dom.SslEnabled ? "https" : "http")://@dom.Host" target="_blank" rel="noopener" class="text-brand-400 truncate">@dom.Host</a>
+                            <a href="@(dom.SslEnabled ? "https" : "http")://@dom.Host" target="_blank" rel="noopener" class="text-accent-text truncate">@dom.Host</a>
                             <div class="flex items-center gap-2 shrink-0">
-                                @if (!dom.SslEnabled){<span class="text-[10px] rounded bg-slate-800 px-1 text-slate-400">HTTP</span>}
-                                <span data-domain-state class="text-xs text-slate-500" title="@(isFa ? "در حال بررسی" : "Checking")">…</span>
-                                <button type="button" data-domain-recheck class="text-xs text-slate-500 hover:text-slate-300"
+                                @if (!dom.SslEnabled){<span class="text-[10px] rounded bg-surface-2 px-1 text-ink-muted">HTTP</span>}
+                                <span data-domain-state class="text-xs text-ink-faint" title="@(isFa ? "در حال بررسی" : "Checking")">…</span>
+                                <button type="button" data-domain-recheck class="text-xs text-ink-faint hover:text-ink"
                                         title="@(isFa ? "بررسی مجدد" : "Re-check")">↻</button>
-                                <form asp-controller="Apps" asp-action="DeleteDomain" asp-route-id="@Model.Id" asp-route-domainId="@dom.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                                <form asp-controller="Apps" asp-action="DeleteDomain" asp-route-id="@Model.Id" asp-route-domainId="@dom.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger">✕</button></form>
                             </div>
                         </div>
                         @* Filled in by the check: the verdict, and the single action that fixes it. *@
-                        <p data-domain-summary class="mt-1 text-xs text-slate-400 hidden"></p>
-                        <p data-domain-action class="mt-1 text-xs text-amber-300/90 hidden"></p>
+                        <p data-domain-summary class="mt-1 text-xs text-ink-muted hidden"></p>
+                        <p data-domain-action class="mt-1 text-xs text-warn/90 hidden"></p>
                     </div>
                 }
             </div>
-            <form asp-controller="Apps" asp-action="AddDomain" asp-route-id="@Model.Id" method="post" class="p-3 border-t border-slate-800 space-y-2">
+            <form asp-controller="Apps" asp-action="AddDomain" asp-route-id="@Model.Id" method="post" class="p-3 border-t border-line space-y-2">
                 @Html.AntiForgeryToken()
-                <input name="host" placeholder="app.example.com" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm" />
+                <input name="host" placeholder="app.example.com" class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
                 <div class="flex items-center justify-between">
                     <label class="flex items-center gap-1 text-xs"><input type="checkbox" name="ssl" value="true" checked> @(isFa ? "SSL خودکار" : "Auto SSL")</label>
-                    <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-3 py-1.5 text-sm font-semibold">+ @(isFa ? "افزودن" : "Add")</button>
+                    <button class="rounded-lg bg-accent hover:bg-accent-hover px-3 py-1.5 text-sm font-semibold">+ @(isFa ? "افزودن" : "Add")</button>
                 </div>
             </form>
         </section>
 
         @* ---- Danger zone ---- *@
-        <section class="rounded-xl border border-red-900/50 bg-red-950/10 p-4">
-            <div class="font-semibold text-red-300 mb-1">@(isFa ? "منطقه‌ی خطر" : "Danger zone")</div>
-            <p class="text-xs text-slate-400 mb-3">@(isFa ? "حذف اپ، کانتینر و مسیرهایش را پاک می‌کند." : "Deleting removes the container and its routes.")</p>
+        <section class="rounded-xl border border-danger bg-red-950/10 p-4">
+            <div class="font-semibold text-danger mb-1">@(isFa ? "منطقه‌ی خطر" : "Danger zone")</div>
+            <p class="text-xs text-ink-muted mb-3">@(isFa ? "حذف اپ، کانتینر و مسیرهایش را پاک می‌کند." : "Deleting removes the container and its routes.")</p>
             <form asp-controller="Apps" asp-action="Delete" asp-route-id="@Model.Id" method="post"
                   onsubmit="return confirm('@(isFa ? "این اپ حذف شود؟ این عمل برگشت‌ناپذیر است." : "Delete this app? This cannot be undone.")')">
                 @Html.AntiForgeryToken()
                 <label class="flex items-center gap-1 text-xs mb-2"><input type="checkbox" name="removeVolumes" value="true"> @(isFa ? "حذف داده‌ها (volumes)" : "Also delete data volumes")</label>
-                <button class="rounded-lg bg-red-900/40 hover:bg-red-900/60 text-red-300 px-4 py-2 text-sm font-semibold">🗑 @(isFa ? "حذف اپ" : "Delete app")</button>
+                <button class="rounded-lg bg-danger-soft hover:bg-danger-soft text-danger px-4 py-2 text-sm font-semibold">🗑 @(isFa ? "حذف اپ" : "Delete app")</button>
             </form>
         </section>
     </div>
@@ -334,19 +334,19 @@
 // page has rendered instead of blocking Details on the slowest domain.
 (function () {
     const dot = {
-        Ready:               ['●', 'text-emerald-400'],
-        AwaitingCertificate: ['●', 'text-amber-400'],
-        DnsMissing:          ['●', 'text-red-400'],
-        DnsNotPointingHere:  ['●', 'text-red-400'],
-        Unreachable:         ['●', 'text-red-400'],
-        Unknown:             ['●', 'text-slate-500']
+        Ready:               ['●', 'text-ok'],
+        AwaitingCertificate: ['●', 'text-warn'],
+        DnsMissing:          ['●', 'text-danger'],
+        DnsNotPointingHere:  ['●', 'text-danger'],
+        Unreachable:         ['●', 'text-danger'],
+        Unknown:             ['●', 'text-ink-faint']
     };
 
     async function check(row) {
         const state = row.querySelector('[data-domain-state]');
         const summary = row.querySelector('[data-domain-summary]');
         const action = row.querySelector('[data-domain-action]');
-        state.className = 'text-xs text-slate-500';
+        state.className = 'text-xs text-ink-faint';
         state.textContent = '…';
 
         try {
@@ -366,7 +366,7 @@
         } catch (e) {
             // Say the check failed rather than implying the domain is broken.
             state.textContent = '?';
-            state.className = 'text-xs text-slate-500';
+            state.className = 'text-xs text-ink-faint';
             state.title = e.message;
             summary.textContent = row.dataset.checkFailed;
             summary.classList.remove('hidden');

@@ -5,61 +5,61 @@
     var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? new();
     var servers = ViewBag.Servers as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? new();
     var environments = ViewBag.Environments as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? new();
-    var input = "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 focus:ring-2 focus:ring-brand-500 focus:outline-none";
+    var input = "w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 focus:ring-2 focus:ring-accent focus:outline-none";
 }
 <div class="max-w-2xl mx-auto">
     <h1 class="text-2xl font-bold mb-1">@(isFa ? "استقرار اپ جدید" : "Deploy a new app")</h1>
-    <p class="text-slate-400 text-sm mb-6">@(isFa ? "فقط یک نام و منبع بده — بقیه را خودمان می‌سازیم." : "Just a name and a source — we handle the rest.")</p>
+    <p class="text-ink-muted text-sm mb-6">@(isFa ? "فقط یک نام و منبع بده — بقیه را خودمان می‌سازیم." : "Just a name and a source — we handle the rest.")</p>
 
     <form asp-controller="Apps" asp-action="Create" method="post" class="space-y-6">
         @Html.AntiForgeryToken()
-        <div asp-validation-summary="All" class="rounded-lg bg-red-900/30 border border-red-700 text-red-300 px-4 py-2 text-sm"></div>
+        <div asp-validation-summary="All" class="rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm"></div>
 
         <div>
-            <label class="block text-sm text-slate-400 mb-1">@T["Name"]</label>
+            <label class="block text-sm text-ink-muted mb-1">@T["Name"]</label>
             <input asp-for="Name" required autofocus placeholder="@(isFa ? "مثلاً وب‌سایت من" : "My website")" class="@input" />
         </div>
 
         @* ---- Source as visual cards ---- *@
         <div>
-            <label class="block text-sm text-slate-400 mb-2">@T["Source"]</label>
+            <label class="block text-sm text-ink-muted mb-2">@T["Source"]</label>
             <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                <label class="cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
+                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-accent">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="GitRepository" data-src checked />
                     <div class="text-2xl">🐙</div>
                     <div class="mt-1 font-semibold">@(isFa ? "مخزن Git" : "Git repository")</div>
-                    <div class="text-xs text-slate-500">@(isFa ? "با Dockerfile یا بدون آن (تشخیص خودکار)" : "With a Dockerfile or none (auto-detected)")</div>
+                    <div class="text-xs text-ink-faint">@(isFa ? "با Dockerfile یا بدون آن (تشخیص خودکار)" : "With a Dockerfile or none (auto-detected)")</div>
                 </label>
-                <label class="cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
+                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-accent">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="PrebuiltImage" data-src />
                     <div class="text-2xl">📦</div>
                     <div class="mt-1 font-semibold">@(isFa ? "ایمیج Docker" : "Docker image")</div>
-                    <div class="text-xs text-slate-500">@(isFa ? "یک ایمیج آماده اجرا کن" : "Run a prebuilt image")</div>
+                    <div class="text-xs text-ink-faint">@(isFa ? "یک ایمیج آماده اجرا کن" : "Run a prebuilt image")</div>
                 </label>
-                <label class="cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
+                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-accent">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="StaticSite" data-src />
                     <div class="text-2xl">📄</div>
                     <div class="mt-1 font-semibold">@(isFa ? "سایت استاتیک" : "Static site")</div>
-                    <div class="text-xs text-slate-500">@(isFa ? "از مخزن Git، پشت Nginx" : "From a Git repo, served by Nginx")</div>
+                    <div class="text-xs text-ink-faint">@(isFa ? "از مخزن Git، پشت Nginx" : "From a Git repo, served by Nginx")</div>
                 </label>
-                <label class="cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
+                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-accent">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="DockerCompose" data-src />
                     <div class="text-2xl">🧩</div>
                     <div class="mt-1 font-semibold">@(isFa ? "Docker Compose" : "Docker Compose")</div>
-                    <div class="text-xs text-slate-500">@(isFa ? "چند سرویس از یک فایل compose" : "Multi-service from a compose file")</div>
+                    <div class="text-xs text-ink-faint">@(isFa ? "چند سرویس از یک فایل compose" : "Multi-service from a compose file")</div>
                 </label>
                 @* No Git remote needed: create the app now, push code from your machine later. *@
-                <label class="cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
+                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-accent">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="Upload" data-src />
                     <div class="text-2xl">⬆️</div>
                     <div class="mt-1 font-semibold">@(isFa ? "ارسال از ترمینال" : "Push from my machine")</div>
-                    <div class="text-xs text-slate-500">@(isFa ? "بدون Git — با harbora deploy کد را بفرست" : "No Git — send code with harbora deploy")</div>
+                    <div class="text-xs text-ink-faint">@(isFa ? "بدون Git — با harbora deploy کد را بفرست" : "No Git — send code with harbora deploy")</div>
                 </label>
             </div>
         </div>
 
         @* Compose: the file comes from the source, so only its path is configurable. *@
-        <div data-panel="DockerCompose" class="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-sm text-slate-400">
+        <div data-panel="DockerCompose" class="rounded-xl border border-line bg-surface p-4 text-sm text-ink-muted">
             @if (isFa)
             {
                 <p>فایل compose از خود سورس خوانده می‌شود (<code>docker-compose.yml</code> یا <code>compose.yml</code>).</p>
@@ -75,18 +75,18 @@
         </div>
 
         @* Upload apps have nothing to configure here; they wait for their first push. *@
-        <div data-panel="Upload" class="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-sm text-slate-400">
+        <div data-panel="Upload" class="rounded-xl border border-line bg-surface p-4 text-sm text-ink-muted">
             @if (isFa)
             {
                 <p>بعد از ساختن اپ، از پوشه‌ی پروژه‌تان این را اجرا کنید:</p>
-                <pre class="mt-3 rounded-lg bg-slate-950 p-3 text-xs text-slate-300 overflow-x-auto" dir="ltr"><code>harbora login --server @(Context.Request.Scheme)://@(Context.Request.Host)
+                <pre class="mt-3 rounded-lg bg-canvas p-3 text-xs text-ink overflow-x-auto" dir="ltr"><code>harbora login --server @(Context.Request.Scheme)://@(Context.Request.Host)
 harbora deploy &lt;slug&gt;</code></pre>
                 <p class="mt-3 text-xs">پوشه بسته‌بندی و آپلود می‌شود؛ ساخت روی سرور انجام می‌گیرد. <code>node_modules</code>، <code>.git</code> و <code>.env</code> فرستاده نمی‌شوند.</p>
             }
             else
             {
                 <p>After creating the app, run this from your project folder:</p>
-                <pre class="mt-3 rounded-lg bg-slate-950 p-3 text-xs text-slate-300 overflow-x-auto"><code>harbora login --server @(Context.Request.Scheme)://@(Context.Request.Host)
+                <pre class="mt-3 rounded-lg bg-canvas p-3 text-xs text-ink overflow-x-auto"><code>harbora login --server @(Context.Request.Scheme)://@(Context.Request.Host)
 harbora deploy &lt;slug&gt;</code></pre>
                 <p class="mt-3 text-xs">The folder is packed and uploaded; the build runs on the server. <code>node_modules</code>, <code>.git</code> and <code>.env</code> are never sent.</p>
             }
@@ -94,67 +94,67 @@ harbora deploy &lt;slug&gt;</code></pre>
 
         @* ---- Essential field per source ---- *@
         <div data-panel="GitRepository,StaticSite,DockerCompose">
-            <label class="block text-sm text-slate-400 mb-1">@(isFa ? "آدرس Git" : "Git repository URL")</label>
+            <label class="block text-sm text-ink-muted mb-1">@(isFa ? "آدرس Git" : "Git repository URL")</label>
             <input asp-for="CloneUrl" placeholder="https://github.com/user/repo.git" class="@input" />
         </div>
         <div data-panel="PrebuiltImage" style="display:none">
-            <label class="block text-sm text-slate-400 mb-1">@(isFa ? "ایمیج" : "Image")</label>
+            <label class="block text-sm text-ink-muted mb-1">@(isFa ? "ایمیج" : "Image")</label>
             <input asp-for="PrebuiltImage" placeholder="nginx:alpine" class="@input" />
         </div>
 
         @* ---- Advanced (collapsed) ---- *@
-        <details class="rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-3">
-            <summary class="cursor-pointer text-sm font-medium text-slate-300">@(isFa ? "تنظیمات پیشرفته (اختیاری)" : "Advanced settings (optional)")</summary>
+        <details class="rounded-xl border border-line bg-surface px-4 py-3">
+            <summary class="cursor-pointer text-sm font-medium text-ink">@(isFa ? "تنظیمات پیشرفته (اختیاری)" : "Advanced settings (optional)")</summary>
             <div class="mt-4 space-y-4">
                 <div class="grid sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm text-slate-400 mb-1">Slug</label>
+                        <label class="block text-sm text-ink-muted mb-1">Slug</label>
                         <input asp-for="Slug" placeholder="@(isFa ? "خودکار از نام" : "auto from name")" class="@input" />
                     </div>
                     <div data-panel="GitRepository,StaticSite,DockerCompose">
-                        <label class="block text-sm text-slate-400 mb-1">@T["Branch or Tag"]</label>
+                        <label class="block text-sm text-ink-muted mb-1">@T["Branch or Tag"]</label>
                         <input asp-for="GitRef" class="@input" />
                     </div>
                 </div>
 
                 <div data-panel="GitRepository,StaticSite,DockerCompose" class="grid sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm text-slate-400 mb-1">@(isFa ? "توکن دسترسی (مخزن خصوصی)" : "Access token (private repo)")</label>
+                        <label class="block text-sm text-ink-muted mb-1">@(isFa ? "توکن دسترسی (مخزن خصوصی)" : "Access token (private repo)")</label>
                         <input asp-for="GitToken" type="password" class="@input" />
                     </div>
                     <div data-panel="GitRepository">
-                        <label class="block text-sm text-slate-400 mb-1">Dockerfile path</label>
+                        <label class="block text-sm text-ink-muted mb-1">Dockerfile path</label>
                         <input asp-for="DockerfilePath" class="@input" />
-                        <span class="text-xs text-slate-500">@(isFa ? "نبود؟ استک خودکار تشخیص داده می‌شود." : "None? The stack is auto-detected.")</span>
+                        <span class="text-xs text-ink-faint">@(isFa ? "نبود؟ استک خودکار تشخیص داده می‌شود." : "None? The stack is auto-detected.")</span>
                     </div>
                 </div>
 
                 <div>
-                    <label class="block text-sm text-slate-400 mb-1">@(isFa ? "نوع سرویس" : "Service type")</label>
+                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "نوع سرویس" : "Service type")</label>
                     <select asp-for="Kind" data-service-kind class="@input">
                         @foreach (var k in Enum.GetValues<Harbora.Domain.Common.ServiceKind>())
                         {
                             <option value="@k" data-help="@Harbora.Infrastructure.Deployments.ServicePlan.Describe(k)">@k</option>
                         }
                     </select>
-                    <span class="text-xs text-slate-500" data-kind-help></span>
+                    <span class="text-xs text-ink-faint" data-kind-help></span>
                 </div>
 
                 <div data-cron-only class="hidden">
-                    <label class="block text-sm text-slate-400 mb-1">@(isFa ? "دستوری که اجرا می‌شود" : "Command to run")</label>
+                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "دستوری که اجرا می‌شود" : "Command to run")</label>
                     <input asp-for="Command" placeholder="php artisan backup:run" class="@input" />
-                    <span asp-validation-for="Command" class="text-xs text-red-400"></span>
-                    <span class="text-xs text-slate-500">
+                    <span asp-validation-for="Command" class="text-xs text-danger"></span>
+                    <span class="text-xs text-ink-faint">
                         @(isFa ? "هر بار که زمان‌بندی فرا برسد همین دستور در یک کانتینر تازه اجرا می‌شود."
                                : "Runs in a fresh container each time the schedule comes round.")
                     </span>
                 </div>
 
                 <div data-cron-only class="hidden">
-                    <label class="block text-sm text-slate-400 mb-1">@(isFa ? "زمان‌بندی (cron)" : "Schedule (cron)")</label>
+                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "زمان‌بندی (cron)" : "Schedule (cron)")</label>
                     <input asp-for="CronExpression" placeholder="0 3 * * *" class="@input" />
-                    <span asp-validation-for="CronExpression" class="text-xs text-red-400"></span>
-                    <span class="text-xs text-slate-500">
+                    <span asp-validation-for="CronExpression" class="text-xs text-danger"></span>
+                    <span class="text-xs text-ink-faint">
                         @(isFa ? "پنج فیلد: دقیقه ساعت روز ماه روزهفته — مثلاً «0 3 * * *» یعنی هر روز ۳ بامداد."
                                : "Five fields: minute hour day month weekday — \"0 3 * * *\" is 03:00 every day.")
                     </span>
@@ -162,11 +162,11 @@ harbora deploy &lt;slug&gt;</code></pre>
 
                 @* Only a repository has branches to preview. *@
                 <div data-git-only class="hidden">
-                    <label class="flex items-start gap-2 text-sm text-slate-300">
+                    <label class="flex items-start gap-2 text-sm text-ink">
                         <input asp-for="PreviewsEnabled" type="checkbox" class="mt-1" />
                         <span>
                             @(isFa ? "برای هر برنچ دیگر یک محیط پیش‌نمایش بساز" : "Give every other branch a preview environment")
-                            <span class="block text-xs text-slate-500">
+                            <span class="block text-xs text-ink-faint">
                                 @(isFa
                                     ? "سکرت‌ها کپی نمی‌شوند — پیش‌نمایش را هرکسی که بتواند push کند می‌سازد."
                                     : "Secrets are not copied: a preview is created by anyone who can push a branch.")
@@ -176,9 +176,9 @@ harbora deploy &lt;slug&gt;</code></pre>
                 </div>
 
                 <div>
-                    <label class="block text-sm text-slate-400 mb-1">@(isFa ? "دستور پیش از انتشار" : "Release command")</label>
+                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "دستور پیش از انتشار" : "Release command")</label>
                     <input asp-for="ReleaseCommand" placeholder="dotnet ef database update" class="@input" />
-                    <span class="text-xs text-slate-500">
+                    <span class="text-xs text-ink-faint">
                         @(isFa
                             ? "قبل از جابه‌جایی ترافیک از روی ایمیج جدید اجرا می‌شود. اگر شکست بخورد، نسخه‌ی فعلی سر جایش می‌ماند."
                             : "Runs from the new image before traffic switches. If it fails, the current version keeps serving.")
@@ -188,9 +188,9 @@ harbora deploy &lt;slug&gt;</code></pre>
                 @if (environments.Count > 0)
                 {
                     <div>
-                        <label class="block text-sm text-slate-400 mb-1">@(isFa ? "محیط" : "Environment")</label>
+                        <label class="block text-sm text-ink-muted mb-1">@(isFa ? "محیط" : "Environment")</label>
                         <select asp-for="EnvironmentId" asp-items="environments" class="@input"></select>
-                        <span class="text-xs text-slate-500">
+                        <span class="text-xs text-ink-faint">
                             @(isFa
                                 ? "سرویس داخل همین پروژه و محیط ساخته می‌شود."
                                 : "The service is created inside this project and environment.")
@@ -201,18 +201,18 @@ harbora deploy &lt;slug&gt;</code></pre>
                 @if (sizes.Count > 0)
                 {
                     <div>
-                        <label class="block text-sm text-slate-400 mb-1">@(isFa ? "اندازه‌ی منبع" : "Instance size")</label>
+                        <label class="block text-sm text-ink-muted mb-1">@(isFa ? "اندازه‌ی منبع" : "Instance size")</label>
                         <select asp-for="InstanceSizeKey" asp-items="sizes" class="@input"></select>
                     </div>
                 }
 
                 <div class="grid sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm text-slate-400 mb-1">@(isFa ? "پورت کانتینر" : "Container port")</label>
+                        <label class="block text-sm text-ink-muted mb-1">@(isFa ? "پورت کانتینر" : "Container port")</label>
                         <input asp-for="ContainerPort" type="number" class="@input" />
                     </div>
                     <div>
-                        <label class="block text-sm text-slate-400 mb-1">@T["Domain"]</label>
+                        <label class="block text-sm text-ink-muted mb-1">@T["Domain"]</label>
                         <input asp-for="Domain" placeholder="@(isFa ? "خودکار: slug.دامنه‌ی‌شما" : "auto: slug.your-domain")" class="@input" />
                     </div>
                 </div>
@@ -220,7 +220,7 @@ harbora deploy &lt;slug&gt;</code></pre>
                 @if (servers.Count > 1)
                 {
                     <div>
-                        <label class="block text-sm text-slate-400 mb-1">@(isFa ? "سرور" : "Server")</label>
+                        <label class="block text-sm text-ink-muted mb-1">@(isFa ? "سرور" : "Server")</label>
                         <select asp-for="ServerId" asp-items="servers" class="@input"></select>
                     </div>
                 }
@@ -233,8 +233,8 @@ harbora deploy &lt;slug&gt;</code></pre>
         </label>
 
         <div class="flex gap-3">
-            <button type="submit" class="rounded-lg bg-brand-600 hover:bg-brand-500 px-6 py-2.5 font-semibold">@(isFa ? "ایجاد و استقرار" : "Create & deploy")</button>
-            <a href="/apps" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-5 py-2.5">@T["Cancel"]</a>
+            <button type="submit" class="rounded-lg bg-accent hover:bg-accent-hover px-6 py-2.5 font-semibold">@(isFa ? "ایجاد و استقرار" : "Create & deploy")</button>
+            <a href="/apps" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-5 py-2.5">@T["Cancel"]</a>
         </div>
     </form>
 </div>

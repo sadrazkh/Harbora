@@ -1,4 +1,4 @@
-/** @type {import('tailwindcss').Config} */
+﻿/** @type {import('tailwindcss').Config} */
 export default {
   darkMode: 'class',
   // Scan Razor views AND Vue/TS islands so no utility class is purged by mistake.
@@ -33,6 +33,43 @@ export default {
           600: '#4f46e5',
           700: '#4338ca',
         },
+
+        // Semantic colours. New markup uses these; the slate ramp above stays for existing views.
+        // Named `line` and `ink` rather than `border` and `text` because Tailwind already owns
+        // those utility prefixes, and colliding produces `border-border`.
+        canvas:        'rgb(var(--canvas) / <alpha-value>)',
+        surface:       'rgb(var(--surface) / <alpha-value>)',
+        'surface-2':   'rgb(var(--surface-2) / <alpha-value>)',
+        line:          'rgb(var(--border) / <alpha-value>)',
+        'line-strong': 'rgb(var(--border-strong) / <alpha-value>)',
+        ink:           'rgb(var(--text) / <alpha-value>)',
+        'ink-muted':   'rgb(var(--text-muted) / <alpha-value>)',
+        'ink-faint':   'rgb(var(--text-faint) / <alpha-value>)',
+        accent:        'rgb(var(--brand) / <alpha-value>)',
+        'accent-hover':'rgb(var(--brand-hover) / <alpha-value>)',
+        'accent-text': 'rgb(var(--brand-text) / <alpha-value>)',
+        'accent-soft': 'rgb(var(--brand-soft) / <alpha-value>)',
+
+        ok:            'rgb(var(--ok) / <alpha-value>)',
+        'ok-soft':     'rgb(var(--ok-soft) / <alpha-value>)',
+        warn:          'rgb(var(--warn) / <alpha-value>)',
+        'warn-soft':   'rgb(var(--warn-soft) / <alpha-value>)',
+        danger:        'rgb(var(--error) / <alpha-value>)',
+        'danger-soft': 'rgb(var(--error-soft) / <alpha-value>)',
+        info:          'rgb(var(--info) / <alpha-value>)',
+        'info-soft':   'rgb(var(--info-soft) / <alpha-value>)',
+        idle:          'rgb(var(--idle) / <alpha-value>)',
+        'idle-soft':   'rgb(var(--idle-soft) / <alpha-value>)',
+
+        code:          'rgb(var(--code) / <alpha-value>)',
+        'code-ink':    'rgb(var(--code-ink) / <alpha-value>)',
+        terminal:      'rgb(var(--terminal) / <alpha-value>)',
+        'terminal-ink':'rgb(var(--terminal-ink) / <alpha-value>)',
+      },
+
+      boxShadow: {
+        panel: '0 1px 2px rgb(16 12 40 / 0.04)',
+        'panel-hover': '0 4px 12px rgb(16 12 40 / 0.06)',
       },
       fontFamily: {
         sans: ['Inter', 'Vazirmatn', 'system-ui', 'sans-serif'],

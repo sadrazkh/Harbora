@@ -7,83 +7,83 @@
     string Size(long b) => b <= 0 ? "—" : b < 1048576 ? $"{b / 1024.0:0} KB" : $"{b / 1048576.0:0.0} MB";
     string StatusClass(Harbora.Domain.Common.BackupStatus s) => s switch
     {
-        Harbora.Domain.Common.BackupStatus.Completed => "bg-emerald-500/15 text-emerald-400",
-        Harbora.Domain.Common.BackupStatus.Failed => "bg-red-500/15 text-red-400",
-        Harbora.Domain.Common.BackupStatus.Running or Harbora.Domain.Common.BackupStatus.Pending => "bg-brand-500/15 text-brand-300 animate-pulse",
-        _ => "bg-slate-500/15 text-slate-300"
+        Harbora.Domain.Common.BackupStatus.Completed => "bg-ok/15 text-ok",
+        Harbora.Domain.Common.BackupStatus.Failed => "bg-danger/15 text-danger",
+        Harbora.Domain.Common.BackupStatus.Running or Harbora.Domain.Common.BackupStatus.Pending => "bg-accent-hover/15 text-accent-text animate-pulse",
+        _ => "bg-slate-500/15 text-ink"
     };
 }
 <h1 class="text-2xl font-bold mb-6">@T["Backups"]</h1>
 
-@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
-@if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
+@if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
 
 <div class="grid lg:grid-cols-3 gap-6">
     <!-- Run a backup -->
-    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+    <section class="rounded-xl border border-line bg-surface p-5">
         <h2 class="font-semibold mb-3">@T["Run backup"]</h2>
         <form asp-controller="Backups" asp-action="Run" method="post" class="space-y-3">
             @Html.AntiForgeryToken()
-            <select name="target" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+            <select name="target" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
                 @foreach (var (val, label) in Model.Targets){<option value="@val">@label</option>}
             </select>
-            <select name="destinationId" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+            <select name="destinationId" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
                 @foreach (var d in Model.Destinations){<option value="@d.Id">@d.Name (@d.Type)</option>}
             </select>
-            <button class="w-full rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Run backup"]</button>
+            <button class="w-full rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">@T["Run backup"]</button>
         </form>
     </section>
 
     <!-- Destinations -->
-    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+    <section class="rounded-xl border border-line bg-surface p-5">
         <h2 class="font-semibold mb-3">@T["Destinations"]</h2>
         <div class="space-y-1 mb-3 text-sm">
             @foreach (var d in Model.Destinations)
             {
-                <div class="flex justify-between"><span>@d.Name</span><span class="text-slate-500">@d.Type</span></div>
+                <div class="flex justify-between"><span>@d.Name</span><span class="text-ink-faint">@d.Type</span></div>
             }
         </div>
         <details>
-            <summary class="cursor-pointer text-sm text-brand-400">+ @T["Add destination"]</summary>
+            <summary class="cursor-pointer text-sm text-accent-text">+ @T["Add destination"]</summary>
             <form asp-controller="Backups" asp-action="CreateDestination" method="post" class="mt-3 space-y-2" data-dest-form>
                 @Html.AntiForgeryToken()
-                <input name="name" placeholder="Name" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                <select name="type" data-dest-type class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                <input name="name" placeholder="Name" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <select name="type" data-dest-type class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
                     <option value="Local">Local</option><option value="S3">S3-compatible</option><option value="Sftp">SFTP</option>
                 </select>
-                <div data-when-local><input name="localPath" placeholder="/var/lib/harbora/backups" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" /></div>
+                <div data-when-local><input name="localPath" placeholder="/var/lib/harbora/backups" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" /></div>
                 <div data-when-s3 class="space-y-2" style="display:none">
-                    <input name="endpoint" placeholder="https://s3.example.com" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="bucket" placeholder="bucket" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="region" placeholder="us-east-1" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="accessKey" placeholder="access key" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="secretKey" type="password" placeholder="secret key" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="endpoint" placeholder="https://s3.example.com" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="bucket" placeholder="bucket" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="region" placeholder="us-east-1" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="accessKey" placeholder="access key" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="secretKey" type="password" placeholder="secret key" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                 </div>
-                <button class="w-full rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@T["Save"]</button>
+                <button class="w-full rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@T["Save"]</button>
             </form>
         </details>
     </section>
 
     <!-- Schedules -->
-    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+    <section class="rounded-xl border border-line bg-surface p-5">
         <h2 class="font-semibold mb-3">@T["Schedules"]</h2>
         <div class="space-y-1 mb-3 text-sm">
             @foreach (var s in Model.Schedules)
             {
                 <div class="flex items-center justify-between">
                     <span>@s.Type · every @s.IntervalHours h · keep @s.RetentionCount</span>
-                    <form asp-controller="Backups" asp-action="DeleteSchedule" asp-route-id="@s.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                    <form asp-controller="Backups" asp-action="DeleteSchedule" asp-route-id="@s.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger">✕</button></form>
                 </div>
                 <div data-when-sftp class="space-y-2" style="display:none">
-                    <input name="sftpHost" placeholder="backup.example.com" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="sftpPort" type="number" value="22" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="sftpUsername" placeholder="harbora" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="sftpPassword" type="password" placeholder="password" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="sftpDirectory" placeholder="/srv/harbora-backups" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <textarea name="sftpHostKey" rows="2" dir="ltr" placeholder="backup.example.com ssh-ed25519 AAAA…" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-xs font-mono"></textarea>
+                    <input name="sftpHost" placeholder="backup.example.com" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="sftpPort" type="number" value="22" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="sftpUsername" placeholder="harbora" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="sftpPassword" type="password" placeholder="password" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="sftpDirectory" placeholder="/srv/harbora-backups" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <textarea name="sftpHostKey" rows="2" dir="ltr" placeholder="backup.example.com ssh-ed25519 AAAA…" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-xs font-mono"></textarea>
                     @* Required, not optional: without it Harbora cannot tell the real server from
                        anything else answering on that address. *@
-                    <p class="text-xs text-slate-500">
+                    <p class="text-xs text-ink-faint">
                         @(isFa
                             ? "کلید میزبان لازم است. با «ssh-keyscan your-host» بگیرید — بدون آن نمی‌توان مطمئن شد بکاپ به سرور درست می‌رود."
                             : "The host key is required. Get it with `ssh-keyscan your-host` — without it there is no way to know the backup is going to the right server.")
@@ -92,104 +92,104 @@
             }
         </div>
         <details>
-            <summary class="cursor-pointer text-sm text-brand-400">+ @T["Add schedule"]</summary>
+            <summary class="cursor-pointer text-sm text-accent-text">+ @T["Add schedule"]</summary>
             <form asp-controller="Backups" asp-action="CreateSchedule" method="post" class="mt-3 space-y-2">
                 @Html.AntiForgeryToken()
-                <select name="target" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                <select name="target" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
                     @foreach (var (val, label) in Model.Targets){<option value="@val">@label</option>}
                 </select>
-                <select name="destinationId" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                <select name="destinationId" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
                     @foreach (var d in Model.Destinations){<option value="@d.Id">@d.Name</option>}
                 </select>
                 <div class="flex gap-2">
-                    <input name="intervalHours" type="number" value="24" title="@T["Interval (hours)"]" class="w-1/2 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="retentionCount" type="number" value="7" title="@T["Retention"]" class="w-1/2 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="intervalHours" type="number" value="24" title="@T["Interval (hours)"]" class="w-1/2 rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="retentionCount" type="number" value="7" title="@T["Retention"]" class="w-1/2 rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                 </div>
-                <button class="w-full rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm">@T["Add schedule"]</button>
+                <button class="w-full rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@T["Add schedule"]</button>
             </form>
         </details>
     </section>
 
     <!-- Delivery: a copy of every scheduled backup, sent where you can reach it -->
-    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+    <section class="rounded-xl border border-line bg-surface p-5">
         <h2 class="font-semibold mb-1">@(isFa ? "ارسال بکاپ" : "Send backups to")</h2>
-        <p class="text-xs text-slate-400 mb-3">
+        <p class="text-xs text-ink-muted mb-3">
             @(isFa
                 ? "از هر بکاپ (زمان‌بندی‌شده یا دستی) یک کپی به این مقصدها فرستاده می‌شود. نسخه‌ی اصلی همان‌جا که هست می‌ماند، چون بازگردانی از روی چت یا ایمیل ممکن نیست."
                 : "A copy of every backup — scheduled or run by hand — is sent here. The stored artifact stays where it is — a chat or a mailbox is not something a restore can read from.")
         </p>
 
         <div class="space-y-2 mb-3 text-sm">
-            @if (Model.Deliveries.Count == 0){<p class="text-slate-500">—</p>}
+            @if (Model.Deliveries.Count == 0){<p class="text-ink-faint">—</p>}
             @foreach (var d in Model.Deliveries)
             {
-                <div class="rounded-lg bg-slate-800/50 px-3 py-2">
+                <div class="rounded-lg bg-surface-2 px-3 py-2">
                     <div class="flex items-center justify-between">
                         <span>
-                            @d.Name <span class="text-slate-500">· @d.Channel</span>
+                            @d.Name <span class="text-ink-faint">· @d.Channel</span>
                             @if (d.LastError is not null)
                             {
-                                <span class="text-xs text-red-400">· @(isFa ? "ناموفق" : "failing")</span>
+                                <span class="text-xs text-danger">· @(isFa ? "ناموفق" : "failing")</span>
                             }
                             else if (d.LastAttemptAt is not null)
                             {
-                                <span class="text-xs text-emerald-400">· @(isFa ? "سالم" : "delivering")</span>
+                                <span class="text-xs text-ok">· @(isFa ? "سالم" : "delivering")</span>
                             }
                         </span>
                         <div class="flex items-center gap-2">
-                            <form asp-controller="Backups" asp-action="TestDelivery" asp-route-id="@d.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-brand-400">test</button></form>
-                            <form asp-controller="Backups" asp-action="DeleteDelivery" asp-route-id="@d.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-red-400">✕</button></form>
+                            <form asp-controller="Backups" asp-action="TestDelivery" asp-route-id="@d.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-accent-text">test</button></form>
+                            <form asp-controller="Backups" asp-action="DeleteDelivery" asp-route-id="@d.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger">✕</button></form>
                         </div>
                     </div>
                     @if (d.LastError is not null)
                     {
-                        <p class="mt-1 text-xs text-red-300/90 break-all">@d.LastError</p>
+                        <p class="mt-1 text-xs text-danger/90 break-all">@d.LastError</p>
                     }
                 </div>
             }
         </div>
 
         <details>
-            <summary class="cursor-pointer text-sm text-brand-400">+ @(isFa ? "افزودن مقصد ارسال" : "Add a delivery channel")</summary>
+            <summary class="cursor-pointer text-sm text-accent-text">+ @(isFa ? "افزودن مقصد ارسال" : "Add a delivery channel")</summary>
             <form asp-controller="Backups" asp-action="CreateDelivery" method="post" class="mt-3 space-y-2" data-delivery-form>
                 @Html.AntiForgeryToken()
-                <input name="name" placeholder="@(isFa ? "نام" : "Name")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                <select name="channel" data-delivery-channel class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+                <input name="name" placeholder="@(isFa ? "نام" : "Name")" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <select name="channel" data-delivery-channel class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
                     <option value="Telegram">Telegram</option>
                     <option value="Email">Email</option>
                 </select>
 
                 <div data-channel="Telegram" class="space-y-2">
-                    <p class="text-xs text-slate-400">
+                    <p class="text-xs text-ink-muted">
                         @(isFa
                             ? "۱) در تلگرام از @@BotFather یک ربات بساز و توکنش را اینجا بگذار. ۲) ربات را باز کن و Start را بزن. ۳) دکمه‌ی زیر آی‌دی چت را پیدا می‌کند."
                             : "1) Create a bot with @@BotFather and paste its token. 2) Open the bot and press Start. 3) The button below finds your chat id.")
                     </p>
-                    <input name="botToken" data-bot-token placeholder="123456:ABC-DEF..." class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm font-mono" />
+                    <input name="botToken" data-bot-token placeholder="123456:ABC-DEF..." class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm font-mono" />
                     <div class="flex gap-2">
-                        <input name="chatId" data-chat-id placeholder="@(isFa ? "آی‌دی چت" : "Chat id")" class="flex-1 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm font-mono" />
-                        <button type="button" data-find-chats class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm whitespace-nowrap">@(isFa ? "پیدا کن" : "Find")</button>
+                        <input name="chatId" data-chat-id placeholder="@(isFa ? "آی‌دی چت" : "Chat id")" class="flex-1 rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm font-mono" />
+                        <button type="button" data-find-chats class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm whitespace-nowrap">@(isFa ? "پیدا کن" : "Find")</button>
                     </div>
-                    <p data-chat-hint class="text-xs text-slate-400 hidden"></p>
+                    <p data-chat-hint class="text-xs text-ink-muted hidden"></p>
                 </div>
 
                 <div data-channel="Email" class="space-y-2 hidden">
                     <div class="flex gap-2">
-                        <input name="smtpHost" placeholder="smtp.example.com" class="flex-1 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                        <input name="smtpPort" type="number" value="587" class="w-24 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                        <input name="smtpHost" placeholder="smtp.example.com" class="flex-1 rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                        <input name="smtpPort" type="number" value="587" class="w-24 rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                     </div>
-                    <input name="smtpUser" placeholder="@(isFa ? "نام کاربری" : "SMTP user")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="smtpPassword" type="password" placeholder="@(isFa ? "رمز" : "SMTP password")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="emailFrom" placeholder="backups@@example.com" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-                    <input name="emailTo" placeholder="you@@example.com" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="smtpUser" placeholder="@(isFa ? "نام کاربری" : "SMTP user")" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="smtpPassword" type="password" placeholder="@(isFa ? "رمز" : "SMTP password")" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="emailFrom" placeholder="backups@@example.com" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="emailTo" placeholder="you@@example.com" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                 </div>
 
-                <label class="block text-xs text-slate-400">
+                <label class="block text-xs text-ink-muted">
                     @(isFa ? "بیشترین حجم (مگابایت، خالی = پیش‌فرض کانال)" : "Max size (MB, blank = the channel's own limit)")
-                    <input name="maxSizeMb" type="number" min="0" placeholder="0" class="mt-1 w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
+                    <input name="maxSizeMb" type="number" min="0" placeholder="0" class="mt-1 w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                 </label>
 
-                <button class="w-full rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@(isFa ? "افزودن" : "Add")</button>
+                <button class="w-full rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">@(isFa ? "افزودن" : "Add")</button>
             </form>
         </details>
     </section>
@@ -197,17 +197,17 @@
 
 <!-- History -->
 <h2 class="text-lg font-semibold mt-8 mb-3">@T["History"]</h2>
-<div class="rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
+<div class="rounded-xl border border-line bg-surface overflow-hidden">
     <table class="w-full text-sm">
-        <thead class="text-slate-400 border-b border-slate-800">
+        <thead class="text-ink-muted border-b border-line">
             <tr>
                 <th class="p-3 text-start">@T["Target"]</th><th class="p-3 text-start">@T["Type"]</th>
                 <th class="p-3 text-start">@T["Status"]</th><th class="p-3 text-start">@(isFa ? "بازیابی" : "Restore check")</th><th class="p-3 text-start">Size</th>
                 <th class="p-3 text-start">@T["Destination"]</th><th class="p-3 text-end">@T["Actions"]</th>
             </tr>
         </thead>
-        <tbody class="divide-y divide-slate-800">
-            @if (Model.Backups.Count == 0){<tr><td colspan="6" class="p-4 text-slate-400">—</td></tr>}
+        <tbody class="divide-y divide-line">
+            @if (Model.Backups.Count == 0){<tr><td colspan="6" class="p-4 text-ink-muted">—</td></tr>}
             @foreach (var b in Model.Backups)
             {
                 <tr>
@@ -219,34 +219,34 @@
                     <td class="p-3">
                         @if (b.VerifiedRestorable == true)
                         {
-                            <span class="rounded-full px-2 py-0.5 text-xs bg-emerald-500/15 text-emerald-400"
+                            <span class="rounded-full px-2 py-0.5 text-xs bg-ok/15 text-ok"
                                   title="@b.VerifiedAt?.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC">
                                 @(isFa ? "بازیابی تأیید شد" : "Restore checked")</span>
                         }
                         else if (b.VerifiedRestorable == false)
                         {
-                            <span class="rounded-full px-2 py-0.5 text-xs bg-red-500/15 text-red-400" title="@b.VerificationNote">
+                            <span class="rounded-full px-2 py-0.5 text-xs bg-danger/15 text-danger" title="@b.VerificationNote">
                                 @(isFa ? "بازیابی نمی‌شود" : "Will not restore")</span>
                         }
                         else if (b.Status == Harbora.Domain.Common.BackupStatus.Completed)
                         {
                             @* Deliberately not blank: "not checked yet" and "checked and fine" are
                                different things and must not look the same. *@
-                            <span class="rounded-full px-2 py-0.5 text-xs bg-slate-500/15 text-slate-400">
+                            <span class="rounded-full px-2 py-0.5 text-xs bg-slate-500/15 text-ink-muted">
                                 @(isFa ? "بررسی نشده" : "Not checked yet")</span>
                         }
                     </td>
-                    <td class="p-3 text-slate-400">@Size(b.SizeBytes)</td>
-                    <td class="p-3 text-slate-400">@b.Destination?.Name</td>
+                    <td class="p-3 text-ink-muted">@Size(b.SizeBytes)</td>
+                    <td class="p-3 text-ink-muted">@b.Destination?.Name</td>
                     <td class="p-3">
                         <div class="flex items-center justify-end gap-2">
                             @if (b.Status == Harbora.Domain.Common.BackupStatus.Completed)
                             {
-                                <a href="/backups/@b.Id/download" class="text-xs rounded-lg bg-slate-800 hover:bg-slate-700 px-2 py-1">@T["Download"]</a>
+                                <a href="/backups/@b.Id/download" class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-2 py-1">@T["Download"]</a>
                                 <form asp-controller="Backups" asp-action="Restore" asp-route-id="@b.Id" method="post" data-restore>
                                     @Html.AntiForgeryToken()
                                     <input type="hidden" name="confirm" />
-                                    <button class="text-xs rounded-lg bg-amber-900/40 hover:bg-amber-900/60 text-amber-300 px-2 py-1">@T["Restore"]</button>
+                                    <button class="text-xs rounded-lg bg-warn-soft hover:bg-warn-soft text-warn px-2 py-1">@T["Restore"]</button>
                                 </form>
                             }
                         </div>

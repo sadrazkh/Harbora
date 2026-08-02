@@ -1,0 +1,11 @@
+@model Harbora.Web.ViewModels.EmptyStateModel
+<div class="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+    <span class="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent-text">
+        <i data-lucide="@Model.Icon" class="h-6 w-6"></i>
+    </span>
+    <p class="text-sm text-ink-muted max-w-sm">@Model.Message</p>
+    @if (Model.ActionUrl is not null && Model.ActionText is not null)
+    {
+        <a href="@Model.ActionUrl" class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover">@Model.ActionText</a>
+    }
+</div>

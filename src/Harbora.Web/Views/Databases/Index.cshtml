@@ -1,24 +1,24 @@
-@model List<Harbora.Domain.Services.ManagedService>
+﻿@model List<Harbora.Domain.Services.ManagedService>
 @{
     ViewData["Title"] = "Databases";
     string StatusClass(Harbora.Domain.Common.ServiceStatus s) => s switch
     {
-        Harbora.Domain.Common.ServiceStatus.Running => "bg-emerald-500/15 text-emerald-400",
-        Harbora.Domain.Common.ServiceStatus.Failed => "bg-red-500/15 text-red-400",
-        Harbora.Domain.Common.ServiceStatus.Provisioning => "bg-brand-500/15 text-brand-300 animate-pulse",
-        _ => "bg-slate-500/15 text-slate-300"
+        Harbora.Domain.Common.ServiceStatus.Running => "bg-ok/15 text-ok",
+        Harbora.Domain.Common.ServiceStatus.Failed => "bg-danger/15 text-danger",
+        Harbora.Domain.Common.ServiceStatus.Provisioning => "bg-accent-hover/15 text-accent-text animate-pulse",
+        _ => "bg-slate-500/15 text-ink"
     };
 }
 <div class="mb-6 flex items-center justify-between">
     <h1 class="text-2xl font-bold">@T["Databases"]</h1>
-    <a href="/databases/create" class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">+ @T["New Service"]</a>
+    <a href="/databases/create" class="rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">+ @T["New Service"]</a>
 </div>
 
 @if (Model.Count == 0)
 {
-    <div class="rounded-xl border border-dashed border-slate-700 p-12 text-center">
+    <div class="rounded-xl border border-dashed border-line-strong p-12 text-center">
         <p class="text-lg font-medium">@T["No services yet"]</p>
-        <a href="/databases/create" class="mt-4 inline-block rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Create Service"]</a>
+        <a href="/databases/create" class="mt-4 inline-block rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">@T["Create Service"]</a>
     </div>
 }
 else
@@ -26,13 +26,13 @@ else
     <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         @foreach (var s in Model)
         {
-            <a href="/databases/@s.Id" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 hover:border-brand-600 transition">
+            <a href="/databases/@s.Id" class="rounded-xl border border-line bg-surface p-5 hover:border-accent transition">
                 <div class="flex items-center justify-between">
                     <span class="font-semibold text-lg">@s.Name</span>
                     <span class="rounded-full px-2.5 py-0.5 text-xs font-medium @StatusClass(s.Status)">@s.Status</span>
                 </div>
-                <div class="mt-2 text-sm text-slate-400">@s.Type · @s.Version</div>
-                <div class="mt-1 text-xs text-slate-500 font-mono">@s.ContainerName:@s.InternalPort</div>
+                <div class="mt-2 text-sm text-ink-muted">@s.Type · @s.Version</div>
+                <div class="mt-1 text-xs text-ink-faint font-mono">@s.ContainerName:@s.InternalPort</div>
             </a>
         }
     </div>

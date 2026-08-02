@@ -1,0 +1,20 @@
+@model Harbora.Web.ViewModels.MetricModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var path = Model.View.HasData
+        ? Harbora.Infrastructure.Design.SparklinePath.Build(Model.View.Series, 100, 20)
+        : null;
+}
+@if (path is not null)
+{
+    <svg viewBox="0 0 100 20" preserveAspectRatio="none" class="h-6 w-full" aria-hidden="true">
+        <path d="@path" fill="none" stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+    </svg>
+}
+else
+{
+    <div class="h-6 flex items-center text-[11px] text-ink-faint">
+        @(isFa ? "هنوز جمع‌آوری نشده" : "not collected yet")
+    </div>
+}

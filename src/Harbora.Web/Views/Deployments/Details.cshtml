@@ -2,7 +2,7 @@
 @{ ViewData["Title"] = $"Deployment #{Model.Number}"; }
 <div class="mb-4 flex items-center justify-between">
     <div>
-        <a href="/apps/details/@Model.AppId" class="text-brand-400 text-sm">← @Model.App?.Name</a>
+        <a href="/apps/details/@Model.AppId" class="text-accent-text text-sm">← @Model.App?.Name</a>
         <h1 class="text-2xl font-bold flex items-center gap-3">
             @T["Deployments"] #@Model.Number
             <span data-status><partial name="_DeployStatusBadge" model="Model.Status" /></span>
@@ -27,24 +27,24 @@
    production are the bytes that passed. *@
 @if (targets.Count > 0 && !string.IsNullOrWhiteSpace(Model.ImageTag))
 {
-    <section class="mb-6 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+    <section class="mb-6 rounded-xl border border-line bg-surface p-4">
         <div class="flex flex-wrap items-center gap-3">
             <span class="font-semibold">@(isFa ? "ترفیع این نسخه" : "Promote this release")</span>
             <form asp-controller="Deployments" asp-action="Promote" asp-route-id="@Model.Id" method="post"
                   class="flex flex-wrap items-center gap-2">
                 @Html.AntiForgeryToken()
-                <select name="targetAppId" class="rounded-lg bg-slate-950 border border-slate-800 px-3 py-1.5 text-sm">
+                <select name="targetAppId" class="rounded-lg bg-canvas border border-line px-3 py-1.5 text-sm">
                     @foreach (var t in targets)
                     {
                         <option value="@t.Id">@t.Name · @t.Environment</option>
                     }
                 </select>
-                <button class="rounded-lg bg-brand-600 hover:bg-brand-500 px-3 py-1.5 text-sm font-semibold">
+                <button class="rounded-lg bg-accent hover:bg-accent-hover px-3 py-1.5 text-sm font-semibold">
                     @(isFa ? "ترفیع بده" : "Promote")</button>
             </form>
         </div>
         @* The half people get wrong: a promotion moves the code, not the settings. *@
-        <p class="mt-2 text-xs text-slate-500">
+        <p class="mt-2 text-xs text-ink-faint">
             @(isFa
                 ? $"دقیقاً همین ایمیج منتشر می‌شود: {Model.ImageTag} — چیزی دوباره ساخته نمی‌شود، و مقصد متغیرها، دیتابیس و دامنه‌های خودش را نگه می‌دارد."
                 : Harbora.Infrastructure.Deployments.PromotionPlan.Describe(Model.ImageTag!, "the target"))
@@ -57,25 +57,25 @@
    settings change and a code change looked identical in this list. *@
 @if (comparedWith is { } previousNumber)
 {
-    <section class="mb-6 rounded-xl border border-slate-800 bg-slate-900/60">
-        <div class="px-4 py-3 border-b border-slate-800 font-semibold">
+    <section class="mb-6 rounded-xl border border-line bg-surface">
+        <div class="px-4 py-3 border-b border-line font-semibold">
             @(isFa ? $"تغییرات نسبت به #{previousNumber}" : $"Changed since #{previousNumber}")
         </div>
         @if (identical)
         {
             @* Worth stating outright: it narrows the search to the code. *@
-            <div class="p-4 text-sm text-slate-400">
+            <div class="p-4 text-sm text-ink-muted">
                 @(isFa ? "پیکربندی دقیقاً همان بود — تفاوت در کد است." : "The configuration was identical — the difference is in the code.")
             </div>
         }
         else
         {
-            <div class="divide-y divide-slate-800">
+            <div class="divide-y divide-line">
                 @foreach (var change in changes)
                 {
                     <div class="flex flex-wrap items-baseline justify-between gap-3 p-3 text-sm">
-                        <span class="text-slate-300">@change.What</span>
-                        <span dir="ltr" class="font-mono text-xs text-slate-400">@change.Detail</span>
+                        <span class="text-ink">@change.What</span>
+                        <span dir="ltr" class="font-mono text-xs text-ink-muted">@change.Detail</span>
                     </div>
                 }
             </div>
@@ -90,38 +90,38 @@
    they knew there was a third party. *@
 @if (ViewBag.AssistantAvailable == true)
 {
-    <section class="mb-6 rounded-xl border border-slate-800 bg-slate-900/60" data-assistant data-id="@Model.Id">
+    <section class="mb-6 rounded-xl border border-line bg-surface" data-assistant data-id="@Model.Id">
         @* Its own token. The promote form above also renders one, but only when a promotion is
            possible — relying on that would make sending work or fail depending on an unrelated
            feature's visibility. *@
         @Html.AntiForgeryToken()
-        <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-800">
+        <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-line">
             <span class="font-semibold">@(isFa ? "توضیح این خطا" : "Explain this failure")</span>
             <button type="button" data-assistant-preview
-                    class="text-xs rounded-lg border border-slate-700 px-3 py-1 hover:border-brand-600">
+                    class="text-xs rounded-lg border border-line-strong px-3 py-1 hover:border-accent">
                 @(isFa ? "ببین چه چیزی ارسال می‌شود" : "See what would be sent")
             </button>
         </div>
 
-        <div class="p-4 text-xs text-slate-400" data-assistant-intro>
+        <div class="p-4 text-xs text-ink-muted" data-assistant-intro>
             @(isFa
                 ? "لاگ پیش از ارسال پاکسازی می‌شود، ولی پیش از ارسال خودتان هم آن را می‌بینید. هیچ چیزی بدون تأیید شما از این سرور خارج نمی‌شود."
                 : "The log is redacted first, and you see it before it goes. Nothing leaves this server until you send it.")
         </div>
 
         <div class="hidden p-4 space-y-3" data-assistant-panel>
-            <div class="text-xs text-slate-400" data-assistant-summary></div>
-            <pre dir="ltr" class="max-h-64 overflow-auto rounded bg-black/60 p-3 font-mono text-[11px] whitespace-pre-wrap" data-assistant-text></pre>
+            <div class="text-xs text-ink-muted" data-assistant-summary></div>
+            <pre dir="ltr" class="max-h-64 overflow-auto rounded bg-terminal text-terminal-ink p-3 font-mono text-[11px] whitespace-pre-wrap" data-assistant-text></pre>
             <div class="flex items-center gap-2">
                 <button type="button" data-assistant-send
-                        class="rounded-lg bg-brand-600 hover:bg-brand-500 px-3 py-1.5 text-sm font-semibold">
+                        class="rounded-lg bg-accent hover:bg-accent-hover px-3 py-1.5 text-sm font-semibold">
                     @(isFa ? "همین را بفرست" : "Send this")
                 </button>
-                <span class="text-xs text-slate-500" data-assistant-status></span>
+                <span class="text-xs text-ink-faint" data-assistant-status></span>
             </div>
         </div>
 
-        <div class="hidden border-t border-slate-800 p-4 text-sm whitespace-pre-wrap" data-assistant-answer></div>
+        <div class="hidden border-t border-line p-4 text-sm whitespace-pre-wrap" data-assistant-answer></div>
     </section>
 }
 
@@ -129,8 +129,8 @@
 <div id="deployment-logs"
      data-deployment-id="@Model.Id"
      data-status="@Model.Status"
-     class="rounded-xl border border-slate-800 bg-black/60 font-mono text-xs leading-relaxed">
-    <div class="flex items-center justify-between px-4 py-2 border-b border-slate-800 text-slate-400">
+     class="rounded-xl border border-line bg-terminal text-terminal-ink font-mono text-xs leading-relaxed">
+    <div class="flex items-center justify-between px-4 py-2 border-b border-line text-ink-muted">
         <span>build &amp; deploy logs</span>
         <a href="/deployments/@Model.Id/logs" class="hover:text-white">download</a>
     </div>

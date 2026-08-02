@@ -5,24 +5,24 @@
 }
 <div class="mb-6 flex items-center justify-between">
     <h1 class="text-2xl font-bold">@T["Applications"]</h1>
-    <a href="/apps/create" class="rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">+ @T["New App"]</a>
+    <a href="/apps/create" class="rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">+ @T["New App"]</a>
 </div>
 
 @if (Model.Count == 0)
 {
-    <div class="rounded-xl border border-dashed border-slate-700 p-12 text-center">
+    <div class="rounded-xl border border-dashed border-line-strong p-12 text-center">
         <p class="text-lg font-medium">@T["No applications yet"]</p>
-        <p class="mt-1 text-slate-400">@T["Create your first app to get started."]</p>
-        <a href="/apps/create" class="mt-4 inline-block rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@T["Create Application"]</a>
+        <p class="mt-1 text-ink-muted">@T["Create your first app to get started."]</p>
+        <a href="/apps/create" class="mt-4 inline-block rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">@T["Create Application"]</a>
     </div>
 }
 else
 {
     <div class="mb-4 flex flex-wrap items-center gap-3">
         <input id="search" type="search" placeholder="@(isFa ? "جستجوی اپ…" : "Search apps…")"
-               class="w-full sm:w-64 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
-        <div class="inline-flex rounded-lg bg-slate-800 p-1 text-sm" id="statusFilter">
-            <button data-status="all" class="rounded-md px-3 py-1 bg-slate-700">@(isFa ? "همه" : "All")</button>
+               class="w-full sm:w-64 rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent" />
+        <div class="inline-flex rounded-lg bg-surface-2 p-1 text-sm" id="statusFilter">
+            <button data-status="all" class="rounded-md px-3 py-1 bg-surface-2">@(isFa ? "همه" : "All")</button>
             <button data-status="Running" class="px-3 py-1">@T["Running"]</button>
             <button data-status="Stopped" class="px-3 py-1">@T["Stopped"]</button>
             <button data-status="Failed" class="px-3 py-1">@T["Failed"]</button>
@@ -32,24 +32,24 @@ else
     <div id="appGrid" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         @foreach (var app in Model)
         {
-            <a href="/apps/details/@app.Id" class="app-card rounded-xl border border-slate-800 bg-slate-900/60 p-5 hover:border-brand-600 transition"
+            <a href="/apps/details/@app.Id" class="app-card rounded-xl border border-line bg-surface p-5 hover:border-accent transition"
                data-name="@app.Name.ToLower() @app.Slug" data-status="@app.Status">
                 <div class="flex items-center justify-between">
                     <span class="font-semibold text-lg">@app.Name</span>
                     <partial name="_StatusBadge" model="app.Status" />
                 </div>
-                <div class="mt-2 text-sm text-slate-400">@app.Slug</div>
+                <div class="mt-2 text-sm text-ink-muted">@app.Slug</div>
                 @* A preview is temporary and has no secrets. Left unmarked it reads as a service
                    somebody created, and its disappearance a week later reads as a fault. *@
                 @if (app.PreviewBranch is { } branch)
                 {
-                    <div class="mt-1 text-[11px] text-amber-400/80 truncate">@(isFa ? "پیش‌نمایش" : "preview") · @branch</div>
+                    <div class="mt-1 text-[11px] text-warn/80 truncate">@(isFa ? "پیش‌نمایش" : "preview") · @branch</div>
                 }
-                <div class="mt-1 text-xs text-slate-500">@app.SourceType · port @app.ContainerPort @(string.IsNullOrEmpty(app.InstanceSizeKey) ? "" : "· " + app.InstanceSizeKey)</div>
+                <div class="mt-1 text-xs text-ink-faint">@app.SourceType · port @app.ContainerPort @(string.IsNullOrEmpty(app.InstanceSizeKey) ? "" : "· " + app.InstanceSizeKey)</div>
             </a>
         }
     </div>
-    <p id="noMatch" class="hidden text-center text-slate-500 py-10 text-sm">@(isFa ? "موردی یافت نشد." : "No apps match.")</p>
+    <p id="noMatch" class="hidden text-center text-ink-faint py-10 text-sm">@(isFa ? "موردی یافت نشد." : "No apps match.")</p>
 }
 
 @section Scripts {
@@ -75,8 +75,8 @@ else
         document.getElementById('statusFilter')?.querySelectorAll('button').forEach(b => {
             b.addEventListener('click', () => {
                 status = b.dataset.status;
-                b.parentElement.querySelectorAll('button').forEach(x => x.classList.remove('bg-slate-700'));
-                b.classList.add('bg-slate-700');
+                b.parentElement.querySelectorAll('button').forEach(x => x.classList.remove('bg-surface-2'));
+                b.classList.add('bg-surface-2');
                 apply();
             });
         });

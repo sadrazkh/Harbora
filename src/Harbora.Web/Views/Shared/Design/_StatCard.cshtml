@@ -1,0 +1,15 @@
+@model Harbora.Web.ViewModels.StatCardModel
+<div class="rounded-xl border border-line bg-surface p-5 shadow-panel">
+    <div class="flex items-start gap-3">
+        <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent-text">
+            <i data-lucide="@Model.Icon" class="h-5 w-5"></i>
+        </span>
+        <div class="min-w-0 flex-1">
+            <partial name="Design/_Metric" model="new Harbora.Web.ViewModels.MetricModel(Model.Value, Model.Label)" />
+            @if (Model.Delta is not null)
+            {
+                <div class="mt-1 text-xs text-ink-faint">@Model.Delta</div>
+            }
+        </div>
+    </div>
+</div>

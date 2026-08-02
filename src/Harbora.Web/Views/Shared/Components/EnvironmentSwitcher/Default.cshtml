@@ -1,0 +1,17 @@
+@model IReadOnlyList<Harbora.Web.Components.EnvironmentSwitcherViewComponent.EnvironmentOption>
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var current = Model.FirstOrDefault(e => e.IsDefault) ?? Model.FirstOrDefault();
+}
+@if (current is not null)
+{
+    <div class="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-ink">
+        <i data-lucide="layers" class="h-4 w-4 text-ink-faint"></i>
+        <span class="truncate max-w-[10rem]">@current.Name</span>
+    </div>
+}
+else
+{
+    @* No environment yet is a real state on a fresh install, and saying so beats an empty box. *@
+    <span class="text-sm text-ink-faint">@(isFa ? "بدون محیط" : "No environment")</span>
+}

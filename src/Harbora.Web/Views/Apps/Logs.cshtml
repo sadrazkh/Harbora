@@ -5,27 +5,27 @@
 }
 <div class="mb-4 flex items-center justify-between">
     <div>
-        <a href="/apps/details/@Model.Id" class="text-brand-400 text-sm">← @Model.Name</a>
+        <a href="/apps/details/@Model.Id" class="text-accent-text text-sm">← @Model.Name</a>
         <h1 class="text-2xl font-bold">@(isFa ? "لاگ‌های کانتینر" : "Container logs")</h1>
     </div>
     <div class="flex flex-wrap items-center gap-3">
         @* Filtered on the server, over the whole tail: the line that explains an outage is usually
            not the one already on screen, which is all the browser's own find can reach. *@
         <input id="search" type="search" placeholder="@(isFa ? "جست‌وجو در لاگ‌ها" : "Search the logs")"
-               class="rounded-lg bg-slate-950 border border-slate-800 px-3 py-1.5 text-sm w-56" />
-        <label class="flex items-center gap-2 text-sm text-slate-400">
+               class="rounded-lg bg-canvas border border-line px-3 py-1.5 text-sm w-56" />
+        <label class="flex items-center gap-2 text-sm text-ink-muted">
             <input type="checkbox" id="problems"> @(isFa ? "فقط خطاها و هشدارها" : "Problems only")
         </label>
-        <label class="flex items-center gap-2 text-sm text-slate-400">
+        <label class="flex items-center gap-2 text-sm text-ink-muted">
             <input type="checkbox" id="autorefresh" checked> @(isFa ? "به‌روزرسانی خودکار" : "Auto-refresh")
         </label>
         <a id="download" href="/apps/@Model.Id/logs/download"
-           class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-sm">@(isFa ? "دانلود" : "Download")</a>
+           class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-sm">@(isFa ? "دانلود" : "Download")</a>
     </div>
 </div>
 
-<div class="rounded-xl border border-slate-800 bg-black/70 font-mono text-xs">
-    <div class="flex items-center justify-between px-4 py-2 border-b border-slate-800 text-slate-400">
+<div class="rounded-xl border border-line bg-terminal text-terminal-ink font-mono text-xs">
+    <div class="flex items-center justify-between px-4 py-2 border-b border-line text-ink-muted">
         <span>harbora-@Model.Slug</span>
         <button id="clear" class="hover:text-white">clear</button>
     </div>

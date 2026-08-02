@@ -11,9 +11,9 @@
 }
 
 <div class="mb-6">
-    <a href="/projects/@Model.Project.Id" class="text-brand-400 text-sm">← @Model.Project.Name</a>
+    <a href="/projects/@Model.Project.Id" class="text-accent-text text-sm">← @Model.Project.Name</a>
     <h1 class="text-2xl font-bold mt-1">@(isFa ? "معماری" : "Architecture")</h1>
-    <p class="text-slate-400 text-sm">
+    <p class="text-ink-muted text-sm">
         @(isFa
             ? "اجزای این محیط و اینکه چه چیزی به چه چیزی وصل است."
             : "What this environment is made of, and what talks to what.")
@@ -22,9 +22,9 @@
 
 @if (selected is null || (Model.Services.Count == 0 && Model.Databases.Count == 0))
 {
-    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-10 text-center">
-        <p class="text-slate-300 font-medium">@(isFa ? "این محیط خالی است" : "Nothing here yet")</p>
-        <p class="text-slate-500 text-sm mt-1">
+    <div class="rounded-xl border border-line bg-surface p-10 text-center">
+        <p class="text-ink font-medium">@(isFa ? "این محیط خالی است" : "Nothing here yet")</p>
+        <p class="text-ink-faint text-sm mt-1">
             @(isFa ? "یک سرویس یا دیتابیس اضافه کنید تا نمودار ساخته شود." : "Add a service or a database and this fills in.")
         </p>
     </div>
@@ -41,19 +41,19 @@ else
                value against a hostname compares ciphertext and always finds nothing. *@
             var connected = Model.Connections.TryGetValue(s.Id, out var hosts) ? hosts : [];
 
-            <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <section class="rounded-xl border border-line bg-surface p-4">
                 <div class="flex flex-wrap items-start justify-between gap-3">
                     <div class="min-w-0">
                         <a href="/apps/details/@s.Id" class="font-semibold hover:underline">@s.Name</a>
-                        <div class="text-xs text-slate-500 mt-0.5">
+                        <div class="text-xs text-ink-faint mt-0.5">
                             @s.Kind · @s.SourceType
                             @if (publicTraffic)
                             {
-                                <span class="text-slate-400">· @(isFa ? "عمومی" : "public")</span>
+                                <span class="text-ink-muted">· @(isFa ? "عمومی" : "public")</span>
                             }
                             else
                             {
-                                <span class="text-slate-400">· @(isFa ? "فقط داخلی" : "internal only")</span>
+                                <span class="text-ink-muted">· @(isFa ? "فقط داخلی" : "internal only")</span>
                             }
                         </div>
                     </div>
@@ -65,37 +65,37 @@ else
                     {
                         foreach (var d in s.Domains)
                         {
-                            <div class="flex items-center gap-2 text-slate-400">
-                                <span class="text-slate-600">↳</span>
+                            <div class="flex items-center gap-2 text-ink-muted">
+                                <span class="text-ink-faint">↳</span>
                                 <span>@(isFa ? "دامنه" : "domain")</span>
-                                <a href="https://@d.Host" target="_blank" rel="noopener" class="text-brand-400">@d.Host</a>
+                                <a href="https://@d.Host" target="_blank" rel="noopener" class="text-accent-text">@d.Host</a>
                             </div>
                         }
                     }
 
                     @if (ServicePlan.JoinsInternalNetwork(s.Kind))
                     {
-                        <div class="flex items-center gap-2 text-slate-400">
-                            <span class="text-slate-600">↳</span>
+                        <div class="flex items-center gap-2 text-ink-muted">
+                            <span class="text-ink-faint">↳</span>
                             <span>@(isFa ? "آدرس داخلی" : "internal")</span>
-                            <code class="text-slate-300">@s.Slug</code>
+                            <code class="text-ink">@s.Slug</code>
                         </div>
                     }
 
                     @foreach (var host in connected)
                     {
                         var db = databaseHosts[host];
-                        <div class="flex items-center gap-2 text-slate-400">
-                            <span class="text-slate-600">↳</span>
+                        <div class="flex items-center gap-2 text-ink-muted">
+                            <span class="text-ink-faint">↳</span>
                             <span>@(isFa ? "متصل به" : "uses")</span>
-                            <a href="/databases/@db.Id" class="text-brand-400">@db.Name</a>
-                            <span class="text-xs text-slate-500">@db.Type</span>
+                            <a href="/databases/@db.Id" class="text-accent-text">@db.Name</a>
+                            <span class="text-xs text-ink-faint">@db.Type</span>
                         </div>
                     }
 
                     @if (connected.Count == 0 && Model.Databases.Count > 0)
                     {
-                        <div class="text-xs text-slate-500">
+                        <div class="text-xs text-ink-faint">
                             @(isFa ? "به دیتابیسی وصل نیست." : "Not connected to any database.")
                         </div>
                     }
@@ -105,7 +105,7 @@ else
 
         @if (Model.Databases.Count > 0)
         {
-            <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <section class="rounded-xl border border-line bg-surface p-4">
                 <div class="font-semibold mb-2">@(isFa ? "دیتابیس‌ها" : "Databases")</div>
                 <div class="space-y-2">
                     @foreach (var d in Model.Databases)
@@ -115,13 +115,13 @@ else
                         <div class="flex items-center justify-between text-sm">
                             <div class="min-w-0">
                                 <a href="/databases/@d.Id" class="hover:underline">@d.Name</a>
-                                <span class="text-xs text-slate-500">· @d.Type @d.Version</span>
+                                <span class="text-xs text-ink-faint">· @d.Type @d.Version</span>
                             </div>
                             <div class="flex items-center gap-3">
-                                <span class="text-xs text-slate-500">
+                                <span class="text-xs text-ink-faint">
                                     @users @(isFa ? "سرویس متصل" : users == 1 ? "service" : "services")
                                 </span>
-                                <span class="text-xs @(d.Status == ServiceStatus.Running ? "text-emerald-400" : "text-slate-500")">
+                                <span class="text-xs @(d.Status == ServiceStatus.Running ? "text-ok" : "text-ink-faint")">
                                     @(d.Status == ServiceStatus.Running ? "●" : "○") @d.Status
                                 </span>
                             </div>
@@ -132,7 +132,7 @@ else
         }
     </div>
 
-    <p class="mt-4 text-xs text-slate-500">
+    <p class="mt-4 text-xs text-ink-faint">
         @(isFa
             ? "اتصال‌ها از روی متغیرهای محیطی هر سرویس خوانده می‌شوند — یعنی آنچه واقعاً تنظیم شده، نه آنچه قرار بوده باشد."
             : "Connections are read from each service's own environment variables — what is actually configured, not what was intended.")

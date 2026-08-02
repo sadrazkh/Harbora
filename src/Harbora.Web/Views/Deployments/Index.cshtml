@@ -1,4 +1,4 @@
-@model List<Harbora.Domain.Deployments.Deployment>
+﻿@model List<Harbora.Domain.Deployments.Deployment>
 @{
     ViewData["Title"] = "Deployments";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -13,15 +13,15 @@
 
 @if (Model.Count == 0)
 {
-    <div class="rounded-xl border border-dashed border-slate-700 p-12 text-center text-slate-400">
+    <div class="rounded-xl border border-dashed border-line-strong p-12 text-center text-ink-muted">
         @(isFa ? "هنوز استقراری انجام نشده است." : "No deployments yet.")
     </div>
 }
 else
 {
-    <div class="rounded-xl border border-slate-800 bg-slate-900/60 overflow-x-auto">
+    <div class="rounded-xl border border-line bg-surface overflow-x-auto">
         <table class="w-full text-sm">
-            <thead class="text-slate-400 border-b border-slate-800">
+            <thead class="text-ink-muted border-b border-line">
                 <tr>
                     <th class="p-3 text-start">@T["Applications"]</th>
                     <th class="p-3 text-start">#</th>
@@ -33,24 +33,24 @@ else
                     <th class="p-3 text-end"></th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-slate-800">
+            <tbody class="divide-y divide-line">
                 @foreach (var d in Model)
                 {
-                    <tr class="hover:bg-slate-800/30">
-                        <td class="p-3"><a href="/apps/details/@d.AppId" class="hover:text-brand-400">@d.App?.Name</a></td>
-                        <td class="p-3 text-slate-400">#@d.Number</td>
+                    <tr class="hover:bg-surface-2">
+                        <td class="p-3"><a href="/apps/details/@d.AppId" class="hover:text-accent-text">@d.App?.Name</a></td>
+                        <td class="p-3 text-ink-muted">#@d.Number</td>
                         <td class="p-3"><partial name="_DeployStatusBadge" model="d.Status" /></td>
-                        <td class="p-3 text-slate-400">@d.Trigger</td>
+                        <td class="p-3 text-ink-muted">@d.Trigger</td>
                         <td class="p-3 font-mono text-xs">
                             @if (d.CommitSha is not null)
                             {
                                 <span title="@d.CommitMessage">@d.GitRef @@ @d.CommitSha[..Math.Min(7, d.CommitSha.Length)]</span>
                             }
-                            else { <span class="text-slate-600">—</span> }
+                            else { <span class="text-ink-faint">—</span> }
                         </td>
-                        <td class="p-3 text-slate-400">@Dur(d)</td>
-                        <td class="p-3 text-slate-500 text-xs">@d.CreatedAt.LocalDateTime.ToString("MM/dd HH:mm")</td>
-                        <td class="p-3 text-end"><a href="/deployments/details/@d.Id" class="text-xs text-brand-400">@T["Logs"]</a></td>
+                        <td class="p-3 text-ink-muted">@Dur(d)</td>
+                        <td class="p-3 text-ink-faint text-xs">@d.CreatedAt.LocalDateTime.ToString("MM/dd HH:mm")</td>
+                        <td class="p-3 text-end"><a href="/deployments/details/@d.Id" class="text-xs text-accent-text">@T["Logs"]</a></td>
                     </tr>
                 }
             </tbody>

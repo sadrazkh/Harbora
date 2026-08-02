@@ -1,0 +1,50 @@
+@using Microsoft.AspNetCore.Mvc.Localization
+@inject IViewLocalizer T
+@{
+    var isRtl = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<header class="flex h-16 shrink-0 items-center gap-3 border-b border-line bg-surface px-4 md:px-5">
+    <button data-toggle-sidebar class="md:hidden rounded-lg p-2 text-ink-muted hover:bg-surface-2" aria-label="menu">
+        <i data-lucide="menu" class="h-5 w-5"></i>
+    </button>
+
+    @await Component.InvokeAsync("EnvironmentSwitcher")
+
+    <div class="flex-1 flex justify-center px-2">
+        <label class="relative w-full max-w-md">
+            <i data-lucide="search" class="pointer-events-none absolute inset-y-0 start-3 my-auto h-4 w-4 text-ink-faint"></i>
+            <input type="search" placeholder="@(isRtl ? "جست‌وجو…" : "Search anything…")"
+                   class="w-full rounded-lg border border-line bg-surface-2 py-2 ps-9 pe-3 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none" />
+        </label>
+    </div>
+
+    @* Theme, language and sign-out are existing, working controls. They are restyled here, not
+       replaced: the mockups show an avatar menu, but hiding a one-click language switch behind a
+       dropdown is a downgrade for a panel whose default language is not its default layout. *@
+    <div class="flex items-center rounded-lg bg-surface-2 p-0.5" role="group" aria-label="@T["Theme"]">
+        @foreach (var (value, icon, label) in new[]
+        {
+            ("system", "monitor", T["System"].Value),
+            ("light",  "sun",     T["Light"].Value),
+            ("dark",   "moon",    T["Dark"].Value)
+        })
+        {
+            <button type="button" data-theme-choice="@value" title="@label" aria-label="@label"
+                    class="rounded-md px-2 py-1 text-ink-faint">
+                <i data-lucide="@icon" class="h-4 w-4"></i>
+            </button>
+        }
+    </div>
+
+    <form asp-controller="Account" asp-action="SetLanguage" method="post" class="flex items-center">
+        <input type="hidden" name="returnUrl" value="@Context.Request.Path" />
+        <input type="hidden" name="culture" value="@(isRtl ? "en" : "fa")" />
+        <button type="submit" class="rounded-lg px-2 py-1.5 text-sm text-ink-muted hover:bg-surface-2" title="@T["Language"]">
+            @(isRtl ? "EN" : "فا")
+        </button>
+    </form>
+
+    <form asp-controller="Account" asp-action="Logout" method="post">
+        <button type="submit" class="rounded-lg border border-line px-3 py-1.5 text-sm text-ink-muted hover:bg-surface-2">@T["Logout"]</button>
+    </form>
+</header>

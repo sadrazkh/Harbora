@@ -5,12 +5,12 @@
     var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
 }
 <div class="mb-6">
-    <a href="/tenants" class="text-brand-400 text-sm">← @(isFa ? "مستأجرها" : "Tenants")</a>
-    <h1 class="text-2xl font-bold">@Model.Name <span class="text-sm text-slate-500 font-mono">@Model.Slug</span></h1>
+    <a href="/tenants" class="text-accent-text text-sm">← @(isFa ? "مستأجرها" : "Tenants")</a>
+    <h1 class="text-2xl font-bold">@Model.Name <span class="text-sm text-ink-faint font-mono">@Model.Slug</span></h1>
 </div>
 
-@if (msg is not null){<div class="mb-4 rounded-lg bg-emerald-900/20 border border-emerald-700 text-emerald-300 px-4 py-2 text-sm">@msg</div>}
-@if (err is not null){<div class="mb-4 rounded-lg bg-red-900/20 border border-red-700 text-red-300 px-4 py-2 text-sm">@err</div>}
+@if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
 
 @{
     var u = Model.Usage;
@@ -24,50 +24,50 @@
         ("CPU", $"{u.CpuUsed:0.##} / {(u.MaxCpuCores == 0 ? "∞" : u.MaxCpuCores.ToString("0.##"))}", u.CpuUsed, u.MaxCpuCores),
     };
 }
-<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-6">
+<div class="rounded-xl border border-line bg-surface p-5 mb-6">
     <div class="flex items-center justify-between mb-3">
-        <h2 class="font-semibold">@(isFa ? "مصرف نسبت به پلن" : "Usage vs plan") <span class="text-slate-500 text-sm">· @u.PlanName</span></h2>
-        @if (Model.Suspended){<span class="text-xs rounded bg-red-500/15 text-red-400 px-2 py-0.5">@(isFa ? "معلق" : "suspended")</span>}
+        <h2 class="font-semibold">@(isFa ? "مصرف نسبت به پلن" : "Usage vs plan") <span class="text-ink-faint text-sm">· @u.PlanName</span></h2>
+        @if (Model.Suspended){<span class="text-xs rounded bg-danger/15 text-danger px-2 py-0.5">@(isFa ? "معلق" : "suspended")</span>}
     </div>
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
         @foreach (var c in usageCards)
         {
             <div>
-                <div class="text-slate-400 text-sm">@c.label</div>
+                <div class="text-ink-muted text-sm">@c.label</div>
                 <div class="mt-1 font-bold">@c.txt</div>
-                <div class="mt-2 h-1.5 rounded-full bg-slate-800 overflow-hidden">
-                    <div class="h-full bg-brand-500" style="width:@Pct(c.used, c.max)%"></div>
+                <div class="mt-2 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+                    <div class="h-full bg-accent-hover" style="width:@Pct(c.used, c.max)%"></div>
                 </div>
             </div>
         }
     </div>
 </div>
 
-<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-6">
-    <h2 class="font-semibold mb-3">@(isFa ? "مصرف متری این ماه" : "Metered usage this month") <span class="text-slate-500 text-sm">· @Model.PeriodLabel</span></h2>
+<div class="rounded-xl border border-line bg-surface p-5 mb-6">
+    <h2 class="font-semibold mb-3">@(isFa ? "مصرف متری این ماه" : "Metered usage this month") <span class="text-ink-faint text-sm">· @Model.PeriodLabel</span></h2>
     <div class="grid grid-cols-3 gap-4 text-sm">
-        <div><div class="text-slate-400">@(isFa ? "گیگ‌بایت-ساعت (RAM)" : "GB-hours (RAM)")</div><div class="mt-1 text-xl font-bold">@Model.MemoryGbHours.ToString("0.0")</div></div>
-        <div><div class="text-slate-400">@(isFa ? "هسته-ساعت (CPU)" : "vCPU-hours")</div><div class="mt-1 text-xl font-bold">@Model.CpuCoreHours.ToString("0.0")</div></div>
-        <div><div class="text-slate-400">@(isFa ? "اوج اپ‌ها" : "Peak apps")</div><div class="mt-1 text-xl font-bold">@Model.AppCountPeak</div></div>
+        <div><div class="text-ink-muted">@(isFa ? "گیگ‌بایت-ساعت (RAM)" : "GB-hours (RAM)")</div><div class="mt-1 text-xl font-bold">@Model.MemoryGbHours.ToString("0.0")</div></div>
+        <div><div class="text-ink-muted">@(isFa ? "هسته-ساعت (CPU)" : "vCPU-hours")</div><div class="mt-1 text-xl font-bold">@Model.CpuCoreHours.ToString("0.0")</div></div>
+        <div><div class="text-ink-muted">@(isFa ? "اوج اپ‌ها" : "Peak apps")</div><div class="mt-1 text-xl font-bold">@Model.AppCountPeak</div></div>
     </div>
-    <p class="mt-2 text-xs text-slate-500">@(isFa ? "مبنای صورتحساب مصرفی؛ هر ۱۵ دقیقه از روی منابع متعهدِ اپ‌های در حال اجرا انباشته می‌شود." : "Billing basis; accrued every 15 min from the committed resources of running apps.")</p>
+    <p class="mt-2 text-xs text-ink-faint">@(isFa ? "مبنای صورتحساب مصرفی؛ هر ۱۵ دقیقه از روی منابع متعهدِ اپ‌های در حال اجرا انباشته می‌شود." : "Billing basis; accrued every 15 min from the committed resources of running apps.")</p>
 </div>
 
 <div class="grid lg:grid-cols-3 gap-6">
-    <section class="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
-        <div class="px-4 py-3 border-b border-slate-800 font-semibold">@(isFa ? "اعضا" : "Members")</div>
+    <section class="lg:col-span-2 rounded-xl border border-line bg-surface overflow-hidden">
+        <div class="px-4 py-3 border-b border-line font-semibold">@(isFa ? "اعضا" : "Members")</div>
         <table class="w-full text-sm">
-            <tbody class="divide-y divide-slate-800">
-                @if (Model.Members.Count == 0){<tr><td class="p-4 text-slate-400">—</td></tr>}
+            <tbody class="divide-y divide-line">
+                @if (Model.Members.Count == 0){<tr><td class="p-4 text-ink-muted">—</td></tr>}
                 @foreach (var m in Model.Members)
                 {
                     <tr>
                         <td class="p-3">
                             <div class="font-medium">@m.DisplayName</div>
-                            <div class="text-xs text-slate-500">@m.Email</div>
+                            <div class="text-xs text-ink-faint">@m.Email</div>
                         </td>
                         <td class="p-3">
-                            <span class="text-xs rounded bg-slate-800 px-2 py-0.5 text-slate-300">@m.WorkspaceRole</span>
+                            <span class="text-xs rounded bg-surface-2 px-2 py-0.5 text-ink">@m.WorkspaceRole</span>
 
                             @* Which projects that role reaches. The role says what someone may do;
                                this says where — and a permission nobody can read is one nobody audits. *@
@@ -76,17 +76,17 @@
                                 <div class="mt-2 space-y-1">
                                     @if (m.Grants.Count == 0)
                                     {
-                                        <div class="text-xs text-amber-400">
+                                        <div class="text-xs text-warn">
                                             @(isFa ? "به هیچ پروژه‌ای دسترسی ندارد" : "no project access yet")
                                         </div>
                                     }
                                     @foreach (var g in m.Grants)
                                     {
-                                        <div class="flex items-center gap-2 text-xs text-slate-400">
+                                        <div class="flex items-center gap-2 text-xs text-ink-muted">
                                             <span>@g.Text</span>
                                             <form asp-controller="Tenants" asp-action="RemoveGrant" asp-route-id="@Model.WorkspaceId" asp-route-grantId="@g.Id" method="post">
                                                 @Html.AntiForgeryToken()
-                                                <button class="text-red-400">✕</button>
+                                                <button class="text-danger">✕</button>
                                             </form>
                                         </div>
                                     }
@@ -95,22 +95,22 @@
                                     <form asp-controller="Tenants" asp-action="AddGrant" asp-route-id="@Model.WorkspaceId" asp-route-userId="@m.UserId"
                                           method="post" class="flex flex-wrap items-center gap-1 pt-1">
                                         @Html.AntiForgeryToken()
-                                        <select name="projectId" class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs">
+                                        <select name="projectId" class="rounded bg-canvas border border-line px-2 py-1 text-xs">
                                             @foreach (var p in projects){<option value="@p.Id">@p.Name</option>}
                                         </select>
-                                        <select name="environmentId" class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs">
+                                        <select name="environmentId" class="rounded bg-canvas border border-line px-2 py-1 text-xs">
                                             <option value="">@(isFa ? "همهٔ محیط‌ها" : "all environments")</option>
                                             @foreach (var p in projects)
                                             {
                                                 foreach (var e in p.Environments){<option value="@e.Id">@p.Name · @e.Name</option>}
                                             }
                                         </select>
-                                        <select name="role" class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs">
+                                        <select name="role" class="rounded bg-canvas border border-line px-2 py-1 text-xs">
                                             <option value="Member">Member</option>
                                             <option value="Operator">Operator</option>
                                             <option value="Viewer">Viewer</option>
                                         </select>
-                                        <button class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1 text-xs">
+                                        <button class="rounded bg-surface-2 hover:bg-surface-2 px-2 py-1 text-xs">
                                             @(isFa ? "افزودن" : "grant")</button>
                                     </form>
                                 </div>
@@ -119,7 +119,7 @@
                             <form asp-controller="Tenants" asp-action="SetScope" asp-route-id="@Model.WorkspaceId" asp-route-userId="@m.UserId" method="post" class="mt-2">
                                 @Html.AntiForgeryToken()
                                 <input type="hidden" name="scoped" value="@((!m.ScopedToProjects).ToString().ToLowerInvariant())" />
-                                <button class="text-xs text-brand-400">
+                                <button class="text-xs text-accent-text">
                                     @(m.ScopedToProjects
                                         ? (isFa ? "دسترسی به همهٔ پروژه‌ها" : "give access to every project")
                                         : (isFa ? "محدود به پروژه‌های مشخص" : "limit to specific projects"))
@@ -130,7 +130,7 @@
                             <form asp-controller="Tenants" asp-action="RemoveMember" asp-route-id="@Model.WorkspaceId" asp-route-userId="@m.UserId" method="post"
                                   onsubmit="return confirm('@(isFa ? "حذف عضو؟" : "Remove member?")')">
                                 @Html.AntiForgeryToken()
-                                <button class="text-xs text-red-400">@(isFa ? "حذف" : "remove")</button>
+                                <button class="text-xs text-danger">@(isFa ? "حذف" : "remove")</button>
                             </form>
                         </td>
                     </tr>
@@ -139,20 +139,20 @@
         </table>
     </section>
 
-    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 h-fit">
+    <section class="rounded-xl border border-line bg-surface p-5 h-fit">
         <h2 class="font-semibold mb-3">@(isFa ? "افزودن کاربر" : "Add a user")</h2>
         <form asp-controller="Tenants" asp-action="AddMember" asp-route-id="@Model.WorkspaceId" method="post" class="space-y-3">
             @Html.AntiForgeryToken()
-            <input name="email" type="email" placeholder="@(isFa ? "ایمیل" : "Email")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-            <input name="displayName" placeholder="@(isFa ? "نام نمایشی" : "Display name")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-            <input name="password" type="password" placeholder="@(isFa ? "گذرواژه موقت (کاربر جدید)" : "Temp password (new user)")" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm" />
-            <select name="role" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm">
+            <input name="email" type="email" placeholder="@(isFa ? "ایمیل" : "Email")" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            <input name="displayName" placeholder="@(isFa ? "نام نمایشی" : "Display name")" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            <input name="password" type="password" placeholder="@(isFa ? "گذرواژه موقت (کاربر جدید)" : "Temp password (new user)")" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            <select name="role" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
                 <option value="Admin">@(isFa ? "مدیر workspace" : "Workspace admin")</option>
                 <option value="Member" selected>@(isFa ? "عضو" : "Member")</option>
                 <option value="Viewer">@(isFa ? "بیننده" : "Viewer")</option>
             </select>
-            <button class="w-full rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-2 text-sm font-semibold">@(isFa ? "افزودن" : "Add")</button>
+            <button class="w-full rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">@(isFa ? "افزودن" : "Add")</button>
         </form>
-        <p class="mt-2 text-xs text-slate-500">@(isFa ? "اگر ایمیل موجود باشد، فقط عضو می‌شود؛ وگرنه حساب ساخته می‌شود." : "Existing email → just added; otherwise an account is created.")</p>
+        <p class="mt-2 text-xs text-ink-faint">@(isFa ? "اگر ایمیل موجود باشد، فقط عضو می‌شود؛ وگرنه حساب ساخته می‌شود." : "Existing email → just added; otherwise an account is created.")</p>
     </section>
 </div>
