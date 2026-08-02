@@ -46,11 +46,18 @@ public sealed partial class DatabasesController(
 
     [HttpGet("create")]
     [Authorize(Policy = Capabilities.DatabasesManage)]
-    public IActionResult Create()
+    public IActionResult Create(ManagedServiceType? type)
     {
         ViewData["Title"] = "New service";
         ViewBag.Catalog = engine.Catalog;
-        return View(new CreateServiceViewModel());
+
+        // Preselected when the caller named an engine we actually run. An unknown one falls back to
+        // the default rather than being honoured, so a stale link cannot produce a service of a type
+        // this installation has no definition for.
+        var model = new CreateServiceViewModel();
+        if (type is { } chosen && engine.Catalog.Any(c => c.Type == chosen)) model.Type = chosen;
+
+        return View(model);
     }
 
     [HttpPost("create")]

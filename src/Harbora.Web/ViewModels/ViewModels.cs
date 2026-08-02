@@ -93,8 +93,14 @@ public sealed class DashboardViewModel
     public int RunningCount { get; set; }
     public int FailedDeployments { get; set; }
     public int DeploymentsTotal { get; set; }
-    public double CpuPercent { get; set; }
-    public long MemoryUsed { get; set; }
+    /// <summary>Null when nothing has been sampled. Never 0 for "we did not look".</summary>
+    public double? CpuPercent { get; set; }
+    /// <summary>Null when nothing has been sampled.</summary>
+    public long? MemoryUsed { get; set; }
+
+    /// <summary>Installed, enabled templates people can start from — never a hardcoded menu.</summary>
+    public List<StarterTemplate> StarterApps { get; set; } = [];
+    public List<StarterDatabase> StarterDatabases { get; set; } = [];
     public long MemoryTotal { get; set; }
     public long DiskUsed { get; set; }
     public long DiskTotal { get; set; }
@@ -196,3 +202,9 @@ public sealed class LandingViewModel
 public sealed record LandingFeature(string Icon, string Title, string Body);
 public sealed record LandingStep(string Title, string Body);
 public sealed record LandingFaq(string Question, string Answer);
+
+/// <summary>One tile on the dashboard's starter rows.</summary>
+public sealed record StarterTemplate(Guid Id, string Name, string? NameFa, string Category, string? IconUrl);
+
+/// <summary>One database engine tile — from the catalog, so it can actually be provisioned.</summary>
+public sealed record StarterDatabase(string Type, string Name, string? NameFa);

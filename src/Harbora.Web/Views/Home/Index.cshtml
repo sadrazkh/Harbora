@@ -10,7 +10,7 @@
     // A percentage is only a number when a total is known. A server that has not reported its
     // capacity is not a server at 0%, and the honesty gate is what keeps those two apart.
     double? diskPercent = Model.DiskTotal > 0 ? (double)Model.DiskUsed / Model.DiskTotal * 100 : null;
-    double? memoryPercent = Model.MemoryTotal > 0 ? (double)Model.MemoryUsed / Model.MemoryTotal * 100 : null;
+    double? memoryPercent = Model.MemoryTotal > 0 && Model.MemoryUsed is { } used ? (double)used / Model.MemoryTotal * 100 : null;
 
     var hour = DateTimeOffset.Now.Hour;
     var greeting = hour switch
@@ -138,6 +138,67 @@
             }
         </div>
         <partial name="Design/_PanelEnd" />
+    </div>
+}
+
+@* ---- start from something ----
+   The two rows the reference dashboard leads with. Every tile is a template that is installed and
+   enabled, read from the database — a fixed menu of logos would offer things this installation
+   cannot actually deploy, which is the same lie as a metric nobody measured. *@
+@if (Model.StarterApps.Count > 0 || Model.StarterDatabases.Count > 0)
+{
+    <div class="mb-6 grid gap-6 lg:grid-cols-2">
+        @if (Model.StarterApps.Count > 0)
+        {
+            <div>
+                @{ var starterPanel = new PanelModel(isFa ? "اپ‌های آماده" : "One-click apps", isFa ? "همه" : "View all", "/templates"); }
+                <partial name="Design/_PanelStart" model="starterPanel" />
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3">
+                    @foreach (var t in Model.StarterApps)
+                    {
+                        <a href="/apps/create?templateId=@t.Id"
+                           class="group flex flex-col items-center gap-2 rounded-xl border border-line bg-surface-2 p-3 text-center hover:border-accent transition">
+                            <span class="grid h-10 w-10 place-items-center rounded-xl bg-accent-soft text-accent-text text-sm font-bold">
+                                @(t.Name.Trim().Length > 0 ? t.Name.Trim()[..1].ToUpperInvariant() : "?")
+                            </span>
+                            <span class="truncate w-full text-[11px] font-medium text-ink" title="@t.Name">
+                                @(isFa && !string.IsNullOrWhiteSpace(t.NameFa) ? t.NameFa : t.Name)
+                            </span>
+                        </a>
+                    }
+                </div>
+                <p class="px-4 pb-3 text-[11px] text-ink-faint">
+                    @(isFa ? "با یک کلیک، فرم ساخت با تنظیمات آمادهٔ همان قالب باز می‌شود." : "One click opens the create form already filled in from that template.")
+                </p>
+                <partial name="Design/_PanelEnd" />
+            </div>
+        }
+
+        @if (Model.StarterDatabases.Count > 0)
+        {
+            <div>
+                @{ var dbPanel = new PanelModel(isFa ? "دیتابیس‌های آماده" : "Ready-made databases", isFa ? "همه" : "View all", "/databases"); }
+                <partial name="Design/_PanelStart" model="dbPanel" />
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3">
+                    @foreach (var t in Model.StarterDatabases)
+                    {
+                        <a href="/databases/create?type=@t.Type"
+                           class="group flex flex-col items-center gap-2 rounded-xl border border-line bg-surface-2 p-3 text-center hover:border-accent transition">
+                            <span class="grid h-10 w-10 place-items-center rounded-xl bg-ok/10 text-ok text-sm font-bold">
+                                @(t.Name.Trim().Length > 0 ? t.Name.Trim()[..1].ToUpperInvariant() : "?")
+                            </span>
+                            <span class="truncate w-full text-[11px] font-medium text-ink" title="@t.Name">
+                                @(isFa && !string.IsNullOrWhiteSpace(t.NameFa) ? t.NameFa : t.Name)
+                            </span>
+                        </a>
+                    }
+                </div>
+                <p class="px-4 pb-3 text-[11px] text-ink-faint">
+                    @(isFa ? "در یک محیط ساخته می‌شود و اتصالش را به شما می‌دهد." : "Provisioned into an environment, with its connection details.")
+                </p>
+                <partial name="Design/_PanelEnd" />
+            </div>
+        }
     </div>
 }
 

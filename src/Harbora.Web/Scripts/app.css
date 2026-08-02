@@ -162,3 +162,73 @@
 html:not(.dark) .bg-surface.border-line {
   box-shadow: 0 1px 2px rgb(24 20 40 / 0.04), 0 2px 6px rgb(24 20 40 / 0.04);
 }
+
+/* ---- Sign in, setup, denied, error ----
+   These four pages share one layout and a handful of semantic class names. The styles lived in a
+   hand-written sheet with a dark palette baked in, so the first screen anybody saw belonged to a
+   different design from the panel behind it. Written here instead, against the tokens, so they
+   follow the theme like everything else. Outside @layer because the class names appear only in that
+   layout and Tailwind would purge them. */
+.auth-wrap {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: rgb(var(--surface));
+  border: 1px solid rgb(var(--border));
+  border-radius: 16px;
+  padding: 28px;
+  box-shadow: 0 10px 30px rgb(24 20 40 / 0.06), 0 2px 8px rgb(24 20 40 / 0.04);
+}
+html.dark .auth-card { box-shadow: 0 20px 60px rgb(0 0 0 / 0.4); }
+
+.auth-brand {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 20px; font-weight: 700; margin-bottom: 20px;
+  color: rgb(var(--text));
+}
+.auth-logo {
+  display: inline-flex; height: 34px; width: 34px;
+  align-items: center; justify-content: center;
+  border-radius: 10px;
+  background: rgb(var(--brand));
+  color: #fff;
+}
+
+.auth-card .title { font-size: 20px; font-weight: 700; margin: 0 0 4px; color: rgb(var(--text)); }
+.auth-card .subtitle { color: rgb(var(--text-muted)); margin: 0 0 20px; font-size: 14px; }
+
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 13px; margin-bottom: 6px; color: rgb(var(--text-muted)); }
+.field input, .field select {
+  width: 100%;
+  background: rgb(var(--surface-2));
+  border: 1px solid rgb(var(--border-strong));
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  color: rgb(var(--text));
+}
+.field input::placeholder { color: rgb(var(--text-faint)); }
+.field input:focus, .field select:focus {
+  outline: 2px solid rgb(var(--brand));
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+/* The error box, only when there is an error — see the valid-state rule below. */
+.auth-card .error,
+.error {
+  background: rgb(var(--error-soft));
+  border: 1px solid rgb(var(--error) / 0.35);
+  color: rgb(var(--error));
+  padding: 10px 12px;
+  border-radius: 10px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}

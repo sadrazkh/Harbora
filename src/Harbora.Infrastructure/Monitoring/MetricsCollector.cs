@@ -82,7 +82,7 @@ public sealed class MetricsCollector(
         {
             var containers = await docker.ListContainersAsync("harbora.app", ct);
             double totalCpu = 0;
-            long totalRx = 0, totalTx = 0;
+            long totalRx = 0, totalTx = 0, totalMemory = 0;
             // Whether anything was actually read this tick. Docker's stats call fails intermittently,
             // and without this the loop falls through with its totals still at zero and records them
             // as a measurement — which reads as "no traffic" and, on the next tick, as a spike back
@@ -106,6 +106,7 @@ public sealed class MetricsCollector(
 
                 totalRx += stats.NetRxBytes;
                 totalTx += stats.NetTxBytes;
+                totalMemory += stats.MemoryUsedBytes;
                 measured++;
             }
 
@@ -114,6 +115,7 @@ public sealed class MetricsCollector(
             if (measured > 0)
             {
                 samples.Add(Metric(server.Id, "cpu.percent", null, Math.Round(totalCpu, 2), now));
+                samples.Add(Metric(server.Id, "mem.used", null, totalMemory, now));
                 samples.Add(Metric(server.Id, "net.rx", null, totalRx, now));
                 samples.Add(Metric(server.Id, "net.tx", null, totalTx, now));
             }

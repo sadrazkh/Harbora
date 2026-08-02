@@ -1,7 +1,9 @@
-﻿@using System.Globalization
+@using System.Globalization
+@inject ViteManifest Vite
 @{
     var culture = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
     var dir = culture == "fa" ? "rtl" : "ltr";
+    var (viteJs, viteCss) = Vite.Resolve("Scripts/main.ts");
 }
 <!DOCTYPE html>
 <html lang="@culture" dir="@dir" class="h-full">
@@ -9,11 +11,37 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>@ViewData["Title"] · Harbora</title>
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#f8f7fd" />
     <link rel="icon" href="~/favicon.ico" />
-    <link rel="stylesheet" href="~/css/fallback.css" />
+
+    @* This layout used to load only the hand-written fallback sheet, which is why signing in was a
+       different product from the panel behind it: its own dark palette, its own inputs, none of the
+       design tokens. It now loads the same stylesheet as everything else. *@
+    @if (Vite.UseDevServer)
+    {
+        <script type="module" src="@(Vite.DevServerUrl)/@@vite/client"></script>
+    }
+    else
+    {
+        foreach (var css in viteCss) { <link rel="stylesheet" href="@css" /> }
+        @* Versioned: this file carries no content hash, so a browser that cached it once kept
+           serving the old copy and a CSS fix could ship without ever arriving. *@
+        <link rel="stylesheet" href="~/css/fallback.css" asp-append-version="true" />
+    }
+
+    <script>
+        // The same stored choice the panel and the landing page use, applied before paint. The old
+        // layout hardcoded a dark background in an inline style, which no stylesheet could override.
+        (function () {
+            var t = localStorage.getItem('harbora-theme') || 'light';
+            var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+            document.documentElement.classList.toggle('dark', dark);
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute('content', dark ? '#0f0d17' : '#f8f7fd');
+        })();
+    </script>
 </head>
-<body class="h-full bg-canvas text-ink" style="background:#020617;color:#e2e8f0">
+<body class="h-full bg-canvas text-ink antialiased">
     <div class="auth-wrap">
         <div class="auth-card">
             <div class="auth-brand">

@@ -17,6 +17,7 @@ public sealed class HomeController(
     IDockerEngine docker,
     Harbora.Infrastructure.Dashboard.AttentionService attention,
     Harbora.Infrastructure.Monitoring.NetworkHistory network,
+    IManagedServiceEngine engine,
     ICurrentUser currentUser,
     ILogger<HomeController> logger) : Controller
 {
@@ -71,10 +72,33 @@ public sealed class HomeController(
         vm.DomainsTotal = await db.Domains.CountAsync(d => d.App!.WorkspaceId == workspaceId, ct);
         vm.DomainsSsl = await db.Domains.CountAsync(d => d.App!.WorkspaceId == workspaceId && d.SslEnabled, ct);
 
-        // Latest aggregate CPU sample from the collector (survives Docker being briefly down).
+        // Latest aggregate samples from the collector (they survive Docker being briefly down).
+        // Cast to a nullable before the default kicks in: on a double, FirstOrDefaultAsync answers
+        // "0" for "there are no rows", and the dashboard printed that as a measured 0%.
         vm.CpuPercent = await db.MonitoringMetrics
             .Where(m => m.Name == "cpu.percent" && m.ResourceRef == null)
-            .OrderByDescending(m => m.Timestamp).Select(m => m.Value).FirstOrDefaultAsync(ct);
+            .OrderByDescending(m => m.Timestamp).Select(m => (double?)m.Value).FirstOrDefaultAsync(ct);
+
+        vm.MemoryUsed = await db.MonitoringMetrics
+            .Where(m => m.Name == "mem.used" && m.ResourceRef == null)
+            .OrderByDescending(m => m.Timestamp).Select(m => (long?)m.Value).FirstOrDefaultAsync(ct);
+
+        // The two things the reference dashboard leads with. Read from the templates that are
+        // actually installed and enabled — a tile for something that is not there deploys nothing.
+        var templates = await db.AppTemplates.AsNoTracking()
+            .Where(t => t.IsEnabled)
+            .OrderBy(t => t.Name)
+            .Select(t => new StarterTemplate(t.Id, t.Name, t.NameFa, t.Category, t.IconUrl))
+            .ToListAsync(ct);
+
+        vm.StarterApps = templates.Where(t => t.Category != "database").Take(8).ToList();
+
+        // Databases are provisioned from the engine catalog, not from app templates. Reading the
+        // catalog means a tile exists only for an engine this installation can really start.
+        vm.StarterDatabases = engine.Catalog
+            .Take(4)
+            .Select(c => new StarterDatabase(c.Type.ToString(), c.DisplayName, c.DisplayNameFa))
+            .ToList();
 
         // Recent errors: failed deploys (with reason) + crashed apps.
         var failed = await db.Deployments.Include(d => d.App)
