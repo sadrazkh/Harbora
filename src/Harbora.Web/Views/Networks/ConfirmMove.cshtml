@@ -1,0 +1,68 @@
+@model MoveServiceViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var verdict = Model.Verdict;
+}
+
+<div class="mx-auto max-w-2xl">
+    <a href="/networks" class="text-sm text-accent-text">← @(isFa ? "شبکه‌ها" : "Networks")</a>
+
+    <h1 class="mt-1 text-2xl font-bold tracking-tight text-ink">
+        @(isFa ? "جابه‌جایی سرویس" : "Move service")
+    </h1>
+
+    <p class="mt-1 text-sm text-ink-muted">
+        <span class="font-semibold text-ink">@Model.Service.Name</span>
+        @(isFa ? "از" : "from")
+        <span class="text-ink">@(Model.Current is null ? (isFa ? "بدون محیط" : "no environment") : Model.Current.Name)</span>
+        @(isFa ? "به" : "to")
+        <span class="text-ink">@Model.Target.Name</span>
+    </p>
+
+    @if (!verdict.Allowed)
+    {
+        <div class="mt-6 rounded-xl border border-danger/40 bg-danger-soft p-4">
+            <p class="text-sm text-ink">@verdict.Reason</p>
+        </div>
+        <a href="/networks" class="mt-4 inline-block rounded-lg border border-line px-4 py-2 text-sm text-ink">
+            @(isFa ? "بازگشت" : "Back")
+        </a>
+    }
+    else
+    {
+        @* Every consequence, before the button. A move is one click and its damage shows up at the
+           next deploy, by which time nobody connects the two. *@
+        <section class="mt-6 rounded-xl border border-warn/40 bg-warn-soft p-4">
+            <div class="text-sm font-semibold text-ink">
+                @(isFa ? "این کار چه چیزی را عوض می‌کند" : "What this changes")
+            </div>
+            <ul class="mt-2 space-y-2 text-sm text-ink">
+                @foreach (var warning in verdict.Warnings)
+                {
+                    <li class="flex gap-2">
+                        <span class="text-warn">•</span>
+                        <span>@warning</span>
+                    </li>
+                }
+            </ul>
+        </section>
+
+        <p class="mt-4 text-xs text-ink-faint">
+            @(isFa
+                ? "محیط یعنی شبکهٔ خصوصی. سرویس بعد از جابه‌جایی روی شبکهٔ تازه است و نام‌های شبکهٔ قبلی برایش قابل دسترسی نیستند."
+                : "An environment is a private network. After the move the service is on the new one, and names on the old network no longer resolve for it.")
+        </p>
+
+        <form method="post" action="/networks/move" class="mt-6 flex items-center gap-2">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="appId" value="@Model.Service.Id" />
+            <input type="hidden" name="targetEnvironmentId" value="@Model.Target.Id" />
+            <button type="submit" class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover">
+                @(isFa ? "بله، جابه‌جا کن" : "Yes, move it")
+            </button>
+            <a href="/networks" class="rounded-lg border border-line px-4 py-2 text-sm text-ink">
+                @(isFa ? "انصراف" : "Cancel")
+            </a>
+        </form>
+    }
+</div>

@@ -250,6 +250,18 @@ public sealed partial class DatabasesController(
             .FirstOrDefaultAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
+        // An environment is a private network, so it is also the wiring boundary. Without this the
+        // attach succeeded and wrote a hostname resolvable only on the other network — the service
+        // then started, looked healthy, and could not reach its database.
+        var service = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id, ct);
+        var verdict = Harbora.Infrastructure.Networking.NetworkWiring.CanAttach(
+            app.EnvironmentId, service?.EnvironmentId);
+        if (!verdict.Allowed)
+        {
+            TempData["Error"] = verdict.Reason;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
         var env = await engine.BuildAttachEnvAsync(id, ct);
         foreach (var (key, value) in env)
         {
@@ -260,6 +272,38 @@ public sealed partial class DatabasesController(
         }
         await db.SaveChangesAsync(ct);
         TempData["Message"] = $"Attached to {app.Name}. Redeploy the app to apply the new variables.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// Removes the variables an attach wrote. Only those keys, and only when they still hold this
+    /// database's values — a key somebody edited by hand is theirs, not ours to delete.
+    /// </summary>
+    [HttpPost("{id:guid}/detach")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> Detach(Guid id, Guid appId, CancellationToken ct)
+    {
+        await Guard(id, ct);
+        var app = await db.Apps.Include(a => a.EnvironmentVariables)
+            .FirstOrDefaultAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        var env = await engine.BuildAttachEnvAsync(id, ct);
+        var removed = 0;
+        foreach (var (key, _) in env)
+        {
+            var existing = app.EnvironmentVariables.FirstOrDefault(e => e.Key == key);
+            if (existing is null) continue;
+
+            app.EnvironmentVariables.Remove(existing);
+            removed++;
+        }
+
+        await db.SaveChangesAsync(ct);
+        TempData["Message"] = removed == 0
+            ? "Nothing to remove — this app was not wired to this database."
+            : $"Removed {removed} variable(s) from {app.Name}. Redeploy the app to apply the change.";
         return RedirectToAction(nameof(Details), new { id });
     }
 

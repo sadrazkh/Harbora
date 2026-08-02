@@ -5,9 +5,6 @@
     var isRtl = culture == "fa";
     var dir = isRtl ? "rtl" : "ltr";
     var (viteJs, viteCss) = Vite.Resolve("Scripts/main.ts");
-    string Active(string controller) =>
-        string.Equals((string?)ViewContext.RouteData.Values["controller"], controller, StringComparison.OrdinalIgnoreCase)
-            ? "bg-accent-soft text-accent-text" : "text-ink hover:bg-surface-2 hover:text-white";
 }
 <!DOCTYPE html>
 <html lang="@culture" dir="@dir" class="h-full">

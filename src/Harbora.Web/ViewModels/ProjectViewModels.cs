@@ -38,3 +38,34 @@ public sealed class ProjectDetailsViewModel
     public IReadOnlyDictionary<Guid, IReadOnlyList<string>> Connections { get; set; } =
         new Dictionary<Guid, IReadOnlyList<string>>();
 }
+
+/// <summary>
+/// The private network of one environment: what is attached, and the address each thing answers on.
+/// </summary>
+public class NetworksViewModel
+{
+    public List<Environment> Environments { get; set; } = [];
+    public Environment? Selected { get; set; }
+
+    /// <summary>The Docker network name, derived from the same rule the deploy engine uses.</summary>
+    public string? NetworkName { get; set; }
+
+    public List<App> Services { get; set; } = [];
+    public List<ManagedService> Databases { get; set; } = [];
+
+    /// <summary>Which databases each service holds a connection string for.</summary>
+    public IReadOnlyDictionary<Guid, IReadOnlyList<string>> Connections { get; set; } =
+        new Dictionary<Guid, IReadOnlyList<string>>();
+
+    /// <summary>The same information as a diagram.</summary>
+    public Harbora.Infrastructure.Networking.ArchitecturePicture? Picture { get; set; }
+}
+
+/// <summary>What moving a service to another environment would cost.</summary>
+public class MoveServiceViewModel
+{
+    public App Service { get; set; } = null!;
+    public Environment? Current { get; set; }
+    public Environment Target { get; set; } = null!;
+    public Harbora.Infrastructure.Networking.WiringVerdict Verdict { get; set; } = null!;
+}

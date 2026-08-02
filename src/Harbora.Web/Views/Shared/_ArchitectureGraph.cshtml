@@ -1,0 +1,112 @@
+﻿@model Harbora.Infrastructure.Networking.ArchitecturePicture
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    // Geometry lives here rather than in CSS because the connector lines have to be drawn in the
+    // same coordinate space as the boxes, and two sources of truth for "where is the box" is how
+    // diagrams end up with lines that point at nothing.
+    const int cardW = 208, cardH = 92, gapX = 40, gapY = 56, padX = 16, padY = 16;
+
+    var rows = Model.Nodes.Count == 0 ? 0 : Model.Nodes.Max(n => n.Row) + 1;
+    var cols = Model.Nodes.Count == 0 ? 0 : Model.Nodes.Max(n => n.Column) + 1;
+    var width = padX * 2 + cols * cardW + Math.Max(0, cols - 1) * gapX;
+    var height = padY * 2 + rows * cardH + Math.Max(0, rows - 1) * gapY;
+
+    int Left(int column) => padX + column * (cardW + gapX);
+    int Top(int row) => padY + row * (cardH + gapY);
+
+    var at = Model.Nodes.ToDictionary(n => n.Id);
+
+    // Tone → the semantic token trio. Nothing here invents a colour; "idle" is deliberately grey
+    // rather than green, because an unknown state drawn as healthy is the failure this guards.
+    string Ring(string tone) => tone switch
+    {
+        "ok" => "border-ok/40",
+        "warn" => "border-warn/50",
+        "error" => "border-danger/50",
+        _ => "border-line"
+    };
+    string Dot(string tone) => tone switch
+    {
+        "ok" => "bg-ok",
+        "warn" => "bg-warn",
+        "error" => "bg-danger",
+        _ => "bg-ink-faint"
+    };
+    // Wrapped in rgb(): the tokens are bare "r g b" triples so Tailwind can append an alpha, which
+    // means an SVG stroke needs the function around them or the line silently does not render.
+    string Stroke(string tone) => tone switch
+    {
+        "ok" => "rgb(var(--ok))",
+        "warn" => "rgb(var(--warn))",
+        "error" => "rgb(var(--error))",
+        _ => "rgb(var(--border))"
+    };
+}
+
+@if (Model.Nodes.Count == 0)
+{
+    <div class="rounded-xl border border-line bg-surface p-10 text-center">
+        <p class="text-ink font-medium">@(isFa ? "چیزی برای رسم نیست" : "Nothing to draw")</p>
+    </div>
+}
+else
+{
+    <div class="rounded-xl border border-line bg-surface overflow-hidden">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+            <div class="text-sm font-semibold text-ink">@(isFa ? "نقشهٔ شبکه" : "Network map")</div>
+            @* A legend, because a colour with no key is decoration. *@
+            <div class="flex flex-wrap items-center gap-3 text-[11px] text-ink-muted">
+                <span class="inline-flex items-center gap-1"><i class="h-2 w-2 rounded-full bg-ok"></i>@(isFa ? "در حال اجرا" : "running")</span>
+                <span class="inline-flex items-center gap-1"><i class="h-2 w-2 rounded-full bg-warn"></i>@(isFa ? "در حال کار" : "working")</span>
+                <span class="inline-flex items-center gap-1"><i class="h-2 w-2 rounded-full bg-danger"></i>@(isFa ? "خطا" : "failed")</span>
+                <span class="inline-flex items-center gap-1"><i class="h-2 w-2 rounded-full bg-ink-faint"></i>@(isFa ? "نامعلوم" : "unknown")</span>
+            </div>
+        </div>
+
+        @* Scrolls rather than scales: a diagram shrunk to fit is a diagram nobody can read. The
+           inner box keeps its own LTR direction so the geometry is the same in Persian — mirroring
+           the canvas would put the connector lines on the wrong side of the boxes. *@
+        <div class="overflow-auto p-2" dir="ltr">
+            <div class="relative" style="width:@(width)px;height:@(height)px;min-width:100%">
+                <svg class="absolute inset-0 pointer-events-none" width="@width" height="@height" aria-hidden="true">
+                    @foreach (var edge in Model.Edges)
+                    {
+                        if (!at.TryGetValue(edge.FromId, out var from) || !at.TryGetValue(edge.ToId, out var to)) { continue; }
+
+                        var x1 = Left(from.Column) + cardW / 2;
+                        var y1 = Top(from.Row) + cardH;
+                        var x2 = Left(to.Column) + cardW / 2;
+                        var y2 = Top(to.Row);
+                        var mid = y1 + (y2 - y1) / 2;
+
+                        @* An orthogonal path, not a straight line: two boxes several columns apart
+                           produce a diagonal that crosses everything between them. *@
+                        <path d="M @x1 @y1 V @mid H @x2 V @y2"
+                              fill="none" stroke="@Stroke(to.Status)" stroke-width="1.5" stroke-linecap="round" opacity="0.75" />
+                        <circle cx="@x2" cy="@y2" r="3" fill="@Stroke(to.Status)" />
+                    }
+                </svg>
+
+                @foreach (var node in Model.Nodes)
+                {
+                    <div class="absolute rounded-xl border bg-surface-2 shadow-sm @Ring(node.Status)"
+                         style="left:@(Left(node.Column))px;top:@(Top(node.Row))px;width:@(cardW)px;height:@(cardH)px">
+                        <div class="flex h-full flex-col justify-center gap-1 px-3">
+                            <div class="flex items-center gap-2">
+                                <i class="h-2 w-2 shrink-0 rounded-full @Dot(node.Status)"></i>
+                                <span class="truncate text-sm font-semibold text-ink" title="@node.Label">@node.Label</span>
+                            </div>
+                            @* Identity, never a measurement — see ArchitectureGraph for why. *@
+                            @if (node.Detail is { } detail)
+                            {
+                                <code class="truncate text-[11px] text-ink-faint" title="@detail">@detail</code>
+                            }
+                            <span class="text-[10px] uppercase tracking-wide text-ink-faint">@node.Tier</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}

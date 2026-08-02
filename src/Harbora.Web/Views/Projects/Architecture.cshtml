@@ -31,8 +31,14 @@
 }
 else
 {
-    @* An indented, structured list rather than a pannable canvas: it reads the same on a phone, and
-       nothing about the network changes because something was dragged. *@
+    @* The diagram first, then the same information as a list. The list is not a fallback: it is what
+       works on a phone, what a screen reader can follow, and what stays readable when a project has
+       forty services. Both are built from the same connections, so they cannot disagree. *@
+    <div class="mb-6">
+        <partial name="_ArchitectureGraph" model="@Harbora.Infrastructure.Networking.ArchitectureGraph.Build(Model.Services, Model.Databases, Model.Connections)" />
+    </div>
+
+    <h2 class="text-sm font-semibold text-ink-muted mb-3">@(isFa ? "جزئیات" : "Details")</h2>
     <div class="space-y-4">
         @foreach (var s in Model.Services)
         {

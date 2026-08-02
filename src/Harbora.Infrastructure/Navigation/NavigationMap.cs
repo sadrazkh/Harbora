@@ -30,7 +30,7 @@ public static class NavigationMap
             new("deployments", "Deployments", "Index", "rocket")
         ]),
         new("connect", [
-            new("networks", "Projects", "Index", "network"),
+            new("networks", "Networks", "Index", "network"),
             new("domains", "Domains", "Index", "globe"),
             new("routing", "Routes", "Index", "route", Capabilities.RoutesManage)
         ]),
