@@ -16,14 +16,14 @@
     <div class="relative mx-auto max-w-6xl px-4 pt-20 pb-16 md:pt-28 md:pb-24">
         <div class="grid lg:grid-cols-2 gap-12 items-center">
             <div class="hb-rise">
-                <span class="inline-flex items-center gap-2 rounded-full border border-brand-500/30 bg-accent-hover/10 px-3 py-1 text-xs text-accent-text">
-                    <span class="w-1.5 h-1.5 rounded-full bg-brand-400"></span>
+                <span class="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent-hover/10 px-3 py-1 text-xs text-accent-text">
+                    <span class="w-1.5 h-1.5 rounded-full bg-accent"></span>
                     @T["Self-hosted PaaS · Docker native"]
                 </span>
 
-                <h1 class="mt-5 text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight text-white leading-[1.1]">
+                <h1 class="mt-5 text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight text-ink leading-[1.1]">
                     @T["Push your code."]
-                    <span class="bg-gradient-to-r from-brand-400 via-brand-300 to-sky-300 bg-clip-text text-transparent">
+                    <span class="bg-gradient-to-r from-accent via-accent-hover to-accent bg-clip-text text-transparent">
                         @T["We handle the rest."]
                     </span>
                 </h1>
@@ -33,7 +33,7 @@
                 </p>
 
                 <div class="mt-8 flex flex-wrap items-center gap-3">
-                    <a href="/account/login" class="rounded-xl bg-accent hover:bg-accent-hover px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-900/40 transition">
+                    <a href="/account/login" class="rounded-xl bg-accent hover:bg-accent-hover px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition">
                         @T["Get started"]
                     </a>
                     <a href="#how" class="rounded-xl border border-line-strong hover:border-line-strong hover:bg-surface px-6 py-3 text-sm font-medium text-ink transition">
@@ -43,15 +43,15 @@
 
                 <dl class="mt-10 grid grid-cols-3 gap-6 max-w-md">
                     <div>
-                        <dt class="text-2xl font-bold text-white">@T["Zero"]</dt>
+                        <dt class="text-2xl font-bold text-ink">@T["Zero"]</dt>
                         <dd class="text-xs text-ink-faint mt-1">@T["downtime cutover"]</dd>
                     </div>
                     <div>
-                        <dt class="text-2xl font-bold text-white">@T["Auto"]</dt>
+                        <dt class="text-2xl font-bold text-ink">@T["Auto"]</dt>
                         <dd class="text-xs text-ink-faint mt-1">@T["SSL certificates"]</dd>
                     </div>
                     <div>
-                        <dt class="text-2xl font-bold text-white">1&nbsp;@T["click"]</dt>
+                        <dt class="text-2xl font-bold text-ink">1&nbsp;@T["click"]</dt>
                         <dd class="text-xs text-ink-faint mt-1">@T["instant rollback"]</dd>
                     </div>
                 </dl>
@@ -86,7 +86,7 @@
 @* ---------------------------------------------------------------- features *@
 <section id="features" class="mx-auto max-w-6xl px-4 py-20">
     <div class="max-w-2xl">
-        <h2 class="text-3xl md:text-4xl font-bold tracking-tight text-white">@T["Everything a deploy needs"]</h2>
+        <h2 class="text-3xl md:text-4xl font-bold tracking-tight text-ink">@T["Everything a deploy needs"]</h2>
         <p class="mt-4 text-ink-muted leading-relaxed">@T["Not a thin wrapper over docker run — the parts that are tedious to get right are the parts Harbora owns."]</p>
     </div>
 
@@ -94,10 +94,10 @@
         @foreach (var f in Model.Features)
         {
             <div class="group rounded-2xl border border-line bg-surface p-6 hover:border-line-strong hover:bg-surface transition">
-                <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-brand-500/20 to-brand-700/10 border border-brand-500/20 grid place-items-center text-xl">
+                <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-accent/15 to-accent-hover/10 border border-accent/20 grid place-items-center text-xl">
                     @f.Icon
                 </div>
-                <h3 class="mt-4 font-semibold text-white">@T[f.Title]</h3>
+                <h3 class="mt-4 font-semibold text-ink">@T[f.Title]</h3>
                 <p class="mt-2 text-sm text-ink-muted leading-relaxed">@T[f.Body]</p>
             </div>
         }
@@ -108,7 +108,7 @@
 <section id="how" class="relative border-y border-line bg-surface">
     <div class="mx-auto max-w-6xl px-4 py-20">
         <div class="max-w-2xl">
-            <h2 class="text-3xl md:text-4xl font-bold tracking-tight text-white">@T["Three steps to production"]</h2>
+            <h2 class="text-3xl md:text-4xl font-bold tracking-tight text-ink">@T["Three steps to production"]</h2>
             <p class="mt-4 text-ink-muted leading-relaxed">@T["From an empty server to a running app with a valid certificate."]</p>
         </div>
 
@@ -119,7 +119,7 @@
                 stepNo++;
                 <li class="relative rounded-2xl border border-line bg-canvas p-6">
                     <span class="absolute -top-3 @(isFa ? "right-6" : "left-6") inline-grid place-items-center w-7 h-7 rounded-full bg-accent text-white text-xs font-bold">@stepNo</span>
-                    <h3 class="mt-2 font-semibold text-white">@T[s.Title]</h3>
+                    <h3 class="mt-2 font-semibold text-ink">@T[s.Title]</h3>
                     <p class="mt-2 text-sm text-ink-muted leading-relaxed">@T[s.Body]</p>
                 </li>
             }
@@ -130,7 +130,7 @@
 @* ---------------------------------------------------------------- plans *@
 <section id="plans" class="mx-auto max-w-6xl px-4 py-20">
     <div class="max-w-2xl">
-        <h2 class="text-3xl md:text-4xl font-bold tracking-tight text-white">@T["Plans"]</h2>
+        <h2 class="text-3xl md:text-4xl font-bold tracking-tight text-ink">@T["Plans"]</h2>
         <p class="mt-4 text-ink-muted leading-relaxed">@T["Quotas are enforced by the platform, not by trust."]</p>
     </div>
 
@@ -146,21 +146,21 @@
             @foreach (var (plan, index) in Model.Plans.Select((p, i) => (p, i)))
             {
                 var featured = index == 1 && Model.Plans.Count > 2;
-                <div class="relative rounded-2xl border @(featured ? "border-brand-500/50 bg-gradient-to-b from-brand-500/10 to-slate-900/40" : "border-line bg-surface") p-6 flex flex-col">
+                <div class="relative rounded-2xl border @(featured ? "border-accent/50 bg-gradient-to-b from-accent/10 to-transparent" : "border-line bg-surface") p-6 flex flex-col">
                     @if (featured)
                     {
                         <span class="absolute -top-3 @(isFa ? "left-6" : "right-6") rounded-full bg-accent px-3 py-1 text-[11px] font-medium text-white">@T["Popular"]</span>
                     }
-                    <h3 class="font-semibold text-white text-lg">@(isFa && !string.IsNullOrWhiteSpace(plan.NameFa) ? plan.NameFa : plan.Name)</h3>
+                    <h3 class="font-semibold text-ink text-lg">@(isFa && !string.IsNullOrWhiteSpace(plan.NameFa) ? plan.NameFa : plan.Name)</h3>
 
                     <div class="mt-4 flex items-baseline gap-1">
                         @if (plan.MonthlyPrice <= 0)
                         {
-                            <span class="text-3xl font-bold text-white">@T["Free"]</span>
+                            <span class="text-3xl font-bold text-ink">@T["Free"]</span>
                         }
                         else
                         {
-                            <span class="text-3xl font-bold text-white">@plan.MonthlyPrice.ToString("0.##")</span>
+                            <span class="text-3xl font-bold text-ink">@plan.MonthlyPrice.ToString("0.##")</span>
                             <span class="text-sm text-ink-faint">/ @T["month"]</span>
                         }
                     </div>
@@ -191,7 +191,7 @@
 @* ---------------------------------------------------------------- faq *@
 <section id="faq" class="border-t border-line bg-surface">
     <div class="mx-auto max-w-3xl px-4 py-20">
-        <h2 class="text-3xl md:text-4xl font-bold tracking-tight text-white">@T["Questions"]</h2>
+        <h2 class="text-3xl md:text-4xl font-bold tracking-tight text-ink">@T["Questions"]</h2>
         <div class="mt-10 divide-y divide-line border-y border-line">
             @foreach (var q in Model.Faqs)
             {
@@ -212,11 +212,11 @@
     <div class="relative overflow-hidden rounded-3xl border border-line bg-surface p-10 md:p-14 text-center">
         <div class="absolute inset-0 hb-aurora opacity-70"></div>
         <div class="relative">
-            <h2 class="text-3xl md:text-4xl font-bold tracking-tight text-white">@T["Ready to deploy?"]</h2>
+            <h2 class="text-3xl md:text-4xl font-bold tracking-tight text-ink">@T["Ready to deploy?"]</h2>
             <p class="mt-4 text-ink-muted max-w-xl mx-auto leading-relaxed">
                 @T["Sign in to the panel and put your first app live in about a minute."]
             </p>
-            <a href="/account/login" class="mt-8 inline-block rounded-xl bg-accent hover:bg-accent-hover px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-brand-900/40 transition">
+            <a href="/account/login" class="mt-8 inline-block rounded-xl bg-accent hover:bg-accent-hover px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition">
                 @T["Get started"]
             </a>
         </div>

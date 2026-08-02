@@ -12,7 +12,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>@ViewData["Title"] · Harbora</title>
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#f8f7fd" />
     <link rel="manifest" href="~/manifest.webmanifest" />
     <link rel="icon" href="~/favicon.ico" />
     @if (Vite.UseDevServer)
@@ -29,7 +29,7 @@
     <script>
         // Apply persisted theme before paint to avoid a flash. Values: dark | light | system.
         (function () {
-            var t = localStorage.getItem('harbora-theme') || 'system';
+            var t = localStorage.getItem('harbora-theme') || 'light';
             var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
             document.documentElement.classList.toggle('dark', dark);
             document.documentElement.dataset.themeChoice = t;
@@ -39,7 +39,7 @@
 
             // "System" has to keep meaning system: follow the OS while that is the choice.
             matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function (e) {
-                if ((localStorage.getItem('harbora-theme') || 'system') !== 'system') return;
+                if ((localStorage.getItem('harbora-theme') || 'light') !== 'system') return;
                 document.documentElement.classList.toggle('dark', e.matches);
                 if (meta) meta.setAttribute('content', e.matches ? '#0f172a' : '#e2e8f0');
             });

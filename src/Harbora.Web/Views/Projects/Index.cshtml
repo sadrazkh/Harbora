@@ -15,7 +15,7 @@
         </p>
     </div>
     <details class="relative">
-        <summary class="cursor-pointer rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold list-none">
+        <summary class="cursor-pointer rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold list-none">
             + @(isFa ? "پروژه‌ی جدید" : "New project")
         </summary>
         <form asp-controller="Projects" asp-action="Create" method="post"
@@ -26,7 +26,7 @@
             <p class="text-xs text-ink-faint">
                 @(isFa ? "یک محیط Production همراهش ساخته می‌شود." : "A Production environment is created with it.")
             </p>
-            <button class="w-full rounded-lg bg-accent hover:bg-accent-hover px-3 py-2 text-sm font-semibold">
+            <button class="w-full rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-2 text-sm font-semibold">
                 @(isFa ? "بساز" : "Create")
             </button>
         </form>

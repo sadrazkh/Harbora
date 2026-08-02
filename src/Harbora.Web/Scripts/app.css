@@ -150,3 +150,15 @@
   vertical-align: -1px; animation: hbr-spin .7s linear infinite;
 }
 @keyframes hbr-spin { to { transform: rotate(360deg); } }
+
+/* Outside @layer on purpose. Tailwind purges layered rules whose selectors it cannot find in the
+   markup, and this class is written by ASP.NET at runtime, never in a .cshtml — so the layered
+   version was stripped from the build and the empty red box came back. */
+.validation-summary-valid,
+.field-validation-valid { display: none !important; }
+
+/* Cards in the reference design sit on the canvas with a little elevation rather than only a
+   border. Light only: on a dark canvas a shadow reads as grime, not depth. */
+html:not(.dark) .bg-surface.border-line {
+  box-shadow: 0 1px 2px rgb(24 20 40 / 0.04), 0 2px 6px rgb(24 20 40 / 0.04);
+}

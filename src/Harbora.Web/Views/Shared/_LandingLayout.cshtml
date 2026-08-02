@@ -14,7 +14,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>@ViewData["Title"] · Harbora</title>
     <meta name="description" content="@T["Deploy any app from Git in seconds — with automatic SSL, databases, backups and monitoring. Your own platform, on your own servers."]" />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#f8f7fd" />
     <link rel="icon" href="~/favicon.ico" />
     @if (Vite.UseDevServer)
     {
@@ -27,21 +27,49 @@
         <link rel="stylesheet" href="~/css/fallback.css" />
         if (viteJs is not null) { <script type="module" src="@viteJs"></script> }
     }
+    <script>
+        // The same choice the panel stores, applied before paint. Without this the landing page
+        // ignored the setting entirely and its dark styling could never appear — and someone who
+        // picked dark inside the panel got a white flash on the way back out.
+        (function () {
+            var t = localStorage.getItem('harbora-theme') || 'light';
+            var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+            document.documentElement.classList.toggle('dark', dark);
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute('content', dark ? '#0f0d17' : '#f8f7fd');
+        })();
+    </script>
     <style>
         /* Ambient gradient wash behind the hero. Kept in the page rather than Tailwind because it
            is one bespoke decoration, not a reusable utility. */
+        /* The wash and the grid were mixed for a near-black canvas: at those alphas they either
+           vanish on a light page or turn it grey. Retuned to the accent, faint enough that the
+           headline above still carries the contrast. */
         .hb-aurora {
+            background:
+                radial-gradient(60rem 32rem at 15% -10%, rgba(109,74,255,.14), transparent 60%),
+                radial-gradient(48rem 28rem at 85% 0%, rgba(147,102,255,.11), transparent 60%),
+                radial-gradient(40rem 24rem at 50% 40%, rgba(109,74,255,.06), transparent 65%);
+        }
+        .hb-grid {
+            background-image:
+                linear-gradient(to right, rgba(60,50,90,.06) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(60,50,90,.06) 1px, transparent 1px);
+            background-size: 56px 56px;
+            mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+        }
+
+        /* Dark keeps the original mix — the page still honours a stored dark choice. */
+        html.dark .hb-aurora {
             background:
                 radial-gradient(60rem 32rem at 15% -10%, rgba(99,102,241,.28), transparent 60%),
                 radial-gradient(48rem 28rem at 85% 0%, rgba(168,85,247,.20), transparent 60%),
                 radial-gradient(40rem 24rem at 50% 40%, rgba(56,189,248,.12), transparent 65%);
         }
-        .hb-grid {
+        html.dark .hb-grid {
             background-image:
                 linear-gradient(to right, rgba(148,163,184,.07) 1px, transparent 1px),
                 linear-gradient(to bottom, rgba(148,163,184,.07) 1px, transparent 1px);
-            background-size: 56px 56px;
-            mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
         }
         .hb-card { backdrop-filter: blur(10px); }
         @@keyframes hb-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
@@ -54,20 +82,20 @@
 
 <header class="sticky top-0 z-50 border-b border-line bg-canvas hb-card">
     <div class="mx-auto max-w-6xl px-4 h-16 flex items-center justify-between gap-4">
-        <a href="/" class="flex items-center gap-2 font-semibold text-white">
-            <span class="inline-grid place-items-center w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 text-white text-sm font-bold">H</span>
+        <a href="/" class="flex items-center gap-2 font-semibold text-ink">
+            <span class="inline-grid place-items-center w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-accent-hover text-white text-sm font-bold">H</span>
             Harbora
         </a>
 
         <nav class="hidden md:flex items-center gap-6 text-sm text-ink-muted">
-            <a href="#features" class="hover:text-white transition">@T["Features"]</a>
-            <a href="#how" class="hover:text-white transition">@T["How it works"]</a>
-            <a href="#plans" class="hover:text-white transition">@T["Plans"]</a>
-            <a href="#faq" class="hover:text-white transition">@T["FAQ"]</a>
+            <a href="#features" class="hover:text-ink transition">@T["Features"]</a>
+            <a href="#how" class="hover:text-ink transition">@T["How it works"]</a>
+            <a href="#plans" class="hover:text-ink transition">@T["Plans"]</a>
+            <a href="#faq" class="hover:text-ink transition">@T["FAQ"]</a>
         </nav>
 
         <div class="flex items-center gap-2">
-            <a href="/account/login" class="text-sm px-3 py-2 rounded-lg text-ink hover:text-white hover:bg-surface-2 transition">@T["Sign in"]</a>
+            <a href="/account/login" class="text-sm px-3 py-2 rounded-lg text-ink hover:text-ink hover:bg-surface-2 transition">@T["Sign in"]</a>
             <a href="/account/login" class="text-sm px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white font-medium transition">@T["Get started"]</a>
         </div>
     </div>
@@ -78,8 +106,8 @@
 <footer class="border-t border-line mt-24">
     <div class="mx-auto max-w-6xl px-4 py-12 grid gap-8 sm:grid-cols-2 md:grid-cols-4 text-sm">
         <div class="sm:col-span-2 md:col-span-1">
-            <div class="flex items-center gap-2 font-semibold text-white mb-3">
-                <span class="inline-grid place-items-center w-7 h-7 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 text-xs font-bold">H</span>
+            <div class="flex items-center gap-2 font-semibold text-ink mb-3">
+                <span class="inline-grid place-items-center w-7 h-7 rounded-lg bg-gradient-to-br from-accent to-accent-hover text-xs font-bold">H</span>
                 Harbora
             </div>
             <p class="text-ink-faint leading-relaxed">@T["Your own deployment platform — on your own servers."]</p>

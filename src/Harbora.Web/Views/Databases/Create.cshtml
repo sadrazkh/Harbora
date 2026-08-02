@@ -17,7 +17,7 @@
             <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 @foreach (var c in catalog)
                 {
-                    <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-brand-500 has-[:checked]:bg-surface">
+                    <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:bg-surface">
                         <input class="sr-only" type="radio" asp-for="Type" value="@c.Type" data-type-radio />
                         <div class="font-semibold">@(isFa ? c.DisplayNameFa : c.DisplayName)</div>
                         <div class="text-xs text-ink-faint mt-1">port @c.InternalPort</div>
@@ -38,7 +38,7 @@
         </div>
 
         <div class="flex gap-3">
-            <button type="submit" class="rounded-lg bg-accent hover:bg-accent-hover px-5 py-2 font-semibold">@T["Create Service"]</button>
+            <button type="submit" class="rounded-lg bg-accent hover:bg-accent-hover text-white px-5 py-2 font-semibold">@T["Create Service"]</button>
             <a href="/databases" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-5 py-2">@T["Cancel"]</a>
         </div>
     </form>

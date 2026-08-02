@@ -89,7 +89,7 @@
             <input name="token" type="password" placeholder="Agent token" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
             <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="useMtls" value="true" data-mtls> @(isFa ? "استفاده از mTLS" : "Use mTLS")</label>
             <textarea name="clientCertPfxBase64" data-mtls-field placeholder="@(isFa ? "گواهی کلاینت (PFX با base64)" : "Client cert (PFX, base64)")" rows="3" style="display:none" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-xs font-mono"></textarea>
-            <button class="w-full rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">@(isFa ? "افزودن و تست" : "Add & test")</button>
+            <button class="w-full rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@(isFa ? "افزودن و تست" : "Add & test")</button>
         </form>
         <script>
             (function(){ var cb=document.querySelector('[data-mtls]'); var f=document.querySelector('[data-mtls-field]');

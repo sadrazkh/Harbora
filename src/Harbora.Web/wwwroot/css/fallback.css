@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Minimal fallback styles used before Tailwind is built (npm run build) and by the auth pages.
  * The full design system comes from Tailwind via Vite; this keeps the app usable out of the box.
  */
@@ -25,6 +25,8 @@ a { color: #38bdf8; text-decoration: none; }
 .text-muted { color: #94a3b8; font-size: 13px; }
 .title { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
 .subtitle { color: #94a3b8; margin: 0 0 20px; font-size: 14px; }
-.error { background: #7f1d1d33; border: 1px solid #b91c1c; color: #fca5a5; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; }
+.error { background: #fee2e2; border: 1px solid #b91c1c; color: #991b1b; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; }
+/* ASP.NET renders the summary even when the form is fine; without this it is an empty red box. */
+.validation-summary-valid, .field-validation-valid { display: none; }
 .row { display: flex; gap: 12px; }
 .row > * { flex: 1; }

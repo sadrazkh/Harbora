@@ -24,32 +24,32 @@
         <div>
             <label class="block text-sm text-ink-muted mb-2">@T["Source"]</label>
             <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-accent">
+                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:ring-1 has-[:checked]:ring-accent">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="GitRepository" data-src checked />
                     <div class="text-2xl">🐙</div>
                     <div class="mt-1 font-semibold">@(isFa ? "مخزن Git" : "Git repository")</div>
                     <div class="text-xs text-ink-faint">@(isFa ? "با Dockerfile یا بدون آن (تشخیص خودکار)" : "With a Dockerfile or none (auto-detected)")</div>
                 </label>
-                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-accent">
+                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:ring-1 has-[:checked]:ring-accent">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="PrebuiltImage" data-src />
                     <div class="text-2xl">📦</div>
                     <div class="mt-1 font-semibold">@(isFa ? "ایمیج Docker" : "Docker image")</div>
                     <div class="text-xs text-ink-faint">@(isFa ? "یک ایمیج آماده اجرا کن" : "Run a prebuilt image")</div>
                 </label>
-                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-accent">
+                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:ring-1 has-[:checked]:ring-accent">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="StaticSite" data-src />
                     <div class="text-2xl">📄</div>
                     <div class="mt-1 font-semibold">@(isFa ? "سایت استاتیک" : "Static site")</div>
                     <div class="text-xs text-ink-faint">@(isFa ? "از مخزن Git، پشت Nginx" : "From a Git repo, served by Nginx")</div>
                 </label>
-                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-accent">
+                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:ring-1 has-[:checked]:ring-accent">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="DockerCompose" data-src />
                     <div class="text-2xl">🧩</div>
                     <div class="mt-1 font-semibold">@(isFa ? "Docker Compose" : "Docker Compose")</div>
                     <div class="text-xs text-ink-faint">@(isFa ? "چند سرویس از یک فایل compose" : "Multi-service from a compose file")</div>
                 </label>
                 @* No Git remote needed: create the app now, push code from your machine later. *@
-                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-brand-500 has-[:checked]:ring-1 has-[:checked]:ring-accent">
+                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:ring-1 has-[:checked]:ring-accent">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="Upload" data-src />
                     <div class="text-2xl">⬆️</div>
                     <div class="mt-1 font-semibold">@(isFa ? "ارسال از ترمینال" : "Push from my machine")</div>
@@ -233,7 +233,7 @@ harbora deploy &lt;slug&gt;</code></pre>
         </label>
 
         <div class="flex gap-3">
-            <button type="submit" class="rounded-lg bg-accent hover:bg-accent-hover px-6 py-2.5 font-semibold">@(isFa ? "ایجاد و استقرار" : "Create & deploy")</button>
+            <button type="submit" class="rounded-lg bg-accent hover:bg-accent-hover text-white px-6 py-2.5 font-semibold">@(isFa ? "ایجاد و استقرار" : "Create & deploy")</button>
             <a href="/apps" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-5 py-2.5">@T["Cancel"]</a>
         </div>
     </form>

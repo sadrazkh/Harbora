@@ -15,12 +15,12 @@
         </p>
     </div>
     <div class="flex flex-wrap gap-2">
-        <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">@T["Deploy"]</button></form>
+        <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Deploy"]</button></form>
         @if (Model.Kind == ServiceKind.Cron)
         {
             @* Without this a nightly job cannot be checked until tomorrow. It takes the same path the
                schedule does, so what is tested here is what will happen at 03:00. *@
-            <form asp-controller="Apps" asp-action="RunNow" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">▶ @T["Run now"]</button></form>
+            <form asp-controller="Apps" asp-action="RunNow" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">▶ @T["Run now"]</button></form>
         }
         <form asp-controller="Apps" asp-action="Restart" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">↻ @T["Restart"]</button></form>
         @if (running)
@@ -167,7 +167,7 @@
                 <input name="key" placeholder="KEY" class="sm:col-span-2 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm font-mono" />
                 <input name="value" placeholder="value" class="sm:col-span-2 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm font-mono" />
                 <label class="flex items-center gap-1 text-xs"><input type="checkbox" name="isSecret" value="true"> secret</label>
-                <button class="rounded-lg bg-accent hover:bg-accent-hover px-3 py-1.5 text-sm font-semibold">+ @T["Save"]</button>
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-sm font-semibold">+ @T["Save"]</button>
             </form>
         </section>
     </div>
@@ -309,7 +309,7 @@
                 <input name="host" placeholder="app.example.com" class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
                 <div class="flex items-center justify-between">
                     <label class="flex items-center gap-1 text-xs"><input type="checkbox" name="ssl" value="true" checked> @(isFa ? "SSL خودکار" : "Auto SSL")</label>
-                    <button class="rounded-lg bg-accent hover:bg-accent-hover px-3 py-1.5 text-sm font-semibold">+ @(isFa ? "افزودن" : "Add")</button>
+                    <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-sm font-semibold">+ @(isFa ? "افزودن" : "Add")</button>
                 </div>
             </form>
         </section>

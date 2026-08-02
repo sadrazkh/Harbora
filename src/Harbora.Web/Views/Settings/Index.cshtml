@@ -33,7 +33,7 @@
             </div>
             @if (isProvider)
             {
-                <button class="rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">@T["Save"]</button>
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Save"]</button>
             }
             else
             {
@@ -111,7 +111,7 @@
 
             @if (isProvider)
             {
-                <button class="rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">@T["Save"]</button>
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Save"]</button>
             }
         </form>
 
@@ -175,7 +175,7 @@
         <form asp-controller="Settings" asp-action="CreateToken" method="post" class="flex gap-2 mb-3 max-w-md">
             @Html.AntiForgeryToken()
             <input name="name" placeholder="@(isFa ? "نام توکن" : "Token name")" class="flex-1 rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
-            <button class="rounded-lg bg-accent hover:bg-accent-hover px-4 py-2 text-sm font-semibold">@(isFa ? "ساخت" : "Create")</button>
+            <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@(isFa ? "ساخت" : "Create")</button>
         </form>
         <div class="divide-y divide-line max-w-md">
             @foreach (var t in tokens)
