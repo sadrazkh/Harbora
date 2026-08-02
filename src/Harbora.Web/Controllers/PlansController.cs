@@ -20,7 +20,9 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private bool IsProvider => User.IsInRole("Owner") || User.IsInRole("Admin");
 
+    // Same reasoning as Servers: this is the platform's plan administration, not a price list.
     [HttpGet("")]
+    [Authorize(Policy = Capabilities.PlansManage)]
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         ViewData["Title"] = "Plans";

@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
@@ -22,7 +22,11 @@ public sealed class ServersController(
     ISecretProtector protector,
     Harbora.Application.Abstractions.ISystemClock clock) : Controller
 {
+    // Reading is gated too, not just managing. The sidebar has always hidden this from a member
+    // without the capability, but the route was open — so the page was one typed URL away, and a
+    // list of node hostnames, core counts and Docker versions is not a tenant's to read.
     [HttpGet("")]
+    [Authorize(Policy = Capabilities.ServersManage)]
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         ViewData["Title"] = "Servers";

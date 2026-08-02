@@ -151,16 +151,23 @@ public sealed class SettingsController(
 
         var settings = await db.Settings.Where(s => !s.IsSecret).ToDictionaryAsync(s => s.Key, s => s.Value, ct);
         ViewBag.IsProvider = IsProvider;
+        // The page stays open to everyone because a person's own API tokens live on it. The platform
+        // half does not: the fields were rendered disabled, which stops them being edited and not
+        // being read, and the ACME address is an administrator's personal email.
         ViewBag.PlatformName = settings.GetValueOrDefault(Harbora.Domain.Settings.SettingKeys.PlatformName, "Harbora");
-        ViewBag.RootDomain = settings.GetValueOrDefault(Harbora.Domain.Settings.SettingKeys.PlatformRootDomain, "");
-        ViewBag.AcmeEmail = settings.GetValueOrDefault(Harbora.Domain.Settings.SettingKeys.AcmeEmail, "");
+        ViewBag.RootDomain = IsProvider
+            ? settings.GetValueOrDefault(Harbora.Domain.Settings.SettingKeys.PlatformRootDomain, "")
+            : "";
+        ViewBag.AcmeEmail = IsProvider
+            ? settings.GetValueOrDefault(Harbora.Domain.Settings.SettingKeys.AcmeEmail, "")
+            : "";
         ViewBag.Culture = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
 
         // The key is never sent back to the page — only whether one is stored. A settings screen
         // that renders a secret so it can be re-saved is a settings screen that leaks it into every
         // browser cache and screen recording.
         var assistantConfig = await assistant.GetConfigAsync(ct);
-        ViewBag.Assistant = assistantConfig;
+        ViewBag.Assistant = IsProvider ? assistantConfig : null;
         ViewBag.AssistantHasKey = !string.IsNullOrWhiteSpace(assistantConfig.ApiKey);
         ViewBag.AssistantUnavailable =
             Harbora.Infrastructure.Assistant.AssistantAvailability.Check(assistantConfig)?.Reason;
@@ -194,6 +201,24 @@ public sealed class SettingsController(
     {
         await assistant.SaveConfigAsync(enabled, provider, model, apiKey, baseUrl, ct);
         TempData["Message"] = "Settings saved.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Provider-only: ask the configured provider to answer a fixed, empty question, and report what
+    /// came back verbatim — including a refusal. A green tick that only means "we sent something" is
+    /// the kind of check that makes people trust a broken setting.
+    /// </summary>
+    [HttpPost("/settings/assistant/test")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.PlatformManage)]
+    public async Task<IActionResult> TestAssistant(CancellationToken ct)
+    {
+        var answer = await assistant.TestAsync(ct);
+
+        if (answer.Ok) TempData["Message"] = $"The AI provider answered: {answer.Text}";
+        else TempData["Error"] = answer.Text;
+
         return RedirectToAction(nameof(Index));
     }
 

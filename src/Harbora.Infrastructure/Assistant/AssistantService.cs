@@ -85,6 +85,27 @@ public sealed class AssistantService(
         return await client.AskAsync(config, ask, ct);
     }
 
+    /// <summary>
+    /// Checks the configuration against the real provider, with a prompt that contains nothing about
+    /// this installation.
+    ///
+    /// Exists because the alternative is finding out the key is wrong at the moment somebody is
+    /// already debugging a failed deployment — the provider's 401 then arrives dressed as "the
+    /// assistant could not explain this", and the two problems get confused.
+    /// </summary>
+    public async Task<AssistantAnswer> TestAsync(CancellationToken ct)
+    {
+        var config = await GetConfigAsync(ct);
+
+        var ask = new AssistantAsk(
+            "You are being checked for connectivity. Reply with the single word: ok.",
+            "Reply with: ok",
+            Removed: 0,
+            Truncated: false);
+
+        return await client.AskAsync(config, ask, ct);
+    }
+
     /// <summary>Stores the API key encrypted; everything else is plain.</summary>
     public async Task SaveConfigAsync(
         bool enabled, string? provider, string? model, string? apiKey, string? baseUrl, CancellationToken ct)
