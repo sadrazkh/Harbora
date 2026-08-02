@@ -64,11 +64,20 @@ gets honest names.
 --border-strong    input / divider            light #E2DFEE        dark #332E42
 --text             primary                    light #1A1523        dark #ECEAF2
 --text-muted       secondary                  light #6B6880        dark #A9A4BC
---text-faint       tertiary                   light #9B98AB        dark #75708A
---brand            primary action             light #6D4AFF        dark #8B6DFF
+--text-faint       tertiary                   light #8B8799        dark #75708A
+--brand            fill, white text on it     light #6D4AFF        dark #6D4AFF
 --brand-hover                                 light #5B37E8        dark #7C5BFF
+--brand-text       links and icons            light #5B37E8        dark #A78BFA
 --brand-soft       tinted background          light #F1EDFF        dark #241E3A
 ```
+
+Two values in the first draft of this table failed the contrast test specified in §7, and were
+corrected before any code was written — which is the reason that test exists:
+
+- `--text-faint` was `#9B98AB`, giving **2.81** on white against a 3.0 floor.
+- `--brand` in dark was `#8B6DFF`, giving **3.67** with white text against a 4.5 floor. The fill is
+  therefore the same violet in both themes, and the lighter `#A78BFA` became `--brand-text`, used
+  only for links and icons on dark surfaces where it measures 6.55.
 
 Status colours, used by pills, chart strokes and the graph legend:
 
