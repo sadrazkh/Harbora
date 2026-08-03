@@ -1,341 +1,159 @@
-﻿@model DashboardViewModel
+@model DashboardViewModel
 @using Harbora.Infrastructure.Monitoring
 @using Harbora.Web.ViewModels
 @{
     ViewData["Title"] = "Dashboard";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
-
-    string Gb(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
-
-    // A percentage is only a number when a total is known. A server that has not reported its
-    // capacity is not a server at 0%, and the honesty gate is what keeps those two apart.
-    double? diskPercent = Model.DiskTotal > 0 ? (double)Model.DiskUsed / Model.DiskTotal * 100 : null;
-    double? memoryPercent = Model.MemoryTotal > 0 && Model.MemoryUsed is { } used ? (double)used / Model.MemoryTotal * 100 : null;
-
-    var hour = DateTimeOffset.Now.Hour;
-    var greeting = hour switch
+    string Throughput(double? bytes)
     {
-        < 12 => isFa ? "صبح بخیر" : "Good morning",
-        < 18 => isFa ? "ظهر بخیر" : "Good afternoon",
-        _ => isFa ? "شب بخیر" : "Good evening"
-    };
+        var metric = MetricDisplay.ForThroughput(bytes);
+        return metric.HasData ? metric.Text : "—";
+    }
+    string CssPercent(double? value) => Math.Clamp(value ?? 0, 0, 100)
+        .ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+    var diskPercent = Model.DiskTotal > 0 ? (double?)Math.Round(Model.DiskUsed * 100.0 / Model.DiskTotal) : null;
+    var memoryPercent = Model.MemoryTotal > 0 && Model.MemoryUsed is { } used ? (double?)Math.Round(used * 100.0 / Model.MemoryTotal) : null;
+    var hour = DateTimeOffset.Now.Hour;
+    var greeting = hour switch { < 12 => isFa ? "صبح بخیر" : "Good morning", < 18 => isFa ? "ظهر بخیر" : "Good afternoon", _ => isFa ? "شب بخیر" : "Good evening" };
     var who = User.Identity?.Name is { Length: > 0 } name ? name.Split('@')[0] : null;
+    var completedSteps = (Model.ServersOnline > 0 ? 1 : 0) + (Model.DomainsTotal > 0 ? 1 : 0) + (Model.AppCount > 0 ? 1 : 0) + (Model.BackupSchedulesEnabled > 0 ? 1 : 0);
+    var platformHealthy = Model.DockerAvailable && Model.ServersTotal > 0 && Model.ServersOnline == Model.ServersTotal && Model.FailedDeployments == 0;
+    string TemplateGlyph(StarterTemplate template) => template.Key switch
+    {
+        "wordpress" => "W", "ghost" => "G", "node" => "JS", "aspnet" => ".N", "laravel" => "L",
+        "redis-commander" => "R", "uptime-kuma" => "U", _ => template.Name.Trim().Length > 1 ? template.Name.Trim()[..2].ToUpperInvariant() : template.Name.ToUpperInvariant()
+    };
+    string DbGlyph(StarterDatabase database) => database.Type switch { "PostgreSql" => "PG", "MySql" => "MY", "MariaDb" => "MA", "Redis" => "R", "MongoDb" => "MO", _ => "DB" };
+    string DbKey(StarterDatabase database) => database.Type switch { "PostgreSql" => "postgres", "MySql" => "mysql", "MariaDb" => "mariadb", "Redis" => "redis", "MongoDb" => "mongodb", _ => "database" };
 }
 
-<div class="mb-6 flex flex-wrap items-start justify-between gap-3">
+<div class="page-heading">
     <div>
-        <h1 class="text-2xl font-bold tracking-tight text-ink">
-            @greeting@(who is null ? "" : (isFa ? $"، {who}" : $", {who}"))@(isFa ? " 👋" : "! 👋")
-        </h1>
-        <p class="mt-1 text-sm text-ink-muted">
-            @(isFa ? "وضعیت پلتفرم و سرویس‌های شما در یک نگاه." : "Here's what's happening with your platform today.")
-        </p>
+        <h1>@greeting@(who is null ? "" : (isFa ? $"، {who}" : $", {who}"))! 👋</h1>
+        <p>@(isFa ? "منابع، پروژه‌ها و کارهایی که امروز نیاز به توجه دارند." : "Here is what is happening with your projects and infrastructure today.")</p>
     </div>
-    <a href="/apps/create" class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover">
-        + @T["New App"]
-    </a>
+    <div class="flex flex-wrap gap-2"><a href="/templates" class="btn-secondary"><i data-lucide="sparkles" class="h-4 w-4"></i>@(isFa ? "پروژه آماده" : "Templates")</a><a href="/apps/create" class="btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>@(isFa ? "منبع جدید" : "New resource")</a></div>
 </div>
 
-@* What needs a person's attention comes before anything decorative. *@
 <partial name="_Attention" model="Model.Attention" />
-
 @if (!Model.DockerAvailable)
 {
-    <div class="mb-6 rounded-xl border border-warn bg-warn-soft px-4 py-3 text-sm text-warn">
-        @(isFa
-            ? "دیمن Docker در دسترس نیست — متریک‌ها و استقرارها تا برقراری اتصال متوقف‌اند."
-            : "The Docker daemon is not reachable. Metrics and deployments are paused until it is back.")
-    </div>
+    <div class="alert-warning mb-5"><i data-lucide="triangle-alert" class="h-4 w-4"></i><span>@(isFa ? "Docker در دسترس نیست؛ متریک زنده و استقرار موقتاً متوقف است." : "Docker is unreachable; live metrics and deployments are temporarily paused.")</span><a href="/servers">@(isFa ? "بررسی سرورها" : "Check servers")</a></div>
 }
 
-@* ---- headline figures ----
-   Every one of these is measured. The mockup also shows uptime, request counts and latency; those
-   are not collected yet, so they are not invented here — they arrive with the collector. *@
-@{
-    // Built as variables rather than inline attributes: the labels contain double quotes, which a
-    // Razor attribute cannot hold without escaping the whole expression into unreadability.
-    var appsCard = new StatCardModel("boxes", T["Applications"].Value,
-        MetricDisplay.For(Model.AppCount),
-        $"{Model.RunningCount} {(isFa ? "در حال اجرا" : "running")}");
+<section class="dashboard-stat-grid">
+    <a href="/projects" class="dashboard-stat"><span class="dashboard-stat-icon bg-accent-soft text-accent-text"><i data-lucide="cuboid" class="h-5 w-5"></i></span><span><small>@(isFa ? "پروژه‌ها" : "Projects")</small><strong>@Model.ProjectCount</strong><em>@(isFa ? $"{Model.Projects.Sum(p => p.Environments)} محیط" : $"{Model.Projects.Sum(p => p.Environments)} environments")</em></span></a>
+    <a href="/apps" class="dashboard-stat"><span class="dashboard-stat-icon bg-info-soft text-info"><i data-lucide="layers-3" class="h-5 w-5"></i></span><span><small>@T["Applications"]</small><strong>@Model.AppCount</strong><em class="text-ok">@Model.RunningCount @(isFa ? "در حال اجرا" : "running")</em></span></a>
+    <a href="/databases" class="dashboard-stat"><span class="dashboard-stat-icon bg-ok-soft text-ok"><i data-lucide="database" class="h-5 w-5"></i></span><span><small>@T["Databases"]</small><strong>@Model.DatabaseCount</strong><em class="text-ok">@Model.HealthyDatabaseCount @(isFa ? "سالم" : "healthy")</em></span></a>
+    <a href="/deployments" class="dashboard-stat"><span class="dashboard-stat-icon bg-warn-soft text-warn"><i data-lucide="rocket" class="h-5 w-5"></i></span><span><small>@T["Deployments"]</small><strong>@Model.DeploymentsTotal</strong><em class="@(Model.FailedDeployments > 0 ? "text-danger" : "text-ok")">@Model.FailedDeployments @(isFa ? "ناموفق" : "failed")</em></span></a>
+    <a href="/servers" class="dashboard-stat"><span class="dashboard-stat-icon @(platformHealthy ? "bg-ok-soft text-ok" : "bg-warn-soft text-warn")"><i data-lucide="@(platformHealthy ? "circle-check-big" : "server-cog")" class="h-5 w-5"></i></span><span><small>@(isFa ? "وضعیت پلتفرم" : "Platform status")</small><strong class="text-lg">@(platformHealthy ? (isFa ? "سالم" : "Healthy") : (isFa ? "نیازمند بررسی" : "Attention"))</strong><em>@Model.ServersOnline/@Model.ServersTotal @(isFa ? "سرور آنلاین" : "servers online")</em></span></a>
+</section>
 
-    var deploymentsCard = new StatCardModel("rocket", T["Deployments"].Value,
-        MetricDisplay.For(Model.DeploymentsTotal),
-        Model.FailedDeployments > 0
-            ? $"{Model.FailedDeployments} {(isFa ? "ناموفق" : "failed")}"
-            : (isFa ? "بدون خطا" : "none failed"));
-
-    var cpuCard = new StatCardModel("server", T["CPU"].Value,
-        MetricDisplay.For(Model.DockerAvailable ? Model.CpuPercent : null, "%"),
-        $"{Model.ContainersRunning} {(isFa ? "کانتینر" : "containers")}");
-
-    var diskCard = new StatCardModel("archive", T["Disk"].Value,
-        MetricDisplay.For(diskPercent, "%"),
-        Model.DiskTotal > 0 ? $"{Gb(Model.DiskUsed)} / {Gb(Model.DiskTotal)}" : null);
-}
-<div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-4">
-    <partial name="Design/_StatCard" model="appsCard" />
-    <partial name="Design/_StatCard" model="deploymentsCard" />
-    <partial name="Design/_StatCard" model="cpuCard" />
-    <partial name="Design/_StatCard" model="diskCard" />
-</div>
-
-@if (Model.AppCount == 0)
-{
-    @* ---- first run ---- *@
-    <section class="mb-6 rounded-xl border border-line bg-surface p-6 shadow-panel">
-        <h2 class="text-lg font-bold text-ink">@(isFa ? "به Harbora خوش آمدید 🎉" : "Welcome to Harbora 🎉")</h2>
-        <p class="mt-1 text-sm text-ink-muted">
-            @(isFa ? "در سه قدم اولین سرویس خود را آنلاین کنید." : "Get your first service online in three steps.")
-        </p>
-        <div class="mt-5 grid gap-4 sm:grid-cols-3">
-            @foreach (var (n, t, d) in new[]
+<section class="dashboard-primary-grid mt-5">
+    <div class="dashboard-panel getting-started">
+        <div class="dashboard-panel-heading"><div><h2>@(isFa ? "شروع کار" : "Getting started")</h2><p>@completedSteps / 4 @(isFa ? "تکمیل‌شده" : "completed")</p></div><span class="progress-ring" style="--progress:@(completedSteps * 25)"><b>@(completedSteps * 25)%</b></span></div>
+        <div class="onboarding-steps">
+            @{
+                var steps = new[]
+                {
+                    (Model.ServersOnline > 0, isFa ? "اتصال سرور" : "Connect a server", isFa ? "ظرفیت اجرای containerها" : "Add container capacity", "/servers", isFa ? "مشاهده" : "View"),
+                    (Model.DomainsTotal > 0, isFa ? "افزودن دامنه" : "Add a domain", isFa ? "SSL و HTTPS خودکار" : "Automatic SSL and HTTPS", "/domains", isFa ? "افزودن" : "Add"),
+                    (Model.AppCount > 0, isFa ? "ساخت اولین برنامه" : "Create your first app", isFa ? "از Git، image یا template" : "From Git, an image or a template", "/apps/create", isFa ? "ساخت" : "Create"),
+                    (Model.BackupSchedulesEnabled > 0, isFa ? "فعال‌سازی پشتیبان" : "Enable backups", isFa ? "زمان‌بندی و نگهداری امن" : "Schedule and retain safely", "/backups", isFa ? "تنظیم" : "Set up")
+                };
+            }
+            @for (var index = 0; index < steps.Length; index++)
             {
-                ("1", isFa ? "ساخت سرویس" : "Create a service", isFa ? "از Git، ایمیج Docker یا قالب آماده" : "From Git, a Docker image or a template"),
-                ("2", isFa ? "اتصال دامنه" : "Attach a domain", isFa ? "SSL خودکار از Let's Encrypt" : "SSL is automatic via Let's Encrypt"),
-                ("3", isFa ? "استقرار" : "Deploy", isFa ? "لاگ زنده، سلامت‌سنجی و بازگشت" : "Live logs, health checks, rollback")
-            })
-            {
-                <div class="rounded-xl border border-line bg-surface-2 p-4">
-                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-accent text-sm font-bold text-white">@n</span>
-                    <div class="mt-2 font-semibold text-ink">@t</div>
-                    <div class="mt-1 text-xs text-ink-muted">@d</div>
-                </div>
+                var step = steps[index];
+                <div class="onboarding-step @(step.Item1 ? "is-done" : "")"><span>@if(step.Item1){<i data-lucide="check" class="h-4 w-4"></i>}else{@(index + 1)}</span><div><strong>@step.Item2</strong><small>@step.Item3</small></div><a href="@step.Item4">@step.Item5</a></div>
             }
         </div>
-        <a href="/apps/create" class="mt-6 inline-block rounded-lg bg-accent px-5 py-2.5 font-semibold text-white hover:bg-accent-hover">
-            @T["Create Application"]
-        </a>
-    </section>
-}
+        <a href="/templates" class="panel-help">@(isFa ? "برای شروع سریع، یک پروژه آماده انتخاب کنید" : "Need a faster start? Choose a ready project")<i data-lucide="arrow-right" class="h-3.5 w-3.5 rtl:rotate-180"></i></a>
+    </div>
 
-@* ---- projects ---- *@
-@if (Model.Projects.Count > 0)
-{
-    <div class="mb-6">
-        @{ var projectsPanel = new PanelModel(isFa ? "پروژه‌ها" : "Projects", isFa ? "همه" : "View all", "/projects"); }
-        <partial name="Design/_PanelStart" model="projectsPanel" />
-        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            @foreach (var p in Model.Projects)
+    <div class="dashboard-panel">
+        <div class="dashboard-panel-heading"><div><h2>@(isFa ? "اپ‌های آماده" : "One-click applications")</h2><p>@(isFa ? "استقرار با تنظیمات production" : "Production-ready defaults")</p></div><a href="/templates">@(isFa ? "همه" : "View all")</a></div>
+        <div class="dashboard-template-grid">
+            @foreach (var template in Model.StarterApps.Take(8))
             {
-                <a href="/projects/@p.Id" class="rounded-xl border border-line bg-surface-2 p-3 transition hover:border-accent">
-                    <div class="flex items-start justify-between gap-2">
-                        <div class="min-w-0">
-                            <div class="truncate text-sm font-medium text-ink">@p.Name</div>
-                            <div class="text-xs text-ink-faint">
-                                @p.Services @(isFa ? "سرویس" : "services") · @p.Databases @(isFa ? "دیتابیس" : "databases")
-                            </div>
-                        </div>
-                        @if (p.Unhealthy > 0)
-                        {
-                            <partial name="Design/_StatusPill" model="new StatusPillModel(p.Unhealthy.ToString(), Tone.Error)" />
-                        }
-                        else if (p.Services > 0)
-                        {
-                            <partial name="Design/_StatusPill" model="@(new StatusPillModel(isFa ? "سالم" : "healthy", Tone.Ok))" />
-                        }
-                    </div>
-                </a>
+                <a href="/templates/@template.Id/deploy"><span class="template-logo" data-template-key="@template.Key">@TemplateGlyph(template)</span><strong>@(isFa && !string.IsNullOrWhiteSpace(template.NameFa) ? template.NameFa : template.Name)</strong><small>@template.Category</small></a>
             }
         </div>
-        <partial name="Design/_PanelEnd" />
     </div>
-}
 
-@* ---- start from something ----
-   The two rows the reference dashboard leads with. Every tile is a template that is installed and
-   enabled, read from the database — a fixed menu of logos would offer things this installation
-   cannot actually deploy, which is the same lie as a metric nobody measured. *@
-@if (Model.StarterApps.Count > 0 || Model.StarterDatabases.Count > 0)
-{
-    <div class="mb-6 grid gap-6 lg:grid-cols-2">
-        @if (Model.StarterApps.Count > 0)
-        {
-            <div>
-                @{ var starterPanel = new PanelModel(isFa ? "اپ‌های آماده" : "One-click apps", isFa ? "همه" : "View all", "/templates"); }
-                <partial name="Design/_PanelStart" model="starterPanel" />
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3">
-                    @foreach (var t in Model.StarterApps)
-                    {
-                        <a href="/templates/@t.Id"
-                           class="group flex flex-col items-center gap-2 rounded-xl border border-line bg-surface-2 p-3 text-center hover:border-accent transition">
-                            <span class="grid h-10 w-10 place-items-center rounded-xl bg-accent-soft text-accent-text text-sm font-bold">
-                                @(t.Name.Trim().Length > 0 ? t.Name.Trim()[..1].ToUpperInvariant() : "?")
-                            </span>
-                            <span class="truncate w-full text-[11px] font-medium text-ink" title="@t.Name">
-                                @(isFa && !string.IsNullOrWhiteSpace(t.NameFa) ? t.NameFa : t.Name)
-                            </span>
-                        </a>
-                    }
-                </div>
-                <p class="px-4 pb-3 text-[11px] text-ink-faint">
-                    @(isFa ? "قبل از اجرا، برنامه، دیتابیس، volume و متغیرهای هر قالب را بررسی کنید." : "Review every app, database, volume and variable before the stack is created.")
-                </p>
-                <partial name="Design/_PanelEnd" />
-            </div>
-        }
-
-        @if (Model.StarterDatabases.Count > 0)
-        {
-            <div>
-                @{ var dbPanel = new PanelModel(isFa ? "دیتابیس‌های آماده" : "Ready-made databases", isFa ? "همه" : "View all", "/databases"); }
-                <partial name="Design/_PanelStart" model="dbPanel" />
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3">
-                    @foreach (var t in Model.StarterDatabases)
-                    {
-                        <a href="/databases/create?type=@t.Type"
-                           class="group flex flex-col items-center gap-2 rounded-xl border border-line bg-surface-2 p-3 text-center hover:border-accent transition">
-                            <span class="grid h-10 w-10 place-items-center rounded-xl bg-ok/10 text-ok text-sm font-bold">
-                                @(t.Name.Trim().Length > 0 ? t.Name.Trim()[..1].ToUpperInvariant() : "?")
-                            </span>
-                            <span class="truncate w-full text-[11px] font-medium text-ink" title="@t.Name">
-                                @(isFa && !string.IsNullOrWhiteSpace(t.NameFa) ? t.NameFa : t.Name)
-                            </span>
-                        </a>
-                    }
-                </div>
-                <p class="px-4 pb-3 text-[11px] text-ink-faint">
-                    @(isFa ? "در یک محیط ساخته می‌شود و اتصالش را به شما می‌دهد." : "Provisioned into an environment, with its connection details.")
-                </p>
-                <partial name="Design/_PanelEnd" />
-            </div>
-        }
-    </div>
-}
-
-@* ---- applications ---- *@
-<div class="mb-6">
-    @{ var appsPanel = new PanelModel(T["Applications"].Value, Model.AppCount > 0 ? (isFa ? "همه" : "View all") : null, "/apps"); }
-    <partial name="Design/_PanelStart" model="appsPanel" />
-    @if (Model.Apps.Count == 0)
-    {
-        var appsEmpty = new EmptyStateModel("boxes",
-            isFa ? "هنوز سرویسی ساخته نشده." : "No applications yet.",
-            T["Create Application"].Value, "/apps/create");
-        <partial name="Design/_EmptyState" model="appsEmpty" />
-    }
-    else
-    {
-        <div class="grid gap-4 sm:grid-cols-2">
-            @foreach (var app in Model.Apps)
+    <div class="dashboard-panel">
+        <div class="dashboard-panel-heading"><div><h2>@(isFa ? "دیتابیس‌های آماده" : "Managed databases")</h2><p>@(isFa ? "شبکه خصوصی و فضای پایدار" : "Private and persistent")</p></div><a href="/databases">@(isFa ? "همه" : "View all")</a></div>
+        <div class="dashboard-database-grid">
+            @foreach (var database in Model.StarterDatabases)
             {
-                <a href="/apps/details/@app.Id" class="rounded-xl border border-line bg-surface-2 p-4 transition hover:border-accent">
-                    <div class="flex items-center justify-between gap-2">
-                        <span class="truncate font-semibold text-ink">@app.Name</span>
-                        <partial name="_StatusBadge" model="app.Status" />
-                    </div>
-                    <div class="mt-1 truncate text-sm text-ink-muted">@app.Slug · @app.SourceType</div>
-                    @if (app.PreviewBranch is { } branch)
-                    {
-                        <div class="mt-1 truncate text-[11px] text-warn">@(isFa ? "پیش‌نمایش" : "preview") · @branch</div>
-                    }
-                </a>
+                <a href="/databases/create?type=@database.Type"><span class="template-logo" data-template-key="@DbKey(database)">@DbGlyph(database)</span><strong>@(isFa && !string.IsNullOrWhiteSpace(database.NameFa) ? database.NameFa : database.Name)</strong><small>@(isFa ? "ساخت با یک کلیک" : "One-click provision")</small></a>
             }
         </div>
-    }
-    <partial name="Design/_PanelEnd" />
-</div>
-
-@section RightRail {
-    @* ---- platform health ---- *@
-    @{ var healthPanel = new PanelModel(isFa ? "سلامت پلتفرم" : "Platform health"); }
-    <partial name="Design/_PanelStart" model="healthPanel" />
-    @{
-        (string label, string text, string tone)[] health =
-        {
-            (T["Servers"].Value,
-             $"{Model.ServersOnline}/{Model.ServersTotal}",
-             Model.ServersTotal > 0 && Model.ServersOnline == Model.ServersTotal ? Tone.Ok : Tone.Warn),
-            ("Traefik",
-             Model.TraefikRunning switch
-             {
-                 true => isFa ? "در حال اجرا" : "running",
-                 false => isFa ? "متوقف" : "stopped",
-                 _ => isFa ? "نامشخص" : "unknown"
-             },
-             Model.TraefikRunning switch { true => Tone.Ok, false => Tone.Error, _ => Tone.Idle }),
-            ("SSL",
-             Model.DomainsTotal == 0
-                ? (isFa ? "بدون دامنه" : "no domains")
-                : $"{Model.DomainsSsl}/{Model.DomainsTotal}",
-             Model.DomainsTotal == 0 ? Tone.Idle : Model.DomainsSsl == Model.DomainsTotal ? Tone.Ok : Tone.Warn),
-            ("Docker",
-             Model.DockerAvailable ? Model.DockerVersion : (isFa ? "در دسترس نیست" : "unreachable"),
-             Model.DockerAvailable ? Tone.Ok : Tone.Error),
-        };
-    }
-    <div class="space-y-3 text-sm">
-        @foreach (var h in health)
-        {
-            <div class="flex items-center justify-between gap-2">
-                <span class="text-ink-muted">@h.label</span>
-                <partial name="Design/_StatusPill" model="new StatusPillModel(h.text, h.tone)" />
-            </div>
-        }
+        <a href="/backups" class="panel-help">@(isFa ? "بعد از ایجاد، پشتیبان خودکار تنظیم کنید" : "Configure automated backups after provisioning")<i data-lucide="arrow-right" class="h-3.5 w-3.5 rtl:rotate-180"></i></a>
     </div>
-    <partial name="Design/_PanelEnd" />
+</section>
 
-    @* ---- resources ---- *@
-    @{ var resourcePanel = new PanelModel(isFa ? "منابع" : "Resources", isFa ? "پایش" : "Monitoring", "/monitoring"); }
-    <partial name="Design/_PanelStart" model="resourcePanel" />
-    <div class="space-y-4">
-        <div class="text-accent-text">
-            @{ var cpuMetric = new MetricModel(MetricDisplay.For(Model.DockerAvailable ? Model.CpuPercent : null, "%"), T["CPU"].Value); }
-            <partial name="Design/_Metric" model="cpuMetric" />
-            <div id="metrics-chart" data-name="cpu.percent" data-label="" data-color="#6d4aff" data-height="36" class="mt-1"></div>
-        </div>
-        @{ var memoryMetric = new MetricModel(MetricDisplay.For(memoryPercent, "%"), T["Memory"].Value); }
-        <partial name="Design/_Metric" model="memoryMetric" />
-        @{ var diskMetric = new MetricModel(MetricDisplay.For(diskPercent, "%"), T["Disk"].Value); }
-        <partial name="Design/_Metric" model="diskMetric" />
-
-        @* Network throughput. Blank until the collector has two comparable samples, which is the
-           honest state rather than a zero. *@
-        @{ var inMetric = new MetricModel(MetricDisplay.ForThroughput(Model.NetworkInPerSecond), isFa ? "شبکه ورودی" : "Network in"); }
-        <partial name="Design/_Metric" model="inMetric" />
-        @{ var outMetric = new MetricModel(MetricDisplay.ForThroughput(Model.NetworkOutPerSecond), isFa ? "شبکه خروجی" : "Network out"); }
-        <partial name="Design/_Metric" model="outMetric" />
-    </div>
-    <partial name="Design/_PanelEnd" />
-
-    @* ---- recent deployments ---- *@
-    @{ var deployPanel = new PanelModel(T["Recent Deployments"].Value, isFa ? "همه" : "View all", "/deployments"); }
-    <partial name="Design/_PanelStart" model="deployPanel" />
-    @if (Model.RecentDeployments.Count == 0)
-    {
-        <p class="text-sm text-ink-faint">@(isFa ? "هنوز استقراری انجام نشده." : "No deployments yet.")</p>
-    }
-    else
-    {
-        <div class="-my-2 divide-y divide-line">
-            @foreach (var d in Model.RecentDeployments)
+<section class="dashboard-middle-grid mt-5">
+    <div class="dashboard-panel">
+        <div class="dashboard-panel-heading"><div><h2>@(isFa ? "پروژه‌های اخیر" : "Recent projects")</h2><p>@(isFa ? "سرویس‌ها و سلامت هر پروژه" : "Services and project health")</p></div><a href="/projects">@(isFa ? "همه" : "View all")</a></div>
+        <div class="dashboard-list">
+            @if (Model.Projects.Count == 0) { <div class="dashboard-empty">@(isFa ? "هنوز پروژه‌ای وجود ندارد." : "No projects yet.")</div> }
+            @foreach (var project in Model.Projects.Take(4))
             {
-                <a href="/deployments/details/@d.Id" class="flex items-center justify-between gap-2 py-2.5">
-                    <div class="min-w-0">
-                        <div class="truncate text-sm font-medium text-ink">@d.App?.Name #@d.Number</div>
-                        <div class="text-xs text-ink-faint">@d.CreatedAt.LocalDateTime.ToString("MM/dd HH:mm")</div>
-                    </div>
-                    <partial name="_DeployStatusBadge" model="d.Status" />
-                </a>
+                <a href="/projects/@project.Id"><span class="list-avatar bg-accent-soft text-accent-text"><i data-lucide="cuboid" class="h-4 w-4"></i></span><span class="min-w-0 flex-1"><strong>@project.Name</strong><small>@project.Services @(isFa ? "اپ" : "apps") · @project.Databases @(isFa ? "دیتابیس" : "databases")</small></span><span class="resource-status @(project.Unhealthy > 0 ? "is-danger" : project.Services + project.Databases > 0 ? "is-ok" : "is-idle")"><i></i>@(project.Unhealthy > 0 ? (isFa ? "مشکل" : "Issue") : (isFa ? "سالم" : "Healthy"))</span></a>
             }
         </div>
-    }
-    <partial name="Design/_PanelEnd" />
+    </div>
 
-    @* ---- recent errors ---- *@
-    @if (Model.RecentErrors.Count > 0)
-    {
-        var errorPanel = new PanelModel(isFa ? "آخرین خطاها" : "Recent errors");
-        <partial name="Design/_PanelStart" model="errorPanel" />
-        <div class="-my-2 divide-y divide-line">
-            @foreach (var e in Model.RecentErrors)
+    <div class="dashboard-panel">
+        <div class="dashboard-panel-heading"><div><h2>@(isFa ? "وضعیت استقرار" : "Deployment status")</h2><p>@(isFa ? "آخرین releaseها" : "Latest releases")</p></div><a href="/deployments">@(isFa ? "همه" : "View all")</a></div>
+        <div class="dashboard-list numbered">
+            @if (Model.RecentDeployments.Count == 0) { <div class="dashboard-empty">@(isFa ? "هنوز استقراری انجام نشده." : "No deployments yet.")</div> }
+            @foreach (var deployment in Model.RecentDeployments.Take(4))
             {
-                <a href="@e.Link" class="block py-2.5">
-                    <div class="text-sm font-medium text-danger">@e.Title</div>
-                    <div class="truncate text-xs text-ink-muted">@e.Detail</div>
-                    <div class="mt-0.5 text-xs text-ink-faint">@e.At.LocalDateTime.ToString("MM/dd HH:mm")</div>
-                </a>
+                <a href="/deployments/details/@deployment.Id"><span class="list-number">#@deployment.Number</span><span class="min-w-0 flex-1"><strong>@deployment.App?.Name</strong><small>@(deployment.CommitSha is { Length: > 0 } sha ? sha[..Math.Min(7, sha.Length)] : deployment.Trigger.ToString()) · @deployment.CreatedAt.LocalDateTime.ToString("MM/dd HH:mm")</small></span><partial name="_DeployStatusBadge" model="deployment.Status" /></a>
             }
         </div>
-        <partial name="Design/_PanelEnd" />
-    }
-}
+    </div>
+
+    <div class="dashboard-panel">
+        <div class="dashboard-panel-heading"><div><h2>@(isFa ? "دامنه‌ها و SSL" : "Domains and SSL")</h2><p>@(isFa ? "آدرس‌های منتشرشده" : "Published endpoints")</p></div><a href="/domains">@(isFa ? "همه" : "View all")</a></div>
+        <div class="dashboard-list">
+            @if (Model.RecentDomains.Count == 0) { <div class="dashboard-empty">@(isFa ? "هنوز دامنه‌ای متصل نیست." : "No domains connected.")</div> }
+            @foreach (var domain in Model.RecentDomains)
+            {
+                <a href="/apps/details/@domain.AppId"><span class="list-avatar bg-info-soft text-info"><i data-lucide="globe-2" class="h-4 w-4"></i></span><span class="min-w-0 flex-1"><strong dir="ltr">@domain.Host</strong><small>@domain.AppName</small></span><span class="resource-status @(domain.SslEnabled ? "is-ok" : "is-warn")"><i></i>@(domain.SslEnabled ? "SSL" : (isFa ? "بدون SSL" : "No SSL"))</span></a>
+            }
+        </div>
+    </div>
+</section>
+
+<section class="dashboard-bottom-grid mt-5">
+    <div class="dashboard-panel backup-summary">
+        <div class="dashboard-panel-heading"><div><h2>@T["Backups"]</h2><p>@(isFa ? "حفاظت و بازیابی داده" : "Data protection and recovery")</p></div><a href="/backups">@(isFa ? "مدیریت" : "Manage")</a></div>
+        <div class="backup-main"><strong>@Model.BackupsThisMonth</strong><span>@(isFa ? "پشتیبان این ماه" : "backups this month")</span><i data-lucide="cloud-upload" class="h-8 w-8"></i></div>
+        <dl><div><dt>@(isFa ? "آخرین پشتیبان موفق" : "Latest successful backup")</dt><dd>@(Model.LatestBackupAt?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? "—")</dd></div><div><dt>@(isFa ? "زمان‌بندی فعال" : "Active schedules")</dt><dd>@Model.BackupSchedulesEnabled</dd></div></dl>
+    </div>
+
+    <div class="dashboard-panel monitoring-summary">
+        <div class="dashboard-panel-heading"><div><h2>@T["Monitoring"]</h2><p>@(isFa ? "آخرین داده زیرساخت" : "Latest infrastructure sample")</p></div><a href="/monitoring">@(isFa ? "جزئیات" : "Details")</a></div>
+        <div class="monitoring-grid">
+            <div><small>CPU</small><strong>@(Model.CpuPercent is null ? "—" : $"{Model.CpuPercent:0.#}%")</strong><span class="metric-track"><i style="width:@CssPercent(Model.CpuPercent)%"></i></span></div>
+            <div><small>@T["Memory"]</small><strong>@(memoryPercent is null ? "—" : $"{memoryPercent}%")</strong><span class="metric-track is-violet"><i style="width:@CssPercent(memoryPercent)%"></i></span></div>
+            <div><small>@T["Disk"]</small><strong>@(diskPercent is null ? "—" : $"{diskPercent}%")</strong><span class="metric-track is-orange"><i style="width:@CssPercent(diskPercent)%"></i></span></div>
+            <div><small>@(isFa ? "شبکه" : "Network")</small><strong class="text-sm">@Throughput(Model.NetworkInPerSecond)</strong><em>@(isFa ? "ورودی" : "in") · @Throughput(Model.NetworkOutPerSecond) @(isFa ? "خروجی" : "out")</em></div>
+        </div>
+    </div>
+
+    <div class="dashboard-panel">
+        <div class="dashboard-panel-heading"><div><h2>@(isFa ? "اعضای تیم" : "Team members")</h2><p>@(isFa ? "دسترسی به فضای کاری" : "Workspace access")</p></div><a href="/users">@(isFa ? "همه" : "View all")</a></div>
+        <div class="team-list">
+            @if (Model.TeamMembers.Count == 0) { <div class="dashboard-empty">@(isFa ? "عضوی ثبت نشده است." : "No members found.")</div> }
+            @foreach (var member in Model.TeamMembers)
+            {
+                <div><span>@(member.Name.Trim().Length > 0 ? member.Name.Trim()[..1].ToUpperInvariant() : "?")</span><p><strong>@member.Name</strong><small>@member.Email</small></p><em>@member.Role</em></div>
+            }
+        </div>
+        <a href="/users" class="invite-button"><i data-lucide="user-plus" class="h-4 w-4"></i>@(isFa ? "دعوت عضو" : "Invite member")</a>
+    </div>
+</section>

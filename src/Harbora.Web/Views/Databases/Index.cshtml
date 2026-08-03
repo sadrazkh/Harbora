@@ -1,39 +1,224 @@
-﻿@model List<Harbora.Domain.Services.ManagedService>
+@model DatabasesPageViewModel
+@using Harbora.Web.ViewModels
 @{
     ViewData["Title"] = "Databases";
-    string StatusClass(Harbora.Domain.Common.ServiceStatus s) => s switch
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var selected = Model.Selected;
+    string CssPercent(double? value) => Math.Clamp(value ?? 0, 0, 100)
+        .ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+    string Gb(long? bytes) => bytes is null ? "—" : bytes < 1024 * 1024
+        ? $"{bytes / 1024.0:0.#} KB"
+        : bytes < 1024L * 1024 * 1024
+            ? $"{bytes / 1024.0 / 1024:0.#} MB"
+            : $"{bytes / 1024.0 / 1024 / 1024:0.##} GB";
+    string TypeKey(ManagedServiceType type) => type switch
     {
-        Harbora.Domain.Common.ServiceStatus.Running => "bg-ok/15 text-ok",
-        Harbora.Domain.Common.ServiceStatus.Failed => "bg-danger/15 text-danger",
-        Harbora.Domain.Common.ServiceStatus.Provisioning => "bg-accent-hover/15 text-accent-text animate-pulse",
-        _ => "bg-slate-500/15 text-ink"
+        ManagedServiceType.PostgreSql => "postgres",
+        ManagedServiceType.MySql => "mysql",
+        ManagedServiceType.MariaDb => "mariadb",
+        ManagedServiceType.Redis => "redis",
+        ManagedServiceType.MongoDb => "mongodb",
+        _ => "database"
+    };
+    string TypeGlyph(ManagedServiceType type) => type switch
+    {
+        ManagedServiceType.PostgreSql => "PG", ManagedServiceType.MySql => "MY",
+        ManagedServiceType.MariaDb => "MA", ManagedServiceType.Redis => "R",
+        ManagedServiceType.MongoDb => "MO", _ => "DB"
+    };
+    string Tone(ServiceStatus status) => status switch
+    {
+        ServiceStatus.Running => "is-ok", ServiceStatus.Provisioning => "is-info",
+        ServiceStatus.Failed => "is-danger", _ => "is-idle"
     };
 }
-<div class="mb-6 flex items-center justify-between">
-    <h1 class="text-2xl font-bold tracking-tight text-ink">@T["Databases"]</h1>
-    <a href="/databases/create" class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">+ @T["New Service"]</a>
+
+<div class="page-heading">
+    <div>
+        <div class="eyebrow"><i data-lucide="database" class="h-3.5 w-3.5"></i>@(isFa ? "سرویس‌های داده" : "Managed data services")</div>
+        <h1>@T["Databases"]</h1>
+        <p>@(isFa ? "دیتابیس‌ها، اتصال‌ها، مصرف منابع و پشتیبان‌ها را از یک صفحه مدیریت کنید." : "Manage databases, private connections, resource usage and backups in one place.")</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+        <a href="/backups" class="btn-secondary"><i data-lucide="upload-cloud" class="h-4 w-4"></i>@(isFa ? "ورود پشتیبان" : "Import backup")</a>
+        <a href="/databases/create" class="btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>@(isFa ? "ساخت دیتابیس" : "Create database")</a>
+    </div>
 </div>
 
-@if (Model.Count == 0)
-{
-    <div class="rounded-xl border border-dashed border-line-strong p-12 text-center">
-        <p class="text-lg font-medium">@T["No services yet"]</p>
-        <a href="/databases/create" class="mt-4 inline-block rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Create Service"]</a>
+<section class="resource-shell">
+    <div class="resource-toolbar">
+        <div class="flex items-center gap-2 text-sm text-ink-muted">
+            <span class="resource-status @(Model.Warnings == 0 ? "is-ok" : "is-warn")"><i></i>@Model.Healthy @(isFa ? "سالم" : "healthy")</span>
+            @if (Model.Warnings > 0) { <span class="resource-status is-warn"><i></i>@Model.Warnings @(isFa ? "نیازمند توجه" : "need attention")</span> }
+        </div>
+        <label class="resource-search ms-auto">
+            <i data-lucide="search" class="h-4 w-4"></i>
+            <input id="databaseSearch" type="search" placeholder="@(isFa ? "جست‌وجوی دیتابیس…" : "Search databases…")" />
+        </label>
     </div>
-}
-else
+
+    @if (Model.Databases.Count == 0)
+    {
+        <div class="empty-state min-h-[24rem]">
+            <span class="empty-state-icon"><i data-lucide="database-zap" class="h-6 w-6"></i></span>
+            <h2>@T["No services yet"]</h2>
+            <p>@(isFa ? "یک دیتابیس مدیریت‌شده با رمز، شبکه خصوصی و فضای پایدار بسازید." : "Provision a managed database with credentials, private networking and persistent storage.")</p>
+            <a href="/databases/create" class="btn-primary">@T["Create Service"]</a>
+        </div>
+    }
+    else
+    {
+        <div class="overflow-x-auto">
+            <table class="resource-table min-w-[1000px]">
+                <thead><tr>
+                    <th>@T["Databases"]</th><th>@(isFa ? "پروژه / محیط" : "Project / environment")</th>
+                    <th>@T["Status"]</th><th>@(isFa ? "فضای مصرفی" : "Storage")</th>
+                    <th>@T["CPU"]</th><th>@T["Memory"]</th><th>@(isFa ? "اپ‌های متصل" : "Linked apps")</th>
+                    <th>@T["Backups"]</th><th></th>
+                </tr></thead>
+                <tbody id="databaseRows">
+                @foreach (var database in Model.Databases)
+                {
+                    <tr class="database-row @(selected?.Database.Id == database.Id ? "is-selected" : "")"
+                        data-name="@($"{database.Name} {database.Type} {database.Project} {database.Environment}".ToLowerInvariant())">
+                        <td><a href="/databases?selected=@database.Id" class="resource-identity">
+                            <span class="template-logo" data-template-key="@TypeKey(database.Type)">@TypeGlyph(database.Type)</span>
+                            <span><strong>@database.Name</strong><small>@database.Type · @database.Version</small></span>
+                        </a></td>
+                        <td><div class="table-primary">@database.Project</div><div class="table-secondary">@database.Environment</div></td>
+                        <td><span class="resource-status @Tone(database.Status)"><i></i>@database.Status</span></td>
+                        <td><div class="table-primary">@Gb(database.StorageBytes)</div><div class="table-secondary">@(database.StorageMeasuredAt is null ? (isFa ? "اندازه‌گیری نشده" : "not measured") : database.StorageMeasuredAt.Value.LocalDateTime.ToString("MM/dd HH:mm"))</div></td>
+                        <td><div class="metric-reading">@(database.CpuPercent is null ? "—" : $"{database.CpuPercent:0.#}%")</div><span class="metric-track"><i style="width:@CssPercent(database.CpuPercent)%"></i></span></td>
+                        <td><div class="metric-reading">@Gb(database.MemoryBytes)</div><span class="table-secondary">@(database.MemoryBytes is null ? (isFa ? "هنوز اندازه‌گیری نشده" : "Not measured yet") : (isFa ? "آخرین نمونه" : "Latest sample"))</span></td>
+                        <td><span class="linked-count"><i data-lucide="boxes" class="h-3.5 w-3.5"></i>@database.LinkedApps</span></td>
+                        <td>
+                            @if (database.LastBackupAt is { } backupAt)
+                            { <div class="table-primary">@database.LastBackupStatus</div><div class="table-secondary">@backupAt.LocalDateTime.ToString("MM/dd HH:mm")</div> }
+                            else { <span class="table-secondary">@(isFa ? "بدون پشتیبان" : "No backup")</span> }
+                        </td>
+                        <td><a href="/databases?selected=@database.Id" class="icon-button" aria-label="@(isFa ? "جزئیات" : "Details")"><i data-lucide="chevron-right" class="h-4 w-4 rtl:rotate-180"></i></a></td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+        <div class="resource-footer"><span id="databaseResultCount">@Model.Databases.Count</span> @(isFa ? "دیتابیس" : "databases")</div>
+        <div id="noDatabaseMatch" class="hidden p-10 text-center text-sm text-ink-faint">@(isFa ? "دیتابیسی پیدا نشد." : "No databases match.")</div>
+    }
+</section>
+
+@if (selected?.Backups.Count > 0)
 {
-    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        @foreach (var s in Model)
+    <section class="resource-shell mt-5">
+        <div class="section-heading border-b border-line p-4"><div><h2><i data-lucide="history" class="h-4 w-4"></i>@(isFa ? "تاریخچه پشتیبان" : "Backup history")</h2><p>@selected.Database.Name</p></div><a href="/backups">@(isFa ? "همه پشتیبان‌ها" : "View all backups")</a></div>
+        <div class="overflow-x-auto"><table class="resource-table min-w-[620px]"><thead><tr><th>@(isFa ? "زمان" : "Date")</th><th>@(isFa ? "نوع" : "Type")</th><th>@(isFa ? "حجم" : "Size")</th><th>@T["Status"]</th><th>@(isFa ? "بررسی بازیابی" : "Restore verification")</th></tr></thead><tbody>
+        @foreach (var backup in selected.Backups)
         {
-            <a href="/databases/@s.Id" class="rounded-xl border border-line bg-surface p-5 hover:border-accent transition">
-                <div class="flex items-center justify-between">
-                    <span class="font-semibold text-lg">@s.Name</span>
-                    <span class="rounded-full px-2.5 py-0.5 text-xs font-medium @StatusClass(s.Status)">@s.Status</span>
-                </div>
-                <div class="mt-2 text-sm text-ink-muted">@s.Type · @s.Version</div>
-                <div class="mt-1 text-xs text-ink-faint font-mono">@s.ContainerName:@s.InternalPort</div>
-            </a>
+            <tr><td class="table-primary">@backup.At.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</td><td>@(backup.IsScheduled ? (isFa ? "خودکار" : "Scheduled") : (isFa ? "دستی" : "Manual"))</td><td>@Gb(backup.SizeBytes)</td><td><span class="resource-status @(backup.Status == BackupStatus.Completed ? "is-ok" : backup.Status == BackupStatus.Failed ? "is-danger" : "is-info")"><i></i>@backup.Status</span></td><td>@(backup.VerifiedRestorable switch { true => isFa ? "تأیید شده" : "Verified", false => isFa ? "نامعتبر" : "Failed", _ => isFa ? "بررسی نشده" : "Not verified" })</td></tr>
         }
-    </div>
+        </tbody></table></div>
+    </section>
+}
+
+@section RightRail {
+    @if (selected is not null)
+    {
+        var db = selected.Database;
+        <section class="rail-panel database-inspector">
+            <div class="flex items-start gap-3">
+                <span class="template-logo h-11 w-11" data-template-key="@TypeKey(db.Type)">@TypeGlyph(db.Type)</span>
+                <div class="min-w-0 flex-1"><div class="flex items-center gap-2"><h2 class="truncate font-semibold text-ink">@db.Name</h2><span class="resource-status @Tone(db.Status)"><i></i>@db.Status</span></div><p class="text-xs text-ink-faint">@db.Type @db.Version · @db.Environment</p></div>
+            </div>
+            @if (selected.CanManage)
+            {
+                <div class="mt-4 flex flex-wrap gap-2">
+                    @if (db.Status == ServiceStatus.Running)
+                    { <form asp-controller="Databases" asp-action="Stop" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary py-1.5 text-xs"><i data-lucide="pause" class="h-3.5 w-3.5"></i>@T["Stop"]</button></form> }
+                    else
+                    { <form asp-controller="Databases" asp-action="Start" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary py-1.5 text-xs"><i data-lucide="play" class="h-3.5 w-3.5"></i>@T["Start"]</button></form> }
+                    <form asp-controller="Databases" asp-action="TestConnection" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary py-1.5 text-xs"><i data-lucide="plug-zap" class="h-3.5 w-3.5"></i>@(isFa ? "تست اتصال" : "Test")</button></form>
+                    <form asp-controller="Databases" asp-action="Measure" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary py-1.5 text-xs"><i data-lucide="ruler" class="h-3.5 w-3.5"></i>@(isFa ? "اندازه‌گیری" : "Measure")</button></form>
+                </div>
+            }
+        </section>
+
+        <section class="rail-panel">
+            <div class="rail-heading"><div><span>@T["Connection info"]</span><small>@(isFa ? "فقط در شبکه خصوصی" : "Private network only")</small></div>@if (selected.CanManage) { <a href="/databases?selected=@db.Id&reveal=@(!selected.Reveal)">@(selected.Reveal ? T["Hide"] : T["Reveal"])</a> }</div>
+            <div class="connection-string mt-3"><code id="databaseConnection" dir="ltr">@selected.Connection</code><button type="button" data-copy-connection title="@(isFa ? "کپی" : "Copy")"><i data-lucide="copy" class="h-4 w-4"></i></button></div>
+            <dl class="connection-grid">
+                <div><dt>Host</dt><dd dir="ltr">@db.ContainerName</dd></div><div><dt>Port</dt><dd>@db.InternalPort</dd></div>
+                <div><dt>User</dt><dd dir="ltr">@db.Username</dd></div><div><dt>Database</dt><dd dir="ltr">@(string.IsNullOrWhiteSpace(db.DatabaseName) ? "—" : db.DatabaseName)</dd></div>
+                @if (selected.Network is { Length: > 0 } network) { <div class="col-span-2"><dt>Network</dt><dd class="break-all" dir="ltr">@network</dd></div> }
+            </dl>
+        </section>
+
+        <section class="rail-panel">
+            <div class="rail-heading"><div><span>@(isFa ? "مصرف و پایداری" : "Usage and persistence")</span><small>@(isFa ? "داده واقعی جمع‌آوری‌شده" : "Latest collected values")</small></div></div>
+            <div class="grid grid-cols-2 gap-2">
+                <div class="summary-cell"><span>@(db.CpuPercent is null ? "—" : $"{db.CpuPercent:0.#}%")</span>CPU</div>
+                <div class="summary-cell"><span>@Gb(db.MemoryBytes)</span>@T["Memory"]</div>
+                <div class="summary-cell"><span>@Gb(db.StorageBytes)</span>@(isFa ? "داده" : "Storage")</div>
+                <div class="summary-cell"><span>@db.LinkedApps</span>@(isFa ? "اپ متصل" : "Linked apps")</div>
+            </div>
+            <div class="mt-3 flex items-center gap-2 rounded-lg bg-ok-soft px-3 py-2 text-xs text-ok"><i data-lucide="hard-drive" class="h-4 w-4"></i><span class="truncate" dir="ltr">@db.VolumeName</span></div>
+        </section>
+
+        <section class="rail-panel">
+            <div class="rail-heading"><div><span>@T["Backups"]</span><small>@(selected.BackupIntervalHours is { } hours ? (isFa ? $"هر {hours} ساعت" : $"Every {hours} hours") : (isFa ? "زمان‌بندی نشده" : "Not scheduled"))</small></div><a href="/backups">@(isFa ? "تنظیم" : "Configure")</a></div>
+            @if (selected.NextBackupAt is { } next)
+            { <div class="mt-3 flex items-center gap-3 rounded-xl bg-info-soft p-3"><span class="rail-icon bg-surface text-info"><i data-lucide="cloud-upload" class="h-4 w-4"></i></span><div><div class="text-xs font-medium text-ink">@(isFa ? "پشتیبان بعدی" : "Next backup")</div><div class="text-[11px] text-ink-faint">@next.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</div></div></div> }
+            else
+            { <a href="/backups" class="rail-action mt-3">@(isFa ? "زمان‌بندی پشتیبان" : "Set up automated backups")<i data-lucide="arrow-right" class="h-4 w-4 rtl:rotate-180"></i></a> }
+        </section>
+
+        <section class="rail-panel">
+            <div class="rail-heading"><div><span>@T["Attach to app"]</span><small>@(isFa ? "تزریق رمزنگاری‌شده متغیرها" : "Encrypted environment variables")</small></div></div>
+            @if (selected.CanManage && selected.Apps.Any(a => a.Compatible))
+            {
+                <form asp-controller="Databases" asp-action="Attach" asp-route-id="@db.Id" method="post" class="mt-3 space-y-2">
+                    @Html.AntiForgeryToken()
+                    <select name="appId" class="form-control text-sm">
+                        @foreach (var app in selected.Apps.Where(a => a.Compatible)) { <option value="@app.Id">@app.Name · @app.Environment</option> }
+                    </select>
+                    <button class="btn-primary w-full justify-center">@T["Attach"]</button>
+                </form>
+            }
+            else if (selected.CanManage)
+            { <p class="mt-3 text-xs leading-5 text-ink-faint">@(isFa ? "در این محیط اپی برای اتصال وجود ندارد؛ دیتابیس فقط به اپ همان شبکه متصل می‌شود." : "No app exists in this environment. A database can only attach inside its private network.")</p> }
+            @if (selected.UsedBy.Count > 0) { <div class="mt-3 text-xs text-ink-muted">@(isFa ? "در حال استفاده توسط: " : "Used by: ")<strong class="text-ink">@string.Join(", ", selected.UsedBy)</strong></div> }
+        </section>
+    }
+    else
+    {
+        <section class="rail-panel"><div class="rail-heading"><div><span>@(isFa ? "ساخت سریع" : "Quick provision")</span><small>@(isFa ? "موتورهای پشتیبانی‌شده" : "Supported engines")</small></div></div><div class="quick-start-grid mt-3">@foreach (var item in Model.Catalog){<a href="/databases/create?type=@item.Type" class="quick-start-item"><span class="template-logo" data-template-key="@TypeKey(item.Type)">@TypeGlyph(item.Type)</span><span><strong>@(isFa ? item.DisplayNameFa : item.DisplayName)</strong><small>@item.Versions.FirstOrDefault()</small></span></a>}</div></section>
+    }
+}
+
+@section Scripts {
+<script>
+(() => {
+    const rows = Array.from(document.querySelectorAll('.database-row'));
+    const search = document.getElementById('databaseSearch');
+    const count = document.getElementById('databaseResultCount');
+    const empty = document.getElementById('noDatabaseMatch');
+    function apply() {
+        const query = (search?.value || '').trim().toLowerCase();
+        let shown = 0;
+        rows.forEach(row => {
+            const visible = !query || row.dataset.name.includes(query);
+            row.classList.toggle('hidden', !visible);
+            if (visible) shown++;
+        });
+        if (count) count.textContent = String(shown);
+        empty?.classList.toggle('hidden', shown !== 0);
+    }
+    search?.addEventListener('input', apply);
+    document.querySelector('[data-copy-connection]')?.addEventListener('click', async button => {
+        const value = document.getElementById('databaseConnection')?.textContent || '';
+        await navigator.clipboard.writeText(value);
+        button.classList.add('text-ok');
+        setTimeout(() => button.classList.remove('text-ok'), 900);
+    });
+})();
+</script>
 }

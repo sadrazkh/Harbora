@@ -4,11 +4,14 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Authorization;
+using Harbora.Domain.Backups;
 using Harbora.Domain.Common;
+using Harbora.Domain.Monitoring;
 using Harbora.Domain.Services;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Web.Controllers;
@@ -32,29 +35,122 @@ public sealed partial class DatabasesController(
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 
     [HttpGet("")]
-    public async Task<IActionResult> Index(CancellationToken ct)
+    public async Task<IActionResult> Index(Guid? selected, bool reveal = false, CancellationToken ct = default)
     {
         ViewData["Title"] = "Databases";
 
         var query = db.ManagedServices.Where(s => s.WorkspaceId == WorkspaceId);
-        if (await access.VisibleProjectIdsAsync(ct) is { } visible)
+        var visibleProjectIds = await access.VisibleProjectIdsAsync(ct);
+        if (visibleProjectIds is { } visible)
             query = query.Where(s => s.EnvironmentId != null && visible.Contains(s.Environment!.ProjectId));
 
-        var services = await query.OrderByDescending(s => s.CreatedAt).ToListAsync(ct);
-        return View(services);
+        var services = await query.AsNoTracking()
+            .Include(s => s.Environment).ThenInclude(e => e!.Project)
+            .OrderByDescending(s => s.CreatedAt)
+            .ToListAsync(ct);
+
+        var serviceRefs = services.Select(s => s.Id.ToString()).ToList();
+        var containerNames = services.Select(s => s.ContainerName).ToList();
+        var metrics = containerNames.Count == 0
+            ? new List<MonitoringMetric>()
+            : await db.MonitoringMetrics.AsNoTracking()
+                .Where(m => m.ResourceRef != null && containerNames.Contains(m.ResourceRef)
+                            && (m.Name == "cpu.percent" || m.Name == "mem.used"))
+                .OrderByDescending(m => m.Timestamp).Take(2_000).ToListAsync(ct);
+
+        var backups = serviceRefs.Count == 0
+            ? new List<Backup>()
+            : await db.Backups.AsNoTracking()
+                .Where(b => serviceRefs.Contains(b.TargetRef)
+                            && (b.Type == BackupType.Database || b.Type == BackupType.Service))
+                .OrderByDescending(b => b.CreatedAt).ToListAsync(ct);
+
+        var appsQuery = db.Apps.AsNoTracking()
+            .Include(a => a.Environment).ThenInclude(e => e!.Project)
+            .Include(a => a.EnvironmentVariables)
+            .Where(a => a.WorkspaceId == WorkspaceId);
+        if (visibleProjectIds is { } appProjects)
+            appsQuery = appsQuery.Where(a => a.EnvironmentId != null && appProjects.Contains(a.Environment!.ProjectId));
+
+        var apps = await appsQuery
+            .OrderBy(a => a.Name).ToListAsync(ct);
+        var connections = usage.ConnectionsFor(apps, containerNames);
+
+        var rows = services.Select(s =>
+        {
+            var latestBackup = backups.FirstOrDefault(b => b.TargetRef == s.Id.ToString());
+            var cpu = metrics.FirstOrDefault(m => m.ResourceRef == s.ContainerName && m.Name == "cpu.percent")?.Value;
+            var memory = metrics.FirstOrDefault(m => m.ResourceRef == s.ContainerName && m.Name == "mem.used")?.Value;
+            var linked = connections.Count(c => c.Value.Contains(s.ContainerName));
+            return new DatabaseRowViewModel(
+                s.Id, s.Name, s.Type, s.Version, s.Status,
+                s.Environment?.Project?.Name ?? "—", s.Environment?.Name ?? "—",
+                s.ContainerName, s.InternalPort, s.Username, s.DatabaseName, s.VolumeName,
+                s.StorageBytes, s.StorageMeasuredAt, cpu,
+                memory is null ? null : (long?)memory.Value,
+                linked, latestBackup?.FinishedAt ?? latestBackup?.CreatedAt, latestBackup?.Status);
+        }).ToList();
+
+        DatabaseOverviewViewModel? overview = null;
+        var selectedRow = rows.FirstOrDefault(r => r.Id == selected) ?? rows.FirstOrDefault();
+        if (selectedRow is not null)
+        {
+            var service = services.First(s => s.Id == selectedRow.Id);
+            var canManage = await access.CanTouchServiceAsync(service.Id, Capabilities.DatabasesManage, ct);
+            var conn = await engine.GetConnectionInfoAsync(service.Id, ct);
+            var network = service.EnvironmentId is { } environmentId
+                ? await db.Environments.AsNoTracking().Where(e => e.Id == environmentId)
+                    .Select(e => Harbora.Infrastructure.Networking.EnvironmentNetwork.For(e.Project!.Slug, e.Slug, e.Id))
+                    .FirstOrDefaultAsync(ct)
+                : null;
+            var usingApps = connections.Where(c => c.Value.Contains(service.ContainerName))
+                .Select(c => apps.First(a => a.Id == c.Key).Name).Order().ToList();
+            var selectedBackups = backups.Where(b => b.TargetRef == service.Id.ToString()).Take(6)
+                .Select(b => new BackupEventViewModel(
+                    b.Id, b.Status, b.SizeBytes, b.FinishedAt ?? b.StartedAt ?? b.CreatedAt,
+                    b.IsScheduled, b.VerifiedRestorable)).ToList();
+            var schedule = await db.BackupSchedules.AsNoTracking()
+                .Where(s => s.TargetRef == service.Id.ToString() && s.IsEnabled)
+                .OrderBy(s => s.NextRunAt).FirstOrDefaultAsync(ct);
+
+            overview = new DatabaseOverviewViewModel
+            {
+                Database = selectedRow,
+                Connection = reveal && canManage ? conn.ConnectionString : conn.ConnectionStringMasked,
+                Reveal = reveal && canManage,
+                CanManage = canManage,
+                Network = network,
+                UsedBy = usingApps,
+                Apps = apps.Select(a => new ResourceOptionViewModel(
+                    a.Id, a.Name,
+                    $"{a.Environment?.Project?.Name ?? "—"} · {a.Environment?.Name ?? "—"}",
+                    a.EnvironmentId == service.EnvironmentId)).ToList(),
+                Backups = selectedBackups,
+                NextBackupAt = schedule?.NextRunAt,
+                BackupIntervalHours = schedule?.IntervalHours
+            };
+        }
+
+        return View(new DatabasesPageViewModel
+        {
+            Databases = rows,
+            Catalog = engine.Catalog,
+            Selected = overview
+        });
     }
 
     [HttpGet("create")]
     [Authorize(Policy = Capabilities.DatabasesManage)]
-    public IActionResult Create(ManagedServiceType? type)
+    public async Task<IActionResult> Create(ManagedServiceType? type, Guid? environmentId, CancellationToken ct)
     {
         ViewData["Title"] = "New service";
-        ViewBag.Catalog = engine.Catalog;
+        await projects.EnsureDefaultEnvironmentAsync(WorkspaceId, ct);
+        await PopulateCreateAsync(ct);
 
         // Preselected when the caller named an engine we actually run. An unknown one falls back to
         // the default rather than being honoured, so a stale link cannot produce a service of a type
         // this installation has no definition for.
-        var model = new CreateServiceViewModel();
+        var model = new CreateServiceViewModel { EnvironmentId = environmentId };
         if (type is { } chosen && engine.Catalog.Any(c => c.Type == chosen)) model.Type = chosen;
 
         return View(model);
@@ -67,22 +163,34 @@ public sealed partial class DatabasesController(
     {
         var entry = engine.Catalog.FirstOrDefault(c => c.Type == model.Type);
         if (entry is null) ModelState.AddModelError(nameof(model.Type), "Unknown service type.");
+        else if (!string.IsNullOrWhiteSpace(model.Version) &&
+                 !entry.Versions.Contains(model.Version, StringComparer.OrdinalIgnoreCase))
+        {
+            ModelState.AddModelError(nameof(model.Version), "The selected database version is not supported.");
+        }
 
         var check = await quota.CanAddServiceAsync(WorkspaceId, ct);
         if (!check.Allowed) ModelState.AddModelError(string.Empty, check.Reason ?? "Plan quota exceeded.");
 
-        if (!ModelState.IsValid) { ViewBag.Catalog = engine.Catalog; return View(model); }
+        var environment = await projects.ResolveEnvironmentAsync(WorkspaceId, model.EnvironmentId, ct);
+        if (!await access.AllowsAsync(
+                new ResourcePlacement(environment.ProjectId, environment.Id), Capabilities.DatabasesManage, ct))
+        {
+            ModelState.AddModelError(nameof(model.EnvironmentId),
+                "You do not have permission to create a database in this environment.");
+        }
+
+        if (!ModelState.IsValid) { await PopulateCreateAsync(ct); return View(model); }
 
         var slug = Slugify(model.Name);
         if (await db.ManagedServices.AnyAsync(s => s.WorkspaceId == WorkspaceId && s.ContainerName == $"harbora-svc-{slug}", ct))
         {
             ModelState.AddModelError(nameof(model.Name), "A service with this name already exists.");
-            ViewBag.Catalog = engine.Catalog;
+            await PopulateCreateAsync(ct);
             return View(model);
         }
 
         var serverId = await db.Servers.Where(s => s.IsLocal).Select(s => s.Id).FirstAsync(ct);
-        var environment = await projects.ResolveEnvironmentAsync(WorkspaceId, model.EnvironmentId, ct);
         var service = new ManagedService
         {
             WorkspaceId = WorkspaceId,
@@ -90,7 +198,9 @@ public sealed partial class DatabasesController(
             ServerId = serverId,
             Name = model.Name,
             Type = model.Type,
-            Version = string.IsNullOrWhiteSpace(model.Version) ? entry!.Versions[0] : model.Version,
+            Version = string.IsNullOrWhiteSpace(model.Version)
+                ? entry!.Versions[0]
+                : entry!.Versions.First(v => string.Equals(v, model.Version, StringComparison.OrdinalIgnoreCase)),
             Status = ServiceStatus.Provisioning,
             ContainerName = $"harbora-svc-{slug}",
             VolumeName = $"harbora-svc-{slug}-data",
@@ -109,31 +219,8 @@ public sealed partial class DatabasesController(
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> Details(Guid id, bool reveal = false, CancellationToken ct = default)
     {
-        // Visibility rather than a management capability: a viewer on this project may look.
         if (!await access.CanSeeServiceAsync(id, ct)) return NotFound();
-
-        var service = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
-        if (service is null) return NotFound();
-
-        ViewData["Title"] = service.Name;
-        var conn = await engine.GetConnectionInfoAsync(id, ct);
-        ViewBag.Connection = reveal ? conn.ConnectionString : conn.ConnectionStringMasked;
-        ViewBag.Reveal = reveal;
-        ViewBag.Apps = await db.Apps.Where(a => a.WorkspaceId == WorkspaceId)
-            .Select(a => new { a.Id, a.Name }).ToListAsync(ct);
-
-        // Which private network this address only works on. Saying it plainly is the difference
-        // between "the host is wrong" and "the service is somewhere else".
-        ViewBag.Network = service.EnvironmentId is { } environmentId
-            ? await db.Environments.Where(e => e.Id == environmentId)
-                .Select(e => Harbora.Infrastructure.Networking.EnvironmentNetwork.For(e.Project!.Slug, e.Slug, e.Id))
-                .FirstOrDefaultAsync(ct)
-            : null;
-
-        // Which services actually hold this database's address — from their real environment, not
-        // from a list of who once pressed Attach.
-        ViewBag.UsedBy = (await usage.AppsUsingAsync(id, ct)).Select(a => a.Name).ToList();
-        return View(service);
+        return RedirectToAction(nameof(Index), new { selected = id, reveal });
     }
 
     [HttpPost("{id:guid}/start")]
@@ -179,6 +266,7 @@ public sealed partial class DatabasesController(
     [Authorize(Policy = Capabilities.DatabasesManage)]
     public async Task<IActionResult> ConfirmRemove(Guid id, bool deleteData, CancellationToken ct)
     {
+        if (!await access.CanTouchServiceAsync(id, Capabilities.DatabasesManage, ct)) return NotFound();
         var svc = await db.ManagedServices.AsNoTracking()
             .FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
         if (svc is null) return NotFound();
@@ -253,6 +341,7 @@ public sealed partial class DatabasesController(
     public async Task<IActionResult> Attach(Guid id, Guid appId, CancellationToken ct)
     {
         await Guard(id, ct);
+        if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();
         var app = await db.Apps.Include(a => a.EnvironmentVariables)
             .FirstOrDefaultAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
@@ -292,6 +381,7 @@ public sealed partial class DatabasesController(
     public async Task<IActionResult> Detach(Guid id, Guid appId, CancellationToken ct)
     {
         await Guard(id, ct);
+        if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();
         var app = await db.Apps.Include(a => a.EnvironmentVariables)
             .FirstOrDefaultAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
@@ -322,6 +412,19 @@ public sealed partial class DatabasesController(
     {
         if (!await access.CanTouchServiceAsync(id, Capabilities.DatabasesManage, ct))
             throw new UnauthorizedAccessException();
+    }
+
+    private async Task PopulateCreateAsync(CancellationToken ct)
+    {
+        ViewBag.Catalog = engine.Catalog;
+        var environmentQuery = db.Environments.AsNoTracking().Where(e => e.WorkspaceId == WorkspaceId);
+        if (await access.VisibleProjectIdsAsync(ct) is { } visible)
+            environmentQuery = environmentQuery.Where(e => visible.Contains(e.ProjectId));
+
+        ViewBag.Environments = await environmentQuery
+            .OrderBy(e => e.Project!.Name).ThenByDescending(e => e.IsDefault).ThenBy(e => e.Name)
+            .Select(e => new SelectListItem($"{e.Project!.Name} · {e.Name}", e.Id.ToString()))
+            .ToListAsync(ct);
     }
 
 

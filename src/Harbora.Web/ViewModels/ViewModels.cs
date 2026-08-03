@@ -35,6 +35,7 @@ public sealed class CreateAppViewModel
     public string? GitRef { get; set; } = "main";
     public string? GitToken { get; set; }
     public string? DockerfilePath { get; set; } = "Dockerfile";
+    public string? ComposeFilePath { get; set; }
     public string? PrebuiltImage { get; set; }
     public int ContainerPort { get; set; } = 80;
     public string? Domain { get; set; }
@@ -90,6 +91,9 @@ public sealed class DashboardViewModel
     public List<ProjectSummary> Projects { get; set; } = [];
 
     public int AppCount { get; set; }
+    public int ProjectCount { get; set; }
+    public int DatabaseCount { get; set; }
+    public int HealthyDatabaseCount { get; set; }
     public int RunningCount { get; set; }
     public int FailedDeployments { get; set; }
     public int DeploymentsTotal { get; set; }
@@ -126,9 +130,16 @@ public sealed class DashboardViewModel
     public List<Deployment> RecentDeployments { get; set; } = new();
     public List<App> Apps { get; set; } = new();
     public List<DashboardError> RecentErrors { get; set; } = new();
+    public int BackupsThisMonth { get; set; }
+    public int BackupSchedulesEnabled { get; set; }
+    public DateTimeOffset? LatestBackupAt { get; set; }
+    public List<DashboardDomain> RecentDomains { get; set; } = [];
+    public List<DashboardTeamMember> TeamMembers { get; set; } = [];
 }
 
 public sealed record DashboardError(string Title, string Detail, DateTimeOffset At, string Link);
+public sealed record DashboardDomain(string Host, bool SslEnabled, string AppName, Guid AppId);
+public sealed record DashboardTeamMember(string Name, string Email, string Role);
 
 /// <summary>Backs the rollback confirmation screen: what would be restored, or why it can't be.</summary>
 public sealed record RollbackViewModel(
@@ -204,7 +215,7 @@ public sealed record LandingStep(string Title, string Body);
 public sealed record LandingFaq(string Question, string Answer);
 
 /// <summary>One tile on the dashboard's starter rows.</summary>
-public sealed record StarterTemplate(Guid Id, string Name, string? NameFa, string Category, string? IconUrl);
+public sealed record StarterTemplate(Guid Id, string Key, string Name, string? NameFa, string Category, string? IconUrl);
 
 /// <summary>One database engine tile — from the catalog, so it can actually be provisioned.</summary>
 public sealed record StarterDatabase(string Type, string Name, string? NameFa);

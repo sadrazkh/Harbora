@@ -14,6 +14,21 @@ public sealed class TemplateCatalogItemViewModel
     public bool IsStack => Manifest.Requires.Count > 0;
     public bool IsManagedService => !string.IsNullOrWhiteSpace(Manifest.Service);
     public bool NeedsRepository => Manifest.Source?.Equals("git", StringComparison.OrdinalIgnoreCase) == true;
+
+    public static TemplateCatalogItemViewModel? Create(AppTemplate template, bool isFa)
+    {
+        if (!TemplateManifest.TryParse(template.ManifestJson, out var manifest, out _)) return null;
+
+        return new TemplateCatalogItemViewModel
+        {
+            Template = template,
+            Manifest = manifest!,
+            Name = isFa && !string.IsNullOrWhiteSpace(template.NameFa) ? template.NameFa : template.Name,
+            Description = isFa && !string.IsNullOrWhiteSpace(template.DescriptionFa)
+                ? template.DescriptionFa
+                : template.Description
+        };
+    }
 }
 
 public sealed class TemplateCatalogPageViewModel

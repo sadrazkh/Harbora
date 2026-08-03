@@ -157,10 +157,10 @@
    fifty almost-identical button/input recipes from drifting one page at a time. */
 @layer components {
   .btn-primary {
-    @apply rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-accent-hover focus-visible:outline-none;
+    @apply inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-accent-hover focus-visible:outline-none;
   }
   .btn-secondary {
-    @apply rounded-lg border border-line-strong bg-surface px-4 py-2 text-sm font-medium text-ink hover:border-accent/40 hover:bg-surface-2;
+    @apply inline-flex items-center gap-2 rounded-lg border border-line-strong bg-surface px-4 py-2 text-sm font-medium text-ink hover:border-accent/40 hover:bg-surface-2;
   }
   .btn-danger {
     @apply rounded-lg border border-danger/20 bg-danger-soft px-4 py-2 text-sm font-semibold text-danger hover:border-danger/40;
@@ -241,6 +241,214 @@
   .command-dialog { @apply relative z-10 w-full max-w-xl overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl; }
   .command-item { @apply flex items-center gap-3 rounded-xl px-2.5 py-2 text-sm text-ink-muted hover:bg-surface-2 hover:text-ink; }
   .command-item.is-selected { @apply bg-accent-soft text-accent-text; }
+
+  /* ---- PaaS resource surfaces ------------------------------------------- */
+  .page-heading { @apply mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between; }
+  .page-heading h1 { @apply mt-2 text-2xl font-bold tracking-tight text-ink; }
+  .page-heading p { @apply mt-1 max-w-3xl text-sm leading-6 text-ink-muted; }
+  .page-heading .btn-primary,
+  .page-heading .btn-secondary { @apply inline-flex items-center gap-2 whitespace-nowrap; }
+  .breadcrumb { @apply flex items-center gap-1.5 text-xs text-ink-faint; }
+  .breadcrumb a { @apply hover:text-accent-text; }
+  .resource-shell { @apply overflow-hidden rounded-2xl border border-line bg-surface shadow-panel; }
+  .resource-toolbar { @apply flex flex-col gap-3 border-b border-line p-3 sm:flex-row sm:items-center sm:justify-between; }
+  .segmented-control { @apply flex max-w-full gap-1 overflow-x-auto rounded-xl bg-surface-2 p-1; }
+  .segmented-control button { @apply flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-ink-muted hover:text-ink; }
+  .segmented-control button span { @apply rounded-full bg-surface px-1.5 py-0.5 text-[9px] text-ink-faint; }
+  .segmented-control button.is-active { @apply bg-accent-soft text-accent-text shadow-sm; }
+  .resource-search { @apply flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 text-ink-faint sm:max-w-64; }
+  .resource-search input { @apply h-9 min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-faint; }
+  .compact-select { @apply h-9 rounded-lg border border-line-strong bg-surface px-3 text-xs text-ink; }
+  .resource-table { @apply w-full border-collapse text-start text-xs; }
+  .resource-table thead { @apply bg-surface-2; }
+  .resource-table th { @apply whitespace-nowrap border-b border-line px-4 py-3 text-start text-[10px] font-semibold uppercase tracking-wide text-ink-faint; }
+  .resource-table td { @apply border-b border-line px-4 py-3 align-middle text-ink-muted; }
+  .resource-table tbody tr { @apply transition hover:bg-surface-2/70; }
+  .resource-table tbody tr.is-selected { @apply bg-accent-soft/60; box-shadow: inset 3px 0 0 rgb(var(--brand)); }
+  html[dir="rtl"] .resource-table tbody tr.is-selected { box-shadow: inset -3px 0 0 rgb(var(--brand)); }
+  .resource-identity { @apply flex min-w-40 items-center gap-2.5; }
+  .resource-identity > span:last-child { @apply min-w-0; }
+  .resource-identity strong { @apply block truncate text-xs font-semibold text-ink; }
+  .resource-identity small { @apply mt-0.5 block truncate text-[10px] text-ink-faint; }
+  .resource-avatar { @apply grid h-9 w-9 shrink-0 place-items-center rounded-xl; }
+  .runtime-chip { @apply inline-flex whitespace-nowrap rounded-md border border-line bg-surface-2 px-2 py-1 text-[10px] font-medium text-ink; }
+  .table-primary { @apply whitespace-nowrap text-xs font-medium text-ink; }
+  .table-secondary { @apply mt-0.5 block whitespace-nowrap text-[10px] text-ink-faint; }
+  .domain-link { @apply inline-flex max-w-44 items-center gap-1 truncate whitespace-nowrap text-xs text-accent-text hover:underline; }
+  .resource-status { @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-1 text-[10px] font-semibold; }
+  .resource-status > i { @apply h-1.5 w-1.5 rounded-full bg-current; }
+  .resource-status.is-ok { @apply bg-ok-soft text-ok; }
+  .resource-status.is-info { @apply bg-info-soft text-info; }
+  .resource-status.is-danger { @apply bg-danger-soft text-danger; }
+  .resource-status.is-warn { @apply bg-warn-soft text-warn; }
+  .resource-status.is-idle { @apply bg-idle-soft text-idle; }
+  .row-actions { @apply flex items-center justify-end gap-1; }
+  .row-actions a, .row-actions button, .icon-button { @apply grid h-8 w-8 place-items-center rounded-lg border border-line bg-surface text-ink-muted hover:border-accent/30 hover:text-accent-text; }
+  .resource-footer { @apply border-t border-line px-4 py-3 text-xs text-ink-faint; }
+  .metric-reading { @apply whitespace-nowrap text-xs font-medium text-ink; }
+  .metric-track { @apply mt-1 block h-1 w-14 overflow-hidden rounded-full bg-surface-2; }
+  .metric-track i { @apply block h-full rounded-full bg-info; }
+  .metric-track.is-violet i { @apply bg-accent; }
+  .metric-track.is-orange i { @apply bg-warn; }
+  .linked-count { @apply inline-flex items-center gap-1 rounded-lg bg-surface-2 px-2 py-1 text-xs text-ink; }
+  .rail-heading { @apply flex items-start justify-between gap-3; }
+  .rail-heading span { @apply block text-sm font-semibold text-ink; }
+  .rail-heading small { @apply mt-0.5 block text-[10px] font-normal text-ink-faint; }
+  .rail-heading > a { @apply whitespace-nowrap text-[10px] font-medium text-accent-text hover:underline; }
+  .quick-start-grid { @apply grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-1; }
+  .quick-start-item { @apply flex min-w-0 items-center gap-2.5 rounded-xl border border-line bg-surface-2 p-2.5 hover:border-accent/25 hover:bg-accent-soft/40; }
+  .quick-start-item .template-logo { @apply h-9 w-9 rounded-lg text-[10px]; }
+  .quick-start-item > span:nth-child(2) { @apply min-w-0 flex-1; }
+  .quick-start-item strong { @apply block truncate text-xs font-semibold text-ink; }
+  .quick-start-item small { @apply mt-0.5 block truncate text-[9px] text-ink-faint; }
+  .rail-action { @apply mt-4 flex items-center justify-between rounded-lg border-t border-line pt-3 text-xs font-medium text-accent-text; }
+  .overview-total { @apply mt-4 flex items-end gap-2; }
+  .overview-total strong { @apply text-3xl font-bold text-ink; }
+  .overview-total span { @apply pb-1 text-[10px] text-ink-faint; }
+  .status-distribution { @apply mt-3 flex h-2 overflow-hidden rounded-full bg-surface-2; }
+  .status-distribution i { @apply block h-full; }
+  .summary-cell { @apply flex min-w-0 flex-col rounded-xl border border-line bg-surface-2 p-3 text-[10px] text-ink-faint; }
+  .summary-cell span { @apply mb-1 truncate text-base font-bold text-ink; }
+  .connection-string { @apply flex items-center gap-2 rounded-xl bg-code p-3; }
+  .connection-string code { @apply min-w-0 flex-1 break-all text-[10px] leading-5 text-code-ink; }
+  .connection-string button { @apply grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-surface text-ink-muted hover:text-accent-text; }
+  .connection-grid { @apply mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px]; }
+  .connection-grid dt { @apply text-ink-faint; }
+  .connection-grid dd { @apply mt-0.5 text-ink; }
+
+  /* ---- Create resource flow --------------------------------------------- */
+  .create-section { @apply rounded-2xl border border-line bg-surface p-4 shadow-panel sm:p-5; }
+  .section-heading { @apply mb-4 flex items-start justify-between gap-3; }
+  .section-heading h2 { @apply flex items-center gap-2 text-sm font-semibold text-ink; }
+  .section-heading h2 > span { @apply grid h-6 w-6 place-items-center rounded-full bg-accent-soft text-[10px] font-bold text-accent-text; }
+  .section-heading p { @apply mt-1 text-xs leading-5 text-ink-faint; }
+  .section-heading > a { @apply flex shrink-0 items-center gap-1 text-xs font-medium text-accent-text hover:underline; }
+  .create-template-grid { @apply grid gap-2 sm:grid-cols-2 xl:grid-cols-3; }
+  .create-template-card { @apply flex min-w-0 items-center gap-3 rounded-xl border border-line bg-surface-2 p-3 hover:border-accent/30 hover:bg-accent-soft/40; }
+  .create-template-card strong { @apply block truncate text-xs font-semibold text-ink; }
+  .create-template-card small { @apply mt-0.5 block truncate text-[10px] text-ink-faint; }
+  .featured-dot { @apply grid h-6 w-6 shrink-0 place-items-center rounded-full bg-warn-soft text-warn; }
+  .create-divider { @apply relative my-6 text-center text-[10px] uppercase tracking-widest text-ink-faint; }
+  .create-divider::before { content: ""; @apply absolute inset-x-0 top-1/2 h-px bg-line; }
+  .create-divider span { @apply relative bg-canvas px-3; }
+  .create-layout { @apply grid min-w-0 gap-5 2xl:grid-cols-[minmax(0,1fr)_21rem]; }
+  .source-card-grid { @apply grid gap-2 sm:grid-cols-2 lg:grid-cols-5; }
+  .source-card { @apply relative flex cursor-pointer flex-col rounded-xl border border-line bg-surface-2 p-3 hover:border-accent/30; }
+  .source-card:has(input:checked) { @apply border-accent bg-accent-soft/50 ring-1 ring-accent/15; }
+  .source-icon { @apply grid h-9 w-9 place-items-center rounded-xl bg-accent-soft text-accent-text; }
+  .source-card strong { @apply mt-3 text-xs font-semibold text-ink; }
+  .source-card small { @apply mt-1 text-[10px] leading-4 text-ink-faint; }
+  .source-check { @apply absolute end-3 top-3 hidden text-accent-text; }
+  .source-card:has(input:checked) .source-check,
+  .database-engine-card:has(input:checked) .source-check { @apply block; }
+  .form-field { @apply block min-w-0; }
+  .form-field > span { @apply mb-1.5 block text-xs font-medium text-ink; }
+  .form-field > small { @apply mt-1 block text-[10px] leading-4 text-ink-faint; }
+  .input-with-icon { @apply relative; }
+  .input-with-icon > i { @apply pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-ink-faint; }
+  .input-with-icon .form-control { @apply ps-9; }
+  .cli-callout { @apply flex gap-3 rounded-xl border border-info/20 bg-info-soft p-4 text-info; }
+  .cli-callout strong { @apply block text-xs text-ink; }
+  .cli-callout code { @apply my-2 block rounded-lg bg-code px-3 py-2 text-xs text-code-ink; }
+  .cli-callout small { @apply block text-[10px] text-ink-muted; }
+  .advanced-panel { @apply overflow-hidden rounded-2xl border border-line bg-surface shadow-panel; }
+  .advanced-panel summary { @apply flex cursor-pointer list-none items-center justify-between p-4 text-sm font-semibold text-ink; }
+  .advanced-panel summary span { @apply flex items-center gap-2; }
+  .advanced-panel[open] summary > i { @apply rotate-180; }
+  .option-row, .deploy-toggle { @apply flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-surface-2 p-3; }
+  .option-row input, .deploy-toggle input { @apply mt-1; }
+  .option-row strong, .deploy-toggle strong { @apply block text-xs font-medium text-ink; }
+  .option-row small, .deploy-toggle small { @apply mt-0.5 block text-[10px] leading-4 text-ink-faint; }
+  .create-review { @apply min-w-0; }
+  .create-review > div { @apply rounded-2xl border border-line bg-surface p-5 shadow-panel; }
+  .review-heading { @apply flex items-center gap-3 border-b border-line pb-4; }
+  .review-heading strong { @apply block text-sm font-semibold text-ink; }
+  .review-heading small { @apply mt-0.5 block text-[10px] text-ink-faint; }
+  .review-list { @apply my-4 divide-y divide-line text-xs; }
+  .review-list > div { @apply flex items-center justify-between gap-3 py-2.5; }
+  .review-list dt { @apply text-ink-faint; }
+  .review-list dd { @apply flex items-center gap-1 text-end font-medium text-ink; }
+  .deploy-toggle { @apply mb-4; }
+  .review-note { @apply mt-3 flex items-start gap-2 text-[10px] leading-4 text-ink-faint; }
+  .database-engine-grid { @apply grid gap-2 sm:grid-cols-2 lg:grid-cols-3; }
+  .database-engine-card { @apply relative flex cursor-pointer items-center gap-3 rounded-xl border border-line bg-surface-2 p-3 hover:border-accent/30; }
+  .database-engine-card:has(input:checked) { @apply border-accent bg-accent-soft/50 ring-1 ring-accent/15; }
+  .database-engine-card strong { @apply block text-xs font-semibold text-ink; }
+  .database-engine-card small { @apply mt-0.5 block text-[10px] text-ink-faint; }
+  .database-engine-card .source-check { @apply absolute end-3 top-3 hidden text-accent-text; }
+  .provision-grid { @apply grid gap-2 sm:grid-cols-2; }
+  .provision-grid > div { @apply grid grid-cols-[auto_1fr] gap-x-3 rounded-xl border border-line bg-surface-2 p-3; }
+  .provision-grid .rail-icon { @apply row-span-2; }
+  .provision-grid strong { @apply text-xs font-semibold text-ink; }
+  .provision-grid small { @apply mt-0.5 text-[10px] text-ink-faint; }
+  .security-callout { @apply mb-4 flex items-start gap-2 rounded-xl bg-ok-soft p-3 text-[10px] leading-5 text-ok; }
+
+  /* ---- Dashboard --------------------------------------------------------- */
+  .alert-warning { @apply flex items-center gap-2 rounded-xl border border-warn/25 bg-warn-soft px-4 py-3 text-sm text-warn; }
+  .alert-warning a { @apply ms-auto whitespace-nowrap font-medium underline; }
+  .dashboard-stat-grid { @apply grid gap-3 sm:grid-cols-2 xl:grid-cols-5; }
+  .dashboard-stat { @apply flex min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface p-4 shadow-panel hover:border-accent/20; }
+  .dashboard-stat-icon { @apply grid h-11 w-11 shrink-0 place-items-center rounded-xl; }
+  .dashboard-stat > span:last-child { @apply min-w-0 flex-1; }
+  .dashboard-stat small { @apply block text-[10px] text-ink-muted; }
+  .dashboard-stat strong { @apply mt-0.5 block truncate text-2xl font-bold leading-7 text-ink; }
+  .dashboard-stat em { @apply block truncate text-[9px] not-italic text-ink-faint; }
+  .dashboard-primary-grid { @apply grid gap-4 xl:grid-cols-[1.15fr_1fr_1fr]; }
+  .dashboard-middle-grid { @apply grid gap-4 xl:grid-cols-3; }
+  .dashboard-bottom-grid { @apply grid gap-4 xl:grid-cols-3; }
+  .dashboard-panel { @apply min-w-0 rounded-2xl border border-line bg-surface p-4 shadow-panel; }
+  .dashboard-panel-heading { @apply flex items-start justify-between gap-3; }
+  .dashboard-panel-heading h2 { @apply text-sm font-semibold text-ink; }
+  .dashboard-panel-heading p { @apply mt-0.5 text-[10px] text-ink-faint; }
+  .dashboard-panel-heading > a { @apply text-[10px] font-medium text-accent-text hover:underline; }
+  .progress-ring { @apply grid h-11 w-11 shrink-0 place-items-center rounded-full; background: conic-gradient(rgb(var(--brand)) calc(var(--progress) * 1%), rgb(var(--surface-2)) 0); }
+  .progress-ring::before { content: ""; @apply col-start-1 row-start-1 h-8 w-8 rounded-full bg-surface; }
+  .progress-ring b { @apply col-start-1 row-start-1 text-[9px] font-bold text-accent-text; }
+  .onboarding-steps { @apply mt-3 divide-y divide-line; }
+  .onboarding-step { @apply grid grid-cols-[1.75rem_1fr_auto] items-center gap-2 py-2.5; }
+  .onboarding-step > span { @apply grid h-6 w-6 place-items-center rounded-full border border-line-strong text-[10px] font-semibold text-ink-faint; }
+  .onboarding-step.is-done > span { @apply border-ok/20 bg-ok-soft text-ok; }
+  .onboarding-step strong { @apply block text-xs font-medium text-ink; }
+  .onboarding-step small { @apply mt-0.5 block text-[9px] text-ink-faint; }
+  .onboarding-step a { @apply rounded-lg border border-line px-2.5 py-1.5 text-[9px] font-medium text-ink-muted hover:border-accent/30 hover:text-accent-text; }
+  .panel-help { @apply mt-3 flex items-center justify-between border-t border-line pt-3 text-[10px] text-accent-text; }
+  .dashboard-template-grid { @apply mt-3 grid grid-cols-2 gap-2; }
+  .dashboard-template-grid a { @apply grid min-w-0 grid-cols-[auto_1fr] gap-x-2 rounded-xl border border-line bg-surface-2 p-2.5 hover:border-accent/25; }
+  .dashboard-template-grid .template-logo { @apply row-span-2 h-9 w-9 rounded-lg text-[9px]; }
+  .dashboard-template-grid strong { @apply truncate text-[10px] font-semibold text-ink; }
+  .dashboard-template-grid small { @apply truncate text-[9px] text-ink-faint; }
+  .dashboard-database-grid { @apply mt-3 grid grid-cols-2 gap-2; }
+  .dashboard-database-grid a { @apply flex min-w-0 flex-col items-center rounded-xl border border-line bg-surface-2 p-3 text-center hover:border-accent/25; }
+  .dashboard-database-grid .template-logo { @apply h-10 w-10; }
+  .dashboard-database-grid strong { @apply mt-2 truncate text-[10px] font-semibold text-ink; }
+  .dashboard-database-grid small { @apply mt-0.5 truncate text-[9px] text-ink-faint; }
+  .dashboard-list { @apply mt-3 divide-y divide-line; }
+  .dashboard-list > a { @apply flex min-w-0 items-center gap-2.5 py-2.5; }
+  .dashboard-list strong { @apply block truncate text-xs font-medium text-ink; }
+  .dashboard-list small { @apply mt-0.5 block truncate text-[9px] text-ink-faint; }
+  .list-avatar, .list-number { @apply grid h-8 w-8 shrink-0 place-items-center rounded-lg; }
+  .list-number { @apply bg-surface-2 text-[9px] font-semibold text-ink-muted; }
+  .dashboard-empty { @apply py-8 text-center text-xs text-ink-faint; }
+  .backup-main { @apply my-5 grid grid-cols-[auto_1fr_auto] items-center gap-x-2 rounded-xl bg-accent-soft p-4 text-accent-text; }
+  .backup-main strong { @apply row-span-2 text-3xl font-bold; }
+  .backup-main span { @apply text-[10px] text-ink-muted; }
+  .backup-main i { @apply row-span-2; }
+  .backup-summary dl { @apply divide-y divide-line text-xs; }
+  .backup-summary dl div { @apply flex items-center justify-between py-2; }
+  .backup-summary dt { @apply text-ink-faint; }
+  .backup-summary dd { @apply font-medium text-ink; }
+  .monitoring-grid { @apply mt-4 grid grid-cols-2 gap-3; }
+  .monitoring-grid > div { @apply min-w-0 rounded-xl bg-surface-2 p-3; }
+  .monitoring-grid small { @apply block text-[9px] text-ink-faint; }
+  .monitoring-grid strong { @apply mt-1 block text-lg font-bold text-ink; }
+  .monitoring-grid em { @apply block truncate text-[9px] not-italic text-ink-faint; }
+  .team-list { @apply mt-3 divide-y divide-line; }
+  .team-list > div { @apply grid grid-cols-[2rem_1fr_auto] items-center gap-2 py-2; }
+  .team-list > div > span { @apply grid h-8 w-8 place-items-center rounded-full bg-accent-soft text-[10px] font-bold text-accent-text; }
+  .team-list strong { @apply block truncate text-xs text-ink; }
+  .team-list small { @apply block truncate text-[9px] text-ink-faint; }
+  .team-list em { @apply text-[9px] not-italic text-ink-muted; }
+  .invite-button { @apply mt-3 flex items-center justify-center gap-2 rounded-xl border border-line py-2 text-xs font-medium text-accent-text hover:border-accent/30; }
 }
 
 /* The compact sidebar is a real alternate layout, not merely hidden text: the content gains the

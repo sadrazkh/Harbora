@@ -1,293 +1,222 @@
-﻿@model CreateAppViewModel
+@model CreateAppViewModel
 @{
     ViewData["Title"] = "Create Application";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
-    var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? new();
-    var servers = ViewBag.Servers as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? new();
-    var environments = ViewBag.Environments as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? new();
-    var input = "w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 focus:ring-2 focus:ring-accent focus:outline-none";
+    var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
+    var servers = ViewBag.Servers as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
+    var environments = ViewBag.Environments as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
+    var quickStarts = ViewBag.QuickStarts as IReadOnlyList<TemplateCatalogItemViewModel> ?? [];
+
+    string Glyph(TemplateCatalogItemViewModel item) => item.Template.Key switch
+    {
+        "wordpress" => "W", "ghost" => "G", "node" => "JS", "aspnet" => ".N",
+        "laravel" => "L", "redis-commander" => "R", "uptime-kuma" => "U",
+        "postgres" => "PG", "mysql" => "MY", "mariadb" => "MA", "redis" => "R", "mongodb" => "MO",
+        _ => item.Name.Trim().Length > 1 ? item.Name.Trim()[..2].ToUpperInvariant() : item.Name.ToUpperInvariant()
+    };
 }
-<div class="max-w-2xl mx-auto">
-    <h1 class="text-2xl font-bold tracking-tight text-ink mb-1">@(isFa ? "استقرار اپ جدید" : "Deploy a new app")</h1>
-    <p class="text-ink-muted text-sm mb-6">@(isFa ? "فقط یک نام و منبع بده — بقیه را خودمان می‌سازیم." : "Just a name and a source — we handle the rest.")</p>
 
-    <form asp-controller="Apps" asp-action="Create" method="post" class="space-y-6">
-        @Html.AntiForgeryToken()
-        <div asp-validation-summary="All" class="rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm"></div>
+<nav class="breadcrumb mb-4" aria-label="breadcrumb">
+    <a href="/apps">@T["Applications"]</a><i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i><span>@(isFa ? "منبع جدید" : "New resource")</span>
+</nav>
 
-        <div>
-            <label class="block text-sm text-ink-muted mb-1">@T["Name"]</label>
-            <input asp-for="Name" required autofocus placeholder="@(isFa ? "مثلاً وب‌سایت من" : "My website")" class="@input" />
+<div class="page-heading">
+    <div>
+        <div class="eyebrow"><i data-lucide="rocket" class="h-3.5 w-3.5"></i>@(isFa ? "استقرار جدید" : "New deployment")</div>
+        <h1>@(isFa ? "چه چیزی می‌خواهید اجرا کنید؟" : "What do you want to deploy?")</h1>
+        <p>@(isFa ? "با یک پروژه آماده شروع کنید یا سورس خودتان را متصل کنید؛ شبکه، SSL و استقرار خودکار ساخته می‌شود." : "Start from a ready project or connect your own source. Harbora handles networking, SSL and deployment.")</p>
+    </div>
+</div>
+
+@if (quickStarts.Count > 0)
+{
+    <section id="quick-start" class="create-section mb-6">
+        <div class="section-heading">
+            <div><h2><i data-lucide="sparkles" class="h-4 w-4 text-accent-text"></i>@(isFa ? "شروع سریع با قالب آماده" : "Quick start with a template")</h2><p>@(isFa ? "منابع واقعی قالب را پیش از ایجاد مرور می‌کنید." : "Review the real resource plan before anything is created.")</p></div>
+            <a href="/templates">@(isFa ? "همه قالب‌ها" : "All templates")<i data-lucide="arrow-right" class="h-3.5 w-3.5 rtl:rotate-180"></i></a>
         </div>
+        <div class="create-template-grid">
+            @foreach (var item in quickStarts)
+            {
+                <a href="/templates/@item.Template.Id/deploy" class="create-template-card">
+                    <span class="template-logo" data-template-key="@item.Template.Key">@Glyph(item)</span>
+                    <span class="min-w-0 flex-1"><strong>@item.Name</strong><small>@(item.IsManagedService ? (isFa ? "دیتابیس مدیریت‌شده" : "Managed database") : item.IsStack ? $"{item.ResourceCount} resources" : item.Template.Category)</small></span>
+                    @if (item.Manifest.Featured) { <span class="featured-dot" title="Featured"><i data-lucide="star" class="h-3 w-3"></i></span> }
+                    <i data-lucide="chevron-right" class="h-4 w-4 text-ink-faint rtl:rotate-180"></i>
+                </a>
+            }
+        </div>
+    </section>
+}
 
-        @* ---- Source as visual cards ---- *@
-        <div>
-            <label class="block text-sm text-ink-muted mb-2">@T["Source"]</label>
-            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:ring-1 has-[:checked]:ring-accent">
-                    <input class="sr-only" type="radio" asp-for="SourceType" value="GitRepository" data-src checked />
-                    <div class="text-2xl">🐙</div>
-                    <div class="mt-1 font-semibold">@(isFa ? "مخزن Git" : "Git repository")</div>
-                    <div class="text-xs text-ink-faint">@(isFa ? "با Dockerfile یا بدون آن (تشخیص خودکار)" : "With a Dockerfile or none (auto-detected)")</div>
+<div class="create-divider"><span>@(isFa ? "یا سورس خودتان را متصل کنید" : "or connect your own source")</span></div>
+
+<form asp-controller="Apps" asp-action="Create" method="post" class="create-layout">
+    @Html.AntiForgeryToken()
+    <div class="min-w-0 space-y-5">
+        <div asp-validation-summary="All" class="alert-danger"></div>
+
+        <section class="create-section">
+            <div class="section-heading"><div><h2><span>1</span>@(isFa ? "روش استقرار" : "Deployment source")</h2><p>@(isFa ? "Harbora بر اساس این انتخاب فقط تنظیمات مرتبط را نشان می‌دهد." : "Only the settings relevant to this source are shown.")</p></div></div>
+            <div class="source-card-grid">
+                <label class="source-card">
+                    <input class="sr-only" type="radio" asp-for="SourceType" value="GitRepository" data-src />
+                    <span class="source-icon"><i data-lucide="git-branch" class="h-5 w-5"></i></span>
+                    <strong>@(isFa ? "مخزن Git" : "Git repository")</strong>
+                    <small>@(isFa ? "تشخیص خودکار استک" : "Automatic stack detection")</small>
+                    <i data-lucide="circle-check" class="source-check h-4 w-4"></i>
                 </label>
-                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:ring-1 has-[:checked]:ring-accent">
+                <label class="source-card">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="PrebuiltImage" data-src />
-                    <div class="text-2xl">📦</div>
-                    <div class="mt-1 font-semibold">@(isFa ? "ایمیج Docker" : "Docker image")</div>
-                    <div class="text-xs text-ink-faint">@(isFa ? "یک ایمیج آماده اجرا کن" : "Run a prebuilt image")</div>
+                    <span class="source-icon"><i data-lucide="container" class="h-5 w-5"></i></span>
+                    <strong>@(isFa ? "ایمیج Docker" : "Docker image")</strong>
+                    <small>@(isFa ? "اجرا از registry" : "Pull from a registry")</small>
+                    <i data-lucide="circle-check" class="source-check h-4 w-4"></i>
                 </label>
-                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:ring-1 has-[:checked]:ring-accent">
-                    <input class="sr-only" type="radio" asp-for="SourceType" value="StaticSite" data-src />
-                    <div class="text-2xl">📄</div>
-                    <div class="mt-1 font-semibold">@(isFa ? "سایت استاتیک" : "Static site")</div>
-                    <div class="text-xs text-ink-faint">@(isFa ? "از مخزن Git، پشت Nginx" : "From a Git repo, served by Nginx")</div>
-                </label>
-                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:ring-1 has-[:checked]:ring-accent">
+                <label class="source-card">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="DockerCompose" data-src />
-                    <div class="text-2xl">🧩</div>
-                    <div class="mt-1 font-semibold">@(isFa ? "Docker Compose" : "Docker Compose")</div>
-                    <div class="text-xs text-ink-faint">@(isFa ? "چند سرویس از یک فایل compose" : "Multi-service from a compose file")</div>
+                    <span class="source-icon"><i data-lucide="boxes" class="h-5 w-5"></i></span>
+                    <strong>Docker Compose</strong>
+                    <small>@(isFa ? "استک چندسرویسی" : "Multi-service stack")</small>
+                    <i data-lucide="circle-check" class="source-check h-4 w-4"></i>
                 </label>
-                @* No Git remote needed: create the app now, push code from your machine later. *@
-                <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:ring-1 has-[:checked]:ring-accent">
+                <label class="source-card">
+                    <input class="sr-only" type="radio" asp-for="SourceType" value="StaticSite" data-src />
+                    <span class="source-icon"><i data-lucide="file-code-2" class="h-5 w-5"></i></span>
+                    <strong>@(isFa ? "سایت استاتیک" : "Static site")</strong>
+                    <small>@(isFa ? "Build و سرو با Nginx" : "Build and serve with Nginx")</small>
+                    <i data-lucide="circle-check" class="source-check h-4 w-4"></i>
+                </label>
+                <label class="source-card">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="Upload" data-src />
-                    <div class="text-2xl">⬆️</div>
-                    <div class="mt-1 font-semibold">@(isFa ? "ارسال از ترمینال" : "Push from my machine")</div>
-                    <div class="text-xs text-ink-faint">@(isFa ? "بدون Git — با harbora deploy کد را بفرست" : "No Git — send code with harbora deploy")</div>
+                    <span class="source-icon"><i data-lucide="terminal" class="h-5 w-5"></i></span>
+                    <strong>@(isFa ? "Harbora CLI" : "Harbora CLI")</strong>
+                    <small>@(isFa ? "ارسال از سیستم شما" : "Push from your machine")</small>
+                    <i data-lucide="circle-check" class="source-check h-4 w-4"></i>
                 </label>
             </div>
-        </div>
+        </section>
 
-        @* Compose: the file comes from the source, so only its path is configurable. *@
-        <div data-panel="DockerCompose" class="rounded-xl border border-line bg-surface p-4 text-sm text-ink-muted">
-            @if (isFa)
-            {
-                <p>فایل compose از خود سورس خوانده می‌شود (<code>docker-compose.yml</code> یا <code>compose.yml</code>).</p>
-                <p class="mt-2 text-xs">سرویسی که ترافیک می‌گیرد باید پورت منتشر کند؛ اگر چند سرویس پورت دارند، آن را <code>web</code> نام بگذارید.</p>
-                <p class="mt-2 text-xs">دستورهایی که ایزوله‌سازی را می‌شکنند (<code>privileged</code>، <code>network_mode</code>، bind mount) رد می‌شوند و دلیلش گفته می‌شود.</p>
-            }
-            else
-            {
-                <p>The compose file is read from your source (<code>docker-compose.yml</code> or <code>compose.yml</code>).</p>
-                <p class="mt-2 text-xs">The service that receives traffic must publish a port; if several do, name it <code>web</code>.</p>
-                <p class="mt-2 text-xs">Directives that break isolation (<code>privileged</code>, <code>network_mode</code>, bind mounts) are refused, and the reason is shown.</p>
-            }
-        </div>
+        <section class="create-section">
+            <div class="section-heading"><div><h2><span>2</span>@(isFa ? "سورس و مشخصات" : "Source and identity")</h2><p>@(isFa ? "نام، محیط و آدرس سرویس را مشخص کنید." : "Choose the service name, environment and source location.")</p></div></div>
+            <div class="grid gap-4 md:grid-cols-2">
+                <label class="form-field md:col-span-2"><span>@T["Name"]</span><input asp-for="Name" required autofocus placeholder="@(isFa ? "مثلاً api-production" : "e.g. production-api")" class="form-control" /><small>@(isFa ? "Slug و نام container به‌صورت امن از این نام ساخته می‌شود." : "A safe slug and container name are generated automatically.")</small></label>
 
-        @* Upload apps have nothing to configure here; they wait for their first push. *@
-        <div data-panel="Upload" class="rounded-xl border border-line bg-surface p-4 text-sm text-ink-muted">
-            @if (isFa)
-            {
-                <p>بعد از ساختن اپ، از پوشه‌ی پروژه‌تان این را اجرا کنید:</p>
-                <pre class="mt-3 rounded-lg bg-canvas p-3 text-xs text-ink overflow-x-auto" dir="ltr"><code>harbora login --server @(Context.Request.Scheme)://@(Context.Request.Host)
-harbora deploy &lt;slug&gt;</code></pre>
-                <p class="mt-3 text-xs">پوشه بسته‌بندی و آپلود می‌شود؛ ساخت روی سرور انجام می‌گیرد. <code>node_modules</code>، <code>.git</code> و <code>.env</code> فرستاده نمی‌شوند.</p>
-            }
-            else
-            {
-                <p>After creating the app, run this from your project folder:</p>
-                <pre class="mt-3 rounded-lg bg-canvas p-3 text-xs text-ink overflow-x-auto"><code>harbora login --server @(Context.Request.Scheme)://@(Context.Request.Host)
-harbora deploy &lt;slug&gt;</code></pre>
-                <p class="mt-3 text-xs">The folder is packed and uploaded; the build runs on the server. <code>node_modules</code>, <code>.git</code> and <code>.env</code> are never sent.</p>
-            }
-        </div>
+                <label data-panel="GitRepository,StaticSite,DockerCompose,Dockerfile" class="form-field md:col-span-2">
+                    <span>@(isFa ? "آدرس مخزن Git" : "Git repository URL")</span>
+                    <div class="input-with-icon"><i data-lucide="git-branch" class="h-4 w-4"></i><input asp-for="CloneUrl" placeholder="https://github.com/acme/service.git" class="form-control" dir="ltr" /></div>
+                </label>
 
-        @* ---- Essential field per source ---- *@
-        <div data-panel="GitRepository,StaticSite,DockerCompose">
-            <label class="block text-sm text-ink-muted mb-1">@(isFa ? "آدرس Git" : "Git repository URL")</label>
-            <input asp-for="CloneUrl" placeholder="https://github.com/user/repo.git" class="@input" />
-        </div>
-        <div data-panel="PrebuiltImage" style="display:none">
-            <label class="block text-sm text-ink-muted mb-1">@(isFa ? "ایمیج" : "Image")</label>
-            <input asp-for="PrebuiltImage" placeholder="nginx:alpine" class="@input" />
-        </div>
+                <label data-panel="PrebuiltImage" class="form-field md:col-span-2">
+                    <span>@(isFa ? "نام ایمیج" : "Container image")</span>
+                    <div class="input-with-icon"><i data-lucide="container" class="h-4 w-4"></i><input asp-for="PrebuiltImage" placeholder="ghcr.io/acme/service:1.4.2" class="form-control" dir="ltr" /></div>
+                </label>
 
-        @* ---- Advanced (collapsed) ---- *@
-        <details class="rounded-xl border border-line bg-surface px-4 py-3">
-            <summary class="cursor-pointer text-sm font-medium text-ink">@(isFa ? "تنظیمات پیشرفته (اختیاری)" : "Advanced settings (optional)")</summary>
-            <div class="mt-4 space-y-4">
-                <div class="grid sm:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm text-ink-muted mb-1">Slug</label>
-                        <input asp-for="Slug" placeholder="@(isFa ? "خودکار از نام" : "auto from name")" class="@input" />
-                    </div>
-                    <div data-panel="GitRepository,StaticSite,DockerCompose">
-                        <label class="block text-sm text-ink-muted mb-1">@T["Branch or Tag"]</label>
-                        <input asp-for="GitRef" class="@input" />
-                    </div>
-                </div>
-
-                <div data-panel="GitRepository,StaticSite,DockerCompose" class="grid sm:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm text-ink-muted mb-1">@(isFa ? "توکن دسترسی (مخزن خصوصی)" : "Access token (private repo)")</label>
-                        <input asp-for="GitToken" type="password" class="@input" />
-                    </div>
-                    <div data-panel="GitRepository">
-                        <label class="block text-sm text-ink-muted mb-1">Dockerfile path</label>
-                        <input asp-for="DockerfilePath" class="@input" />
-                        <span class="text-xs text-ink-faint">@(isFa ? "نبود؟ استک خودکار تشخیص داده می‌شود." : "None? The stack is auto-detected.")</span>
-                    </div>
-                </div>
-
-                <div>
-                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "نوع سرویس" : "Service type")</label>
-                    <select asp-for="Kind" data-service-kind class="@input">
-                        @foreach (var k in Enum.GetValues<Harbora.Domain.Common.ServiceKind>())
-                        {
-                            <option value="@k" data-help="@Harbora.Infrastructure.Deployments.ServicePlan.Describe(k)">@k</option>
-                        }
-                    </select>
-                    <span class="text-xs text-ink-faint" data-kind-help></span>
-                </div>
-
-                <div data-cron-only class="hidden">
-                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "دستوری که اجرا می‌شود" : "Command to run")</label>
-                    <input asp-for="Command" placeholder="php artisan backup:run" class="@input" />
-                    <span asp-validation-for="Command" class="text-xs text-danger"></span>
-                    <span class="text-xs text-ink-faint">
-                        @(isFa ? "هر بار که زمان‌بندی فرا برسد همین دستور در یک کانتینر تازه اجرا می‌شود."
-                               : "Runs in a fresh container each time the schedule comes round.")
-                    </span>
-                </div>
-
-                <div data-cron-only class="hidden">
-                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "زمان‌بندی (cron)" : "Schedule (cron)")</label>
-                    <input asp-for="CronExpression" placeholder="0 3 * * *" class="@input" />
-                    <span asp-validation-for="CronExpression" class="text-xs text-danger"></span>
-                    <span class="text-xs text-ink-faint">
-                        @(isFa ? "پنج فیلد: دقیقه ساعت روز ماه روزهفته — مثلاً «0 3 * * *» یعنی هر روز ۳ بامداد."
-                               : "Five fields: minute hour day month weekday — \"0 3 * * *\" is 03:00 every day.")
-                    </span>
-                </div>
-
-                @* Only a repository has branches to preview. *@
-                <div data-git-only class="hidden">
-                    <label class="flex items-start gap-2 text-sm text-ink">
-                        <input asp-for="PreviewsEnabled" type="checkbox" class="mt-1" />
-                        <span>
-                            @(isFa ? "برای هر برنچ دیگر یک محیط پیش‌نمایش بساز" : "Give every other branch a preview environment")
-                            <span class="block text-xs text-ink-faint">
-                                @(isFa
-                                    ? "سکرت‌ها کپی نمی‌شوند — پیش‌نمایش را هرکسی که بتواند push کند می‌سازد."
-                                    : "Secrets are not copied: a preview is created by anyone who can push a branch.")
-                            </span>
-                        </span>
-                    </label>
-                </div>
-
-                <div>
-                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "دستور پیش از انتشار" : "Release command")</label>
-                    <input asp-for="ReleaseCommand" placeholder="dotnet ef database update" class="@input" />
-                    <span class="text-xs text-ink-faint">
-                        @(isFa
-                            ? "قبل از جابه‌جایی ترافیک از روی ایمیج جدید اجرا می‌شود. اگر شکست بخورد، نسخه‌ی فعلی سر جایش می‌ماند."
-                            : "Runs from the new image before traffic switches. If it fails, the current version keeps serving.")
-                    </span>
+                <div data-panel="Upload" class="md:col-span-2 cli-callout">
+                    <i data-lucide="terminal-square" class="h-5 w-5"></i>
+                    <div><strong>@(isFa ? "بعد از ایجاد، سورس را از ترمینال بفرستید" : "Push the source after creating the app")</strong>
+                    <code dir="ltr">harbora deploy &lt;slug&gt;</code><small>@(isFa ? ".git، node_modules و .env آپلود نمی‌شوند." : ".git, node_modules and .env are excluded.")</small></div>
                 </div>
 
                 @if (environments.Count > 0)
                 {
-                    <div>
-                        <label class="block text-sm text-ink-muted mb-1">@(isFa ? "محیط" : "Environment")</label>
-                        <select asp-for="EnvironmentId" asp-items="environments" class="@input"></select>
-                        <span class="text-xs text-ink-faint">
-                            @(isFa
-                                ? "سرویس داخل همین پروژه و محیط ساخته می‌شود."
-                                : "The service is created inside this project and environment.")
-                        </span>
-                    </div>
+                    <label class="form-field"><span>@(isFa ? "پروژه و محیط" : "Project environment")</span><select asp-for="EnvironmentId" asp-items="environments" class="form-control"></select><small>@(isFa ? "مرز شبکه خصوصی سرویس" : "The service's private-network boundary")</small></label>
                 }
+                <label class="form-field"><span>@T["Domain"]</span><input asp-for="Domain" placeholder="@(isFa ? "خودکار یا app.example.com" : "automatic or app.example.com")" class="form-control" dir="ltr" /><small>@(isFa ? "SSL و HTTPS به‌صورت خودکار" : "Automatic SSL and HTTPS")</small></label>
+            </div>
+        </section>
 
-                @if (sizes.Count > 0)
-                {
-                    <div>
-                        <label class="block text-sm text-ink-muted mb-1">@(isFa ? "اندازه‌ی منبع" : "Instance size")</label>
-                        <select asp-for="InstanceSizeKey" asp-items="sizes" class="@input"></select>
-                    </div>
-                }
-
-                <div class="grid sm:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm text-ink-muted mb-1">@(isFa ? "پورت کانتینر" : "Container port")</label>
-                        <input asp-for="ContainerPort" type="number" class="@input" />
-                    </div>
-                    <div>
-                        <label class="block text-sm text-ink-muted mb-1">@T["Domain"]</label>
-                        <input asp-for="Domain" placeholder="@(isFa ? "خودکار: slug.دامنه‌ی‌شما" : "auto: slug.your-domain")" class="@input" />
-                    </div>
-                </div>
-
-                @if (servers.Count > 1)
-                {
-                    <div>
-                        <label class="block text-sm text-ink-muted mb-1">@(isFa ? "سرور" : "Server")</label>
-                        <select asp-for="ServerId" asp-items="servers" class="@input"></select>
-                    </div>
-                }
+        <details class="advanced-panel">
+            <summary><span><i data-lucide="sliders-horizontal" class="h-4 w-4"></i>@(isFa ? "تنظیمات Runtime و Build" : "Runtime and build settings")</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
+            <div class="grid gap-4 border-t border-line p-5 md:grid-cols-2">
+                <label class="form-field"><span>Slug</span><input asp-for="Slug" placeholder="auto-from-name" class="form-control" dir="ltr" /></label>
+                <label data-panel="GitRepository,StaticSite,DockerCompose,Dockerfile" class="form-field"><span>@T["Branch or Tag"]</span><input asp-for="GitRef" class="form-control" dir="ltr" /></label>
+                <label data-panel="GitRepository,StaticSite,DockerCompose,Dockerfile" class="form-field"><span>@(isFa ? "توکن مخزن خصوصی" : "Private repository token")</span><input asp-for="GitToken" type="password" class="form-control" autocomplete="off" /></label>
+                <label data-panel="GitRepository,Dockerfile" class="form-field"><span>Dockerfile path</span><input asp-for="DockerfilePath" class="form-control" dir="ltr" /></label>
+                <label data-panel="DockerCompose" class="form-field"><span>Compose file path</span><input asp-for="ComposeFilePath" placeholder="compose.yml (auto-detected)" class="form-control" dir="ltr" /><small>@(isFa ? "خالی بگذارید تا نام‌های استاندارد پیدا شوند." : "Leave blank to detect standard file names.")</small></label>
+                <label class="form-field"><span>@(isFa ? "نوع سرویس" : "Service type")</span><select asp-for="Kind" data-service-kind class="form-control">@foreach (var k in Enum.GetValues<Harbora.Domain.Common.ServiceKind>()){<option value="@k" data-help="@Harbora.Infrastructure.Deployments.ServicePlan.Describe(k)">@k</option>}</select><small data-kind-help></small></label>
+                <label class="form-field"><span>@(isFa ? "پورت داخلی" : "Container port")</span><input asp-for="ContainerPort" type="number" min="1" max="65535" class="form-control" /></label>
+                @if (sizes.Count > 0) { <label class="form-field"><span>@(isFa ? "اندازه منبع" : "Instance size")</span><select asp-for="InstanceSizeKey" asp-items="sizes" class="form-control"></select></label> }
+                @if (servers.Count > 1) { <label class="form-field"><span>@T["Servers"]</span><select asp-for="ServerId" asp-items="servers" class="form-control"></select></label> }
+                <label class="form-field md:col-span-2"><span>@(isFa ? "دستور پیش از انتشار" : "Release command")</span><input asp-for="ReleaseCommand" placeholder="dotnet ef database update" class="form-control" dir="ltr" /><small>@(isFa ? "اگر شکست بخورد، ترافیک روی نسخه فعلی می‌ماند." : "If it fails, traffic stays on the current version.")</small></label>
+                <label data-cron-only class="form-field hidden"><span>@(isFa ? "دستور اجرا" : "Command to run")</span><input asp-for="Command" placeholder="php artisan schedule:run" class="form-control" dir="ltr" /></label>
+                <label data-cron-only class="form-field hidden"><span>@(isFa ? "زمان‌بندی Cron" : "Cron schedule")</span><input asp-for="CronExpression" placeholder="0 3 * * *" class="form-control" dir="ltr" /></label>
+                <label data-git-only class="option-row md:col-span-2"><input asp-for="PreviewsEnabled" type="checkbox" /><span><strong>@(isFa ? "محیط Preview برای branchها" : "Preview environments for branches")</strong><small>@(isFa ? "سکرت‌ها به Preview کپی نمی‌شوند." : "Secrets are never copied to previews.")</small></span></label>
             </div>
         </details>
+    </div>
 
-        <label class="flex items-center gap-2 text-sm">
-            <input asp-for="DeployNow" type="checkbox" />
-            @(isFa ? "همین حالا بساز و دیپلوی کن (رفتن به لاگ زنده)" : "Build & deploy now (go to live logs)")
-        </label>
-
-        <div class="flex gap-3">
-            <button type="submit" class="rounded-lg bg-accent hover:bg-accent-hover text-white px-6 py-2.5 font-semibold">@(isFa ? "ایجاد و استقرار" : "Create & deploy")</button>
-            <a href="/apps" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-5 py-2.5">@T["Cancel"]</a>
+    <aside class="create-review">
+        <div class="sticky top-4">
+            <div class="review-heading"><span class="source-icon"><i data-lucide="rocket" class="h-5 w-5"></i></span><div><strong>@(isFa ? "خلاصه استقرار" : "Deployment summary")</strong><small>@(isFa ? "پیش از ساخت بررسی کنید" : "Review before creating")</small></div></div>
+            <dl class="review-list">
+                <div><dt>@(isFa ? "منبع" : "Source")</dt><dd data-review-source>Git repository</dd></div>
+                <div><dt>@(isFa ? "شبکه" : "Network")</dt><dd><i data-lucide="shield-check" class="h-3.5 w-3.5 text-ok"></i>@(isFa ? "خصوصی" : "Private")</dd></div>
+                <div><dt>HTTPS</dt><dd><i data-lucide="lock-keyhole" class="h-3.5 w-3.5 text-ok"></i>@(isFa ? "خودکار" : "Automatic")</dd></div>
+                <div><dt>@(isFa ? "استقرار" : "Deployment")</dt><dd data-review-deployment>@(isFa ? "سلامت‌سنجی + rollback" : "Health gate + rollback")</dd></div>
+            </dl>
+            <label class="deploy-toggle" data-deploy-toggle><input asp-for="DeployNow" type="checkbox" data-deploy-now /><span><strong>@(isFa ? "همین حالا استقرار بده" : "Deploy immediately")</strong><small>@(isFa ? "بعد از ایجاد به لاگ زنده می‌روید." : "Open live deployment logs after creation.")</small></span></label>
+            <button type="submit" class="btn-primary w-full justify-center py-3"><i data-lucide="rocket" class="h-4 w-4"></i><span data-submit-label>@(isFa ? "ایجاد و استقرار برنامه" : "Create and deploy application")</span></button>
+            <a href="/apps" class="mt-2 flex justify-center py-2 text-sm text-ink-muted hover:text-ink">@T["Cancel"]</a>
+            <p class="review-note"><i data-lucide="info" class="h-3.5 w-3.5"></i>@(isFa ? "Quota، ظرفیت سرور و دسترسی پروژه پیش از ایجاد بررسی می‌شود." : "Quota, server capacity and project access are checked before creation.")</p>
         </div>
-    </form>
-</div>
+    </aside>
+</form>
 
 @section Scripts {
 <script>
-    // Show only the fields relevant to the selected source.
-    function syncSource() {
-        var val = document.querySelector('[data-src]:checked')?.value || 'GitRepository';
-        document.querySelectorAll('[data-panel]').forEach(function (el) {
-            var list = el.getAttribute('data-panel').split(',').map(function (s) { return s.trim(); });
-            el.style.display = list.indexOf(val) >= 0 ? '' : 'none';
-        });
+(() => {
+    const createAndDeployLabel = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "ایجاد و استقرار برنامه" : "Create and deploy application"));
+    const createOnlyLabel = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "ایجاد برنامه" : "Create application"));
+    const healthGateLabel = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "سلامت‌سنجی + rollback" : "Health gate + rollback"));
+    const cliWaitingLabel = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "منتظر push از CLI" : "Waiting for CLI push"));
+    const sourceNames = {
+        GitRepository: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "مخزن Git" : "Git repository")),
+        PrebuiltImage: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "ایمیج Docker" : "Docker image")),
+        DockerCompose: 'Docker Compose',
+        StaticSite: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "سایت استاتیک" : "Static site")),
+        Upload: 'Harbora CLI'
+    };
+    const kind = document.querySelector('[data-service-kind]');
+    const deployNow = document.querySelector('[data-deploy-now]');
+    const deployToggle = document.querySelector('[data-deploy-toggle]');
+    const submitLabel = document.querySelector('[data-submit-label]');
+    const deploymentSummary = document.querySelector('[data-review-deployment]');
+    function syncDeploy(source) {
+        const canDeployNow = source !== 'Upload';
+        deployToggle?.classList.toggle('hidden', !canDeployNow);
+        if (!canDeployNow && deployNow) deployNow.checked = false;
+        const deploying = canDeployNow && deployNow?.checked;
+        if (submitLabel) submitLabel.textContent = deploying
+            ? createAndDeployLabel
+            : createOnlyLabel;
+        if (deploymentSummary) deploymentSummary.textContent = canDeployNow
+            ? healthGateLabel
+            : cliWaitingLabel;
     }
-    document.querySelectorAll('[data-src]').forEach(function (r) { r.addEventListener('change', syncSource); });
-
-    // The service type decides which fields mean anything. Without this the schedule and command
-    // inputs stay hidden for ever — and since the server refuses a cron service without them, a
-    // scheduled job could not be created from this form at all.
-    var kind = document.querySelector('[data-service-kind]');
-    var kindHelp = document.querySelector('[data-kind-help]');
-
+    function sync() {
+        const value = document.querySelector('[data-src]:checked')?.value || 'GitRepository';
+        document.querySelectorAll('[data-panel]').forEach(element => {
+            const sources = element.dataset.panel.split(',').map(x => x.trim());
+            element.classList.toggle('hidden', !sources.includes(value));
+        });
+        document.querySelectorAll('[data-git-only]').forEach(element =>
+            element.classList.toggle('hidden', !['GitRepository', 'DockerCompose'].includes(value)));
+        const review = document.querySelector('[data-review-source]');
+        if (review) review.textContent = sourceNames[value] || value;
+        syncDeploy(value);
+    }
     function syncKind() {
-        var value = kind ? kind.value : 'Web';
-
-        document.querySelectorAll('[data-cron-only]').forEach(function (el) {
-            el.classList.toggle('hidden', value !== 'Cron');
-        });
-
-        // One line explaining the choice, from the same rule the deploy engine uses.
-        if (kindHelp && kind) {
-            var option = kind.options[kind.selectedIndex];
-            kindHelp.textContent = option ? (option.getAttribute('data-help') || '') : '';
-        }
+        const value = kind?.value || 'Web';
+        document.querySelectorAll('[data-cron-only]').forEach(element => element.classList.toggle('hidden', value !== 'Cron'));
+        const help = document.querySelector('[data-kind-help]');
+        if (help && kind) help.textContent = kind.options[kind.selectedIndex]?.dataset.help || '';
     }
-
-    if (kind) kind.addEventListener('change', syncKind);
-
-    // Previews only exist for a service built from a repository: there is no branch otherwise.
-    function syncPreview() {
-        var source = document.querySelector('[data-src]:checked');
-        var value = source ? source.value : 'GitRepository';
-        // GitRepository only, matching AppsController: a branch is what a preview is of, and a
-        // checkbox the server quietly ignores is worse than no checkbox.
-        var isGit = value === 'GitRepository';
-        document.querySelectorAll('[data-git-only]').forEach(function (el) {
-            el.classList.toggle('hidden', !isGit);
-        });
-    }
-    document.querySelectorAll('[data-src]').forEach(function (r) { r.addEventListener('change', syncPreview); });
-
-    syncSource();
+    document.querySelectorAll('[data-src]').forEach(input => input.addEventListener('change', sync));
+    deployNow?.addEventListener('change', () => syncDeploy(document.querySelector('[data-src]:checked')?.value || 'GitRepository'));
+    kind?.addEventListener('change', syncKind);
+    sync();
     syncKind();
-    syncPreview();
+})();
 </script>
 }

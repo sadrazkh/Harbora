@@ -252,20 +252,7 @@ public sealed class TemplatesController(
     }
 
     private Harbora.Web.ViewModels.TemplateCatalogItemViewModel? BuildItem(Harbora.Domain.Templates.AppTemplate template)
-    {
-        if (!Harbora.Infrastructure.Templates.TemplateManifest.TryParse(template.ManifestJson, out var manifest, out _))
-            return null;
-
-        return new Harbora.Web.ViewModels.TemplateCatalogItemViewModel
-        {
-            Template = template,
-            Manifest = manifest!,
-            Name = IsFa && !string.IsNullOrWhiteSpace(template.NameFa) ? template.NameFa : template.Name,
-            Description = IsFa && !string.IsNullOrWhiteSpace(template.DescriptionFa)
-                ? template.DescriptionFa
-                : template.Description
-        };
-    }
+        => Harbora.Web.ViewModels.TemplateCatalogItemViewModel.Create(template, IsFa);
 
     private async Task<bool> CanDeployAsync(Harbora.Web.ViewModels.TemplateCatalogItemViewModel item)
     {

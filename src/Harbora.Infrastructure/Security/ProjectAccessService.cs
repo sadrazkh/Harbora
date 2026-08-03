@@ -34,6 +34,34 @@ public sealed class ProjectAccessService(HarboraDbContext db, ICurrentUser curre
             new ResourcePlacement(app.ProjectId, app.EnvironmentId), capability);
     }
 
+    /// <summary>
+    /// Batch form used by resource tables. Besides keeping action visibility aligned with the
+    /// endpoint, it avoids turning a page of apps into three authorization queries per row.
+    /// </summary>
+    public async Task<IReadOnlySet<Guid>> TouchableAppIdsAsync(
+        IEnumerable<Guid> appIds, string capability, CancellationToken ct)
+    {
+        var ids = appIds.Distinct().ToList();
+        if (ids.Count == 0) return new HashSet<Guid>();
+
+        var placements = await db.Apps.AsNoTracking()
+            .Where(a => ids.Contains(a.Id) && a.WorkspaceId == currentUser.WorkspaceId)
+            .Select(a => new
+            {
+                a.Id,
+                a.EnvironmentId,
+                ProjectId = (Guid?)a.Environment!.ProjectId
+            })
+            .ToListAsync(ct);
+        var (role, scoped, grants) = await CallerAsync(ct);
+
+        return placements
+            .Where(a => ProjectAccess.Allows(role, scoped, grants,
+                new ResourcePlacement(a.ProjectId, a.EnvironmentId), capability))
+            .Select(a => a.Id)
+            .ToHashSet();
+    }
+
     /// <summary>Whether the caller may exercise this capability on this managed database.</summary>
     public async Task<bool> CanTouchServiceAsync(Guid serviceId, string capability, CancellationToken ct)
     {

@@ -1,61 +1,115 @@
-﻿@model CreateServiceViewModel
+@model CreateServiceViewModel
 @{
-    ViewData["Title"] = "New service";
-    var catalog = ViewBag.Catalog as IReadOnlyList<Harbora.Application.Abstractions.ServiceCatalogEntry> ?? new List<Harbora.Application.Abstractions.ServiceCatalogEntry>();
+    ViewData["Title"] = "Create database";
+    var catalog = ViewBag.Catalog as IReadOnlyList<Harbora.Application.Abstractions.ServiceCatalogEntry> ?? [];
+    var environments = ViewBag.Environments as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var versionMap = catalog.ToDictionary(c => c.Type.ToString(), c => c.Versions);
+    var portMap = catalog.ToDictionary(c => c.Type.ToString(), c => c.InternalPort);
+    string Key(ManagedServiceType type) => type switch
+    {
+        ManagedServiceType.PostgreSql => "postgres", ManagedServiceType.MySql => "mysql",
+        ManagedServiceType.MariaDb => "mariadb", ManagedServiceType.Redis => "redis",
+        ManagedServiceType.MongoDb => "mongodb", _ => "database"
+    };
+    string Glyph(ManagedServiceType type) => type switch
+    {
+        ManagedServiceType.PostgreSql => "PG", ManagedServiceType.MySql => "MY",
+        ManagedServiceType.MariaDb => "MA", ManagedServiceType.Redis => "R",
+        ManagedServiceType.MongoDb => "MO", _ => "DB"
+    };
 }
-<div class="max-w-2xl mx-auto">
-    <h1 class="text-2xl font-bold tracking-tight text-ink mb-6">@T["New Service"]</h1>
 
-    <form asp-controller="Databases" asp-action="Create" method="post" class="space-y-6">
-        @Html.AntiForgeryToken()
-        <div asp-validation-summary="All" class="rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm"></div>
+<nav class="breadcrumb mb-4" aria-label="breadcrumb"><a href="/databases">@T["Databases"]</a><i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i><span>@(isFa ? "ساخت سرویس" : "Create service")</span></nav>
+<div class="page-heading"><div><div class="eyebrow"><i data-lucide="database-zap" class="h-3.5 w-3.5"></i>@(isFa ? "سرویس مدیریت‌شده" : "Managed service")</div><h1>@(isFa ? "ساخت دیتابیس" : "Create a database")</h1><p>@(isFa ? "موتور و محیط را انتخاب کنید؛ Harbora فضای پایدار، رمز و شبکه خصوصی را ایجاد می‌کند." : "Choose an engine and environment. Harbora provisions persistent storage, credentials and private networking.")</p></div></div>
 
-        <div>
-            <label class="block text-sm text-ink-muted mb-2">@T["Type"]</label>
-            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                @foreach (var c in catalog)
+<form asp-controller="Databases" asp-action="Create" method="post" class="create-layout">
+    @Html.AntiForgeryToken()
+    <div class="min-w-0 space-y-5">
+        <div asp-validation-summary="All" class="alert-danger"></div>
+        <section class="create-section">
+            <div class="section-heading"><div><h2><span>1</span>@(isFa ? "موتور دیتابیس" : "Database engine")</h2><p>@(isFa ? "نسخه دقیق سنجاق می‌شود تا بازسازی container باعث ارتقای ناخواسته نشود." : "Versions are pinned so recreating a container never causes an accidental major upgrade.")</p></div></div>
+            <div class="database-engine-grid">
+                @foreach (var item in catalog)
                 {
-                    <label class="cursor-pointer rounded-xl border border-line bg-surface p-4 has-[:checked]:border-accent has-[:checked]:bg-surface">
-                        <input class="sr-only" type="radio" asp-for="Type" value="@c.Type" data-type-radio />
-                        <div class="font-semibold">@(isFa ? c.DisplayNameFa : c.DisplayName)</div>
-                        <div class="text-xs text-ink-faint mt-1">port @c.InternalPort</div>
+                    <label class="database-engine-card">
+                        <input class="sr-only" type="radio" asp-for="Type" value="@item.Type" data-type-radio data-label="@(isFa ? item.DisplayNameFa : item.DisplayName)" />
+                        <span class="template-logo" data-template-key="@Key(item.Type)">@Glyph(item.Type)</span>
+                        <span><strong>@(isFa ? item.DisplayNameFa : item.DisplayName)</strong><small>@(isFa ? "پورت داخلی" : "Private port") @item.InternalPort</small></span>
+                        <i data-lucide="circle-check" class="source-check h-4 w-4"></i>
                     </label>
                 }
             </div>
-        </div>
+        </section>
 
-        <div class="grid sm:grid-cols-2 gap-4">
-            <div>
-                <label class="block text-sm text-ink-muted mb-1">@T["Name"]</label>
-                <input asp-for="Name" placeholder="my-database" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2" />
+        <section class="create-section">
+            <div class="section-heading"><div><h2><span>2</span>@(isFa ? "نام و محل اجرا" : "Identity and placement")</h2><p>@(isFa ? "دیتابیس فقط برای اپ‌های همین محیط قابل اتصال است." : "The database can only attach to applications in this environment.")</p></div></div>
+            <div class="grid gap-4 md:grid-cols-2">
+                <label class="form-field"><span>@T["Name"]</span><input asp-for="Name" required autofocus placeholder="@(isFa ? "مثلاً production-db" : "e.g. production-db")" class="form-control" /><small>@(isFa ? "برای hostname و volume استفاده می‌شود." : "Used to derive the private hostname and volume.")</small></label>
+                <label class="form-field"><span>@T["Version"]</span><select asp-for="Version" data-version class="form-control"></select><small>@(isFa ? "تغییر نسخه بعداً نیازمند برنامه مهاجرت است." : "Changing versions later requires an explicit migration.")</small></label>
+                @if (environments.Count > 0)
+                {
+                    <label class="form-field md:col-span-2"><span>@(isFa ? "پروژه و محیط" : "Project environment")</span><select asp-for="EnvironmentId" asp-items="environments" class="form-control"></select><small>@(isFa ? "این انتخاب شبکه خصوصی و اپ‌های قابل اتصال را تعیین می‌کند." : "This determines the private network and which apps can attach.")</small></label>
+                }
             </div>
-            <div>
-                <label class="block text-sm text-ink-muted mb-1">@T["Version"]</label>
-                <select asp-for="Version" data-version class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2"></select>
-            </div>
-        </div>
+        </section>
 
-        <div class="flex gap-3">
-            <button type="submit" class="rounded-lg bg-accent hover:bg-accent-hover text-white px-5 py-2 font-semibold">@T["Create Service"]</button>
-            <a href="/databases" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-5 py-2">@T["Cancel"]</a>
+        <section class="create-section">
+            <div class="section-heading"><div><h2><span>3</span>@(isFa ? "چیزی که ساخته می‌شود" : "What Harbora creates")</h2></div></div>
+            <div class="provision-grid">
+                <div><span class="rail-icon bg-accent-soft text-accent-text"><i data-lucide="container" class="h-4 w-4"></i></span><strong>@(isFa ? "Container نسخه‌دار" : "Versioned container")</strong><small>@(isFa ? "با health state قابل مشاهده" : "With observable health state")</small></div>
+                <div><span class="rail-icon bg-info-soft text-info"><i data-lucide="network" class="h-4 w-4"></i></span><strong>@(isFa ? "شبکه خصوصی" : "Private network")</strong><small>@(isFa ? "بدون انتشار پورت عمومی" : "No public port exposure")</small></div>
+                <div><span class="rail-icon bg-ok-soft text-ok"><i data-lucide="key-round" class="h-4 w-4"></i></span><strong>@(isFa ? "رمز تولیدشده" : "Generated credentials")</strong><small>@(isFa ? "رمزنگاری‌شده در storage" : "Encrypted at rest")</small></div>
+                <div><span class="rail-icon bg-warn-soft text-warn"><i data-lucide="hard-drive" class="h-4 w-4"></i></span><strong>@(isFa ? "Volume پایدار" : "Persistent volume")</strong><small>@(isFa ? "داده با restart باقی می‌ماند" : "Data survives restarts")</small></div>
+            </div>
+        </section>
+    </div>
+
+    <aside class="create-review">
+        <div class="sticky top-4">
+            <div class="review-heading"><span class="template-logo" data-review-logo data-template-key="@Key(Model.Type)">@Glyph(Model.Type)</span><div><strong data-review-engine>@Model.Type</strong><small>@(isFa ? "طرح ایجاد سرویس" : "Provisioning plan")</small></div></div>
+            <dl class="review-list">
+                <div><dt>@T["Version"]</dt><dd data-review-version>—</dd></div>
+                <div><dt>@(isFa ? "پورت داخلی" : "Private port")</dt><dd data-review-port>—</dd></div>
+                <div><dt>@(isFa ? "فضای داده" : "Data storage")</dt><dd><i data-lucide="hard-drive" class="h-3.5 w-3.5 text-ok"></i>@(isFa ? "پایدار" : "Persistent")</dd></div>
+                <div><dt>@(isFa ? "دسترسی" : "Exposure")</dt><dd><i data-lucide="shield-check" class="h-3.5 w-3.5 text-ok"></i>@(isFa ? "فقط خصوصی" : "Private only")</dd></div>
+            </dl>
+            <div class="security-callout"><i data-lucide="shield-check" class="h-4 w-4"></i><span>@(isFa ? "رمز ورود خودکار ساخته و با master key رمزنگاری می‌شود." : "Credentials are generated automatically and encrypted with the platform master key.")</span></div>
+            <button class="btn-primary w-full justify-center py-3"><i data-lucide="database-zap" class="h-4 w-4"></i>@(isFa ? "ساخت دیتابیس" : "Create database")</button>
+            <a href="/databases" class="mt-2 flex justify-center py-2 text-sm text-ink-muted hover:text-ink">@T["Cancel"]</a>
         </div>
-    </form>
-</div>
+    </aside>
+</form>
 
 @section Scripts {
 <script>
+(() => {
     const versions = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(versionMap));
-    const versionSel = document.querySelector('[data-version]');
-    function fillVersions() {
-        const t = document.querySelector('[data-type-radio]:checked')?.value;
-        const list = versions[t] || [];
-        versionSel.innerHTML = list.map(v => `<option value="${v}">${v}</option>`).join('');
+    const ports = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(portMap));
+    const versionSelect = document.querySelector('[data-version]');
+    function sync() {
+        const radio = document.querySelector('[data-type-radio]:checked') || document.querySelector('[data-type-radio]');
+        if (!radio || !versionSelect) return;
+        if (!radio.checked) radio.checked = true;
+        const selectedVersion = '@Model.Version';
+        versionSelect.innerHTML = (versions[radio.value] || []).map(value =>
+            '<option value="' + value + '" ' + (value === selectedVersion ? 'selected' : '') + '>' + value + '</option>').join('');
+        document.querySelector('[data-review-engine]').textContent = radio.dataset.label || radio.value;
+        document.querySelector('[data-review-version]').textContent = versionSelect.value || '—';
+        document.querySelector('[data-review-port]').textContent = ports[radio.value] || '—';
+        const logo = document.querySelector('[data-review-logo]');
+        if (logo) {
+            const source = radio.closest('label')?.querySelector('.template-logo');
+            logo.textContent = source?.textContent || 'DB';
+            logo.dataset.templateKey = source?.dataset.templateKey || 'database';
+        }
     }
-    document.querySelectorAll('[data-type-radio]').forEach(r => r.addEventListener('change', fillVersions));
-    // default-select the first type
-    const first = document.querySelector('[data-type-radio]');
-    if (first) { first.checked = true; fillVersions(); }
+    document.querySelectorAll('[data-type-radio]').forEach(radio => radio.addEventListener('change', sync));
+    versionSelect?.addEventListener('change', () => {
+        const target = document.querySelector('[data-review-version]');
+        if (target) target.textContent = versionSelect.value;
+    });
+    sync();
+})();
 </script>
 }

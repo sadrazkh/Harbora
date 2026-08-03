@@ -61,6 +61,10 @@ public sealed class HomeController(
         };
 
         vm.AppCount = await db.Apps.CountAsync(a => a.WorkspaceId == workspaceId, ct);
+        vm.ProjectCount = await db.Projects.CountAsync(p => p.WorkspaceId == workspaceId, ct);
+        vm.DatabaseCount = await db.ManagedServices.CountAsync(s => s.WorkspaceId == workspaceId, ct);
+        vm.HealthyDatabaseCount = await db.ManagedServices
+            .CountAsync(s => s.WorkspaceId == workspaceId && s.Status == ServiceStatus.Running, ct);
         vm.RunningCount = await db.Apps.CountAsync(a => a.WorkspaceId == workspaceId && a.Status == AppStatus.Running, ct);
         vm.DeploymentsTotal = await db.Deployments.CountAsync(d => d.App!.WorkspaceId == workspaceId, ct);
         vm.FailedDeployments = await db.Deployments
@@ -71,6 +75,30 @@ public sealed class HomeController(
         vm.ServersOnline = await db.Servers.CountAsync(s => s.Status == ServerStatus.Online, ct);
         vm.DomainsTotal = await db.Domains.CountAsync(d => d.App!.WorkspaceId == workspaceId, ct);
         vm.DomainsSsl = await db.Domains.CountAsync(d => d.App!.WorkspaceId == workspaceId && d.SslEnabled, ct);
+
+        var monthStart = new DateTimeOffset(DateTimeOffset.UtcNow.Year, DateTimeOffset.UtcNow.Month, 1, 0, 0, 0, TimeSpan.Zero);
+        vm.BackupsThisMonth = await db.Backups.CountAsync(b => b.WorkspaceId == workspaceId && b.CreatedAt >= monthStart, ct);
+        vm.BackupSchedulesEnabled = await db.BackupSchedules
+            .CountAsync(b => b.WorkspaceId == workspaceId && b.IsEnabled, ct);
+        vm.LatestBackupAt = await db.Backups
+            .Where(b => b.WorkspaceId == workspaceId && b.Status == BackupStatus.Completed)
+            .OrderByDescending(b => b.FinishedAt ?? b.CreatedAt)
+            .Select(b => (DateTimeOffset?)(b.FinishedAt ?? b.CreatedAt))
+            .FirstOrDefaultAsync(ct);
+
+        vm.RecentDomains = await db.Domains.AsNoTracking()
+            .Where(d => d.App!.WorkspaceId == workspaceId)
+            .OrderByDescending(d => d.CreatedAt).Take(4)
+            .Select(d => new DashboardDomain(d.Host, d.SslEnabled, d.App!.Name, d.AppId))
+            .ToListAsync(ct);
+
+        vm.TeamMembers = await db.WorkspaceMembers.AsNoTracking()
+            .Where(m => m.WorkspaceId == workspaceId && m.User != null)
+            .OrderBy(m => m.Role).ThenBy(m => m.User!.DisplayName).Take(4)
+            .Select(m => new DashboardTeamMember(
+                string.IsNullOrWhiteSpace(m.User!.DisplayName) ? m.User.Email : m.User.DisplayName,
+                m.User.Email, m.Role.ToString()))
+            .ToListAsync(ct);
 
         // Latest aggregate samples from the collector (they survive Docker being briefly down).
         // Cast to a nullable before the default kicks in: on a double, FirstOrDefaultAsync answers
@@ -88,7 +116,7 @@ public sealed class HomeController(
         var templates = await db.AppTemplates.AsNoTracking()
             .Where(t => t.IsEnabled)
             .OrderBy(t => t.Name)
-            .Select(t => new StarterTemplate(t.Id, t.Name, t.NameFa, t.Category, t.IconUrl))
+            .Select(t => new StarterTemplate(t.Id, t.Key, t.Name, t.NameFa, t.Category, t.IconUrl))
             .ToListAsync(ct);
 
         vm.StarterApps = templates.Where(t => t.Category != "database").Take(8).ToList();

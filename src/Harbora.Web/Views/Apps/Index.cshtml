@@ -1,85 +1,233 @@
-﻿@model List<App>
+@model ApplicationsPageViewModel
+@using Harbora.Web.ViewModels
 @{
     ViewData["Title"] = "Applications";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var environments = Model.Apps.Select(a => a.Environment).Where(e => e != "—").Distinct().Order().ToList();
+    string Bytes(long? bytes) => bytes is null ? "—" : bytes < 1024 * 1024
+        ? $"{bytes / 1024.0:0.#} KB"
+        : $"{bytes / 1024.0 / 1024:0.#} MB";
+    string CssPercent(double? value) => Math.Clamp(value ?? 0, 0, 100)
+        .ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    string SourceLabel(AppSourceType source) => source switch
+    {
+        AppSourceType.GitRepository => "Git / Buildpack",
+        AppSourceType.Dockerfile => "Dockerfile",
+        AppSourceType.DockerCompose => "Docker Compose",
+        AppSourceType.PrebuiltImage => "Docker image",
+        AppSourceType.StaticSite => "Static site",
+        AppSourceType.Template => "Template",
+        AppSourceType.Upload => "CLI upload",
+        _ => source.ToString()
+    };
+    string SourceIcon(AppSourceType source) => source switch
+    {
+        AppSourceType.GitRepository => "git-branch",
+        AppSourceType.Dockerfile or AppSourceType.PrebuiltImage => "container",
+        AppSourceType.DockerCompose => "boxes",
+        AppSourceType.StaticSite => "file-code-2",
+        AppSourceType.Template => "sparkles",
+        AppSourceType.Upload => "terminal",
+        _ => "box"
+    };
+    string Tone(AppStatus status) => status switch
+    {
+        AppStatus.Running => "is-ok",
+        AppStatus.Deploying => "is-info",
+        AppStatus.Failed or AppStatus.Crashed => "is-danger",
+        AppStatus.Stopped => "is-idle",
+        _ => "is-warn"
+    };
+    string TemplateGlyph(string key, string name) => key switch
+    {
+        "wordpress" => "W", "ghost" => "G", "node" => "JS", "aspnet" => ".N",
+        "laravel" => "L", "redis-commander" => "R", "uptime-kuma" => "U",
+        _ => name.Trim().Length > 1 ? name.Trim()[..2].ToUpperInvariant() : name.ToUpperInvariant()
+    };
 }
-<div class="mb-6 flex items-center justify-between">
-    <h1 class="text-2xl font-bold tracking-tight text-ink">@T["Applications"]</h1>
-    <a href="/apps/create" class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">+ @T["New App"]</a>
+
+<div class="page-heading">
+    <div>
+        <div class="eyebrow"><i data-lucide="boxes" class="h-3.5 w-3.5"></i>@(isFa ? "سرویس‌های قابل استقرار" : "Deployable services")</div>
+        <h1>@T["Applications"]</h1>
+        <p>@(isFa ? "برنامه‌ها را بسازید، استقرارها را دنبال کنید و وضعیت هر محیط را ببینید." : "Build, deploy and operate every service across your environments.")</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+        <a href="/git" class="btn-secondary"><i data-lucide="git-branch" class="h-4 w-4"></i>@(isFa ? "ورود از Git" : "Import from Git")</a>
+        <a href="/apps/create" class="btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>@T["New App"]</a>
+    </div>
 </div>
 
-@if (Model.Count == 0)
-{
-    <div class="rounded-xl border border-dashed border-line-strong p-12 text-center">
-        <p class="text-lg font-medium">@T["No applications yet"]</p>
-        <p class="mt-1 text-ink-muted">@T["Create your first app to get started."]</p>
-        <a href="/apps/create" class="mt-4 inline-block rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Create Application"]</a>
-    </div>
-}
-else
-{
-    <div class="mb-4 flex flex-wrap items-center gap-3">
-        <input id="search" type="search" placeholder="@(isFa ? "جستجوی اپ…" : "Search apps…")"
-               class="w-full sm:w-64 rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent" />
-        <div class="inline-flex rounded-lg bg-surface-2 p-1 text-sm" id="statusFilter">
-            <button data-status="all" class="rounded-md px-3 py-1 bg-surface-2">@(isFa ? "همه" : "All")</button>
-            <button data-status="Running" class="px-3 py-1">@T["Running"]</button>
-            <button data-status="Stopped" class="px-3 py-1">@T["Stopped"]</button>
-            <button data-status="Failed" class="px-3 py-1">@T["Failed"]</button>
+<section class="resource-shell">
+    <div class="resource-toolbar">
+        <div id="statusFilter" class="segmented-control" role="group" aria-label="@(isFa ? "فیلتر وضعیت" : "Status filter")">
+            <button type="button" data-status="all" class="is-active">@(isFa ? "همه" : "All") <span>@Model.Apps.Count</span></button>
+            <button type="button" data-status="Running">@T["Running"] <span>@Model.Running</span></button>
+            <button type="button" data-status="Deploying">@(isFa ? "در حال ساخت" : "Building") <span>@Model.Building</span></button>
+            <button type="button" data-status="Stopped">@T["Stopped"] <span>@Model.Stopped</span></button>
+            <button type="button" data-status="Failed">@T["Failed"] <span>@Model.Failed</span></button>
+        </div>
+        <div class="flex min-w-0 flex-1 flex-wrap justify-end gap-2">
+            <label class="resource-search">
+                <i data-lucide="search" class="h-4 w-4"></i>
+                <input id="appSearch" type="search" placeholder="@(isFa ? "جست‌وجوی برنامه…" : "Search applications…")" />
+            </label>
+            @if (environments.Count > 1)
+            {
+                <select id="environmentFilter" class="compact-select" aria-label="@(isFa ? "محیط" : "Environment")">
+                    <option value="all">@(isFa ? "همه محیط‌ها" : "All environments")</option>
+                    @foreach (var environment in environments) { <option value="@environment">@environment</option> }
+                </select>
+            }
         </div>
     </div>
 
-    <div id="appGrid" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        @foreach (var app in Model)
-        {
-            <a href="/apps/details/@app.Id" class="app-card rounded-xl border border-line bg-surface p-5 hover:border-accent transition"
-               data-name="@app.Name.ToLower() @app.Slug" data-status="@app.Status">
-                <div class="flex items-center justify-between">
-                    <span class="font-semibold text-lg">@app.Name</span>
-                    <partial name="_StatusBadge" model="app.Status" />
-                </div>
-                <div class="mt-2 text-sm text-ink-muted">@app.Slug</div>
-                @* A preview is temporary and has no secrets. Left unmarked it reads as a service
-                   somebody created, and its disappearance a week later reads as a fault. *@
-                @if (app.PreviewBranch is { } branch)
+    @if (Model.Apps.Count == 0)
+    {
+        <div class="empty-state min-h-[28rem]">
+            <span class="empty-state-icon"><i data-lucide="rocket" class="h-6 w-6"></i></span>
+            <h2>@T["No applications yet"]</h2>
+            <p>@(isFa ? "از یک قالب آماده شروع کنید یا مخزن خودتان را متصل کنید." : "Start from a production-ready template or connect your own repository.")</p>
+            <a href="/apps/create" class="btn-primary">@T["Create Application"]</a>
+        </div>
+    }
+    else
+    {
+        <div class="overflow-x-auto">
+            <table class="resource-table min-w-[1120px]">
+                <thead><tr>
+                    <th>@(isFa ? "برنامه" : "Application")</th>
+                    <th>@(isFa ? "سورس" : "Source")</th>
+                    <th>@(isFa ? "پروژه / محیط" : "Project / environment")</th>
+                    <th>@T["Domain"]</th>
+                    <th>@T["Status"]</th>
+                    <th>CPU</th>
+                    <th>@T["Memory"]</th>
+                    <th>@(isFa ? "آخرین استقرار" : "Last deployment")</th>
+                    <th class="text-end">@(isFa ? "عملیات" : "Actions")</th>
+                </tr></thead>
+                <tbody id="appRows">
+                @foreach (var app in Model.Apps)
                 {
-                    <div class="mt-1 text-[11px] text-warn/80 truncate">@(isFa ? "پیش‌نمایش" : "preview") · @branch</div>
+                    var filterStatus = app.Status is AppStatus.Failed or AppStatus.Crashed ? "Failed" : app.Status.ToString();
+                    <tr class="app-row" data-name="@($"{app.Name} {app.Slug} {app.Domain} {app.Project} {app.Environment}".ToLowerInvariant())" data-status="@filterStatus" data-environment="@app.Environment">
+                        <td>
+                            <a href="/apps/details/@app.Id" class="resource-identity">
+                                <span class="resource-avatar bg-accent-soft text-accent-text"><i data-lucide="@SourceIcon(app.SourceType)" class="h-4 w-4"></i></span>
+                                <span><strong>@app.Name</strong><small>@app.Slug · @app.Kind</small></span>
+                            </a>
+                        </td>
+                        <td><span class="runtime-chip">@SourceLabel(app.SourceType)</span></td>
+                        <td><div class="table-primary">@app.Project</div><div class="table-secondary">@app.Environment</div></td>
+                        <td>
+                            @if (app.Domain is { Length: > 0 } host)
+                            { <a href="https://@host" target="_blank" rel="noopener" class="domain-link"><i data-lucide="lock-keyhole" class="h-3.5 w-3.5"></i>@host<i data-lucide="external-link" class="h-3 w-3"></i></a> }
+                            else
+                            { <span class="table-secondary">@(isFa ? "بدون دامنه" : "No domain")</span> }
+                        </td>
+                        <td><span class="resource-status @Tone(app.Status)"><i></i>@app.Status</span></td>
+                        <td><div class="metric-reading">@(app.CpuPercent is null ? "—" : $"{app.CpuPercent:0.#}%")</div><span class="metric-track"><i style="width:@CssPercent(app.CpuPercent)%"></i></span></td>
+                        <td><div class="metric-reading">@Bytes(app.MemoryBytes)</div><span class="table-secondary">@(app.MemoryBytes is null ? (isFa ? "هنوز اندازه‌گیری نشده" : "Not measured yet") : (isFa ? "آخرین نمونه" : "Latest sample"))</span></td>
+                        <td>
+                            @if (app.LastDeploymentNumber is { } number)
+                            {
+                                <div class="table-primary">#@number · @(app.LastDeploymentStatus?.ToString() ?? "—")</div>
+                                <div class="table-secondary">@(app.LastCommit ?? "—") · @app.LastDeploymentAt?.LocalDateTime.ToString("MM/dd HH:mm")</div>
+                            }
+                            else { <span class="table-secondary">@(isFa ? "هنوز استقرار ندارد" : "Never deployed")</span> }
+                        </td>
+                        <td>
+                            <div class="row-actions">
+                                <a href="/apps/details/@app.Id" title="@(isFa ? "بازکردن" : "Open")"><i data-lucide="square-arrow-out-up-right" class="h-4 w-4"></i></a>
+                                @if (app.CanOperate && app.Status == AppStatus.Running)
+                                {
+                                    <form asp-controller="Apps" asp-action="Restart" asp-route-id="@app.Id" method="post">@Html.AntiForgeryToken()<button title="@(T["Restart"].Value)"><i data-lucide="rotate-cw" class="h-4 w-4"></i></button></form>
+                                }
+                                else if (app.CanOperate)
+                                {
+                                    <form asp-controller="Apps" asp-action="Start" asp-route-id="@app.Id" method="post">@Html.AntiForgeryToken()<button title="@(T["Start"].Value)"><i data-lucide="play" class="h-4 w-4"></i></button></form>
+                                }
+                                <a href="/apps/@app.Id/logs" title="@(T["Logs"].Value)"><i data-lucide="scroll-text" class="h-4 w-4"></i></a>
+                            </div>
+                        </td>
+                    </tr>
                 }
-                <div class="mt-1 text-xs text-ink-faint">@app.SourceType · port @app.ContainerPort @(string.IsNullOrEmpty(app.InstanceSizeKey) ? "" : "· " + app.InstanceSizeKey)</div>
-            </a>
-        }
-    </div>
-    <p id="noMatch" class="hidden text-center text-ink-faint py-10 text-sm">@(isFa ? "موردی یافت نشد." : "No apps match.")</p>
+                </tbody>
+            </table>
+        </div>
+        <div class="resource-footer"><span id="appResultCount">@Model.Apps.Count</span> @(isFa ? "برنامه" : "applications")</div>
+        <div id="noAppMatch" class="hidden p-10 text-center text-sm text-ink-faint">@(isFa ? "برنامه‌ای با این فیلتر پیدا نشد." : "No applications match these filters.")</div>
+    }
+</section>
+
+@section RightRail {
+    <section class="rail-panel">
+        <div class="rail-heading"><div><span>@(isFa ? "شروع سریع" : "Quick start")</span><small>@(isFa ? "پروژه آماده و واقعی" : "Deployable templates")</small></div><a href="/templates">@(isFa ? "همه" : "View all")</a></div>
+        <div class="quick-start-grid mt-3">
+            @foreach (var item in Model.QuickStarts)
+            {
+                <a href="/templates/@item.Template.Id/deploy" class="quick-start-item">
+                    <span class="template-logo" data-template-key="@item.Template.Key">@TemplateGlyph(item.Template.Key, item.Name)</span>
+                    <span><strong>@item.Name</strong><small>@(item.IsStack ? $"{item.ResourceCount} resources" : item.Template.Category)</small></span>
+                </a>
+            }
+        </div>
+        <a href="/apps/create#quick-start" class="rail-action">@(isFa ? "مرور همه روش‌های ساخت" : "Browse all create options")<i data-lucide="arrow-right" class="h-4 w-4 rtl:rotate-180"></i></a>
+    </section>
+
+    <section class="rail-panel">
+        <div class="rail-heading"><div><span>@(isFa ? "نمای کلی" : "Applications overview")</span><small>@(isFa ? "وضعیت فعلی" : "Current state")</small></div></div>
+        <div class="overview-total"><strong>@Model.Apps.Count</strong><span>@(isFa ? "کل برنامه‌ها" : "total applications")</span></div>
+        <div class="status-distribution">
+            @if (Model.Apps.Count > 0)
+            {
+                <i class="bg-ok" style="width:@(Model.Running * 100.0 / Model.Apps.Count)%"></i>
+                <i class="bg-info" style="width:@(Model.Building * 100.0 / Model.Apps.Count)%"></i>
+                <i class="bg-ink-faint" style="width:@(Model.Stopped * 100.0 / Model.Apps.Count)%"></i>
+                <i class="bg-danger" style="width:@(Model.Failed * 100.0 / Model.Apps.Count)%"></i>
+            }
+        </div>
+        <div class="mt-4 grid grid-cols-2 gap-2 text-xs">
+            <div class="summary-cell"><span class="text-ok">@Model.Running</span>@T["Running"]</div>
+            <div class="summary-cell"><span class="text-info">@Model.Building</span>@(isFa ? "در حال ساخت" : "Building")</div>
+            <div class="summary-cell"><span class="text-ink-muted">@Model.Stopped</span>@T["Stopped"]</div>
+            <div class="summary-cell"><span class="text-danger">@Model.Failed</span>@T["Failed"]</div>
+        </div>
+    </section>
 }
 
 @section Scripts {
 <script>
-    (function () {
-        const search = document.getElementById('search');
-        const cards = Array.from(document.querySelectorAll('.app-card'));
-        const noMatch = document.getElementById('noMatch');
-        let status = 'all';
-        function apply() {
-            const q = (search?.value || '').toLowerCase().trim();
-            let shown = 0;
-            cards.forEach(c => {
-                const okQ = !q || c.dataset.name.includes(q);
-                const okS = status === 'all' || c.dataset.status.startsWith(status);
-                const show = okQ && okS;
-                c.style.display = show ? '' : 'none';
-                if (show) shown++;
-            });
-            if (noMatch) noMatch.classList.toggle('hidden', shown > 0);
-        }
-        search?.addEventListener('input', apply);
-        document.getElementById('statusFilter')?.querySelectorAll('button').forEach(b => {
-            b.addEventListener('click', () => {
-                status = b.dataset.status;
-                b.parentElement.querySelectorAll('button').forEach(x => x.classList.remove('bg-surface-2'));
-                b.classList.add('bg-surface-2');
-                apply();
-            });
+(() => {
+    const rows = Array.from(document.querySelectorAll('.app-row'));
+    const search = document.getElementById('appSearch');
+    const environment = document.getElementById('environmentFilter');
+    const count = document.getElementById('appResultCount');
+    const empty = document.getElementById('noAppMatch');
+    let status = 'all';
+    function apply() {
+        const query = (search?.value || '').trim().toLowerCase();
+        const env = environment?.value || 'all';
+        let shown = 0;
+        rows.forEach(row => {
+            const visible = (!query || row.dataset.name.includes(query))
+                && (status === 'all' || row.dataset.status === status)
+                && (env === 'all' || row.dataset.environment === env);
+            row.classList.toggle('hidden', !visible);
+            if (visible) shown++;
         });
-    })();
+        if (count) count.textContent = String(shown);
+        empty?.classList.toggle('hidden', shown !== 0);
+    }
+    search?.addEventListener('input', apply);
+    environment?.addEventListener('change', apply);
+    document.querySelectorAll('#statusFilter [data-status]').forEach(button => button.addEventListener('click', () => {
+        status = button.dataset.status;
+        document.querySelectorAll('#statusFilter [data-status]').forEach(x => x.classList.remove('is-active'));
+        button.classList.add('is-active');
+        apply();
+    }));
+})();
 </script>
 }

@@ -115,6 +115,31 @@ public class ProjectAccessServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Batch_app_authorization_returns_only_rows_the_caller_can_operate()
+    {
+        GivenUser(SystemRole.Member, scoped: true, (_shopProject, null, SystemRole.Member));
+        var permitted = GivenApp(_shopProduction);
+        var hidden = GivenApp(_secretEnvironment);
+
+        var result = await Service().TouchableAppIdsAsync(
+            [permitted, hidden], Capabilities.AppsOperate, default);
+
+        result.Should().BeEquivalentTo([permitted]);
+    }
+
+    [Fact]
+    public async Task Batch_app_authorization_does_not_turn_visibility_into_an_action_permission()
+    {
+        GivenUser(SystemRole.Viewer, scoped: true, (_shopProject, null, SystemRole.Viewer));
+        var visible = GivenApp(_shopProduction);
+
+        var result = await Service().TouchableAppIdsAsync(
+            [visible], Capabilities.AppsOperate, default);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task The_same_holds_for_a_database()
     {
         GivenUser(SystemRole.Member, scoped: true, (_shopProject, null, SystemRole.Member));

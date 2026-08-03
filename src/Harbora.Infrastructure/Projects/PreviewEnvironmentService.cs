@@ -158,6 +158,7 @@ public sealed class PreviewEnvironmentService(
             SourceType = parent.SourceType,
             PrebuiltImage = parent.PrebuiltImage,
             DockerfilePath = parent.DockerfilePath,
+            ComposeFilePath = parent.ComposeFilePath,
             ContainerPort = parent.ContainerPort,
             HealthCheckPath = parent.HealthCheckPath,
             InstanceSizeKey = parent.InstanceSizeKey,

@@ -5,6 +5,7 @@ using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Git;
 using Harbora.Domain.Jobs;
+using Harbora.Domain.Monitoring;
 using Harbora.Domain.Networking;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
@@ -42,13 +43,68 @@ public sealed class AppsController(
         if (await access.VisibleProjectIdsAsync(ct) is { } visible)
             query = query.Where(a => a.EnvironmentId != null && visible.Contains(a.Environment!.ProjectId));
 
-        var apps = await query.OrderByDescending(a => a.UpdatedAt).ToListAsync(ct);
-        return View(apps);
+        var apps = await query
+            .AsNoTracking()
+            .Include(a => a.Environment).ThenInclude(e => e!.Project)
+            .Include(a => a.Domains.Where(d => d.IsPrimary))
+            .Include(a => a.Deployments.OrderByDescending(d => d.Number).Take(1))
+            .OrderByDescending(a => a.UpdatedAt)
+            .ToListAsync(ct);
+        var operable = await access.TouchableAppIdsAsync(
+            apps.Select(a => a.Id), Capabilities.AppsOperate, ct);
+        var activeDeploymentIds = apps
+            .Where(a => a.ActiveDeploymentId is not null && a.SourceType != AppSourceType.DockerCompose)
+            .Select(a => a.ActiveDeploymentId!.Value)
+            .ToList();
+        var activeNumbers = activeDeploymentIds.Count == 0
+            ? new Dictionary<Guid, int>()
+            : await db.Deployments.AsNoTracking()
+                .Where(d => activeDeploymentIds.Contains(d.Id))
+                .ToDictionaryAsync(d => d.Id, d => d.Number, ct);
+        var metricRefs = apps
+            .Where(a => a.ActiveDeploymentId is { } id && activeNumbers.ContainsKey(id))
+            .ToDictionary(
+                a => a.Id,
+                a => Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(
+                    a.Slug, activeNumbers[a.ActiveDeploymentId!.Value]));
+        var resourceRefs = metricRefs.Values.Distinct().ToList();
+        var metrics = resourceRefs.Count == 0
+            ? new List<MonitoringMetric>()
+            : await db.MonitoringMetrics.AsNoTracking()
+                .Where(m => m.ResourceRef != null && resourceRefs.Contains(m.ResourceRef)
+                            && (m.Name == "cpu.percent" || m.Name == "mem.used"))
+                .OrderByDescending(m => m.Timestamp).Take(2_000).ToListAsync(ct);
+
+        return View(new ApplicationsPageViewModel
+        {
+            Apps = apps.Select(a =>
+            {
+                var deployment = a.Deployments.OrderByDescending(d => d.Number).FirstOrDefault();
+                metricRefs.TryGetValue(a.Id, out var metricRef);
+                var cpu = metricRef is null ? null : metrics
+                    .FirstOrDefault(m => m.ResourceRef == metricRef && m.Name == "cpu.percent")?.Value;
+                var memory = metricRef is null ? null : metrics
+                    .FirstOrDefault(m => m.ResourceRef == metricRef && m.Name == "mem.used")?.Value;
+                return new ApplicationRowViewModel(
+                    a.Id, a.Name, a.Slug, a.SourceType, a.Kind, a.Status,
+                    a.Environment?.Project?.Name ?? "—", a.Environment?.Name ?? "—",
+                    a.Domains.FirstOrDefault(d => d.IsPrimary)?.Host,
+                    a.InstanceSizeKey, deployment?.Status, deployment?.Number,
+                    deployment?.FinishedAt ?? deployment?.CreatedAt,
+                    deployment?.CommitSha is { Length: > 0 } sha ? sha[..Math.Min(7, sha.Length)] : null,
+                    operable.Contains(a.Id), cpu, memory is null ? null : (long?)memory.Value);
+            }).ToList(),
+            QuickStarts = (await LoadTemplateCardsAsync(ct)).Where(t => !t.IsManagedService).Take(6).ToList()
+        });
     }
 
     [HttpGet]
     [Authorize(Policy = Capabilities.AppsCreate)]
-    public async Task<IActionResult> Create(Guid? environmentId, Guid? templateId, CancellationToken ct)
+    public async Task<IActionResult> Create(
+        Guid? environmentId,
+        Guid? templateId,
+        AppSourceType? source,
+        CancellationToken ct)
     {
         // Legacy dashboard/catalog links used to land here with ?templateId=, but the form ignored
         // it and created an ordinary Git app. Templates now have a reviewable stack deployment
@@ -60,7 +116,11 @@ public sealed class AppsController(
         await PopulateTemplates(ct);
         // Arriving from a project page pre-selects that environment.
         ViewData["EnvironmentId"] = environmentId;
-        return View(new CreateAppViewModel());
+        return View(new CreateAppViewModel
+        {
+            EnvironmentId = environmentId,
+            SourceType = source ?? AppSourceType.GitRepository
+        });
     }
 
     [HttpPost]
@@ -71,7 +131,10 @@ public sealed class AppsController(
         // Auto-derive a unique slug from the name (keeps the form to just "name + source").
         var slug = await UniqueSlugAsync(Slugify(string.IsNullOrWhiteSpace(model.Slug) ? model.Name : model.Slug!), ct);
 
-        if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile or AppSourceType.StaticSite
+        var usesRepository = model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile
+            or AppSourceType.StaticSite or AppSourceType.DockerCompose;
+
+        if (usesRepository
             && string.IsNullOrWhiteSpace(model.CloneUrl))
             ModelState.AddModelError(nameof(model.CloneUrl), "A Git repository URL is required.");
 
@@ -102,6 +165,16 @@ public sealed class AppsController(
         if (!check.Allowed)
             ModelState.AddModelError(string.Empty, check.Reason ?? "Plan quota exceeded.");
 
+        // The environment id is a writable form value. Workspace ownership alone is not enough:
+        // a project-scoped member must not create an app in another project in the same workspace.
+        var environment = await projects.ResolveEnvironmentAsync(WorkspaceId, model.EnvironmentId, ct);
+        if (!await access.AllowsAsync(
+                new ResourcePlacement(environment.ProjectId, environment.Id), Capabilities.AppsCreate, ct))
+        {
+            ModelState.AddModelError(nameof(model.EnvironmentId),
+                "You do not have permission to create an app in this environment.");
+        }
+
         // Place on a node with capacity: honour an explicit choice (guarded) or auto-schedule.
         var placement = model.ServerId is { } chosen && await db.Servers.AnyAsync(s => s.Id == chosen, ct)
             ? await scheduler.CheckAsync(chosen, needMem, needCpu, ct)
@@ -116,10 +189,6 @@ public sealed class AppsController(
         }
 
         var serverId = placement.ServerId!.Value;
-
-        // Everything belongs to a project from the moment it is created. Ownership of a chosen
-        // environment is checked inside the service — see ResolveEnvironmentAsync.
-        var environment = await projects.ResolveEnvironmentAsync(WorkspaceId, model.EnvironmentId, ct);
 
         var app = new App
         {
@@ -139,10 +208,12 @@ public sealed class AppsController(
                 : null,
             // Only meaningful for a service built from a repository — there is no branch to
             // preview otherwise.
-            PreviewsEnabled = model.PreviewsEnabled && model.SourceType is AppSourceType.GitRepository
-                or AppSourceType.Dockerfile or AppSourceType.StaticSite,
+            PreviewsEnabled = model.PreviewsEnabled && usesRepository,
             ContainerPort = model.ContainerPort <= 0 ? 80 : model.ContainerPort,
             DockerfilePath = model.DockerfilePath,
+            ComposeFilePath = model.SourceType == AppSourceType.DockerCompose
+                ? (string.IsNullOrWhiteSpace(model.ComposeFilePath) ? null : model.ComposeFilePath.Trim())
+                : null,
             PrebuiltImage = model.PrebuiltImage,
             GitRef = model.GitRef,
             TemplateId = model.TemplateId,
@@ -151,7 +222,7 @@ public sealed class AppsController(
             CpuLimit = size?.CpuCores ?? 0
         };
 
-        if (model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile or AppSourceType.StaticSite)
+        if (usesRepository)
         {
             var provider = new GitProvider
             {
@@ -193,7 +264,8 @@ public sealed class AppsController(
 
         // "Give it a repo and it just works": build + deploy right away and show live logs.
         var canDeploy = model.SourceType is AppSourceType.GitRepository
-            or AppSourceType.Dockerfile or AppSourceType.PrebuiltImage or AppSourceType.StaticSite;
+            or AppSourceType.Dockerfile or AppSourceType.DockerCompose
+            or AppSourceType.PrebuiltImage or AppSourceType.StaticSite;
         if (model.DeployNow && canDeploy)
         {
             var deploymentId = await deployEngine.QueueDeploymentAsync(
@@ -626,8 +698,11 @@ public sealed class AppsController(
     {
         // Every project's environments, so a service can be created where it belongs rather than
         // always landing in the default one.
-        ViewBag.Environments = await db.Environments
-            .Where(e => e.WorkspaceId == WorkspaceId)
+        var environmentQuery = db.Environments.Where(e => e.WorkspaceId == WorkspaceId);
+        if (await access.VisibleProjectIdsAsync(ct) is { } visible)
+            environmentQuery = environmentQuery.Where(e => visible.Contains(e.ProjectId));
+
+        ViewBag.Environments = await environmentQuery
             .OrderBy(e => e.Project!.Name).ThenByDescending(e => e.IsDefault).ThenBy(e => e.Name)
             .Select(e => new SelectListItem($"{e.Project!.Name} · {e.Name}", e.Id.ToString()))
             .ToListAsync(ct);
@@ -639,6 +714,9 @@ public sealed class AppsController(
             .Where(t => Harbora.Infrastructure.Templates.TemplateCatalog.IsVisibleTo(t, WorkspaceId))
             .ToList();
         ViewBag.Templates = templates.Select(t => new SelectListItem($"{t.Name}", t.Id.ToString())).ToList();
+        var quickStarts = await LoadTemplateCardsAsync(ct);
+        ViewBag.QuickStarts = quickStarts.Where(t => !t.IsManagedService).Take(6)
+            .Concat(quickStarts.Where(t => t.IsManagedService).Take(4)).ToList();
 
         ViewBag.Servers = await db.Servers.OrderByDescending(s => s.IsLocal).ThenBy(s => s.Name)
             .Select(s => new SelectListItem(s.IsLocal ? s.Name + " (local)" : s.Name, s.Id.ToString())).ToListAsync(ct);
@@ -655,6 +733,24 @@ public sealed class AppsController(
         ViewBag.Sizes = sizes
             .Where(s => allowed is null || allowed.Contains(s.Key))
             .Select(s => new SelectListItem($"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key))
+            .ToList();
+    }
+
+    private async Task<IReadOnlyList<TemplateCatalogItemViewModel>> LoadTemplateCardsAsync(CancellationToken ct)
+    {
+        var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+        var templates = await db.AppTemplates.AsNoTracking()
+            .Where(t => t.IsEnabled)
+            .OrderBy(t => t.Category).ThenBy(t => t.Name)
+            .ToListAsync(ct);
+
+        return templates
+            .Where(t => Harbora.Infrastructure.Templates.TemplateCatalog.IsVisibleTo(t, WorkspaceId))
+            .Select(t => TemplateCatalogItemViewModel.Create(t, isFa))
+            .Where(t => t is not null)
+            .Cast<TemplateCatalogItemViewModel>()
+            .OrderByDescending(t => t.Manifest.Featured)
+            .ThenBy(t => t.Name)
             .ToList();
     }
 
