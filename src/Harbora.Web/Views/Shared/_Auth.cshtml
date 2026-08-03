@@ -24,9 +24,9 @@
     else
     {
         foreach (var css in viteCss) { <link rel="stylesheet" href="@css" /> }
-        @* Versioned: this file carries no content hash, so a browser that cached it once kept
-           serving the old copy and a CSS fix could ship without ever arriving. *@
-        <link rel="stylesheet" href="~/css/fallback.css" asp-append-version="true" />
+        @* The fallback is mutually exclusive with the generated stylesheet. Loading both used to
+           let emergency selectors override production components such as primary action widths. *@
+        if (viteCss.Count == 0) { <link rel="stylesheet" href="~/css/fallback.css" asp-append-version="true" /> }
     }
 
     <script>

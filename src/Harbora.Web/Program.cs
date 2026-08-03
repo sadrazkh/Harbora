@@ -15,6 +15,18 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Harbora is deployed as a container and its operational log is stdout/stderr. The Windows host
+// adds EventLog by default; under an ordinary (non-admin) account that provider can throw while
+// trying to create/open the ".NET Runtime" source, turning an otherwise harmless EF warning into a
+// fatal startup exception. Console is portable, works with `docker logs`, and never needs host
+// registry/Event Log privileges.
+builder.Logging.ClearProviders();
+builder.Logging.AddSimpleConsole(o =>
+{
+    o.SingleLine = true;
+    o.TimestampFormat = "HH:mm:ss ";
+});
+
 // Break-glass admin commands run before anything else is configured, so they still work when the
 // app itself refuses to start (missing master key, lost admin password). See AdminCommands.
 if (args.Length > 0 && string.Equals(args[0], AdminCommands.Verb, StringComparison.OrdinalIgnoreCase))

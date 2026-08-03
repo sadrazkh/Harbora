@@ -99,7 +99,10 @@ public static class DependencyInjection
 
         // Backups (config + volume/db), storage (local + S3), and the schedule runner.
         services.Configure<Backups.BackupOptions>(config.GetSection("Backups"));
-        services.AddSingleton<IBackupStorage, Backups.BackupStorage>();
+        // BackupStorage executes SFTP transfers through IDockerEngine, which is scoped because its
+        // connection options may be resolved per request/node. Registering the storage adapter as a
+        // singleton captured that scoped engine and made Development startup fail DI validation.
+        services.AddScoped<IBackupStorage, Backups.BackupStorage>();
         services.AddScoped<Backups.BackupEngine>();
         // Sends a copy of each finished backup to Telegram/email, alongside the stored artifact.
         services.AddScoped<Backups.BackupDeliveryService>();
@@ -116,6 +119,7 @@ public static class DependencyInjection
 
         // Projects + environments: the grouping every screen and the private network hang off.
         services.AddScoped<Projects.ProjectService>();
+        services.AddScoped<Templates.TemplateDeploymentService>();
         // A branch gets an environment of its own, and loses it again when the branch goes.
         services.AddScoped<Projects.PreviewEnvironmentService>();
         // Branches get abandoned rather than deleted, so the webhook alone would leak services.

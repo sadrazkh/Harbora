@@ -23,8 +23,9 @@
     else
     {
         foreach (var css in viteCss) { <link rel="stylesheet" href="@css" /> }
-        @* Fallback base styles so the shell is usable even before `npm run build`. *@
-        <link rel="stylesheet" href="~/css/fallback.css" />
+        @* Never layer the emergency sheet on top of the generated design system: its deliberately
+           broad selectors are only meant to keep a checkout usable before `npm run build`. *@
+        if (viteCss.Count == 0) { <link rel="stylesheet" href="~/css/fallback.css" asp-append-version="true" /> }
     }
     <script>
         // Apply persisted theme before paint to avoid a flash. Values: dark | light | system.
@@ -49,10 +50,12 @@
 <body class="h-full bg-canvas text-ink antialiased">
 <div class="flex h-full">
     <div id="backdrop" class="app-backdrop hidden md:hidden"></div>
-    <aside id="sidebar" class="app-sidebar flex md:w-60 flex-col border-e border-line bg-surface">
-        <div class="flex items-center gap-2.5 px-5 h-16 border-b border-line">
-            <span class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-accent font-bold text-white">H</span>
-            <span class="text-lg font-semibold tracking-tight text-ink">Harbora</span>
+    <aside id="sidebar" class="app-sidebar flex w-64 shrink-0 flex-col border-e border-line bg-surface transition-[width] duration-200">
+        <div class="sidebar-brand flex h-16 items-center gap-2.5 border-b border-line px-5">
+            <span class="harbora-mark" aria-hidden="true">
+                <svg viewBox="0 0 32 32" class="h-8 w-8" fill="none"><path d="M16 2.5 28 9.4v13.2L16 29.5 4 22.6V9.4L16 2.5Z" fill="currentColor" opacity=".14"/><path d="m9 11.6 7-4 7 4-7 4-7-4Zm0 2.9 5.6 3.2v6.5L9 21v-6.5Zm14 0v6.5l-5.6 3.2v-6.5l5.6-3.2Z" fill="currentColor"/></svg>
+            </span>
+            <span class="sidebar-label text-lg font-bold tracking-tight text-ink">Harbora</span>
         </div>
         <partial name="Design/_Sidebar" />
     </aside>
@@ -63,13 +66,13 @@
         @* The rail is rendered exactly once. A Razor section cannot be rendered twice, so its
            placement is a CSS concern: beside the content on wide screens, beneath it otherwise.
            It moves rather than disappearing, because on these pages it carries information. *@
-        <div class="flex flex-1 min-h-0 flex-col overflow-y-auto xl:flex-row">
-            <main class="flex-1 min-w-0 p-4 md:p-6">
+        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto 2xl:flex-row">
+            <main class="min-w-0 flex-1 p-4 md:p-6 2xl:p-7">
                 @RenderBody()
             </main>
             @if (IsSectionDefined("RightRail"))
             {
-                <aside class="w-full shrink-0 border-t border-line bg-surface p-5 space-y-5 xl:w-80 xl:border-t-0 xl:border-s">
+                <aside class="w-full shrink-0 space-y-5 border-t border-line bg-surface p-5 2xl:w-80 2xl:border-s 2xl:border-t-0">
                     @await RenderSectionAsync("RightRail", required: false)
                 </aside>
             }

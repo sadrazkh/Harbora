@@ -12,6 +12,7 @@ src/Harbora.Web/wwwroot/build/
 # Secrets / local
 .env
 *.log
+.runtime/
 deploy/**/.env
 appsettings.*.local.json
 

@@ -36,12 +36,13 @@ public class TemplateResolverTests
     }
 
     [Fact]
-    public void Multi_service_template_is_unsupported_with_reason()
+    public void Multi_service_template_resolves_the_application_image()
     {
         // WordPress requires MariaDB — not one-click yet, but must not throw NotSupported.
         var spec = TemplateResolver.Resolve("""{"image":"wordpress:php8.3-apache","port":80,"requires":["mariadb"]}""");
-        spec.Kind.Should().Be(TemplateResolver.TemplateKind.Unsupported);
-        spec.Reason.Should().NotBeNullOrEmpty();
+        spec.Kind.Should().Be(TemplateResolver.TemplateKind.Image);
+        spec.Image.Should().Be("wordpress:php8.3-apache");
+        spec.Reason.Should().BeNull();
     }
 
     [Fact]

@@ -1,50 +1,103 @@
 @using Microsoft.AspNetCore.Mvc.Localization
+@using Harbora.Infrastructure.Navigation
+@using Harbora.Web.Infrastructure
 @inject IViewLocalizer T
 @{
-    var isRtl = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var groups = NavigationMap.VisibleTo(NavigationCapabilities.For(User));
+    var identity = User.Identity?.Name ?? "Harbora";
+    var initial = identity.Trim()[..1].ToUpperInvariant();
+
+    string ItemLabel(string key) => (key, isFa) switch
+    {
+        ("dashboard", true) => "داشبورد", ("dashboard", false) => "Dashboard",
+        ("applications", true) => "برنامه‌ها", ("applications", false) => "Applications",
+        ("services", true) => "دیتابیس‌ها", ("services", false) => "Databases",
+        ("deployments", true) => "استقرارها", ("deployments", false) => "Deployments",
+        ("networks", true) => "شبکه‌ها", ("networks", false) => "Networks",
+        ("domains", true) => "دامنه‌ها و SSL", ("domains", false) => "Domains & SSL",
+        ("routing", true) => "مسیریابی", ("routing", false) => "Routing",
+        ("backups", true) => "پشتیبان‌ها", ("backups", false) => "Backups",
+        ("monitoring", true) => "پایش", ("monitoring", false) => "Monitoring",
+        ("audit", true) => "گزارش رخدادها", ("audit", false) => "Audit log",
+        ("templates", true) => "قالب‌های آماده", ("templates", false) => "Templates",
+        ("users", true) => "کاربران و تیم", ("users", false) => "Users & Team",
+        ("servers", true) => "سرورها", ("servers", false) => "Servers",
+        ("plans", true) => "پلن‌ها", ("plans", false) => "Plans",
+        ("tenants", true) => "فضاهای کاری", ("tenants", false) => "Workspaces",
+        ("settings", true) => "تنظیمات", ("settings", false) => "Settings",
+        _ => key
+    };
 }
-<header class="flex h-16 shrink-0 items-center gap-3 border-b border-line bg-surface px-4 md:px-5">
-    <button data-toggle-sidebar class="md:hidden rounded-lg p-2 text-ink-muted hover:bg-surface-2" aria-label="menu">
+
+<header class="relative z-20 flex h-16 shrink-0 items-center gap-2 border-b border-line bg-surface/95 px-3 backdrop-blur md:gap-3 md:px-5">
+    <button data-toggle-sidebar class="rounded-lg p-2 text-ink-muted hover:bg-surface-2 md:hidden" aria-label="@(isFa ? "بازکردن منوی اصلی" : "Open main navigation")">
         <i data-lucide="menu" class="h-5 w-5"></i>
     </button>
 
-    @await Component.InvokeAsync("EnvironmentSwitcher")
+    <div class="hidden sm:block">@await Component.InvokeAsync("EnvironmentSwitcher")</div>
 
-    <div class="flex-1 flex justify-center px-2">
-        <label class="relative w-full max-w-md">
-            <i data-lucide="search" class="pointer-events-none absolute inset-y-0 start-3 my-auto h-4 w-4 text-ink-faint"></i>
-            <input type="search" placeholder="@(isRtl ? "جست‌وجو…" : "Search anything…")"
-                   class="w-full rounded-lg border border-line bg-surface-2 py-2 ps-9 pe-3 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none" />
-        </label>
+    <div class="flex min-w-0 flex-1 justify-center px-1 md:px-3">
+        <button type="button" data-command-open class="group flex w-full max-w-lg items-center gap-2 rounded-xl border border-line-strong bg-surface-2 px-3 py-2 text-start text-sm text-ink-faint hover:border-accent/30 hover:bg-surface">
+            <i data-lucide="search" class="h-4 w-4 shrink-0"></i>
+            <span class="min-w-0 flex-1 truncate">@(isFa ? "جست‌وجوی برنامه، پروژه، دامنه…" : "Search apps, projects, domains…")</span>
+            <kbd class="hidden rounded-md border border-line bg-surface px-1.5 py-0.5 font-sans text-[10px] text-ink-faint md:inline">⌘ K</kbd>
+        </button>
     </div>
 
-    @* Theme, language and sign-out are existing, working controls. They are restyled here, not
-       replaced: the mockups show an avatar menu, but hiding a one-click language switch behind a
-       dropdown is a downgrade for a panel whose default language is not its default layout. *@
-    <div class="flex items-center rounded-lg bg-surface-2 p-0.5" role="group" aria-label="@T["Theme"]">
-        @foreach (var (value, icon, label) in new[]
+    <div class="relative" data-menu-root>
+        <button type="button" data-menu-trigger class="btn-primary inline-flex items-center gap-2 whitespace-nowrap px-3 md:px-4" aria-expanded="false" aria-label="@(isFa ? "منبع جدید" : "New resource")">
+            <i data-lucide="plus" class="h-4 w-4"></i><span class="hidden lg:inline">@(isFa ? "منبع جدید" : "New resource")</span><i data-lucide="chevron-down" class="hidden h-3.5 w-3.5 lg:block"></i>
+        </button>
+        <div data-menu class="topbar-menu end-0 hidden w-56">
+            <a href="/apps/create"><span class="menu-icon bg-accent-soft text-accent-text"><i data-lucide="box" class="h-4 w-4"></i></span><span><strong>@(isFa ? "برنامه" : "Application")</strong><small>@(isFa ? "از Git یا Docker" : "From Git or Docker")</small></span></a>
+            <a href="/databases/create"><span class="menu-icon bg-info-soft text-info"><i data-lucide="database" class="h-4 w-4"></i></span><span><strong>@(isFa ? "دیتابیس" : "Database")</strong><small>@(isFa ? "سرویس مدیریت‌شده" : "Managed service")</small></span></a>
+            <a href="/templates"><span class="menu-icon bg-warn-soft text-warn"><i data-lucide="sparkles" class="h-4 w-4"></i></span><span><strong>@(isFa ? "پروژهٔ آماده" : "Template project")</strong><small>@(isFa ? "استک کامل" : "Complete stack")</small></span></a>
+        </div>
+    </div>
+
+    <a href="/alerts" class="hidden rounded-lg p-2 text-ink-muted hover:bg-surface-2 md:block" title="@(isFa ? "هشدارها" : "Alerts")"><i data-lucide="bell" class="h-4.5 w-4.5"></i></a>
+
+    <div class="hidden items-center rounded-lg bg-surface-2 p-0.5 xl:flex" role="group" aria-label="@T["Theme"]">
+        @foreach (var (value, icon, label) in new[] { ("system", "monitor", T["System"].Value), ("light", "sun", T["Light"].Value), ("dark", "moon", T["Dark"].Value) })
         {
-            ("system", "monitor", T["System"].Value),
-            ("light",  "sun",     T["Light"].Value),
-            ("dark",   "moon",    T["Dark"].Value)
-        })
-        {
-            <button type="button" data-theme-choice="@value" title="@label" aria-label="@label"
-                    class="rounded-md px-2 py-1 text-ink-faint">
-                <i data-lucide="@icon" class="h-4 w-4"></i>
-            </button>
+            <button type="button" data-theme-choice="@value" title="@label" aria-label="@label" class="rounded-md px-2 py-1 text-ink-faint"><i data-lucide="@icon" class="h-4 w-4"></i></button>
         }
     </div>
 
-    <form asp-controller="Account" asp-action="SetLanguage" method="post" class="flex items-center">
-        <input type="hidden" name="returnUrl" value="@Context.Request.Path" />
-        <input type="hidden" name="culture" value="@(isRtl ? "en" : "fa")" />
-        <button type="submit" class="rounded-lg px-2 py-1.5 text-sm text-ink-muted hover:bg-surface-2" title="@T["Language"]">
-            @(isRtl ? "EN" : "فا")
+    <div class="relative" data-menu-root>
+        <button type="button" data-menu-trigger class="flex items-center gap-2 rounded-xl p-1.5 hover:bg-surface-2" aria-expanded="false" aria-label="@(isFa ? "منوی حساب کاربری" : "Account menu")">
+            <span class="grid h-8 w-8 place-items-center rounded-lg bg-accent text-xs font-bold text-white">@initial</span>
+            <span class="hidden max-w-28 truncate text-xs font-medium text-ink 2xl:block">@identity</span>
+            <i data-lucide="chevron-down" class="hidden h-3.5 w-3.5 text-ink-faint lg:block"></i>
         </button>
-    </form>
-
-    <form asp-controller="Account" asp-action="Logout" method="post">
-        <button type="submit" class="rounded-lg border border-line px-3 py-1.5 text-sm text-ink-muted hover:bg-surface-2">@T["Logout"]</button>
-    </form>
+        <div data-menu class="topbar-menu end-0 hidden w-52">
+            <div class="border-b border-line px-3 py-2"><strong class="block truncate text-xs text-ink">@identity</strong><small class="text-[10px] text-ink-faint">@(isFa ? "حساب Harbora" : "Harbora account")</small></div>
+            <a href="/settings"><i data-lucide="settings" class="h-4 w-4"></i><span><strong>@(isFa ? "تنظیمات" : "Settings")</strong></span></a>
+            <form asp-controller="Account" asp-action="SetLanguage" method="post">
+                <input type="hidden" name="returnUrl" value="@Context.Request.Path" /><input type="hidden" name="culture" value="@(isFa ? "en" : "fa")" />
+                <button type="submit"><i data-lucide="languages" class="h-4 w-4"></i><span>@(isFa ? "English" : "فارسی")</span></button>
+            </form>
+            <form asp-controller="Account" asp-action="Logout" method="post" class="border-t border-line"><button type="submit" class="text-danger"><i data-lucide="log-out" class="h-4 w-4"></i><span>@T["Logout"]</span></button></form>
+        </div>
+    </div>
 </header>
+
+<div data-command-palette class="command-palette hidden" aria-hidden="true">
+    <div data-command-backdrop class="absolute inset-0 bg-black/35 backdrop-blur-sm"></div>
+    <section class="command-dialog" role="dialog" aria-modal="true" aria-label="@(isFa ? "جست‌وجوی سریع" : "Quick search")">
+        <div class="flex items-center gap-3 border-b border-line px-4">
+            <i data-lucide="search" class="h-5 w-5 text-ink-faint"></i>
+            <input data-command-input type="search" autocomplete="off" placeholder="@(isFa ? "نام یک بخش یا اقدام را بنویسید…" : "Type a page or action…")" class="h-14 min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-faint" />
+            <kbd class="rounded-md border border-line bg-surface-2 px-2 py-1 text-[10px] text-ink-faint">ESC</kbd>
+        </div>
+        <div data-command-results class="max-h-[24rem] overflow-y-auto p-2">
+            <div class="px-2 py-2 text-[10px] font-semibold uppercase tracking-wider text-ink-faint">@(isFa ? "رفتن به" : "Go to")</div>
+            @foreach (var item in groups.SelectMany(g => g.Items))
+            {
+                <a asp-controller="@item.Controller" asp-action="@item.Action" data-command-item data-search="@ItemLabel(item.Key) @item.Key" class="command-item"><span class="menu-icon bg-surface-2 text-ink-muted"><i data-lucide="@item.Icon" class="h-4 w-4"></i></span><span class="flex-1">@ItemLabel(item.Key)</span><i data-lucide="arrow-up-left" class="h-3.5 w-3.5 text-ink-faint"></i></a>
+            }
+        </div>
+        <div class="flex items-center justify-between border-t border-line px-4 py-2 text-[10px] text-ink-faint"><span>@(isFa ? "↑↓ انتخاب · Enter بازکردن" : "↑↓ select · Enter open")</span><span>Harbora</span></div>
+    </section>
+</div>

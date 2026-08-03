@@ -1,0 +1,91 @@
+@model TemplateDeployPageViewModel
+@using Harbora.Web.ViewModels
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    ViewData["Title"] = isFa ? $"استقرار {Model.Item.Name}" : $"Deploy {Model.Item.Name}";
+    var requiredInputs = Model.Item.Manifest.Variables.Where(v => string.IsNullOrWhiteSpace(v.Default) && !v.Secret).ToList();
+}
+
+<div class="mx-auto max-w-5xl">
+    <nav class="mb-5 flex items-center gap-2 text-xs text-ink-faint">
+        <a href="/templates" class="hover:text-accent-text">@(isFa ? "قالب‌ها" : "Templates")</a>
+        <i data-lucide="chevron-right" class="h-3.5 w-3.5"></i>
+        <a href="/templates/@Model.Item.Template.Id" class="hover:text-accent-text">@Model.Item.Name</a>
+        <i data-lucide="chevron-right" class="h-3.5 w-3.5"></i>
+        <span class="text-ink-muted">@(isFa ? "بررسی و استقرار" : "Review & deploy")</span>
+    </nav>
+
+    <div class="mb-6">
+        <span class="eyebrow"><i data-lucide="rocket" class="h-3.5 w-3.5"></i>@(isFa ? "راه‌اندازی پروژه" : "Create project")</span>
+        <h1 class="mt-2 text-2xl font-bold tracking-tight text-ink">@(isFa ? $"استقرار {Model.Item.Name}" : $"Deploy {Model.Item.Name}")</h1>
+        <p class="mt-1 text-sm text-ink-muted">@(isFa ? "نام‌ها را انتخاب کنید و قبل از اجرا، طرح کامل منابع را مرور کنید." : "Choose the names and review the complete resource plan before anything is created.")</p>
+    </div>
+
+    <form asp-controller="Templates" asp-action="Deploy" asp-route-id="@Model.Item.Template.Id" method="post" class="grid gap-6 lg:grid-cols-[1fr_21rem]">
+        @Html.AntiForgeryToken()
+        <input asp-for="Input.TemplateId" type="hidden" />
+        <section class="space-y-5 rounded-2xl border border-line bg-surface p-5 shadow-panel md:p-6">
+            <div asp-validation-summary="All" class="validation-box"></div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div><label asp-for="Input.ProjectName" class="form-label">@(isFa ? "نام پروژه" : "Project name")</label><input asp-for="Input.ProjectName" class="form-control" autofocus /><span asp-validation-for="Input.ProjectName" class="field-error"></span></div>
+                <div><label asp-for="Input.ResourceName" class="form-label">@(Model.Item.IsManagedService ? (isFa ? "نام سرویس" : "Service name") : (isFa ? "نام برنامه" : "Application name"))</label><input asp-for="Input.ResourceName" class="form-control" /><span asp-validation-for="Input.ResourceName" class="field-error"></span></div>
+            </div>
+
+            @if (Model.Item.NeedsRepository)
+            {
+                <div class="rounded-xl border border-info/20 bg-info-soft p-4">
+                    <div class="mb-3 flex items-center gap-2 text-sm font-semibold text-info"><i data-lucide="git-branch" class="h-4 w-4"></i>@(isFa ? "منبع کد" : "Source repository")</div>
+                    <div><label asp-for="Input.RepositoryUrl" class="form-label">@(isFa ? "آدرس مخزن Git" : "Git repository URL")</label><input asp-for="Input.RepositoryUrl" dir="ltr" class="form-control" placeholder="https://github.com/you/project.git" /><span asp-validation-for="Input.RepositoryUrl" class="field-error"></span></div>
+                    <div class="mt-3"><label asp-for="Input.GitRef" class="form-label">@(isFa ? "برنچ یا تگ" : "Branch or tag")</label><input asp-for="Input.GitRef" dir="ltr" class="form-control" /></div>
+                </div>
+            }
+
+            @if (requiredInputs.Count > 0)
+            {
+                <div>
+                    <div class="mb-3"><h2 class="text-sm font-semibold text-ink">@(isFa ? "پیکربندی لازم" : "Required configuration")</h2><p class="mt-1 text-xs text-ink-faint">@(isFa ? "این مقادیر را فقط شما می‌دانید و Harbora چیزی حدس نمی‌زند." : "Only you know these values; Harbora will not invent them.")</p></div>
+                    <div class="space-y-3">
+                        @foreach (var variable in requiredInputs)
+                        {
+                            <div><label class="form-label" for="var-@variable.Key">@variable.Key</label><input id="var-@variable.Key" name="Input.Variables[@variable.Key]" value="@(Model.Input.Variables.GetValueOrDefault(variable.Key))" dir="ltr" class="form-control" required /><p class="mt-1 text-xs text-ink-faint">@variable.Description</p></div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (!Model.Item.IsManagedService)
+            {
+                <label class="flex items-start gap-3 rounded-xl border border-line bg-surface-2 p-4">
+                    <input asp-for="Input.DeployNow" type="checkbox" class="mt-0.5 h-4 w-4 rounded border-line-strong text-accent" />
+                    <span><span class="block text-sm font-medium text-ink">@(isFa ? "پس از ساخت منابع، استقرار را شروع کن" : "Start deployment after provisioning")</span><span class="mt-1 block text-xs leading-5 text-ink-faint">@(isFa ? "سرویس‌های وابسته اول در صف اجرا می‌شوند و سپس برنامه build و health-check می‌شود." : "Dependencies are queued first; the app is then built and health-checked.")</span></span>
+                </label>
+            }
+
+            <div class="flex flex-wrap items-center gap-3 border-t border-line pt-5">
+                <button class="btn-primary inline-flex items-center gap-2 px-5 py-2.5"><i data-lucide="rocket" class="h-4 w-4"></i>@(Model.Item.IsManagedService ? (isFa ? "ساخت سرویس" : "Provision service") : (isFa ? "ساخت و استقرار" : "Create & deploy"))</button>
+                <a href="/templates/@Model.Item.Template.Id" class="btn-secondary">@T["Cancel"]</a>
+            </div>
+        </section>
+
+        <aside class="space-y-4">
+            <section class="rounded-2xl border border-line bg-surface p-5 shadow-panel">
+                <h2 class="text-sm font-semibold text-ink">@(isFa ? "منابعی که ساخته می‌شوند" : "Resources to create")</h2>
+                <div class="mt-4 space-y-3">
+                    <div class="deploy-resource"><span class="rail-icon bg-accent-soft text-accent-text"><i data-lucide="@(Model.Item.IsManagedService ? "database" : "box")" class="h-4 w-4"></i></span><div><strong>@Model.Item.Name</strong><span>@(Model.Item.IsManagedService ? (isFa ? "مدیریت‌شده" : "Managed") : Model.Item.Manifest.Image ?? "Git build")</span></div><i data-lucide="check-circle-2" class="ms-auto h-4 w-4 text-ok"></i></div>
+                    @foreach (var dependency in Model.Item.Manifest.Requires)
+                    {
+                        <div class="deploy-resource"><span class="rail-icon bg-info-soft text-info"><i data-lucide="database" class="h-4 w-4"></i></span><div><strong>@dependency.ToUpperInvariant()</strong><span>@(isFa ? "خصوصی و پایدار" : "Private & persistent")</span></div><i data-lucide="check-circle-2" class="ms-auto h-4 w-4 text-ok"></i></div>
+                    }
+                    @foreach (var volume in Model.Item.Manifest.Volumes)
+                    {
+                        <div class="deploy-resource"><span class="rail-icon bg-warn-soft text-warn"><i data-lucide="hard-drive" class="h-4 w-4"></i></span><div class="min-w-0"><strong>Volume</strong><span class="truncate" dir="ltr">@volume.MountPath</span></div><i data-lucide="check-circle-2" class="ms-auto h-4 w-4 text-ok"></i></div>
+                    }
+                </div>
+            </section>
+            <section class="rounded-2xl border border-ok/20 bg-ok-soft p-4 text-xs leading-5 text-ok">
+                <div class="flex gap-2"><i data-lucide="shield-check" class="mt-0.5 h-4 w-4 shrink-0"></i><p>@(isFa ? "secretها با کلید اصلی Harbora رمز می‌شوند؛ دیتابیس فقط روی شبکهٔ خصوصی پروژه قابل دسترس است." : "Secrets are encrypted with Harbora's master key; databases are reachable only on the project's private network.")</p></div>
+            </section>
+        </aside>
+    </form>
+</div>

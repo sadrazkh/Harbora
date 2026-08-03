@@ -48,8 +48,14 @@ public sealed class AppsController(
 
     [HttpGet]
     [Authorize(Policy = Capabilities.AppsCreate)]
-    public async Task<IActionResult> Create(Guid? environmentId, CancellationToken ct)
+    public async Task<IActionResult> Create(Guid? environmentId, Guid? templateId, CancellationToken ct)
     {
+        // Legacy dashboard/catalog links used to land here with ?templateId=, but the form ignored
+        // it and created an ordinary Git app. Templates now have a reviewable stack deployment
+        // flow; keep old bookmarks useful by routing them to it.
+        if (templateId is { } selected)
+            return Redirect($"/templates/{selected}/deploy");
+
         await projects.EnsureDefaultEnvironmentAsync(WorkspaceId, ct);
         await PopulateTemplates(ct);
         // Arriving from a project page pre-selects that environment.

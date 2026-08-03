@@ -28,7 +28,13 @@ public sealed class TemplateManifest
 {
     public string? Image { get; init; }
     public string? Source { get; init; }
+    public string? Service { get; init; }
     public int? Port { get; init; }
+    public string? HealthPath { get; init; }
+    public string? DocumentationUrl { get; init; }
+    public string? WebsiteUrl { get; init; }
+    public bool Featured { get; init; }
+    public IReadOnlyList<string> Tags { get; init; } = [];
     public IReadOnlyList<ManifestVariable> Variables { get; init; } = [];
     public IReadOnlyList<ManifestVolume> Volumes { get; init; } = [];
     public IReadOnlyList<string> Requires { get; init; } = [];
@@ -70,10 +76,11 @@ public sealed class TemplateManifest
 
         var image = Text(root, "image");
         var source = Text(root, "source");
+        var service = Text(root, "service");
         var port = Number(root, "port");
 
-        if (string.IsNullOrWhiteSpace(image) && string.IsNullOrWhiteSpace(source))
-            problems.Add("A template needs either \"image\" (a container image) or \"source\": \"git\".");
+        if (string.IsNullOrWhiteSpace(image) && string.IsNullOrWhiteSpace(source) && string.IsNullOrWhiteSpace(service))
+            problems.Add("A template needs \"image\", \"source\": \"git\", or a managed \"service\".");
 
         if (!string.IsNullOrWhiteSpace(source)
             && !source!.Equals("git", StringComparison.OrdinalIgnoreCase))
@@ -90,13 +97,18 @@ public sealed class TemplateManifest
         var variables = ReadVariables(root, problems);
         var volumes = ReadVolumes(root, problems);
         var requires = ReadRequires(root);
+        var tags = ReadStrings(root, "tags");
 
         if (problems.Count > 0) return false;
 
         manifest = new TemplateManifest
         {
-            Image = image, Source = source, Port = port,
-            Variables = variables, Volumes = volumes, Requires = requires
+            Image = image, Source = source, Service = service, Port = port,
+            HealthPath = Text(root, "healthPath"),
+            DocumentationUrl = Text(root, "documentation"),
+            WebsiteUrl = Text(root, "website"),
+            Featured = Flag(root, "featured"),
+            Tags = tags, Variables = variables, Volumes = volumes, Requires = requires
         };
         return true;
     }
@@ -171,12 +183,15 @@ public sealed class TemplateManifest
     }
 
     private static List<string> ReadRequires(JsonElement root)
+        => ReadStrings(root, "requires");
+
+    private static List<string> ReadStrings(JsonElement root, string name)
     {
         var result = new List<string>();
-        if (!root.TryGetProperty("requires", out var requires) || requires.ValueKind != JsonValueKind.Array)
+        if (!root.TryGetProperty(name, out var values) || values.ValueKind != JsonValueKind.Array)
             return result;
 
-        foreach (var item in requires.EnumerateArray())
+        foreach (var item in values.EnumerateArray())
             if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } value)
                 result.Add(value);
 

@@ -40,13 +40,6 @@ public static class TemplateResolver
             return new TemplateDeploySpec(TemplateKind.ManagedService, null, Port(),
                 "This template provisions a managed database/cache — create it from the Databases page.");
 
-        // Multi-service templates (e.g. WordPress + MariaDB) are not one-click apps yet.
-        if (root.TryGetProperty("requires", out var req) &&
-            req.ValueKind == JsonValueKind.Array && req.GetArrayLength() > 0)
-            return new TemplateDeploySpec(TemplateKind.Unsupported, null, Port(),
-                "This template needs additional services and isn't one-click deployable yet — " +
-                "deploy its parts individually for now.");
-
         var image = Str("image");
         if (!string.IsNullOrWhiteSpace(image))
             return new TemplateDeploySpec(TemplateKind.Image, image, Port(), null);

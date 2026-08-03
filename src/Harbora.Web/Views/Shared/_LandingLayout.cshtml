@@ -24,7 +24,7 @@
     else
     {
         foreach (var css in viteCss) { <link rel="stylesheet" href="@css" /> }
-        <link rel="stylesheet" href="~/css/fallback.css" />
+        if (viteCss.Count == 0) { <link rel="stylesheet" href="~/css/fallback.css" asp-append-version="true" /> }
         if (viteJs is not null) { <script type="module" src="@viteJs"></script> }
     }
     <script>

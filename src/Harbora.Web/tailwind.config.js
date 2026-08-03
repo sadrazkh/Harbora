@@ -70,14 +70,12 @@ export default {
       boxShadow: {
         panel: '0 1px 2px rgb(16 12 40 / 0.04)',
         'panel-hover': '0 4px 12px rgb(16 12 40 / 0.06)',
+        card: '0 1px 2px rgb(24 20 40 / 0.04), 0 2px 6px rgb(24 20 40 / 0.04)',
       },
       // The reference design's cards are a touch softer than Tailwind's default 12px.
       borderRadius: {
         xl: '14px',
         '2xl': '18px',
-      },
-      boxShadow: {
-        card: '0 1px 2px rgb(24 20 40 / 0.04), 0 2px 6px rgb(24 20 40 / 0.04)',
       },
       fontFamily: {
         sans: ['Inter', 'Vazirmatn', 'system-ui', 'sans-serif'],

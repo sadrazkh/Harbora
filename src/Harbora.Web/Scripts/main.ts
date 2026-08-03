@@ -51,16 +51,21 @@ for (const [id, mount] of Object.entries(islands)) {
 // 138 kB to 821 kB — six times the weight of the entire panel, for a set of glyphs, on every page
 // load. Adding an icon to a view means adding it here too, which is the point.
 import {
-    createIcons,
-    Activity, Archive, Boxes, Building2, CreditCard, GitBranch, Globe, Layers, LayoutDashboard,
-    Menu, Monitor, Moon, Network, Rocket, Route, ScrollText, Search, Server, Settings, Shapes, Sun,
-    Users,
+    createIcons, Activity, Archive, ArrowUpLeft, Bell, BookOpen, Box, Boxes, Building2, Check,
+    CheckCircle2, ChevronDown, ChevronRight, CreditCard, Database, ExternalLink, FileJson2,
+    FolderLock, GitBranch, Globe, Globe2, HardDrive, KeyRound, Languages, Layers, Layers3,
+    LayoutDashboard, LockKeyhole, LogOut, Menu, Monitor, Moon, Network, PanelLeftClose, Plus,
+    Rocket, Route, ScrollText, Search, SearchX, Server, Settings, Settings2, Shapes, ShieldAlert,
+    ShieldCheck, Sparkles, Star, Sun, Users,
 } from 'lucide';
 
 const usedIcons = {
-    Activity, Archive, Boxes, Building2, CreditCard, GitBranch, Globe, Layers, LayoutDashboard,
-    Menu, Monitor, Moon, Network, Rocket, Route, ScrollText, Search, Server, Settings, Shapes, Sun,
-    Users,
+    Activity, Archive, ArrowUpLeft, Bell, BookOpen, Box, Boxes, Building2, Check, CheckCircle2,
+    ChevronDown, ChevronRight, CreditCard, Database, ExternalLink, FileJson2, FolderLock,
+    GitBranch, Globe, Globe2, HardDrive, KeyRound, Languages, Layers, Layers3, LayoutDashboard,
+    LockKeyhole, LogOut, Menu, Monitor, Moon, Network, PanelLeftClose, Plus, Rocket, Route,
+    ScrollText, Search, SearchX, Server, Settings, Settings2, Shapes, ShieldAlert, ShieldCheck,
+    Sparkles, Star, Sun, Users,
 };
 
 function renderIcons() {
@@ -69,3 +74,98 @@ function renderIcons() {
 
 renderIcons();
 document.addEventListener('harbora:content-changed', renderIcons);
+
+// ---- app shell interactions ----
+// Dropdowns share one small behaviour: only one is open, outside click and Escape both close it.
+const menuRoots = Array.from(document.querySelectorAll<HTMLElement>('[data-menu-root]'));
+function closeMenus(except?: HTMLElement) {
+  for (const root of menuRoots) {
+    if (root === except) continue;
+    root.querySelector<HTMLElement>('[data-menu]')?.classList.add('hidden');
+    root.querySelector<HTMLElement>('[data-menu-trigger]')?.setAttribute('aria-expanded', 'false');
+  }
+}
+for (const root of menuRoots) {
+  const trigger = root.querySelector<HTMLElement>('[data-menu-trigger]');
+  const menu = root.querySelector<HTMLElement>('[data-menu]');
+  trigger?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const opening = menu?.classList.contains('hidden') ?? false;
+    closeMenus(root);
+    menu?.classList.toggle('hidden', !opening);
+    trigger.setAttribute('aria-expanded', opening ? 'true' : 'false');
+  });
+}
+document.addEventListener('click', () => closeMenus());
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMenus(); });
+
+// Desktop compact mode persists per browser. Mobile remains an off-canvas panel.
+const collapseButton = document.querySelector<HTMLElement>('[data-collapse-sidebar]');
+const collapsed = localStorage.getItem('harbora-sidebar') === 'collapsed';
+document.documentElement.classList.toggle('sidebar-collapsed', collapsed);
+collapseButton?.addEventListener('click', () => {
+  const next = !document.documentElement.classList.contains('sidebar-collapsed');
+  document.documentElement.classList.toggle('sidebar-collapsed', next);
+  localStorage.setItem('harbora-sidebar', next ? 'collapsed' : 'expanded');
+});
+
+// Command palette: the top-bar search is intentionally a button, because a text field that accepts
+// input and does nothing is worse than no search. The palette filters only routes the current user
+// is authorised to see because its entries come from the same navigation map as the sidebar.
+const palette = document.querySelector<HTMLElement>('[data-command-palette]');
+const commandInput = palette?.querySelector<HTMLInputElement>('[data-command-input]');
+const commandItems = Array.from(palette?.querySelectorAll<HTMLAnchorElement>('[data-command-item]') ?? []);
+let selected = 0;
+
+function visibleCommandItems() {
+  return commandItems.filter((item) => !item.classList.contains('hidden'));
+}
+
+function paintCommandSelection(index: number) {
+  const visible = visibleCommandItems();
+  if (visible.length === 0) return;
+  selected = (index + visible.length) % visible.length;
+  visible.forEach((item, i) => item.classList.toggle('is-selected', i === selected));
+  visible[selected].scrollIntoView({ block: 'nearest' });
+}
+
+function openPalette(open: boolean) {
+  if (!palette) return;
+  palette.classList.toggle('hidden', !open);
+  palette.setAttribute('aria-hidden', open ? 'false' : 'true');
+  document.body.classList.toggle('overflow-hidden', open);
+  if (open) {
+    commandInput?.focus();
+    commandInput?.select();
+    selected = 0;
+    paintCommandSelection(0);
+  }
+}
+
+document.querySelectorAll('[data-command-open]').forEach((button) => button.addEventListener('click', () => openPalette(true)));
+palette?.querySelector('[data-command-backdrop]')?.addEventListener('click', () => openPalette(false));
+document.addEventListener('keydown', (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault();
+    openPalette(true);
+    return;
+  }
+  if (!palette || palette.classList.contains('hidden')) return;
+  if (event.key === 'Escape') openPalette(false);
+  else if (event.key === 'ArrowDown') { event.preventDefault(); paintCommandSelection(selected + 1); }
+  else if (event.key === 'ArrowUp') { event.preventDefault(); paintCommandSelection(selected - 1); }
+  else if (event.key === 'Enter' && document.activeElement === commandInput) {
+    event.preventDefault();
+    visibleCommandItems()[selected]?.click();
+  }
+});
+
+commandInput?.addEventListener('input', () => {
+  const query = commandInput.value.trim().toLocaleLowerCase();
+  for (const item of commandItems) {
+    const haystack = (item.dataset.search || item.textContent || '').toLocaleLowerCase();
+    item.classList.toggle('hidden', query.length > 0 && !haystack.includes(query));
+  }
+  selected = 0;
+  paintCommandSelection(0);
+});

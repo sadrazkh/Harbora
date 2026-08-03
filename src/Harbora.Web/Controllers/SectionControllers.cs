@@ -13,24 +13,140 @@ namespace Harbora.Web.Controllers;
 /// a shared placeholder so navigation is complete and honest rather than dead links.
 /// </summary>
 [Authorize]
-public sealed class TemplatesController(HarboraDbContext db, ICurrentUser currentUser) : Controller
+public sealed class TemplatesController(
+    HarboraDbContext db,
+    Harbora.Infrastructure.Templates.TemplateDeploymentService templateDeployments,
+    IAuthorizationService authorization,
+    IAuditLogger audit,
+    ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private bool IsReviewer => User.IsInRole("Owner") || User.IsInRole("Admin");
+    private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
-    public async Task<IActionResult> Index(CancellationToken ct)
+    [HttpGet("/templates")]
+    public async Task<IActionResult> Index(string? q, string? category, string? scope, CancellationToken ct)
     {
         ViewData["Title"] = "Templates";
 
         // Filtered in memory against one rule rather than a Where clause repeated per screen —
         // "who may see this" decides whether one tenant's unreviewed image is offered to another.
         var all = await db.AppTemplates.OrderBy(t => t.Category).ThenBy(t => t.Name).ToListAsync(ct);
-        ViewBag.WorkspaceId = WorkspaceId;
-        ViewBag.Reviewing = IsReviewer
-            ? all.Where(t => t.Status == Harbora.Domain.Templates.TemplateStatus.Submitted).ToList()
-            : [];
+        var visible = all.Where(t => Harbora.Infrastructure.Templates.TemplateCatalog.IsVisibleTo(t, WorkspaceId));
+        if (scope == "mine") visible = visible.Where(t => t.WorkspaceId == WorkspaceId);
+        else if (scope == "featured") visible = visible.Where(t =>
+            Harbora.Infrastructure.Templates.TemplateManifest.TryParse(t.ManifestJson, out var m, out _) && m!.Featured);
 
-        return View(all.Where(t => Harbora.Infrastructure.Templates.TemplateCatalog.IsVisibleTo(t, WorkspaceId)).ToList());
+        if (!string.IsNullOrWhiteSpace(category))
+            visible = visible.Where(t => t.Category.Equals(category, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(q))
+            visible = visible.Where(t => t.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                         || t.NameFa.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                         || t.Description.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                         || t.DescriptionFa.Contains(q, StringComparison.OrdinalIgnoreCase));
+
+        var items = visible.Select(BuildItem).Where(i => i is not null).Cast<Harbora.Web.ViewModels.TemplateCatalogItemViewModel>().ToList();
+        return View(new Harbora.Web.ViewModels.TemplateCatalogPageViewModel
+        {
+            Items = items,
+            Reviewing = IsReviewer
+                ? all.Where(t => t.Status == Harbora.Domain.Templates.TemplateStatus.Submitted).ToList()
+                : [],
+            WorkspaceId = WorkspaceId,
+            Query = q,
+            Category = category,
+            Scope = scope,
+            Categories = all.Where(t => Harbora.Infrastructure.Templates.TemplateCatalog.IsVisibleTo(t, WorkspaceId))
+                .Select(t => t.Category).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToList()
+        });
+    }
+
+    [HttpGet("/templates/{id:guid}")]
+    public async Task<IActionResult> Details(Guid id, CancellationToken ct)
+    {
+        var template = await db.AppTemplates.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (template is null || !Harbora.Infrastructure.Templates.TemplateCatalog.IsVisibleTo(template, WorkspaceId))
+            return NotFound();
+
+        var item = BuildItem(template);
+        if (item is null) return NotFound();
+        ViewData["Title"] = item.Name;
+        return View(item);
+    }
+
+    [HttpGet("/templates/{id:guid}/deploy")]
+    public async Task<IActionResult> Deploy(Guid id, CancellationToken ct)
+    {
+        var template = await db.AppTemplates.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (template is null || !Harbora.Infrastructure.Templates.TemplateCatalog.IsVisibleTo(template, WorkspaceId))
+            return NotFound();
+
+        var item = BuildItem(template);
+        if (item is null) return NotFound();
+        if (!await CanDeployAsync(item)) return Forbid();
+        return View(new Harbora.Web.ViewModels.TemplateDeployPageViewModel
+        {
+            Item = item,
+            Input = new Harbora.Web.ViewModels.TemplateDeployInput
+            {
+                TemplateId = template.Id,
+                ProjectName = item.Name,
+                ResourceName = item.Name
+            }
+        });
+    }
+
+    [HttpPost("/templates/{id:guid}/deploy")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Deploy(Guid id, Harbora.Web.ViewModels.TemplateDeployInput input, CancellationToken ct)
+    {
+        input.TemplateId = id;
+        var template = await db.AppTemplates.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
+        var item = template is null ? null : BuildItem(template);
+        if (template is null || item is null
+            || !Harbora.Infrastructure.Templates.TemplateCatalog.IsVisibleTo(template, WorkspaceId))
+            return NotFound();
+        if (!await CanDeployAsync(item)) return Forbid();
+
+        if (item.NeedsRepository && string.IsNullOrWhiteSpace(input.RepositoryUrl))
+            ModelState.AddModelError(nameof(input.RepositoryUrl), IsFa ? "آدرس مخزن Git لازم است." : "A Git repository URL is required.");
+
+        if (!ModelState.IsValid)
+            return View(new Harbora.Web.ViewModels.TemplateDeployPageViewModel { Item = item, Input = input });
+
+        try
+        {
+            var result = await templateDeployments.DeployAsync(new Harbora.Infrastructure.Templates.TemplateDeployRequest(
+                WorkspaceId,
+                currentUser.UserId ?? Guid.Empty,
+                id,
+                input.ProjectName,
+                input.ResourceName,
+                input.RepositoryUrl,
+                input.GitRef,
+                input.Variables,
+                input.DeployNow), ct);
+
+            await audit.LogAsync("template.deploy", "template", id.ToString(),
+                HttpContext.Connection.RemoteIpAddress?.ToString(),
+                metadataJson: $"{{\"projectId\":\"{result.ProjectId}\",\"dependencies\":{result.DependencyCount}}}",
+                ct: ct);
+
+            TempData["Message"] = IsFa
+                ? $"پروژه ساخته شد؛ {result.DependencyCount} سرویس وابسته پیش از برنامه در صف قرار گرفت."
+                : $"Project created; {result.DependencyCount} dependency service(s) were queued before the app.";
+
+            if (result.DeploymentId is { } deploymentId)
+                return RedirectToAction("Details", "Deployments", new { id = deploymentId });
+            if (result.ServiceId is { } serviceId)
+                return RedirectToAction("Details", "Databases", new { id = serviceId });
+            return RedirectToAction("Details", "Projects", new { id = result.ProjectId });
+        }
+        catch (InvalidOperationException ex)
+        {
+            ModelState.AddModelError(string.Empty, ex.Message);
+            return View(new Harbora.Web.ViewModels.TemplateDeployPageViewModel { Item = item, Input = input });
+        }
     }
 
     /// <summary>
@@ -38,6 +154,7 @@ public sealed class TemplatesController(HarboraDbContext db, ICurrentUser curren
     /// rather than at deploy time, which is an hour later and much more expensive to unpick.
     /// </summary>
     [HttpPost]
+    [Route("/templates/custom")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Save(Guid? id, string name, string category, string manifestJson, CancellationToken ct)
     {
@@ -85,6 +202,7 @@ public sealed class TemplatesController(HarboraDbContext db, ICurrentUser curren
     }
 
     [HttpPost]
+    [Route("/templates/{id:guid}/submit")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Submit(Guid id, CancellationToken ct)
     {
@@ -106,6 +224,7 @@ public sealed class TemplatesController(HarboraDbContext db, ICurrentUser curren
 
     /// <summary>An admin decides whether a template is offered to every tenant.</summary>
     [HttpPost]
+    [Route("/templates/{id:guid}/review")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Review(Guid id, bool approve, string? note, CancellationToken ct)
     {
@@ -130,6 +249,37 @@ public sealed class TemplatesController(HarboraDbContext db, ICurrentUser curren
 
         TempData["Message"] = approve ? "Approved and added to the catalog." : "Sent back to its author.";
         return RedirectToAction(nameof(Index));
+    }
+
+    private Harbora.Web.ViewModels.TemplateCatalogItemViewModel? BuildItem(Harbora.Domain.Templates.AppTemplate template)
+    {
+        if (!Harbora.Infrastructure.Templates.TemplateManifest.TryParse(template.ManifestJson, out var manifest, out _))
+            return null;
+
+        return new Harbora.Web.ViewModels.TemplateCatalogItemViewModel
+        {
+            Template = template,
+            Manifest = manifest!,
+            Name = IsFa && !string.IsNullOrWhiteSpace(template.NameFa) ? template.NameFa : template.Name,
+            Description = IsFa && !string.IsNullOrWhiteSpace(template.DescriptionFa)
+                ? template.DescriptionFa
+                : template.Description
+        };
+    }
+
+    private async Task<bool> CanDeployAsync(Harbora.Web.ViewModels.TemplateCatalogItemViewModel item)
+    {
+        if (!item.IsManagedService
+            && !(await authorization.AuthorizeAsync(User, Capabilities.AppsCreate)).Succeeded)
+            return false;
+
+        // A stack that creates a database is a database-management operation too. Without this
+        // check the template path would bypass the permission enforced by DatabasesController.
+        if ((item.IsManagedService || item.Manifest.Requires.Count > 0)
+            && !(await authorization.AuthorizeAsync(User, Capabilities.DatabasesManage)).Succeeded)
+            return false;
+
+        return true;
     }
 }
 

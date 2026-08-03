@@ -67,6 +67,25 @@ public class TemplateManifestTests
     }
 
     [Fact]
+    public void A_managed_service_is_a_valid_template_without_an_app_image()
+    {
+        var manifest = Parse("""{"service":"postgres","port":5432,"tags":["SQL","Managed"]}""");
+
+        manifest.Service.Should().Be("postgres");
+        manifest.Tags.Should().BeEquivalentTo(["SQL", "Managed"]);
+    }
+
+    [Fact]
+    public void Catalog_metadata_is_read_without_changing_the_deploy_contract()
+    {
+        var manifest = Parse("""{"image":"nginx:alpine","featured":true,"healthPath":"/health","documentation":"https://example.test/docs"}""");
+
+        manifest.Featured.Should().BeTrue();
+        manifest.HealthPath.Should().Be("/health");
+        manifest.DocumentationUrl.Should().Be("https://example.test/docs");
+    }
+
+    [Fact]
     public void A_source_harbora_cannot_build_is_named_in_the_error()
     {
         // "svn" is refused by saying what it is, not by saying "invalid".

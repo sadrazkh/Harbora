@@ -1,107 +1,214 @@
-﻿@model List<Harbora.Domain.Templates.AppTemplate>
+@model TemplateCatalogPageViewModel
 @using Harbora.Domain.Templates
 @using Harbora.Infrastructure.Templates
+@using Harbora.Web.ViewModels
 @{
     ViewData["Title"] = "Templates";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var msg = TempData["Message"] as string;
     var err = TempData["Error"] as string;
-    var reviewing = ViewBag.Reviewing as List<AppTemplate> ?? new();
-    var workspaceId = ViewBag.WorkspaceId is Guid ws ? ws : Guid.Empty;
-    var input = "w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm";
+
+    string Category(string value) => (value.ToLowerInvariant(), isFa) switch
+    {
+        ("cms", true) => "مدیریت محتوا", ("cms", false) => "Content",
+        ("observability", true) => "پایش", ("observability", false) => "Observability",
+        ("developer-tools", true) => "ابزار توسعه", ("developer-tools", false) => "Developer tools",
+        ("data", true) => "داده و جست‌وجو", ("data", false) => "Data & search",
+        ("starter", true) => "شروع با کد", ("starter", false) => "Code starters",
+        ("database", true) => "دیتابیس", ("database", false) => "Databases",
+        (_, _) => value
+    };
+
+    string Glyph(string key) => key switch
+    {
+        "wordpress" => "W", "ghost" => "G", "uptime-kuma" => "U", "meilisearch" => "M",
+        "redis-commander" => "R", "nginx-static" => "N", "node" => "JS", "aspnet" => ".N",
+        "laravel" => "L", "postgres" => "PG", "mariadb" => "M", "mysql" => "MY",
+        "redis" => "R", "mongodb" => "MO", _ => (key.Length > 1 ? key[..2] : key).ToUpperInvariant()
+    };
 }
-<h1 class="text-2xl font-bold tracking-tight text-ink mb-6">@T["Templates"]</h1>
 
-@if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
-@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
+<div class="mb-6 flex flex-wrap items-end justify-between gap-4">
+    <div class="max-w-2xl">
+        <div class="mb-2 inline-flex items-center gap-2 rounded-full bg-accent-soft px-3 py-1 text-xs font-semibold text-accent-text">
+            <i data-lucide="sparkles" class="h-3.5 w-3.5"></i>
+            @(isFa ? "کاتالوگ راه‌حل‌های آماده" : "Solution marketplace")
+        </div>
+        <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "از ایده تا پروژهٔ در حال اجرا" : "From idea to running project")</h1>
+        <p class="mt-1 text-sm leading-6 text-ink-muted">
+            @(isFa
+                ? "هر قالب دقیقاً نشان می‌دهد چه برنامه، دیتابیس، فضای ذخیره‌سازی و متغیرهایی می‌سازد؛ Harbora همه را در یک شبکهٔ خصوصی راه‌اندازی می‌کند."
+                : "Every template shows the applications, databases, storage and variables it creates. Harbora provisions the complete stack on one private network.")
+        </p>
+    </div>
+    <a href="#create-template" class="btn-secondary inline-flex items-center gap-2">
+        <i data-lucide="plus" class="h-4 w-4"></i>
+        @(isFa ? "قالب شخصی" : "Private template")
+    </a>
+</div>
 
-@* ---- review queue ----
-   Shown only to an admin. A template runs someone else's image inside a tenant's private network,
-   so it reaches the shared catalog because a person decided, not because a form was saved. *@
-@if (reviewing.Count > 0)
-{
-    <section class="mb-6 rounded-xl border border-warn bg-warn-soft p-5">
-        <h2 class="font-semibold text-warn mb-3">@(isFa ? "در انتظار بررسی" : "Waiting for review")</h2>
-        <div class="space-y-4">
-            @foreach (var t in reviewing)
+@if (msg is not null) { <div class="alert-success mb-4">@msg</div> }
+@if (err is not null) { <div class="alert-danger mb-4">@err</div> }
+
+<section class="mb-5 rounded-2xl border border-line bg-surface p-4 shadow-panel">
+    <form method="get" action="/templates" class="flex flex-col gap-3 lg:flex-row lg:items-center">
+        <label class="relative min-w-0 flex-1">
+            <i data-lucide="search" class="pointer-events-none absolute inset-y-0 start-3 my-auto h-4 w-4 text-ink-faint"></i>
+            <input name="q" value="@Model.Query" type="search"
+                   placeholder="@(isFa ? "جست‌وجوی WordPress، دیتابیس، پایش…" : "Search WordPress, database, monitoring…")"
+                   class="form-control ps-9" />
+        </label>
+        <div class="flex gap-2 overflow-x-auto pb-1 lg:pb-0">
+            <a href="/templates@(string.IsNullOrWhiteSpace(Model.Query) ? "" : $"?q={Uri.EscapeDataString(Model.Query)}")"
+               class="filter-chip @(string.IsNullOrWhiteSpace(Model.Category) && string.IsNullOrWhiteSpace(Model.Scope) ? "is-active" : "")">
+                @(isFa ? "همه" : "All")
+            </a>
+            <a href="/templates?scope=featured" class="filter-chip @(Model.Scope == "featured" ? "is-active" : "")">
+                <i data-lucide="star" class="h-3.5 w-3.5"></i> @(isFa ? "پیشنهادی" : "Featured")
+            </a>
+            @foreach (var category in Model.Categories)
             {
-                <div class="rounded-lg border border-line bg-surface p-4">
-                    <div class="font-medium">@t.Name <span class="text-xs text-ink-faint">· @t.Category</span></div>
-                    <pre dir="ltr" class="mt-2 max-h-40 overflow-auto rounded bg-code text-code-ink p-2 text-[11px] text-ink-muted whitespace-pre-wrap">@t.ManifestJson</pre>
-                    <form asp-controller="Templates" asp-action="Review" method="post" class="mt-3 flex flex-wrap items-center gap-2">
-                        @Html.AntiForgeryToken()
-                        <input type="hidden" name="id" value="@t.Id" />
-                        <input name="note" placeholder="@(isFa ? "دلیل (برای برگرداندن لازم است)" : "Reason (required to send back)")" class="@input flex-1 min-w-[16rem]" />
-                        <button name="approve" value="true" class="rounded-lg bg-ok hover:bg-ok px-3 py-2 text-sm font-semibold">@(isFa ? "تأیید" : "Approve")</button>
-                        <button name="approve" value="false" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">@(isFa ? "برگرداندن" : "Send back")</button>
-                    </form>
+                <a href="/templates?category=@Uri.EscapeDataString(category)" class="filter-chip @(Model.Category == category ? "is-active" : "")">
+                    @Category(category)
+                </a>
+            }
+        </div>
+    </form>
+</section>
+
+@if (Model.Items.Count == 0)
+{
+    <div class="empty-state rounded-2xl border border-dashed border-line-strong bg-surface">
+        <span class="empty-state-icon"><i data-lucide="search-x" class="h-6 w-6"></i></span>
+        <h2>@(isFa ? "قالبی پیدا نشد" : "No templates found")</h2>
+        <p>@(isFa ? "عبارت یا دسته‌بندی را تغییر دهید." : "Try a different search or category.")</p>
+        <a href="/templates" class="btn-secondary">@(isFa ? "پاک‌کردن فیلترها" : "Clear filters")</a>
+    </div>
+}
+else
+{
+    <div class="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+        @foreach (var item in Model.Items)
+        {
+            var template = item.Template;
+            <article class="template-card group">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="flex min-w-0 items-center gap-3">
+                        <span class="template-logo" data-template-key="@template.Key">@Glyph(template.Key)</span>
+                        <div class="min-w-0">
+                            <h2 class="truncate text-[15px] font-semibold text-ink">@item.Name</h2>
+                            <div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-faint">
+                                <span>@Category(template.Category)</span>
+                                <span aria-hidden="true">·</span>
+                                <span>@(item.ResourceCount) @(isFa ? "منبع" : item.ResourceCount == 1 ? "resource" : "resources")</span>
+                            </div>
+                        </div>
+                    </div>
+                    @if (item.Manifest.Featured)
+                    {
+                        <span class="status-pill bg-warn-soft text-warn"><i data-lucide="star" class="h-3 w-3"></i>@(isFa ? "پیشنهادی" : "Featured")</span>
+                    }
                 </div>
+
+                <p class="mt-4 line-clamp-2 min-h-10 text-sm leading-5 text-ink-muted">@item.Description</p>
+
+                <div class="mt-4 flex min-h-6 flex-wrap gap-1.5">
+                    @foreach (var tag in item.Manifest.Tags.Take(4))
+                    {
+                        <span class="template-tag">@tag</span>
+                    }
+                </div>
+
+                <div class="mt-5 rounded-xl border border-line bg-surface-2 p-3">
+                    <div class="flex items-center justify-between gap-3 text-xs">
+                        <span class="flex items-center gap-1.5 text-ink-muted">
+                            <i data-lucide="@((item.IsManagedService ? "database" : item.NeedsRepository ? "git-branch" : "box"))" class="h-3.5 w-3.5 text-accent-text"></i>
+                            @(item.IsManagedService
+                                ? (isFa ? "سرویس مدیریت‌شده" : "Managed service")
+                                : item.NeedsRepository
+                                    ? (isFa ? "ساخت از مخزن شما" : "Builds your repository")
+                                    : (isFa ? "ایمیج آماده" : "Prebuilt image"))
+                        </span>
+                        <span class="flex items-center gap-1.5 font-medium text-ok">
+                            <i data-lucide="shield-check" class="h-3.5 w-3.5"></i>
+                            @(template.IsBuiltIn ? (isFa ? "بررسی‌شده" : "Reviewed") : TemplateCatalog.Describe(template))
+                        </span>
+                    </div>
+                    @if (item.Manifest.Requires.Count > 0)
+                    {
+                        <div class="mt-2 flex items-center gap-1.5 border-t border-line pt-2 text-xs text-ink-muted">
+                            <i data-lucide="network" class="h-3.5 w-3.5 text-accent-text"></i>
+                            @(isFa ? "همراه با" : "Includes") @string.Join(" + ", item.Manifest.Requires.Select(x => x.ToUpperInvariant()))
+                        </div>
+                    }
+                </div>
+
+                <div class="mt-4 flex items-center gap-2">
+                    <a href="/templates/@template.Id" class="btn-secondary flex-1 text-center">@(isFa ? "جزئیات" : "Details")</a>
+                    <a href="/templates/@template.Id/deploy" class="btn-primary flex-1 text-center">
+                        @(item.IsManagedService ? (isFa ? "ساخت دیتابیس" : "Provision") : (isFa ? "استقرار" : "Deploy"))
+                    </a>
+                </div>
+            </article>
+        }
+    </div>
+}
+
+@if (Model.Reviewing.Count > 0)
+{
+    <section class="mt-8 rounded-2xl border border-warn/30 bg-warn-soft p-5">
+        <div class="mb-4 flex items-center gap-2 text-warn">
+            <i data-lucide="shield-alert" class="h-5 w-5"></i>
+            <h2 class="font-semibold">@(isFa ? "صف بررسی امنیتی" : "Security review queue")</h2>
+        </div>
+        <div class="space-y-3">
+            @foreach (var template in Model.Reviewing)
+            {
+                <details class="rounded-xl border border-line bg-surface p-4">
+                    <summary class="cursor-pointer font-medium text-ink">@template.Name <span class="text-xs text-ink-faint">· @template.Category</span></summary>
+                    <pre dir="ltr" class="mt-3 max-h-48 overflow-auto rounded-xl bg-code p-3 text-[11px] text-code-ink whitespace-pre-wrap">@template.ManifestJson</pre>
+                    <form asp-controller="Templates" asp-action="Review" asp-route-id="@template.Id" method="post" class="mt-3 flex flex-wrap gap-2">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="id" value="@template.Id" />
+                        <input name="note" placeholder="@(isFa ? "دلیل رد یا یادداشت بررسی" : "Rejection reason or review note")" class="form-control min-w-64 flex-1" />
+                        <button name="approve" value="true" class="btn-primary">@(isFa ? "تأیید" : "Approve")</button>
+                        <button name="approve" value="false" class="btn-danger">@(isFa ? "برگرداندن" : "Send back")</button>
+                    </form>
+                </details>
             }
         </div>
     </section>
 }
 
-<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-    @foreach (var t in Model)
-    {
-        <div class="rounded-xl border border-line bg-surface p-5 flex flex-col">
-            <div class="flex items-center justify-between gap-2">
-                <span class="font-semibold">@(isFa && !string.IsNullOrEmpty(t.NameFa) ? t.NameFa : t.Name)</span>
-                <span class="text-xs rounded-full bg-surface-2 px-2 py-0.5 text-ink">@t.Category</span>
-            </div>
-            <p class="mt-2 text-sm text-ink-muted flex-1">@(isFa && !string.IsNullOrEmpty(t.DescriptionFa) ? t.DescriptionFa : t.Description)</p>
-
-            @* Where it stands: "yours only" and "in the shared catalog" are different things, and
-               the card is the only place that can say which. *@
-            <div class="mt-3 text-xs text-ink-faint">@TemplateCatalog.Describe(t)</div>
-
-            @if (t.Status == TemplateStatus.Rejected && !string.IsNullOrWhiteSpace(t.ReviewNote))
-            {
-                <div class="mt-2 rounded-lg bg-danger-soft border border-danger px-3 py-2 text-xs text-danger">@t.ReviewNote</div>
-            }
-
-            <div class="mt-4 flex flex-wrap gap-2">
-                <a href="/apps/create?templateId=@t.Id" class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-sm font-semibold">@T["Deploy"]</a>
-                @if (TemplateCatalog.CanSubmit(t, workspaceId))
-                {
-                    <form asp-controller="Templates" asp-action="Submit" method="post">
-                        @Html.AntiForgeryToken()
-                        <input type="hidden" name="id" value="@t.Id" />
-                        <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-sm">@(isFa ? "ارسال برای بررسی" : "Send for review")</button>
-                    </form>
-                }
-            </div>
+@section RightRail {
+    <section class="rail-panel">
+        <div class="rail-panel-header">
+            <span class="rail-icon bg-accent-soft text-accent-text"><i data-lucide="layers-3" class="h-4 w-4"></i></span>
+            <h2>@(isFa ? "قبل از اجرا می‌بینید" : "Review before deploy")</h2>
         </div>
-    }
-</div>
+        <ul class="space-y-3 text-sm text-ink-muted">
+            <li class="flex gap-2"><i data-lucide="check" class="mt-0.5 h-4 w-4 shrink-0 text-ok"></i>@(isFa ? "تمام سرویس‌ها و وابستگی‌ها" : "Every service and dependency")</li>
+            <li class="flex gap-2"><i data-lucide="check" class="mt-0.5 h-4 w-4 shrink-0 text-ok"></i>@(isFa ? "متغیرها، secretها و volumeها" : "Variables, secrets and volumes")</li>
+            <li class="flex gap-2"><i data-lucide="check" class="mt-0.5 h-4 w-4 shrink-0 text-ok"></i>@(isFa ? "شبکهٔ خصوصی و health check" : "Private network and health check")</li>
+        </ul>
+    </section>
 
-@* ---- add your own ----
-   The manifest is checked here, where it is written. A deploy failing on it an hour later is the
-   expensive moment to find a typo. *@
-<section class="mt-8 rounded-xl border border-line bg-surface p-5 max-w-3xl">
-    <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "قالب خودت را بساز" : "Add your own template")</h2>
-    <form asp-controller="Templates" asp-action="Save" method="post" class="space-y-3">
-        @Html.AntiForgeryToken()
-        <div class="grid sm:grid-cols-2 gap-3">
+    <details id="create-template" class="rail-panel group">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-2">
+            <span class="flex items-center gap-2 font-semibold text-ink"><i data-lucide="file-json-2" class="h-4 w-4 text-accent-text"></i>@(isFa ? "قالب شخصی" : "Private template")</span>
+            <i data-lucide="chevron-down" class="h-4 w-4 text-ink-faint transition group-open:rotate-180"></i>
+        </summary>
+        <form asp-controller="Templates" asp-action="Save" method="post" class="mt-4 space-y-3">
+            @Html.AntiForgeryToken()
+            <div><label class="form-label">@T["Name"]</label><input name="name" class="form-control" required /></div>
+            <div><label class="form-label">@(isFa ? "دسته" : "Category")</label><input name="category" value="app" class="form-control" /></div>
             <div>
-                <label class="block text-sm text-ink-muted mb-1">@T["Name"]</label>
-                <input name="name" class="@input" />
+                <label class="form-label">@(isFa ? "مانیفست JSON" : "JSON manifest")</label>
+                <textarea name="manifestJson" dir="ltr" rows="8" class="form-control font-mono text-xs" required
+                          placeholder='{"image":"nginx:1.27-alpine","port":80}'></textarea>
             </div>
-            <div>
-                <label class="block text-sm text-ink-muted mb-1">@(isFa ? "دسته" : "Category")</label>
-                <input name="category" value="app" class="@input" />
-            </div>
-        </div>
-        <div>
-            <label class="block text-sm text-ink-muted mb-1">@(isFa ? "مانیفست (JSON)" : "Manifest (JSON)")</label>
-            <textarea name="manifestJson" dir="ltr" rows="6" class="@input font-mono text-xs"
-                      placeholder='{"image":"nginx:alpine","port":80,"volumes":[{"mount":"/usr/share/nginx/html"}]}'></textarea>
-            <p class="mt-1 text-xs text-ink-faint">
-                @(isFa
-                    ? "«image» یا «source»: «git» لازم است. ولیوم‌ها و متغیرهایی که اینجا تعریف کنی واقعاً روی اپ ساخته می‌شوند."
-                    : "Needs either \"image\" or \"source\": \"git\". The volumes and variables declared here are really created on the app.")
-            </p>
-        </div>
-        <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Save"]</button>
-    </form>
-</section>
+            <p class="text-xs leading-5 text-ink-faint">@(isFa ? "قبل از ذخیره اعتبارسنجی می‌شود و فقط برای همین فضای کاری قابل مشاهده است." : "Validated before save and visible only to this workspace until reviewed.")</p>
+            <button class="btn-primary w-full">@T["Save"]</button>
+        </form>
+    </details>
+}

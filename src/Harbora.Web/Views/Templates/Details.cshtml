@@ -1,0 +1,115 @@
+@model TemplateCatalogItemViewModel
+@using Harbora.Infrastructure.Templates
+@using Harbora.Web.ViewModels
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    ViewData["Title"] = Model.Name;
+    var m = Model.Manifest;
+}
+
+<nav class="mb-5 flex items-center gap-2 text-xs text-ink-faint" aria-label="breadcrumb">
+    <a href="/templates" class="hover:text-accent-text">@(isFa ? "قالب‌ها" : "Templates")</a>
+    <i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i>
+    <span class="text-ink-muted">@Model.Name</span>
+</nav>
+
+<section class="overflow-hidden rounded-2xl border border-line bg-surface shadow-panel">
+    <div class="template-hero p-6 md:p-8">
+        <div class="relative z-10 flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
+            <div class="flex min-w-0 items-start gap-4">
+                <span class="template-logo h-16 w-16 rounded-2xl text-xl" data-template-key="@Model.Template.Key">@Model.Name[..Math.Min(2, Model.Name.Length)].ToUpperInvariant()</span>
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <h1 class="text-2xl font-bold tracking-tight text-ink">@Model.Name</h1>
+                        @if (m.Featured) { <span class="status-pill bg-warn-soft text-warn"><i data-lucide="star" class="h-3 w-3"></i>@(isFa ? "پیشنهادی" : "Featured")</span> }
+                    </div>
+                    <p class="mt-2 max-w-2xl text-sm leading-6 text-ink-muted">@Model.Description</p>
+                    <div class="mt-4 flex flex-wrap gap-2">
+                        @foreach (var tag in m.Tags) { <span class="template-tag">@tag</span> }
+                    </div>
+                </div>
+            </div>
+            <a href="/templates/@Model.Template.Id/deploy" class="btn-primary inline-flex shrink-0 items-center justify-center gap-2 px-5 py-2.5">
+                <i data-lucide="rocket" class="h-4 w-4"></i>
+                @(Model.IsManagedService ? (isFa ? "ساخت سرویس" : "Provision service") : (isFa ? "استقرار این قالب" : "Deploy this template"))
+            </a>
+        </div>
+    </div>
+
+    <div class="grid border-t border-line lg:grid-cols-[1fr_18rem]">
+        <div class="p-6 md:p-8">
+            <div class="mb-6 flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "معماری پروژه" : "Project architecture")</h2>
+                    <p class="mt-1 text-xs text-ink-faint">@(isFa ? "منابع داخل یک محیط و شبکهٔ خصوصی ساخته می‌شوند." : "Resources are created inside one environment and private network.")</p>
+                </div>
+                <span class="status-pill bg-info-soft text-info">@Model.ResourceCount @(isFa ? "منبع" : "resources")</span>
+            </div>
+
+            <div class="template-topology">
+                <div class="topology-node is-app">
+                    <span class="topology-icon"><i data-lucide="@(Model.IsManagedService ? "database" : "box")" class="h-5 w-5"></i></span>
+                    <div><strong>@Model.Name</strong><span>@(Model.IsManagedService ? m.Service : m.Image ?? (isFa ? "ساخت از Git" : "Build from Git"))</span></div>
+                </div>
+                @foreach (var dependency in m.Requires)
+                {
+                    <div class="topology-connector"><span></span></div>
+                    <div class="topology-node is-database">
+                        <span class="topology-icon"><i data-lucide="database" class="h-5 w-5"></i></span>
+                        <div><strong>@dependency.ToUpperInvariant()</strong><span>@(isFa ? "سرویس مدیریت‌شده" : "Managed service")</span></div>
+                    </div>
+                }
+            </div>
+
+            <div class="mt-8 grid gap-5 md:grid-cols-2">
+                <section class="detail-block">
+                    <h3><i data-lucide="settings-2" class="h-4 w-4"></i>@(isFa ? "پیکربندی اجرا" : "Runtime configuration")</h3>
+                    <dl class="detail-list">
+                        <div><dt>@(isFa ? "منبع" : "Source")</dt><dd dir="ltr">@(m.Service ?? m.Image ?? "Git repository")</dd></div>
+                        @if (m.Port is { } port) { <div><dt>@(isFa ? "پورت داخلی" : "Internal port")</dt><dd dir="ltr">@port</dd></div> }
+                        @if (!Model.IsManagedService) { <div><dt>Health check</dt><dd dir="ltr">@(m.HealthPath ?? "/")</dd></div> }
+                    </dl>
+                </section>
+                <section class="detail-block">
+                    <h3><i data-lucide="hard-drive" class="h-4 w-4"></i>@(isFa ? "دادهٔ پایدار" : "Persistent data")</h3>
+                    @if (m.Volumes.Count == 0)
+                    {
+                        <p class="text-sm text-ink-faint">@(isFa ? "این قالب volume برنامه ندارد." : "This template has no application volume.")</p>
+                    }
+                    else
+                    {
+                        <ul class="space-y-2">@foreach (var volume in m.Volumes) { <li class="code-row"><i data-lucide="folder-lock" class="h-4 w-4"></i><code dir="ltr">@volume.MountPath</code></li> }</ul>
+                    }
+                </section>
+                <section class="detail-block md:col-span-2">
+                    <h3><i data-lucide="key-round" class="h-4 w-4"></i>@(isFa ? "متغیرها و secretها" : "Variables and secrets")</h3>
+                    @if (m.Variables.Count == 0)
+                    {
+                        <p class="text-sm text-ink-faint">@(isFa ? "متغیری لازم نیست." : "No variables required.")</p>
+                    }
+                    else
+                    {
+                        <div class="overflow-x-auto"><table class="data-table"><thead><tr><th>@(isFa ? "کلید" : "Key")</th><th>@(isFa ? "مقدار" : "Value")</th><th>@(isFa ? "حفاظت" : "Protection")</th></tr></thead><tbody>
+                        @foreach (var variable in m.Variables)
+                        {
+                            <tr><td><code dir="ltr">@variable.Key</code></td><td class="text-ink-muted">@(variable.Default?.Contains("${{") == true ? (isFa ? "از سرویس وابسته" : "Referenced service") : variable.Default ?? (variable.Secret ? (isFa ? "تولید خودکار" : "Generated") : (isFa ? "هنگام استقرار" : "At deploy")))</td><td>@if(variable.Secret){<span class="status-pill bg-ok-soft text-ok"><i data-lucide="lock-keyhole" class="h-3 w-3"></i>Secret</span>}else{<span class="text-xs text-ink-faint">Plain</span>}</td></tr>
+                        }
+                        </tbody></table></div>
+                    }
+                </section>
+            </div>
+        </div>
+
+        <aside class="border-t border-line bg-surface-2 p-6 lg:border-s lg:border-t-0">
+            <h2 class="text-sm font-semibold text-ink">@(isFa ? "اعتماد و مالکیت" : "Trust & ownership")</h2>
+            <div class="mt-4 space-y-4 text-sm">
+                <div class="flex gap-3"><span class="rail-icon bg-ok-soft text-ok"><i data-lucide="shield-check" class="h-4 w-4"></i></span><div><div class="font-medium text-ink">@(Model.Template.IsBuiltIn ? (isFa ? "قالب رسمی Harbora" : "Official Harbora template") : TemplateCatalog.Describe(Model.Template))</div><div class="mt-0.5 text-xs leading-5 text-ink-faint">@(isFa ? "مانیفست قبل از نمایش در کاتالوگ بررسی شده است." : "The manifest was reviewed before catalog publication.")</div></div></div>
+                <div class="flex gap-3"><span class="rail-icon bg-info-soft text-info"><i data-lucide="network" class="h-4 w-4"></i></span><div><div class="font-medium text-ink">@(isFa ? "شبکهٔ خصوصی" : "Private network")</div><div class="mt-0.5 text-xs leading-5 text-ink-faint">@(isFa ? "دیتابیس به اینترنت عمومی منتشر نمی‌شود." : "Backing services are not exposed to the public internet.")</div></div></div>
+            </div>
+            <div class="mt-6 space-y-2 border-t border-line pt-5">
+                @if (!string.IsNullOrWhiteSpace(m.WebsiteUrl)) { <a href="@m.WebsiteUrl" target="_blank" rel="noopener" class="detail-link"><span><i data-lucide="globe-2" class="h-4 w-4"></i>@(isFa ? "وب‌سایت پروژه" : "Project website")</span><i data-lucide="external-link" class="h-3.5 w-3.5"></i></a> }
+                @if (!string.IsNullOrWhiteSpace(m.DocumentationUrl)) { <a href="@m.DocumentationUrl" target="_blank" rel="noopener" class="detail-link"><span><i data-lucide="book-open" class="h-4 w-4"></i>@(isFa ? "مستندات" : "Documentation")</span><i data-lucide="external-link" class="h-3.5 w-3.5"></i></a> }
+            </div>
+        </aside>
+    </div>
+</section>

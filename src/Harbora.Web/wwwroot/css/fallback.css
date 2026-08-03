@@ -11,22 +11,22 @@ a { color: #38bdf8; text-decoration: none; }
 .auth-brand { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; margin-bottom: 20px; }
 .auth-logo { display: inline-flex; height: 34px; width: 34px; align-items: center; justify-content: center; border-radius: 10px; background: #6d4aff; }
 
-.field { margin-bottom: 14px; }
-.field label { display: block; font-size: 13px; margin-bottom: 6px; color: #6b6880; }
-.field input, .field select {
+.auth-card .field { margin-bottom: 14px; }
+.auth-card .field label { display: block; font-size: 13px; margin-bottom: 6px; color: #6b6880; }
+.auth-card .field input, .auth-card .field select {
     width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #334155;
     background: #1e293b; color: #e2e8f0; font-size: 14px;
 }
-.field input:focus, .field select:focus { outline: 2px solid #6d4aff; border-color: transparent; }
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;
+.auth-card .field input:focus, .auth-card .field select:focus { outline: 2px solid #6d4aff; border-color: transparent; }
+.auth-card .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;
     padding: 10px 16px; border-radius: 10px; border: 0; font-size: 14px; font-weight: 600; }
-.btn-primary { background: #6d4aff; color: #fff; width: 100%; }
-.btn-primary:hover { background: #4338ca; }
-.text-muted { color: #6b6880; font-size: 13px; }
-.title { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
-.subtitle { color: #6b6880; margin: 0 0 20px; font-size: 14px; }
-.error { background: #fee2e2; border: 1px solid #b91c1c; color: #991b1b; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; }
+.auth-card .btn-primary { background: #6d4aff; color: #fff; width: 100%; }
+.auth-card .btn-primary:hover { background: #4338ca; }
+.auth-card .text-muted { color: #6b6880; font-size: 13px; }
+.auth-card .title { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
+.auth-card .subtitle { color: #6b6880; margin: 0 0 20px; font-size: 14px; }
+.auth-card .error { background: #fee2e2; border: 1px solid #b91c1c; color: #991b1b; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; }
 /* ASP.NET renders the summary even when the form is fine; without this it is an empty red box. */
 .validation-summary-valid, .field-validation-valid { display: none; }
-.row { display: flex; gap: 12px; }
-.row > * { flex: 1; }
+.auth-card .row { display: flex; gap: 12px; }
+.auth-card .row > * { flex: 1; }
