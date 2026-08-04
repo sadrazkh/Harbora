@@ -12,6 +12,7 @@ commands and database tunnels are all connections the node dials itself.
 |---|---|
 | [installation.md](installation.md) | Installing, configuring, updating, draining, uninstalling |
 | [security.md](security.md) | What the control plane can and cannot do to a node, and why |
+| [control-plane.md](control-plane.md) | The panel's half: CA, enrollment, channel, gateway, admin API |
 | [troubleshooting.md](troubleshooting.md) | Symptoms → causes → fixes |
 | [merge-notes.md](merge-notes.md) | What this branch touches, what the panel still has to implement, known gaps |
 | [changelog.md](changelog.md) | What each commit on this branch contains |

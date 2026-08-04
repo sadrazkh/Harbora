@@ -8,26 +8,6 @@ using Harbora.NodeAgent.Transport;
 
 namespace Harbora.NodeAgent.Tunnels;
 
-/// <summary>
-/// Frame types on a tunnel connection. One TLS connection carries every client session for a
-/// grant, multiplexed — a connection per client would mean a TLS handshake per <c>psql</c>, and a
-/// gateway that has to hold a port open per node per grant.
-/// </summary>
-public enum TunnelFrameType : byte
-{
-    /// <summary>Gateway → node: a client connected; open a stream to the local target.</summary>
-    Open = 1,
-
-    /// <summary>Either direction: payload bytes for a stream.</summary>
-    Data = 2,
-
-    /// <summary>Either direction: the stream ended.</summary>
-    Close = 3,
-
-    /// <summary>Either direction: liveness, no payload.</summary>
-    Ping = 4,
-}
-
 public readonly record struct TunnelFrame(uint StreamId, TunnelFrameType Type, ReadOnlyMemory<byte> Payload);
 
 /// <summary>
@@ -41,10 +21,8 @@ public readonly record struct TunnelFrame(uint StreamId, TunnelFrameType Type, R
 /// </summary>
 public sealed class TunnelFramer(Stream stream)
 {
-    public const int HeaderBytes = 9;
-
-    /// <summary>Refuses anything larger, which is what keeps a hostile peer from asking for a gigabyte buffer.</summary>
-    public const int MaxPayloadBytes = 256 * 1024;
+    public const int HeaderBytes = TunnelFraming.HeaderBytes;
+    public const int MaxPayloadBytes = TunnelFraming.MaxPayloadBytes;
 
     private readonly SemaphoreSlim _writeGate = new(1, 1);
 

@@ -1,0 +1,73 @@
+# Traefik configuration for the Harbora node channel.
+#
+# The node endpoints are the only place the panel authenticates a caller with a client certificate.
+# Traefik terminates TLS, so it — not Kestrel — is what must ask for one and pass it through.
+#
+# Copy this file next to the rest of the dynamic configuration and set NodeAgent settings in
+# deploy/.env:
+#
+#   NodeAgent__PublicUrl=https://panel.example.com
+#   NodeAgent__TrustForwardedClientCertificate=true
+#
+# TrustForwardedClientCertificate is the operator asserting that the two pieces below are in place.
+# Without them, the header is something any client can set, and a certificate header anyone can set
+# is a login form with no password field.
+
+tls:
+  options:
+    harbora-node-mtls:
+      minVersion: VersionTLS12
+
+      clientAuth:
+        # The CA the panel created on first enrollment. Export it with:
+        #   docker exec harbora-panel harbora node-ca > /opt/harbora/app/deploy/traefik/node-ca.pem
+        # or copy the value of the `nodeagent.ca.certificate` setting.
+        caFiles:
+          - /etc/traefik/dynamic/node-ca.pem
+
+        # RequireAndVerifyClientCert: a connection with no client certificate, or one that does not
+        # chain to the node CA, never reaches the panel. The panel checks again — the certificate
+        # must also be the current credential of a node that is not revoked — but this keeps
+        # unauthenticated traffic off the endpoint entirely.
+        clientAuthType: RequireAndVerifyClientCert
+
+http:
+  middlewares:
+    harbora-node-client-cert:
+      passTLSClientCert:
+        # The panel reads X-Forwarded-Tls-Client-Cert. Traefik overwrites it on every request, which
+        # is what makes it trustworthy — a client that sets it themselves has it replaced.
+        pem: true
+
+  routers:
+    # Enrollment: authenticated by a single-use token, not by a certificate, so it gets the ordinary
+    # TLS options. A node has no certificate yet when it calls this.
+    harbora-node-enroll:
+      rule: "Host(`panel.example.com`) && Path(`/api/node-agent/v1/enroll`)"
+      entryPoints: [websecure]
+      service: harbora-panel
+      tls:
+        certResolver: letsencrypt
+
+    # Renewal and the channel: both require the node's certificate.
+    harbora-node-mtls:
+      rule: >-
+        Host(`panel.example.com`) &&
+        (Path(`/api/node-agent/v1/credential/renew`) || Path(`/api/node-agent/v1/channel`))
+      entryPoints: [websecure]
+      service: harbora-panel
+      middlewares: [harbora-node-client-cert]
+      tls:
+        certResolver: letsencrypt
+        options: harbora-node-mtls
+
+  services:
+    harbora-panel:
+      loadBalancer:
+        servers:
+          - url: "http://panel:8080"
+
+        # The channel is a long-lived WebSocket. Without this, Traefik's default response timeout
+        # closes it mid-session and the fleet reconnects every minute for no reason.
+        responseForwarding:
+          flushInterval: 100ms

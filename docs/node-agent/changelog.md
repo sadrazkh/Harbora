@@ -175,3 +175,35 @@ The workflow also cross-publishes both release architectures, because a build th
 developer's framework-dependent path is a release that fails at tag time.
 
 Covers section 14's integration-container requirement. 412 passing, 17 environment-gated.
+
+---
+
+## 8. The control plane
+
+The panel's half of the contract, so a node has something to enroll with.
+
+**Added**
+
+```
+src/Harbora.Domain/Nodes/{Node,NodeEnrollmentToken,NodeCommandRecord}.cs
+src/Harbora.Data/Migrations/*_NodeAgentV1.*
+src/Harbora.Infrastructure/Nodes/{NodeAgentControlPlaneOptions,NodeCertificateAuthority,
+  NodeEnrollmentService,NodeConnection,NodeChannelSession,NodeCommandService,
+  NodeHeartbeatMonitor,NodeTunnelGateway}.cs
+src/Harbora.Web/Controllers/Api/{NodeAgentController,NodesController}.cs
+src/Harbora.Web/Infrastructure/{NodeClientCertificate,NodeChannelEndpoint}.cs
+deploy/traefik/dynamic/node-agent.yml
+docs/node-agent/control-plane.md
+tests/Harbora.Tests/{NodeEnrollmentTests,NodeControlPlaneTests}.cs
+```
+
+**Modified** — `HarboraDbContext.cs` (four DbSets and their configuration), `DependencyInjection.cs`
+(registrations), `Harbora.Infrastructure.csproj` and `Harbora.Tests.csproj` (a project reference each),
+`Harbora.Web/Program.cs` (WebSockets, one registration, one endpoint), `Harbora.slnx`,
+`docs/node-agent/{README,merge-notes}.md`, `contracts/node-agent/v1/README.md` (tunnel framing),
+`src/Harbora.NodeAgent.Contracts/Tunnel.cs` and `src/Harbora.NodeAgent/Tunnels/TunnelProtocol.cs`
+(the frame type moved into the contract, where a wire format belongs).
+
+Covers the control-plane side of sections 5, 6, 7, 10 and 13.
+
+412 + 17 gated on the agent's suite; 1213 on the panel's, up from 1145.

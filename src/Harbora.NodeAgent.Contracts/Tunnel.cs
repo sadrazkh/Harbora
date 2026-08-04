@@ -82,3 +82,40 @@ public sealed record TunnelRegistrationResponse
     public DateTimeOffset? ExpiresAt { get; init; }
     public NodeError? Error { get; init; }
 }
+
+/// <summary>
+/// Frame types on a tunnel connection. One TLS connection carries every client session for a grant,
+/// multiplexed — a connection per client would mean a TLS handshake per <c>psql</c>, and a gateway
+/// holding a port open per node per grant.
+/// </summary>
+public enum TunnelFrameType : byte
+{
+    /// <summary>Gateway → node: a client connected; open a stream to the local target.</summary>
+    Open = 1,
+
+    /// <summary>Either direction: payload bytes for a stream.</summary>
+    Data = 2,
+
+    /// <summary>Either direction: the stream ended.</summary>
+    Close = 3,
+
+    /// <summary>Either direction: liveness, no payload.</summary>
+    Ping = 4,
+}
+
+/// <summary>
+/// The tunnel's binary framing, shared by the node and the gateway.
+///
+/// <para>
+/// <c>streamId(4) | type(1) | length(4)</c>, big-endian, then the payload. Fixed and tiny on
+/// purpose: the two ends are different codebases, and a framing that needs a parser is a framing
+/// that will be parsed differently by one of them.
+/// </para>
+/// </summary>
+public static class TunnelFraming
+{
+    public const int HeaderBytes = 9;
+
+    /// <summary>Refusing anything larger is what stops a peer asking for a gigabyte buffer.</summary>
+    public const int MaxPayloadBytes = 256 * 1024;
+}

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\Harbora.Data\Harbora.Data.csproj" />
     <ProjectReference Include="..\..\src\Harbora.Web\Harbora.Web.csproj" />
     <ProjectReference Include="..\..\src\Harbora.Cli\Harbora.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Harbora.NodeAgent.Contracts\Harbora.NodeAgent.Contracts.csproj" />
   </ItemGroup>
 
 </Project>

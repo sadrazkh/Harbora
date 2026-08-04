@@ -141,6 +141,34 @@ parses a payload that has not already been authorised.
 
 ---
 
+## Tunnel framing
+
+The database tunnel is the one part of this contract that is not JSON. After the registration
+exchange — one JSON line each way, `tunnelRegistration` then `tunnelRegistrationResponse` — the
+connection carries multiplexed client sessions:
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++---------------------------------------------------------------+
+|                          streamId (u32)                        |
++-------+-------------------------------------------------------+
+| type  |                     length (i32)                       |
++-------+-------------------------------------------------------+
+|                        payload (length bytes)                  |
++---------------------------------------------------------------+
+```
+
+Big-endian. `type` is `1 = open`, `2 = data`, `3 = close`, `4 = ping`. `length` above 262144 is a
+protocol error — refusing it is what stops a peer asking the other side for a gigabyte buffer.
+
+One TLS connection carries every client session for a grant. A connection per client would mean a
+TLS handshake per `psql`, and a gateway holding a port open per node per grant.
+
+The gateway opens a stream (`open`), both sides exchange `data`, and either may `close`. The node
+never initiates a stream: it has no way to know a client connected, and a node that could open
+streams could reach into the gateway rather than out of it.
+
 ## Compatibility rules
 
 Within major version 1:

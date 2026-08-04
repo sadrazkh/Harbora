@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Threading.RateLimiting;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
@@ -49,6 +49,8 @@ builder.Services.AddScoped<ICurrentUser, HttpCurrentUser>();
 builder.Services.AddScoped<IWorkspaceScope, HttpWorkspaceScope>();
 builder.Services.AddScoped<DbSeeder>();
 builder.Services.AddSingleton<ViteManifest>();
+// Resolves the client certificate a node presents, whether Kestrel or Traefik terminated the TLS.
+builder.Services.AddSingleton<NodeClientCertificateResolver>();
 
 // ---- MVC + bilingual localization (fa/en, RTL/LTR) ----
 builder.Services.AddLocalization(o => o.ResourcesPath = "Resources");
@@ -171,6 +173,11 @@ app.UseForwardedHeaders();
 app.UseRequestLocalization(app.Services.GetRequiredService<
     Microsoft.Extensions.Options.IOptions<RequestLocalizationOptions>>().Value);
 app.UseStaticFiles();
+// The node channel is the only WebSocket the panel serves besides SignalR's. The keep-alive is
+// shorter than a typical proxy idle timeout, so an idle channel is held open by pings rather than
+// rediscovered by a reconnect.
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
+
 app.UseRouting();
 app.UseRateLimiter();
 app.UseAuthentication();
@@ -185,6 +192,7 @@ app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 app.MapControllers(); // attribute-routed API + controllers
 app.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
 app.MapHub<DeploymentHub>("/hubs/deployments");
+app.MapNodeChannel();
 
 await app.RunAsync();
 return 0;

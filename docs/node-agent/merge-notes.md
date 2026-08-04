@@ -10,26 +10,29 @@ working tree with `feature/harbora-platform-expansion-v1`.
 **Added** (nothing here existed before):
 
 ```
-contracts/node-agent/v1/**
-src/Harbora.NodeAgent.Contracts/**
-src/Harbora.NodeAgent/**
-tests/Harbora.NodeAgent.Tests/**
-deploy/node-agent/**
-docs/node-agent/**
-examples/node-agent/**
-.github/workflows/release-node-agent.yml
+contracts/node-agent/v1/**                   the wire contract
+src/Harbora.NodeAgent.Contracts/**           its C# mirror, dependency-free
+src/Harbora.NodeAgent/**                     the agent
+src/Harbora.Domain/Nodes/**                  Node, tokens, command and event records
+src/Harbora.Infrastructure/Nodes/**          CA, enrollment, channel, commands, gateway
+src/Harbora.Web/Controllers/Api/Node*.cs     the node-facing and admin APIs
+src/Harbora.Web/Infrastructure/Node*.cs      client-certificate resolution, channel endpoint
+src/Harbora.Data/Migrations/*_NodeAgentV1.*  four new tables
+tests/Harbora.NodeAgent.Tests/**             the agent's suite
+tests/Harbora.Tests/Node*Tests.cs            the control plane's
+deploy/node-agent/**                         installer, uninstaller, unit, release script
+deploy/traefik/dynamic/node-agent.yml        mTLS routing for the node endpoints
+docs/node-agent/**                           installation, security, control plane, troubleshooting
+examples/node-agent/**                       dev config and a worked enrollment
+.github/workflows/{ci,release}-node-agent.yml
 ```
 
-**Modified** — two files, both minimally:
+**Modified** — seven files, each by an appended block. The full list with conflict risk is
+in [Additional files touched outside the node's own tree](#additional-files-touched-outside-the-nodes-own-tree)
+below.
 
-| File | Change | Conflict risk |
-|---|---|---|
-| `Harbora.slnx` | Three `<Project>` lines added | Low; a textual conflict here resolves by keeping both sides' lines |
-| — | | |
-
-Nothing else in the repository was edited. In particular: no changes to `Harbora.Web`, `Harbora.Domain`,
-`Harbora.Application`, `Harbora.Infrastructure`, `Harbora.Data`, `Harbora.Cli`, the existing
-`Harbora.Agent`, any view, any migration, the template catalog, or the AI gateway.
+Untouched: every view and Vue island, the template catalog, the AI gateway, the CLI, the existing
+`Harbora.Agent`, and every pre-existing domain entity.
 
 ---
 
@@ -59,58 +62,53 @@ The difference between them, for whoever decides when to migrate:
 
 ---
 
-## What the control plane has to implement before a node can enroll
+## The control plane side is implemented
 
-This branch owns the node side and the contract. The panel side is **not** included, by design — it
-lives in `Harbora.Web`, which this branch does not touch.
+Originally this branch shipped the node and the contract only. The control-plane half now ships with
+it — see [control-plane.md](control-plane.md).
 
-`contracts/node-agent/v1/` is the specification. Four things are needed:
+Implemented:
 
-### 1. `POST /api/node-agent/v1/enroll`
+| Contract surface | Where |
+|---|---|
+| `POST /api/node-agent/v1/enroll` | `NodeAgentController` → `NodeEnrollmentService` |
+| `POST /api/node-agent/v1/credential/renew` | same |
+| `WSS /api/node-agent/v1/channel` | `NodeChannelEndpoint` → `NodeChannelSession` |
+| TCP gateway | `NodeTunnelGateway` |
+| Node CA | `NodeCertificateAuthority` — created on first use, key encrypted with the platform master key |
+| Command issue and correlation | `NodeCommandService` |
+| Admin API | `NodesController` at `/api/v1/nodes`, capability `servers.manage` |
 
-Bearer-authenticated by a short-lived, single-use enrollment token. Takes an `enrollmentRequest`
-(CSR included), returns an `enrollmentResponse`: a signed certificate, the CA, a permanent node id,
-and the granted scopes.
+### Additional files touched outside the node's own tree
 
-Needs a node CA. The private key never leaves the node, so the panel signs and never holds it.
+| File | Change | Conflict risk |
+|---|---|---|
+| `Harbora.slnx` | Three `<Project>` lines | Low — keep both sides' lines |
+| `src/Harbora.Data/HarboraDbContext.cs` | Four `DbSet`s and their configuration, appended | **Medium** — both changes are additions to the same two regions; resolve by keeping both |
+| `src/Harbora.Data/Migrations/` | One new migration, `NodeAgentV1` | **Medium** — if the other branch also adds a migration, both apply, but the model snapshot conflicts and needs regenerating with `dotnet ef migrations add` after the merge |
+| `src/Harbora.Infrastructure/DependencyInjection.cs` | One block of registrations | Low |
+| `src/Harbora.Infrastructure/Harbora.Infrastructure.csproj` | One `<ProjectReference>` | Low |
+| `src/Harbora.Web/Program.cs` | `UseWebSockets`, one service registration, `MapNodeChannel()` | Low |
+| `tests/Harbora.Tests/Harbora.Tests.csproj` | One `<ProjectReference>` | Low |
+| `deploy/traefik/dynamic/node-agent.yml` | New file | None |
 
-**Watch out:** this endpoint is authenticated by a token, not by a session. Per
-`docs/overhaul/`-era experience with Git webhooks, any DB read on this path must use
-`IgnoreQueryFilters()` and pin the tenant explicitly — an anonymous HTTP request is scoped to
-`Guid.Empty`, and every filtered read comes back empty while reporting success.
+Still untouched: every view, the template catalog, the AI gateway, the CLI, the existing
+`Harbora.Agent`, and every existing domain entity.
 
-### 2. `POST /api/node-agent/v1/credential/renew`
+### Resolving the migration conflict, if there is one
 
-mTLS-authenticated by the certificate being replaced. Returns a fresh one. A revoked node gets 403
-with `credentialRevoked`.
+Two branches adding migrations produce a conflicting `HarboraDbContextModelSnapshot.cs`. The
+migrations themselves do not conflict — they create different tables. After merging:
 
-### 3. `WSS /api/node-agent/v1/channel`
+```bash
+git checkout --theirs src/Harbora.Data/Migrations/HarboraDbContextModelSnapshot.cs
+dotnet ef migrations remove --project src/Harbora.Data --startup-project src/Harbora.Web   # if needed
+dotnet ef migrations add MergeSnapshot --project src/Harbora.Data --startup-project src/Harbora.Web
+```
 
-The persistent channel. The panel must:
-
-- answer `node.hello` with `control.hello-ack` carrying the chosen protocol version, a resume token,
-  the last sequence it durably holds, the granted scopes and the heartbeat interval
-- keep per-node session state so a resume is possible, and set `resumeRejected` when it is not
-- send `control.ack` with the highest sequence it has durably stored, so the node can trim its outbox
-- issue commands as `commandEnvelope`s with a **fresh nonce per send** and a **stable idempotency key
-  per logical operation** — that pairing is what makes a retry safe and a replay detectable
-
-### 4. A TCP gateway (only if you publish databases)
-
-Terminates mTLS, accepts a `tunnelRegistration` line, answers with a `tunnelRegistrationResponse`,
-then multiplexes client sessions over the connection using the 9-byte frame header in
-`TunnelProtocol.cs`. It enforces the IP allowlist and the connection caps, because it is the side
-that sees the client's real address.
-
-### Suggested panel-side sequencing
-
-1. Enrollment + renewal endpoints and the node CA → nodes can enroll and stay enrolled
-2. The channel with heartbeat and inventory → nodes appear and report
-3. Command issuing for workloads → deployments move to the new path
-4. The TCP gateway → database access
-5. Migration of existing nodes
-
----
+Regenerating is safer than hand-merging a snapshot: the snapshot is generated output, and a
+hand-edited one that disagrees with the model produces migrations that are wrong in ways EF cannot
+detect until they run against a real database.
 
 ## Versioning
 
@@ -126,9 +124,15 @@ release workflow is separate, so a CLI release and a node-agent release move ind
 
 ## Merge order with `feature/harbora-platform-expansion-v1`
 
-The two branches are disjoint apart from `Harbora.slnx`. Either order works. If both add projects to
-the solution, resolve by keeping every `<Project>` line from both sides — the file is a flat list and
-the order does not matter.
+Either order works; the conflicts are all additive. Expect to resolve:
+
+- **`Harbora.slnx`** — keep every `<Project>` line from both sides. The file is a flat list.
+- **`HarboraDbContext.cs`** — keep both sides' `DbSet`s and both sides' `OnModelCreating` blocks.
+- **`HarboraDbContextModelSnapshot.cs`** — regenerate rather than hand-merge; see above.
+- **`DependencyInjection.cs`, `Program.cs`** — keep both sides' registrations.
+
+Merging this branch second is slightly easier, because regenerating the EF snapshot is the last
+thing either branch needs and doing it once is less work than doing it twice.
 
 ---
 
@@ -143,6 +147,9 @@ the order does not matter.
 | Route publication | The node reports `host:port` for a route; Traefik still lives with the control plane. A node-local proxy is not attempted | Control plane |
 | `RotateDatabaseAccessCredential` overlap | `overlapSeconds` is accepted and logged as unsupported — none of the four engines can hold two live passwords for one user | Contract note; would need a second user per rotation |
 | Metrics endpoint auth | Loopback-only, no authentication. Anyone already on the box can read it — which is the same population that can read the state directory | Fine as is; documented |
+| Multi-replica command routing | `NodeChannelRegistry` is per-instance, so a command only works on the replica holding that node's socket; others answer 503. Single-instance Harbora is unaffected | A shared routing layer, or pinning node routes to one replica |
+| Scheduling onto v1 nodes | The panel's `IServerEngineFactory` still resolves the inbound `Harbora.Agent` for remote servers. A v1 node is enrolled, connected and commandable, but the deployment pipeline does not yet place workloads on it | An `IDockerEngine` implementation over `NodeCommandService`, selected in `ServerEngineFactory` |
+| Node UI | The API is complete; there is no panel screen for it, because this branch does not touch views | `Harbora.Web/Views` |
 
 ---
 
@@ -156,8 +163,13 @@ b369822  agent core: identity, enrollment, channel, admission
 0b87cfd  workload policy, deployment, runtime verbs
 dd85809  database access, tunnels, Docker workspaces
 0fb3ea1  self-update, drain
-<this>   installer, uninstaller, systemd, release, docs
+6046e21  installer, uninstaller, systemd, release, docs
+47f9a5d  container integration tests, CI gate
+<this>   control plane: CA, enrollment, channel, gateway, admin API
 ```
 
-Reverting the whole branch removes the new directories and the three lines in `Harbora.slnx`. No
-existing behaviour depends on any of it.
+Reverting the first seven commits removes the new directories and the three lines in `Harbora.slnx`.
+Reverting the eighth additionally undoes the DbContext, migration, DI and Program.cs changes listed
+above. No existing behaviour depends on any of it: with the node subsystem reverted, the panel
+behaves exactly as it did on `c6ff869`, and `NodeAgent:GatewayListenPort` defaulting to 0 means even
+an un-reverted install opens no new port until an operator configures one.

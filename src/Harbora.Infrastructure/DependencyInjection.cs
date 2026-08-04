@@ -22,6 +22,19 @@ public static class DependencyInjection
     {
         services.Configure<TraefikOptions>(config.GetSection("Traefik"));
         services.Configure<HarboraRuntimeOptions>(config.GetSection("Runtime"));
+        services.Configure<Nodes.NodeAgentControlPlaneOptions>(
+            config.GetSection(Nodes.NodeAgentControlPlaneOptions.SectionName));
+
+        // Node agent v1. The registry is a singleton because it holds live sockets; everything that
+        // touches the database around them is scoped, as usual.
+        services.AddSingleton<Nodes.NodeChannelRegistry>();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<Nodes.NodeCertificateAuthority>();
+        services.AddScoped<Nodes.NodeEnrollmentService>();
+        services.AddScoped<Nodes.NodeCommandService>();
+        services.AddScoped<Nodes.NodeChannelSession>();
+        services.AddHostedService<Nodes.NodeHeartbeatMonitor>();
+        services.AddHostedService<Nodes.NodeTunnelGateway>();
 
         // Container runtime
         services.AddSingleton<IDockerClient>(_ =>
