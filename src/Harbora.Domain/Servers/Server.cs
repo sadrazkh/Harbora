@@ -42,4 +42,11 @@ public class Server : BaseEntity
     public long TotalMemoryBytes { get; set; }
     public long TotalDiskBytes { get; set; }
     public string? DockerVersion { get; set; }
+
+    /// <summary>
+    /// <c>amd64</c>, <c>arm64</c> — what this host can actually run, as last reported. Null means
+    /// nobody has told us yet, and that is treated as "do not filter" rather than as amd64: a guess
+    /// here refuses images that would have run.
+    /// </summary>
+    public string? Architecture { get; set; }
 }

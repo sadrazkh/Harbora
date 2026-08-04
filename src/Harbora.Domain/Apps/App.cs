@@ -100,6 +100,16 @@ public class App : BaseEntity
 
     public Guid? TemplateId { get; set; }
 
+    /// <summary>
+    /// Which version of that template this app was created from.
+    ///
+    /// Recorded rather than inferred from the image: a digest alone answers "what is running" but
+    /// not "which of our versions is that", so without this column nobody can tell who is on the
+    /// release being deprecated. Null for apps created before versions existed, and for templates
+    /// that have none.
+    /// </summary>
+    public Guid? TemplateVersionId { get; set; }
+
     public ICollection<EnvironmentVariable> EnvironmentVariables { get; set; } = new List<EnvironmentVariable>();
     public ICollection<Volume> Volumes { get; set; } = new List<Volume>();
     public ICollection<DomainName> Domains { get; set; } = new List<DomainName>();

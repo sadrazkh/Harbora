@@ -21,7 +21,13 @@ public sealed record TemplateDeployRequest(
     string? RepositoryUrl,
     string? GitRef,
     IReadOnlyDictionary<string, string> Variables,
-    bool DeployNow);
+    bool DeployNow,
+
+    /// <summary>
+    /// The version the person picked, or null to take the recommended one. Optional and last so
+    /// every existing caller keeps working unchanged.
+    /// </summary>
+    Guid? VersionId = null);
 
 public sealed record TemplateDeployResult(
     Guid ProjectId,
@@ -74,8 +80,15 @@ public sealed class TemplateDeploymentService(
             if (!serviceQuota.Allowed) throw new InvalidOperationException(serviceQuota.Reason ?? "Service quota exceeded.");
         }
 
-        var serverId = await db.Servers.Where(s => s.IsLocal).Select(s => (Guid?)s.Id).FirstOrDefaultAsync(ct)
+        var server = await db.Servers.Where(s => s.IsLocal)
+            .Select(s => new { s.Id, s.Architecture }).FirstOrDefaultAsync(ct)
             ?? throw new InvalidOperationException("No local server is configured.");
+        var serverId = server.Id;
+
+        // Resolved here rather than trusting the list the form drew. That page was rendered a while
+        // ago and a version can be withdrawn in between; somebody with an old link or a scripted
+        // call asks for the id directly and never sees the list at all.
+        var version = await ResolveVersionAsync(template.Id, request.VersionId, server.Architecture, ct);
 
         var (project, environment) = await projects.CreateAsync(
             request.WorkspaceId,
@@ -144,7 +157,14 @@ public sealed class TemplateDeploymentService(
             Slug = appSlug,
             SourceType = AppSourceType.Template,
             TemplateId = template.Id,
-            PrebuiltImage = manifest.Image,
+            TemplateVersionId = version?.Id,
+
+            // The version's pinned digest wins over the manifest's image. The manifest names a tag,
+            // and a tag is a moving pointer: two people deploying "the same" template a month apart
+            // otherwise get different software with nothing recording the difference.
+            PrebuiltImage = version is null
+                ? manifest.Image
+                : VersionSelection.PinnedImage(version) ?? manifest.Image,
             GitRef = string.IsNullOrWhiteSpace(request.GitRef) ? "main" : request.GitRef.Trim(),
             ContainerPort = manifest.Port ?? 80,
             HealthCheckPath = string.IsNullOrWhiteSpace(manifest.HealthPath) ? "/" : manifest.HealthPath,
@@ -228,6 +248,47 @@ public sealed class TemplateDeploymentService(
                 new DeploymentRequest(app.Id, DeploymentTrigger.Manual, request.UserId, app.GitRef), ct);
 
         return new TemplateDeployResult(project.Id, app.Id, null, deploymentId, createdServices.Count);
+    }
+
+    /// <summary>
+    /// The version to deploy, or null when this template has none and the manifest's own image is
+    /// what runs.
+    ///
+    /// An explicit choice is checked and refused with its reason. No choice takes the recommended
+    /// one — and if a template has versions but none of them is offerable, that is a refusal too,
+    /// not a silent fall back to the manifest: the operator published versions precisely so the
+    /// manifest's floating tag would stop being what customers get.
+    /// </summary>
+    private async Task<Harbora.Domain.Templates.AppTemplateVersion?> ResolveVersionAsync(
+        Guid templateId, Guid? versionId, string? nodeArchitecture, CancellationToken ct)
+    {
+        var versions = await db.AppTemplateVersions.AsNoTracking()
+            .Where(v => v.AppTemplateId == templateId)
+            .ToListAsync(ct);
+
+        if (versions.Count == 0)
+        {
+            // Asking for a version of a template that has none is a stale link or a typo, not a
+            // reason to quietly deploy something else.
+            if (versionId is not null)
+                throw new InvalidOperationException("That version does not belong to this template.");
+            return null;
+        }
+
+        if (versionId is { } chosen)
+        {
+            var version = versions.FirstOrDefault(v => v.Id == chosen)
+                ?? throw new InvalidOperationException("That version does not belong to this template.");
+
+            if (VersionSelection.Refuse(version, nodeArchitecture) is { } refusal)
+                throw new InvalidOperationException(refusal.Reason);
+
+            return version;
+        }
+
+        return VersionSelection.Default(versions, nodeArchitecture)
+            ?? throw new InvalidOperationException(
+                "No version of this template can be deployed on this server yet.");
     }
 
     public static ManagedServiceType ParseServiceType(string value) => value.Trim().ToLowerInvariant() switch

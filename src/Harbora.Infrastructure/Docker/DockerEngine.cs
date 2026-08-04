@@ -327,7 +327,10 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
             totalDisk,
             freeDisk,
             info.ServerVersion,
-            (int)info.ContainersRunning);
+            (int)info.ContainersRunning,
+            // Docker reports the kernel's name; image manifests use Go's. Normalised here so the
+            // version compatibility check has something it can actually compare against.
+            Templates.HostArchitecture.Normalise(info.Architecture));
     }
 
     // --- helpers ---

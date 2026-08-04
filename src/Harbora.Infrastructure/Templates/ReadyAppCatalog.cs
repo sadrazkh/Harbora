@@ -212,13 +212,21 @@ public static class ReadyAppCatalog
         IReadOnlyList<string>? requires = null,
         VersionPublication publication = VersionPublication.Published)
     {
+        // A manifest with no image, no git source and no managed service does not parse, and an
+        // entry whose manifest does not parse is dropped from the catalogue page and refused by the
+        // deploy service — the app is seeded, sits in the database, and is nowhere on screen. The
+        // image named here is the one the recommended version stands for, so the page and the
+        // deployment agree; the digest still overrides it at deploy time.
+        var offered = versions.FirstOrDefault(v => v.Lifecycle == VersionLifecycle.Recommended);
+        if (offered.Version is null) offered = versions.OrderBy(v => v.Lifecycle).First();
+
         var template = new AppTemplate
         {
             Key = key, Name = name, NameFa = nameFa, Category = category,
             Description = description, DescriptionFa = descriptionFa,
             IconUrl = TemplateIcon.PathFor(key),
             IsBuiltIn = true, IsEnabled = true, Status = TemplateStatus.Approved,
-            ManifestJson = Manifest(port, healthPath, volumes, env, requires, website, docs)
+            ManifestJson = Manifest($"{repository}:{offered.Version}", port, healthPath, volumes, env, requires, website, docs)
         };
 
         var built = versions.Select(v => new AppTemplateVersion
@@ -232,7 +240,10 @@ public static class ReadyAppCatalog
             SupportedArchitectures = v.Arch,
             UpgradeNotes = v.Notes,
             MigrationWarnings = v.Warnings,
-            ManifestJson = Manifest(port, healthPath, volumes, env, requires, website, docs)
+
+            // Each version's manifest names its own image, not the recommended one's. They differ in
+            // ports and variables between releases, which is why the manifest lives here at all.
+            ManifestJson = Manifest($"{repository}:{v.Version}", port, healthPath, volumes, env, requires, website, docs)
         }).ToList();
 
         var asset = new AppTemplateAsset
@@ -249,6 +260,7 @@ public static class ReadyAppCatalog
     }
 
     private static string Manifest(
+        string image,
         int port, string? healthPath,
         IReadOnlyList<string> volumes,
         IReadOnlyList<(string Key, string? Default, bool Secret)> env,
@@ -262,7 +274,7 @@ public static class ReadyAppCatalog
         var volumeJson = string.Join(",", volumes.Select(v => $"{{\"mount\":{J(v)}}}"));
         var requiresJson = string.Join(",", (requires ?? []).Select(J));
 
-        return $"{{\"port\":{port},\"healthPath\":{J(healthPath)},\"env\":[{envJson}],"
+        return $"{{\"image\":{J(image)},\"port\":{port},\"healthPath\":{J(healthPath)},\"env\":[{envJson}],"
              + $"\"volumes\":[{volumeJson}],\"requires\":[{requiresJson}],"
              + $"\"website\":{J(website)},\"documentation\":{J(docs)}}}";
     }

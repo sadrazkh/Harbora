@@ -149,6 +149,70 @@ public class ReadyAppCatalogTests
     }
 
     [Fact]
+    public void Every_manifest_actually_parses()
+    {
+        // The catalogue page silently drops any template whose manifest does not parse, and the
+        // deploy service refuses one. Both failures look identical to "the feature was never built":
+        // the entry is seeded, sits in the database, and is nowhere on screen.
+        foreach (var app in ReadyAppCatalog.All())
+        {
+            TemplateManifest.TryParse(app.Template.ManifestJson, out _, out var errors)
+                .Should().BeTrue($"{app.Template.Key}: {string.Join(" ", errors)}");
+
+            foreach (var version in app.Versions)
+                TemplateManifest.TryParse(version.ManifestJson, out _, out var versionErrors)
+                    .Should().BeTrue($"{app.Template.Key} {version.Version}: {string.Join(" ", versionErrors)}");
+        }
+    }
+
+    [Fact]
+    public void Every_manifest_names_an_image_with_a_tag()
+    {
+        // A manifest with no image at all does not parse. One whose image carries no tag resolves
+        // through :latest, which is the thing the digest pinning exists to prevent — and it would
+        // only show up as "this deployed a different version than the page said".
+        foreach (var app in ReadyAppCatalog.All())
+        {
+            TemplateManifest.TryParse(app.Template.ManifestJson, out var manifest, out _);
+
+            manifest!.Image.Should().NotBeNullOrWhiteSpace($"{app.Template.Key}");
+            manifest.Image.Should().Contain(":", $"{app.Template.Key} names an untagged image");
+            manifest.Image.Should().NotEndWith(":latest", $"{app.Template.Key}");
+        }
+    }
+
+    [Fact]
+    public void The_manifest_image_matches_the_version_it_stands_for()
+    {
+        // The manifest's image is what a person reads on the catalogue page; the digest is what gets
+        // deployed. If they name different versions the page is lying, quietly.
+        foreach (var app in ReadyAppCatalog.All())
+        {
+            var offered = VersionSelection.Default(app.Versions)
+                          ?? app.Versions.OrderBy(v => v.Lifecycle).First();
+
+            TemplateManifest.TryParse(app.Template.ManifestJson, out var manifest, out _);
+            manifest!.Image.Should().Be($"{offered.ImageRepository}:{offered.ImageTag}",
+                $"{app.Template.Key} shows one version and deploys another");
+        }
+    }
+
+    [Fact]
+    public void Each_version_manifest_names_its_own_image()
+    {
+        // Not the recommended one's. The manifest is per-version precisely because ports, variables
+        // and images change between releases; copying the recommended one into all of them makes
+        // every version describe the same software.
+        foreach (var app in ReadyAppCatalog.All())
+        foreach (var version in app.Versions)
+        {
+            TemplateManifest.TryParse(version.ManifestJson, out var manifest, out _);
+            manifest!.Image.Should().Be($"{version.ImageRepository}:{version.ImageTag}",
+                $"{app.Template.Key} {version.Version}");
+        }
+    }
+
+    [Fact]
     public void Every_app_carries_documentation_a_person_can_open()
     {
         foreach (var app in ReadyAppCatalog.All())
