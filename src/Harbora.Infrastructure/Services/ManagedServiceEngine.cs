@@ -85,7 +85,9 @@ public sealed class ManagedServiceEngine(
                 var (certificate, key) = DatabaseTls.Generate(svc.ContainerName, clock.UtcNow);
 
                 var prepared = await docker.RunOneOffAsync(new DockerOneOffRequest(
-                    Image: DatabaseTls.PrepareImage,
+                    // The service's own image, so `id -u postgres` inside it is the uid the
+                    // server will actually run as.
+                    Image: image,
                     Command: DatabaseTls.PrepareCommand(),
                     Binds: [(certVolume, DatabaseTls.MountPath, false)],
                     Env: DatabaseTls.PrepareEnvironment(certificate, key)),

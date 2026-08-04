@@ -101,11 +101,13 @@ public static class DatabaseTls
         // Applied every time, not only after writing: a volume restored from a backup, or one
         // written by an older version of this code, would otherwise keep permissions that stop the
         // database booting — and the failure reads as data corruption.
-        $"chmod 600 {Key}; chmod 644 {Certificate}; chown 999:999 {Key} {Certificate}"
+        // The owner is asked of the image rather than assumed. It is 999 on the Debian-based
+        // postgres images and 70 on the Alpine ones, and hardcoding the Debian value put the server
+        // into a crash loop on Alpine: "private key file must be owned by the database user or
+        // root". Run against the service's own image, this is right by construction.
+        $"chmod 600 {Key}; chmod 644 {Certificate}; " +
+        $"chown \"$(id -u postgres):$(id -g postgres)\" {Key} {Certificate}"
     ];
-
-    /// <summary>Only needs a shell, so the database's own image will do and nothing new is pulled.</summary>
-    public const string PrepareImage = "postgres:16-alpine";
 
     /// <summary>How the server is started once the certificate exists.</summary>
     public static IReadOnlyList<string> ServerCommand() =>

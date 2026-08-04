@@ -108,7 +108,12 @@ public class DatabaseTlsTests
         var command = string.Join(" ", DatabaseTls.PrepareCommand());
 
         command.Should().Contain("chmod 600");
-        command.Should().Contain("chown 999:999");
+
+        // Asked of the image, not assumed: postgres is uid 999 on the Debian images and 70 on the
+        // Alpine ones. Hardcoding the Debian value put an Alpine server into a crash loop with
+        // "private key file must be owned by the database user or root".
+        command.Should().Contain("id -u postgres");
+        command.Should().NotContain("999");
     }
 
     [Fact]
