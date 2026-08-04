@@ -1,6 +1,12 @@
+using Harbora.Application.Abstractions;
 using Harbora.Modules.Backup.Contracts;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+
+// Both namespaces declare an IBackupEngine — the platform's target-oriented service and this
+// module's storage-engine port (ARCHITECTURE.md § 2). Registering the wrong one would compile only
+// by accident, so the intended type is named outright.
+using IBackupEngine = Harbora.Modules.Backup.Contracts.IBackupEngine;
 
 namespace Harbora.Modules.Backup.Infrastructure;
 
@@ -48,6 +54,27 @@ public static class BackupModuleServiceCollectionExtensions
         services.AddScoped<IBackupEngine, HarboraNativeBackupEngine>();
         services.AddScoped<IBackupEngine, KopiaBackupEngine>();
         services.AddScoped<IBackupEngineResolver, BackupEngineResolver>();
+
+        services.AddScoped<IBackupTargetResolver, BackupTargetResolver>();
+        services.AddScoped<IBackupNotificationService, BackupNotificationService>();
+
+        services.AddScoped<BackupRepositoryService>();
+        services.AddScoped<BackupSnapshotService>();
+        services.AddScoped<RestoreService>();
+        services.AddScoped<BackupRetentionService>();
+        services.AddScoped<BackupPolicyService>();
+
+        // Job handlers are resolved by JobDispatcher from the worker's scope. Registered as
+        // IJobHandler so the core dispatcher can find them without referencing this module.
+        services.AddScoped<IJobHandler, BackupSnapshotJobHandler>();
+        services.AddScoped<IJobHandler, BackupRestoreJobHandler>();
+        services.AddScoped<IJobHandler, BackupVerifyJobHandler>();
+        services.AddScoped<IJobHandler, BackupPruneJobHandler>();
+        services.AddScoped<IJobHandler, RepositoryHealthCheckJobHandler>();
+
+        // Checks the flag itself and returns immediately when the module is off, so a disabled
+        // module costs one log line rather than a timer ticking for the process's lifetime.
+        services.AddHostedService<BackupPolicyScheduler>();
 
         return services;
     }

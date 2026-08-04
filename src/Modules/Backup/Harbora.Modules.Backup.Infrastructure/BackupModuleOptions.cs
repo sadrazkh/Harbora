@@ -88,4 +88,16 @@ public sealed class BackupModuleOptions
 
     /// <summary>Ceiling on entry count, for the same reason.</summary>
     public long MaxRestoreEntryCount { get; set; } = 5_000_000;
+
+    /// <summary>
+    /// Directories this panel is permitted to back up. **Empty means none.**
+    ///
+    /// <para>
+    /// Fails closed deliberately. A backup engine pointed at an arbitrary path is an arbitrary-file
+    /// read with a download button on the end of it; the default must not be "anywhere the panel
+    /// user can read", which includes <c>/etc</c> and Harbora's own key material. Naming the
+    /// readable roots is one setting and removes the question.
+    /// </para>
+    /// </summary>
+    public List<string> AllowedSourceRoots { get; set; } = [];
 }

@@ -13,7 +13,20 @@ namespace Harbora.Infrastructure.Jobs;
 /// </summary>
 public static class JobDispatcher
 {
-    public static Task ExecuteAsync(Job job, IServiceProvider scope, CancellationToken ct) => job.Kind switch
+    public static Task ExecuteAsync(Job job, IServiceProvider scope, CancellationToken ct)
+    {
+        // A module that owns a job kind registers a handler for it. Checked before the switch below
+        // so modules can add kinds without this file — which sits in the core and cannot reference
+        // them — having to know they exist.
+        var handler = scope.GetServices<Harbora.Application.Abstractions.IJobHandler>()
+            .FirstOrDefault(h => h.Kind == job.Kind);
+
+        return handler is not null
+            ? handler.ExecuteAsync(job.TargetId, ct)
+            : ExecuteBuiltInAsync(job, scope, ct);
+    }
+
+    private static Task ExecuteBuiltInAsync(Job job, IServiceProvider scope, CancellationToken ct) => job.Kind switch
     {
         JobKind.Deployment =>
             scope.GetRequiredService<DeploymentPipeline>().ExecuteAsync(job.TargetId, ct),
