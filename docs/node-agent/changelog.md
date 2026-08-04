@@ -153,3 +153,25 @@ tests/Harbora.NodeAgent.Tests/DeploymentArtifactTests.cs
 **Modified** — `Program.cs` (a `--version` flag, which the installer and the updater both use).
 
 Covers section 15. 412 tests.
+
+---
+
+## 7. Container-backed integration tests and the node-agent CI gate
+
+**Added**
+
+```
+tests/Harbora.NodeAgent.Tests/DockerIntegrationTests.cs
+.github/workflows/ci-node-agent.yml
+```
+
+The only tests that need a real daemon: they exercise `DockerContainerRuntime` against Docker with
+throwaway containers, which is the one thing the fake runtime cannot validate. Where no daemon is
+reachable they report an explicit skip with a reason rather than passing vacuously — and the CI
+workflow fails the build if they skip on a runner that *does* have Docker, so the gate cannot
+quietly stop testing anything.
+
+The workflow also cross-publishes both release architectures, because a build that only works on the
+developer's framework-dependent path is a release that fails at tag time.
+
+Covers section 14's integration-container requirement. 412 passing, 17 environment-gated.
