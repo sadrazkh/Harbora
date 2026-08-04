@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using Harbora.Domain.Common;
 
 namespace Harbora.Infrastructure.Services;
@@ -45,30 +47,64 @@ public static class DatabaseTls
     private const string Key = MountPath + "/server.key";
 
     /// <summary>
-    /// Writes a self-signed certificate, once.
+    /// A self-signed certificate and its key, as PEM.
     ///
-    /// Guarded by a test for the file, because this runs on every provision and regenerating would
-    /// change the certificate under clients that had pinned it. Ten years, because a database
-    /// certificate that expires is a database that stops accepting connections on a morning nobody
-    /// connected the two events.
+    /// Made here rather than by shelling out to openssl, because the postgres image does not carry
+    /// the openssl binary — the first attempt at this failed on the server with "openssl: not
+    /// found" — and the alternatives were to pull an image purely to run one command or to make the
+    /// caller depend on one that happened to have it.
     ///
-    /// The ownership and mode are the whole reason this is a container rather than a line of config:
-    /// PostgreSQL refuses to start if the key is readable by anyone but its own user.
+    /// Ten years, because a database certificate that expires is a database that stops accepting
+    /// connections on a morning when nobody connects the two events.
     /// </summary>
-    public static IReadOnlyList<string> PrepareCommand(string commonName) =>
+    public static (string Certificate, string Key) Generate(string commonName, DateTimeOffset now)
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest(
+            $"CN={Sanitise(commonName)}", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
+        request.CertificateExtensions.Add(
+            new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, false));
+
+        // Backdated an hour so a client whose clock runs slightly behind the server does not reject
+        // a certificate that was valid the moment it was made.
+        using var certificate = request.CreateSelfSigned(now.AddHours(-1), now.AddYears(10));
+
+        return (certificate.ExportCertificatePem(), rsa.ExportPkcs8PrivateKeyPem());
+    }
+
+    /// <summary>Environment carrying the PEMs — never argv, where `docker inspect` would keep the key.</summary>
+    public static IReadOnlyDictionary<string, string> PrepareEnvironment(string certificate, string key) =>
+        new Dictionary<string, string>
+        {
+            ["HARBORA_TLS_CERT"] = certificate,
+            ["HARBORA_TLS_KEY"] = key
+        };
+
+    /// <summary>
+    /// Writes the certificate, once.
+    ///
+    /// Guarded by a test for the file, because this runs on every provision and rewriting would
+    /// change the certificate under clients that had pinned it.
+    ///
+    /// The ownership and mode are the whole reason this is a container step rather than a line of
+    /// config: PostgreSQL refuses to start if the key is readable by anyone but its own user.
+    /// </summary>
+    public static IReadOnlyList<string> PrepareCommand() =>
     [
         "sh", "-c",
         $"set -e; if [ ! -f {Certificate} ]; then " +
-        $"openssl req -new -x509 -days 3650 -nodes -text " +
-        $"-subj '/CN={Sanitise(commonName)}' -out {Certificate} -keyout {Key}; fi; " +
+        $"printf '%s' \"$HARBORA_TLS_CERT\" > {Certificate}; " +
+        $"printf '%s' \"$HARBORA_TLS_KEY\" > {Key}; fi; " +
 
-        // Applied every time, not only after generating: a volume restored from a backup, or one
+        // Applied every time, not only after writing: a volume restored from a backup, or one
         // written by an older version of this code, would otherwise keep permissions that stop the
         // database booting — and the failure reads as data corruption.
         $"chmod 600 {Key}; chmod 644 {Certificate}; chown 999:999 {Key} {Certificate}"
     ];
 
-    /// <summary>The image used to write it — already on any host running PostgreSQL, so nothing new is pulled.</summary>
+    /// <summary>Only needs a shell, so the database's own image will do and nothing new is pulled.</summary>
     public const string PrepareImage = "postgres:16-alpine";
 
     /// <summary>How the server is started once the certificate exists.</summary>

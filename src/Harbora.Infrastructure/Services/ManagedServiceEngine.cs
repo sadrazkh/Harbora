@@ -82,10 +82,14 @@ public sealed class ManagedServiceEngine(
                 var certVolume = DatabaseTls.VolumeName(svc.ContainerName);
                 await docker.EnsureVolumeAsync(certVolume, ct);
 
+                var (certificate, key) = DatabaseTls.Generate(svc.ContainerName, clock.UtcNow);
+
                 var prepared = await docker.RunOneOffAsync(new DockerOneOffRequest(
                     Image: DatabaseTls.PrepareImage,
-                    Command: DatabaseTls.PrepareCommand(svc.ContainerName),
-                    Binds: [(certVolume, DatabaseTls.MountPath, false)]), null, ct);
+                    Command: DatabaseTls.PrepareCommand(),
+                    Binds: [(certVolume, DatabaseTls.MountPath, false)],
+                    Env: DatabaseTls.PrepareEnvironment(certificate, key)),
+                    new Progress<string>(l => logger.LogInformation("{Svc} tls: {Line}", svc.Name, l)), ct);
 
                 if (prepared == 0)
                 {
