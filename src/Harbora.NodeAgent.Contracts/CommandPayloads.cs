@@ -194,6 +194,47 @@ public sealed record RouteResult
     public string? PublicEndpoint { get; init; }
 }
 
+/// <summary>
+/// Payload of <c>ConfigureIngress</c> — whether this node keeps an outbound tunnel open for the
+/// control plane's proxy to reach its published ports through.
+///
+/// <para>
+/// This is the answer for a node behind NAT. Its published host ports are reachable from its own
+/// machine and from nowhere else, so the panel's proxy cannot open a socket to them and every route
+/// it wires up times out. With the tunnel, the node dials the gateway exactly as it already does for
+/// a database, and the panel binds an internal port per published port at its end.
+/// </para>
+///
+/// <para>
+/// Off unless asked. The tunnel puts the panel on the path of every request to every app on the
+/// node — the right trade for a node that is otherwise unreachable, the wrong one for a node on a
+/// routable network.
+/// </para>
+/// </summary>
+public sealed record ConfigureIngressRequest
+{
+    public required bool Enabled { get; init; }
+
+    /// <summary>
+    /// Gateway to dial, as <c>host:port</c>. Null keeps whatever the node was enrolled with, which
+    /// is the ordinary case — a control plane names one only when it is moving the fleet.
+    /// </summary>
+    public string? GatewayUrl { get; init; }
+}
+
+/// <summary>Result of <c>ConfigureIngress</c>: what the node did, and whether the tunnel came up.</summary>
+public sealed record ConfigureIngressResult
+{
+    public required bool Enabled { get; init; }
+    public required TunnelStatus Status { get; init; }
+
+    /// <summary>Host ports this node publishes, and so can serve through the tunnel.</summary>
+    public IReadOnlyList<int> PublishedPorts { get; init; } = [];
+
+    public string? Detail { get; init; }
+    public NodeError? LastError { get; init; }
+}
+
 /// <summary>Simple confirmation for verbs whose only interesting answer is "yes, and here is the state".</summary>
 public sealed record AcknowledgedResult
 {

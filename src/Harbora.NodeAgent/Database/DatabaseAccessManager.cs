@@ -491,7 +491,9 @@ public sealed class DatabaseAccessManager(
 
         return await tunnels.StartAsync(
             gateway, identity, registration,
-            new TunnelTarget(record.Container, record.Port),
+            // Fixed at registration: the control plane named the container and port when it issued
+            // the grant, and no frame afterwards can move it.
+            new FixedTunnelTarget(new TunnelTarget(record.Container, record.Port)),
             TimeSpan.FromSeconds(30), ct);
     }
 

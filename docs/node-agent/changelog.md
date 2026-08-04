@@ -272,3 +272,58 @@ throws on a failed command instead of returning empty, because an empty list wou
 cut traffic over while leaving the old container running.
 
 1283 tests on the panel's suite, up from 1246; 417 + 17 gated on the agent's.
+
+---
+
+## 11. HTTP ingress for nodes behind NAT
+
+Closes the gap the previous commit opened: a node dialling out from behind NAT could be enrolled,
+commanded and deployed to, and then every route the panel wired up timed out.
+
+**Contract** — v1.2.0, additive.
+
+```
+ConfigureIngress (routes:write)              turn the node's ingress tunnel on or off
+tunnelRegistration.purpose                   database (default) or ingress; grantId now nullable
+open frames carry a target on ingress        the host port, four bytes big-endian
+nodeCapabilities.supportsHttpIngressTunnel
+```
+
+**Node**
+
+```
+src/Harbora.NodeAgent/Tunnels/TunnelTargets.cs   ITunnelTargetResolver + the two implementations
+src/Harbora.NodeAgent/Tunnels/IngressTunnel.cs   one tunnel per node, restored after a restart
+tests/Harbora.NodeAgent.Tests/IngressTunnelTests.cs   21 tests
+```
+
+`GatewayTunnel` now resolves its target per stream instead of holding one. A database tunnel keeps
+the target fixed at registration; an ingress tunnel accepts only a port the node itself allocated
+for a workload that asked to publish it. That check is the security of the feature — without it,
+"open a stream to X" is a port-forward into the customer's private network. The frame carries a port
+and no host for the same reason, and the node always dials loopback.
+
+**Panel**
+
+```
+src/Harbora.Infrastructure/Nodes/NodeIngressRegistry.cs   live tunnels + a listener per published port
+src/Harbora.Infrastructure/Nodes/IngressChannel.cs        the panel's end of the multiplexer
+src/Harbora.Infrastructure/Nodes/NodeIngressRouter.cs     direct or tunnelled, per deploy
+src/Harbora.Infrastructure/Nodes/NodeIngressRebinder.cs   restart recovery
+src/Harbora.Data/Migrations/*_NodeIngressTunnel.*         two additive columns
+tests/Harbora.Tests/NodeIngressTests.cs                   22 tests
+```
+
+**Modified** — `NodeTunnelGateway.cs` (dispatch on purpose), `HostPortAllocator.cs` (the panel port
+is reserved and released with the node port, on the same row, because a second table is a second
+thing to forget to free), `DeploymentPipeline.cs` (the upstream comes from the router, including on
+the compose path where `server.Hostname` would have quietly routed around the tunnel),
+`NodeChannelSession.cs` (re-assert the mode on connect), `Node.cs` + `HostPortAllocation.cs`
+(`IngressMode`, `IngressPort`), `NodeAgentControlPlaneOptions.cs` (the port range, and a validation
+that refuses to let it overlap the public one), and the node page.
+
+Mode is set by an admin, not inferred: the panel would have to probe a port that only exists after a
+deploy, and a probe failing for a container still starting would move a working fleet onto a tunnel
+it does not need.
+
+1305 tests on the panel's suite, up from 1283; 438 + 17 gated on the agent's, up from 417.

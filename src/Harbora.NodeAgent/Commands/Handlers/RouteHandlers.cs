@@ -1,4 +1,5 @@
 using Harbora.NodeAgent.Contracts;
+using Harbora.NodeAgent.Tunnels;
 using Harbora.NodeAgent.Inventory;
 using Harbora.NodeAgent.Runtime;
 using Microsoft.Extensions.Logging;
@@ -121,6 +122,43 @@ public sealed class RegisterTcpRouteHandler(
             Active = true,
             PublicEndpoint = endpoint,
         }));
+    }
+}
+
+/// <summary>
+/// Turns this node's ingress tunnel on or off.
+///
+/// <para>
+/// The verb exists because reachability is not something a node can work out about itself. It knows
+/// which ports it published; it cannot know whether anything outside can open a socket to them. The
+/// control plane can — it is the thing that tried — so the decision is made there and carried here.
+/// </para>
+/// </summary>
+public sealed class ConfigureIngressHandler(IngressTunnel ingress, ILogger<ConfigureIngressHandler> log)
+    : INodeCommandHandler
+{
+    public string Command => NodeCommands.ConfigureIngress;
+
+    public async Task<CommandResult> HandleAsync(CommandContext context, CancellationToken ct)
+    {
+        var request = context.Envelope.PayloadAs<ConfigureIngressRequest>();
+        if (request is null)
+            return context.Fail(NodeErrorCode.ValidationFailed, "The payload does not say whether ingress is enabled.");
+
+        log.LogInformation(
+            "{Actor} is turning the ingress tunnel {State}.",
+            context.Envelope.Audit?.ActorName ?? "the control plane", request.Enabled ? "on" : "off");
+
+        var result = await ingress.ApplyAsync(request.Enabled, request.GatewayUrl, ct);
+
+        // A tunnel that was asked for and did not come up is a failure, not an acknowledgement. The
+        // control plane is about to point routes at it, and it should not do that on a maybe.
+        return result is { Enabled: true, Status: not TunnelStatus.Connected }
+            ? context.Fail(
+                result.LastError?.Code ?? NodeErrorCode.TunnelUnavailable,
+                result.LastError?.Message ?? "The ingress tunnel did not connect to the gateway.",
+                retryable: true)
+            : context.Ok(result);
     }
 }
 

@@ -125,7 +125,7 @@ public sealed class TunnelProtocolTests : IDisposable
 
         var run = tunnel.RunAsync(
             new Uri("tcp://gw.harbora.test:8443"), Identity(), Registration(),
-            new TunnelTarget("db", 5432), cts.Token);
+            new FixedTunnelTarget(new TunnelTarget("db", 5432)), cts.Token);
 
         var gateway = new TunnelFramer(gatewaySide);
         var registration = await ReadLineAsync(gatewaySide, cts.Token);
@@ -176,7 +176,7 @@ public sealed class TunnelProtocolTests : IDisposable
 
         var run = tunnel.RunAsync(
             new Uri("tcp://gw.harbora.test:8443"), Identity(), Registration(),
-            new TunnelTarget("db", 5432), cts.Token);
+            new FixedTunnelTarget(new TunnelTarget("db", 5432)), cts.Token);
 
         await ReadLineAsync(gatewaySide, cts.Token);
 
@@ -206,7 +206,7 @@ public sealed class TunnelProtocolTests : IDisposable
 
         var run = tunnel.RunAsync(
             new Uri("tcp://gw.harbora.test:8443"), Identity(), Registration(),
-            new TunnelTarget("db", 5432), cts.Token);
+            new FixedTunnelTarget(new TunnelTarget("db", 5432)), cts.Token);
 
         var gateway = new TunnelFramer(gatewaySide);
         await ReadLineAsync(gatewaySide, cts.Token);

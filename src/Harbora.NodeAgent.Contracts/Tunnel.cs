@@ -57,8 +57,20 @@ public sealed record TunnelRegistration
 {
     public required string NodeId { get; init; }
     public required string TunnelId { get; init; }
-    public required string GrantId { get; init; }
+
+    /// <summary>
+    /// The grant this tunnel publishes. Null for an ingress tunnel, which serves whatever the node
+    /// has published rather than one named grant.
+    /// </summary>
+    public string? GrantId { get; init; }
+
     public required string TenantId { get; init; }
+
+    /// <summary>
+    /// What the tunnel is for. Absent reads as <see cref="TunnelPurpose.Database"/>, so a frame from
+    /// a node that predates ingress still means exactly what it used to.
+    /// </summary>
+    public TunnelPurpose Purpose { get; init; } = TunnelPurpose.Database;
 
     /// <summary>Enforced at the gateway, where the client's real address is visible.</summary>
     public IReadOnlyList<string> IpAllowlist { get; init; } = [];
@@ -71,6 +83,32 @@ public sealed record TunnelRegistration
 
     public bool RequireMutualTls { get; init; }
     public int ProtocolVersion { get; init; } = NodeContract.ProtocolVersion;
+
+    /// <summary>
+    /// How both ends name this tunnel. A grant has its own id; a node has exactly one ingress
+    /// tunnel, so it needs no id of its own and must not be able to invent one — two ingress
+    /// registrations from the same node are the same tunnel, and the second replaces the first.
+    /// </summary>
+    public string Key => Purpose == TunnelPurpose.Ingress ? IngressKey : GrantId ?? TunnelId;
+
+    public const string IngressKey = "ingress";
+}
+
+/// <summary>
+/// What a tunnel carries.
+///
+/// <para>
+/// The two differ in who may be reached through them, which is why the gateway dispatches on this
+/// before it authorises anything. A database tunnel serves one grant and gets a public port. An
+/// ingress tunnel serves the node's published workload ports and gets no public port at all — the
+/// panel binds an internal listener per port and Traefik routes to it, so an app on a node reached
+/// this way is still only reachable through the same TLS and the same routing rules as any other.
+/// </para>
+/// </summary>
+public enum TunnelPurpose
+{
+    Database = 0,
+    Ingress = 1,
 }
 
 /// <summary>The gateway's answer to a registration.</summary>
@@ -90,7 +128,15 @@ public sealed record TunnelRegistrationResponse
 /// </summary>
 public enum TunnelFrameType : byte
 {
-    /// <summary>Gateway → node: a client connected; open a stream to the local target.</summary>
+    /// <summary>
+    /// Gateway → node: a client connected; open a stream to the local target.
+    ///
+    /// <para>
+    /// Empty payload on a database tunnel, where the target was fixed when the tunnel registered.
+    /// On an ingress tunnel it carries the host port, and the node checks that port against the ones
+    /// it allocated itself — see <see cref="TunnelFraming.EncodeTarget"/>.
+    /// </para>
+    /// </summary>
     Open = 1,
 
     /// <summary>Either direction: payload bytes for a stream.</summary>
@@ -118,4 +164,36 @@ public static class TunnelFraming
 
     /// <summary>Refusing anything larger is what stops a peer asking for a gigabyte buffer.</summary>
     public const int MaxPayloadBytes = 256 * 1024;
+
+    /// <summary>
+    /// The target of an <see cref="TunnelFrameType.Open"/> on an ingress tunnel: a host port, four
+    /// bytes big-endian.
+    ///
+    /// <para>
+    /// A port and nothing else, deliberately. A host would let the gateway name any address the node
+    /// can reach, which is a port-forward into the customer's private network wearing a tunnel's
+    /// clothes. The node always dials loopback, and only a port it allocated itself.
+    /// </para>
+    /// </summary>
+    public static byte[] EncodeTarget(int hostPort)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(hostPort, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(hostPort, 65535);
+
+        var payload = new byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(payload, hostPort);
+        return payload;
+    }
+
+    /// <summary>
+    /// The port an <c>Open</c> names, or null when it names none or names nonsense. Null is not an
+    /// error here — an empty payload is exactly what a database tunnel sends.
+    /// </summary>
+    public static int? DecodeTarget(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 4) return null;
+
+        var port = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(payload);
+        return port is > 0 and <= 65535 ? port : null;
+    }
 }

@@ -19,24 +19,30 @@ using Microsoft.Extensions.Options;
 namespace Harbora.Infrastructure.Nodes;
 
 /// <summary>
-/// The public end of a database tunnel.
+/// The panel's end of every tunnel a node dials.
 ///
 /// <para>
-/// Nodes dial in; customers connect to a port here. That direction is the whole point: the customer's
-/// server needs no inbound firewall rule, the address they hand to a colleague belongs to Harbora,
-/// and revoking access means closing sockets we hold rather than trusting a remote machine to have
-/// unbound a port.
+/// Nodes dial in; traffic goes back down. That direction is the whole point: the customer's server
+/// needs no inbound firewall rule, the address a colleague is handed belongs to Harbora, and
+/// revoking access means closing sockets we hold rather than trusting a remote machine to have
+/// unbound a port. It is also the only thing that works at all for a node behind NAT.
 /// </para>
 ///
 /// <para>
-/// The allowlist and the connection cap are enforced <em>here</em> rather than on the node, because
-/// this is the only place the client's real address exists. And they are read from the grant the
-/// panel itself issued, never from the registration frame — a node that could widen its own
-/// allowlist would make the allowlist decorative.
+/// Two kinds arrive on the same listener and are told apart by
+/// <see cref="TunnelRegistration.Purpose"/>. A <c>database</c> tunnel publishes one grant on a
+/// public port, with the allowlist and the connection cap enforced <em>here</em> rather than on the
+/// node — this is the only place the client's real address exists — and read from the grant the
+/// panel itself issued, never from the registration frame, because a node that could widen its own
+/// allowlist would make the allowlist decorative. An <c>ingress</c> tunnel gets no public port at
+/// all: it registers with <see cref="NodeIngressRegistry"/>, which binds an internal listener per
+/// published port for Traefik to route to, so an app reached this way is behind the same TLS and the
+/// same rules as every other.
 /// </para>
 /// </summary>
 public sealed class NodeTunnelGateway(
     IServiceScopeFactory scopeFactory,
+    NodeIngressRegistry ingress,
     IOptions<NodeAgentControlPlaneOptions> options,
     TimeProvider clock,
     ILogger<NodeTunnelGateway> log) : BackgroundService
@@ -164,6 +170,12 @@ public sealed class NodeTunnelGateway(
                 return;
             }
 
+            if (registration.Purpose == TunnelPurpose.Ingress)
+            {
+                await ServeIngressAsync(certificate, registration, tls, remote, ct);
+                return;
+            }
+
             var grant = await AuthoriseAsync(certificate, registration, ct);
 
             if (grant is null)
@@ -192,16 +204,16 @@ public sealed class NodeTunnelGateway(
                 return;
             }
 
-            endpoint = new TunnelEndpoint(registration.GrantId, grant, tls, publicPort, clock, log);
+            endpoint = new TunnelEndpoint(registration.Key, grant, tls, publicPort, clock, log);
 
-            if (_tunnels.TryRemove(registration.GrantId, out var previous))
+            if (_tunnels.TryRemove(registration.Key, out var previous))
             {
                 // A node reconnecting after a blip: the new socket is the live one.
                 log.LogInformation("Grant {GrantId} re-registered; closing the previous tunnel.", registration.GrantId);
                 await previous.DisposeAsync();
             }
 
-            _tunnels[registration.GrantId] = endpoint;
+            _tunnels[registration.Key] = endpoint;
 
             await WriteLineAsync(tls, NodeContract.Serialize(new TunnelRegistrationResponse
             {
@@ -237,6 +249,85 @@ public sealed class NodeTunnelGateway(
             tls?.Dispose();
             client.Dispose();
         }
+    }
+
+    // --- ingress ---
+
+    /// <summary>
+    /// Take a node's ingress tunnel and hold it until it drops.
+    ///
+    /// <para>
+    /// There is nothing to authorise beyond "is this an enrolled node with a valid certificate",
+    /// because the tunnel confers nothing on its own: it reaches only the ports that node already
+    /// publishes, and only when the gateway names one — which the gateway does only for a listener
+    /// the panel itself bound for a workload the panel itself deployed. A node that opened an
+    /// ingress tunnel and was never given an app would serve nothing.
+    /// </para>
+    /// </summary>
+    private async Task ServeIngressAsync(
+        X509Certificate2 certificate, TunnelRegistration registration, Stream tls, string remote, CancellationToken ct)
+    {
+        var nodeId = await IdentifyAsync(certificate, ct);
+
+        if (nodeId is null)
+        {
+            await WriteLineAsync(tls, NodeContract.Serialize(new TunnelRegistrationResponse
+            {
+                Accepted = false,
+                Error = NodeError.From(NodeErrorCode.TunnelRejected,
+                    "This certificate is not the current credential of any enrolled node."),
+            }), ct);
+
+            log.LogWarning("Gateway refused an ingress tunnel from {Remote}: unknown or revoked certificate.", remote);
+            return;
+        }
+
+        // The node names itself in the registration too. Believing the certificate instead is the
+        // point: one is asserted, the other is proved.
+        if (registration.NodeId is { Length: > 0 } claimed && claimed != nodeId)
+            log.LogWarning(
+                "Node {NodeId} registered an ingress tunnel claiming to be {Claimed}; using the certificate.",
+                nodeId, claimed);
+
+        var channel = new IngressChannel(nodeId, tls, log);
+
+        await WriteLineAsync(tls, NodeContract.Serialize(new TunnelRegistrationResponse
+        {
+            Accepted = true,
+            // No public endpoint on purpose. An ingress tunnel is reached through the panel's
+            // routing, never directly, so there is no address to hand back.
+        }), ct);
+
+        ingress.Attach(nodeId, channel);
+
+        log.LogInformation("Node {NodeId} opened an ingress tunnel from {Remote}.", nodeId, remote);
+
+        try
+        {
+            await channel.RunAsync(ct);
+        }
+        finally
+        {
+            ingress.Detach(nodeId, channel);
+            await channel.DisposeAsync();
+        }
+    }
+
+    /// <summary>The node this certificate currently belongs to, or null if none does.</summary>
+    private async Task<string?> IdentifyAsync(X509Certificate2 certificate, CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+        var ca = scope.ServiceProvider.GetRequiredService<NodeCertificateAuthority>();
+
+        if (!await ca.ValidatesAsync(certificate, ct)) return null;
+
+        // IgnoreQueryFilters: the gateway is a background listener with no session, and a filtered
+        // read would find nothing and refuse every tunnel while reporting no error.
+        var node = await db.Nodes.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(n => n.CertificateThumbprint == certificate.Thumbprint, ct);
+
+        return node is null || node.IsRevoked ? null : node.NodeId;
     }
 
     /// <summary>

@@ -31,6 +31,7 @@ public sealed class NodeAgentWorker(
     CommandDispatcher dispatcher,
     CommandLedger ledger,
     StateReconciler reconciler,
+    Harbora.NodeAgent.Tunnels.IngressTunnel ingress,
     Harbora.NodeAgent.Updates.AgentUpdater updater,
     JsonFileStore<NodeState> stateStore,
     InventoryCollector inventory,
@@ -185,6 +186,10 @@ public sealed class NodeAgentWorker(
             if (report.Problems.Count > 0)
                 log.LogWarning("Reconciliation found {Count} problem(s): {Problems}",
                     report.Problems.Count, string.Join("; ", report.Problems));
+
+            // After the containers, because the tunnel serves the ports they publish and reopening
+            // it first would advertise ports that are not listening yet.
+            await ingress.RestoreAsync(ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

@@ -46,7 +46,11 @@ Under `NodeAgent:` in `appsettings.json`, or `NodeAgent__*` in `deploy/.env`:
     "GatewayListenPort": 8443,
     "GatewayPublicHost": "gw.example.com",
     "GatewayPublicPortStart": 41000,
-    "GatewayPublicPortEnd": 41999
+    "GatewayPublicPortEnd": 41999,
+
+    "IngressPortStart": 42000,
+    "IngressPortEnd": 42999,
+    "IngressHost": "harbora-panel"
   }
 }
 ```
@@ -58,7 +62,9 @@ Under `NodeAgent:` in `appsettings.json`, or `NodeAgent__*` in `deploy/.env`:
 | `EnrollmentTokenMinutes` | Capped at 24 hours. The token's job is to survive a copy-paste, not to live in a wiki |
 | `TrustForwardedClientCertificate` | **Off by default.** See the mTLS section — turning it on without the Traefik half removes authentication rather than adding it |
 | `AutoRegisterAsServer` | On by default: an enrolled node becomes a deploy target. Off means nodes are attached by hand from the node's page. See [Scheduling onto a node](#scheduling-onto-a-node) |
-| `GatewayListenPort` | `0` (the default) disables database tunnels entirely |
+| `GatewayListenPort` | `0` (the default) disables database tunnels entirely — and ingress tunnels with them, since both dial it |
+| `IngressPortStart`–`IngressPortEnd` | Bound inside the panel container for apps on tunnelled nodes. **Must not overlap the gateway's public range**; the panel refuses to start if it does. See [Reaching a node behind NAT](#reaching-a-node-behind-nat) |
+| `IngressHost` | What Traefik targets for those listeners. Defaults to the panel's own container name |
 
 ---
 
@@ -204,20 +210,71 @@ decides which app a request may act on at all, and on the node by the per-worksp
 pipeline already names.
 
 **Reaching the app.** There is no shared overlay between panel and node, so every container's port
-is published to a per-deployment host port and the proxy routes to `hostname:port`. The hostname is
-the node's own reported address, preferring a globally routable IPv4 one. A hostname an operator
-typed is kept; a raw address is refreshed, so a node that changes address does not keep receiving
-traffic at the old one.
-
-> A node behind NAT enrolls, connects and deploys successfully — and its HTTP routes time out. The
-> control channel is outbound-only by design; ingress is not, yet. See the gap table in
-> [merge-notes.md](merge-notes.md).
+is published to a per-deployment host port. How the proxy gets to that port is
+[the node's ingress mode](#reaching-a-node-behind-nat).
 
 **Turning it off.** `NodeAgent:AutoRegisterAsServer` (default `true`) decides whether enrolling a
 node also makes it a deploy target. Set it to `false` on an install where nodes exist for something
 else — publishing a database, say — and attach individual nodes from the node's page instead.
 Detaching is refused while anything is placed on the node, because removing the `Server` row under a
 running app leaves the panel showing it as deployed with no way to reach, stop or delete it.
+
+---
+
+## Reaching a node behind NAT
+
+A node's containers publish on host ports bound on the node's own machine. Whether the panel's proxy
+can open a socket to one is a fact about the customer's network, and there are two answers.
+
+**Direct** (the default) sends the proxy to the node's own address. One hop, no panel in the middle,
+and it is what a routable VPS fleet wants. It is also impossible behind NAT — the deploy succeeds,
+the container passes its health check on the node, and every request to the site times out.
+
+**Tunnel** sends the traffic back down the outbound connection the node already dials. The node
+opens one ingress tunnel to the same TCP gateway that publishes databases; the panel binds an
+internal port per published port and Traefik routes to that. Nothing about the app or the route
+configuration changes — it is the same TLS, the same hostname matching, the same rules.
+
+```
+browser ──▶ Traefik ──▶ harbora-panel:42017 ──▶ ingress tunnel ──▶ 127.0.0.1:32017 on the node
+                        (bound per published port)   (dialled out by the node)
+```
+
+**Why it is not inferred.** The panel would have to probe a port that only exists after a deploy,
+and a probe that failed because a container was still starting would move a working fleet onto a
+tunnel it does not need. An admin sets it on the node's page; the page says what each choice costs.
+
+**What the gateway may name.** An `open` frame on an ingress tunnel carries a host port, and the node
+checks it against the ports it allocated itself for workloads that asked to publish one. Anything
+else is refused with a `close`. That check is the whole security of the feature: without it, "open a
+stream to X" would be a port-forward into the customer's private network — reachable at
+`127.0.0.1:22`, at a TCP Docker socket, at anything on their LAN. The frame carries a port and no
+host for the same reason, and the node always dials loopback.
+
+**Ports.** `NodeAgent:IngressPortStart`–`IngressPortEnd` (42000–42999 by default) is the range the
+panel binds locally. It must not overlap the gateway's public range — the panel refuses to start with
+a configuration where it does — because the gateway range is published to the internet and an app
+reachable there would be reachable without Traefik in front of it. The listeners bind inside the
+panel container, which publishes no ports, so they are reachable on the container network and
+nowhere else.
+
+**Lifecycle.** The panel port is reserved next to the node port on the same `HostPortAllocation` row
+and released with it — after a cutover, or at once when a deploy fails. On restart, `NodeIngressRebinder`
+binds each recorded port again before any node has reconnected: routes name those numbers and nothing
+rewrites them, so binding a different one would take every site on the node down. A listener bound
+with no tunnel behind it refuses connections, which a proxy reports as an upstream being down —
+better than hanging until a timeout.
+
+**Switching modes does not rewrite existing routes.** An app keeps the upstream it was deployed with
+until it is redeployed. The panel says so when the mode changes, rather than leaving an operator to
+wonder why nothing moved.
+
+Two things worth knowing:
+
+- Every request to a tunnelled node passes through the panel. That is the trade, and it is the
+  reason the mode is off by default rather than always on.
+- `NodeIngressRegistry` is per-instance, like the command registry. On a multi-replica install a
+  node's tunnel lands on one replica and only that replica can serve it.
 
 ---
 
@@ -268,6 +325,9 @@ curl -sX POST .../api/v1/nodes/nd_xxx/update-agent -d '{
 curl -sX POST .../api/v1/nodes/nd_xxx/revoke -d '{"reason":"decommissioned"}'
 ```
 
+Routing mode is set from the node's page rather than the API: it is a one-off decision per node, and
+one that needs the warning next to it about existing routes keeping their upstream until redeployed.
+
 There is deliberately **no** endpoint that forwards an arbitrary command to a node. The node's
 allowlist is what makes a compromised panel survivable, and a passthrough here would move the
 boundary from "twenty-one verbs" to "twenty-one verbs plus whatever that endpoint accepts".
@@ -283,3 +343,7 @@ boundary from "twenty-one verbs" to "twenty-one verbs plus whatever that endpoin
 | Nodes flap between online and offline | The channel is being closed by a proxy idle timeout shorter than the 20-second keep-alive |
 | Commands answer `503` | The node is connected to a different panel replica |
 | `The node CA is present but could not be decrypted` | `HARBORA_MASTER_KEY` changed. Every node has to be re-enrolled against a new CA |
+| A deploy succeeds and the site times out | The node is on direct routing and the panel cannot reach it. Switch it to the ingress tunnel on its page, then redeploy |
+| Sites on one node go down while the node stays online | Its ingress tunnel dropped. The node page says so; the containers are still running |
+| `Refused an ingress stream to port …` in the node's log | The gateway named a port the node does not publish. Expected after a workload is deleted; worth investigating otherwise |
+| Ingress routing changed but nothing moved | Existing apps keep the upstream they were deployed with. Redeploy them |

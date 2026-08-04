@@ -65,6 +65,21 @@ public sealed class NodeAgentControlPlaneOptions
     /// <summary>Hostname clients are told to connect to. Defaults to the gateway URL's host.</summary>
     public string? GatewayPublicHost { get; set; }
 
+    /// <summary>
+    /// Port range the panel binds locally for apps on nodes it can only reach through their ingress
+    /// tunnel. Separate from the gateway's public range on purpose: these ports are for Traefik to
+    /// route to over the container network, and must not be published to the internet — an app
+    /// reachable at a raw port would be reachable without the TLS and the rules Traefik applies.
+    /// </summary>
+    public int IngressPortStart { get; set; } = 42000;
+    public int IngressPortEnd { get; set; } = 42999;
+
+    /// <summary>
+    /// The address Traefik should use to reach those listeners. Defaults to the panel's own
+    /// container name, which is how the proxy already reaches the panel for health checks.
+    /// </summary>
+    public string? IngressHost { get; set; }
+
     /// <summary>Everything that must be true before the node subsystem is worth starting.</summary>
     public IReadOnlyList<string> Validate()
     {
@@ -85,6 +100,17 @@ public sealed class NodeAgentControlPlaneOptions
 
         if (GatewayPublicPortStart >= GatewayPublicPortEnd)
             problems.Add("NodeAgent:GatewayPublicPortStart must be below GatewayPublicPortEnd.");
+
+        if (IngressPortStart >= IngressPortEnd)
+            problems.Add("NodeAgent:IngressPortStart must be below IngressPortEnd.");
+
+        // Overlapping would let an app's internal ingress listener be allocated a port the gateway
+        // also publishes to the internet — which is exactly the exposure the two ranges exist to
+        // keep apart.
+        if (IngressPortStart <= GatewayPublicPortEnd && GatewayPublicPortStart <= IngressPortEnd)
+            problems.Add(
+                "NodeAgent:IngressPortStart–IngressPortEnd must not overlap GatewayPublicPortStart–GatewayPublicPortEnd. " +
+                "The gateway range is published; the ingress range must not be.");
 
         return problems;
     }

@@ -66,6 +66,7 @@ public sealed class InventoryCollector(
         SupportsRollingUpdate = true,
         SupportsVolumeSnapshots = true,
         SupportsTcpTunnel = true,
+        SupportsHttpIngressTunnel = true,
         SupportsIsolatedDockerWorkspace = true,
         PrivilegedModeEnabled = _options.Security.AllowPrivilegedWorkloads,
         SupportsSelfUpdate = OperatingSystem.IsLinux(),

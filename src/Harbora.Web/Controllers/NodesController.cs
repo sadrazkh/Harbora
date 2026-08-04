@@ -31,6 +31,8 @@ public sealed class NodesController(
     NodeCommandService commands,
     NodeChannelRegistry registry,
     NodeServerLink serverLink,
+    NodeIngressRegistry ingress,
+    NodeIngressRouter ingressRouter,
     IOptions<NodeAgentControlPlaneOptions> options,
     Harbora.Application.Abstractions.ICurrentUser currentUser,
     TimeProvider clock,
@@ -125,6 +127,65 @@ public sealed class NodesController(
     /// delete it.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Switch a node between direct routing and its ingress tunnel.
+    ///
+    /// <para>
+    /// The row is written only after the node confirms, and only for the direction that can fail.
+    /// Turning the tunnel on and recording it before the node agreed would point every route on the
+    /// node at a tunnel that does not exist — which looks exactly like the NAT problem this is here
+    /// to solve, and would be blamed on it.
+    /// </para>
+    /// </summary>
+    [HttpPost("{nodeId}/ingress")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Ingress(string nodeId, bool tunnel, CancellationToken ct)
+    {
+        var node = await db.Nodes.IgnoreQueryFilters().FirstOrDefaultAsync(n => n.NodeId == nodeId, ct);
+
+        if (node is null)
+        {
+            TempData["Error"] = Fa() ? "نودی با این شناسه نیست." : "No such node.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var outcome = await commands.SendAsync(
+            nodeId, NodeCommands.ConfigureIngress,
+            new ConfigureIngressRequest { Enabled = tunnel },
+            idempotencyKey: $"ingress:{nodeId}:{(tunnel ? "on" : "off")}",
+            reason: tunnel ? "route through the ingress tunnel" : "route directly",
+            sourceIp: HttpContext.Connection.RemoteIpAddress?.ToString(),
+            ct: ct);
+
+        if (!outcome.Succeeded)
+        {
+            TempData["Error"] = outcome.ErrorMessage ?? (Fa()
+                ? "نود درخواست را نپذیرفت؛ مسیر تغییر نکرد."
+                : "The node declined; routing is unchanged.");
+
+            return RedirectToAction(nameof(Detail), new { nodeId });
+        }
+
+        node.IngressMode = tunnel ? NodeIngressMode.Tunnel : NodeIngressMode.Direct;
+        await db.SaveChangesAsync(ct);
+
+        log.LogWarning(
+            "Node {NodeId} now routes {Mode}; its apps need a redeploy before the change reaches their routes.",
+            nodeId, tunnel ? "through its ingress tunnel" : "directly");
+
+        // Existing routes still name the old upstream. Saying so is the difference between an
+        // operator redeploying and an operator wondering why nothing changed.
+        TempData["Message"] = tunnel
+            ? (Fa()
+                ? "این نود از این پس از طریق تونل ورودی سرویس می‌دهد. برنامه‌های موجود تا استقرار مجدد، مسیر قبلی را نگه می‌دارند."
+                : "This node now serves through its ingress tunnel. Existing apps keep the old route until they are redeployed.")
+            : (Fa()
+                ? "این نود از این پس مستقیم سرویس می‌دهد. برنامه‌های موجود تا استقرار مجدد، مسیر قبلی را نگه می‌دارند."
+                : "This node now serves directly. Existing apps keep the old route until they are redeployed.");
+
+        return RedirectToAction(nameof(Detail), new { nodeId });
+    }
+
     [HttpPost("{nodeId}/detach")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Detach(string nodeId, CancellationToken ct)
@@ -285,18 +346,19 @@ public sealed class NodesController(
     /// </summary>
     private async Task<NodeSchedulingViewModel> BuildSchedulingAsync(Node node, CancellationToken ct)
     {
-        if (node.ServerId is not { } serverId)
-            return new NodeSchedulingViewModel(
-                null, string.Empty, string.Empty, ServerStatus.Unknown, 0, 0, 0, 0, 0, 0,
-                _options.AutoRegisterAsServer);
+        var supported = Deserialize<NodeCapabilities>(node.CapabilitiesJson)?.SupportsHttpIngressTunnel ?? false;
+
+        NodeSchedulingViewModel Unattached() => new(
+            null, string.Empty, string.Empty, ServerStatus.Unknown, 0, 0, 0, 0, 0, 0,
+            _options.AutoRegisterAsServer,
+            node.IngressMode, supported, ingress.IsConnected(node.NodeId), 0, ingressRouter.IngressHost);
+
+        if (node.ServerId is not { } serverId) return Unattached();
 
         var server = await db.Servers.IgnoreQueryFilters().AsNoTracking()
             .FirstOrDefaultAsync(s => s.Id == serverId, ct);
 
-        if (server is null)
-            return new NodeSchedulingViewModel(
-                null, string.Empty, string.Empty, ServerStatus.Unknown, 0, 0, 0, 0, 0, 0,
-                _options.AutoRegisterAsServer);
+        if (server is null) return Unattached();
 
         // Platform-wide counts, not workspace-scoped: a node may hold another workspace's app, and
         // an operator deciding whether to detach needs to know that it does.
@@ -317,7 +379,12 @@ public sealed class NodesController(
             apps.Sum(a => a.MemoryLimitBytes),
             server.CpuCores > 0 ? server.CpuCores * Math.Max(1, server.CpuOvercommitFactor) : 0,
             apps.Sum(a => a.CpuLimit),
-            _options.AutoRegisterAsServer);
+            _options.AutoRegisterAsServer,
+            node.IngressMode,
+            supported,
+            ingress.IsConnected(node.NodeId),
+            ingress.Bindings().Count(b => b.NodeId == node.NodeId),
+            ingressRouter.IngressHost);
     }
 
     private async Task<NodeListViewModel> BuildListAsync(CancellationToken ct)

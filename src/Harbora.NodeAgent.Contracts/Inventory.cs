@@ -69,6 +69,15 @@ public sealed record NodeCapabilities
     public bool SupportsVolumeSnapshots { get; init; }
     public bool SupportsTcpTunnel { get; init; }
 
+    /// <summary>
+    /// True when this build can serve HTTP ingress over an outbound tunnel — what makes a node
+    /// behind NAT usable at all. Separate from <see cref="SupportsTcpTunnel"/> because the two
+    /// differ in what may be reached through them: a database tunnel dials one target fixed when it
+    /// registered, an ingress tunnel dials whichever published port the gateway names, and nothing
+    /// but a published port.
+    /// </summary>
+    public bool SupportsHttpIngressTunnel { get; init; }
+
     /// <summary>True when an isolated per-tenant Docker workspace can be provisioned here.</summary>
     public bool SupportsIsolatedDockerWorkspace { get; init; }
 

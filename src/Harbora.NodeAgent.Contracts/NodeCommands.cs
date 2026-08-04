@@ -32,6 +32,7 @@ public static class NodeCommands
     public const string RegisterHttpRoute = "RegisterHttpRoute";
     public const string RegisterTcpRoute = "RegisterTcpRoute";
     public const string RemoveRoute = "RemoveRoute";
+    public const string ConfigureIngress = "ConfigureIngress";
 
     public const string DrainNode = "DrainNode";
     public const string UpdateAgent = "UpdateAgent";
@@ -97,6 +98,9 @@ public static class NodeCommandCatalog
             [NodeCommands.RegisterHttpRoute] = new(NodeCommands.RegisterHttpRoute, NodeScopes.RoutesWrite, 120, true),
             [NodeCommands.RegisterTcpRoute] = new(NodeCommands.RegisterTcpRoute, NodeScopes.RoutesWrite, 120, true),
             [NodeCommands.RemoveRoute] = new(NodeCommands.RemoveRoute, NodeScopes.RoutesWrite, 120, true),
+            // routes:write, not node:admin — it decides how traffic reaches this node's routes, and
+            // nothing else. A node enrolled without that scope cannot be made to dial the gateway.
+            [NodeCommands.ConfigureIngress] = new(NodeCommands.ConfigureIngress, NodeScopes.RoutesWrite, 120, true),
 
             [NodeCommands.DrainNode] = new(NodeCommands.DrainNode, NodeScopes.NodeAdmin, 1800, true),
             [NodeCommands.UpdateAgent] = new(NodeCommands.UpdateAgent, NodeScopes.NodeAdmin, 1800, true),

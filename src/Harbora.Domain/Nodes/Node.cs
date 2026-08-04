@@ -20,6 +20,24 @@ public enum NodeStatus
     Revoked = 4,
 }
 
+/// <summary>How the panel's proxy reaches apps running on a node.</summary>
+public enum NodeIngressMode
+{
+    /// <summary>
+    /// Open a socket to the node's own address on the port the container publishes. Right for a
+    /// routable fleet, and impossible behind NAT — where the deploy succeeds, the container is
+    /// healthy, and every request to the site times out.
+    /// </summary>
+    Direct = 0,
+
+    /// <summary>
+    /// Send the traffic back down the outbound tunnel the node already dials. Works wherever the
+    /// node can reach the panel at all, at the cost of putting the panel on the path of every
+    /// request to every app on that node.
+    /// </summary>
+    Tunnel = 1,
+}
+
 /// <summary>
 /// A server running the Harbora node agent.
 ///
@@ -51,6 +69,18 @@ public class Node : BaseEntity
     public string Health { get; set; } = "unknown";
 
     public bool Draining { get; set; }
+
+    /// <summary>
+    /// How the panel's proxy reaches apps here.
+    ///
+    /// <para>
+    /// Not inferred, because it cannot be honestly: the panel would have to probe a port that only
+    /// exists after a deploy, and a probe that failed for a container still starting would move a
+    /// working fleet onto a tunnel it does not need. An admin decides; the node page explains what
+    /// the choice costs either way.
+    /// </para>
+    /// </summary>
+    public NodeIngressMode IngressMode { get; set; } = NodeIngressMode.Direct;
 
     // --- what the node is ---
 

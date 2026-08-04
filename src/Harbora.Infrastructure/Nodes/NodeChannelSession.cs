@@ -290,6 +290,10 @@ public sealed class NodeChannelSession(
         }, ct);
 
         await SyncSchedulingTargetAsync(nodeId, ct);
+
+        // On connect only. A node that routes through a tunnel needs one before anything reaches it,
+        // and asking again on every heartbeat would be a command a minute for a settled fleet.
+        await EnsureIngressAsync(nodeId, ct);
     }
 
     private async Task MarkDisconnectedAsync(string nodeId, long lastReceivedSequence, CancellationToken ct)
@@ -469,6 +473,51 @@ public sealed class NodeChannelSession(
         catch (Exception e)
         {
             log.LogWarning(e, "Could not refresh the scheduling target for node {NodeId}.", nodeId);
+        }
+    }
+
+    /// <summary>
+    /// Tell a node that routes through an ingress tunnel to open one, if it has not already.
+    ///
+    /// <para>
+    /// Usually a no-op the node answers straight away: it restores the tunnel from its own state
+    /// after a restart. It is here for the case that is not — a node re-enrolled from a clean state
+    /// directory comes back believing ingress is off while the panel is still pointing every route
+    /// on it at a tunnel, and nothing else would ever notice the disagreement.
+    /// </para>
+    /// </summary>
+    private async Task EnsureIngressAsync(string nodeId, CancellationToken ct)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var provider = scope.ServiceProvider;
+
+            var node = await provider.GetRequiredService<HarboraDbContext>().Nodes
+                .IgnoreQueryFilters().AsNoTracking()
+                .FirstOrDefaultAsync(n => n.NodeId == nodeId, ct);
+
+            if (node?.IngressMode != NodeIngressMode.Tunnel) return;
+
+            var outcome = await provider.GetRequiredService<NodeCommandService>().SendAsync(
+                nodeId, NodeCommands.ConfigureIngress,
+                new ConfigureIngressRequest { Enabled = true },
+                idempotencyKey: $"ingress:{nodeId}:on",
+                reason: "this node routes through its ingress tunnel",
+                ct: ct);
+
+            if (!outcome.Succeeded)
+                log.LogError(
+                    "Node {NodeId} routes through an ingress tunnel and would not open one: {Message}. " +
+                    "Its apps stay unreachable until that is resolved.",
+                    nodeId, outcome.ErrorMessage ?? "no reason given");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "Could not confirm the ingress tunnel for node {NodeId}.", nodeId);
         }
     }
 

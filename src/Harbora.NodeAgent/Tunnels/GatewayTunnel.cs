@@ -5,17 +5,22 @@ using Microsoft.Extensions.Logging;
 
 namespace Harbora.NodeAgent.Tunnels;
 
-/// <summary>Where a tunnel forwards to, on this node.</summary>
-public sealed record TunnelTarget(string Host, int Port);
-
 /// <summary>
-/// One outbound tunnel: node → Harbora TCP gateway, carrying every client session for a grant.
+/// One outbound tunnel: node → Harbora TCP gateway, carrying every client session it serves.
 ///
 /// <para>
 /// The direction is the design. A database published this way costs the customer no inbound
 /// firewall rule, the public address belongs to Harbora rather than to them, and revoking access is
 /// closing a socket the node owns — not hoping a port somewhere got unbound. The alternative, an
-/// engine bound to 0.0.0.0 with a fixed password, is what this exists to avoid.
+/// engine bound to 0.0.0.0 with a fixed password, is what this exists to avoid. An app on a node
+/// behind NAT reaches its users through the same shape, for the same reason.
+/// </para>
+///
+/// <para>
+/// What a stream may reach is an <see cref="ITunnelTargetResolver"/>'s decision rather than this
+/// class's, because it is the one thing the gateway gets to influence and it is worth reading on
+/// its own. A database tunnel resolves to the target fixed at registration; an ingress tunnel
+/// resolves to a port this node published, and to nothing else.
 /// </para>
 /// </summary>
 public sealed class GatewayTunnel(
@@ -41,14 +46,19 @@ public sealed class GatewayTunnel(
     /// the supervisor decides whether that warrants another attempt.
     /// </summary>
     public async Task RunAsync(
-        Uri gateway, NodeIdentity identity, TunnelRegistration registration, TunnelTarget target, CancellationToken ct)
+        Uri gateway, NodeIdentity identity, TunnelRegistration registration,
+        ITunnelTargetResolver targets, CancellationToken ct)
     {
         SetState(new TunnelState
         {
             TunnelId = registration.TunnelId,
             GrantId = registration.GrantId,
             Status = TunnelStatus.Connecting,
-            LocalTarget = $"{target.Host}:{target.Port}",
+            LocalTarget = targets is FixedTunnelTarget fixedTarget
+                ? $"{fixedTarget.Target.Host}:{fixedTarget.Target.Port}"
+                // An ingress tunnel has no one target; saying so beats naming the first one it
+                // happened to serve.
+                : "published ports",
         });
 
         try
@@ -74,10 +84,11 @@ public sealed class GatewayTunnel(
             });
 
             log.LogInformation(
-                "Tunnel {TunnelId} for grant {GrantId} is published at {Endpoint}.",
-                registration.TunnelId, registration.GrantId, response.PublicEndpoint);
+                "Tunnel {TunnelId} ({Purpose}, {Key}) is live{Endpoint}.",
+                registration.TunnelId, registration.Purpose, registration.Key,
+                response.PublicEndpoint is { Length: > 0 } endpoint ? $" at {endpoint}" : string.Empty);
 
-            await PumpAsync(target, ct);
+            await PumpAsync(targets, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -101,7 +112,7 @@ public sealed class GatewayTunnel(
         }
     }
 
-    private async Task PumpAsync(TunnelTarget target, CancellationToken ct)
+    private async Task PumpAsync(ITunnelTargetResolver targets, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
@@ -111,7 +122,7 @@ public sealed class GatewayTunnel(
             switch (frame.Value.Type)
             {
                 case TunnelFrameType.Open:
-                    await OpenStreamAsync(frame.Value.StreamId, target, ct);
+                    await OpenStreamAsync(frame.Value.StreamId, targets, frame.Value.Payload, ct);
                     break;
 
                 case TunnelFrameType.Data:
@@ -129,8 +140,18 @@ public sealed class GatewayTunnel(
         }
     }
 
-    private async Task OpenStreamAsync(uint streamId, TunnelTarget target, CancellationToken ct)
+    private async Task OpenStreamAsync(
+        uint streamId, ITunnelTargetResolver targets, ReadOnlyMemory<byte> openPayload, CancellationToken ct)
     {
+        if (targets.Resolve(openPayload.Span) is not { } target)
+        {
+            // The resolver already logged why. Closing immediately is what makes the client's
+            // connect fail rather than hang, and it is the whole of the refusal — nothing was
+            // dialled, so there is nothing to undo.
+            await SafeWriteAsync(new TunnelFrame(streamId, TunnelFrameType.Close, ReadOnlyMemory<byte>.Empty), ct);
+            return;
+        }
+
         try
         {
             var local = await dialer.DialAsync(target.Host, target.Port, ct);

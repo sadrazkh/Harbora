@@ -4,6 +4,32 @@ Versioning: the directory name (`v1`) is the **major** version and appears in ev
 changes are recorded here and do not move the directory. A breaking change creates `v2/` and both
 are served until every node has moved.
 
+## v1.2.0 — HTTP ingress over an outbound tunnel
+
+Additive. A node that does not implement it reports `supportsHttpIngressTunnel: false` and is never
+sent `ConfigureIngress`; a gateway that receives no `purpose` reads the registration as a database
+tunnel, exactly as before.
+
+- **`ConfigureIngress`** (`routes:write`) — turn the node's ingress tunnel on or off.
+- **`tunnelRegistration.purpose`** — `database` (default) or `ingress`. `grantId` is now nullable,
+  because an ingress tunnel serves the node's published ports rather than one named grant.
+- **`open` frames carry a target on an ingress tunnel** — the host port, four bytes big-endian.
+  Empty on a database tunnel, as before.
+- **`nodeCapabilities.supportsHttpIngressTunnel`**.
+
+Added because a node dialling out from behind NAT could be enrolled, commanded and deployed to — and
+then every HTTP route the control plane wired up timed out, because the published host port existed
+only on the node's own machine. The tunnel reverses the direction the same way the database tunnel
+already does.
+
+The `open` payload is a port and nothing else. A host field would let the gateway name any address
+the node can reach, which is a port-forward into the customer's private network wearing a tunnel's
+clothes. The node dials loopback, and only a port it allocated itself for a workload that asked to
+publish it — so an ingress tunnel reaches exactly what the control plane already deployed there, and
+the verb grants no capability that the deploy did not.
+
+---
+
 ## v1.1.0 — ListWorkloads
 
 Additive, and therefore still v1: an older node that does not implement the verb reports it as

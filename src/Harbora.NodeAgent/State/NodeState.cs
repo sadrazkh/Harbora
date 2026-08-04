@@ -28,6 +28,18 @@ public sealed record NodeState
     public bool Draining { get; init; }
     public string? DrainReason { get; init; }
 
+    /// <summary>
+    /// Whether this node keeps an ingress tunnel open so the control plane's proxy can reach its
+    /// published ports.
+    ///
+    /// <para>
+    /// Remembered for the same reason the drain flag is: on a node behind NAT this is the only path
+    /// its apps have to their users, and a restarted agent that forgot would leave every site down
+    /// until somebody noticed and re-sent the command.
+    /// </para>
+    /// </summary>
+    public bool IngressEnabled { get; init; }
+
     public string? ControlPlaneUrl { get; init; }
     public string? TunnelGatewayUrl { get; init; }
     public string? MinimumAgentVersion { get; init; }

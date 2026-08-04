@@ -34,10 +34,14 @@ public sealed class TunnelSupervisor(
 
     public int ActiveCount => _tunnels.Count(t => t.Value.Tunnel.State.Status == TunnelStatus.Connected);
 
-    public TunnelState? StateFor(string grantId) =>
-        _tunnels.TryGetValue(grantId, out var running) ? running.Tunnel.State : null;
+    public TunnelState? StateFor(string key) =>
+        _tunnels.TryGetValue(key, out var running) ? running.Tunnel.State : null;
 
     public IReadOnlyList<TunnelState> All() => _tunnels.Values.Select(t => t.Tunnel.State).ToList();
+
+    /// <summary>Whether the node's single ingress tunnel is up right now.</summary>
+    public bool IngressConnected =>
+        StateFor(TunnelRegistration.IngressKey) is { Status: TunnelStatus.Connected };
 
     /// <summary>
     /// Start a tunnel for a grant and wait until it is published or has failed.
@@ -49,18 +53,18 @@ public sealed class TunnelSupervisor(
     /// </para>
     /// </summary>
     public async Task<TunnelState> StartAsync(
-        string gatewayUrl, NodeIdentity identity, TunnelRegistration registration, TunnelTarget target,
+        string gatewayUrl, NodeIdentity identity, TunnelRegistration registration, ITunnelTargetResolver targets,
         TimeSpan readyTimeout, CancellationToken ct)
     {
-        await StopAsync(registration.GrantId);
+        await StopAsync(registration.Key);
 
         var gateway = ParseGateway(gatewayUrl);
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var tunnel = new GatewayTunnel(connections, dialer, clock, loggerFactory.CreateLogger<GatewayTunnel>());
 
-        var loop = Task.Run(() => SuperviseAsync(tunnel, gateway, identity, registration, target, cancellation.Token), CancellationToken.None);
+        var loop = Task.Run(() => SuperviseAsync(tunnel, gateway, identity, registration, targets, cancellation.Token), CancellationToken.None);
 
-        _tunnels[registration.GrantId] = new Running(tunnel, cancellation, loop);
+        _tunnels[registration.Key] = new Running(tunnel, cancellation, loop);
 
         var deadline = clock.GetUtcNow() + readyTimeout;
 
@@ -83,10 +87,10 @@ public sealed class TunnelSupervisor(
         };
     }
 
-    /// <summary>Close a grant's tunnel. Returns quietly when there is not one.</summary>
-    public async Task StopAsync(string grantId)
+    /// <summary>Close a tunnel by its key. Returns quietly when there is not one.</summary>
+    public async Task StopAsync(string key)
     {
-        if (!_tunnels.TryRemove(grantId, out var running)) return;
+        if (!_tunnels.TryRemove(key, out var running)) return;
 
         await running.Cancellation.CancelAsync();
 
@@ -98,17 +102,17 @@ public sealed class TunnelSupervisor(
         running.Cancellation.Dispose();
 
         Report();
-        log.LogInformation("Tunnel for grant {GrantId} closed.", grantId);
+        log.LogInformation("Tunnel {Key} closed.", key);
     }
 
     public async Task StopAllAsync()
     {
-        foreach (var grantId in _tunnels.Keys.ToList()) await StopAsync(grantId);
+        foreach (var key in _tunnels.Keys.ToList()) await StopAsync(key);
     }
 
     private async Task SuperviseAsync(
         GatewayTunnel tunnel, Uri gateway, NodeIdentity identity,
-        TunnelRegistration registration, TunnelTarget target, CancellationToken ct)
+        TunnelRegistration registration, ITunnelTargetResolver targets, CancellationToken ct)
     {
         var attempt = 0;
 
@@ -122,7 +126,7 @@ public sealed class TunnelSupervisor(
                 catch (OperationCanceledException) { return; }
             }
 
-            await tunnel.RunAsync(gateway, identity, registration, target, ct);
+            await tunnel.RunAsync(gateway, identity, registration, targets, ct);
 
             if (ct.IsCancellationRequested) return;
 
@@ -130,7 +134,7 @@ public sealed class TunnelSupervisor(
             // network. Retrying would hammer it with a request it has already declined.
             if (tunnel.State.LastError?.Code == NodeErrorCode.TunnelRejected)
             {
-                log.LogWarning("Gateway rejected the tunnel for grant {GrantId}; not retrying.", registration.GrantId);
+                log.LogWarning("Gateway rejected tunnel {Key}; not retrying.", registration.Key);
                 return;
             }
 

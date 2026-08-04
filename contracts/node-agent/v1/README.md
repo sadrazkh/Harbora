@@ -122,6 +122,7 @@ The `payload` of a `commandEnvelope`, by verb:
 | `RegisterHttpRoute` | `routes:write` | `registerHttpRouteRequest` | `routeResult` |
 | `RegisterTcpRoute` | `routes:write` | `registerTcpRouteRequest` | `routeResult` |
 | `RemoveRoute` | `routes:write` | `removeRouteRequest` | `acknowledgedResult` |
+| `ConfigureIngress` | `routes:write` | `configureIngressRequest` | `configureIngressResult` |
 | `DrainNode` | `node:admin` | `drainNodeRequest` | `drainNodeResult` |
 | `UpdateAgent` | `node:admin` | `agentUpdateRequest` | `agentUpdateResult` |
 
@@ -144,9 +145,9 @@ parses a payload that has not already been authorised.
 
 ## Tunnel framing
 
-The database tunnel is the one part of this contract that is not JSON. After the registration
-exchange — one JSON line each way, `tunnelRegistration` then `tunnelRegistrationResponse` — the
-connection carries multiplexed client sessions:
+A tunnel is the one part of this contract that is not JSON. After the registration exchange — one
+JSON line each way, `tunnelRegistration` then `tunnelRegistrationResponse` — the connection carries
+multiplexed client sessions:
 
 ```
  0                   1                   2                   3
@@ -169,6 +170,30 @@ TLS handshake per `psql`, and a gateway holding a port open per node per grant.
 The gateway opens a stream (`open`), both sides exchange `data`, and either may `close`. The node
 never initiates a stream: it has no way to know a client connected, and a node that could open
 streams could reach into the gateway rather than out of it.
+
+### The two purposes
+
+`tunnelRegistration.purpose` decides what a tunnel is, and the gateway dispatches on it before it
+authorises anything.
+
+| | `database` | `ingress` |
+|---|---|---|
+| Serves | One grant, named by `grantId` | Whatever the node has published |
+| Gets | A public port from the gateway's range | No public port; the panel binds an internal listener per port and Traefik routes to it |
+| `open` payload | Empty — the target was fixed at registration | The host port, four bytes big-endian |
+| Per node | One per active grant | Exactly one, replaced rather than added to |
+
+The `open` payload on an ingress tunnel is **a port and nothing else**, deliberately. A host would
+let the gateway name any address the node can reach, which is a port-forward into the customer's
+private network wearing a tunnel's clothes. The node always dials loopback, and it dials a port only
+if that port is one it allocated itself for a workload that asked to publish it — so the set of
+things reachable through an ingress tunnel is exactly the set of things the control plane already
+deployed there.
+
+An ingress tunnel is what makes a node behind NAT usable: its published ports are reachable from its
+own machine and nowhere else, so without one every route the panel wires up times out. It is off
+until `ConfigureIngress` turns it on, because it puts the panel on the path of every request to
+every app on that node.
 
 ## Compatibility rules
 

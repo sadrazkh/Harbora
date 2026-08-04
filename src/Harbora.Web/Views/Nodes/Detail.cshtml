@@ -243,15 +243,62 @@
                 {
                     <div>
                         <dt class="text-xs text-ink-faint">@(isFa ? "آدرس بالادست" : "Upstream address")</dt>
-                        <dd class="font-mono text-xs" dir="ltr">@sched.Hostname</dd>
-                        @* The proxy needs to open a socket to this address. A node behind NAT
-                           deploys fine and then times out, so it is stated rather than implied. *@
+                        <dd class="font-mono text-xs" dir="ltr">@(sched.Tunnelled ? sched.IngressHost : sched.Hostname)</dd>
                         <p class="mt-1 text-[11px] text-ink-faint">
-                            @(isFa
-                                ? "پروکسی هربورا برای ورودی HTTP باید بتواند روی این نشانی و پورت منتشرشده به نود وصل شود."
-                                : "Harbora's proxy must be able to reach the node at this address on the published port for HTTP ingress.")
+                            @(sched.Tunnelled
+                                ? (isFa
+                                    ? $"ترافیک از پنل و از راه تونل ورودی نود می‌گذرد؛ {sched.IngressBoundPorts} پورت در این نمونه bind شده است."
+                                    : $"Traffic goes through the panel and down the node's ingress tunnel; {sched.IngressBoundPorts} port(s) bound on this instance.")
+                                : (isFa
+                                    ? "پروکسی هربورا باید بتواند روی این نشانی و پورت منتشرشده به نود وصل شود."
+                                    : "Harbora's proxy must be able to open a socket to the node at this address on the published port."))
                         </p>
                     </div>
+
+                    @if (sched.TunnelBroken)
+                    {
+                        @* The one state worth shouting about: the node is up, the containers are
+                           up, and every site on it is down because the path is gone. *@
+                        <div class="rounded-lg border border-danger bg-danger-soft px-3 py-2 text-xs text-danger">
+                            @(isFa
+                                ? "تونل ورودی به این نمونه‌ی پنل وصل نیست. برنامه‌های این نود اجرا می‌شوند اما در دسترس نیستند."
+                                : "The ingress tunnel is not connected to this panel instance. Apps on this node are running but unreachable.")
+                        </div>
+                    }
+
+                    @if (!node.Revoked)
+                    {
+                        <form asp-controller="Nodes" asp-action="Ingress" asp-route-nodeId="@node.NodeId" method="post" class="space-y-1.5">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="tunnel" value="@((!sched.Tunnelled).ToString().ToLowerInvariant())" />
+
+                            <button type="submit" class="btn-secondary w-full" @(sched.IngressSupported || sched.Tunnelled ? "" : "disabled")>
+                                @(sched.Tunnelled
+                                    ? (isFa ? "مستقیم سرویس بده" : "Serve directly")
+                                    : (isFa ? "از راه تونل ورودی سرویس بده" : "Serve through the ingress tunnel"))
+                            </button>
+
+                            <p class="text-[11px] text-ink-faint">
+                                @(!sched.IngressSupported
+                                    ? (isFa
+                                        ? "نسخه‌ی این ایجنت تونل ورودی را پشتیبانی نمی‌کند."
+                                        : "This agent build does not support an ingress tunnel.")
+                                    : sched.Tunnelled
+                                        ? (isFa
+                                            ? "بازگشت به حالت مستقیم فقط وقتی کار می‌کند که پنل بتواند خودش به نود وصل شود."
+                                            : "Going back to direct only works if the panel can open a socket to the node itself.")
+                                        : (isFa
+                                            ? "برای نودی که پشت NAT است لازم است — استقرار موفق می‌شود اما مسیرها timeout می‌خورند."
+                                            : "Needed for a node behind NAT, where deploys succeed and routes time out."))
+                            </p>
+
+                            <p class="text-[11px] text-ink-faint">
+                                @(isFa
+                                    ? "برنامه‌های موجود تا استقرار مجدد، مسیر قبلی خود را نگه می‌دارند."
+                                    : "Existing apps keep their current route until they are redeployed.")
+                            </p>
+                        </form>
+                    }
 
                     @if (!string.IsNullOrEmpty(sched.Pool))
                     {

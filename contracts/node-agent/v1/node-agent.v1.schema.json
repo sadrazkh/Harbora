@@ -37,7 +37,7 @@
         "CreateNetwork", "DeleteNetwork",
         "CreateVolume", "SnapshotVolume", "RestoreVolume",
         "CreateDatabaseAccessGrant", "RevokeDatabaseAccessGrant", "RotateDatabaseAccessCredential",
-        "RegisterHttpRoute", "RegisterTcpRoute", "RemoveRoute",
+        "RegisterHttpRoute", "RegisterTcpRoute", "RemoveRoute", "ConfigureIngress",
         "DrainNode", "UpdateAgent"
       ]
     },
@@ -234,6 +234,7 @@
         "supportsRollingUpdate": { "type": "boolean" },
         "supportsVolumeSnapshots": { "type": "boolean" },
         "supportsTcpTunnel": { "type": "boolean" },
+        "supportsHttpIngressTunnel": { "type": "boolean", "description": "Can serve HTTP ingress over an outbound tunnel, which is what makes a node behind NAT usable." },
         "supportsIsolatedDockerWorkspace": { "type": "boolean" },
         "privilegedModeEnabled": { "type": "boolean", "description": "True only when an admin set the host feature flag. Left false, every privileged spec is refused — including an admin's." },
         "supportsSelfUpdate": { "type": "boolean" }
@@ -747,7 +748,7 @@
       "properties": {
         "tunnelId": { "type": "string" },
         "grantId": { "type": ["string", "null"] },
-        "status": { "type": "string", "enum": ["pending", "connecting", "connected", "reconnecting", "closed", "failed"] },
+        "status": { "$ref": "#/$defs/tunnelStatus" },
         "publicEndpoint": { "type": ["string", "null"] },
         "localTarget": { "type": ["string", "null"] },
         "connectedAt": { "type": ["string", "null"], "format": "date-time" },
@@ -760,13 +761,25 @@
       }
     },
 
+    "tunnelStatus": {
+      "type": "string",
+      "enum": ["pending", "connecting", "connected", "reconnecting", "closed", "failed"]
+    },
+
+    "tunnelPurpose": {
+      "type": "string",
+      "description": "What the tunnel carries. Absent reads as 'database', so a registration from a node that predates ingress still means what it used to.",
+      "enum": ["database", "ingress"]
+    },
+
     "tunnelRegistration": {
       "type": "object",
-      "required": ["nodeId", "tunnelId", "grantId", "tenantId"],
+      "required": ["nodeId", "tunnelId", "tenantId"],
       "properties": {
         "nodeId": { "type": "string" },
         "tunnelId": { "type": "string" },
-        "grantId": { "type": "string" },
+        "grantId": { "type": ["string", "null"], "description": "The grant this tunnel publishes. Null on an ingress tunnel, which serves the node's published ports rather than one named grant." },
+        "purpose": { "$ref": "#/$defs/tunnelPurpose" },
         "tenantId": { "type": "string" },
         "ipAllowlist": { "type": "array", "items": { "$ref": "#/$defs/cidr" } },
         "maxConnections": { "type": "integer", "minimum": 1 },
@@ -1052,6 +1065,28 @@
         "routeId": { "type": "string" },
         "active": { "type": "boolean" },
         "publicEndpoint": { "type": ["string", "null"] }
+      }
+    },
+
+    "configureIngressRequest": {
+      "type": "object",
+      "description": "Whether the node keeps an outbound tunnel open for the control plane's proxy to reach its published ports through. The answer for a node behind NAT; off unless asked, because it puts the panel on the path of every request.",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "gatewayUrl": { "type": ["string", "null"], "description": "host:port. Null keeps whatever the node was enrolled with." }
+      }
+    },
+
+    "configureIngressResult": {
+      "type": "object",
+      "required": ["enabled", "status"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "status": { "$ref": "#/$defs/tunnelStatus" },
+        "publishedPorts": { "type": "array", "items": { "type": "integer" }, "description": "Host ports this node publishes, and so can serve through the tunnel." },
+        "detail": { "type": ["string", "null"] },
+        "lastError": { "$ref": "#/$defs/nodeError" }
       }
     },
 

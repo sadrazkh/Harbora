@@ -172,8 +172,21 @@ public sealed record NodeSchedulingViewModel(
     long CommittedMemoryBytes,
     double AllocatableCpu,
     double CommittedCpu,
-    bool AutoRegisterEnabled)
+    bool AutoRegisterEnabled,
+    NodeIngressMode IngressMode = NodeIngressMode.Direct,
+    bool IngressSupported = true,
+    bool IngressConnected = false,
+    int IngressBoundPorts = 0,
+    string IngressHost = "")
 {
+    public bool Tunnelled => IngressMode == NodeIngressMode.Tunnel;
+
+    /// <summary>
+    /// The state worth shouting about: routes point at a tunnel that is not there, so every app on
+    /// this node is down even though the node itself is heartbeating.
+    /// </summary>
+    public bool TunnelBroken => Tunnelled && !IngressConnected;
+
     public bool IsAttached => ServerId is not null;
 
     /// <summary>What the scheduler asks: is this node accepting placements right now.</summary>

@@ -94,6 +94,7 @@ builder.Services.AddSingleton<DatabaseEngineOperations>();
 builder.Services.AddSingleton<ITunnelConnectionFactory, TlsTunnelConnectionFactory>();
 builder.Services.AddSingleton<ILocalDialer, TcpLocalDialer>();
 builder.Services.AddSingleton<TunnelSupervisor>();
+builder.Services.AddSingleton<IngressTunnel>();
 builder.Services.AddSingleton<DatabaseAccessManager>();
 
 // --- self-update and drain ---
@@ -155,6 +156,7 @@ builder.Services.AddSingleton<INodeCommandHandler, RestoreVolumeHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, RegisterHttpRouteHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, RegisterTcpRouteHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, RemoveRouteHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, ConfigureIngressHandler>();
 
 builder.Services.AddSingleton<INodeCommandHandler, CreateDatabaseAccessGrantHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, RevokeDatabaseAccessGrantHandler>();
