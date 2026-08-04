@@ -60,15 +60,31 @@ one-directional:
 
 ```
 src/Modules/Backup/
-├── Harbora.Backup.Contracts/       ports + DTOs + enums   → (Harbora.Shared)
-├── Harbora.Backup.Domain/          entities               → Harbora.Domain, Contracts
-├── Harbora.Backup.Application/     services, validation   → Domain, Contracts, Harbora.Application
-└── Harbora.Backup.Infrastructure/  engine adapters        → Application, Harbora.Infrastructure
-
-src/Modules/Sync/
-├── Harbora.Sync.Contracts/         ports + DTOs + enums
-└── Harbora.Sync.Domain/            entities
+├── Harbora.Modules.Backup.Contracts/       ports + DTOs + enums   → (nothing)
+├── Harbora.Modules.Backup.Domain/          entities + pure logic  → Harbora.Domain, Contracts
+└── Harbora.Modules.Backup.Infrastructure/  adapters + services    → Domain, Harbora.Infrastructure, Harbora.Data
 ```
+
+### Two naming decisions worth explaining
+
+**`Harbora.Modules.Backup.*`, not `Harbora.Backup.*`.** The shorter name is a namespace sitting
+directly under `Harbora`, which means C# name resolution finds it before any `using`-imported type
+called `Backup` — shadowing the existing `Harbora.Domain.Backups.Backup` entity for *every* file in
+the `Harbora.*` tree, `BackupEngine.cs` included. The alternative was scattering type aliases
+through files this branch has no business editing.
+
+**No separate `Application` project.** Harbora's own `Harbora.Application` contains only
+abstractions; every implementation lives in `Harbora.Infrastructure`. Adding a module project that
+held services would have introduced a layering convention the codebase does not use. The brief's
+conceptual boundary is preserved — ports in `Contracts`, invariants in `Domain`, implementations in
+`Infrastructure` — without inventing a fourth layer for this module alone.
+
+One consequence is recorded honestly: both `IBackupEngine` types are in scope inside
+`HarboraNativeBackupEngine.cs`, which needs `IBackupStorage` and `ISecretProtector` from
+`Harbora.Application.Abstractions`. That file carries an explicit `using` alias rather than relying
+on resolution order.
+
+Sync (`src/Modules/Sync/`) is not yet created — see § 10.
 
 ### Dependency rules
 
