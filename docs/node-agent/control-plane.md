@@ -40,6 +40,7 @@ Under `NodeAgent:` in `appsettings.json`, or `NodeAgent__*` in `deploy/.env`:
     "HeartbeatIntervalSeconds": 30,
     "EnrollmentTokenMinutes": 30,
     "TrustForwardedClientCertificate": true,
+    "AutoRegisterAsServer": true,
 
     "TunnelGatewayUrl": "gw.example.com:8443",
     "GatewayListenPort": 8443,
@@ -56,6 +57,7 @@ Under `NodeAgent:` in `appsettings.json`, or `NodeAgent__*` in `deploy/.env`:
 | `MinimumAgentVersion` | Nodes below it are told they are too old and refuse work themselves. Raising it is how a fleet is forced forward |
 | `EnrollmentTokenMinutes` | Capped at 24 hours. The token's job is to survive a copy-paste, not to live in a wiki |
 | `TrustForwardedClientCertificate` | **Off by default.** See the mTLS section — turning it on without the Traefik half removes authentication rather than adding it |
+| `AutoRegisterAsServer` | On by default: an enrolled node becomes a deploy target. Off means nodes are attached by hand from the node's page. See [Scheduling onto a node](#scheduling-onto-a-node) |
 | `GatewayListenPort` | `0` (the default) disables database tunnels entirely |
 
 ---
@@ -151,6 +153,71 @@ neither can be used in the other's role.
 Ports `GatewayListenPort` and the public range must be reachable from wherever customers connect.
 This is the one part of the node design that opens inbound ports — on **Harbora's** infrastructure,
 which is the point: the customer's server opens none.
+
+---
+
+## Scheduling onto a node
+
+The platform schedules onto `Server` rows: `NodeCapacityService` reads that table, the scheduler
+reads capacity from it, and an app carries a `ServerId`. A `Node` that exists only as a node is
+enrolled, connected and commandable — and invisible to every one of those.
+
+So a node projects itself into the model that already exists. `NodeServerLink` gives each node a
+`Server` row and rewrites it from the node's own reports on connect, on every heartbeat and on
+disconnect. Nothing else in the scheduler changed.
+
+**How a node-backed server is recognised.** Its `AgentEndpoint` is null. That null is load-bearing:
+`ServerEngineFactory` looks for a linked node *before* it falls back to the local engine, because
+the old fallback read "not local, no endpoint" as "this machine" — which for a node-backed server
+would deploy a customer's app onto the panel's own Docker daemon. A non-local server with neither an
+endpoint nor a node now throws instead of landing somewhere convenient.
+
+**What runs the workload.** `NodeWorkloadEngine` implements `IDockerEngine` over the node's verbs.
+The pipeline's container name doubles as the node's workload id, so "stop the container I just got
+back" and "retire the containers carrying this app's label" both land on the right workload without
+the pipeline knowing anything changed.
+
+Three things it cannot do, and says so by name rather than pretending:
+
+| Call | Behaviour |
+|---|---|
+| `BuildImageAsync` | Throws `NodeCapabilityException`. There is no build verb; a build context is arbitrary code plus an arbitrary Dockerfile. Deploy from a prebuilt image or a template |
+| `RunOneOffAsync` | Throws `NodeCapabilityException`. Release tasks and volume backups need it, and "run this container to completion" is a shell with extra steps |
+| `GetStatsAsync` | Returns null, meaning *not measured*. Host pressure still arrives on the heartbeat; a fabricated zero would draw a flat line across a busy container |
+
+`ListContainersAsync` is the opposite case: it **throws** when the node does not answer. An empty
+list would tell the pipeline there is nothing to retire, and it would cut traffic over to the new
+container while leaving the old one running.
+
+**Images are pinned before they are sent.** A node refuses an unpinned reference, correctly — a tag
+cannot express "deploy the thing that was tested". `ImageDigestResolver` turns a tag into
+`repository@sha256:…`, asking the panel's own Docker first and the registry second, so every node in
+a fleet gets the same bytes rather than each resolving `:latest` at whatever moment it pulled.
+
+**Tenancy on the node.** Every panel-scheduled workload is deployed under one tenant,
+`harbora-platform`, not under the workspace. `IDockerEngine` is server-scoped — the metrics sweep
+lists every container on a machine, a backup reaches whichever workspace owns the volume, a cutover
+retires containers the current request has no workspace context for — so a per-workspace tenant
+would be a lookup the interface cannot express, and the first caller to get it wrong would silently
+see nothing. Workspace isolation is unaffected: it is enforced in the panel by the query filter that
+decides which app a request may act on at all, and on the node by the per-workspace networks the
+pipeline already names.
+
+**Reaching the app.** There is no shared overlay between panel and node, so every container's port
+is published to a per-deployment host port and the proxy routes to `hostname:port`. The hostname is
+the node's own reported address, preferring a globally routable IPv4 one. A hostname an operator
+typed is kept; a raw address is refreshed, so a node that changes address does not keep receiving
+traffic at the old one.
+
+> A node behind NAT enrolls, connects and deploys successfully — and its HTTP routes time out. The
+> control channel is outbound-only by design; ingress is not, yet. See the gap table in
+> [merge-notes.md](merge-notes.md).
+
+**Turning it off.** `NodeAgent:AutoRegisterAsServer` (default `true`) decides whether enrolling a
+node also makes it a deploy target. Set it to `false` on an install where nodes exist for something
+else — publishing a database, say — and attach individual nodes from the node's page instead.
+Detaching is refused while anything is placed on the node, because removing the `Server` row under a
+running app leaves the panel showing it as deployed with no way to reach, stop or delete it.
 
 ---
 

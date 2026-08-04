@@ -175,6 +175,59 @@ public sealed class GetWorkloadStatusHandler(WorkloadRegistry registry, Workload
 }
 
 /// <summary>
+/// Every workload this node holds for the calling tenant.
+///
+/// <para>
+/// The tenant filter is not a convenience: a control plane that sent the wrong tenant would
+/// otherwise get an inventory of somebody else's workloads, which is a disclosure even though
+/// nothing was modified. Read verbs leak, and this is the one that leaks the most at once.
+/// </para>
+/// </summary>
+public sealed class ListWorkloadsHandler(WorkloadRegistry registry, WorkloadDeployer deployer)
+    : INodeCommandHandler
+{
+    public string Command => NodeCommands.ListWorkloads;
+
+    public async Task<CommandResult> HandleAsync(CommandContext context, CancellationToken ct)
+    {
+        var request = context.Envelope.PayloadAs<ListWorkloadsRequest>();
+        if (request is null) return context.Fail(NodeErrorCode.ValidationFailed, "The payload has no tenant id.");
+
+        if (CreateNetworkHandler.Mismatch(context, request.TenantId) is { } refusal) return refusal;
+
+        var records = registry.All()
+            .Where(w => w.TenantId == request.TenantId)
+            .Where(w => request.AppId is null || w.Spec.AppId == request.AppId)
+            .OrderBy(w => w.Name, StringComparer.Ordinal)
+            .ToList();
+
+        var summaries = new List<WorkloadSummary>(records.Count);
+
+        foreach (var record in records)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            summaries.Add(new WorkloadSummary
+            {
+                WorkloadId = record.WorkloadId,
+                Name = record.Name,
+                TenantId = record.TenantId,
+                AppId = record.Spec.AppId,
+                AppVersion = record.AppVersion,
+                ReleaseId = record.ReleaseId,
+                DeployedAt = record.DeployedAt,
+                Labels = record.Spec.Labels,
+                // One runtime inspect per workload, which the caller opted into. A node holding
+                // fifty workloads should be able to answer cheaply when the caller only wants names.
+                Status = request.IncludeStatus ? await deployer.StatusAsync(record, ct) : null,
+            });
+        }
+
+        return context.Ok(new ListWorkloadsResult { Workloads = summaries });
+    }
+}
+
+/// <summary>
 /// Streams container output back as <c>log.chunk</c> frames.
 ///
 /// <para>

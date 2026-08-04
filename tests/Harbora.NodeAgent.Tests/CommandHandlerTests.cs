@@ -125,6 +125,81 @@ public sealed class CommandHandlerTests : IDisposable
         result.Result!.Value.GetProperty("state").GetString().Should().Be("absent");
     }
 
+    // --- listing ---
+
+    [Fact]
+    public async Task Listing_workloads_returns_this_tenants_set()
+    {
+        await DeployedAsync();
+        var handler = new ListWorkloadsHandler(_registry, Deployer());
+
+        var payload = new ListWorkloadsRequest { TenantId = "tenant-1" };
+        var result = await handler.HandleAsync(Context(NodeCommands.ListWorkloads, payload), CancellationToken.None);
+
+        result.Status.Should().Be(CommandStatus.Succeeded);
+
+        var workloads = result.Result!.Value.GetProperty("workloads");
+        workloads.GetArrayLength().Should().Be(1);
+        workloads[0].GetProperty("name").GetString().Should().Be("test-app");
+        workloads[0].GetProperty("status").GetProperty("state").GetString().Should().Be("running");
+    }
+
+    [Fact]
+    public async Task Listing_never_shows_another_tenants_workloads()
+    {
+        // A read verb leaks, and this is the one that leaks the most at once — an inventory rather
+        // than a single lookup.
+        await DeployedAsync();
+        var handler = new ListWorkloadsHandler(_registry, Deployer());
+
+        var payload = new ListWorkloadsRequest { TenantId = "tenant-b" };
+        var result = await handler.HandleAsync(
+            Context(NodeCommands.ListWorkloads, payload, tenantId: "tenant-b"), CancellationToken.None);
+
+        result.Result!.Value.GetProperty("workloads").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Listing_for_a_tenant_the_command_does_not_act_for_is_refused()
+    {
+        await DeployedAsync();
+        var handler = new ListWorkloadsHandler(_registry, Deployer());
+
+        var payload = new ListWorkloadsRequest { TenantId = "tenant-1" };
+        var result = await handler.HandleAsync(
+            Context(NodeCommands.ListWorkloads, payload, tenantId: "tenant-b"), CancellationToken.None);
+
+        result.Error!.Code.Should().Be(NodeErrorCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Listing_can_skip_the_status_read()
+    {
+        // A node holding fifty workloads should be able to answer cheaply when the caller only
+        // wants names: status costs one runtime inspect each.
+        await DeployedAsync();
+        var handler = new ListWorkloadsHandler(_registry, Deployer());
+
+        var payload = new ListWorkloadsRequest { TenantId = "tenant-1", IncludeStatus = false };
+        var result = await handler.HandleAsync(Context(NodeCommands.ListWorkloads, payload), CancellationToken.None);
+
+        var workload = result.Result!.Value.GetProperty("workloads")[0];
+        workload.TryGetProperty("status", out var status).Should().BeFalse();
+        _ = status;
+    }
+
+    [Fact]
+    public async Task Listing_can_be_narrowed_to_one_app()
+    {
+        await DeployedAsync();
+        var handler = new ListWorkloadsHandler(_registry, Deployer());
+
+        var payload = new ListWorkloadsRequest { TenantId = "tenant-1", AppId = "some-other-app" };
+        var result = await handler.HandleAsync(Context(NodeCommands.ListWorkloads, payload), CancellationToken.None);
+
+        result.Result!.Value.GetProperty("workloads").GetArrayLength().Should().Be(0);
+    }
+
     // --- logs ---
 
     [Fact]

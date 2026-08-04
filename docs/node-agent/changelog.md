@@ -230,3 +230,45 @@ the panel: a measurement goes through `Design/_Metric`, and "never heartbeat" re
 rather than as a long time ago.
 
 1246 tests on the panel's suite, up from 1213.
+
+---
+
+## 10. Scheduling onto v1 nodes
+
+Closes the last gap in the table: a v1 node was enrolled, connected and commandable, but nothing
+could be deployed to it.
+
+**Added**
+
+```
+src/Harbora.Infrastructure/Nodes/NodeServerLink.cs        the Server projection
+src/Harbora.Infrastructure/Nodes/NodeHostFacts.cs         host facts without a round trip
+src/Harbora.Infrastructure/Nodes/ImageDigestResolver.cs   tag → repository@sha256:…
+src/Harbora.Infrastructure/Nodes/NodeWorkloadEngine.cs    IDockerEngine over the node's verbs
+tests/Harbora.Tests/NodeSchedulingTests.cs                37 tests
+```
+
+**Modified**
+
+- `Docker/ServerEngineFactory.cs` — the node lookup now happens *before* the local fallback. This is
+  the fix that matters: a node-backed `Server` has no `AgentEndpoint`, and the old order read that
+  as "the local machine", which would have deployed a customer's app onto the panel's own Docker.
+  A non-local server with neither an endpoint nor a node throws instead.
+- `Nodes/NodeCommandService.cs` — an optional `tenantScope`, so a command can act as the platform
+  rather than as the acting user's workspace. The acting user is still recorded.
+- `Nodes/NodeChannelSession.cs` — syncs the scheduling target on connect, heartbeat and disconnect.
+- `Nodes/NodeAgentControlPlaneOptions.cs` — `AutoRegisterAsServer`.
+- `NodeAgent.Contracts` + `contracts/node-agent/v1/**` — one additive read verb, `ListWorkloads`.
+  Strictly weaker than repeating `GetWorkloadStatus`, and tenant-filtered on the node.
+- `NodeAgent/Commands/Handlers/WorkloadHandlers.cs` — its handler.
+- `DependencyInjection.cs` — three registrations.
+- `Web/Controllers/NodesController.cs`, `ViewModels/NodeViewModels.cs`, `Views/Nodes/Detail.cshtml`
+  — a scheduling card: upstream address, pool, what is placed here, committed memory and CPU
+  against allocatable, and attach / detach.
+
+Three `IDockerEngine` members refuse by name rather than pretending: `BuildImageAsync` and
+`RunOneOffAsync` throw `NodeCapabilityException`, `GetStatsAsync` returns null. `ListContainersAsync`
+throws on a failed command instead of returning empty, because an empty list would make the pipeline
+cut traffic over while leaving the old container running.
+
+1283 tests on the panel's suite, up from 1246; 417 + 17 gated on the agent's.

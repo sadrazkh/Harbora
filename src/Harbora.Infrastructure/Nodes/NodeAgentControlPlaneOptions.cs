@@ -25,6 +25,17 @@ public sealed class NodeAgentControlPlaneOptions
     public int HeartbeatIntervalSeconds { get; set; } = 30;
 
     /// <summary>
+    /// Give every enrolled node a <c>Server</c> row so the scheduler can place work on it.
+    ///
+    /// <para>
+    /// On by default, because enrolling a node is a deliberate act by an admin and running workloads
+    /// is what a node is for. Turn it off on an install where nodes are enrolled for something else
+    /// — publishing a database, say — and attach them by hand from the node page instead.
+    /// </para>
+    /// </summary>
+    public bool AutoRegisterAsServer { get; set; } = true;
+
+    /// <summary>
     /// How long a freshly minted enrollment token lives. Short on purpose: the token's whole job is
     /// to survive a copy-paste into a terminal, and one that lives for a week lives in a wiki.
     /// </summary>

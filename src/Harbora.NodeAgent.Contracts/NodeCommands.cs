@@ -15,6 +15,7 @@ public static class NodeCommands
     public const string RestartWorkload = "RestartWorkload";
     public const string DeleteWorkload = "DeleteWorkload";
     public const string GetWorkloadStatus = "GetWorkloadStatus";
+    public const string ListWorkloads = "ListWorkloads";
     public const string StreamLogs = "StreamLogs";
 
     public const string CreateNetwork = "CreateNetwork";
@@ -79,6 +80,7 @@ public static class NodeCommandCatalog
             [NodeCommands.RestartWorkload] = new(NodeCommands.RestartWorkload, NodeScopes.WorkloadsWrite, 300, true),
             [NodeCommands.DeleteWorkload] = new(NodeCommands.DeleteWorkload, NodeScopes.WorkloadsWrite, 600, true),
             [NodeCommands.GetWorkloadStatus] = new(NodeCommands.GetWorkloadStatus, NodeScopes.WorkloadsRead, 60, false),
+            [NodeCommands.ListWorkloads] = new(NodeCommands.ListWorkloads, NodeScopes.WorkloadsRead, 60, false),
             [NodeCommands.StreamLogs] = new(NodeCommands.StreamLogs, NodeScopes.WorkloadsRead, 3600, false),
 
             [NodeCommands.CreateNetwork] = new(NodeCommands.CreateNetwork, NodeScopes.NetworksWrite, 120, true),

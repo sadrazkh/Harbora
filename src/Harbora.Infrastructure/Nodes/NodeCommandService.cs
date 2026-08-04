@@ -59,6 +59,14 @@ public sealed class NodeCommandService(
     /// execution per attempt, which for a deploy means deploying twice.
     /// </para>
     /// </summary>
+    /// <inheritdoc cref="SendAsync(string, string, object, string, string?, TimeSpan?, string?, CancellationToken)"/>
+    /// <param name="tenantScope">
+    /// The tenant the node should evaluate this command under, when that is not the acting user's
+    /// workspace. The scheduler needs it: a node's workloads are addressed by tenant, but the panel
+    /// operates a node as a whole — a metrics sweep, a backup, a cutover retiring another
+    /// workspace's container — so those commands act as the platform rather than as one workspace.
+    /// The acting user is still recorded; only the scope changes.
+    /// </param>
     public async Task<NodeCommandOutcome> SendAsync(
         string nodeId,
         string command,
@@ -67,6 +75,7 @@ public sealed class NodeCommandService(
         string? reason = null,
         TimeSpan? timeout = null,
         string? sourceIp = null,
+        string? tenantScope = null,
         CancellationToken ct = default)
     {
         if (!NodeCommandCatalog.TryGet(command, out var descriptor))
@@ -106,7 +115,7 @@ public sealed class NodeCommandService(
             {
                 ActorId = currentUser.UserId?.ToString(),
                 ActorName = currentUser.Email,
-                TenantId = currentUser.WorkspaceId?.ToString(),
+                TenantId = tenantScope ?? currentUser.WorkspaceId?.ToString(),
                 SourceIp = sourceIp,
                 Reason = reason,
             },
@@ -227,7 +236,7 @@ public sealed class NodeCommandService(
     /// </summary>
     public async Task<NodeCommandOutcome> StreamLogsAsync(
         string nodeId, StreamLogsRequest request, Func<LogChunk, Task> onChunk,
-        TimeSpan timeout, CancellationToken ct)
+        TimeSpan timeout, CancellationToken ct, string? tenantScope = null)
     {
         var connection = registry.Get(nodeId)
             ?? throw new NodeNotConnectedException(nodeId);
@@ -236,13 +245,13 @@ public sealed class NodeCommandService(
         using var subscription = connection.SubscribeLogs(commandId, onChunk);
 
         return await SendPreparedAsync(nodeId, commandId, NodeCommands.StreamLogs, request,
-            $"logs:{request.WorkloadId}:{commandId}", timeout, ct);
+            $"logs:{request.WorkloadId}:{commandId}", timeout, tenantScope, ct);
     }
 
     /// <summary>Send with a command id the caller has already used to subscribe to something.</summary>
     private async Task<NodeCommandOutcome> SendPreparedAsync(
         string nodeId, string commandId, string command, object payload,
-        string idempotencyKey, TimeSpan timeout, CancellationToken ct)
+        string idempotencyKey, TimeSpan timeout, string? tenantScope, CancellationToken ct)
     {
         var node = await db.Nodes.IgnoreQueryFilters().FirstOrDefaultAsync(n => n.NodeId == nodeId, ct)
             ?? throw new NodeNotFoundException(nodeId);
@@ -263,7 +272,7 @@ public sealed class NodeCommandService(
             {
                 ActorId = currentUser.UserId?.ToString(),
                 ActorName = currentUser.Email,
-                TenantId = currentUser.WorkspaceId?.ToString(),
+                TenantId = tenantScope ?? currentUser.WorkspaceId?.ToString(),
             },
             Payload = JsonSerializer.SerializeToElement(payload, NodeContract.Json),
         };

@@ -143,6 +143,7 @@ builder.Services.AddSingleton<INodeCommandHandler, StartWorkloadHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, RestartWorkloadHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, DeleteWorkloadHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, GetWorkloadStatusHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, ListWorkloadsHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, StreamLogsHandler>();
 
 builder.Services.AddSingleton<INodeCommandHandler, CreateNetworkHandler>();

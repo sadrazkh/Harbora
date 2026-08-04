@@ -288,6 +288,8 @@ public sealed class NodeChannelSession(
 
             NodeEnrollmentService.ApplyInventory(node, hello.Inventory, hello.Capabilities);
         }, ct);
+
+        await SyncSchedulingTargetAsync(nodeId, ct);
     }
 
     private async Task MarkDisconnectedAsync(string nodeId, long lastReceivedSequence, CancellationToken ct)
@@ -302,6 +304,10 @@ public sealed class NodeChannelSession(
             node.DisconnectedAt = clock.GetUtcNow();
             node.LastReceivedSequence = Math.Max(node.LastReceivedSequence, lastReceivedSequence);
         }, ct);
+
+        // The scheduler reads Server.Status, so a node that went away has to be marked there too —
+        // otherwise the next placement picks a machine nobody can reach.
+        await SyncSchedulingTargetAsync(nodeId, ct);
     }
 
     private async Task ApplyHeartbeatAsync(string nodeId, NodeHeartbeat heartbeat, CancellationToken ct)
@@ -324,6 +330,8 @@ public sealed class NodeChannelSession(
                 : heartbeat.Draining ? NodeStatus.Draining
                 : NodeStatus.Online;
         }, ct);
+
+        await SyncSchedulingTargetAsync(nodeId, ct);
     }
 
     private async Task ApplyInventoryAsync(string nodeId, NodeInventory inventory, CancellationToken ct)
@@ -437,6 +445,31 @@ public sealed class NodeChannelSession(
 
         mutate(node);
         await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Keep the node's scheduling target in step with what it just reported.
+    ///
+    /// <para>
+    /// Runs after the node row is written, in its own scope, and never throws into the session: a
+    /// projection that fails to update is a scheduler working from slightly stale capacity, which
+    /// is survivable. Dropping the channel over it would not be.
+    /// </para>
+    /// </summary>
+    private async Task SyncSchedulingTargetAsync(string nodeId, CancellationToken ct)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<NodeServerLink>().SyncAsync(nodeId, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "Could not refresh the scheduling target for node {NodeId}.", nodeId);
+        }
     }
 
     private static async Task CloseWithAsync(WebSocket socket, WebSocketCloseStatus status, string reason)

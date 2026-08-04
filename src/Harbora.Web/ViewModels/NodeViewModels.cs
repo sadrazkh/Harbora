@@ -1,3 +1,4 @@
+using Harbora.Domain.Common;
 using Harbora.Domain.Nodes;
 
 namespace Harbora.Web.ViewModels;
@@ -148,4 +149,42 @@ public sealed record NodeDetailViewModel(
     string? RevokedReason,
     IReadOnlyList<NodeCommandRow> Commands,
     IReadOnlyList<NodeEventRow> Events,
-    DateTimeOffset Now);
+    DateTimeOffset Now,
+    NodeSchedulingViewModel Scheduling);
+
+/// <summary>
+/// Whether the scheduler may place work on this node, and what is already there.
+///
+/// <para>
+/// <see cref="ServerId"/> is null when the node is enrolled but not a scheduling target — either
+/// because auto-registration is off, or because an operator detached it. Everything else is only
+/// meaningful when it is set.
+/// </para>
+/// </summary>
+public sealed record NodeSchedulingViewModel(
+    Guid? ServerId,
+    string Hostname,
+    string Pool,
+    ServerStatus Status,
+    int Apps,
+    int Services,
+    long AllocatableMemoryBytes,
+    long CommittedMemoryBytes,
+    double AllocatableCpu,
+    double CommittedCpu,
+    bool AutoRegisterEnabled)
+{
+    public bool IsAttached => ServerId is not null;
+
+    /// <summary>What the scheduler asks: is this node accepting placements right now.</summary>
+    public bool AcceptsWork => IsAttached && Status == ServerStatus.Online;
+
+    /// <summary>Blocked while anything is placed, because detaching would orphan it.</summary>
+    public bool CanDetach => IsAttached && Apps + Services == 0;
+
+    public double MemoryUsedRatio =>
+        AllocatableMemoryBytes > 0 ? Math.Clamp((double)CommittedMemoryBytes / AllocatableMemoryBytes, 0, 1) : 0;
+
+    public double CpuUsedRatio =>
+        AllocatableCpu > 0 ? Math.Clamp(CommittedCpu / AllocatableCpu, 0, 1) : 0;
+}

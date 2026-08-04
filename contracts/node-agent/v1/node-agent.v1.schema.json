@@ -33,7 +33,7 @@
       "description": "Closed allowlist. There is no member that executes an arbitrary shell command.",
       "enum": [
         "DeployWorkload", "UpdateWorkload", "StopWorkload", "StartWorkload", "RestartWorkload",
-        "DeleteWorkload", "GetWorkloadStatus", "StreamLogs",
+        "DeleteWorkload", "GetWorkloadStatus", "ListWorkloads", "StreamLogs",
         "CreateNetwork", "DeleteNetwork",
         "CreateVolume", "SnapshotVolume", "RestoreVolume",
         "CreateDatabaseAccessGrant", "RevokeDatabaseAccessGrant", "RotateDatabaseAccessCredential",
@@ -912,6 +912,41 @@
         "tenantId": { "type": "string" },
         "deleteVolumes": { "type": "boolean", "default": false, "description": "Deleting a workload and deleting the data it held are different decisions, and only one is reversible." },
         "force": { "type": "boolean", "default": false }
+      }
+    },
+
+    "listWorkloadsRequest": {
+      "type": "object",
+      "description": "Read-only, and strictly weaker than repeating GetWorkloadStatus for every id the caller already knows. It exists because a control plane cannot retire the containers a previous release left behind by guessing their names.",
+      "required": ["tenantId"],
+      "properties": {
+        "tenantId": { "type": "string", "minLength": 1 },
+        "appId": { "type": ["string", "null"] },
+        "includeStatus": { "type": "boolean", "default": true }
+      }
+    },
+
+    "workloadSummary": {
+      "type": "object",
+      "required": ["workloadId", "name", "tenantId", "releaseId"],
+      "properties": {
+        "workloadId": { "type": "string" },
+        "name": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "appId": { "type": ["string", "null"] },
+        "appVersion": { "type": ["string", "null"] },
+        "releaseId": { "type": "string" },
+        "deployedAt": { "type": "string", "format": "date-time" },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "status": { "$ref": "#/$defs/workloadStatus" }
+      }
+    },
+
+    "listWorkloadsResult": {
+      "type": "object",
+      "required": ["workloads"],
+      "properties": {
+        "workloads": { "type": "array", "items": { "$ref": "#/$defs/workloadSummary" } }
       }
     },
 

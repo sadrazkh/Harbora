@@ -152,7 +152,10 @@ thing either branch needs and doing it once is less work than doing it twice.
 | `RotateDatabaseAccessCredential` overlap | `overlapSeconds` is accepted and logged as unsupported — none of the four engines can hold two live passwords for one user | Contract note; would need a second user per rotation |
 | Metrics endpoint auth | Loopback-only, no authentication. Anyone already on the box can read it — which is the same population that can read the state directory | Fine as is; documented |
 | Multi-replica command routing | `NodeChannelRegistry` is per-instance, so a command only works on the replica holding that node's socket; others answer 503. Single-instance Harbora is unaffected | A shared routing layer, or pinning node routes to one replica |
-| Scheduling onto v1 nodes | The panel's `IServerEngineFactory` still resolves the inbound `Harbora.Agent` for remote servers. A v1 node is enrolled, connected and commandable, but the deployment pipeline does not yet place workloads on it | An `IDockerEngine` implementation over `NodeCommandService`, selected in `ServerEngineFactory` |
+| HTTP ingress to a node behind NAT | The panel's proxy reaches an app on a node by opening a socket to the node's reported address on the published host port. A node that dials out from behind NAT enrolls, connects and deploys — and then its routes time out | A reverse HTTP tunnel over the control channel, or the TCP gateway generalised past database traffic |
+| Building on a v1 node | The contract has no build verb, deliberately: a build context is arbitrary code plus an arbitrary Dockerfile. An app deployed from a Git source cannot be placed on a v1 node, and `NodeWorkloadEngine.BuildImageAsync` refuses by name rather than failing obscurely | Build centrally, push to a registry, let the node pull by digest |
+| Release tasks and volume backups on a v1 node | Both need a one-off container, which is a shell with extra steps and so is not a verb. `RunOneOffAsync` throws `NodeCapabilityException` instead of skipping the task quietly | A narrow `RunReleaseTask` verb whose command comes from the app manifest rather than from the request |
+| Per-container statistics from a v1 node | `GetStatsAsync` returns null, so the metrics collector keeps host pressure from the heartbeat but has no per-app CPU or memory | A `GetWorkloadStats` verb |
 
 ---
 

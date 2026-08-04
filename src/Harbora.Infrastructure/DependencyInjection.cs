@@ -36,6 +36,12 @@ public static class DependencyInjection
         services.AddHostedService<Nodes.NodeHeartbeatMonitor>();
         services.AddHostedService<Nodes.NodeTunnelGateway>();
 
+        // Scheduling onto nodes: the Server projection that makes a node visible to the scheduler,
+        // the engine's read of what a node is, and the digest resolution a node insists on.
+        services.AddScoped<Nodes.NodeServerLink>();
+        services.AddScoped<Nodes.NodeHostFacts>();
+        services.AddScoped<Nodes.ImageDigestResolver>();
+
         // Container runtime
         services.AddSingleton<IDockerClient>(_ =>
         {

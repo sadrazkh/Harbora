@@ -4,6 +4,21 @@ Versioning: the directory name (`v1`) is the **major** version and appears in ev
 changes are recorded here and do not move the directory. A breaking change creates `v2/` and both
 are served until every node has moved.
 
+## v1.1.0 — ListWorkloads
+
+Additive, and therefore still v1: an older node that does not implement the verb reports it as
+absent in its capabilities, and a control plane that consults `supportedCommands` — as the contract
+requires — simply does not send it.
+
+- **`ListWorkloads`** (`workloads:read`) — enumerate a tenant's workloads on a node.
+
+Added because the control plane cannot retire the containers a previous release left behind without
+knowing what is there, and guessing names is not knowing. It is read-only and strictly weaker than
+repeating `GetWorkloadStatus` for every id the caller already holds, so it grants no capability that
+did not already exist — it only removes the need to have memorised the ids.
+
+---
+
 ## v1.0.0 — first release
 
 Initial contract. Covers:

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
+using Harbora.Domain.Common;
 using Harbora.Domain.Nodes;
 using Harbora.Infrastructure.Nodes;
 using Harbora.NodeAgent.Contracts;
@@ -29,6 +30,7 @@ public sealed class NodesController(
     NodeEnrollmentService enrollment,
     NodeCommandService commands,
     NodeChannelRegistry registry,
+    NodeServerLink serverLink,
     IOptions<NodeAgentControlPlaneOptions> options,
     Harbora.Application.Abstractions.ICurrentUser currentUser,
     TimeProvider clock,
@@ -87,7 +89,55 @@ public sealed class NodesController(
             node.RevokedReason,
             commandRows,
             eventRows,
-            clock.GetUtcNow()));
+            clock.GetUtcNow(),
+            await BuildSchedulingAsync(node, ct)));
+    }
+
+    /// <summary>
+    /// Make this node a scheduling target.
+    ///
+    /// <para>
+    /// Only needed on an install that turned auto-registration off, or for a node an operator
+    /// detached earlier — an enrolled node normally acquires its Server row on its first connect.
+    /// </para>
+    /// </summary>
+    [HttpPost("{nodeId}/attach")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Attach(string nodeId, CancellationToken ct)
+    {
+        var serverId = await serverLink.AttachAsync(nodeId, ct);
+
+        TempData[serverId is null ? "Error" : "Message"] = serverId is null
+            ? (Fa() ? "نودی با این شناسه نیست." : "No such node.")
+            : (Fa()
+                ? "این نود حالا هدف زمان‌بندی است و برنامه‌ها می‌توانند روی آن مستقر شوند."
+                : "This node is now a scheduling target and apps can be placed on it.");
+
+        return RedirectToAction(nameof(Detail), new { nodeId });
+    }
+
+    /// <summary>
+    /// Stop scheduling onto this node without touching its enrollment.
+    ///
+    /// <para>
+    /// Refused while anything is placed on it. The alternative — removing the Server row under a
+    /// running app — leaves the panel showing the app as deployed with no way to reach, stop or
+    /// delete it.
+    /// </para>
+    /// </summary>
+    [HttpPost("{nodeId}/detach")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Detach(string nodeId, CancellationToken ct)
+    {
+        var result = await serverLink.DetachAsync(nodeId, ct);
+
+        TempData[result.Ok ? "Message" : "Error"] = result.Ok
+            ? (Fa()
+                ? "زمان‌بندی روی این نود متوقف شد. نود همچنان ثبت‌شده و قابل فرمان است."
+                : "Scheduling onto this node is off. It stays enrolled and commandable.")
+            : result.Reason;
+
+        return RedirectToAction(nameof(Detail), new { nodeId });
     }
 
     /// <summary>
@@ -223,6 +273,52 @@ public sealed class NodesController(
     }
 
     // --- internals ---
+
+    /// <summary>
+    /// What the scheduler sees when it considers this node.
+    ///
+    /// <para>
+    /// Read from the Server row rather than from the node's own inventory: capacity is committed
+    /// against the Server, and showing the node's raw totals here would report headroom the
+    /// scheduler does not believe in.
+    /// </para>
+    /// </summary>
+    private async Task<NodeSchedulingViewModel> BuildSchedulingAsync(Node node, CancellationToken ct)
+    {
+        if (node.ServerId is not { } serverId)
+            return new NodeSchedulingViewModel(
+                null, string.Empty, string.Empty, ServerStatus.Unknown, 0, 0, 0, 0, 0, 0,
+                _options.AutoRegisterAsServer);
+
+        var server = await db.Servers.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == serverId, ct);
+
+        if (server is null)
+            return new NodeSchedulingViewModel(
+                null, string.Empty, string.Empty, ServerStatus.Unknown, 0, 0, 0, 0, 0, 0,
+                _options.AutoRegisterAsServer);
+
+        // Platform-wide counts, not workspace-scoped: a node may hold another workspace's app, and
+        // an operator deciding whether to detach needs to know that it does.
+        var apps = await db.Apps.IgnoreQueryFilters().Where(a => a.ServerId == serverId)
+            .Select(a => new { a.MemoryLimitBytes, a.CpuLimit })
+            .ToListAsync(ct);
+
+        var services = await db.ManagedServices.IgnoreQueryFilters().CountAsync(s => s.ServerId == serverId, ct);
+
+        return new NodeSchedulingViewModel(
+            server.Id,
+            server.Hostname,
+            server.Pool,
+            server.Status,
+            apps.Count,
+            services,
+            server.TotalMemoryBytes > 0 ? (long)(server.TotalMemoryBytes * (1 - server.ReservedMemoryRatio)) : 0,
+            apps.Sum(a => a.MemoryLimitBytes),
+            server.CpuCores > 0 ? server.CpuCores * Math.Max(1, server.CpuOvercommitFactor) : 0,
+            apps.Sum(a => a.CpuLimit),
+            _options.AutoRegisterAsServer);
+    }
 
     private async Task<NodeListViewModel> BuildListAsync(CancellationToken ct)
     {

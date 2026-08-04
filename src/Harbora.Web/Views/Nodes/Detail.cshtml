@@ -2,6 +2,7 @@
 @using Harbora.Domain.Nodes
 @{
     var node = Model.Node;
+    var sched = Model.Scheduling;
     ViewData["Title"] = node.Name;
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var msg = TempData["Message"] as string;
@@ -197,6 +198,139 @@
     </div>
 
     <div class="space-y-6">
+        <section class="rounded-xl border border-line bg-surface shadow-panel">
+            <header class="flex items-center justify-between px-5 py-3.5 border-b border-line">
+                <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "زمان‌بندی" : "Scheduling")</h2>
+                @if (sched.IsAttached)
+                {
+                    <span class="text-[11px] @(sched.AcceptsWork ? "text-ok" : "text-ink-faint")">
+                        @(sched.AcceptsWork
+                            ? (isFa ? "کار می‌پذیرد" : "accepting work")
+                            : (isFa ? "کار تازه نمی‌پذیرد" : "not accepting work"))
+                    </span>
+                }
+            </header>
+
+            <div class="p-5 space-y-4 text-sm">
+                @if (!sched.IsAttached)
+                {
+                    <p class="text-xs text-ink-muted">
+                        @(isFa
+                            ? "این نود هدف زمان‌بندی نیست، پس برنامه‌ای روی آن مستقر نمی‌شود. ثبت‌شده و قابل فرمان می‌ماند — برای انتشار دیتابیس یا تونل همچنان کار می‌کند."
+                            : "This node is not a scheduling target, so no app will be placed on it. It stays enrolled and commandable — database publishing and tunnels still work.")
+                    </p>
+
+                    @if (!sched.AutoRegisterEnabled)
+                    {
+                        <p class="text-xs text-ink-faint">
+                            @(isFa
+                                ? "ثبت خودکار در تنظیمات خاموش است (NodeAgent:AutoRegisterAsServer)."
+                                : "Auto-registration is off in configuration (NodeAgent:AutoRegisterAsServer).")
+                        </p>
+                    }
+
+                    @if (!node.Revoked)
+                    {
+                        <form asp-controller="Nodes" asp-action="Attach" asp-route-nodeId="@node.NodeId" method="post">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="btn-secondary w-full">
+                                @(isFa ? "هدف زمان‌بندی کن" : "Make a scheduling target")
+                            </button>
+                        </form>
+                    }
+                }
+                else
+                {
+                    <div>
+                        <dt class="text-xs text-ink-faint">@(isFa ? "آدرس بالادست" : "Upstream address")</dt>
+                        <dd class="font-mono text-xs" dir="ltr">@sched.Hostname</dd>
+                        @* The proxy needs to open a socket to this address. A node behind NAT
+                           deploys fine and then times out, so it is stated rather than implied. *@
+                        <p class="mt-1 text-[11px] text-ink-faint">
+                            @(isFa
+                                ? "پروکسی هربورا برای ورودی HTTP باید بتواند روی این نشانی و پورت منتشرشده به نود وصل شود."
+                                : "Harbora's proxy must be able to reach the node at this address on the published port for HTTP ingress.")
+                        </p>
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(sched.Pool))
+                    {
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs text-ink-faint">@(isFa ? "استخر" : "Pool")</span>
+                            <span class="rounded bg-surface-2 px-2 py-0.5 text-[11px] font-mono" dir="ltr">@sched.Pool</span>
+                        </div>
+                    }
+
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs text-ink-faint">@(isFa ? "مستقرشده" : "Placed here")</span>
+                        <span>
+                            @(isFa
+                                ? $"{sched.Apps} برنامه · {sched.Services} سرویس"
+                                : $"{sched.Apps} app(s) · {sched.Services} service(s)")
+                        </span>
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <div class="flex items-center justify-between text-xs">
+                            <span class="text-ink-faint">@(isFa ? "حافظه‌ی تعهدشده" : "Committed memory")</span>
+                            <span dir="ltr">@Gb(sched.CommittedMemoryBytes) / @Gb(sched.AllocatableMemoryBytes)</span>
+                        </div>
+                        <div class="h-1.5 rounded-full bg-surface-2 overflow-hidden">
+                            <div class="h-full rounded-full @(sched.MemoryUsedRatio > 0.9 ? "bg-danger" : sched.MemoryUsedRatio > 0.75 ? "bg-warn" : "bg-accent")"
+                                 style="width: @((sched.MemoryUsedRatio * 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                        </div>
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <div class="flex items-center justify-between text-xs">
+                            <span class="text-ink-faint">@(isFa ? "CPU تعهدشده" : "Committed CPU")</span>
+                            <span dir="ltr">
+                                @sched.CommittedCpu.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) /
+                                @sched.AllocatableCpu.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)
+                            </span>
+                        </div>
+                        <div class="h-1.5 rounded-full bg-surface-2 overflow-hidden">
+                            <div class="h-full rounded-full @(sched.CpuUsedRatio > 0.9 ? "bg-danger" : sched.CpuUsedRatio > 0.75 ? "bg-warn" : "bg-accent")"
+                                 style="width: @((sched.CpuUsedRatio * 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                        </div>
+                    </div>
+
+                    @if (!sched.AcceptsWork && !node.Revoked)
+                    {
+                        <p class="text-xs text-warn">
+                            @(node.Draining
+                                ? (isFa
+                                    ? "نود در حال تخلیه است، پس زمان‌بند از آن رد می‌شود. آنچه مستقر است همچنان اجرا می‌شود."
+                                    : "The node is draining, so the scheduler passes over it. What is already placed keeps running.")
+                                : (isFa
+                                    ? "زمان‌بند فقط نودهای آنلاین و سالم را انتخاب می‌کند."
+                                    : "The scheduler only picks nodes that are online and healthy."))
+                        </p>
+                    }
+
+                    @if (!node.Revoked)
+                    {
+                        <form asp-controller="Nodes" asp-action="Detach" asp-route-nodeId="@node.NodeId" method="post">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="btn-secondary w-full" @(sched.CanDetach ? "" : "disabled")>
+                                @(isFa ? "زمان‌بندی را متوقف کن" : "Stop scheduling here")
+                            </button>
+                            @if (!sched.CanDetach)
+                            {
+                                @* Detaching under a running app would leave it deployed with nothing
+                                   able to reach, stop or delete it. *@
+                                <p class="mt-1.5 text-[11px] text-ink-faint">
+                                    @(isFa
+                                        ? "اول باید هرچه روی این نود مستقر است جابه‌جا یا حذف شود."
+                                        : "Move or delete everything placed here first.")
+                                </p>
+                            }
+                        </form>
+                    }
+                }
+            </div>
+        </section>
+
         <section class="rounded-xl border border-line bg-surface shadow-panel">
             <header class="px-5 py-3.5 border-b border-line">
                 <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "اعتبارنامه" : "Credential")</h2>
