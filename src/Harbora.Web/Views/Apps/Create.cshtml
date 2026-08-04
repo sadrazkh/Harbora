@@ -1,6 +1,14 @@
 @model CreateAppViewModel
+@inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @{
     ViewData["Title"] = "Create Application";
+
+    // Open in Advanced, folded in Simple — and always open when the form has just been rejected,
+    // because half these fields are required for some source types and an error about a control
+    // nobody can see is an error nobody can fix.
+    var advancedOpen = Harbora.Infrastructure.Navigation.PanelSections.StartsOpen(
+        await PanelModes.GetAsync(), !ViewData.ModelState.IsValid);
+
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
     var servers = ViewBag.Servers as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
@@ -126,8 +134,8 @@
             </div>
         </section>
 
-        <details class="advanced-panel">
-            <summary><span><i data-lucide="sliders-horizontal" class="h-4 w-4"></i>@(isFa ? "تنظیمات Runtime و Build" : "Runtime and build settings")</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
+        <partial name="Design/_AdvancedStart" model="@(new AdvancedSectionModel(
+            isFa ? "تنظیمات Runtime و Build" : "Runtime and build settings", advancedOpen))" />
             <div class="grid gap-4 border-t border-line p-5 md:grid-cols-2">
                 <label class="form-field"><span>Slug</span><input asp-for="Slug" placeholder="auto-from-name" class="form-control" dir="ltr" /></label>
                 <label data-panel="GitRepository,StaticSite,DockerCompose,Dockerfile" class="form-field"><span>@T["Branch or Tag"]</span><input asp-for="GitRef" class="form-control" dir="ltr" /></label>
@@ -143,7 +151,7 @@
                 <label data-cron-only class="form-field hidden"><span>@(isFa ? "زمان‌بندی Cron" : "Cron schedule")</span><input asp-for="CronExpression" placeholder="0 3 * * *" class="form-control" dir="ltr" /></label>
                 <label data-git-only class="option-row md:col-span-2"><input asp-for="PreviewsEnabled" type="checkbox" /><span><strong>@(isFa ? "محیط Preview برای branchها" : "Preview environments for branches")</strong><small>@(isFa ? "سکرت‌ها به Preview کپی نمی‌شوند." : "Secrets are never copied to previews.")</small></span></label>
             </div>
-        </details>
+        <partial name="Design/_AdvancedEnd" />
     </div>
 
     <aside class="create-review">

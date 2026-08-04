@@ -82,14 +82,18 @@ public class UiBaselineTests
 
         foreach (var path in Directory.EnumerateFiles(ViewsRoot(), "*.cshtml", SearchOption.AllDirectories))
         {
-            // The panel partials are a deliberate pair: one opens the section, the other closes it.
+            // These partials are deliberate pairs: one opens the element, the other closes it.
             var name = Path.GetFileName(path);
-            if (name is "_PanelStart.cshtml" or "_PanelEnd.cshtml") continue;
+            if (name is "_PanelStart.cshtml" or "_PanelEnd.cshtml"
+                     or "_AdvancedStart.cshtml" or "_AdvancedEnd.cshtml") continue;
 
             var markup = Regex.Replace(File.ReadAllText(path), @"@\*.*?\*@", "", RegexOptions.Singleline);
             markup = Regex.Replace(markup, "<!--.*?-->", "", RegexOptions.Singleline);
 
-            foreach (var tag in new[] { "div", "section", "aside", "main", "table", "form" })
+            // details is in the list because Simple mode folds specialist blocks into one. An
+            // unbalanced disclosure swallows the rest of the form into a collapsed section, which
+            // reads as "those settings were removed" rather than as broken markup.
+            foreach (var tag in new[] { "div", "section", "aside", "main", "table", "form", "details" })
             {
                 var opened = Regex.Matches(markup, $@"<{tag}[\s>]", RegexOptions.IgnoreCase).Count;
                 var closed = Regex.Matches(markup, $@"</{tag}>", RegexOptions.IgnoreCase).Count;

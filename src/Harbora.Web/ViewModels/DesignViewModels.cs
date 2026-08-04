@@ -9,6 +9,15 @@ public sealed record PanelModel(string Title, string? LinkText = null, string? L
 public sealed record StatCardModel(string Icon, string Label, MetricView Value, string? Delta = null);
 
 /// <summary>
+/// A specialist block that folds in Simple mode and is open in Advanced.
+///
+/// <paramref name="Open"/> is a decision rather than a preference:
+/// <c>PanelSections.StartsOpen</c> makes it, so every page answers the same way and a rejected form
+/// opens the block holding whatever it complained about.
+/// </summary>
+public sealed record AdvancedSectionModel(string Title, bool Open, string Icon = "sliders-horizontal");
+
+/// <summary>
 /// The semantic tones a pill may carry. Constants rather than loose strings because a mistyped
 /// "sucess" silently falls through to the neutral tone, which reads as "nothing is wrong".
 /// </summary>

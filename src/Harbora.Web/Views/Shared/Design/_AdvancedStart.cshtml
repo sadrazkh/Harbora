@@ -1,0 +1,14 @@
+@model Harbora.Web.ViewModels.AdvancedSectionModel
+@* Split into a start and an end partial because a Razor partial cannot call RenderBody.
+
+   The disclosure itself is unchanged from the one this replaces — what changed is that whether it
+   starts open now depends on the panel mode, and on whether the form was just rejected. A block
+   folded over a field the server complained about is a form reporting an error about a control
+   nobody can see. *@
+<details class="advanced-panel" open="@Model.Open">
+    <summary>
+        <span>
+            <i data-lucide="@Model.Icon" class="h-4 w-4"></i>@Model.Title
+        </span>
+        <i data-lucide="chevron-down" class="h-4 w-4"></i>
+    </summary>

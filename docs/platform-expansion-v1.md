@@ -199,6 +199,29 @@ the sidebar and their routes stay live, so a bookmark or a runbook link still wo
 - The migration writes Advanced onto every **existing** account rather than leaving it null.
   Otherwise they meet a reduced interface on upgrade, which reads as "features were removed".
 
+### Inside a page
+
+Simple mode **folds; it never removes**. Specialist blocks become a collapsed disclosure with a
+label saying what is inside, and every control stays in the markup one click away. A form that
+quietly drops fields between modes is one where the settings a person gets depend on a preference
+they set weeks ago, with nothing on screen saying so.
+
+`PanelSections.StartsOpen` makes the decision once, and the load-bearing half of it is not about the
+mode: **any rejected form opens every specialist block**. A block folded over a field the server just
+complained about is a form reporting an error about a control the person cannot see, and no amount of
+re-reading the page will show it to them. All blocks open rather than only the offending one —
+mapping a model-state key to the block that holds it is a mapping that goes stale the first time
+somebody moves a field, and being wrong means the error is invisible.
+
+Two places use it today: the application form's runtime and build settings, and the version picker on
+the deploy form. The database form was left alone — it has no specialist block worth folding, and
+inventing one to demonstrate the feature would make that page worse.
+
+Folding takes away the choice, not the fact: with the version picker collapsed, the page still states
+in plain text which version will install. A test asserts that, another asserts every advanced field
+is still rendered, and a third sweeps the views so no folding block can decide for itself whether to
+open.
+
 ---
 
 ## 4–5. AI as a service
@@ -364,14 +387,16 @@ boundary, but no run in this environment has spoken to Docker Hub.
 
 ## Testing
 
-1,543 tests. Mutation testing was run on every rule where a wrong answer is silent — version
+1,550 tests. Mutation testing was run on every rule where a wrong answer is silent — version
 selection and resolution, the ready-app catalogue, host architecture, database access policy,
 credential routing, failure classification, pricing, usage parsing, plan access, API keys and the
 administration controller, external access availability, grant scoping, the gateway's rate limits and
-registry discovery — for 158 mutants, all caught. The `scripts/mutate-*.py` files hold the last five
-runs: changes that compile, leave the
+registry discovery and Simple-mode folding — for 167 mutants, all caught. The `scripts/mutate-*.py`
+files hold the last six runs: changes that compile, leave the
 screen looking correct, and each break something nobody would notice.
 
 `UiBaselineTests` guards the approved interface: design tokens present in both themes, every view's
-tags balanced (an extra `</div>` closes the layout early and pushes content outside it), the retired
+tags balanced (an extra `</div>` closes the layout early and pushes content outside it; `<details>`
+joined the list when Simple mode started folding blocks, because an unbalanced disclosure swallows
+the rest of a form into a collapsed section and reads as "those settings were removed"), the retired
 colour ramp absent, and every filled accent control carrying an explicit text colour.
