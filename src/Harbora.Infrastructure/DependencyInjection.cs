@@ -179,6 +179,12 @@ public static class DependencyInjection
         services.AddHostedService(sp => sp.GetRequiredService<Templates.RegistryDiscoveryService>());
 
         // Outside access to a managed database, and the sweeper that makes "temporary" true.
+        // The gateway and the grant executor are what turn it from a contract into an open port:
+        // on a single-server install the control plane already talks to the same Docker daemon the
+        // databases run on, which was true the whole time this was documented as blocked on a node
+        // agent that has not shipped.
+        services.AddScoped<Services.DockerTcpGateway>();
+        services.AddScoped<Services.DatabaseGrantExecutor>();
         services.AddScoped<Services.DatabaseAccessService>();
         services.AddHostedService<Services.DatabaseAccessSweeper>();
 

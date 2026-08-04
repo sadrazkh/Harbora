@@ -110,6 +110,38 @@ public class ExternalAccessAvailabilityTests
     }
 
     [Fact]
+    public void A_simulated_agent_no_longer_blocks_an_install_that_can_open_the_port_itself()
+    {
+        // The node agent was blocking a feature that never needed it here: on a single-server
+        // install the control plane already talks to the same Docker daemon the databases run on.
+        ExternalAccessAvailability.Refuse(Fake(), Database(), canOpenLocally: true).Should().BeNull();
+    }
+
+    [Fact]
+    public void A_stopped_database_is_still_refused_even_when_the_port_could_be_opened()
+    {
+        ExternalAccessAvailability.Refuse(Fake(), Database(ServiceStatus.Stopped), canOpenLocally: true)
+            .Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData(ManagedServiceType.Redis)]
+    [InlineData(ManagedServiceType.MongoDb)]
+    public void An_engine_with_no_way_to_make_a_login_is_refused_before_anything_else(ManagedServiceType type)
+    {
+        // Checked first and regardless of everything else. Opening a port onto an engine Harbora
+        // cannot make a login for would publish it with only the platform's own admin credentials
+        // behind it.
+        var database = Database();
+        database.Type = type;
+
+        var refusal = ExternalAccessAvailability.Refuse(Fake(), database, canOpenLocally: true);
+
+        refusal.Should().NotBeNull();
+        refusal!.Reason.Should().Contain(type.ToString());
+    }
+
+    [Fact]
     public void Every_refusal_says_why_in_both_languages()
     {
         // A reason nobody can read is the same as no reason: the person retries, and retries.

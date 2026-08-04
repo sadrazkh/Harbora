@@ -18,9 +18,20 @@ public sealed record AccessUnavailable(string Reason, string ReasonFa);
 /// </summary>
 public static class ExternalAccessAvailability
 {
-    public static AccessUnavailable? Refuse(INodeAgentClient node, ManagedService? service)
+    /// <param name="canOpenLocally">
+    /// True when Harbora can open the port itself, which it can on a single-server install. The
+    /// node agent is only needed for the multi-server case, and for a long time its absence blocked
+    /// a feature that never needed it here.
+    /// </param>
+    public static AccessUnavailable? Refuse(
+        INodeAgentClient node, ManagedService? service, bool canOpenLocally = false)
     {
-        if (node.IsSimulated)
+        if (service is not null && !DatabaseGrantSql.Supports(service.Type))
+            return new AccessUnavailable(
+                DatabaseGrantSql.UnsupportedReason(service.Type),
+                $"دسترسی خارجی برای {service.Type} هنوز ساخته نشده. فعلاً PostgreSQL، MySQL و MariaDB.");
+
+        if (!canOpenLocally && node.IsSimulated)
             return new AccessUnavailable(
                 "External access needs the Harbora node agent, which is not configured on this installation. " +
                 "Nothing would be reachable, so nothing is issued.",

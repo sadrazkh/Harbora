@@ -42,7 +42,7 @@ public sealed partial class DatabasesController
 
         // Asked again here and not only when the page was drawn: the database may have stopped, or
         // the agent may have gone away, in the minutes since somebody opened the form.
-        if (ExternalAccessAvailability.Refuse(node, service) is { } unavailable)
+        if (ExternalAccessAvailability.Refuse(node, service, databaseAccess.CanOpenLocally) is { } unavailable)
             return View("Access", await BuildAccessPageAsync(id, ct, error: IsFa ? unavailable.ReasonFa : unavailable.Reason));
 
         var result = await databaseAccess.IssueAsync(
@@ -108,7 +108,7 @@ public sealed partial class DatabasesController
         if (grant is null) return NotFound();
 
         var service = await FindDatabaseAsync(id, ct);
-        if (ExternalAccessAvailability.Refuse(node, service) is { } unavailable)
+        if (ExternalAccessAvailability.Refuse(node, service, databaseAccess.CanOpenLocally) is { } unavailable)
             return View("Access", await BuildAccessPageAsync(id, ct, error: IsFa ? unavailable.ReasonFa : unavailable.Reason));
 
         var (password, error) = await databaseAccess.RotateAsync(grant, User.Identity?.Name, ct);
@@ -153,7 +153,7 @@ public sealed partial class DatabasesController
         return new DatabaseAccessPageViewModel
         {
             Database = service,
-            Unavailable = ExternalAccessAvailability.Refuse(node, service),
+            Unavailable = ExternalAccessAvailability.Refuse(node, service, databaseAccess.CanOpenLocally),
 
             // Closed grants stay listed. "Who opened this database in March, and for how long" is a
             // question that gets asked, and a list that only shows what is open cannot answer it.

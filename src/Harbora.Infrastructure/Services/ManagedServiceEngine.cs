@@ -93,6 +93,21 @@ public sealed class ManagedServiceEngine(
     }
 
     /// <summary>The private network for this resource's environment, or null while it has none.</summary>
+    /// <summary>
+    /// The network a service's container is actually on.
+    ///
+    /// Public so anything that has to sit beside a database — the external-access gateway — joins
+    /// the same one by asking rather than by rebuilding the same name from the same parts. Two
+    /// copies of that would agree until the day the naming changes, and then a gateway would come
+    /// up on a network with no database on it and time out with nothing to explain why.
+    /// </summary>
+    public async Task<string> NetworkForAsync(Domain.Services.ManagedService svc, CancellationToken ct)
+    {
+        var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
+        var environmentNetwork = await ResolveEnvironmentNetworkAsync(svc, ct);
+        return Networking.NetworkPlan.Primary(environmentNetwork, _opt.WorkspaceNetwork(wsSlug));
+    }
+
     private async Task<string?> ResolveEnvironmentNetworkAsync(Domain.Services.ManagedService svc, CancellationToken ct)
     {
         if (svc.EnvironmentId is not { } environmentId) return null;

@@ -28,8 +28,22 @@ public sealed class DatabaseAccessService(
     HarboraDbContext db,
     INodeAgentClient node,
     ISystemClock clock,
-    ILogger<DatabaseAccessService> logger)
+    ILogger<DatabaseAccessService> logger,
+    DockerTcpGateway? gateway = null,
+    DatabaseGrantExecutor? grants = null,
+    ManagedServiceEngine? services = null,
+    ISecretProtector? protector = null)
 {
+    /// <summary>
+    /// Whether this installation can really open a database, rather than simulate it.
+    ///
+    /// True on a single-server install, where the control plane talks to the same Docker daemon the
+    /// databases run on. The node contract stays for the multi-server case that has not shipped —
+    /// what changed is that the single-server case no longer pretends to need it.
+    /// </summary>
+    public bool CanOpenLocally => gateway is not null && grants is not null
+                                  && services is not null && protector is not null;
+
     /// <summary>
     /// Issues access. The password is returned here and never again — it is hashed before the row
     /// is saved.
@@ -71,10 +85,16 @@ public sealed class DatabaseAccessService(
         await AuditAsync(grant, "created", userEmail, null, ct);
         await db.SaveChangesAsync(ct);
 
-        // The login first: a tunnel to a database that will not accept the credential is worse than
-        // no tunnel, because it looks like it works until the client authenticates.
-        var made = await node.CreateDatabaseGrantAsync(
-            service.ServerId, service.ContainerName, credential.Username, credential.Password, ct);
+        // The private network the database is really on, asked for rather than rebuilt: the gateway
+        // has to land on the same one or it comes up beside nothing and times out.
+        var network = CanOpenLocally ? await services!.NetworkForAsync(service, ct) : string.Empty;
+
+        // The login first. An endpoint onto a database that will not accept the credential is worse
+        // than no endpoint: it looks like it works until the client authenticates.
+        var made = CanOpenLocally
+            ? await grants!.CreateAsync(service, network, credential.Username, credential.Password, ct)
+            : ToLocal(await node.CreateDatabaseGrantAsync(
+                service.ServerId, service.ContainerName, credential.Username, credential.Password, ct));
 
         if (!made.Ok)
         {
@@ -84,29 +104,51 @@ public sealed class DatabaseAccessService(
             return new AccessResult(null, made.Error ?? "The database refused to create the login.");
         }
 
-        var tunnel = await node.CreateTcpTunnelAsync(
-            service.ServerId, service.ContainerName, service.InternalPort, ct);
+        string tunnelId, gatewayHost;
+        int gatewayPort;
 
-        if (tunnel is null)
+        if (CanOpenLocally)
         {
-            // Undo the login rather than leaving an account nobody can reach or account for.
-            await node.RevokeDatabaseGrantAsync(service.ServerId, service.ContainerName, credential.Username, ct);
-            grant.Status = DatabaseAccessStatus.Failed;
-            await AuditAsync(grant, "failed", userEmail, "No tunnel could be opened.", ct);
-            await db.SaveChangesAsync(ct);
-            return new AccessResult(null, "A connection endpoint could not be reserved. Nothing was left open.");
+            var (endpoint, error) = await gateway!.OpenAsync(grant, service, network, ct);
+            if (endpoint is null)
+            {
+                // Undo the login rather than leaving an account nobody can reach or account for.
+                await grants!.DropAsync(service, network, credential.Username, ct);
+                grant.Status = DatabaseAccessStatus.Failed;
+                await AuditAsync(grant, "failed", userEmail, error, ct);
+                await db.SaveChangesAsync(ct);
+                return new AccessResult(null, error ?? "No connection endpoint could be opened.");
+            }
+
+            (tunnelId, gatewayHost, gatewayPort) = (endpoint.ContainerName, endpoint.Host, endpoint.Port);
+        }
+        else
+        {
+            var tunnel = await node.CreateTcpTunnelAsync(
+                service.ServerId, service.ContainerName, service.InternalPort, ct);
+
+            if (tunnel is null)
+            {
+                await node.RevokeDatabaseGrantAsync(service.ServerId, service.ContainerName, credential.Username, ct);
+                grant.Status = DatabaseAccessStatus.Failed;
+                await AuditAsync(grant, "failed", userEmail, "No tunnel could be opened.", ct);
+                await db.SaveChangesAsync(ct);
+                return new AccessResult(null, "A connection endpoint could not be reserved. Nothing was left open.");
+            }
+
+            (tunnelId, gatewayHost, gatewayPort) = (tunnel.TunnelId, tunnel.GatewayHost, tunnel.GatewayPort);
         }
 
-        grant.TunnelId = tunnel.TunnelId;
-        grant.GatewayHost = tunnel.GatewayHost;
-        grant.GatewayPort = tunnel.GatewayPort;
+        grant.TunnelId = tunnelId;
+        grant.GatewayHost = gatewayHost;
+        grant.GatewayPort = gatewayPort;
         grant.Status = DatabaseAccessStatus.Active;
 
         await AuditAsync(grant, "activated", userEmail, null, ct);
         await db.SaveChangesAsync(ct);
 
         var connection = DatabaseCredentialManager.ConnectionString(
-            service.Type.ToString(), tunnel.GatewayHost, tunnel.GatewayPort,
+            service.Type.ToString(), gatewayHost, gatewayPort,
             credential.Username, credential.Password, service.DatabaseName);
 
         return new AccessResult(new IssuedAccess(grant, credential.Password, connection), null);
@@ -124,10 +166,29 @@ public sealed class DatabaseAccessService(
 
         if (service is not null)
         {
-            if (grant.TunnelId is { } tunnelId)
-                await node.RemoveTcpTunnelAsync(service.ServerId, tunnelId, ct);
+            if (CanOpenLocally)
+            {
+                // The endpoint goes first. While the login still exists a client that is already
+                // connected keeps working, which is the right order: closing the door before taking
+                // the key back never leaves a usable key on an open door.
+                await gateway!.CloseAsync(grant, ct);
 
-            await node.RevokeDatabaseGrantAsync(service.ServerId, service.ContainerName, grant.Username, ct);
+                var network = await services!.NetworkForAsync(service, ct);
+                await grants!.DropAsync(service, network, grant.Username, ct);
+            }
+            else
+            {
+                if (grant.TunnelId is { } tunnelId)
+                    await node.RemoveTcpTunnelAsync(service.ServerId, tunnelId, ct);
+
+                await node.RevokeDatabaseGrantAsync(service.ServerId, service.ContainerName, grant.Username, ct);
+            }
+        }
+        else if (CanOpenLocally)
+        {
+            // The database is gone, so there is no login left to remove — but the gateway container
+            // is ours and is still holding a published port open.
+            await gateway!.CloseAsync(grant, ct);
         }
         else
         {
@@ -198,6 +259,9 @@ public sealed class DatabaseAccessService(
 
         return candidates.Where(g => DatabaseAccessPolicy.HasExpired(g, now)).ToList();
     }
+
+    /// <summary>Bridges the node contract's result shape onto the local one.</summary>
+    private static (bool Ok, string? Error) ToLocal(NodeResult result) => (result.Ok, result.Error);
 
     private async Task AuditAsync(
         DatabaseAccessGrant grant, string action, string? actor, string? detail, CancellationToken ct)
