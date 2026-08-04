@@ -24,6 +24,7 @@ namespace Harbora.Web.Controllers;
 [Route("v1")]
 public sealed class AiGatewayController(
     AiGatewayService gateway,
+    AiRateLimiter limiter,
     IEnumerable<IAiProviderAdapter> adapters,
     ILogger<AiGatewayController> logger) : ControllerBase
 {
@@ -78,6 +79,22 @@ public sealed class AiGatewayController(
         var caller = await AuthenticateAsync(ct);
         if (caller is null) return Unauthorized(Error("invalid_api_key", "Invalid API key."));
 
+        // Before the body is read, not after. A caller who is already over their limit should cost
+        // us nothing more than a lookup — reading two megabytes first is work their own flooding
+        // paid for.
+        var (rate, slot) = limiter.TryEnter(caller.Key.WorkspaceId, caller.Plan);
+        if (slot is null)
+        {
+            if (rate.RetryAfterSeconds > 0)
+                Response.Headers.RetryAfter = rate.RetryAfterSeconds.ToString();
+
+            return StatusCode(rate.Refusal!.StatusCode, Error(rate.Refusal.Code, rate.Refusal.Message));
+        }
+
+        // Held for the whole request, streaming included: the concurrency limit means requests in
+        // progress, and releasing at the first return would count only the ones that failed fast.
+        using var _ = slot;
+
         var body = await ReadBodyAsync(ct);
         if (body is null)
             return StatusCode(413, Error("request_too_large", "The request body is too large."));
@@ -112,9 +129,9 @@ public sealed class AiGatewayController(
             if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
 
             if (streaming)
-                return await StreamAsync(routed, body, endpoint, correlationId, ct);
+                return await StreamAsync(routed, body, endpoint, correlationId, slot, ct);
 
-            var outcome = await SendAsync(routed, body, endpoint, correlationId, ct);
+            var outcome = await SendAsync(routed, body, endpoint, correlationId, slot, ct);
             if (outcome.Handled) return outcome.Result!;
 
             lastRefusal = new AiRefusal(502, "upstream_failed", "The AI provider could not be reached.");
@@ -126,7 +143,8 @@ public sealed class AiGatewayController(
 
     /// <summary>Sends a plain request, meters it, and says whether the answer is final.</summary>
     private async Task<(bool Handled, IActionResult? Result)> SendAsync(
-        AiRoutedRequest routed, string body, string endpoint, string correlationId, CancellationToken ct)
+        AiRoutedRequest routed, string body, string endpoint, string correlationId,
+        AiRateSlot slot, CancellationToken ct)
     {
         var adapter = AdapterFor(routed);
         if (adapter is null) return (true, StatusCode(503, Error("no_adapter", "No adapter for that provider.")));
@@ -144,6 +162,10 @@ public sealed class AiGatewayController(
             AiCredentialRouter.NoteSuccess(routed.Credential, DateTimeOffset.UtcNow);
             await gateway.MeterAsync(routed, result.InputTokens, result.OutputTokens, result.CachedInputTokens,
                 200, (int)stopwatch.ElapsedMilliseconds, false, false, correlationId, null, ct);
+
+            // Against the event counted on the way in, so the tokens-per-minute window sees what was
+            // actually spent. Attached rather than added: adding would count the request twice.
+            slot.Record(result.InputTokens + result.OutputTokens);
 
             return (true, Content(result.Body ?? "{}", "application/json"));
         }
@@ -174,7 +196,8 @@ public sealed class AiGatewayController(
     /// Not recording those is a real cost with no record against it.
     /// </summary>
     private async Task<IActionResult> StreamAsync(
-        AiRoutedRequest routed, string body, string endpoint, string correlationId, CancellationToken ct)
+        AiRoutedRequest routed, string body, string endpoint, string correlationId,
+        AiRateSlot slot, CancellationToken ct)
     {
         var adapter = AdapterFor(routed);
         if (adapter is null) return StatusCode(503, Error("no_adapter", "No adapter for that provider."));
@@ -239,6 +262,10 @@ public sealed class AiGatewayController(
                 disconnected ? 499 : 200, (int)stopwatch.ElapsedMilliseconds,
                 streaming: true, clientDisconnected: disconnected,
                 correlationId, disconnected ? "client disconnected" : null, CancellationToken.None);
+
+            // Recorded here too, including for a customer who disconnected: those tokens were
+            // produced and billed to us, so they count against the minute like any others.
+            slot.Record(input + output);
         }
 
         return new EmptyResult();

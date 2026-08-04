@@ -139,6 +139,11 @@ public static class DependencyInjection
         services.AddScoped<Ai.AiGatewayService>();
         services.AddScoped<Ai.IAiProviderAdapter, Ai.OpenRouterProviderAdapter>();
 
+        // A singleton, because it is the counter. Scoped, every request would get a fresh one and
+        // every limit would be judged against a history of exactly one request — a rate limiter that
+        // is present, tested, configured and enforces nothing.
+        services.AddSingleton<Ai.AiRateLimiter>();
+
         // Outside access to a managed database, and the sweeper that makes "temporary" true.
         services.AddScoped<Services.DatabaseAccessService>();
         services.AddHostedService<Services.DatabaseAccessSweeper>();

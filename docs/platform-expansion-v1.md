@@ -204,6 +204,43 @@ credential burns all of them and returns the same error more slowly.
 Nothing already streamed to the customer or already charged for is retried — they have seen part of
 an answer, and a second attempt duplicates or contradicts it.
 
+### Rate limits
+
+`RequestsPerMinute`, `TokensPerMinute`, `RequestsPerDay` and `ConcurrentRequests` were stored, priced
+and shown on the plan page for two phases while nothing enforced them. A limit that exists everywhere
+except in the code path is worse than no limit: the page promises sixty requests a minute, the
+customer sends six thousand, and the operator finds out from the provider invoice.
+
+**Sliding windows, not fixed ones.** A fixed minute lets a caller send the whole allowance at
+11:59:59 and the whole next allowance at 12:00:00 — twice the limit, one second apart — and it passes
+every test written against a fixed window. A test sends the burst one second before the boundary
+specifically to catch that.
+
+**Longest window first.** A caller who has exhausted both the day and the minute and is told to retry
+in sixty seconds will retry in sixty seconds, fail, and read the gateway as broken rather than as
+limited. Concurrency is checked last and reports one second, because it clears as soon as a request
+in progress finishes.
+
+**A limit of zero blocks.** An administrator who clears the field breaks their customers, who say so
+within the hour; one who accidentally removes every limit is told by the provider a month later. The
+token limit is the exception — the request limits already bound it, and a plan meaning to leave it
+off would otherwise be unusable.
+
+**Counted on the way in.** A limiter that counts finished requests lets a caller open a thousand at
+once: none has finished, so none is counted. Tokens are attached to that same event afterwards, not
+added as a second one, since adding would count every request twice and halve the real allowance.
+
+Every refusal is a 429 with `Retry-After`, never 402 or 403: client libraries retry a 429 with
+backoff and give up on the others, and a limit that reads as "you are not entitled" is escalated as a
+billing problem.
+
+**In memory, per process.** Stated plainly rather than hidden behind an abstraction: run two control
+planes and each enforces the limits separately, so a tenant can send twice the allowance. Harbora
+runs one today, and only `AiRateLimiter` changes when that stops being true. It does not replace the
+period quotas — those are durable and survive a restart; these do not, and a restart forgives the
+last minute of traffic, which is the right trade for a limit whose job is smoothing bursts rather
+than counting money.
+
 ### Metering and privacy
 
 `AiUsageRecord` holds **no prompt and no response**. Storing them would make it the most sensitive
@@ -282,19 +319,15 @@ Production database tunnelling is not real until the node agent ships.
 **The gateway has not been exercised against a real provider.** Without a provider key it is testable
 only up to the network boundary.
 
-**Rate limiting per plan is defined but not enforced at the edge.** `RequestsPerMinute` and
-`TokensPerMinute` are stored and shown; the gateway enforces model access, output ceilings and
-period quotas, but per-minute throttling needs a shared counter and is not wired.
-
 ---
 
 ## Testing
 
-1,446 tests. Mutation testing was run on every rule where a wrong answer is silent — version
+1,475 tests. Mutation testing was run on every rule where a wrong answer is silent — version
 selection and resolution, the ready-app catalogue, host architecture, database access policy,
 credential routing, failure classification, pricing, usage parsing, plan access, API keys and the
-administration controller, external access availability and grant scoping — for 120 mutants, all
-caught. The `scripts/mutate-*.py` files hold the last three runs: changes that compile, leave the
+administration controller, external access availability, grant scoping and the gateway's rate limits
+— for 139 mutants, all caught. The `scripts/mutate-*.py` files hold the last four runs: changes that compile, leave the
 screen looking correct, and each break something nobody would notice.
 
 `UiBaselineTests` guards the approved interface: design tokens present in both themes, every view's
