@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Threading.RateLimiting;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
@@ -42,6 +42,7 @@ builder.Services.AddHarboraInfrastructure(builder.Configuration);
 
 // The SignalR-backed log stream is the host's implementation of the Application port.
 builder.Services.AddScoped<IDeploymentLogStream, SignalRDeploymentLogStream>();
+builder.Services.AddScoped<Harbora.Web.Infrastructure.PanelModeProvider>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUser, HttpCurrentUser>();
 // Drives the DbContext's global query filters. Registered here (not in Infrastructure) because only

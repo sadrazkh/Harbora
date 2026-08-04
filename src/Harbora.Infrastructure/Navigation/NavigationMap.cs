@@ -1,11 +1,18 @@
 ﻿using Harbora.Domain.Authorization;
+using Harbora.Domain.Identity;
 
 namespace Harbora.Infrastructure.Navigation;
 
 /// <summary>One destination in the sidebar.</summary>
 /// <param name="Key">Stable identifier, also the translation key.</param>
 /// <param name="Capability">Null when reading the section needs no action capability.</param>
-public sealed record NavItem(string Key, string Controller, string Action, string Icon, string? Capability = null);
+/// <param name="Advanced">
+/// True for a destination that only belongs in Advanced mode. Simple mode hides it; it is never
+/// removed, and the route behind it keeps working for anyone who has the link.
+/// </param>
+public sealed record NavItem(
+    string Key, string Controller, string Action, string Icon,
+    string? Capability = null, bool Advanced = false);
 
 /// <summary>A labelled run of destinations.</summary>
 public sealed record NavGroup(string Key, IReadOnlyList<NavItem> Items);
@@ -30,20 +37,20 @@ public static class NavigationMap
             new("deployments", "Deployments", "Index", "rocket")
         ]),
         new("connect", [
-            new("networks", "Networks", "Index", "network"),
+            new("networks", "Networks", "Index", "network", Advanced: true),
             new("domains", "Domains", "Index", "globe"),
-            new("routing", "Routes", "Index", "route", Capabilities.RoutesManage)
+            new("routing", "Routes", "Index", "route", Capabilities.RoutesManage, Advanced: true)
         ]),
         new("data", [
             new("backups", "Backups", "Index", "archive")
         ]),
         new("insight", [
             new("monitoring", "Monitoring", "Index", "activity"),
-            new("audit", "Audit", "Index", "scroll-text")
+            new("audit", "Audit", "Index", "scroll-text", Advanced: true)
         ]),
         new("build", [
             new("templates", "Templates", "Index", "shapes"),
-            new("git", "Git", "Index", "git-branch", Capabilities.GitManage)
+            new("git", "Git", "Index", "git-branch", Capabilities.GitManage, Advanced: true)
         ]),
         new("platform", [
             new("users", "Users", "Index", "users", Capabilities.TenantsManage),
@@ -68,10 +75,24 @@ public static class NavigationMap
     /// </summary>
     public static IReadOnlyList<NavGroup> VisibleTo(
         IReadOnlyList<NavGroup> groups, Func<string, bool> hasCapability) =>
+        VisibleTo(groups, hasCapability, PanelMode.Advanced);
+
+    /// <summary>
+    /// The map for one caller in one mode.
+    ///
+    /// Simple hides the specialist destinations; it does not take them away. The routes stay live,
+    /// so a bookmark, a link in a runbook or a support instruction all still work — and the person
+    /// can switch to Advanced without having lost anything in the meantime.
+    /// </summary>
+    public static IReadOnlyList<NavGroup> VisibleTo(
+        IReadOnlyList<NavGroup> groups, Func<string, bool> hasCapability, PanelMode mode) =>
         groups
             .Select(group => group with
             {
-                Items = group.Items.Where(i => i.Capability is null || hasCapability(i.Capability)).ToList()
+                Items = group.Items
+                    .Where(i => i.Capability is null || hasCapability(i.Capability))
+                    .Where(i => mode == PanelMode.Advanced || !i.Advanced)
+                    .ToList()
             })
             .Where(group => group.Items.Count > 0)
             .ToList();

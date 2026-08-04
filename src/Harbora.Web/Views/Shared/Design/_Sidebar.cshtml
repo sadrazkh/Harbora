@@ -1,8 +1,12 @@
 ﻿@using Harbora.Infrastructure.Navigation
+@inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @using Harbora.Web.Infrastructure
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
-    var groups = NavigationMap.VisibleTo(NavigationCapabilities.For(User));
+    // Simple hides the specialist destinations; their routes stay live, so a bookmark or a link in
+    // a runbook still works for somebody in Simple mode.
+    var panelMode = await PanelModes.GetAsync();
+    var groups = NavigationMap.VisibleTo(NavigationMap.All, NavigationCapabilities.For(User), panelMode);
     var currentController = (string?)ViewContext.RouteData.Values["controller"];
 
     string GroupLabel(string key) => (key, isFa) switch
