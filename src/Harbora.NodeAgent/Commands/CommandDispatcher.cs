@@ -49,9 +49,11 @@ public sealed class CommandDispatcher
         JsonFileStore<NodeState> state,
         IOptions<NodeAgentOptions> options,
         TimeProvider clock,
-        ILogger<CommandDispatcher> log)
+        ILogger<CommandDispatcher> log,
+        ImplementedCommands? implemented = null)
     {
         _handlers = handlers.ToDictionary(h => h.Command, StringComparer.Ordinal);
+        implemented?.Set(_handlers.Keys);
         _ledger = ledger;
         _audit = audit;
         _state = state;

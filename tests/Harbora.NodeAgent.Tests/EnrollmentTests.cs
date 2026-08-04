@@ -39,7 +39,7 @@ public sealed class EnrollmentTests : IDisposable
 
     private EnrollmentService Service() => new(
         _agent.Wrapped, _client, _identities, _state,
-        new InventoryCollector(_agent.Wrapped, _host, _runtime, TestFactories.Log<InventoryCollector>()),
+        TestFactories.Inventory(_agent, _host, _runtime),
         _host, _clock, TestFactories.Log<EnrollmentService>());
 
     [Fact]

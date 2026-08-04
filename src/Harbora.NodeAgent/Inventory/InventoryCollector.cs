@@ -1,3 +1,4 @@
+using Harbora.NodeAgent.Commands;
 using Harbora.NodeAgent.Contracts;
 using Harbora.NodeAgent.Runtime;
 using Microsoft.Extensions.Logging;
@@ -13,6 +14,7 @@ public sealed class InventoryCollector(
     IOptions<NodeAgentOptions> options,
     IHostFacts host,
     IContainerRuntime runtime,
+    ImplementedCommands implemented,
     ILogger<InventoryCollector> log)
 {
     private readonly NodeAgentOptions _options = options.Value;
@@ -56,7 +58,9 @@ public sealed class InventoryCollector(
     {
         AgentVersion = AgentVersion.Current,
         SupportedProtocolVersions = NodeContract.SupportedProtocolVersions,
-        SupportedCommands = NodeCommandCatalog.All.ToList(),
+        // What is actually wired up, not what the contract names. A control plane that sends a verb
+        // this build does not implement gets a refusal, and telling it in advance is cheaper.
+        SupportedCommands = implemented.Names,
         SupportedDatabaseEngines = DatabaseEngines.All,
         SupportsComposeStacks = true,
         SupportsRollingUpdate = true,

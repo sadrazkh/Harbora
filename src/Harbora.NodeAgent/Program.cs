@@ -2,6 +2,8 @@ using Docker.DotNet;
 using Harbora.NodeAgent;
 using Harbora.NodeAgent.Auditing;
 using Harbora.NodeAgent.Commands;
+using Harbora.NodeAgent.Commands.Handlers;
+using Harbora.NodeAgent.Contracts;
 using Harbora.NodeAgent.Enrollment;
 using Harbora.NodeAgent.Hosting;
 using Harbora.NodeAgent.Identity;
@@ -48,6 +50,8 @@ builder.Services.AddSingleton(sp => new NodeIdentityStore(Options(sp).IdentityDi
 builder.Services.AddSingleton(sp => new JsonFileStore<NodeState>(Path.Combine(Options(sp).StateDirectory, "node.json")));
 builder.Services.AddSingleton(sp => new JsonFileStore<OutboxState>(Path.Combine(Options(sp).StateDirectory, "outbox.json")));
 builder.Services.AddSingleton(sp => new JsonFileStore<CommandLedgerState>(Path.Combine(Options(sp).StateDirectory, "commands.json")));
+builder.Services.AddSingleton(sp => new JsonFileStore<WorkloadRegistryState>(Path.Combine(Options(sp).StateDirectory, "workloads.json")));
+builder.Services.AddSingleton(sp => new JsonFileStore<RouteRegistryState>(Path.Combine(Options(sp).StateDirectory, "routes.json")));
 
 // --- container runtime ---
 
@@ -57,6 +61,16 @@ builder.Services.AddSingleton<IDockerClient>(sp =>
     return new DockerClientConfiguration(new Uri(host)).CreateClient();
 });
 builder.Services.AddSingleton<IContainerRuntime, DockerContainerRuntime>();
+builder.Services.AddSingleton<WorkloadRegistry>();
+builder.Services.AddSingleton<RouteRegistry>();
+builder.Services.AddSingleton(sp => new PortAllocator(Options(sp).Ports));
+builder.Services.AddSingleton(sp => new HealthProbe(
+    sp.GetRequiredService<IContainerRuntime>(),
+    sp.GetRequiredService<TimeProvider>(),
+    sp.GetRequiredService<ILogger<HealthProbe>>()));
+builder.Services.AddSingleton<VolumeArchiver>();
+builder.Services.AddSingleton<WorkloadDeployer>();
+builder.Services.AddSingleton<StateReconciler>();
 
 // --- control plane ---
 
@@ -69,11 +83,46 @@ builder.Services.AddSingleton<ControlChannel>();
 
 // --- agent services ---
 
+builder.Services.AddSingleton<ImplementedCommands>();
 builder.Services.AddSingleton<InventoryCollector>();
 builder.Services.AddSingleton<NodeAuditLog>();
 builder.Services.AddSingleton<NodeMetrics>();
 builder.Services.AddSingleton<CommandLedger>();
 builder.Services.AddSingleton<CommandDispatcher>();
+builder.Services.AddSingleton<INodeEventPublisher, ChannelEventPublisher>();
+
+// --- command handlers: one registration per verb in the allowlist ---
+
+// Deploy and update are the same operation. Two verbs exist because the control plane's intent
+// differs, and an audit line that cannot tell them apart is worth less than one that can.
+builder.Services.AddSingleton<INodeCommandHandler>(sp => new DeployWorkloadHandler(
+    sp.GetRequiredService<WorkloadDeployer>(),
+    sp.GetRequiredService<JsonFileStore<NodeState>>(),
+    NodeCommands.DeployWorkload,
+    sp.GetRequiredService<ILogger<DeployWorkloadHandler>>()));
+
+builder.Services.AddSingleton<INodeCommandHandler>(sp => new DeployWorkloadHandler(
+    sp.GetRequiredService<WorkloadDeployer>(),
+    sp.GetRequiredService<JsonFileStore<NodeState>>(),
+    NodeCommands.UpdateWorkload,
+    sp.GetRequiredService<ILogger<DeployWorkloadHandler>>()));
+
+builder.Services.AddSingleton<INodeCommandHandler, StopWorkloadHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, StartWorkloadHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, RestartWorkloadHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, DeleteWorkloadHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, GetWorkloadStatusHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, StreamLogsHandler>();
+
+builder.Services.AddSingleton<INodeCommandHandler, CreateNetworkHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, DeleteNetworkHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, CreateVolumeHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, SnapshotVolumeHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, RestoreVolumeHandler>();
+
+builder.Services.AddSingleton<INodeCommandHandler, RegisterHttpRouteHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, RegisterTcpRouteHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, RemoveRouteHandler>();
 
 builder.Services.AddHostedService<NodeAgentWorker>();
 builder.Services.AddHostedService<MetricsEndpoint>();

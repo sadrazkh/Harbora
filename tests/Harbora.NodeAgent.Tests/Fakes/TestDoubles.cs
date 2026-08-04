@@ -261,8 +261,13 @@ public sealed class FakeContainerRuntime : IContainerRuntime
         return Task.CompletedTask;
     }
 
+    /// <summary>Lets a test model a registry that hands back something other than what was asked for.</summary>
+    public Func<string, string?>? DigestOverride { get; set; }
+
     public Task<string?> ResolveDigestAsync(string reference, CancellationToken ct)
     {
+        if (DigestOverride is { } substitute) return Task.FromResult(substitute(reference));
+
         var digest = reference.Contains('@') ? reference.Split('@')[1] : null;
         return Task.FromResult(PulledImages.Contains(reference) ? digest : null);
     }
@@ -372,9 +377,27 @@ public sealed class FakeContainerRuntime : IContainerRuntime
 
     public Task<bool> VolumeExistsAsync(string name, CancellationToken ct) => Task.FromResult(Volumes.Contains(name));
 
+    /// <summary>Checksum the fake's <c>sha256sum</c> helper reports. Tests override it to model corruption.</summary>
+    public string HelperChecksum { get; set; } = new('a', 64);
+
+    public long HelperSize { get; set; } = 4096;
+
     public Task<int> RunOneOffAsync(OneOffRequest request, IProgress<string>? log, CancellationToken ct)
     {
         OneOffs.Add(request);
+
+        // Model what busybox actually prints, so the archiver's parsing is exercised rather than
+        // stubbed past.
+        switch (request.Command.FirstOrDefault())
+        {
+            case "sha256sum":
+                log?.Report($"{HelperChecksum}  {request.Command.ElementAtOrDefault(1)}");
+                break;
+            case "stat":
+                log?.Report(HelperSize.ToString());
+                break;
+        }
+
         return Task.FromResult(OneOffExitCode);
     }
 

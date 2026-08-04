@@ -43,6 +43,18 @@ public sealed class NodeAgentOptions
     /// <summary>Container runtime endpoint. Defaults to the local Docker socket.</summary>
     public string DockerHost { get; set; } = "unix:///var/run/docker.sock";
 
+    /// <summary>
+    /// Image used for the agent's own helper containers — volume archiving, restores, checksums.
+    ///
+    /// <para>
+    /// The digest-pinning rule the policy enforces applies to tenant workloads; this is the agent's
+    /// own tooling and is pinned by the operator instead. Production installs should set a digest
+    /// here (<c>repo@sha256:…</c>); the tagged default exists so a fresh install works before anyone
+    /// has looked one up.
+    /// </para>
+    /// </summary>
+    public string MaintenanceImage { get; set; } = "docker.io/library/busybox:1.36";
+
     public int HeartbeatIntervalSeconds { get; set; } = 30;
 
     /// <summary>

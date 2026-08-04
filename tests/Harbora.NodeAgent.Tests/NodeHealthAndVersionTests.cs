@@ -190,8 +190,7 @@ public sealed class InventoryTests : IDisposable
     private readonly FakeHostFacts _host = new();
     private readonly FakeContainerRuntime _runtime = new();
 
-    private InventoryCollector Collector() =>
-        new(_agent.Wrapped, _host, _runtime, TestFactories.Log<InventoryCollector>());
+    private InventoryCollector Collector() => TestFactories.Inventory(_agent, _host, _runtime);
 
     [Fact]
     public async Task Inventory_carries_everything_section_six_asks_for()

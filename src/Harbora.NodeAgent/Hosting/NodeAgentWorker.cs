@@ -30,6 +30,7 @@ public sealed class NodeAgentWorker(
     ControlChannel channel,
     CommandDispatcher dispatcher,
     CommandLedger ledger,
+    StateReconciler reconciler,
     JsonFileStore<NodeState> stateStore,
     InventoryCollector inventory,
     IContainerRuntime runtime,
@@ -53,6 +54,10 @@ public sealed class NodeAgentWorker(
 
         _identity = await EnrollWithRetryAsync(stoppingToken);
         if (_identity is null) return;
+
+        // Before the first connection, not after: the control plane's first heartbeat should
+        // describe the node as it actually is, not as it was when the machine went down.
+        await ReconcileAsync(stoppingToken);
 
         var attempt = 0;
 
@@ -145,6 +150,27 @@ public sealed class NodeAgentWorker(
             AgentVersion.Current, host.OsName, host.OsVersion, host.Architecture, host.CpuCores);
 
         return true;
+    }
+
+    private async Task ReconcileAsync(CancellationToken ct)
+    {
+        try
+        {
+            var report = await reconciler.ReconcileAsync(ct);
+
+            if (report.Problems.Count > 0)
+                log.LogWarning("Reconciliation found {Count} problem(s): {Problems}",
+                    report.Problems.Count, string.Join("; ", report.Problems));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception e)
+        {
+            // A node that cannot reconcile is still a node that can take new work. Failing to start
+            // over it would turn a recoverable mess into an unreachable one.
+            log.LogError(e, "Reconciliation failed; continuing to connect.");
+        }
     }
 
     private async Task<NodeIdentity?> EnrollWithRetryAsync(CancellationToken ct)

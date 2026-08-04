@@ -36,7 +36,7 @@ public sealed class ControlChannelTests : IDisposable
         new InMemoryTransportFactory(_pair),
         _outbox,
         _state,
-        new InventoryCollector(_agent.Wrapped, new FakeHostFacts(), new FakeContainerRuntime(), TestFactories.Log<InventoryCollector>()),
+        TestFactories.Inventory(_agent, new FakeHostFacts(), new FakeContainerRuntime()),
         _clock,
         TestFactories.Log<ControlChannel>());
 

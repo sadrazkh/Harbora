@@ -19,6 +19,30 @@ public static class TestFactories
     public static NodeAuditLog Audit(TempAgent agent, SecretRedactor? redactor = null) =>
         new(agent.Wrapped, redactor ?? new SecretRedactor(), Log<NodeAuditLog>());
 
+    /// <summary>
+    /// An inventory collector whose capability report names <paramref name="commands"/>. Defaults to
+    /// the whole catalog, which is what the shipped agent registers.
+    /// </summary>
+    public static Harbora.NodeAgent.Inventory.InventoryCollector Inventory(
+        TempAgent agent,
+        Harbora.NodeAgent.Inventory.IHostFacts host,
+        Harbora.NodeAgent.Runtime.IContainerRuntime runtime,
+        IEnumerable<string>? commands = null)
+    {
+        var implemented = new ImplementedCommands();
+
+        // Set through the dispatcher, the same way the running agent does, so the test cannot
+        // report a capability the dispatcher would not honour.
+        _ = new CommandDispatcher(
+            (commands ?? NodeCommandCatalog.All).Select(c => (INodeCommandHandler)ScriptedHandler.Succeeding(c)),
+            Ledger(agent, new ManualClock(DateTimeOffset.UtcNow)), Audit(agent),
+            Store<NodeState>(agent, "node.json"), agent.Wrapped, TimeProvider.System,
+            Log<CommandDispatcher>(), implemented);
+
+        return new Harbora.NodeAgent.Inventory.InventoryCollector(
+            agent.Wrapped, host, runtime, implemented, Log<Harbora.NodeAgent.Inventory.InventoryCollector>());
+    }
+
     public static CommandLedger Ledger(TempAgent agent, ManualClock clock) =>
         new(Store<CommandLedgerState>(agent, "commands.json"), agent.Wrapped, clock, Log<CommandLedger>());
 

@@ -54,14 +54,35 @@ public sealed class CommandContext(
             Envelope.CorrelationId,
             ct);
 
-    /// <summary>An <see cref="IProgress{T}"/> that turns runtime output lines into progress messages.</summary>
+    /// <summary>
+    /// An <see cref="IProgress{T}"/> that turns runtime output lines into progress messages.
+    ///
+    /// <para>
+    /// Deliberately not <see cref="Progress{T}"/>: that type posts each callback to the captured
+    /// synchronisation context, so lines arrive in whatever order the thread pool gets to them.
+    /// Build and pull output is only useful in the order it was produced.
+    /// </para>
+    /// </summary>
     public IProgress<string> ProgressLines(string phase, CancellationToken ct) =>
-        new Progress<string>(line => _ = ReportAsync(phase, message: line, ct: ct));
+        new InlineProgress<string>(line => ReportAsync(phase, message: line, ct: ct).GetAwaiter().GetResult());
 
     public CommandResult Ok<T>(T result) => CommandResult.Ok(Envelope.CommandId, result, StartedAt);
 
     public CommandResult Fail(NodeErrorCode code, string message, bool retryable = false) =>
         CommandResult.Fail(Envelope.CommandId, NodeError.From(code, message, retryable), StartedAt);
+}
+
+/// <summary>
+/// An <see cref="IProgress{T}"/> that runs its callback on the reporting thread, in order.
+/// </summary>
+public sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+{
+    private readonly Lock _gate = new();
+
+    public void Report(T value)
+    {
+        lock (_gate) report(value);
+    }
 }
 
 /// <summary>
