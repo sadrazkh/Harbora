@@ -15,7 +15,9 @@ src/Harbora.NodeAgent.Contracts/**           its C# mirror, dependency-free
 src/Harbora.NodeAgent/**                     the agent
 src/Harbora.Domain/Nodes/**                  Node, tokens, command and event records
 src/Harbora.Infrastructure/Nodes/**          CA, enrollment, channel, commands, gateway
-src/Harbora.Web/Controllers/Api/Node*.cs     the node-facing and admin APIs
+src/Harbora.Web/Controllers/{Nodes,Api/Node*}.cs  the panel screens and the APIs
+src/Harbora.Web/Views/Nodes/**               the fleet list and one node's detail
+src/Harbora.Web/ViewModels/NodeViewModels.cs
 src/Harbora.Web/Infrastructure/Node*.cs      client-certificate resolution, channel endpoint
 src/Harbora.Data/Migrations/*_NodeAgentV1.*  four new tables
 tests/Harbora.NodeAgent.Tests/**             the agent's suite
@@ -90,6 +92,8 @@ Implemented:
 | `src/Harbora.Infrastructure/Harbora.Infrastructure.csproj` | One `<ProjectReference>` | Low |
 | `src/Harbora.Web/Program.cs` | `UseWebSockets`, one service registration, `MapNodeChannel()` | Low |
 | `tests/Harbora.Tests/Harbora.Tests.csproj` | One `<ProjectReference>` | Low |
+| `src/Harbora.Infrastructure/Navigation/NavigationMap.cs` | One sidebar item | Low |
+| `src/Harbora.Web/Views/Shared/Design/_Sidebar.cshtml` | One label pair | Low |
 | `deploy/traefik/dynamic/node-agent.yml` | New file | None |
 
 Still untouched: every view, the template catalog, the AI gateway, the CLI, the existing
@@ -149,7 +153,6 @@ thing either branch needs and doing it once is less work than doing it twice.
 | Metrics endpoint auth | Loopback-only, no authentication. Anyone already on the box can read it — which is the same population that can read the state directory | Fine as is; documented |
 | Multi-replica command routing | `NodeChannelRegistry` is per-instance, so a command only works on the replica holding that node's socket; others answer 503. Single-instance Harbora is unaffected | A shared routing layer, or pinning node routes to one replica |
 | Scheduling onto v1 nodes | The panel's `IServerEngineFactory` still resolves the inbound `Harbora.Agent` for remote servers. A v1 node is enrolled, connected and commandable, but the deployment pipeline does not yet place workloads on it | An `IDockerEngine` implementation over `NodeCommandService`, selected in `ServerEngineFactory` |
-| Node UI | The API is complete; there is no panel screen for it, because this branch does not touch views | `Harbora.Web/Views` |
 
 ---
 

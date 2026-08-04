@@ -1,0 +1,359 @@
+@model Harbora.Web.ViewModels.NodeDetailViewModel
+@using Harbora.Domain.Nodes
+@{
+    var node = Model.Node;
+    ViewData["Title"] = node.Name;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+
+    string Gb(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
+    string When(DateTimeOffset? at) => at?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? (isFa ? "—" : "—");
+
+    string StatusText() =>
+        node.Revoked ? (isFa ? "ابطال‌شده" : "Revoked")
+        : node.Draining ? (isFa ? "در حال تخلیه" : "Draining")
+        : node.Status switch
+        {
+            NodeStatus.Online => isFa ? "آنلاین" : "Online",
+            NodeStatus.Offline => isFa ? "آفلاین" : "Offline",
+            NodeStatus.Pending => isFa ? "در انتظار اتصال" : "Awaiting connection",
+            _ => isFa ? "نامشخص" : "Unknown"
+        };
+
+    string Duration(TimeSpan? span) =>
+        span is null ? "—"
+        : span.Value.TotalSeconds < 1 ? "<1s"
+        : span.Value.TotalSeconds < 60 ? $"{span.Value.TotalSeconds:0}s"
+        : $"{span.Value.TotalMinutes:0}m";
+}
+
+<div class="mb-6">
+    <a href="/nodes" class="text-xs text-ink-faint hover:text-accent-text">← @(isFa ? "نودها" : "Nodes")</a>
+
+    <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
+        <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+            node.Name,
+            $"{node.OsName} {Model.OsVersion} · {node.Architecture} · agent {node.AgentVersion}",
+            node.NodeId))" />
+
+        <div class="flex flex-col items-end gap-1.5">
+            <partial name="Design/_StatusPill" model="@(new StatusPillModel(StatusText(), node.Tone))" />
+            @if (node.Status == NodeStatus.Online && !node.Connected)
+            {
+                <span class="text-[11px] text-warn">
+                    @(isFa ? "به نمونه‌ی دیگری از پنل وصل است — فرمان‌ها از اینجا نمی‌روند" : "attached to another panel instance — commands cannot be sent from here")
+                </span>
+            }
+        </div>
+    </div>
+</div>
+
+@if (msg is not null)
+{
+    <div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>
+}
+@if (err is not null)
+{
+    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>
+}
+
+@if (node.Revoked)
+{
+    <div class="mb-6 rounded-xl border border-danger bg-danger-soft p-5">
+        <h2 class="text-[15px] font-semibold text-danger">@(isFa ? "اعتبارنامه ابطال شده است" : "Credential revoked")</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+            @(Model.RevokedReason is not null
+                ? (isFa ? $"دلیل: {Model.RevokedReason}." : $"Reason: {Model.RevokedReason}.")
+                : "")
+            @(isFa
+                ? "این نود نمی‌تواند تمدید کند و اتصال بعدی‌اش رد می‌شود. برای بازگرداندن، توکن ثبت تازه بسازید."
+                : "It cannot renew and its next connection is refused. Mint a fresh enrollment token to re-admit it.")
+        </p>
+    </div>
+}
+
+<div class="grid lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-6">
+        <section class="rounded-xl border border-line bg-surface shadow-panel">
+            <header class="px-5 py-3.5 border-b border-line">
+                <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "وضعیت" : "State")</h2>
+            </header>
+            <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3 p-5 text-sm">
+                <div><dt class="text-xs text-ink-faint">@(isFa ? "پردازنده" : "CPU")</dt>
+                     <dd>@(node.CpuCores > 0 ? $"{node.CpuCores} ×" : "—") · load @node.Load1.ToString("0.00")</dd></div>
+                <div><dt class="text-xs text-ink-faint">@(isFa ? "حافظه‌ی آزاد" : "Free memory")</dt>
+                     <dd>@Gb(node.FreeMemoryBytes) / @Gb(node.TotalMemoryBytes)</dd></div>
+                <div><dt class="text-xs text-ink-faint">@(isFa ? "دیسک آزاد" : "Free disk")</dt>
+                     <dd>@Gb(node.FreeDiskBytes) / @Gb(node.TotalDiskBytes)</dd></div>
+                <div><dt class="text-xs text-ink-faint">@(isFa ? "بارکاری" : "Workloads")</dt>
+                     <dd>@node.RunningWorkloads</dd></div>
+                <div><dt class="text-xs text-ink-faint">@(isFa ? "دسترسی دیتابیس" : "Database grants")</dt>
+                     <dd>@node.ActiveDatabaseGrants</dd></div>
+                <div><dt class="text-xs text-ink-faint">@(isFa ? "آخرین ضربان" : "Last heartbeat")</dt>
+                     <dd>@When(node.LastHeartbeatAt)</dd></div>
+                <div><dt class="text-xs text-ink-faint">@(isFa ? "هسته" : "Kernel")</dt>
+                     <dd class="font-mono text-xs" dir="ltr">@Model.KernelVersion</dd></div>
+                <div><dt class="text-xs text-ink-faint">@(isFa ? "زمان اجرا" : "Runtime")</dt>
+                     <dd>Docker @node.ContainerRuntimeVersion</dd></div>
+                <div><dt class="text-xs text-ink-faint">@(isFa ? "نشانی‌ها" : "Addresses")</dt>
+                     <dd class="font-mono text-xs" dir="ltr">@(node.IpAddresses.Count > 0 ? string.Join(", ", node.IpAddresses) : "—")</dd></div>
+            </dl>
+        </section>
+
+        <section class="rounded-xl border border-line bg-surface shadow-panel">
+            <header class="px-5 py-3.5 border-b border-line">
+                <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "فرمان‌های اخیر" : "Recent commands")</h2>
+            </header>
+
+            @if (Model.Commands.Count == 0)
+            {
+                <partial name="Design/_EmptyState" model="@(new EmptyStateModel("terminal",
+                    isFa ? "هنوز فرمانی به این نود فرستاده نشده است." : "No commands have been sent to this node yet."))" />
+            }
+            else
+            {
+                <ul class="divide-y divide-line">
+                    @foreach (var command in Model.Commands)
+                    {
+                        <li class="px-5 py-3">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <div class="min-w-0">
+                                    <span class="font-medium text-sm text-ink">@command.Command</span>
+                                    @if (command.IdempotentReplay)
+                                    {
+                                        @* The node recognised a repeat and replayed its stored answer
+                                           rather than doing the work again. Worth showing: it is the
+                                           difference between "ran twice" and "asked twice". *@
+                                        <span class="ms-2 rounded bg-surface-2 px-2 py-0.5 text-[11px] text-ink-faint">
+                                            @(isFa ? "پاسخ تکراری" : "replayed")
+                                        </span>
+                                    }
+                                    <div class="text-xs text-ink-faint">
+                                        @command.IssuedAt.LocalDateTime.ToString("MM-dd HH:mm:ss")
+                                        @if (command.Actor is not null)
+                                        {
+                                            <text> · @command.Actor</text>
+                                        }
+                                        @if (command.Duration is not null)
+                                        {
+                                            <text> · @Duration(command.Duration)</text>
+                                        }
+                                    </div>
+                                </div>
+                                <partial name="Design/_StatusPill" model="@(new StatusPillModel(command.Status.ToString(), command.Tone))" />
+                            </div>
+
+                            @if (command.ErrorMessage is not null)
+                            {
+                                <p class="mt-1.5 text-xs text-danger">
+                                    @if (command.ErrorCode is not null)
+                                    {
+                                        <span class="font-mono" dir="ltr">@command.ErrorCode</span><text> — </text>
+                                    }
+                                    @command.ErrorMessage
+                                </p>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+
+        <section class="rounded-xl border border-line bg-surface shadow-panel">
+            <header class="px-5 py-3.5 border-b border-line">
+                <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "رخدادهای نود" : "Node events")</h2>
+            </header>
+
+            @if (Model.Events.Count == 0)
+            {
+                <partial name="Design/_EmptyState" model="@(new EmptyStateModel("bell",
+                    isFa ? "این نود هنوز رخدادی گزارش نکرده است." : "This node has not reported any events."))" />
+            }
+            else
+            {
+                <ul class="divide-y divide-line">
+                    @foreach (var nodeEvent in Model.Events)
+                    {
+                        <li class="flex items-start justify-between gap-3 px-5 py-3">
+                            <div class="min-w-0">
+                                <div class="text-sm text-ink">@nodeEvent.Message</div>
+                                <div class="text-xs text-ink-faint font-mono" dir="ltr">
+                                    @nodeEvent.Kind
+                                    @if (nodeEvent.WorkloadId is not null)
+                                    {
+                                        <text> · @nodeEvent.WorkloadId</text>
+                                    }
+                                </div>
+                            </div>
+                            <div class="shrink-0 text-xs text-ink-faint">
+                                @nodeEvent.At.LocalDateTime.ToString("MM-dd HH:mm")
+                            </div>
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+    </div>
+
+    <div class="space-y-6">
+        <section class="rounded-xl border border-line bg-surface shadow-panel">
+            <header class="px-5 py-3.5 border-b border-line">
+                <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "اعتبارنامه" : "Credential")</h2>
+            </header>
+            <dl class="space-y-3 p-5 text-sm">
+                <div><dt class="text-xs text-ink-faint">@(isFa ? "ثبت‌شده در" : "Enrolled")</dt><dd>@When(Model.EnrolledAt)</dd></div>
+                <div><dt class="text-xs text-ink-faint">@(isFa ? "آخرین اتصال" : "Last connected")</dt><dd>@When(Model.LastConnectedAt)</dd></div>
+                <div>
+                    <dt class="text-xs text-ink-faint">@(isFa ? "انقضای گواهی" : "Certificate expires")</dt>
+                    <dd class="@(node.CertificateExpiringSoon(Model.Now) && !node.Revoked ? "text-warn" : "")">
+                        @When(node.CertificateNotAfter)
+                        <span class="text-ink-faint">(@(isFa ? "نسل" : "generation") @Model.CertificateGeneration)</span>
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-ink-faint">@(isFa ? "دامنه‌های مجاز" : "Granted scopes")</dt>
+                    <dd class="mt-1 flex flex-wrap gap-1">
+                        @foreach (var scope in Model.Scopes)
+                        {
+                            <span class="rounded bg-surface-2 px-2 py-0.5 text-[11px] font-mono" dir="ltr">@scope</span>
+                        }
+                    </dd>
+                </div>
+            </dl>
+        </section>
+
+        <section class="rounded-xl border border-line bg-surface shadow-panel">
+            <header class="px-5 py-3.5 border-b border-line">
+                <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "قابلیت‌ها" : "Capabilities")</h2>
+            </header>
+            <div class="p-5 space-y-3 text-sm">
+                <div>
+                    <div class="text-xs text-ink-faint mb-1">@(isFa ? "موتورهای دیتابیس" : "Database engines")</div>
+                    <div class="flex flex-wrap gap-1">
+                        @foreach (var engine in Model.DatabaseEngines)
+                        {
+                            <span class="rounded bg-surface-2 px-2 py-0.5 text-[11px]">@engine</span>
+                        }
+                        @if (Model.DatabaseEngines.Count == 0)
+                        {
+                            <span class="text-ink-faint">—</span>
+                        }
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-ink-faint">@(isFa ? "فرمان‌های پشتیبانی‌شده" : "Supported commands")</span>
+                    <span>@Model.SupportedCommands.Count</span>
+                </div>
+
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-ink-faint">@(isFa ? "حالت ممتاز" : "Privileged mode")</span>
+                    @if (Model.PrivilegedModeEnabled)
+                    {
+                        @* Worth flagging rather than ticking: it means the machine's owner turned on
+                           a switch that lets a node-admin command run a privileged container. *@
+                        <span class="text-warn">@(isFa ? "فعال" : "enabled")</span>
+                    }
+                    else
+                    {
+                        <span class="text-ink-faint">@(isFa ? "غیرفعال" : "off")</span>
+                    }
+                </div>
+
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-ink-faint">@(isFa ? "فضای کاری Docker" : "Docker workspace")</span>
+                    <span class="@(Model.IsolatedWorkspaceSupported ? "" : "text-ink-faint")">
+                        @(Model.IsolatedWorkspaceSupported ? (isFa ? "پشتیبانی می‌شود" : "supported") : (isFa ? "خیر" : "no"))
+                    </span>
+                </div>
+            </div>
+        </section>
+
+        @if (!node.Revoked)
+        {
+            <section class="rounded-xl border border-line bg-surface shadow-panel">
+                <header class="px-5 py-3.5 border-b border-line">
+                    <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "عملیات" : "Operations")</h2>
+                </header>
+                <div class="p-5 space-y-5">
+                    <form asp-controller="Nodes" asp-action="Drain" asp-route-nodeId="@node.NodeId" method="post" class="space-y-2">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="drain" value="@((!node.Draining).ToString().ToLowerInvariant())" />
+
+                        @if (node.Draining)
+                        {
+                            <p class="text-xs text-ink-muted">
+                                @(isFa
+                                    ? "این نود کار تازه نمی‌پذیرد. پرچم تخلیه با راه‌اندازی مجدد هم باقی می‌ماند."
+                                    : "This node takes no new work. The drain flag survives a restart.")
+                            </p>
+                            <button class="w-full rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                                @(isFa ? "بازگرداندن به سرویس" : "Put back in service")
+                            </button>
+                        }
+                        else
+                        {
+                            <label class="flex items-center gap-2 text-sm">
+                                <input type="checkbox" name="stopWorkloads" value="true" />
+                                @(isFa ? "بارکاری‌های در حال اجرا هم متوقف شوند" : "Also stop running workloads")
+                            </label>
+                            <input name="reason" placeholder="@(isFa ? "دلیل (اختیاری)" : "Reason (optional)")"
+                                   class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                            <button class="w-full rounded-lg bg-warn-soft hover:bg-warn-soft text-warn px-4 py-2 text-sm font-semibold">
+                                @(isFa ? "تخلیه‌ی نود" : "Drain node")
+                            </button>
+                        }
+                    </form>
+
+                    <form asp-controller="Nodes" asp-action="UpdateAgent" asp-route-nodeId="@node.NodeId" method="post" class="space-y-2 border-t border-line pt-4">
+                        @Html.AntiForgeryToken()
+                        <div class="text-xs text-ink-faint">@(isFa ? "به‌روزرسانی ایجنت" : "Update the agent")</div>
+
+                        <input name="targetVersion" placeholder="@(isFa ? "نسخه‌ی هدف، مثلاً 0.3.0" : "Target version, e.g. 0.3.0")"
+                               class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" dir="ltr" />
+                        <input name="downloadUrl" placeholder="https://…/harbora-node-agent-linux-x64"
+                               class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-xs font-mono" dir="ltr" />
+                        <input name="sha256" placeholder="sha256"
+                               class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-xs font-mono" dir="ltr" />
+
+                        <label class="flex items-center gap-2 text-sm">
+                            <input type="checkbox" name="drainFirst" value="true" checked />
+                            @(isFa ? "قبل از تعویض، تخلیه شود" : "Drain before the swap")
+                        </label>
+
+                        <p class="text-[11px] text-ink-faint">
+                            @(isFa
+                                ? "SHA-256 اجباری است: نود فایلی را که نتواند تأیید کند نصب نمی‌کند، و اگر نسخه‌ی بازگشتی اشتباه باشد خودش به نسخه‌ی قبلی برمی‌گردد."
+                                : "The SHA-256 is mandatory: the node will not install an artifact it cannot verify, and it rolls itself back if the version that comes back is wrong.")
+                        </p>
+
+                        <button class="w-full rounded-lg bg-surface-2 hover:bg-surface-2 text-ink px-4 py-2 text-sm font-semibold">
+                            @(isFa ? "به‌روزرسانی ایجنت" : "Update agent")
+                        </button>
+                    </form>
+
+                    <form asp-controller="Nodes" asp-action="Revoke" asp-route-nodeId="@node.NodeId" method="post"
+                          class="space-y-2 border-t border-line pt-4"
+                          onsubmit="return confirm('@(isFa ? "اعتبارنامه‌ی این نود ابطال شود؟ برای بازگرداندن باید توکن تازه بسازید." : "Revoke this node's credential? Re-admitting it needs a fresh token.")')">
+                        @Html.AntiForgeryToken()
+                        <div class="text-xs text-ink-faint">@(isFa ? "ابطال اعتبارنامه" : "Revoke the credential")</div>
+
+                        <input name="reason" placeholder="@(isFa ? "دلیل (اختیاری)" : "Reason (optional)")"
+                               class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+
+                        <p class="text-[11px] text-ink-faint">
+                            @(isFa
+                                ? "نود از این ابطال باخبر نمی‌شود و لازم هم نیست: اتصال بعدی‌اش رد می‌شود و اتصال فعلی همین حالا بسته می‌شود."
+                                : "The node is not asked to cooperate and does not need to be: its next connection is refused and the current one is closed now.")
+                        </p>
+
+                        <button class="w-full rounded-lg bg-danger-soft hover:bg-danger-soft text-danger px-4 py-2 text-sm font-semibold">
+                            @(isFa ? "ابطال" : "Revoke")
+                        </button>
+                    </form>
+                </div>
+            </section>
+        }
+    </div>
+</div>

@@ -20,7 +20,8 @@ the wire contract both halves implement is [`contracts/node-agent/v1/`](../../co
 | `NodeTunnelGateway` | `Harbora.Infrastructure/Nodes` | Publishes database grants on public ports |
 | `NodeAgentController` | `Harbora.Web/Controllers/Api` | `POST /api/node-agent/v1/enroll` and `…/credential/renew` |
 | `NodeChannelEndpoint` | `Harbora.Web/Infrastructure` | `GET /api/node-agent/v1/channel` (WebSocket) |
-| `NodesController` | `Harbora.Web/Controllers/Api` | `/api/v1/nodes` — tokens, listing, revoke, drain, update |
+| `NodeAdminApiController` | `Harbora.Web/Controllers/Api` | `/api/v1/nodes` — tokens, listing, revoke, drain, update |
+| `NodesController` | `Harbora.Web/Controllers` | `/nodes` — the fleet screen and one node's detail |
 
 Four new tables: `Nodes`, `NodeEnrollmentTokens`, `NodeCommands`, `NodeEvents`. Migration
 `NodeAgentV1`, purely additive.
@@ -154,6 +155,24 @@ which is the point: the customer's server opens none.
 ---
 
 ## Operating
+
+### From the panel
+
+**Platform → Nodes** (capability `servers.manage`) lists the fleet with its live state, mints an
+enrollment token and shows the exact install command once — the panel stores only a hash, so that
+response is the single moment the token exists anywhere readable.
+
+A node's page carries its inventory, granted scopes, capabilities, recent commands and recent
+events, plus the three operations: drain, update the agent, revoke the credential. Two details worth
+knowing when reading it:
+
+- A node can show **online but not connected to this instance**. The row is what the database last
+  recorded; the flag is whether this replica holds its socket. They disagree exactly when a command
+  from here would fail, so the page says so instead of letting the 503 explain it later.
+- **Privileged mode enabled** is shown as a warning rather than a tick. It means the machine's owner
+  turned on a switch that lets a node-admin command run a privileged container.
+
+### From the API
 
 ```bash
 # Mint a token and get the install command back

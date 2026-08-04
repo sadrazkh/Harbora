@@ -48,6 +48,7 @@ public static class NavigationMap
         new("platform", [
             new("users", "Users", "Index", "users", Capabilities.TenantsManage),
             new("servers", "Servers", "Index", "server", Capabilities.ServersManage),
+            new("nodes", "Nodes", "Index", "cpu", Capabilities.ServersManage),
             new("plans", "Plans", "Index", "credit-card", Capabilities.PlansManage),
             new("tenants", "Tenants", "Index", "building-2", Capabilities.TenantsManage),
             new("settings", "Settings", "Index", "settings")

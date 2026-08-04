@@ -13,8 +13,14 @@ using Microsoft.EntityFrameworkCore;
 namespace Harbora.Web.Controllers.Api;
 
 /// <summary>
-/// Managing enrolled nodes: minting enrollment tokens, seeing what is out there, and the two
-/// node-admin operations — drain and update.
+/// Managing enrolled nodes over the JSON API: minting enrollment tokens, seeing what is out there,
+/// and the two node-admin operations — drain and update.
+///
+/// <para>
+/// Named <c>NodeAdminApi</c> rather than <c>Nodes</c> because MVC resolves link generation by
+/// controller name, and the panel's own <c>NodesController</c> owns that name. The route is
+/// unaffected: this is still <c>/api/v1/nodes</c>.
+/// </para>
 ///
 /// <para>
 /// Deliberately not a passthrough for arbitrary commands. The node's allowlist is what makes a
@@ -27,13 +33,13 @@ namespace Harbora.Web.Controllers.Api;
 [ApiController]
 [Route("api/v1/nodes")]
 [Authorize(AuthenticationSchemes = TokenAuthenticationHandler.SchemeName, Policy = Capabilities.ServersManage)]
-public sealed class NodesController(
+public sealed class NodeAdminApiController(
     HarboraDbContext db,
     NodeEnrollmentService enrollment,
     NodeCommandService commands,
     NodeChannelRegistry registry,
     ICurrentUser currentUser,
-    ILogger<NodesController> log) : ControllerBase
+    ILogger<NodeAdminApiController> log) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct)

@@ -1,0 +1,323 @@
+using System.Text.Json;
+using Harbora.Data;
+using Harbora.Domain.Authorization;
+using Harbora.Domain.Nodes;
+using Harbora.Infrastructure.Nodes;
+using Harbora.NodeAgent.Contracts;
+using Harbora.Web.ViewModels;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+
+namespace Harbora.Web.Controllers;
+
+/// <summary>
+/// The fleet screen: which nodes exist, what they are doing, and the three things an operator does
+/// to one — drain it, update it, or withdraw its credential.
+///
+/// <para>
+/// Reading is gated by the same capability as managing, for the reason
+/// <see cref="ServersController"/> already learned: a list of hostnames, core counts and runtime
+/// versions is not a tenant's to read, and an open route is one typed URL away from being read.
+/// </para>
+/// </summary>
+[Authorize(Policy = Capabilities.ServersManage)]
+[Route("nodes")]
+public sealed class NodesController(
+    HarboraDbContext db,
+    NodeEnrollmentService enrollment,
+    NodeCommandService commands,
+    NodeChannelRegistry registry,
+    IOptions<NodeAgentControlPlaneOptions> options,
+    Harbora.Application.Abstractions.ICurrentUser currentUser,
+    TimeProvider clock,
+    ILogger<NodesController> log) : Controller
+{
+    private readonly NodeAgentControlPlaneOptions _options = options.Value;
+
+    [HttpGet("")]
+    public async Task<IActionResult> Index(CancellationToken ct)
+    {
+        ViewData["Title"] = "Nodes";
+        return View(await BuildListAsync(ct));
+    }
+
+    [HttpGet("{nodeId}")]
+    public async Task<IActionResult> Detail(string nodeId, CancellationToken ct)
+    {
+        // IgnoreQueryFilters: nodes are platform infrastructure and carry no workspace, so a
+        // filtered read would find nothing and every node would 404 for everyone.
+        var node = await db.Nodes.IgnoreQueryFilters().FirstOrDefaultAsync(n => n.NodeId == nodeId, ct);
+        if (node is null) return NotFound();
+
+        var capabilities = Deserialize<NodeCapabilities>(node.CapabilitiesJson);
+
+        var commandRows = await db.NodeCommands.IgnoreQueryFilters()
+            .Where(c => c.NodeId == nodeId)
+            .OrderByDescending(c => c.IssuedAt)
+            .Take(30)
+            .Select(c => new NodeCommandRow(
+                c.CommandId, c.Command, c.Status, c.IssuedAt, c.CompletedAt,
+                c.ErrorCode, c.ErrorMessage, c.IdempotentReplay, c.IssuedByName))
+            .ToListAsync(ct);
+
+        var eventRows = await db.NodeEvents.IgnoreQueryFilters()
+            .Where(e => e.NodeId == nodeId)
+            .OrderByDescending(e => e.At)
+            .Take(40)
+            .Select(e => new NodeEventRow(e.Kind, e.Message, e.WorkloadId, e.At))
+            .ToListAsync(ct);
+
+        ViewData["Title"] = node.Name;
+
+        return View(new NodeDetailViewModel(
+            ToRow(node),
+            Deserialize<List<string>>(node.GrantedScopesJson) ?? [],
+            capabilities?.SupportedCommands ?? [],
+            capabilities?.SupportedDatabaseEngines ?? [],
+            capabilities?.PrivilegedModeEnabled ?? false,
+            capabilities?.SupportsIsolatedDockerWorkspace ?? false,
+            node.KernelVersion,
+            node.OsVersion,
+            node.MachineFingerprint,
+            node.EnrolledAt,
+            node.LastConnectedAt,
+            node.CertificateGeneration,
+            node.RevokedReason,
+            commandRows,
+            eventRows,
+            clock.GetUtcNow()));
+    }
+
+    /// <summary>
+    /// Mint an enrollment token and show it once.
+    ///
+    /// <para>
+    /// Through TempData rather than a redirect parameter: a token in a query string is a token in
+    /// the browser history, the access log and whatever the operator pastes into a chat when asking
+    /// for help.
+    /// </para>
+    /// </summary>
+    [HttpPost("tokens")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> MintToken(
+        string? nodeName, string? region, string? environment, int? lifetimeMinutes, CancellationToken ct)
+    {
+        try
+        {
+            var token = await enrollment.MintTokenAsync(
+                currentUser.UserId ?? Guid.Empty,
+                Trimmed(nodeName), Trimmed(region), Trimmed(environment),
+                labels: null, scopes: null,
+                lifetimeMinutes is > 0 ? TimeSpan.FromMinutes(lifetimeMinutes.Value) : null,
+                ct);
+
+            TempData["NodeToken"] = token.Token;
+            TempData["NodeTokenInstall"] = InstallCommand(token.Token, Trimmed(nodeName));
+            TempData["Message"] = Fa()
+                ? $"توکن ساخته شد. تا {token.ExpiresAt.LocalDateTime:HH:mm} معتبر است و فقط یک بار قابل استفاده."
+                : $"Token created. Valid until {token.ExpiresAt.LocalDateTime:HH:mm}, single use.";
+        }
+        catch (ArgumentException e)
+        {
+            TempData["Error"] = e.Message;
+        }
+
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost("{nodeId}/drain")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Drain(string nodeId, bool drain, bool stopWorkloads, string? reason, CancellationToken ct)
+    {
+        var request = new DrainNodeRequest
+        {
+            Drain = drain,
+            StopWorkloads = stopWorkloads,
+            TimeoutSeconds = 300,
+            Reason = Trimmed(reason),
+        };
+
+        await SendAsync(nodeId, NodeCommands.DrainNode, request,
+            $"drain:{nodeId}:{drain}:{stopWorkloads}", request.Reason,
+            drain
+                ? (Fa() ? "نود در حال تخلیه است." : "The node is draining.")
+                : (Fa() ? "نود دوباره در سرویس است." : "The node is back in service."),
+            ct);
+
+        return RedirectToAction(nameof(Detail), new { nodeId });
+    }
+
+    [HttpPost("{nodeId}/update-agent")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> UpdateAgent(
+        string nodeId, string targetVersion, string downloadUrl, string sha256, bool drainFirst, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(targetVersion) || string.IsNullOrWhiteSpace(downloadUrl) || string.IsNullOrWhiteSpace(sha256))
+        {
+            TempData["Error"] = Fa()
+                ? "نسخه، آدرس دانلود و SHA-256 هر سه لازم‌اند."
+                : "Version, download URL and SHA-256 are all required.";
+            return RedirectToAction(nameof(Detail), new { nodeId });
+        }
+
+        if (!downloadUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            TempData["Error"] = Fa()
+                ? "آدرس دانلود باید https باشد."
+                : "The download URL must be https.";
+            return RedirectToAction(nameof(Detail), new { nodeId });
+        }
+
+        var request = new AgentUpdateRequest
+        {
+            TargetVersion = targetVersion.Trim(),
+            DownloadUrl = downloadUrl.Trim(),
+            Sha256 = sha256.Trim().ToLowerInvariant(),
+            DrainFirst = drainFirst,
+        };
+
+        log.LogWarning("Updating node {NodeId} to agent {Version} from the panel.", nodeId, request.TargetVersion);
+
+        await SendAsync(nodeId, NodeCommands.UpdateAgent, request,
+            $"agent-update:{nodeId}:{request.TargetVersion}", $"update to {request.TargetVersion}",
+            Fa()
+                ? "به‌روزرسانی آغاز شد. نود پس از راه‌اندازی مجدد نسخه‌ی خود را گزارش می‌کند."
+                : "Update started. The node reports its version after it restarts.",
+            ct);
+
+        return RedirectToAction(nameof(Detail), new { nodeId });
+    }
+
+    /// <summary>
+    /// Withdraw a node's credential.
+    ///
+    /// <para>
+    /// Not a command — the node is not asked to cooperate, because a node worth revoking may be one
+    /// that stopped answering. The row is what refuses its next connection; closing the live socket
+    /// is what ends the current one.
+    /// </para>
+    /// </summary>
+    [HttpPost("{nodeId}/revoke")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Revoke(string nodeId, string? reason, CancellationToken ct)
+    {
+        var revoked = await enrollment.RevokeAsync(
+            nodeId, Trimmed(reason), currentUser.UserId, HttpContext.Connection.RemoteIpAddress?.ToString(), ct);
+
+        if (!revoked)
+        {
+            TempData["Error"] = Fa() ? "نودی با این شناسه نبود، یا از قبل ابطال شده بود." : "No such node, or it was already revoked.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        if (registry.Get(nodeId) is { } connection)
+            await connection.CloseAsync("credential revoked");
+
+        TempData["Message"] = Fa()
+            ? "اعتبارنامه ابطال شد. برای بازگرداندن این ماشین، توکن تازه بسازید."
+            : "Credential revoked. Mint a fresh token to re-admit this machine.";
+
+        return RedirectToAction(nameof(Index));
+    }
+
+    // --- internals ---
+
+    private async Task<NodeListViewModel> BuildListAsync(CancellationToken ct)
+    {
+        var nodes = await db.Nodes.IgnoreQueryFilters()
+            .OrderBy(n => n.Name)
+            .ToListAsync(ct);
+
+        var tokens = await db.NodeEnrollmentTokens.IgnoreQueryFilters()
+            .OrderByDescending(t => t.CreatedAt)
+            .Take(10)
+            .Select(t => new EnrollmentTokenRow(t.Prefix, t.ExpiresAt, t.UsedAt, t.UsedByNodeId, t.RevokedAt, t.NodeNameHint))
+            .ToListAsync(ct);
+
+        return new NodeListViewModel(
+            nodes.Select(ToRow).ToList(),
+            tokens,
+            clock.GetUtcNow(),
+            ControlPlaneUrl,
+            TempData["NodeToken"] as string,
+            TempData["NodeTokenInstall"] as string);
+    }
+
+    private NodeRow ToRow(Node node) => new(
+        node.NodeId,
+        node.Name,
+        node.Status,
+        node.Health,
+        registry.IsConnected(node.NodeId),
+        node.Draining,
+        node.IsRevoked,
+        node.AgentVersion,
+        node.Region,
+        node.Environment,
+        node.Architecture,
+        node.OsName,
+        node.ContainerRuntimeVersion,
+        node.CpuCores,
+        node.TotalMemoryBytes,
+        node.FreeMemoryBytes,
+        node.TotalDiskBytes,
+        node.FreeDiskBytes,
+        node.Load1,
+        node.RunningWorkloads,
+        node.ActiveDatabaseGrants,
+        node.LastHeartbeatAt,
+        node.CertificateNotAfter,
+        Deserialize<List<string>>(node.IpAddressesJson) ?? []);
+
+    private async Task SendAsync(
+        string nodeId, string command, object payload, string idempotencyKey,
+        string? reason, string successMessage, CancellationToken ct)
+    {
+        try
+        {
+            var outcome = await commands.SendAsync(
+                nodeId, command, payload, idempotencyKey, reason,
+                sourceIp: HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+
+            if (outcome.Succeeded) TempData["Message"] = successMessage;
+            else TempData["Error"] = outcome.ErrorMessage ?? (Fa() ? "نود درخواست را نپذیرفت." : "The node declined the request.");
+        }
+        catch (NodeNotFoundException)
+        {
+            TempData["Error"] = Fa() ? "نودی با این شناسه نیست." : "No such node.";
+        }
+        catch (NodeNotConnectedException)
+        {
+            // Worth its own message: on a single-instance install this means the node is offline; on
+            // several replicas it may be online and attached elsewhere.
+            TempData["Error"] = Fa()
+                ? "نود به این نمونه‌ی پنل وصل نیست."
+                : "The node is not connected to this panel instance.";
+        }
+    }
+
+    private string ControlPlaneUrl =>
+        string.IsNullOrWhiteSpace(_options.PublicUrl)
+            ? $"{Request.Scheme}://{Request.Host}"
+            : _options.PublicUrl.TrimEnd('/');
+
+    private string InstallCommand(string token, string? nodeName) =>
+        "curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/node-agent/install.sh | \\\n" +
+        $"  bash -s -- --control-plane {ControlPlaneUrl} --token {token} --name {nodeName ?? "<node-name>"}";
+
+    private static bool Fa() =>
+        System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    private static string? Trimmed(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static T? Deserialize<T>(string? json) where T : class
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+
+        try { return JsonSerializer.Deserialize<T>(json, NodeContract.Json); }
+        catch (JsonException) { return null; }
+    }
+}

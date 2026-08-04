@@ -207,3 +207,26 @@ tests/Harbora.Tests/{NodeEnrollmentTests,NodeControlPlaneTests}.cs
 Covers the control-plane side of sections 5, 6, 7, 10 and 13.
 
 412 + 17 gated on the agent's suite; 1213 on the panel's, up from 1145.
+
+---
+
+## 9. The node screens
+
+**Added**
+
+```
+src/Harbora.Web/Controllers/NodesController.cs
+src/Harbora.Web/ViewModels/NodeViewModels.cs
+src/Harbora.Web/Views/Nodes/{Index,Detail}.cshtml
+tests/Harbora.Tests/NodeUiTests.cs
+```
+
+**Modified** — `NavigationMap.cs` and `_Sidebar.cshtml` (one item and its label pair);
+`Controllers/Api/NodesController.cs` renamed to `NodeAdminApiController` so the panel's own
+`NodesController` can own the controller name MVC resolves links by. The API route is unchanged.
+
+Bilingual, logical direction classes throughout, and held to the same honesty gate as the rest of
+the panel: a measurement goes through `Design/_Metric`, and "never heartbeat" reads as *never*
+rather than as a long time ago.
+
+1246 tests on the panel's suite, up from 1213.
