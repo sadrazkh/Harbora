@@ -15,6 +15,7 @@ using Harbora.NodeAgent.Security;
 using Harbora.NodeAgent.State;
 using Harbora.NodeAgent.Transport;
 using Harbora.NodeAgent.Tunnels;
+using Harbora.NodeAgent.Updates;
 using Harbora.NodeAgent.Workspaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -56,6 +57,7 @@ builder.Services.AddSingleton(sp => new JsonFileStore<CommandLedgerState>(Path.C
 builder.Services.AddSingleton(sp => new JsonFileStore<WorkloadRegistryState>(Path.Combine(Options(sp).StateDirectory, "workloads.json")));
 builder.Services.AddSingleton(sp => new JsonFileStore<RouteRegistryState>(Path.Combine(Options(sp).StateDirectory, "routes.json")));
 builder.Services.AddSingleton(sp => new JsonFileStore<GrantStoreState>(Path.Combine(Options(sp).StateDirectory, "grants.json")));
+builder.Services.AddSingleton(sp => new JsonFileStore<PendingUpdate>(Path.Combine(Options(sp).StateDirectory, "pending-update.json")));
 
 // --- container runtime ---
 
@@ -85,6 +87,13 @@ builder.Services.AddSingleton<ITunnelConnectionFactory, TlsTunnelConnectionFacto
 builder.Services.AddSingleton<ILocalDialer, TcpLocalDialer>();
 builder.Services.AddSingleton<TunnelSupervisor>();
 builder.Services.AddSingleton<DatabaseAccessManager>();
+
+// --- self-update and drain ---
+
+builder.Services.AddSingleton<IUpdateDownloader, HttpUpdateDownloader>();
+builder.Services.AddSingleton<IServiceController, SystemdServiceController>();
+builder.Services.AddSingleton<DrainCoordinator>();
+builder.Services.AddSingleton<AgentUpdater>();
 
 // --- control plane ---
 
@@ -141,6 +150,9 @@ builder.Services.AddSingleton<INodeCommandHandler, RemoveRouteHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, CreateDatabaseAccessGrantHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, RevokeDatabaseAccessGrantHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, RotateDatabaseAccessCredentialHandler>();
+
+builder.Services.AddSingleton<INodeCommandHandler, DrainNodeHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, UpdateAgentHandler>();
 
 builder.Services.AddHostedService<NodeAgentWorker>();
 builder.Services.AddHostedService<MetricsEndpoint>();

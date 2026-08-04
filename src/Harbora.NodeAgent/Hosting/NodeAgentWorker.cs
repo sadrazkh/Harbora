@@ -31,6 +31,7 @@ public sealed class NodeAgentWorker(
     CommandDispatcher dispatcher,
     CommandLedger ledger,
     StateReconciler reconciler,
+    Harbora.NodeAgent.Updates.AgentUpdater updater,
     JsonFileStore<NodeState> stateStore,
     InventoryCollector inventory,
     IContainerRuntime runtime,
@@ -57,6 +58,7 @@ public sealed class NodeAgentWorker(
 
         // Before the first connection, not after: the control plane's first heartbeat should
         // describe the node as it actually is, not as it was when the machine went down.
+        await CompleteUpdateAsync(stoppingToken);
         await ReconcileAsync(stoppingToken);
 
         var attempt = 0;
@@ -150,6 +152,28 @@ public sealed class NodeAgentWorker(
             AgentVersion.Current, host.OsName, host.OsVersion, host.Architecture, host.CpuCores);
 
         return true;
+    }
+
+    /// <summary>
+    /// Resolve an update that was in flight when the process last exited. Runs before anything else
+    /// touches the runtime, because the answer may be "this binary is wrong, put the old one back".
+    /// </summary>
+    private async Task CompleteUpdateAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (await updater.CompletePendingAsync(ct) is { } outcome)
+                log.LogInformation(
+                    "Resolved the pending agent update: {Outcome} ({Previous} → {Current}).",
+                    outcome.Outcome, outcome.PreviousVersion, outcome.CurrentVersion);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception e)
+        {
+            log.LogError(e, "Could not resolve the pending agent update; continuing on the running binary.");
+        }
     }
 
     private async Task ReconcileAsync(CancellationToken ct)
