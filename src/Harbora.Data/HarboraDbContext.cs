@@ -66,6 +66,8 @@ public class HarboraDbContext : DbContext
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
     public DbSet<AppTemplateVersion> AppTemplateVersions => Set<AppTemplateVersion>();
+    public DbSet<Harbora.Domain.Services.DatabaseAccessGrant> DatabaseAccessGrants => Set<Harbora.Domain.Services.DatabaseAccessGrant>();
+    public DbSet<Harbora.Domain.Services.DatabaseAccessAudit> DatabaseAccessAudits => Set<Harbora.Domain.Services.DatabaseAccessAudit>();
     public DbSet<AppTemplateAsset> AppTemplateAssets => Set<AppTemplateAsset>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Harbora.Domain.Jobs.Job> Jobs => Set<Harbora.Domain.Jobs.Job>();
@@ -174,6 +176,24 @@ public class HarboraDbContext : DbContext
         b.Entity<ManagedService>(e => e.HasIndex(x => x.ContainerName).IsUnique());
         b.Entity<MonitoringMetric>(e => e.HasIndex(x => new { x.ServerId, x.Name, x.Timestamp }));
         b.Entity<AppTemplate>(e => e.HasIndex(x => x.Key).IsUnique());
+
+        // A grant is one tenant's permission over one tenant's database, so it carries the same
+        // filter as everything else they own. The audit trail is filtered too — but note the
+        // sweeper runs without a session and reads these with IgnoreQueryFilters, deliberately.
+        b.Entity<Harbora.Domain.Services.DatabaseAccessGrant>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            e.HasOne(x => x.ManagedService).WithMany().HasForeignKey(x => x.ManagedServiceId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.ManagedServiceId, x.Status });
+            e.HasIndex(x => x.ExpiresAt);
+        });
+
+        b.Entity<Harbora.Domain.Services.DatabaseAccessAudit>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            e.HasIndex(x => new { x.ManagedServiceId, x.CreatedAt });
+        });
 
         // Versions and assets belong to their template and go with it. No workspace filter: the
         // catalogue is platform-wide, and a template's own WorkspaceId already scopes a private one.
