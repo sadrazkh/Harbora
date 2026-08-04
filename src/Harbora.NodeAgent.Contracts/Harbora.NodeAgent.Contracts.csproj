@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The wire contract between a Harbora node and the control plane, version 1.
+
+    Deliberately dependency-free: the node agent must stay small, and the control plane must be
+    able to reference this without dragging the agent's runtime concerns into the panel. The
+    normative form of this contract is the JSON Schema set under contracts/node-agent/v1/ —
+    these records mirror it, and ContractSchemaTests keeps the two honest.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Harbora.NodeAgent.Contracts</RootNamespace>
+  </PropertyGroup>
+
+</Project>

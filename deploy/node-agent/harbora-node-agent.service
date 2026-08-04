@@ -1,0 +1,71 @@
+[Unit]
+Description=Harbora Node Agent
+Documentation=https://github.com/sadrazkh/Harbora/blob/master/docs/node-agent/installation.md
+After=network-online.target docker.service
+Wants=network-online.target
+# Not Requires=: a node whose Docker is down must still start and report that Docker is down.
+# Refusing to start would look identical to the machine being off.
+After=docker.socket
+
+[Service]
+# Type=exec, not notify: the agent does not link sd_notify, and a notify unit that never notifies
+# hangs systemd until the start timeout rather than failing visibly.
+Type=exec
+ExecStart=/usr/local/bin/harbora-node-agent
+WorkingDirectory=/var/lib/harbora-node
+
+# Always come back. The agent is how a node is reachable at all, so a crash must not be terminal;
+# the burst limit keeps a genuinely broken build from spinning the machine.
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# Runs as root because it drives the Docker daemon (root-equivalent by definition) and replaces its
+# own binary in /usr/local/bin during a self-update. The confinement below is what limits the blast
+# radius: everything outside the paths it genuinely needs is read-only or invisible.
+User=root
+Group=root
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# The only writable paths. /usr/local/bin is here for the self-update path and nothing else.
+ReadWritePaths=/var/lib/harbora-node /etc/harbora-node /usr/local/bin
+
+# The container runtime socket.
+BindReadOnlyPaths=-/run/docker.sock
+
+# Structured JSON lines on stdout; the journal is the log.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=harbora-node-agent
+
+# Bounded so a busy node cannot starve the machine the workloads run on.
+LimitNOFILE=65535
+TasksMax=4096
+
+Environment=DOTNET_EnableDiagnostics=0
+
+# Give in-flight commands a chance to report a result before the process goes away.
+TimeoutStopSec=45
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

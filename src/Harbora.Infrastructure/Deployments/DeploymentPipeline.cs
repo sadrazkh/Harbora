@@ -28,6 +28,7 @@ public sealed class DeploymentPipeline(
     ISystemClock clock,
     IOptions<HarboraRuntimeOptions> options,
     HostPortAllocator hostPorts,
+    Nodes.NodeIngressRouter ingressRouter,
     ILogger<DeploymentPipeline> logger)
 {
     private readonly HarboraRuntimeOptions _opt = options.Value;
@@ -229,8 +230,16 @@ public sealed class DeploymentPipeline(
                 // Reserved, not derived: a hashed port consulted nothing about what was already
                 // in use, and a port reused across apps aims one app's route at another's container.
                 publishPort = await hostPorts.AllocateAsync(server.Id, app.Id, deployment.Number, ct);
-                upstreamHost = server.Hostname;
-                upstreamPort = publishPort.Value;
+
+                // A node behind NAT publishes on a port only its own machine can reach, so the
+                // proxy is sent to a port here instead and the bytes go back down the node's tunnel.
+                var upstream = await ingressRouter.ResolveAsync(server, app.Id, deployment.Number, publishPort.Value, ct);
+                upstreamHost = upstream.Host;
+                upstreamPort = upstream.Port;
+
+                if (upstream.Tunnelled)
+                    await Log(LogStream.System,
+                        $"This node is reached through its ingress tunnel; the proxy will target {upstream.Host}:{upstream.Port}.");
             }
             else
             {
@@ -259,8 +268,11 @@ public sealed class DeploymentPipeline(
                 var web = await StartComposeStackAsync(
                     docker, app, deployment, composeStack, network, labels, server, stackBuildLog, Log, ct);
                 containerName = web.ContainerName;
-                upstreamHost = server.IsLocal ? web.ContainerName : server.Hostname;
-                upstreamPort = server.IsLocal ? web.Port : publishPort ?? web.Port;
+                // A remote server's upstream was already decided above, and on a tunnelled node it
+                // is the panel's own port — naming server.Hostname here would quietly route around
+                // the tunnel and leave a compose stack unreachable where a single container works.
+                upstreamHost = server.IsLocal ? web.ContainerName : upstreamHost;
+                upstreamPort = server.IsLocal ? web.Port : publishPort is not null ? upstreamPort : web.Port;
                 keepContainers = web.AllContainerNames;
 
                 await SetStatus(DeploymentStatus.HealthChecking);

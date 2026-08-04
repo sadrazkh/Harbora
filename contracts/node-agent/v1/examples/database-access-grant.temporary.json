@@ -1,0 +1,25 @@
+{
+  "grantId": "gr-4c81b2",
+  "tenantId": "ws-acme",
+  "workloadId": "wl-pg-91ac",
+  "engine": "postgresql",
+  "targetContainer": "db",
+  "targetPort": 5432,
+  "databaseName": "acme",
+  "mode": "temporary",
+  "ttlSeconds": 3600,
+  "ipAllowlist": ["203.0.113.44/32"],
+  "maxConnections": 5,
+  "maxConnectionsPerMinute": 30,
+  "requireTls": true,
+  "requireMutualTls": false,
+  "readOnly": true,
+  "operatorConfirmed": false,
+  "audit": {
+    "actorId": "6b1f0a92-59c4-4c6f-a1d1-0b3c9e4d2f77",
+    "actorName": "support@example.com",
+    "tenantId": "ws-acme",
+    "sourceIp": "203.0.113.44",
+    "reason": "incident INC-2291 — read-only inspection"
+  }
+}

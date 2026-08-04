@@ -1,0 +1,307 @@
+@model Harbora.Web.ViewModels.NodeListViewModel
+@using Harbora.Domain.Nodes
+@using Harbora.Infrastructure.Monitoring
+@{
+    ViewData["Title"] = "Nodes";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+
+    string Gb(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
+
+    string StatusText(NodeRow n) =>
+        n.Revoked ? (isFa ? "ابطال‌شده" : "Revoked")
+        : n.Status switch
+        {
+            NodeStatus.Online when n.Draining => isFa ? "در حال تخلیه" : "Draining",
+            NodeStatus.Online => isFa ? "آنلاین" : "Online",
+            NodeStatus.Draining => isFa ? "در حال تخلیه" : "Draining",
+            NodeStatus.Offline => isFa ? "آفلاین" : "Offline",
+            NodeStatus.Pending => isFa ? "در انتظار اتصال" : "Awaiting connection",
+            _ => isFa ? "نامشخص" : "Unknown"
+        };
+
+    string Ago(DateTimeOffset? at)
+    {
+        // Unknown is not "a long time ago". A node that has never reported says so.
+        if (at is null) return isFa ? "هرگز" : "never";
+
+        var span = Model.Now - at.Value;
+        if (span < TimeSpan.FromMinutes(1)) return isFa ? "همین حالا" : "just now";
+        if (span < TimeSpan.FromHours(1)) return isFa ? $"{span.TotalMinutes:0} دقیقه پیش" : $"{span.TotalMinutes:0}m ago";
+        if (span < TimeSpan.FromDays(1)) return isFa ? $"{span.TotalHours:0} ساعت پیش" : $"{span.TotalHours:0}h ago";
+        return isFa ? $"{span.TotalDays:0} روز پیش" : $"{span.TotalDays:0}d ago";
+    }
+}
+
+<div class="flex flex-wrap items-start justify-between gap-4 mb-6">
+    <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+        isFa ? "نودها" : "Nodes",
+        isFa
+            ? "سرورهایی که Harbora Node Agent روی آن‌ها نصب است. نصب یک نود هیچ پورت ورودی باز نمی‌کند — نود خودش به پنل وصل می‌شود."
+            : "Servers running the Harbora node agent. Installing one opens no inbound port — the node dials the panel."))" />
+
+    <a href="#add-node" class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover">
+        @(isFa ? "افزودن نود" : "Add a node")
+    </a>
+</div>
+
+@if (msg is not null)
+{
+    <div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>
+}
+@if (err is not null)
+{
+    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>
+}
+
+@if (Model.NewToken is not null)
+{
+    <section class="mb-6 rounded-xl border border-accent bg-accent-soft p-5">
+        <h2 class="text-[15px] font-semibold text-accent-text">
+            @(isFa ? "توکن ثبت — فقط همین یک بار نمایش داده می‌شود" : "Enrollment token — shown once")
+        </h2>
+        <p class="mt-1 text-sm text-ink-muted">
+            @(isFa
+                ? "پنل فقط درهم‌سازی آن را ذخیره می‌کند، پس دوباره قابل نمایش نیست. یک‌بارمصرف است و پس از اولین ثبت بی‌ارزش می‌شود."
+                : "The panel stores only a hash, so it cannot be shown again. It is single-use and worthless once spent.")
+        </p>
+
+        <pre class="mt-3 overflow-x-auto rounded-lg bg-surface border border-line p-3 text-xs font-mono text-ink" dir="ltr" data-token-command>@Model.NewTokenInstallCommand</pre>
+
+        <button type="button" data-copy-token
+                class="mt-2 rounded-lg bg-surface-2 px-3 py-1.5 text-xs hover:bg-surface-2">
+            @(isFa ? "کپی فرمان نصب" : "Copy install command")
+        </button>
+    </section>
+}
+
+<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-6">
+    <partial name="Design/_StatCard" model="@(new StatCardModel("cpu",
+        isFa ? "نودها" : "Nodes", MetricDisplay.For(Model.Nodes.Count)))" />
+    <partial name="Design/_StatCard" model="@(new StatCardModel("plug",
+        isFa ? "آنلاین" : "Online", MetricDisplay.For(Model.Online)))" />
+    <partial name="Design/_StatCard" model="@(new StatCardModel("plug-zap",
+        isFa ? "آفلاین" : "Offline", MetricDisplay.For(Model.Offline)))" />
+    <partial name="Design/_StatCard" model="@(new StatCardModel("boxes",
+        isFa ? "بارکاری در حال اجرا" : "Running workloads", MetricDisplay.For(Model.Workloads)))" />
+</div>
+
+<div class="grid lg:grid-cols-3 gap-6">
+    <section class="lg:col-span-2 space-y-4">
+        @if (Model.Nodes.Count == 0)
+        {
+            <div class="rounded-xl border border-line bg-surface shadow-panel">
+                <partial name="Design/_EmptyState" model="@(new EmptyStateModel("cpu",
+                    isFa
+                        ? "هنوز نودی ثبت نشده است. یک توکن بسازید و فرمان نصب را روی سرور مقصد اجرا کنید."
+                        : "No nodes are enrolled yet. Mint a token and run the install command on the target server.",
+                    isFa ? "ساخت توکن" : "Mint a token", "#add-node"))" />
+            </div>
+        }
+
+        @foreach (var node in Model.Nodes)
+        {
+            <article class="rounded-xl border border-line bg-surface p-5 shadow-panel">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <a href="/nodes/@node.NodeId" class="font-semibold text-lg text-ink hover:text-accent-text">@node.Name</a>
+                        <div class="text-sm text-ink-muted">
+                            @node.OsName · @node.Architecture
+                            @if (!string.IsNullOrEmpty(node.ContainerRuntimeVersion))
+                            {
+                                <text> · Docker @node.ContainerRuntimeVersion</text>
+                            }
+                        </div>
+                        <div class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-faint">
+                            <span class="rounded bg-surface-2 px-2 py-0.5 font-mono" dir="ltr">@node.NodeId</span>
+                            @if (node.Region is not null)
+                            {
+                                <span class="rounded bg-surface-2 px-2 py-0.5">@node.Region</span>
+                            }
+                            @if (node.Environment is not null)
+                            {
+                                <span class="rounded bg-surface-2 px-2 py-0.5">@node.Environment</span>
+                            }
+                            <span class="rounded bg-surface-2 px-2 py-0.5">agent @node.AgentVersion</span>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col items-end gap-1.5">
+                        <partial name="Design/_StatusPill" model="@(new StatusPillModel(StatusText(node), node.Tone))" />
+
+                        @if (node.Status == NodeStatus.Online && !node.Connected)
+                        {
+                            @* Online in the database but attached to a different replica: this panel
+                               cannot send it a command, and saying so beats a 503 later. *@
+                            <span class="text-[11px] text-warn">
+                                @(isFa ? "به نمونه‌ی دیگری از پنل وصل است" : "attached to another panel instance")
+                            </span>
+                        }
+                    </div>
+                </div>
+
+                <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                    <div>
+                        <div class="text-ink-faint text-xs">@(isFa ? "پردازنده" : "CPU")</div>
+                        @(node.CpuCores > 0 ? $"{node.CpuCores} × · load {node.Load1:0.00}" : "—")
+                    </div>
+                    <div>
+                        <div class="text-ink-faint text-xs">@(isFa ? "حافظه" : "Memory")</div>
+                        @if (node.TotalMemoryBytes > 0)
+                        {
+                            <text>@Gb(node.FreeMemoryBytes) / @Gb(node.TotalMemoryBytes)</text>
+                        }
+                        else
+                        {
+                            <text>—</text>
+                        }
+                    </div>
+                    <div>
+                        <div class="text-ink-faint text-xs">@(isFa ? "دیسک" : "Disk")</div>
+                        @if (node.TotalDiskBytes > 0)
+                        {
+                            <text>@Gb(node.FreeDiskBytes) / @Gb(node.TotalDiskBytes)</text>
+                        }
+                        else
+                        {
+                            <text>—</text>
+                        }
+                    </div>
+                    <div>
+                        <div class="text-ink-faint text-xs">@(isFa ? "بارکاری" : "Workloads")</div>
+                        @node.RunningWorkloads
+                        @if (node.ActiveDatabaseGrants > 0)
+                        {
+                            <span class="text-ink-faint"> · @node.ActiveDatabaseGrants @(isFa ? "دسترسی دیتابیس" : "db grants")</span>
+                        }
+                    </div>
+                </div>
+
+                <div class="mt-3 flex flex-wrap items-center gap-3 text-xs text-ink-faint">
+                    <span>@(isFa ? "آخرین ضربان:" : "last heartbeat") @Ago(node.LastHeartbeatAt)</span>
+
+                    @if (node.CertificateExpiringSoon(Model.Now) && !node.Revoked)
+                    {
+                        @* The agent renews at two thirds of its certificate's life on its own, so
+                           this being lit means renewal has been failing. *@
+                        <span class="text-warn">
+                            @(isFa ? "اعتبارنامه نزدیک انقضا:" : "credential expires")
+                            @node.CertificateNotAfter!.Value.LocalDateTime.ToString("yyyy-MM-dd")
+                        </span>
+                    }
+
+                    <a href="/nodes/@node.NodeId" class="text-accent-text hover:underline">
+                        @(isFa ? "جزئیات" : "Details")
+                    </a>
+                </div>
+            </article>
+        }
+    </section>
+
+    <div class="space-y-6">
+        <section id="add-node" class="rounded-xl border border-line bg-surface shadow-panel">
+            <header class="px-5 py-3.5 border-b border-line">
+                <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "افزودن نود" : "Add a node")</h2>
+            </header>
+            <div class="p-5">
+                <form asp-controller="Nodes" asp-action="MintToken" method="post" class="space-y-3">
+                    @Html.AntiForgeryToken()
+
+                    <div>
+                        <label class="block text-xs text-ink-faint mb-1">@(isFa ? "نام نود" : "Node name")</label>
+                        <input name="nodeName" placeholder="web-01"
+                               class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs text-ink-faint mb-1">@(isFa ? "منطقه" : "Region")</label>
+                            <input name="region" placeholder="eu-central"
+                                   class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                            <label class="block text-xs text-ink-faint mb-1">@(isFa ? "محیط" : "Environment")</label>
+                            <input name="environment" placeholder="production"
+                                   class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs text-ink-faint mb-1">@(isFa ? "اعتبار توکن (دقیقه)" : "Token lifetime (minutes)")</label>
+                        <input name="lifetimeMinutes" type="number" min="1" max="1440" value="30"
+                               class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    </div>
+
+                    <button class="w-full rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                        @(isFa ? "ساخت توکن ثبت" : "Mint enrollment token")
+                    </button>
+                </form>
+
+                <p class="mt-3 text-xs text-ink-faint">
+                    @(isFa
+                        ? "توکن کوتاه‌عمر و یک‌بارمصرف است. ایجنت پس از گرفتن گواهی، فایل توکن را از روی دیسک پاک می‌کند."
+                        : "The token is short-lived and single-use. The agent shreds it from disk once it has a certificate.")
+                </p>
+            </div>
+        </section>
+
+        @if (Model.Tokens.Count > 0)
+        {
+            <section class="rounded-xl border border-line bg-surface shadow-panel">
+                <header class="px-5 py-3.5 border-b border-line">
+                    <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "توکن‌های اخیر" : "Recent tokens")</h2>
+                </header>
+                <ul class="divide-y divide-line">
+                    @foreach (var token in Model.Tokens)
+                    {
+                        <li class="flex items-center justify-between gap-2 px-5 py-3 text-sm">
+                            <div class="min-w-0">
+                                <span class="font-mono text-xs text-ink" dir="ltr">@token.Prefix…</span>
+                                @if (token.NodeNameHint is not null)
+                                {
+                                    <span class="text-ink-faint"> · @token.NodeNameHint</span>
+                                }
+                            </div>
+
+                            @if (token.UsedAt is not null)
+                            {
+                                <span class="text-xs text-ok">@(isFa ? "استفاده شد" : "used")</span>
+                            }
+                            else if (token.RevokedAt is not null)
+                            {
+                                <span class="text-xs text-ink-faint">@(isFa ? "باطل شد" : "revoked")</span>
+                            }
+                            else if (!token.IsUsable(Model.Now))
+                            {
+                                <span class="text-xs text-ink-faint">@(isFa ? "منقضی" : "expired")</span>
+                            }
+                            else
+                            {
+                                <span class="text-xs text-warn">@(isFa ? "در انتظار" : "waiting")</span>
+                            }
+                        </li>
+                    }
+                </ul>
+            </section>
+        }
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        (function () {
+            var button = document.querySelector('[data-copy-token]');
+            var command = document.querySelector('[data-token-command]');
+            if (!button || !command) return;
+
+            button.addEventListener('click', function () {
+                navigator.clipboard.writeText(command.textContent.trim()).then(function () {
+                    var original = button.textContent;
+                    button.textContent = '@(isFa ? "کپی شد" : "Copied")';
+                    setTimeout(function () { button.textContent = original; }, 1500);
+                });
+            });
+        })();
+    </script>
+}

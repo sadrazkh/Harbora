@@ -44,6 +44,10 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Projects.Project> Projects => Set<Harbora.Domain.Projects.Project>();
     public DbSet<Harbora.Domain.Projects.Environment> Environments => Set<Harbora.Domain.Projects.Environment>();
     public DbSet<Server> Servers => Set<Server>();
+    public DbSet<Harbora.Domain.Nodes.Node> Nodes => Set<Harbora.Domain.Nodes.Node>();
+    public DbSet<Harbora.Domain.Nodes.NodeEnrollmentToken> NodeEnrollmentTokens => Set<Harbora.Domain.Nodes.NodeEnrollmentToken>();
+    public DbSet<Harbora.Domain.Nodes.NodeCommandRecord> NodeCommands => Set<Harbora.Domain.Nodes.NodeCommandRecord>();
+    public DbSet<Harbora.Domain.Nodes.NodeEventRecord> NodeEvents => Set<Harbora.Domain.Nodes.NodeEventRecord>();
     public DbSet<HostPortAllocation> HostPortAllocations => Set<HostPortAllocation>();
     public DbSet<GitProvider> GitProviders => Set<GitProvider>();
     public DbSet<GitRepository> GitRepositories => Set<GitRepository>();
@@ -125,6 +129,54 @@ public class HarboraDbContext : DbContext
         });
 
         b.Entity<EnvironmentVariable>(e => e.HasIndex(x => new { x.AppId, x.Key }).IsUnique());
+
+        // --- node agent v1 ---
+        //
+        // Deliberately NOT workspace-filtered. A node is platform infrastructure, like a Server:
+        // it belongs to the provider, not to a tenant, and every path that reads one — enrollment,
+        // the channel, the heartbeat sweeper — runs without a session. A filter here would make all
+        // of them read an empty table and report success.
+
+        b.Entity<Harbora.Domain.Nodes.Node>(e =>
+        {
+            e.HasIndex(x => x.NodeId).IsUnique();
+            e.HasIndex(x => x.MachineFingerprint);
+            e.HasIndex(x => x.CertificateThumbprint);
+            e.HasIndex(x => x.Status);
+            e.Property(x => x.NodeId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Name).HasMaxLength(128).IsRequired();
+            e.Property(x => x.CertificateThumbprint).HasMaxLength(128);
+            e.Property(x => x.CertificateSerial).HasMaxLength(64);
+            e.Property(x => x.Health).HasMaxLength(32);
+            e.Property(x => x.Architecture).HasMaxLength(32);
+            e.Property(x => x.AgentVersion).HasMaxLength(64);
+        });
+
+        b.Entity<Harbora.Domain.Nodes.NodeEnrollmentToken>(e =>
+        {
+            e.HasIndex(x => x.Prefix).IsUnique();
+            e.HasIndex(x => x.TokenHash);
+            e.Property(x => x.Prefix).HasMaxLength(32).IsRequired();
+            e.Property(x => x.TokenHash).HasMaxLength(128).IsRequired();
+        });
+
+        b.Entity<Harbora.Domain.Nodes.NodeCommandRecord>(e =>
+        {
+            e.HasIndex(x => x.CommandId).IsUnique();
+            e.HasIndex(x => new { x.NodeId, x.Status });
+            e.HasIndex(x => x.IdempotencyKey);
+            e.Property(x => x.CommandId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Command).HasMaxLength(64).IsRequired();
+            e.Property(x => x.IdempotencyKey).HasMaxLength(256).IsRequired();
+            e.Property(x => x.CorrelationId).HasMaxLength(64);
+            e.Property(x => x.Nonce).HasMaxLength(64);
+        });
+
+        b.Entity<Harbora.Domain.Nodes.NodeEventRecord>(e =>
+        {
+            e.HasIndex(x => new { x.NodeId, x.At });
+            e.Property(x => x.Kind).HasMaxLength(64).IsRequired();
+        });
 
         b.Entity<Harbora.Domain.Projects.Project>(e =>
         {

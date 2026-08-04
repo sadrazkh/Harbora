@@ -219,8 +219,21 @@ public sealed class PipelineHarness : IDisposable
         Microsoft.Extensions.Options.Options.Create(Options),
         // The real allocator over the same in-memory context: host ports are a database reservation
         // now, so a fake would test the fake rather than the guarantee.
-        new HostPortAllocator(Db, NullLogger<HostPortAllocator>.Instance),
+        new HostPortAllocator(Db, Ingress, NullLogger<HostPortAllocator>.Instance),
+        // The real router too: whether an app's upstream is the node's own address or a port on the
+        // panel is a decision the pipeline makes on every remote deploy, and a fake would answer it
+        // for the pipeline rather than let the pipeline be watched answering it.
+        new Harbora.Infrastructure.Nodes.NodeIngressRouter(
+            Db,
+            Ingress,
+            new HostPortAllocator(Db, Ingress, NullLogger<HostPortAllocator>.Instance),
+            Microsoft.Extensions.Options.Options.Create(new Harbora.Infrastructure.Nodes.NodeAgentControlPlaneOptions()),
+            Microsoft.Extensions.Options.Options.Create(Options),
+            NullLogger<Harbora.Infrastructure.Nodes.NodeIngressRouter>.Instance),
         NullLogger<DeploymentPipeline>.Instance);
+
+    /// <summary>Shared with the pipeline, so a test can assert on what it bound.</summary>
+    public Harbora.Infrastructure.Nodes.NodeIngressRegistry Ingress { get; } = TestIngress.Registry();
 
     /// <summary>Runs the real pipeline end-to-end for the given deployment.</summary>
     public async Task<Deployment> RunAsync(Deployment deployment)

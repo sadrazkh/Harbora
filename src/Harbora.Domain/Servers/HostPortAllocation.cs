@@ -29,4 +29,18 @@ public class HostPortAllocation : BaseEntity
     /// reservation per app would fail exactly when the overlap matters.
     /// </summary>
     public int DeploymentNumber { get; set; }
+
+    /// <summary>
+    /// The port the panel binds locally when this node's own ports can only be reached through its
+    /// ingress tunnel. Null on a node the proxy can dial directly, which is the ordinary case.
+    ///
+    /// <para>
+    /// Here rather than in a table of its own so the lifecycle is the one that already works: the
+    /// pair is reserved together at deploy time, survives a restart together, and is released
+    /// together — after the cutover, or at once when a deploy fails. A separate table would be a
+    /// second thing to remember to free, and the first release path to forget it would leave the
+    /// panel holding a listener for a container that no longer exists.
+    /// </para>
+    /// </summary>
+    public int? IngressPort { get; set; }
 }

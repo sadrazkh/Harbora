@@ -1,0 +1,56 @@
+{
+  "appId": "postgresql",
+  "templateVersion": "3.1.0",
+  "applicationVersion": "16.4",
+  "supportedArchitectures": ["amd64", "arm64"],
+  "images": [
+    {
+      "role": "db",
+      "repository": "docker.io/library/postgres",
+      "tag": "16.4-alpine",
+      "digestByArchitecture": {
+        "amd64": "sha256:0a1b2c3d4e5f60718293a4b5c6d7e8f901a2b3c4d5e6f708192a3b4c5d6e7f80",
+        "arm64": "sha256:1b2c3d4e5f60718293a4b5c6d7e8f901a2b3c4d5e6f708192a3b4c5d6e7f8091"
+      }
+    }
+  ],
+  "requiredResources": { "cpuCores": 1.0, "memoryBytes": 1073741824, "pidsLimit": 256 },
+  "environmentSchema": [
+    { "key": "POSTGRES_DB", "required": true, "description": "Initial database name", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$" },
+    { "key": "POSTGRES_USER", "required": true, "default": "harbora" }
+  ],
+  "secretSchema": [
+    { "key": "POSTGRES_PASSWORD", "required": true, "generateLength": 32, "mountAs": "environment" }
+  ],
+  "volumes": [{ "name": "pgdata", "persistent": true }],
+  "networks": [{ "name": "harbora-tenant", "internal": true }],
+  "ports": [{ "containerPort": 5432, "protocol": "tcp", "publishToHost": false }],
+  "healthCheck": {
+    "kind": "command",
+    "command": ["pg_isready", "-U", "harbora"],
+    "intervalSeconds": 10,
+    "timeoutSeconds": 5,
+    "retries": 6,
+    "startPeriodSeconds": 30
+  },
+  "backup": {
+    "volumes": ["pgdata"],
+    "databaseEngine": "postgresql",
+    "requiresQuiesce": false,
+    "schedule": "0 3 * * *",
+    "retentionDays": 14
+  },
+  "restore": {
+    "stopBeforeRestore": true,
+    "postRestoreCommands": [["psql", "-U", "harbora", "-c", "ANALYZE"]],
+    "verifyHealthAfterRestore": true
+  },
+  "upgrade": {
+    "mode": "recreate",
+    "healthGraceSeconds": 120,
+    "autoRollbackOnFailure": true,
+    "migrationNotes": "A major-version upgrade needs pg_upgrade and is not performed automatically."
+  },
+  "minimumNodeVersion": "0.2.0",
+  "dependencies": []
+}

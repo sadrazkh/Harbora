@@ -1,0 +1,120 @@
+openapi: 3.1.0
+
+# The REST half of the node contract. Only two endpoints live here — everything else happens on the
+# persistent WebSocket channel described in README.md, which OpenAPI cannot usefully express.
+
+info:
+  title: Harbora Node Agent API
+  version: "1.0.0"
+  description: |
+    Enrollment and credential renewal for Harbora nodes.
+
+    Both endpoints are dialled **outbound by the node**. A node install therefore requires no
+    inbound firewall rule on the customer's server — which is the property that makes "one command
+    on any VPS" safe to offer.
+
+servers:
+  - url: "{controlPlaneUrl}"
+    variables:
+      controlPlaneUrl:
+        default: https://panel.example.com
+
+paths:
+  /api/node-agent/v1/enroll:
+    post:
+      summary: Exchange a single-use enrollment token for a permanent node identity
+      description: |
+        Spends the enrollment token and returns a signed certificate. The node's private key never
+        leaves the node — only the CSR is sent — so a compromised control-plane database cannot
+        impersonate a node it once enrolled.
+
+        The token is consumed on **first successful use**. A second attempt with the same token
+        returns 409 `enrollmentTokenAlreadyUsed`, even from the same machine: re-enrolling a host is
+        an admin action that mints a fresh token, not a retry.
+      security:
+        - enrollmentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "node-agent.v1.schema.json#/$defs/enrollmentRequest"
+      responses:
+        "200":
+          description: Enrolled
+          content:
+            application/json:
+              schema:
+                $ref: "node-agent.v1.schema.json#/$defs/enrollmentResponse"
+        "401":
+          description: Token invalid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollmentFailure" }
+        "409":
+          description: Token already used
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollmentFailure" }
+        "410":
+          description: Token expired
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollmentFailure" }
+        "422":
+          description: Request failed validation (bad CSR, unsupported architecture, no common protocol version)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollmentFailure" }
+
+  /api/node-agent/v1/credential/renew:
+    post:
+      summary: Rotate the node certificate before it expires
+      description: |
+        Authenticated by the certificate being replaced. The node starts asking at two thirds of the
+        certificate's lifetime, so a failed renewal has many retries left before it becomes an
+        outage rather than a warning.
+
+        A revoked node gets 403 `credentialRevoked` and must be re-enrolled by an admin.
+      security:
+        - nodeCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "node-agent.v1.schema.json#/$defs/credentialRenewalRequest"
+      responses:
+        "200":
+          description: Renewed
+          content:
+            application/json:
+              schema:
+                $ref: "node-agent.v1.schema.json#/$defs/credentialRenewalResponse"
+        "403":
+          description: Node revoked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollmentFailure" }
+        "404":
+          description: Unknown node id
+
+components:
+  securitySchemes:
+    enrollmentToken:
+      type: http
+      scheme: bearer
+      description: Short-lived single-use token minted by an admin in the panel.
+    nodeCertificate:
+      type: mutualTLS
+      description: The certificate issued at enrollment.
+
+  schemas:
+    EnrollmentFailure:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          $ref: "node-agent.v1.schema.json#/$defs/errorCode"
+        message:
+          type: string

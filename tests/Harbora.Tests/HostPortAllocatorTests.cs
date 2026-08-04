@@ -28,8 +28,11 @@ public class HostPortAllocatorTests
     private static HarboraDbContext NewContext(string name) =>
         new(new DbContextOptionsBuilder<HarboraDbContext>().UseInMemoryDatabase(name).Options);
 
+    // A real registry, which binds nothing until something is placed on a tunnelled node. The
+    // reservation lifecycle now frees ingress listeners too, and a fake here would let that go
+    // untested in the one place it happens.
     private static HostPortAllocator AllocatorOn(HarboraDbContext db) =>
-        new(db, NullLogger<HostPortAllocator>.Instance);
+        new(db, Fakes.TestIngress.Registry(), NullLogger<HostPortAllocator>.Instance);
 
     // ---- picking a port ----
 

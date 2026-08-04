@@ -22,6 +22,30 @@ public static class DependencyInjection
     {
         services.Configure<TraefikOptions>(config.GetSection("Traefik"));
         services.Configure<HarboraRuntimeOptions>(config.GetSection("Runtime"));
+        services.Configure<Nodes.NodeAgentControlPlaneOptions>(
+            config.GetSection(Nodes.NodeAgentControlPlaneOptions.SectionName));
+
+        // Node agent v1. The registry is a singleton because it holds live sockets; everything that
+        // touches the database around them is scoped, as usual.
+        services.AddSingleton<Nodes.NodeChannelRegistry>();
+        // Also a singleton, and for the same reason: it holds the listeners that carry traffic back
+        // down a node's ingress tunnel.
+        services.AddSingleton<Nodes.NodeIngressRegistry>();
+        services.AddHostedService<Nodes.NodeIngressRebinder>();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<Nodes.NodeCertificateAuthority>();
+        services.AddScoped<Nodes.NodeEnrollmentService>();
+        services.AddScoped<Nodes.NodeCommandService>();
+        services.AddScoped<Nodes.NodeChannelSession>();
+        services.AddHostedService<Nodes.NodeHeartbeatMonitor>();
+        services.AddHostedService<Nodes.NodeTunnelGateway>();
+
+        // Scheduling onto nodes: the Server projection that makes a node visible to the scheduler,
+        // the engine's read of what a node is, and the digest resolution a node insists on.
+        services.AddScoped<Nodes.NodeServerLink>();
+        services.AddScoped<Nodes.NodeHostFacts>();
+        services.AddScoped<Nodes.ImageDigestResolver>();
+        services.AddScoped<Nodes.NodeIngressRouter>();
 
         // Container runtime
         services.AddSingleton<IDockerClient>(_ =>
