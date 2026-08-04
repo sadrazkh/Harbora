@@ -4,8 +4,17 @@ Read this before merging. It records what is finished, what is deliberately not,
 should not have to discover by reading diffs.
 
 - **Source branch:** `feature/harbora-backup-sync`
-- **Cut from:** `master` at `a55d27f`
-- **Not merged, not rebased, not pushed.** No commit was made on `master`.
+- **Base:** `df95b0d` (`Mutation-test what publishes ports and what goes into SQL`), which is also
+  `origin/master`. The branch is a clean fast-forward from it — merging needs no rebase.
+- **Not merged, not rebased, not pushed.**
+
+> **One incident, recorded rather than tidied away.** Partway through this branch, something else
+> operating in this repository committed `df95b0d` onto the feature branch, switched `HEAD` back to
+> `master`, and fast-forwarded `master` onto it. Because that happened between commits and the branch
+> was not re-checked, the four commits below were initially made on `master`. They were moved to
+> `feature/harbora-backup-sync` and `master` was restored to `origin/master`; nothing was pushed and
+> no commit was lost. If you use worktrees or another agent against this repository, expect `HEAD` to
+> move under a long-running session.
 
 ---
 
