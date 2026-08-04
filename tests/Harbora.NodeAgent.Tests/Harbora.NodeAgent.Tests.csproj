@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Harbora.NodeAgent.Contracts\Harbora.NodeAgent.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Harbora.NodeAgent\Harbora.NodeAgent.csproj" />
   </ItemGroup>
 
 </Project>

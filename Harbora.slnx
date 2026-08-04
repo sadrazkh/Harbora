@@ -7,6 +7,7 @@
     <Project Path="src/Harbora.Domain/Harbora.Domain.csproj" />
     <Project Path="src/Harbora.Infrastructure/Harbora.Infrastructure.csproj" />
     <Project Path="src/Harbora.NodeAgent.Contracts/Harbora.NodeAgent.Contracts.csproj" />
+    <Project Path="src/Harbora.NodeAgent/Harbora.NodeAgent.csproj" />
     <Project Path="src/Harbora.Shared/Harbora.Shared.csproj" />
     <Project Path="src/Harbora.Web/Harbora.Web.csproj" />
   </Folder>
