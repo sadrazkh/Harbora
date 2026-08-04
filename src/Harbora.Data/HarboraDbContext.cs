@@ -78,6 +78,8 @@ public class HarboraDbContext : DbContext
         Set<Harbora.Modules.Backup.Domain.BackupSnapshot>();
     public DbSet<Harbora.Modules.Backup.Domain.RestoreJob> RestoreJobs =>
         Set<Harbora.Modules.Backup.Domain.RestoreJob>();
+    public DbSet<Harbora.Modules.Backup.Domain.BackupIdempotencyRecord> BackupIdempotencyRecords =>
+        Set<Harbora.Modules.Backup.Domain.BackupIdempotencyRecord>();
     public DbSet<MonitoringMetric> MonitoringMetrics => Set<MonitoringMetric>();
     public DbSet<MetricRollup> MetricRollups => Set<MetricRollup>();
     public DbSet<Alert> Alerts => Set<Alert>();
@@ -451,6 +453,18 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
             e.HasIndex(x => x.Status);
         });
+
+        b.Entity<Harbora.Modules.Backup.Domain.BackupIdempotencyRecord>(e =>
+        {
+            e.Property(x => x.Key).HasMaxLength(128).IsRequired();
+            e.Property(x => x.Endpoint).HasMaxLength(128).IsRequired();
+
+            // Unique on the whole identity. This is what makes a concurrent retry lose the insert
+            // rather than start a second restore: the second writer takes a duplicate-key error and
+            // reads back the first one's result.
+            e.HasIndex(x => new { x.WorkspaceId, x.Endpoint, x.Key }).IsUnique();
+            e.HasIndex(x => x.ExpiresAt);
+        });
     }
 
     /// <summary>
@@ -511,6 +525,10 @@ public class HarboraDbContext : DbContext
         b.Entity<Harbora.Modules.Backup.Domain.BackupSnapshot>()
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Harbora.Modules.Backup.Domain.RestoreJob>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        // The key is client-chosen, so two tenants can pick the same string. Filtered so one can
+        // never replay the other's result.
+        b.Entity<Harbora.Modules.Backup.Domain.BackupIdempotencyRecord>()
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Alert>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<GitProvider>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);

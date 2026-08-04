@@ -32,6 +32,9 @@ public sealed class BackupServiceTests : IDisposable
     private readonly HarboraDbContext _db;
     private readonly RecordingJobQueue _jobs = new();
     private readonly RecordingBackupNotifications _notifications = new();
+    /// <summary>Exposed so a volume-staging test can assert exactly what the helper was asked to do.</summary>
+    internal FakeDockerEngine Docker { get; } = new();
+
     private readonly Guid _workspace = Guid.CreateVersion7();
     private readonly Guid _otherWorkspace = Guid.CreateVersion7();
     private readonly BackupRepository _repository;
@@ -77,7 +80,7 @@ public sealed class BackupServiceTests : IDisposable
         _db,
         new StubEngineResolver(),
         new StubCredentialReader("password"),
-        new BackupTargetResolver(Options.Create(_options)),
+        new BackupTargetResolver(Docker, Options.Create(_options), NullLogger<BackupTargetResolver>.Instance),
         _jobs,
         _notifications,
         new StubCaller(_workspace),

@@ -49,9 +49,10 @@ public sealed class BackupSnapshotService(
         if (!repository.IsEnabled)
             return new SnapshotOutcome(false, Error: $"Repository '{repository.Name}' is disabled.");
 
-        // Checked before queueing rather than inside the job, so a mistyped path is a message on the
-        // screen the user is looking at instead of a failed job they have to go and find.
-        var resolved = targets.Resolve(targetType, targetRef);
+        // Validated, not acquired: this must not stage a 200 GB volume inside an HTTP request. The
+        // check is side-effect-free, so a mistyped target is a message on the screen the user is
+        // looking at instead of a failed job they have to go and find.
+        var resolved = targets.Validate(targetType, targetRef);
         if (!resolved.Succeeded) return new SnapshotOutcome(false, Error: resolved.Error);
 
         // One backup at a time per target. Two concurrent snapshots of the same directory waste the
@@ -123,10 +124,13 @@ public sealed class BackupSnapshotService(
             snapshot.StartedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(ct);
 
-            var resolved = targets.Resolve(snapshot.TargetType, snapshot.TargetRef);
-            if (!resolved.Succeeded)
+            // A Docker volume is staged to disk here, so the lease is held for exactly as long as
+            // the engine needs it and released whatever happens — a staged copy is plaintext
+            // application data and must not outlive the backup that needed it.
+            await using var lease = await targets.AcquireAsync(snapshot.TargetType, snapshot.TargetRef, ct);
+            if (!lease.Succeeded)
             {
-                await FailAsync(snapshot, resolved.Error!, ct);
+                await FailAsync(snapshot, lease.Error!, ct);
                 return;
             }
 
@@ -145,7 +149,7 @@ public sealed class BackupSnapshotService(
             var result = await engine.CreateSnapshotAsync(new CreateBackupSnapshotRequest(
                 repository.Id,
                 snapshot.Id,
-                resolved.SourcePath!,
+                lease.SourcePath!,
                 password,
                 snapshot.TargetType,
                 snapshot.TargetRef), ct);

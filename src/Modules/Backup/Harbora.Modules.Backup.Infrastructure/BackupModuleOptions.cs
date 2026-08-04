@@ -81,6 +81,23 @@ public sealed class BackupModuleOptions
     public string StagingDirectory { get; set; } = "/var/lib/harbora/backups";
 
     /// <summary>
+    /// Docker volume backing <see cref="StagingDirectory"/>.
+    ///
+    /// <para>
+    /// Both names are needed because two processes reach the same storage differently: the panel
+    /// reads it as a mounted path, and a helper container mounts it by name. Defaults match the
+    /// platform's existing backup staging volume so one volume serves both.
+    /// </para>
+    /// </summary>
+    public string StagingVolume { get; set; } = "harbora_backups";
+
+    /// <summary>
+    /// Image used for the helper that copies a Docker volume into staging. Pinned, never
+    /// <c>latest</c> — a tag whose meaning changes under you is not a dependency, it is a surprise.
+    /// </summary>
+    public string HelperImage { get; set; } = "alpine:3.20";
+
+    /// <summary>
     /// Ceiling on what a single restore may expand to. An archive bomb is small on disk and
     /// enormous once extracted; without a bound, restoring one fills the server (THREAT_MODEL T8).
     /// </summary>
