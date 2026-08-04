@@ -1,4 +1,4 @@
-using Harbora.Data;
+﻿using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Servers;
 using Harbora.Domain.Templates;
@@ -41,7 +41,82 @@ public sealed class DbSeeder(HarboraDbContext db)
             }
         }
 
+        await SeedReadyAppsAsync();
         await SeedTenancyAsync();
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// The versioned ready-app catalogue, plus a logo record for every template that has one.
+    ///
+    /// Versions are upserted by (template, version) and never deleted here: a version somebody is
+    /// running must not vanish because a newer catalogue shipped without it. Retiring one is a
+    /// lifecycle change an administrator makes, not a side effect of an upgrade.
+    /// </summary>
+    private async Task SeedReadyAppsAsync()
+    {
+        foreach (var app in Harbora.Infrastructure.Templates.ReadyAppCatalog.All())
+        {
+            var template = await db.AppTemplates.FirstOrDefaultAsync(x => x.Key == app.Template.Key);
+            if (template is null)
+            {
+                template = app.Template;
+                db.AppTemplates.Add(template);
+            }
+            else
+            {
+                template.Name = app.Template.Name;
+                template.NameFa = app.Template.NameFa;
+                template.Description = app.Template.Description;
+                template.DescriptionFa = app.Template.DescriptionFa;
+                template.Category = app.Template.Category;
+                template.IconUrl = app.Template.IconUrl;
+                template.ManifestJson = app.Template.ManifestJson;
+                template.IsBuiltIn = true;
+                template.IsEnabled = true;
+            }
+
+            await db.SaveChangesAsync();
+
+            foreach (var version in app.Versions)
+            {
+                var stored = await db.AppTemplateVersions
+                    .FirstOrDefaultAsync(v => v.AppTemplateId == template.Id && v.Version == version.Version);
+
+                if (stored is null)
+                {
+                    version.AppTemplateId = template.Id;
+                    version.DiscoveredAt = DateTimeOffset.UtcNow;
+                    db.AppTemplateVersions.Add(version);
+                    continue;
+                }
+
+                // The pin and the manifest are product data and are refreshed. Publication is not:
+                // an administrator who withdrew a version did so deliberately.
+                stored.ImageRepository = version.ImageRepository;
+                stored.ImageTag = version.ImageTag;
+                stored.ImageDigest = version.ImageDigest;
+                stored.SupportedArchitectures = version.SupportedArchitectures;
+                stored.ManifestJson = version.ManifestJson;
+                stored.UpgradeNotes = version.UpgradeNotes;
+                stored.MigrationWarnings = version.MigrationWarnings;
+            }
+
+            var asset = await db.AppTemplateAssets.FirstOrDefaultAsync(a => a.AppTemplateId == template.Id);
+            if (asset is null)
+            {
+                app.Asset.AppTemplateId = template.Id;
+                db.AppTemplateAssets.Add(app.Asset);
+            }
+            else
+            {
+                asset.Path = app.Asset.Path;
+                asset.SourceUrl = app.Asset.SourceUrl;
+                asset.License = app.Asset.License;
+                asset.LicenseNote = app.Asset.LicenseNote;
+            }
+        }
 
         await db.SaveChangesAsync();
     }

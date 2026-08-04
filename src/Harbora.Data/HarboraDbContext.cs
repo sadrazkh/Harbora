@@ -65,6 +65,8 @@ public class HarboraDbContext : DbContext
     public DbSet<MetricRollup> MetricRollups => Set<MetricRollup>();
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
+    public DbSet<AppTemplateVersion> AppTemplateVersions => Set<AppTemplateVersion>();
+    public DbSet<AppTemplateAsset> AppTemplateAssets => Set<AppTemplateAsset>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Harbora.Domain.Jobs.Job> Jobs => Set<Harbora.Domain.Jobs.Job>();
     public DbSet<Setting> Settings => Set<Setting>();
@@ -172,6 +174,22 @@ public class HarboraDbContext : DbContext
         b.Entity<ManagedService>(e => e.HasIndex(x => x.ContainerName).IsUnique());
         b.Entity<MonitoringMetric>(e => e.HasIndex(x => new { x.ServerId, x.Name, x.Timestamp }));
         b.Entity<AppTemplate>(e => e.HasIndex(x => x.Key).IsUnique());
+
+        // Versions and assets belong to their template and go with it. No workspace filter: the
+        // catalogue is platform-wide, and a template's own WorkspaceId already scopes a private one.
+        b.Entity<AppTemplateVersion>(e =>
+        {
+            e.HasOne(x => x.AppTemplate).WithMany().HasForeignKey(x => x.AppTemplateId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.AppTemplateId, x.Version }).IsUnique();
+        });
+
+        b.Entity<AppTemplateAsset>(e =>
+        {
+            e.HasOne(x => x.AppTemplate).WithMany().HasForeignKey(x => x.AppTemplateId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.AppTemplateId).IsUnique();
+        });
         b.Entity<Setting>(e => e.HasIndex(x => x.Key).IsUnique());
         b.Entity<Harbora.Domain.Tenancy.InstanceSize>(e => e.HasIndex(x => x.Key).IsUnique());
         b.Entity<Harbora.Domain.Tenancy.Plan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
