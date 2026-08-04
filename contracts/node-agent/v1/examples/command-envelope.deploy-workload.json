@@ -1,0 +1,79 @@
+{
+  "commandId": "01924f7c-2d31-7a4e-9b10-6f0c2a1d8e33",
+  "command": "DeployWorkload",
+  "idempotencyKey": "deploy:app-7f2a:rel-114",
+  "nonce": "1f8c2b7d9e4a5c60",
+  "issuedAt": "2026-08-04T09:12:03.418Z",
+  "correlationId": "01924f7c-2d31-7a4e-9b10-6f0c2a1d8e33",
+  "requiredScope": "workloads:write",
+  "timeoutSeconds": 900,
+  "audit": {
+    "actorId": "6b1f0a92-59c4-4c6f-a1d1-0b3c9e4d2f77",
+    "actorName": "ops@example.com",
+    "tenantId": "ws-acme",
+    "sourceIp": "203.0.113.44",
+    "reason": "release 1.14.0"
+  },
+  "payload": {
+    "spec": {
+      "workloadId": "wl-7f2a91",
+      "name": "acme-api",
+      "tenantId": "ws-acme",
+      "appId": "acme-api",
+      "appVersion": "1.14.0",
+      "supportedArchitectures": ["amd64", "arm64"],
+      "minimumAgentVersion": "0.2.0",
+      "containers": [
+        {
+          "name": "api",
+          "image": {
+            "repository": "registry.example.com/acme/api",
+            "tag": "1.14.0",
+            "digest": "sha256:9b2c1f4d7e8a0b3c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c"
+          },
+          "env": { "ASPNETCORE_ENVIRONMENT": "Production", "LOG_LEVEL": "info" },
+          "secrets": [
+            { "name": "ConnectionStrings__Default", "value": "REDACTED-AT-REST", "mountAs": "environment" }
+          ],
+          "ports": [{ "containerPort": 8080, "protocol": "tcp", "publishToHost": false }],
+          "mounts": [{ "volumeName": "acme-api-data", "mountPath": "/var/lib/app", "readOnly": false }],
+          "networkAliases": ["api"],
+          "resources": { "cpuCores": 1.0, "memoryBytes": 1073741824, "memoryReservationBytes": 268435456, "pidsLimit": 512 },
+          "healthCheck": {
+            "kind": "http",
+            "path": "/healthz",
+            "port": 8080,
+            "intervalSeconds": 10,
+            "timeoutSeconds": 5,
+            "retries": 5,
+            "startPeriodSeconds": 20,
+            "expectedStatus": 200
+          },
+          "restartPolicy": { "mode": "unlessStopped" },
+          "readOnlyRootFilesystem": true,
+          "capabilitiesDrop": ["ALL"],
+          "privileged": false,
+          "hostNetwork": false,
+          "hostPidNamespace": false,
+          "stopGracePeriodSeconds": 15
+        }
+      ],
+      "networks": [{ "name": "harbora-ws-acme", "internal": false }],
+      "volumes": [{ "name": "acme-api-data", "persistent": true }],
+      "httpRoutes": [
+        {
+          "routeId": "rt-acme-api",
+          "domain": "api.acme.example.com",
+          "targetContainer": "api",
+          "targetPort": 8080,
+          "tls": true,
+          "redirectHttpToHttps": true,
+          "webSocket": false
+        }
+      ],
+      "upgrade": { "mode": "blueGreen", "healthGraceSeconds": 90, "autoRollbackOnFailure": true },
+      "labels": { "harbora.app": "acme-api" }
+    },
+    "dryRun": false
+  }
+}

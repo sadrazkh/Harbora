@@ -1,0 +1,1033 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harbora.io/contracts/node-agent/v1/node-agent.v1.schema.json",
+  "title": "Harbora Node Agent contract, version 1",
+  "description": "Normative wire contract between a Harbora node and the control plane. Objects are open (additionalProperties true) so a newer peer may add fields without breaking an older one; a field that already exists never changes meaning within a major version.",
+
+  "$defs": {
+
+    "semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+
+    "architecture": {
+      "type": "string",
+      "description": "Normalised CPU architecture. Anything outside this list is reported verbatim and refused work.",
+      "enum": ["amd64", "arm64"]
+    },
+
+    "cidr": {
+      "type": "string",
+      "description": "IPv4 or IPv6 address or CIDR block.",
+      "minLength": 1
+    },
+
+    "imageDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+
+    "commandName": {
+      "type": "string",
+      "description": "Closed allowlist. There is no member that executes an arbitrary shell command.",
+      "enum": [
+        "DeployWorkload", "UpdateWorkload", "StopWorkload", "StartWorkload", "RestartWorkload",
+        "DeleteWorkload", "GetWorkloadStatus", "StreamLogs",
+        "CreateNetwork", "DeleteNetwork",
+        "CreateVolume", "SnapshotVolume", "RestoreVolume",
+        "CreateDatabaseAccessGrant", "RevokeDatabaseAccessGrant", "RotateDatabaseAccessCredential",
+        "RegisterHttpRoute", "RegisterTcpRoute", "RemoveRoute",
+        "DrainNode", "UpdateAgent"
+      ]
+    },
+
+    "scope": {
+      "type": "string",
+      "enum": [
+        "workloads:read", "workloads:write", "networks:write", "volumes:write",
+        "database-access:write", "routes:write", "node:admin"
+      ]
+    },
+
+    "errorCode": {
+      "type": "string",
+      "description": "Structured failure code. A code the peer does not recognise must be treated as 'unknown', never as a protocol violation.",
+      "enum": [
+        "unknown",
+        "unsupportedProtocolVersion", "malformedEnvelope", "unknownCommand", "commandNotSupported",
+        "replayRejected", "unauthorized", "validationFailed", "timeout", "cancelled",
+        "nodeDraining", "nodeNotReady", "agentTooOld", "unsupportedArchitecture", "insufficientResources",
+        "runtimeUnavailable", "imagePullFailed", "imageNotPinned", "containerStartFailed",
+        "healthCheckFailed", "rolledBack", "rollbackFailed", "volumeOperationFailed",
+        "networkOperationFailed", "policyDenied",
+        "grantNotFound", "grantExpired", "grantRevoked", "unsupportedDatabaseEngine",
+        "credentialRotationFailed", "ipNotAllowed", "connectionLimitReached",
+        "tunnelUnavailable", "tunnelRejected",
+        "updateDownloadFailed", "updateVerificationFailed", "updateApplyFailed", "updateRolledBack",
+        "enrollmentTokenInvalid", "enrollmentTokenExpired", "enrollmentTokenAlreadyUsed", "credentialRevoked",
+        "internal"
+      ]
+    },
+
+    "nodeError": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/errorCode" },
+        "message": { "type": "string", "description": "Operator-facing. Already passed through secret redaction on the node." },
+        "retryable": { "type": "boolean", "default": false },
+        "details": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+
+    "auditMetadata": {
+      "type": "object",
+      "description": "Provenance carried from the control plane onto the node's own audit trail.",
+      "properties": {
+        "actorId": { "type": "string" },
+        "actorName": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "sourceIp": { "type": "string" },
+        "reason": { "type": "string" }
+      }
+    },
+
+    "controlFrame": {
+      "type": "object",
+      "description": "Outer envelope of every frame on the persistent channel, both directions.",
+      "required": ["v", "type", "id"],
+      "properties": {
+        "v": { "type": "integer", "minimum": 1, "description": "Negotiated protocol version. A frame outside it is dropped, not guessed at." },
+        "type": {
+          "type": "string",
+          "enum": [
+            "node.hello", "node.resume", "node.heartbeat", "node.inventory",
+            "command.ack", "command.progress", "command.result",
+            "log.chunk", "node.event", "node.pong",
+            "control.hello-ack", "control.command", "control.cancel",
+            "control.credential-rotated", "control.ack", "control.ping"
+          ]
+        },
+        "id": { "type": "string", "minLength": 1 },
+        "sequence": { "type": "integer", "minimum": 0, "description": "Monotonic per sender within a session. Drives resume-after-reconnect." },
+        "sentAt": { "type": "string", "format": "date-time" },
+        "correlationId": { "type": ["string", "null"] },
+        "payload": {}
+      }
+    },
+
+    "enrollmentRequest": {
+      "type": "object",
+      "description": "Sent once by the installer with a short-lived single-use token. The private key never leaves the node.",
+      "required": ["enrollmentToken", "nodeName", "certificateSigningRequestPem", "agentVersion", "supportedProtocolVersions", "inventory", "capabilities"],
+      "properties": {
+        "enrollmentToken": { "type": "string", "minLength": 1 },
+        "nodeName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "certificateSigningRequestPem": { "type": "string", "pattern": "BEGIN CERTIFICATE REQUEST" },
+        "agentVersion": { "$ref": "#/$defs/semver" },
+        "supportedProtocolVersions": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1 },
+        "region": { "type": ["string", "null"] },
+        "environment": { "type": ["string", "null"] },
+        "labels": { "type": ["object", "null"], "additionalProperties": { "type": "string" } },
+        "inventory": { "$ref": "#/$defs/nodeInventory" },
+        "capabilities": { "$ref": "#/$defs/nodeCapabilities" },
+        "machineFingerprint": { "type": ["string", "null"], "description": "Lets a re-enrollment of the same host be recognised instead of duplicating the node." }
+      }
+    },
+
+    "enrollmentResponse": {
+      "type": "object",
+      "required": ["nodeId", "certificatePem", "caCertificatePem", "certificateNotAfter", "controlPlaneUrl", "protocolVersion"],
+      "properties": {
+        "nodeId": { "type": "string", "minLength": 1 },
+        "certificatePem": { "type": "string", "pattern": "BEGIN CERTIFICATE" },
+        "caCertificatePem": { "type": "string", "pattern": "BEGIN CERTIFICATE" },
+        "certificateNotAfter": { "type": "string", "format": "date-time" },
+        "controlPlaneUrl": { "type": "string", "format": "uri" },
+        "tunnelGatewayUrl": { "type": ["string", "null"] },
+        "protocolVersion": { "type": "integer", "minimum": 1 },
+        "grantedScopes": { "type": ["array", "null"], "items": { "$ref": "#/$defs/scope" } },
+        "minimumAgentVersion": { "type": ["string", "null"] },
+        "heartbeatIntervalSeconds": { "type": "integer", "minimum": 5, "default": 30 }
+      }
+    },
+
+    "credentialRenewalRequest": {
+      "type": "object",
+      "required": ["nodeId", "certificateSigningRequestPem", "agentVersion"],
+      "properties": {
+        "nodeId": { "type": "string" },
+        "certificateSigningRequestPem": { "type": "string", "pattern": "BEGIN CERTIFICATE REQUEST" },
+        "agentVersion": { "$ref": "#/$defs/semver" }
+      }
+    },
+
+    "credentialRenewalResponse": {
+      "type": "object",
+      "required": ["certificatePem", "caCertificatePem", "certificateNotAfter"],
+      "properties": {
+        "certificatePem": { "type": "string" },
+        "caCertificatePem": { "type": "string" },
+        "certificateNotAfter": { "type": "string", "format": "date-time" },
+        "grantedScopes": { "type": ["array", "null"], "items": { "$ref": "#/$defs/scope" } }
+      }
+    },
+
+    "portRange": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "end": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+
+    "storageCapacity": {
+      "type": "object",
+      "required": ["totalBytes", "freeBytes", "dataRoot"],
+      "properties": {
+        "totalBytes": { "type": "integer", "minimum": 0 },
+        "freeBytes": { "type": "integer", "minimum": 0 },
+        "dataRoot": { "type": "string" }
+      }
+    },
+
+    "nodeInventory": {
+      "type": "object",
+      "description": "Everything the scheduler needs. Sent at enrollment, on connect and on material change — never on the heartbeat.",
+      "required": ["nodeName", "hostname", "osName", "osVersion", "kernelVersion", "architecture", "containerRuntime", "containerRuntimeVersion"],
+      "properties": {
+        "nodeName": { "type": "string" },
+        "hostname": { "type": "string" },
+        "osName": { "type": "string" },
+        "osVersion": { "type": "string" },
+        "kernelVersion": { "type": "string" },
+        "architecture": { "type": "string" },
+        "containerRuntime": { "type": "string" },
+        "containerRuntimeVersion": { "type": "string" },
+        "cpuCores": { "type": "integer", "minimum": 0 },
+        "totalMemoryBytes": { "type": "integer", "minimum": 0 },
+        "totalDiskBytes": { "type": "integer", "minimum": 0 },
+        "freeDiskBytes": { "type": "integer", "minimum": 0 },
+        "ipAddresses": { "type": "array", "items": { "type": "string" } },
+        "region": { "type": ["string", "null"] },
+        "environment": { "type": ["string", "null"] },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "availablePortRange": { "$ref": "#/$defs/portRange" },
+        "usedPorts": { "type": "array", "items": { "type": "integer" } },
+        "managedNetworks": { "type": "array", "items": { "type": "string" } },
+        "storage": { "$ref": "#/$defs/storageCapacity" }
+      }
+    },
+
+    "nodeCapabilities": {
+      "type": "object",
+      "description": "What this build can actually do. The control plane must consult this rather than infer it from the version string.",
+      "required": ["agentVersion", "supportedProtocolVersions", "supportedCommands"],
+      "properties": {
+        "agentVersion": { "$ref": "#/$defs/semver" },
+        "supportedProtocolVersions": { "type": "array", "items": { "type": "integer" }, "minItems": 1 },
+        "supportedCommands": { "type": "array", "items": { "$ref": "#/$defs/commandName" } },
+        "supportedDatabaseEngines": { "type": "array", "items": { "enum": ["postgresql", "mysql", "mongodb", "redis"] } },
+        "supportsComposeStacks": { "type": "boolean" },
+        "supportsRollingUpdate": { "type": "boolean" },
+        "supportsVolumeSnapshots": { "type": "boolean" },
+        "supportsTcpTunnel": { "type": "boolean" },
+        "supportsIsolatedDockerWorkspace": { "type": "boolean" },
+        "privilegedModeEnabled": { "type": "boolean", "description": "True only when an admin set the host feature flag. Left false, every privileged spec is refused — including an admin's." },
+        "supportsSelfUpdate": { "type": "boolean" }
+      }
+    },
+
+    "nodeHello": {
+      "type": "object",
+      "required": ["nodeId", "agentVersion", "supportedProtocolVersions", "inventory", "capabilities"],
+      "properties": {
+        "nodeId": { "type": "string" },
+        "agentVersion": { "$ref": "#/$defs/semver" },
+        "supportedProtocolVersions": { "type": "array", "items": { "type": "integer" }, "minItems": 1 },
+        "resumeToken": { "type": ["string", "null"] },
+        "lastReceivedSequence": { "type": "integer", "minimum": 0 },
+        "inventory": { "$ref": "#/$defs/nodeInventory" },
+        "capabilities": { "$ref": "#/$defs/nodeCapabilities" }
+      }
+    },
+
+    "controlHelloAck": {
+      "type": "object",
+      "required": ["protocolVersion", "resumeToken"],
+      "properties": {
+        "protocolVersion": { "type": "integer", "minimum": 1 },
+        "resumeToken": { "type": "string" },
+        "serverTime": { "type": "string", "format": "date-time" },
+        "lastReceivedSequence": { "type": "integer", "minimum": 0 },
+        "minimumAgentVersion": { "type": ["string", "null"] },
+        "heartbeatIntervalSeconds": { "type": "integer", "minimum": 5 },
+        "grantedScopes": { "type": ["array", "null"], "items": { "$ref": "#/$defs/scope" } },
+        "resumeRejected": { "type": "boolean" }
+      }
+    },
+
+    "nodeHeartbeat": {
+      "type": "object",
+      "required": ["nodeId", "agentVersion", "health"],
+      "properties": {
+        "nodeId": { "type": "string" },
+        "agentVersion": { "$ref": "#/$defs/semver" },
+        "health": { "type": "string", "enum": ["unknown", "healthy", "degraded", "draining", "unhealthy"] },
+        "at": { "type": "string", "format": "date-time" },
+        "load1": { "type": "number" },
+        "load5": { "type": "number" },
+        "load15": { "type": "number" },
+        "freeMemoryBytes": { "type": "integer" },
+        "freeDiskBytes": { "type": "integer" },
+        "runningWorkloads": { "type": "integer" },
+        "activeDatabaseGrants": { "type": "integer" },
+        "activeTunnels": { "type": "integer" },
+        "draining": { "type": "boolean" },
+        "certificateExpiresAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+
+    "commandEnvelope": {
+      "type": "object",
+      "description": "One instruction. Admission, dedup, authorisation, bounding and audit all live on the envelope; the verb-specific payload is not touched until the envelope is accepted.",
+      "required": ["commandId", "command", "idempotencyKey", "nonce", "issuedAt", "correlationId", "requiredScope"],
+      "properties": {
+        "commandId": { "type": "string", "minLength": 1 },
+        "command": { "$ref": "#/$defs/commandName" },
+        "idempotencyKey": { "type": "string", "minLength": 1, "description": "Re-sending after a timeout must not act twice. Only the node knows whether the first attempt landed, so the node decides." },
+        "nonce": { "type": "string", "minLength": 8, "description": "Single use. With issuedAt this makes a replay detectable." },
+        "issuedAt": { "type": "string", "format": "date-time", "description": "Envelopes older than the freshness window (5 minutes) are rejected regardless of nonce." },
+        "correlationId": { "type": "string", "minLength": 1 },
+        "requiredScope": { "$ref": "#/$defs/scope" },
+        "timeoutSeconds": { "type": ["integer", "null"], "minimum": 1, "maximum": 86400 },
+        "audit": { "$ref": "#/$defs/auditMetadata" },
+        "payload": {}
+      }
+    },
+
+    "commandAck": {
+      "type": "object",
+      "required": ["commandId"],
+      "properties": {
+        "commandId": { "type": "string" },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "deduplicated": { "type": "boolean", "description": "The idempotency key had already run. Treat as success-in-progress; the result frame carries the original outcome." },
+        "rejected": { "$ref": "#/$defs/nodeError" }
+      }
+    },
+
+    "commandProgress": {
+      "type": "object",
+      "required": ["commandId", "phase"],
+      "properties": {
+        "commandId": { "type": "string" },
+        "phase": { "type": "string" },
+        "percent": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+        "message": { "type": ["string", "null"] },
+        "at": { "type": "string", "format": "date-time" }
+      }
+    },
+
+    "commandResult": {
+      "type": "object",
+      "required": ["commandId", "status"],
+      "properties": {
+        "commandId": { "type": "string" },
+        "status": { "type": "string", "enum": ["succeeded", "failed", "cancelled", "timedOut", "rejected"] },
+        "error": { "$ref": "#/$defs/nodeError" },
+        "result": {},
+        "startedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "idempotentReplay": { "type": "boolean" }
+      }
+    },
+
+    "commandCancel": {
+      "type": "object",
+      "required": ["commandId"],
+      "properties": {
+        "commandId": { "type": "string" },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+
+    "logChunk": {
+      "type": "object",
+      "required": ["commandId", "workloadId", "text"],
+      "properties": {
+        "commandId": { "type": "string" },
+        "workloadId": { "type": "string" },
+        "text": { "type": "string" },
+        "final": { "type": "boolean" },
+        "at": { "type": "string", "format": "date-time" }
+      }
+    },
+
+    "nodeEvent": {
+      "type": "object",
+      "required": ["kind", "message"],
+      "properties": {
+        "kind": { "type": "string" },
+        "message": { "type": "string" },
+        "workloadId": { "type": ["string", "null"] },
+        "data": { "type": ["object", "null"], "additionalProperties": { "type": "string" } },
+        "at": { "type": "string", "format": "date-time" }
+      }
+    },
+
+    "imageRef": {
+      "type": "object",
+      "description": "Pinned by digest. A spec with no digest is rejected: 'deploy the same thing you tested' is not a property a mutable tag can offer.",
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/imageDigest" },
+        "tag": { "type": ["string", "null"], "description": "Human-facing only. Never used for resolution." }
+      }
+    },
+
+    "secretSpec": {
+      "type": "object",
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "value": { "type": "string", "description": "Never logged, never placed on a command line, never written unencrypted outside the container." },
+        "mountAs": { "type": "string", "enum": ["environment", "file"], "default": "environment" },
+        "targetPath": { "type": ["string", "null"] }
+      }
+    },
+
+    "portMapping": {
+      "type": "object",
+      "required": ["containerPort"],
+      "properties": {
+        "containerPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "hostPort": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 },
+        "protocol": { "type": "string", "enum": ["tcp", "udp"], "default": "tcp" },
+        "publishToHost": { "type": "boolean", "default": false, "description": "Publishing is an explicit decision, so nothing becomes internet-facing by accident." }
+      }
+    },
+
+    "mountSpec": {
+      "type": "object",
+      "description": "Named volumes only. Host bind mounts are not expressible in this contract.",
+      "required": ["volumeName", "mountPath"],
+      "properties": {
+        "volumeName": { "type": "string", "minLength": 1 },
+        "mountPath": { "type": "string", "pattern": "^/" },
+        "readOnly": { "type": "boolean", "default": false }
+      }
+    },
+
+    "volumeSpec": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "persistent": { "type": "boolean", "default": true }
+      }
+    },
+
+    "networkSpec": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "internal": { "type": "boolean", "default": false },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+
+    "resourceLimits": {
+      "type": "object",
+      "properties": {
+        "cpuCores": { "type": "number", "minimum": 0 },
+        "memoryBytes": { "type": "integer", "minimum": 0 },
+        "memoryReservationBytes": { "type": "integer", "minimum": 0 },
+        "pidsLimit": { "type": "integer", "minimum": 0, "default": 512 },
+        "diskBytes": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+
+    "healthCheckSpec": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "enum": ["containerLiveness", "http", "tcp", "command"], "default": "containerLiveness" },
+        "path": { "type": ["string", "null"] },
+        "port": { "type": ["integer", "null"] },
+        "command": { "type": ["array", "null"], "items": { "type": "string" } },
+        "intervalSeconds": { "type": "integer", "minimum": 1, "default": 10 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "default": 5 },
+        "retries": { "type": "integer", "minimum": 1, "default": 5 },
+        "startPeriodSeconds": { "type": "integer", "minimum": 0, "default": 15 },
+        "expectedStatus": { "type": "integer", "default": 200 }
+      }
+    },
+
+    "restartPolicySpec": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["no", "onFailure", "always", "unlessStopped"], "default": "unlessStopped" },
+        "maxRetries": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "upgradeStrategy": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["recreate", "rollingUpdate", "blueGreen"], "default": "recreate" },
+        "healthGraceSeconds": { "type": "integer", "minimum": 0, "default": 60 },
+        "autoRollbackOnFailure": { "type": "boolean", "default": true },
+        "maxUnavailable": { "type": "integer", "minimum": 0, "default": 1 },
+        "migrationNotes": { "type": ["string", "null"] }
+      }
+    },
+
+    "httpRouteSpec": {
+      "type": "object",
+      "required": ["routeId", "domain", "targetContainer", "targetPort"],
+      "properties": {
+        "routeId": { "type": "string" },
+        "domain": { "type": "string", "minLength": 1 },
+        "pathPrefix": { "type": ["string", "null"] },
+        "targetContainer": { "type": "string" },
+        "targetPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "tls": { "type": "boolean", "default": true },
+        "redirectHttpToHttps": { "type": "boolean", "default": true },
+        "webSocket": { "type": "boolean", "default": false },
+        "stripPrefix": { "type": "boolean", "default": false },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+
+    "tcpRouteSpec": {
+      "type": "object",
+      "required": ["routeId", "targetContainer", "targetPort"],
+      "properties": {
+        "routeId": { "type": "string" },
+        "targetContainer": { "type": "string" },
+        "targetPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "gatewayPort": { "type": ["integer", "null"], "description": "Port on the Harbora gateway, not on this host. The node dials out; the customer's firewall gains nothing." },
+        "tls": { "type": "boolean", "default": false },
+        "ipAllowlist": { "type": "array", "items": { "$ref": "#/$defs/cidr" } }
+      }
+    },
+
+    "containerSpec": {
+      "type": "object",
+      "required": ["name", "image"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "image": { "$ref": "#/$defs/imageRef" },
+        "command": { "type": ["array", "null"], "items": { "type": "string" }, "description": "argv array. Never a shell string." },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "secrets": { "type": "array", "items": { "$ref": "#/$defs/secretSpec" } },
+        "ports": { "type": "array", "items": { "$ref": "#/$defs/portMapping" } },
+        "mounts": { "type": "array", "items": { "$ref": "#/$defs/mountSpec" } },
+        "networkAliases": { "type": "array", "items": { "type": "string" } },
+        "resources": { "$ref": "#/$defs/resourceLimits" },
+        "healthCheck": { "$ref": "#/$defs/healthCheckSpec" },
+        "restartPolicy": { "$ref": "#/$defs/restartPolicySpec" },
+        "user": { "type": ["string", "null"] },
+        "readOnlyRootFilesystem": { "type": "boolean", "default": false },
+        "capabilitiesAdd": { "type": "array", "items": { "type": "string" } },
+        "capabilitiesDrop": { "type": "array", "items": { "type": "string" } },
+        "privileged": { "type": "boolean", "default": false, "description": "Refused unless the host feature flag is on AND the command carries node:admin scope." },
+        "hostNetwork": { "type": "boolean", "default": false },
+        "hostPidNamespace": { "type": "boolean", "default": false },
+        "stopGracePeriodSeconds": { "type": "integer", "minimum": 0, "default": 10 }
+      }
+    },
+
+    "workloadSpec": {
+      "type": "object",
+      "description": "Desired state of one deployable unit. A deploy is a declaration, not a script — which is what makes re-sending the same spec harmless.",
+      "required": ["workloadId", "name", "tenantId", "containers"],
+      "properties": {
+        "workloadId": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" },
+        "tenantId": { "type": "string", "minLength": 1 },
+        "appId": { "type": ["string", "null"] },
+        "appVersion": { "type": ["string", "null"] },
+        "templateVersion": { "type": ["string", "null"] },
+        "containers": { "type": "array", "items": { "$ref": "#/$defs/containerSpec" }, "minItems": 1 },
+        "networks": { "type": "array", "items": { "$ref": "#/$defs/networkSpec" } },
+        "volumes": { "type": "array", "items": { "$ref": "#/$defs/volumeSpec" } },
+        "httpRoutes": { "type": "array", "items": { "$ref": "#/$defs/httpRouteSpec" } },
+        "tcpRoutes": { "type": "array", "items": { "$ref": "#/$defs/tcpRouteSpec" } },
+        "upgrade": { "$ref": "#/$defs/upgradeStrategy" },
+        "supportedArchitectures": { "type": "array", "items": { "$ref": "#/$defs/architecture" } },
+        "minimumAgentVersion": { "type": ["string", "null"] },
+        "composeFile": { "type": ["string", "null"] },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+
+    "manifestImage": {
+      "type": "object",
+      "required": ["role", "repository", "digestByArchitecture"],
+      "properties": {
+        "role": { "type": "string" },
+        "repository": { "type": "string" },
+        "tag": { "type": ["string", "null"] },
+        "digestByArchitecture": {
+          "type": "object",
+          "description": "An architecture listed as supported with no digest here is invalid — the node would otherwise fall back to a tag on exactly the platform it was least tested on.",
+          "additionalProperties": { "$ref": "#/$defs/imageDigest" },
+          "minProperties": 1
+        }
+      }
+    },
+
+    "environmentField": {
+      "type": "object",
+      "required": ["key"],
+      "properties": {
+        "key": { "type": "string" },
+        "required": { "type": "boolean", "default": false },
+        "default": { "type": ["string", "null"] },
+        "description": { "type": ["string", "null"] },
+        "pattern": { "type": ["string", "null"] }
+      }
+    },
+
+    "secretField": {
+      "type": "object",
+      "required": ["key"],
+      "properties": {
+        "key": { "type": "string" },
+        "required": { "type": "boolean", "default": true },
+        "generateLength": { "type": ["integer", "null"], "minimum": 8 },
+        "mountAs": { "type": "string", "enum": ["environment", "file"], "default": "environment" },
+        "targetPath": { "type": ["string", "null"] },
+        "description": { "type": ["string", "null"] }
+      }
+    },
+
+    "backupPolicy": {
+      "type": "object",
+      "properties": {
+        "volumes": { "type": "array", "items": { "type": "string" } },
+        "databaseEngine": { "type": ["string", "null"] },
+        "requiresQuiesce": { "type": "boolean", "default": false },
+        "schedule": { "type": ["string", "null"] },
+        "retentionDays": { "type": "integer", "minimum": 1, "default": 14 }
+      }
+    },
+
+    "restorePolicy": {
+      "type": "object",
+      "properties": {
+        "stopBeforeRestore": { "type": "boolean", "default": true },
+        "postRestoreCommands": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
+        "verifyHealthAfterRestore": { "type": "boolean", "default": true }
+      }
+    },
+
+    "manifestDependency": {
+      "type": "object",
+      "required": ["appId"],
+      "properties": {
+        "appId": { "type": "string" },
+        "minimumVersion": { "type": ["string", "null"] },
+        "required": { "type": "boolean", "default": true }
+      }
+    },
+
+    "appManifest": {
+      "type": "object",
+      "description": "A versioned Ready App. A node holds several versions of one appId at once: an upgrade is choosing a different manifest and a rollback is choosing the previous one.",
+      "required": ["appId", "templateVersion", "applicationVersion", "images", "supportedArchitectures"],
+      "properties": {
+        "appId": { "type": "string" },
+        "templateVersion": { "type": "string" },
+        "applicationVersion": { "type": "string" },
+        "images": { "type": "array", "items": { "$ref": "#/$defs/manifestImage" }, "minItems": 1 },
+        "supportedArchitectures": { "type": "array", "items": { "$ref": "#/$defs/architecture" }, "minItems": 1 },
+        "requiredResources": { "$ref": "#/$defs/resourceLimits" },
+        "environmentSchema": { "type": "array", "items": { "$ref": "#/$defs/environmentField" } },
+        "secretSchema": { "type": "array", "items": { "$ref": "#/$defs/secretField" } },
+        "volumes": { "type": "array", "items": { "$ref": "#/$defs/volumeSpec" } },
+        "networks": { "type": "array", "items": { "$ref": "#/$defs/networkSpec" } },
+        "ports": { "type": "array", "items": { "$ref": "#/$defs/portMapping" } },
+        "httpRoutes": { "type": "array", "items": { "$ref": "#/$defs/httpRouteSpec" } },
+        "tcpRoutes": { "type": "array", "items": { "$ref": "#/$defs/tcpRouteSpec" } },
+        "healthCheck": { "$ref": "#/$defs/healthCheckSpec" },
+        "backup": { "$ref": "#/$defs/backupPolicy" },
+        "restore": { "$ref": "#/$defs/restorePolicy" },
+        "upgrade": { "$ref": "#/$defs/upgradeStrategy" },
+        "migrationNotes": { "type": ["string", "null"] },
+        "minimumNodeVersion": { "type": ["string", "null"] },
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/manifestDependency" } }
+      }
+    },
+
+    "databaseAccessGrantSpec": {
+      "type": "object",
+      "description": "The node never binds a database to 0.0.0.0. It dials the Harbora TCP gateway outbound and the gateway publishes the endpoint.",
+      "required": ["grantId", "tenantId", "workloadId", "engine", "targetContainer", "mode"],
+      "properties": {
+        "grantId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "workloadId": { "type": "string" },
+        "engine": { "type": "string", "enum": ["postgresql", "mysql", "mongodb", "redis"] },
+        "targetContainer": { "type": "string" },
+        "targetPort": { "type": ["integer", "null"] },
+        "databaseName": { "type": ["string", "null"] },
+        "mode": { "type": "string", "enum": ["temporary", "persistent"] },
+        "ttlSeconds": { "type": ["integer", "null"], "minimum": 60, "maximum": 604800 },
+        "ipAllowlist": { "type": "array", "items": { "$ref": "#/$defs/cidr" } },
+        "maxConnections": { "type": "integer", "minimum": 1, "default": 10 },
+        "maxConnectionsPerMinute": { "type": "integer", "minimum": 1, "default": 60 },
+        "requireTls": { "type": "boolean", "default": false },
+        "requireMutualTls": { "type": "boolean", "default": false },
+        "readOnly": { "type": "boolean", "default": false },
+        "operatorConfirmed": { "type": "boolean", "default": false, "description": "Required for a persistent grant. The node refuses rather than inferring consent." },
+        "audit": { "$ref": "#/$defs/auditMetadata" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "persistent" } }, "required": ["mode"] },
+          "then": { "properties": { "operatorConfirmed": { "const": true } }, "required": ["operatorConfirmed", "ipAllowlist"] }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "temporary" } }, "required": ["mode"] },
+          "then": { "required": ["ttlSeconds"] }
+        }
+      ]
+    },
+
+    "databaseAccessGrantState": {
+      "type": "object",
+      "required": ["grantId", "state", "engine", "mode"],
+      "properties": {
+        "grantId": { "type": "string" },
+        "state": { "type": "string", "enum": ["pending", "active", "expired", "revoked", "failed"] },
+        "engine": { "type": "string" },
+        "mode": { "type": "string", "enum": ["temporary", "persistent"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": ["string", "null"], "format": "date-time" },
+        "revokedAt": { "type": ["string", "null"], "format": "date-time" },
+        "revokedReason": { "type": ["string", "null"] },
+        "username": { "type": ["string", "null"] },
+        "password": { "type": ["string", "null"], "description": "Returned exactly once, on creation and on rotation. Never repeated in a status read." },
+        "endpoint": { "type": ["string", "null"] },
+        "tunnel": { "$ref": "#/$defs/tunnelState" },
+        "activeConnections": { "type": "integer", "minimum": 0 },
+        "lastConnectionAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+
+    "revokeDatabaseAccessRequest": {
+      "type": "object",
+      "required": ["grantId"],
+      "properties": {
+        "grantId": { "type": "string" },
+        "reason": { "type": ["string", "null"] },
+        "dropEngineUser": { "type": "boolean", "default": true }
+      }
+    },
+
+    "rotateDatabaseAccessRequest": {
+      "type": "object",
+      "required": ["grantId"],
+      "properties": {
+        "grantId": { "type": "string" },
+        "overlapSeconds": { "type": "integer", "minimum": 0, "default": 0 }
+      }
+    },
+
+    "tunnelState": {
+      "type": "object",
+      "required": ["tunnelId", "status"],
+      "properties": {
+        "tunnelId": { "type": "string" },
+        "grantId": { "type": ["string", "null"] },
+        "status": { "type": "string", "enum": ["pending", "connecting", "connected", "reconnecting", "closed", "failed"] },
+        "publicEndpoint": { "type": ["string", "null"] },
+        "localTarget": { "type": ["string", "null"] },
+        "connectedAt": { "type": ["string", "null"], "format": "date-time" },
+        "lastActivityAt": { "type": ["string", "null"], "format": "date-time" },
+        "activeConnections": { "type": "integer", "minimum": 0 },
+        "bytesIn": { "type": "integer", "minimum": 0 },
+        "bytesOut": { "type": "integer", "minimum": 0 },
+        "reconnectCount": { "type": "integer", "minimum": 0 },
+        "lastError": { "$ref": "#/$defs/nodeError" }
+      }
+    },
+
+    "tunnelRegistration": {
+      "type": "object",
+      "required": ["nodeId", "tunnelId", "grantId", "tenantId"],
+      "properties": {
+        "nodeId": { "type": "string" },
+        "tunnelId": { "type": "string" },
+        "grantId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "ipAllowlist": { "type": "array", "items": { "$ref": "#/$defs/cidr" } },
+        "maxConnections": { "type": "integer", "minimum": 1 },
+        "maxConnectionsPerMinute": { "type": "integer", "minimum": 1 },
+        "requestedPort": { "type": ["integer", "null"] },
+        "requireMutualTls": { "type": "boolean" },
+        "protocolVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "tunnelRegistrationResponse": {
+      "type": "object",
+      "required": ["accepted"],
+      "properties": {
+        "accepted": { "type": "boolean" },
+        "publicEndpoint": { "type": ["string", "null"] },
+        "publicPort": { "type": ["integer", "null"] },
+        "expiresAt": { "type": ["string", "null"], "format": "date-time" },
+        "error": { "$ref": "#/$defs/nodeError" }
+      }
+    },
+
+    "agentUpdateRequest": {
+      "type": "object",
+      "required": ["targetVersion", "downloadUrl", "sha256"],
+      "properties": {
+        "targetVersion": { "$ref": "#/$defs/semver" },
+        "downloadUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Required. An unverified binary downloaded and then executed as root is the worst thing an update path can do." },
+        "signatureBase64": { "type": ["string", "null"] },
+        "drainFirst": { "type": "boolean", "default": true },
+        "drainTimeoutSeconds": { "type": "integer", "minimum": 0, "default": 300 },
+        "verifyTimeoutSeconds": { "type": "integer", "minimum": 5, "default": 120 }
+      }
+    },
+
+    "agentUpdateResult": {
+      "type": "object",
+      "required": ["outcome", "previousVersion", "currentVersion"],
+      "properties": {
+        "outcome": { "type": "string", "enum": ["alreadyCurrent", "updated", "rolledBack", "failed"] },
+        "previousVersion": { "type": "string" },
+        "currentVersion": { "type": "string" },
+        "message": { "type": ["string", "null"] },
+        "error": { "$ref": "#/$defs/nodeError" },
+        "at": { "type": "string", "format": "date-time" }
+      }
+    },
+
+    "drainNodeRequest": {
+      "type": "object",
+      "properties": {
+        "drain": { "type": "boolean", "default": true },
+        "stopWorkloads": { "type": "boolean", "default": false },
+        "timeoutSeconds": { "type": "integer", "minimum": 0, "default": 300 },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+
+    "drainNodeResult": {
+      "type": "object",
+      "required": ["draining"],
+      "properties": {
+        "draining": { "type": "boolean" },
+        "workloadsStopped": { "type": "integer", "minimum": 0 },
+        "workloadsRemaining": { "type": "integer", "minimum": 0 },
+        "timedOut": { "type": "boolean" }
+      }
+    },
+
+    "workloadStatus": {
+      "type": "object",
+      "required": ["workloadId", "state"],
+      "properties": {
+        "workloadId": { "type": "string" },
+        "state": { "type": "string" },
+        "containerId": { "type": ["string", "null"] },
+        "imageDigest": { "type": ["string", "null"] },
+        "appVersion": { "type": ["string", "null"] },
+        "startedAt": { "type": ["string", "null"], "format": "date-time" },
+        "restartCount": { "type": "integer", "minimum": 0 },
+        "healthy": { "type": "boolean" },
+        "lastError": { "type": ["string", "null"] },
+        "containers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "containerId", "state", "image"],
+            "properties": {
+              "name": { "type": "string" },
+              "containerId": { "type": "string" },
+              "state": { "type": "string" },
+              "image": { "type": "string" },
+              "healthy": { "type": "boolean" },
+              "restartCount": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+
+    "deployWorkloadRequest": {
+      "type": "object",
+      "required": ["spec"],
+      "properties": {
+        "spec": { "$ref": "#/$defs/workloadSpec" },
+        "manifest": { "$ref": "#/$defs/appManifest" },
+        "dryRun": { "type": "boolean", "default": false }
+      }
+    },
+
+    "deployWorkloadResult": {
+      "type": "object",
+      "required": ["workloadId", "deployed", "status"],
+      "properties": {
+        "workloadId": { "type": "string" },
+        "deployed": { "type": "boolean" },
+        "status": { "$ref": "#/$defs/workloadStatus" },
+        "allocatedPorts": { "type": "object", "additionalProperties": { "type": "integer" } },
+        "resolvedDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+        "rolledBack": { "type": "boolean" },
+        "previousVersion": { "type": ["string", "null"] },
+        "pullDurationMs": { "type": "integer", "minimum": 0 },
+        "deployDurationMs": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "workloadRequest": {
+      "type": "object",
+      "required": ["workloadId", "tenantId"],
+      "properties": {
+        "workloadId": { "type": "string" },
+        "tenantId": { "type": "string" }
+      }
+    },
+
+    "deleteWorkloadRequest": {
+      "type": "object",
+      "required": ["workloadId", "tenantId"],
+      "properties": {
+        "workloadId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "deleteVolumes": { "type": "boolean", "default": false, "description": "Deleting a workload and deleting the data it held are different decisions, and only one is reversible." },
+        "force": { "type": "boolean", "default": false }
+      }
+    },
+
+    "streamLogsRequest": {
+      "type": "object",
+      "required": ["workloadId", "tenantId"],
+      "properties": {
+        "workloadId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "containerName": { "type": ["string", "null"] },
+        "tailLines": { "type": "integer", "minimum": 0, "default": 200 },
+        "follow": { "type": "boolean", "default": true }
+      }
+    },
+
+    "networkRequest": {
+      "type": "object",
+      "required": ["tenantId", "network"],
+      "properties": {
+        "tenantId": { "type": "string" },
+        "network": { "$ref": "#/$defs/networkSpec" }
+      }
+    },
+
+    "volumeRequest": {
+      "type": "object",
+      "required": ["tenantId", "volume"],
+      "properties": {
+        "tenantId": { "type": "string" },
+        "volume": { "$ref": "#/$defs/volumeSpec" }
+      }
+    },
+
+    "snapshotVolumeRequest": {
+      "type": "object",
+      "required": ["tenantId", "volumeName", "snapshotId"],
+      "properties": {
+        "tenantId": { "type": "string" },
+        "volumeName": { "type": "string" },
+        "snapshotId": { "type": "string" },
+        "quiesceWorkloadId": { "type": ["string", "null"] },
+        "compress": { "type": "boolean", "default": true }
+      }
+    },
+
+    "snapshotVolumeResult": {
+      "type": "object",
+      "required": ["snapshotId", "path", "sha256"],
+      "properties": {
+        "snapshotId": { "type": "string" },
+        "path": { "type": "string" },
+        "sizeBytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "durationMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "restoreVolumeRequest": {
+      "type": "object",
+      "required": ["tenantId", "volumeName", "snapshotId", "expectedSha256"],
+      "properties": {
+        "tenantId": { "type": "string" },
+        "volumeName": { "type": "string" },
+        "snapshotId": { "type": "string" },
+        "expectedSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Verified before anything is written. A corrupt archive must not half-restore." },
+        "quiesceWorkloadId": { "type": ["string", "null"] }
+      }
+    },
+
+    "registerHttpRouteRequest": {
+      "type": "object",
+      "required": ["tenantId", "workloadId", "route"],
+      "properties": {
+        "tenantId": { "type": "string" },
+        "workloadId": { "type": "string" },
+        "route": { "$ref": "#/$defs/httpRouteSpec" }
+      }
+    },
+
+    "registerTcpRouteRequest": {
+      "type": "object",
+      "required": ["tenantId", "workloadId", "route"],
+      "properties": {
+        "tenantId": { "type": "string" },
+        "workloadId": { "type": "string" },
+        "route": { "$ref": "#/$defs/tcpRouteSpec" }
+      }
+    },
+
+    "removeRouteRequest": {
+      "type": "object",
+      "required": ["tenantId", "routeId"],
+      "properties": {
+        "tenantId": { "type": "string" },
+        "routeId": { "type": "string" }
+      }
+    },
+
+    "routeResult": {
+      "type": "object",
+      "required": ["routeId", "active"],
+      "properties": {
+        "routeId": { "type": "string" },
+        "active": { "type": "boolean" },
+        "publicEndpoint": { "type": ["string", "null"] }
+      }
+    },
+
+    "acknowledgedResult": {
+      "type": "object",
+      "required": ["applied"],
+      "properties": {
+        "applied": { "type": "boolean" },
+        "detail": { "type": ["string", "null"] },
+        "noOp": { "type": "boolean", "default": false }
+      }
+    }
+  }
+}
