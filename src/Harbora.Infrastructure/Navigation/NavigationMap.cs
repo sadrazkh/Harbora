@@ -47,7 +47,10 @@ public static class NavigationMap
         // AI sits in its own group rather than under Insight: it is a service somebody uses, not a
         // report they read, and burying it under monitoring is how a feature goes unnoticed.
         new("intelligence", [
-            new("ai", "Ai", "Index", "sparkles")
+            new("ai", "Ai", "Index", "sparkles"),
+            // Administering the AI service is a different job from using it: providers, tokens,
+            // pricing and plans. It needs the platform capability and belongs in Advanced.
+            new("ai-admin", "AiAdmin", "Index", "sliders-horizontal", Capabilities.PlatformManage, Advanced: true)
         ]),
         new("insight", [
             new("monitoring", "Monitoring", "Index", "activity"),

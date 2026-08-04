@@ -159,6 +159,37 @@ metadata — is the highest-value target and is covered, as are private IPv6 ran
 
 ---
 
+### Administration
+
+`/admin/ai`, behind `platform.manage`. Providers, their tokens, the model catalogue, plans and the
+plan→model mapping.
+
+A token is **write-only**. It can be added and it can be replaced; it can never be read back. A form
+that renders the current token so it can be "edited" puts it in the browser cache, in the next screen
+recording and in every support screenshot it appears in — and the field looks like a convenience,
+which is why a test asserts the view never mentions `EncryptedToken` and the controller never calls
+`Unprotect`.
+
+Rotation clears the failure count, the failure reason and the rate-limit parking, because the
+failures belonged to the old token. Left in place, the administrator's fix appears to change nothing:
+the new token stays out of rotation behind the old one's open circuit.
+
+The plan→model form replaces the whole set. An add-only form cannot take a model back off a plan, so
+a mistake there would be permanent from the interface — and an empty submission has to mean "none",
+since the browser sends no field at all for a checkbox group with nothing ticked.
+
+The base URL is validated where it is **stored**, not only where it is called. Stored, it becomes a
+request our own server makes on somebody else's instruction.
+
+Health is read from what the router wrote, never probed on render: a page that probes reports the
+health of the page load rather than of the traffic.
+
+In the sidebar it is a separate destination from `/ai` — administering the service is a different job
+from using it — capability-gated and Advanced-only, with the route live for anyone in Simple mode who
+follows a link.
+
+---
+
 ## Migrations
 
 All additive, all with a working `Down`.
@@ -182,9 +213,9 @@ template was shipped rather than an unsafe one. A test asserts no manifest mount
 **The TCP gateway does not exist.** Only its contract, and a fake that returns a placeholder host.
 Production database tunnelling is not real until the node agent ships.
 
-**Admin AI pages are not built.** Providers, credentials, model catalogue and plan editing have no
-UI yet; the data model, rules and migrations are complete and tested. The same applies to the
-database-grant UI and the version selector on the deploy form.
+**The database-grant UI and the version selector on the deploy form are not built.** The data model,
+rules and migrations behind both are complete and tested; grants are created through the API and the
+deploy form still takes the recommended version.
 
 **The gateway has not been exercised against a real provider.** Without a provider key it is testable
 only up to the network boundary.
@@ -197,9 +228,11 @@ period quotas, but per-minute throttling needs a shared counter and is not wired
 
 ## Testing
 
-1,376 tests. Mutation testing was run on every rule where a wrong answer is silent — version
+1,397 tests. Mutation testing was run on every rule where a wrong answer is silent — version
 selection, database access policy, credential routing, failure classification, pricing, usage
-parsing, plan access and API keys — for 81 mutants, all caught.
+parsing, plan access, API keys and the administration controller — for 93 mutants, all caught.
+`scripts/mutate-ai-admin.py` holds the last of those runs: twelve changes that compile, leave the
+screen looking correct, and each break something nobody would notice.
 
 `UiBaselineTests` guards the approved interface: design tokens present in both themes, every view's
 tags balanced (an extra `</div>` closes the layout early and pushes content outside it), the retired

@@ -85,3 +85,18 @@ public class AiOverviewViewModel
     public int RequestsThisPeriod { get; set; }
     public string EndpointUrl { get; set; } = "/v1";
 }
+
+/// <summary>Everything the AI administration page shows.</summary>
+public class AiAdminViewModel
+{
+    public List<Harbora.Domain.Ai.AiProvider> Providers { get; set; } = [];
+    public List<Harbora.Domain.Ai.AiModel> Models { get; set; } = [];
+    public List<Harbora.Domain.Ai.AiPlan> Plans { get; set; } = [];
+
+    /// <summary>Recent failures, so routing trouble is visible without reading logs.</summary>
+    public List<Harbora.Domain.Ai.AiUsageRecord> RecentFailures { get; set; } = [];
+
+    public decimal SpendLast30Days { get; set; }
+    public decimal ChargedLast30Days { get; set; }
+    public int RequestsLast30Days { get; set; }
+}
