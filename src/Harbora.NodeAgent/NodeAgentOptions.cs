@@ -55,6 +55,12 @@ public sealed class NodeAgentOptions
     /// </summary>
     public string MaintenanceImage { get; set; } = "docker.io/library/busybox:1.36";
 
+    /// <summary>
+    /// TCP gateway to dial for database tunnels, as <c>host:port</c>. Normally supplied by the
+    /// control plane at enrollment; this overrides it, which is what a development setup needs.
+    /// </summary>
+    public string? TunnelGatewayUrl { get; set; }
+
     public int HeartbeatIntervalSeconds { get; set; } = 30;
 
     /// <summary>
@@ -70,6 +76,9 @@ public sealed class NodeAgentOptions
     public SecurityOptions Security { get; set; } = new();
 
     public PortAllocationOptions Ports { get; set; } = new();
+
+    /// <summary>Caps an isolated Docker workspace runs under. Node-owned, never spec-supplied.</summary>
+    public Workspaces.WorkspaceLimits Workspace { get; set; } = new();
 
     /// <summary>Commands executed concurrently. Beyond this they queue; nothing is dropped.</summary>
     public int MaxConcurrentCommands { get; set; } = 4;
@@ -173,6 +182,18 @@ public sealed class SecurityOptions
     /// deliberate act by the machine's owner, recorded in the audit log at startup.
     /// </summary>
     public bool AllowPrivilegedWorkloads { get; set; }
+
+    /// <summary>
+    /// Separate switch for tenant Docker workspaces, deliberately not the same one as
+    /// <see cref="AllowPrivilegedWorkloads"/>.
+    ///
+    /// <para>
+    /// An operator who enables privileged mode for one internal workload has not thereby agreed to
+    /// run untrusted tenant code in a nested daemon. Two different decisions get two different
+    /// flags, so neither can be granted by accident along with the other.
+    /// </para>
+    /// </summary>
+    public bool AllowIsolatedDockerWorkspace { get; set; }
 
     /// <summary>
     /// Host paths that may never be mounted into a container, however the request is phrased.

@@ -45,6 +45,7 @@ public sealed class WorkloadDeployer(
     SecretRedactor redactor,
     NodeMetrics metrics,
     INodeEventPublisher events,
+    Workspaces.DockerWorkspaceProvisioner workspaces,
     TimeProvider clock,
     ILogger<WorkloadDeployer> log)
 {
@@ -62,6 +63,22 @@ public sealed class WorkloadDeployer(
         var stopwatch = Stopwatch.StartNew();
 
         await context.ReportAsync("validating", 5, $"checking the specification for {spec.Name}", ct);
+
+        // A Docker workspace is not an ordinary workload with extra flags: it is a separate,
+        // separately-gated path, and the spec it deploys is the node's hardened version rather
+        // than anything the control plane sent.
+        if (Workspaces.DockerWorkspaceProvisioner.IsWorkspace(spec))
+        {
+            var decision = workspaces.Evaluate(spec, hasNodeAdminScope);
+
+            if (!decision.Allowed)
+                throw new DeploymentRefusedException(
+                    decision.Violations[0].Code,
+                    string.Join(" ", decision.Violations.Select(v => v.Message)),
+                    decision.Violations);
+
+            spec = decision.Hardened!;
+        }
 
         var violations = _policy.Validate(spec, host.Architecture, AgentVersion.Current, hasNodeAdminScope);
 

@@ -48,6 +48,7 @@ public sealed class DeploymentTests : IDisposable
         _redactor,
         new NodeMetrics(_clock),
         _events,
+        TestFactories.Workspaces(_agent),
         _clock,
         TestFactories.Log<WorkloadDeployer>());
 

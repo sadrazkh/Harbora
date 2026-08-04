@@ -4,6 +4,7 @@ using Harbora.NodeAgent.Auditing;
 using Harbora.NodeAgent.Commands;
 using Harbora.NodeAgent.Commands.Handlers;
 using Harbora.NodeAgent.Contracts;
+using Harbora.NodeAgent.Database;
 using Harbora.NodeAgent.Enrollment;
 using Harbora.NodeAgent.Hosting;
 using Harbora.NodeAgent.Identity;
@@ -13,6 +14,8 @@ using Harbora.NodeAgent.Runtime;
 using Harbora.NodeAgent.Security;
 using Harbora.NodeAgent.State;
 using Harbora.NodeAgent.Transport;
+using Harbora.NodeAgent.Tunnels;
+using Harbora.NodeAgent.Workspaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -52,6 +55,7 @@ builder.Services.AddSingleton(sp => new JsonFileStore<OutboxState>(Path.Combine(
 builder.Services.AddSingleton(sp => new JsonFileStore<CommandLedgerState>(Path.Combine(Options(sp).StateDirectory, "commands.json")));
 builder.Services.AddSingleton(sp => new JsonFileStore<WorkloadRegistryState>(Path.Combine(Options(sp).StateDirectory, "workloads.json")));
 builder.Services.AddSingleton(sp => new JsonFileStore<RouteRegistryState>(Path.Combine(Options(sp).StateDirectory, "routes.json")));
+builder.Services.AddSingleton(sp => new JsonFileStore<GrantStoreState>(Path.Combine(Options(sp).StateDirectory, "grants.json")));
 
 // --- container runtime ---
 
@@ -69,8 +73,18 @@ builder.Services.AddSingleton(sp => new HealthProbe(
     sp.GetRequiredService<TimeProvider>(),
     sp.GetRequiredService<ILogger<HealthProbe>>()));
 builder.Services.AddSingleton<VolumeArchiver>();
+builder.Services.AddSingleton<DockerWorkspaceProvisioner>();
 builder.Services.AddSingleton<WorkloadDeployer>();
 builder.Services.AddSingleton<StateReconciler>();
+
+// --- external database access ---
+
+builder.Services.AddSingleton<LocalSecretVault>();
+builder.Services.AddSingleton<DatabaseEngineOperations>();
+builder.Services.AddSingleton<ITunnelConnectionFactory, TlsTunnelConnectionFactory>();
+builder.Services.AddSingleton<ILocalDialer, TcpLocalDialer>();
+builder.Services.AddSingleton<TunnelSupervisor>();
+builder.Services.AddSingleton<DatabaseAccessManager>();
 
 // --- control plane ---
 
@@ -124,9 +138,14 @@ builder.Services.AddSingleton<INodeCommandHandler, RegisterHttpRouteHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, RegisterTcpRouteHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, RemoveRouteHandler>();
 
+builder.Services.AddSingleton<INodeCommandHandler, CreateDatabaseAccessGrantHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, RevokeDatabaseAccessGrantHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, RotateDatabaseAccessCredentialHandler>();
+
 builder.Services.AddHostedService<NodeAgentWorker>();
 builder.Services.AddHostedService<MetricsEndpoint>();
 builder.Services.AddHostedService<LedgerSweeper>();
+builder.Services.AddHostedService<GrantSweeper>();
 
 await builder.Build().RunAsync();
 return;

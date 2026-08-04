@@ -43,6 +43,10 @@ public static class TestFactories
             agent.Wrapped, host, runtime, implemented, Log<Harbora.NodeAgent.Inventory.InventoryCollector>());
     }
 
+    /// <summary>The workspace provisioner, wired to the agent's own security options.</summary>
+    public static Harbora.NodeAgent.Workspaces.DockerWorkspaceProvisioner Workspaces(TempAgent agent) =>
+        new(agent.Wrapped, Audit(agent), Log<Harbora.NodeAgent.Workspaces.DockerWorkspaceProvisioner>());
+
     public static CommandLedger Ledger(TempAgent agent, ManualClock clock) =>
         new(Store<CommandLedgerState>(agent, "commands.json"), agent.Wrapped, clock, Log<CommandLedger>());
 

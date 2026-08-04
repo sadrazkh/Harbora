@@ -35,7 +35,7 @@ public sealed class CommandHandlerTests : IDisposable
     private WorkloadDeployer Deployer() => new(
         _agent.Wrapped, _runtime, _registry, new PortAllocator(_agent.Options.Ports),
         new HealthProbe(_runtime, TimeProvider.System, TestFactories.Log<HealthProbe>()),
-        _host, new SecretRedactor(), new NodeMetrics(_clock), new NullEvents(), _clock,
+        _host, new SecretRedactor(), new NodeMetrics(_clock), new NullEvents(), TestFactories.Workspaces(_agent), _clock,
         TestFactories.Log<WorkloadDeployer>());
 
     private CommandContext Context(string command, object payload, string? tenantId = "tenant-1") =>
