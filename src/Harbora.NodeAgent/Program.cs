@@ -23,6 +23,14 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+// The installer and the updater both ask the binary what it is before trusting it, so this has to
+// answer without touching configuration, the network or the container runtime.
+if (args.Contains("--version") || args.Contains("-v"))
+{
+    Console.WriteLine(AgentVersion.Current);
+    return;
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 
 // Configuration, lowest precedence first. The installer writes agent.conf, so an operator editing

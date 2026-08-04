@@ -1,0 +1,54 @@
+name: Release node agent
+
+# Tag a version to publish node-agent binaries:  git tag node-agent-v1.0.0 && git push --tags
+# Kept separate from release-cli.yml so a CLI release and a node-agent release can move
+# independently — a fleet of nodes should not have to be updated because the CLI changed.
+
+on:
+  push:
+    tags:
+      - 'node-agent-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rid: [linux-x64, linux-arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Test
+        run: dotnet test tests/Harbora.NodeAgent.Tests/Harbora.NodeAgent.Tests.csproj -c Release
+
+      - name: Publish ${{ matrix.rid }}
+        run: |
+          dotnet publish src/Harbora.NodeAgent/Harbora.NodeAgent.csproj \
+            -c Release -r ${{ matrix.rid }} --self-contained true \
+            -p:PublishSingleFile=true -p:DebugType=none \
+            -o out
+
+      - name: Checksum
+        run: |
+          mv out/harbora-node-agent harbora-node-agent-${{ matrix.rid }}
+          chmod +x harbora-node-agent-${{ matrix.rid }}
+          sha256sum harbora-node-agent-${{ matrix.rid }} > harbora-node-agent-${{ matrix.rid }}.sha256
+          cat harbora-node-agent-${{ matrix.rid }}.sha256
+
+      # The checksum ships with the binary because both the installer and the agent's own updater
+      # refuse to install an artifact they cannot verify.
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            harbora-node-agent-${{ matrix.rid }}
+            harbora-node-agent-${{ matrix.rid }}.sha256
