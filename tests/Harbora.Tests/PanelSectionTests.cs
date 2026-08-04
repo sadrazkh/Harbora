@@ -53,6 +53,16 @@ public class PanelSectionTests
         File.ReadAllText(Path.Combine([RepoRoot(), "src", "Harbora.Web", "Views", .. parts]));
 
     [Fact]
+    public void Simple_mode_hides_the_platforms_own_numbers_and_advanced_shows_them()
+    {
+        // Host CPU, server counts, backup schedules, the team list. Each has its own page, so
+        // Simple is not losing them — it is not making somebody read them on the way to the thing
+        // they opened the panel for.
+        PanelSections.ShowsPlatformDetail(PanelMode.Simple).Should().BeFalse();
+        PanelSections.ShowsPlatformDetail(PanelMode.Advanced).Should().BeTrue();
+    }
+
+    [Fact]
     public void Every_folding_block_takes_its_open_state_from_the_shared_decision()
     {
         // Scoped to advanced-panel: the other <details> in the panel are dropdowns, accordions and

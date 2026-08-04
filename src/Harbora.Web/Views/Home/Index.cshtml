@@ -1,6 +1,7 @@
 @model DashboardViewModel
 @using Harbora.Infrastructure.Monitoring
 @using Harbora.Web.ViewModels
+@inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @{
     ViewData["Title"] = "Dashboard";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -18,6 +19,12 @@
     var who = User.Identity?.Name is { Length: > 0 } name ? name.Split('@')[0] : null;
     var completedSteps = (Model.ServersOnline > 0 ? 1 : 0) + (Model.DomainsTotal > 0 ? 1 : 0) + (Model.AppCount > 0 ? 1 : 0) + (Model.BackupSchedulesEnabled > 0 ? 1 : 0);
     var platformHealthy = Model.DockerAvailable && Model.ServersTotal > 0 && Model.ServersOnline == Model.ServersTotal && Model.FailedDeployments == 0;
+
+    // Simple mode shows the person their own work and leaves the platform's vital signs to the
+    // pages that exist for them. Nothing here is removed — Monitoring, Servers, Backups and Users
+    // are all still one click away, and in Advanced this page is exactly as it was.
+    var showPlatform = Harbora.Infrastructure.Navigation.PanelSections.ShowsPlatformDetail(
+        await PanelModes.GetAsync());
     string DbKey(StarterDatabase database) => database.Type switch { "PostgreSql" => "postgres", "MySql" => "mysql", "MariaDb" => "mariadb", "Redis" => "redis", "MongoDb" => "mongodb", _ => "database" };
 }
 
@@ -40,7 +47,10 @@
     <a href="/apps" class="dashboard-stat"><span class="dashboard-stat-icon bg-info-soft text-info"><i data-lucide="layers-3" class="h-5 w-5"></i></span><span><small>@T["Applications"]</small><strong>@Model.AppCount</strong><em class="text-ok">@Model.RunningCount @(isFa ? "در حال اجرا" : "running")</em></span></a>
     <a href="/databases" class="dashboard-stat"><span class="dashboard-stat-icon bg-ok-soft text-ok"><i data-lucide="database" class="h-5 w-5"></i></span><span><small>@T["Databases"]</small><strong>@Model.DatabaseCount</strong><em class="text-ok">@Model.HealthyDatabaseCount @(isFa ? "سالم" : "healthy")</em></span></a>
     <a href="/deployments" class="dashboard-stat"><span class="dashboard-stat-icon bg-warn-soft text-warn"><i data-lucide="rocket" class="h-5 w-5"></i></span><span><small>@T["Deployments"]</small><strong>@Model.DeploymentsTotal</strong><em class="@(Model.FailedDeployments > 0 ? "text-danger" : "text-ok")">@Model.FailedDeployments @(isFa ? "ناموفق" : "failed")</em></span></a>
+    @if (showPlatform)
+    {
     <a href="/servers" class="dashboard-stat"><span class="dashboard-stat-icon @(platformHealthy ? "bg-ok-soft text-ok" : "bg-warn-soft text-warn")"><i data-lucide="@(platformHealthy ? "circle-check-big" : "server-cog")" class="h-5 w-5"></i></span><span><small>@(isFa ? "وضعیت پلتفرم" : "Platform status")</small><strong class="text-lg">@(platformHealthy ? (isFa ? "سالم" : "Healthy") : (isFa ? "نیازمند بررسی" : "Attention"))</strong><em>@Model.ServersOnline/@Model.ServersTotal @(isFa ? "سرور آنلاین" : "servers online")</em></span></a>
+    }
 </section>
 
 <section class="dashboard-primary-grid mt-5">
@@ -122,6 +132,8 @@
     </div>
 </section>
 
+@if (showPlatform)
+{
 <section class="dashboard-bottom-grid mt-5">
     <div class="dashboard-panel backup-summary">
         <div class="dashboard-panel-heading"><div><h2>@T["Backups"]</h2><p>@(isFa ? "حفاظت و بازیابی داده" : "Data protection and recovery")</p></div><a href="/backups">@(isFa ? "مدیریت" : "Manage")</a></div>
@@ -151,3 +163,4 @@
         <a href="/users" class="invite-button"><i data-lucide="user-plus" class="h-4 w-4"></i>@(isFa ? "دعوت عضو" : "Invite member")</a>
     </div>
 </section>
+}

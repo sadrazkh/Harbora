@@ -1,7 +1,13 @@
 ﻿@model App
 @using Harbora.Infrastructure.Projects
+@inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @{
     ViewData["Title"] = Model.Name;
+
+    // Simple mode folds the specialist parts of this page; Advanced leaves them open, so the page
+    // is unchanged for anyone who was already using it. Folded, never dropped — the settings are
+    // one click away and the summary says what is inside.
+    var advancedOpen = Harbora.Infrastructure.Navigation.PanelSections.StartsOpen(await PanelModes.GetAsync());
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
     var running = Model.Status == AppStatus.Running;
@@ -120,8 +126,8 @@
             </section>
         }
 
-        <section class="rounded-xl border border-line bg-surface">
-            <div class="px-4 py-3 border-b border-line font-semibold">@T["Deployments"]</div>
+        <details class="advanced-panel" open="@advancedOpen">
+            <summary><span><i data-lucide="rocket" class="h-4 w-4"></i>@T["Deployments"]</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
             <div class="divide-y divide-line">
                 @if (!Model.Deployments.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
                 @foreach (var d in Model.Deployments.OrderByDescending(x => x.Number))
@@ -144,11 +150,11 @@
                     </div>
                 }
             </div>
-        </section>
+        </details>
 
         @* ---- Environment variables ---- *@
-        <section class="rounded-xl border border-line bg-surface">
-            <div class="px-4 py-3 border-b border-line font-semibold">@T["Environment Variables"]</div>
+        <details class="advanced-panel" open="@advancedOpen">
+            <summary><span><i data-lucide="file-code-2" class="h-4 w-4"></i>@T["Environment Variables"]</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
             <div class="divide-y divide-line">
                 @if (!Model.EnvironmentVariables.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
                 @foreach (var e in Model.EnvironmentVariables.OrderBy(x => x.Key))
@@ -169,7 +175,7 @@
                 <label class="flex items-center gap-1 text-xs"><input type="checkbox" name="isSecret" value="true"> secret</label>
                 <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-sm font-semibold">+ @T["Save"]</button>
             </form>
-        </section>
+        </details>
     </div>
 
     <div class="space-y-6">

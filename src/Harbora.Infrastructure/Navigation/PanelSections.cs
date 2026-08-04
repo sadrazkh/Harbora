@@ -28,4 +28,14 @@ public static class PanelSections
     /// </param>
     public static bool StartsOpen(PanelMode mode, bool hasErrors = false) =>
         hasErrors || mode == PanelMode.Advanced;
+
+    /// <summary>
+    /// Whether to draw the parts of a page that describe the platform rather than the person's own
+    /// work: host CPU and memory, server counts, backup schedules, team lists.
+    ///
+    /// Hidden in Simple, never removed — each of these has its own page, reachable from the sidebar
+    /// in Advanced and by URL always. What Simple takes away is having to read them on the way to
+    /// the thing somebody actually opened the panel for.
+    /// </summary>
+    public static bool ShowsPlatformDetail(PanelMode mode) => mode == PanelMode.Advanced;
 }
