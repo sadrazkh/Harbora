@@ -153,7 +153,7 @@ public sealed class DatabaseAccessService(
         var connection = DatabaseCredentialManager.ConnectionString(
             service.Type.ToString(), gatewayHost, gatewayPort,
             credential.Username, credential.Password, service.DatabaseName,
-            DatabaseTls.Available(service.Type) ? DatabaseTls.ConnectionParameter(service.Type) : null);
+            service.TlsEnabled ? DatabaseTls.ConnectionParameter(service.Type) : null);
 
         return new AccessResult(new IssuedAccess(grant, credential.Password, connection), null);
     }

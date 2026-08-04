@@ -31,6 +31,16 @@ public class ManagedService : BaseEntity
     public string Username { get; set; } = string.Empty;
     /// <summary>Encrypted at rest.</summary>
     public string EncryptedPassword { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Whether connections to this service are actually encrypted, as of the last provision.
+    ///
+    /// Recorded rather than inferred from the engine type: a PostgreSQL container created before
+    /// Harbora configured TLS is still running with ssl=off, and a page that reads "PostgreSQL can
+    /// do TLS" as "this one does" tells the customer their connection is encrypted when it is not —
+    /// which is worse than saying nothing at all.
+    /// </summary>
+    public bool TlsEnabled { get; set; }
     public string DatabaseName { get; set; } = string.Empty;
 
     public string VolumeName { get; set; } = string.Empty;

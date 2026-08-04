@@ -137,6 +137,21 @@ public class DatabaseTlsTests
     }
 
     [Fact]
+    public void The_backfill_only_marks_the_engines_that_were_already_encrypted()
+    {
+        // The migration writes true for MySQL and MariaDB and leaves PostgreSQL false. Asserted
+        // against the enum rather than the numbers in the SQL, because the numbers are what would
+        // silently stop matching if the enum were ever reordered.
+        ((int)ManagedServiceType.MySql).Should().Be(1);
+        ((int)ManagedServiceType.MariaDb).Should().Be(2);
+        ((int)ManagedServiceType.PostgreSql).Should().Be(0);
+
+        DatabaseTls.EncryptedByDefault(ManagedServiceType.MySql).Should().BeTrue();
+        DatabaseTls.EncryptedByDefault(ManagedServiceType.MariaDb).Should().BeTrue();
+        DatabaseTls.EncryptedByDefault(ManagedServiceType.PostgreSql).Should().BeFalse();
+    }
+
+    [Fact]
     public void A_certificate_name_cannot_carry_anything_into_the_shell()
     {
         // The name comes from a container name, which comes from a service name somebody typed.

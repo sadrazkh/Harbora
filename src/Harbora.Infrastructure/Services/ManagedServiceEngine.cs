@@ -69,6 +69,10 @@ public sealed class ManagedServiceEngine(
             var volumes = new List<(string, string, bool)> { (svc.VolumeName, def.DataMountPath, false) };
             var command = def.Command(creds);
 
+            // MariaDB and MySQL make their own certificate at first start; anything else starts
+            // unencrypted unless the block below succeeds.
+            svc.TlsEnabled = DatabaseTls.EncryptedByDefault(svc.Type);
+
             // PostgreSQL will not encrypt a connection without a certificate it can read, and the
             // moment external access publishes a port that stops being a private-network trade-off:
             // the password and every row after it would cross the internet in the clear. MariaDB and
@@ -87,6 +91,7 @@ public sealed class ManagedServiceEngine(
                 {
                     volumes.Add((certVolume, DatabaseTls.MountPath, true));
                     command = DatabaseTls.ServerCommand();
+                    svc.TlsEnabled = true;
                 }
                 else
                 {
