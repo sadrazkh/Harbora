@@ -1,0 +1,171 @@
+@model Harbora.Web.Controllers.SnapshotBrowserViewModel
+@using Harbora.Modules.Backup.Contracts
+@{
+    ViewData["Title"] = "Snapshot";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+
+    string Size(long b) => b <= 0 ? "—" : b < 1048576 ? $"{b / 1024.0:0} KB" : $"{b / 1048576.0:0.0} MB";
+
+    var header = new Harbora.Web.ViewModels.PageHeaderModel(
+        isFa ? "مرور نسخه" : "Browse snapshot",
+        $"{Model.Snapshot.TargetRef} · {Model.RepositoryName} · {Model.Snapshot.CreatedAt.LocalDateTime:yyyy-MM-dd HH:mm}");
+
+    // The folder a restore lands in by default: named after the snapshot, inside the restore root,
+    // so the safe option is the one that needs no thought.
+    var suggested = System.IO.Path.Combine(
+        Model.RestoreRoot, $"snapshot-{Model.Snapshot.Id:N}"[..24]);
+}
+
+<div class="mb-6">
+    <partial name="Design/_PageHeader" model="header" />
+</div>
+
+@if (err is not null)
+{
+    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>
+}
+
+<div class="mb-4 text-sm">
+    <a asp-action="Index" class="text-accent-text hover:underline">@(isFa ? "مرکز پشتیبان" : "Backup Center")</a>
+    <span class="text-ink-faint"> / </span>
+    <a asp-action="Snapshot" asp-route-id="@Model.Snapshot.Id" asp-route-path=""
+       class="text-accent-text hover:underline">@(isFa ? "ریشه" : "root")</a>
+    @foreach (var (name, path) in Model.Breadcrumbs)
+    {
+        <span class="text-ink-faint"> / </span>
+        <a asp-action="Snapshot" asp-route-id="@Model.Snapshot.Id" asp-route-path="@path"
+           class="text-accent-text hover:underline">@name</a>
+    }
+</div>
+
+<div class="grid lg:grid-cols-3 gap-6">
+
+    <!-- File listing -->
+    <section class="lg:col-span-2 rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "محتویات" : "Contents")</h2>
+
+        @if (Model.Entries.Count == 0)
+        {
+            <p class="text-sm text-ink-faint">
+                @(isFa ? "این پوشه خالی است، یا محتوایش خوانده نشد." : "This folder is empty, or could not be read.")
+            </p>
+        }
+        else
+        {
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="text-ink-faint text-[12px]">
+                        <tr class="border-b border-line">
+                            <th class="text-start py-2">@(isFa ? "نام" : "Name")</th>
+                            <th class="text-start py-2">@(isFa ? "حجم" : "Size")</th>
+                            <th class="text-start py-2">@(isFa ? "تغییر" : "Modified")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (Model.ParentPath is { } parent)
+                        {
+                            <tr class="border-b border-line/50">
+                                <td class="py-2" colspan="3">
+                                    <a asp-action="Snapshot" asp-route-id="@Model.Snapshot.Id" asp-route-path="@parent"
+                                       class="text-accent-text hover:underline">..</a>
+                                </td>
+                            </tr>
+                        }
+                        @foreach (var e in Model.Entries)
+                        {
+                            <tr class="border-b border-line/50">
+                                <td class="py-2">
+                                    @if (e.IsDirectory)
+                                    {
+                                        <a asp-action="Snapshot" asp-route-id="@Model.Snapshot.Id" asp-route-path="@e.RelativePath"
+                                           class="text-accent-text hover:underline">@e.Name/</a>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-ink">@e.Name</span>
+                                    }
+                                </td>
+                                <td class="py-2 text-ink-faint">@(e.IsDirectory ? "—" : Size(e.SizeBytes))</td>
+                                <td class="py-2 text-ink-faint">
+                                    @(e.ModifiedAt == DateTimeOffset.MinValue ? "—" : e.ModifiedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm"))
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <!-- Restore -->
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "بازگردانی" : "Restore")</h2>
+
+        <form asp-action="Restore" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="snapshotId" value="@Model.Snapshot.Id" />
+
+            <label class="block text-[12px] text-ink-faint">
+                @(isFa ? "مقصد" : "Destination")
+                <input name="destination" required value="@suggested"
+                       class="mt-1 w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            </label>
+            <p class="text-[11px] text-ink-faint">
+                @(isFa
+                    ? $"باید داخل {Model.RestoreRoot} باشد."
+                    : $"Must be inside {Model.RestoreRoot}.")
+            </p>
+
+            <label class="block text-[12px] text-ink-faint">
+                @(isFa ? "فقط این موارد (هر خط یک مورد، خالی یعنی همه)" : "Only these entries (one per line, blank = everything)")
+                <textarea name="entries" rows="3" placeholder="@(Model.CurrentPath.Length > 0 ? Model.CurrentPath : "data/config.yml")"
+                          class="mt-1 w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm"></textarea>
+            </label>
+
+            <label class="block text-[12px] text-ink-faint">
+                @(isFa ? "اگر فایل از قبل بود" : "If a file already exists")
+                <select name="conflictStrategy" class="mt-1 w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                    <option value="@RestoreConflictStrategy.Fail">@(isFa ? "توقف و دست‌نزدن (پیش‌فرض امن)" : "Stop and change nothing (safe default)")</option>
+                    <option value="@RestoreConflictStrategy.Skip">@(isFa ? "رد شو، موجود را نگه دار" : "Skip, keep what is there")</option>
+                    <option value="@RestoreConflictStrategy.Rename">@(isFa ? "با نام جدید بنویس" : "Write under a new name")</option>
+                    <option value="@RestoreConflictStrategy.Overwrite">@(isFa ? "بازنویسی کن" : "Overwrite")</option>
+                </select>
+            </label>
+
+            <label class="block text-[12px] text-ink-faint">
+                @(isFa ? "اگر مقصد داده دارد، نام پوشه را تایپ کنید" : "If the destination has data, type its folder name")
+                <input name="confirmationText" autocomplete="off"
+                       class="mt-1 w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            </label>
+            <p class="text-[11px] text-ink-faint">
+                @(isFa
+                    ? "برای مقصد خالی لازم نیست. بازگردانی روی داده موجود بدون تایید انجام نمی‌شود."
+                    : "Not needed for an empty destination. A restore over existing data will not run without it.")
+            </p>
+
+            <button class="w-full rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                @(isFa ? "شروع بازگردانی" : "Start restore")
+            </button>
+        </form>
+
+        <div class="mt-4 pt-4 border-t border-line text-[11px] text-ink-faint space-y-1">
+            <div class="flex justify-between">
+                <span>@(isFa ? "فایل‌ها" : "Files")</span>
+                <span>@Model.Snapshot.FilesCount.ToString("N0")</span>
+            </div>
+            <div class="flex justify-between">
+                <span>@(isFa ? "حجم اصلی" : "Original size")</span>
+                <span>@Size(Model.Snapshot.OriginalSizeBytes)</span>
+            </div>
+            <div class="flex justify-between">
+                <span>@(isFa ? "حجم ذخیره‌شده" : "Stored size")</span>
+                <span>@Size(Model.Snapshot.StoredSizeBytes)</span>
+            </div>
+            @if (Model.Snapshot.Warnings is { Length: > 0 })
+            {
+                <p class="text-warn pt-2">@Model.Snapshot.Warnings</p>
+            }
+        </div>
+    </section>
+</div>

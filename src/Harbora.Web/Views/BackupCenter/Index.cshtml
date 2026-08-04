@@ -1,0 +1,395 @@
+@model Harbora.Web.Controllers.BackupCenterViewModel
+@using Harbora.Modules.Backup.Contracts
+@{
+    ViewData["Title"] = "Backup Center";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+
+    string Size(long b) => b <= 0 ? "—" : b < 1048576 ? $"{b / 1024.0:0} KB" : $"{b / 1048576.0:0.0} MB";
+
+    string StatusClass(BackupSnapshotStatus s) => s switch
+    {
+        BackupSnapshotStatus.Completed => "bg-ok/15 text-ok",
+        BackupSnapshotStatus.CompletedWithWarnings => "bg-warn/15 text-warn",
+        BackupSnapshotStatus.Failed => "bg-danger/15 text-danger",
+        BackupSnapshotStatus.Pending or BackupSnapshotStatus.Preparing
+            or BackupSnapshotStatus.Running or BackupSnapshotStatus.Verifying
+            => "bg-accent-hover/15 text-accent-text animate-pulse",
+        _ => "bg-slate-500/15 text-ink"
+    };
+
+    string RepoClass(BackupRepositoryStatus s) => s switch
+    {
+        BackupRepositoryStatus.Ready => "bg-ok/15 text-ok",
+        BackupRepositoryStatus.Degraded => "bg-warn/15 text-warn",
+        BackupRepositoryStatus.Unavailable => "bg-danger/15 text-danger",
+        _ => "bg-slate-500/15 text-ink"
+    };
+
+    // "Not verified" and "passed" must never look the same: a year of nightly backups nobody ever
+    // checked is a year of assumption.
+    string VerifyLabel(BackupVerificationStatus v) => (v, isFa) switch
+    {
+        (BackupVerificationStatus.Passed, true) => "بررسی شد",
+        (BackupVerificationStatus.Passed, false) => "verified",
+        (BackupVerificationStatus.Failed, true) => "بررسی ناموفق",
+        (BackupVerificationStatus.Failed, false) => "check failed",
+        (BackupVerificationStatus.Skipped, true) => "بررسی‌نشدنی",
+        (BackupVerificationStatus.Skipped, false) => "not checkable",
+        (_, true) => "بررسی‌نشده",
+        (_, false) => "not verified"
+    };
+
+    string VerifyClass(BackupVerificationStatus v) => v switch
+    {
+        BackupVerificationStatus.Passed => "text-ok",
+        BackupVerificationStatus.Failed => "text-danger",
+        _ => "text-ink-faint"
+    };
+
+    var header = new Harbora.Web.ViewModels.PageHeaderModel(
+        isFa ? "مرکز پشتیبان" : "Backup Center",
+        isFa
+            ? "مخزن‌ها، سیاست‌ها، نسخه‌ها و بازگردانی."
+            : "Repositories, policies, snapshots and restore.");
+
+    var lastCard = new Harbora.Web.ViewModels.StatCardModel("shield-check",
+        isFa ? "آخرین پشتیبان موفق" : "Last successful",
+        Model.LastSuccessful is null
+            ? Harbora.Infrastructure.Monitoring.MetricDisplay.For(null)
+            : Harbora.Infrastructure.Monitoring.MetricDisplay.For(
+                (DateTimeOffset.UtcNow - Model.LastSuccessful.CreatedAt).TotalHours, isFa ? " ساعت" : "h"),
+        Model.LastSuccessful?.TargetRef);
+
+    var failedCard = new Harbora.Web.ViewModels.StatCardModel("rocket",
+        isFa ? "ناموفق" : "Failed",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(Model.FailedCount),
+        Model.RunningCount > 0
+            ? (isFa ? $"{Model.RunningCount} در حال اجرا" : $"{Model.RunningCount} running")
+            : (isFa ? "چیزی در صف نیست" : "nothing queued"));
+
+    var storedCard = new Harbora.Web.ViewModels.StatCardModel("layers",
+        isFa ? "حجم ذخیره‌شده" : "Stored",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(
+            Model.StoredBytes > 0 ? Model.StoredBytes / 1048576.0 : null, " MB"),
+        isFa ? $"{Model.Snapshots.Count} نسخه" : $"{Model.Snapshots.Count} snapshots");
+
+    var repoCard = new Harbora.Web.ViewModels.StatCardModel("archive",
+        isFa ? "مخزن‌ها" : "Repositories",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(Model.Repositories.Count),
+        Model.UnhealthyRepositories == 0
+            ? (isFa ? "همه سالم" : "all healthy")
+            : (isFa ? $"{Model.UnhealthyRepositories} مشکل‌دار" : $"{Model.UnhealthyRepositories} unhealthy"));
+}
+
+<div class="mb-6">
+    <partial name="Design/_PageHeader" model="header" />
+</div>
+
+<div class="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
+    <partial name="Design/_StatCard" model="lastCard" />
+    <partial name="Design/_StatCard" model="failedCard" />
+    <partial name="Design/_StatCard" model="storedCard" />
+    <partial name="Design/_StatCard" model="repoCard" />
+</div>
+
+@if (msg is not null)
+{
+    <div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>
+}
+@if (err is not null)
+{
+    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>
+}
+
+@if (Model.AllowedSourceRoots.Count == 0)
+{
+    <div class="mb-4 rounded-lg bg-warn-soft border border-warn text-warn px-4 py-3 text-sm">
+        @(isFa
+            ? "هیچ پوشه‌ای برای پشتیبان‌گیری مجاز نشده است. تا وقتی Backups:Module:AllowedSourceRoots تنظیم نشود، این پنل هیچ مسیری را نمی‌خواند."
+            : "No source directories are allowed yet. Until Backups:Module:AllowedSourceRoots is set, this panel will not read any path.")
+    </div>
+}
+
+<div class="grid lg:grid-cols-3 gap-6 mb-6">
+
+    <!-- Run a backup now -->
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "پشتیبان‌گیری فوری" : "Back up now")</h2>
+        @if (Model.Repositories.Count == 0)
+        {
+            <p class="text-sm text-ink-faint">@(isFa ? "ابتدا یک مخزن بسازید." : "Create a repository first.")</p>
+        }
+        else
+        {
+            <form asp-action="RunBackup" method="post" class="space-y-3">
+                @Html.AntiForgeryToken()
+                <select name="repositoryId" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                    @foreach (var r in Model.Repositories)
+                    {
+                        <option value="@r.Id">@r.Name (@r.Engine)</option>
+                    }
+                </select>
+                <input type="hidden" name="targetType" value="@BackupTargetType.Directory" />
+                <input name="targetRef" required placeholder="@(Model.AllowedSourceRoots.FirstOrDefault() ?? "/var/lib/harbora/data")"
+                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <button class="w-full rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                    @(isFa ? "شروع پشتیبان‌گیری" : "Start backup")
+                </button>
+            </form>
+        }
+    </section>
+
+    <!-- Repositories -->
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "مخزن‌ها" : "Repositories")</h2>
+
+        <div class="space-y-2 mb-3 text-sm">
+            @if (Model.Repositories.Count == 0)
+            {
+                <p class="text-ink-faint">@(isFa ? "هنوز مخزنی ندارید." : "No repositories yet.")</p>
+            }
+            @foreach (var r in Model.Repositories)
+            {
+                <div class="flex items-center justify-between gap-2">
+                    <span class="truncate">@r.Name</span>
+                    <span class="flex items-center gap-2 shrink-0">
+                        <span class="rounded px-1.5 py-0.5 text-[11px] @RepoClass(r.Status)">@r.Status</span>
+                        <form asp-action="CheckRepository" asp-route-id="@r.Id" method="post" class="inline">
+                            @Html.AntiForgeryToken()
+                            <button class="text-[11px] text-accent-text hover:underline">@(isFa ? "بررسی" : "check")</button>
+                        </form>
+                    </span>
+                </div>
+                @if (r.LastError is { Length: > 0 })
+                {
+                    <p class="text-[11px] text-danger truncate" title="@r.LastError">@r.LastError</p>
+                }
+            }
+        </div>
+
+        <details>
+            <summary class="cursor-pointer text-sm text-accent-text">+ @(isFa ? "افزودن مخزن" : "Add repository")</summary>
+            <form asp-action="CreateRepository" method="post" class="mt-3 space-y-2" data-repo-form>
+                @Html.AntiForgeryToken()
+                <input name="name" required placeholder="@(isFa ? "نام" : "Name")"
+                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+
+                <select name="type" data-repo-type class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                    <option value="@BackupRepositoryType.Local">Local</option>
+                    <option value="@BackupRepositoryType.S3Compatible">S3-compatible</option>
+                </select>
+
+                <select name="engine" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                    <option value="@BackupEngineKind.Native">@(isFa ? "موتور داخلی Harbora" : "Built-in Harbora engine")</option>
+                    <option value="@BackupEngineKind.Kopia">Kopia (@(isFa ? "فقط مسیر محلی" : "local path only"))</option>
+                </select>
+
+                <div data-when-local>
+                    <input name="localPath" placeholder="/var/lib/harbora/repo"
+                           class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                </div>
+
+                <div data-when-s3 class="space-y-2" style="display:none">
+                    <input name="endpoint" placeholder="https://s3.example.com"
+                           class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="bucket" placeholder="bucket"
+                           class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="region" placeholder="us-east-1"
+                           class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="accessKeyId" placeholder="access key" autocomplete="off"
+                           class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="secretAccessKey" type="password" placeholder="secret key" autocomplete="new-password"
+                           class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                </div>
+
+                <input name="password" type="password" required autocomplete="new-password"
+                       placeholder="@(isFa ? "رمز مخزن" : "Repository password")"
+                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <p class="text-[11px] text-ink-faint">
+                    @(isFa
+                        ? "بدون این رمز هیچ‌چیز از مخزن خوانده نمی‌شود — حتی توسط شما."
+                        : "Without this password nothing in the repository can be read — including by you.")
+                </p>
+
+                <button class="w-full rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@T["Save"]</button>
+            </form>
+        </details>
+    </section>
+
+    <!-- Policies -->
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "سیاست‌ها" : "Policies")</h2>
+
+        <div class="space-y-2 mb-3 text-sm">
+            @if (Model.Policies.Count == 0)
+            {
+                <p class="text-ink-faint">@(isFa ? "هیچ زمان‌بندی‌ای تعریف نشده." : "No schedules yet.")</p>
+            }
+            @foreach (var p in Model.Policies)
+            {
+                <div class="flex items-center justify-between gap-2">
+                    <span class="truncate" title="@p.TargetRef">@p.Name</span>
+                    <span class="flex items-center gap-2 shrink-0 text-ink-faint text-[11px]">
+                        <span>@p.Schedule</span>
+                        <form asp-action="DeletePolicy" asp-route-id="@p.Id" method="post" class="inline">
+                            @Html.AntiForgeryToken()
+                            <button class="text-danger hover:underline">@(isFa ? "حذف" : "remove")</button>
+                        </form>
+                    </span>
+                </div>
+            }
+        </div>
+
+        <details>
+            <summary class="cursor-pointer text-sm text-accent-text">+ @(isFa ? "افزودن سیاست" : "Add policy")</summary>
+            <form asp-action="CreatePolicy" method="post" class="mt-3 space-y-2">
+                @Html.AntiForgeryToken()
+                <input name="name" required placeholder="@(isFa ? "نام" : "Name")"
+                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <select name="repositoryId" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                    @foreach (var r in Model.Repositories)
+                    {
+                        <option value="@r.Id">@r.Name</option>
+                    }
+                </select>
+                <input type="hidden" name="targetType" value="@BackupTargetType.Directory" />
+                <input name="targetRef" required placeholder="/var/lib/harbora/data"
+                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <input name="schedule" value="0 3 * * *"
+                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <input name="timezone" value="UTC" placeholder="UTC"
+                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+
+                <div class="grid grid-cols-3 gap-2">
+                    <label class="text-[11px] text-ink-faint">
+                        @(isFa ? "آخرین" : "Latest")
+                        <input name="keepLatest" type="number" min="1" value="3"
+                               class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1 text-sm" />
+                    </label>
+                    <label class="text-[11px] text-ink-faint">
+                        @(isFa ? "روزانه" : "Daily")
+                        <input name="keepDaily" type="number" min="0" value="30"
+                               class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1 text-sm" />
+                    </label>
+                    <label class="text-[11px] text-ink-faint">
+                        @(isFa ? "ماهانه" : "Monthly")
+                        <input name="keepMonthly" type="number" min="0" value="12"
+                               class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1 text-sm" />
+                    </label>
+                </div>
+
+                <button class="w-full rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@T["Save"]</button>
+            </form>
+        </details>
+    </section>
+</div>
+
+<!-- Snapshots -->
+<section class="rounded-xl border border-line bg-surface p-5 mb-6">
+    <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "نسخه‌ها" : "Snapshots")</h2>
+
+    @if (Model.Snapshots.Count == 0)
+    {
+        <p class="text-sm text-ink-faint">
+            @(isFa ? "هنوز نسخه‌ای گرفته نشده است." : "No snapshots have been taken yet.")
+        </p>
+    }
+    else
+    {
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="text-ink-faint text-[12px]">
+                    <tr class="border-b border-line">
+                        <th class="text-start py-2">@(isFa ? "هدف" : "Target")</th>
+                        <th class="text-start py-2">@(isFa ? "وضعیت" : "Status")</th>
+                        <th class="text-start py-2">@(isFa ? "بررسی" : "Verified")</th>
+                        <th class="text-start py-2">@(isFa ? "فایل‌ها" : "Files")</th>
+                        <th class="text-start py-2">@(isFa ? "حجم" : "Size")</th>
+                        <th class="text-start py-2">@(isFa ? "زمان" : "When")</th>
+                        <th class="text-end py-2"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var s in Model.Snapshots)
+                    {
+                        <tr class="border-b border-line/50">
+                            <td class="py-2 truncate max-w-[220px]" title="@s.TargetRef">@s.TargetRef</td>
+                            <td class="py-2">
+                                <span class="rounded px-1.5 py-0.5 text-[11px] @StatusClass(s.Status)">@s.Status</span>
+                                @if (s.FailureReason is { Length: > 0 })
+                                {
+                                    <p class="text-[11px] text-danger truncate max-w-[220px]" title="@s.FailureReason">@s.FailureReason</p>
+                                }
+                            </td>
+                            <td class="py-2 text-[11px] @VerifyClass(s.VerificationStatus)">@VerifyLabel(s.VerificationStatus)</td>
+                            <td class="py-2">@(s.FilesCount > 0 ? s.FilesCount.ToString("N0") : "—")</td>
+                            <td class="py-2">@Size(s.StoredSizeBytes)</td>
+                            <td class="py-2 text-ink-faint">@s.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</td>
+                            <td class="py-2 text-end whitespace-nowrap">
+                                @if (s.IsRestorable)
+                                {
+                                    <a asp-action="Snapshot" asp-route-id="@s.Id" class="text-accent-text hover:underline">
+                                        @(isFa ? "مرور" : "browse")
+                                    </a>
+                                }
+                                <form asp-action="DeleteSnapshot" asp-route-id="@s.Id" method="post" class="inline ms-2">
+                                    @Html.AntiForgeryToken()
+                                    <button class="text-danger hover:underline">@(isFa ? "حذف" : "delete")</button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+<!-- Restores -->
+<section class="rounded-xl border border-line bg-surface p-5">
+    <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "بازگردانی‌ها" : "Restores")</h2>
+
+    @if (Model.Restores.Count == 0)
+    {
+        <p class="text-sm text-ink-faint">@(isFa ? "هنوز بازگردانی‌ای انجام نشده." : "No restores yet.")</p>
+    }
+    else
+    {
+        <div class="space-y-2 text-sm">
+            @foreach (var r in Model.Restores)
+            {
+                <div class="flex items-center justify-between gap-2">
+                    <span class="truncate" title="@r.Destination">@r.Destination</span>
+                    <span class="flex items-center gap-3 shrink-0 text-[11px] text-ink-faint">
+                        @if (r.OverwritesLiveTarget)
+                        {
+                            <span class="text-warn">@(isFa ? "روی داده موجود" : "overwrote live data")</span>
+                        }
+                        <span>@r.RestoredFilesCount.ToString("N0") @(isFa ? "فایل" : "files")</span>
+                        <span class="rounded px-1.5 py-0.5 @(r.Status == Harbora.Modules.Backup.Contracts.RestoreJobStatus.Completed ? "bg-ok/15 text-ok" : r.Status == Harbora.Modules.Backup.Contracts.RestoreJobStatus.Failed ? "bg-danger/15 text-danger" : "bg-accent-hover/15 text-accent-text")">@r.Status</span>
+                    </span>
+                </div>
+            }
+        </div>
+    }
+</section>
+
+@section Scripts {
+    <script>
+        // Shows only the fields the chosen repository type needs. Same pattern the existing
+        // destination form uses, so the two forms behave identically.
+        document.querySelectorAll('[data-repo-form]').forEach(function (form) {
+            var type = form.querySelector('[data-repo-type]');
+            if (!type) return;
+            function sync() {
+                var local = type.value === '@BackupRepositoryType.Local';
+                form.querySelectorAll('[data-when-local]').forEach(function (el) { el.style.display = local ? '' : 'none'; });
+                form.querySelectorAll('[data-when-s3]').forEach(function (el) { el.style.display = local ? 'none' : ''; });
+            }
+            type.addEventListener('change', sync);
+            sync();
+        });
+    </script>
+}

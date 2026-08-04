@@ -171,8 +171,8 @@ public sealed class BackupCenterController(
     {
         if (!Enabled) return NotFound();
 
-        var (snapshot, repository, _) = await snapshots.LoadForReadAsync(id, ct);
-        if (snapshot is null || repository is null) return NotFound();
+        var (snapshot, repositoryName) = await snapshots.GetForDisplayAsync(id, ct);
+        if (snapshot is null || repositoryName is null) return NotFound();
 
         // A snapshot from another workspace must be indistinguishable from one that does not exist.
         if (snapshot.WorkspaceId != WorkspaceId) return NotFound();
@@ -182,7 +182,7 @@ public sealed class BackupCenterController(
         return View(new SnapshotBrowserViewModel
         {
             Snapshot = snapshot,
-            RepositoryName = repository.Name,
+            RepositoryName = repositoryName,
             CurrentPath = path,
             Entries = snapshot.IsRestorable ? await snapshots.BrowseAsync(id, path, ct) : [],
             RestoreRoot = moduleOptions.Value.RestoreRoot

@@ -261,6 +261,22 @@ public sealed class BackupSnapshotService(
         return new SnapshotOutcome(true, snapshotId);
     }
 
+    /// <summary>
+    /// What a screen needs to show a snapshot: the row and the repository's name.
+    ///
+    /// <para>
+    /// Deliberately does NOT hand back the repository password. The internal overload below does,
+    /// because the engine calls need it; a controller never does, and a secret that is not returned
+    /// cannot be logged, serialised into a view model, or put in a hidden field by mistake.
+    /// </para>
+    /// </summary>
+    public async Task<(BackupSnapshot? Snapshot, string? RepositoryName)> GetForDisplayAsync(
+        Guid snapshotId, CancellationToken ct)
+    {
+        var (snapshot, repository, _) = await LoadForReadAsync(snapshotId, ct);
+        return (snapshot, repository?.Name);
+    }
+
     internal async Task<(BackupSnapshot? Snapshot, BackupRepository? Repository, string? Password)>
         LoadForReadAsync(Guid snapshotId, CancellationToken ct)
     {
