@@ -24,6 +24,13 @@ public class User : BaseEntity
     /// <summary>Preferred UI culture: "fa" or "en". Drives RTL/LTR + localization.</summary>
     public string PreferredCulture { get; set; } = "fa";
 
+    /// <summary>
+    /// Simple or Advanced, or null when this person has never chosen and should follow the
+    /// platform default. Stored on the account rather than in the browser so the choice travels
+    /// with the person instead of with the device.
+    /// </summary>
+    public PanelMode? PanelMode { get; set; }
+
     public DateTimeOffset? LastLoginAt { get; set; }
 
     public ICollection<ApiToken> Tokens { get; set; } = new List<ApiToken>();

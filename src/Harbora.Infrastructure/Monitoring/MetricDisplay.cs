@@ -40,6 +40,17 @@ public static class MetricDisplay
     }
 
     /// <summary>
+    /// A value that is a word rather than a measurement — a plan name, a formatted amount.
+    ///
+    /// Goes through the same gate so an absent value renders as "not collected" rather than as an
+    /// empty box that reads like a rendering fault.
+    /// </summary>
+    public static MetricView ForText(string? text) =>
+        string.IsNullOrWhiteSpace(text)
+            ? new MetricView(false, string.Empty, [])
+            : new MetricView(true, text.Trim(), []);
+
+    /// <summary>
     /// A throughput, scaled to a unit a person reads without counting zeros.
     ///
     /// Goes through the same gate as everything else: null is "not collected yet", and stays that

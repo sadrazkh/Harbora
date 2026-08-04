@@ -65,6 +65,18 @@ public class HarboraDbContext : DbContext
     public DbSet<MetricRollup> MetricRollups => Set<MetricRollup>();
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
+    public DbSet<AppTemplateVersion> AppTemplateVersions => Set<AppTemplateVersion>();
+    public DbSet<Harbora.Domain.Ai.AiProvider> AiProviders => Set<Harbora.Domain.Ai.AiProvider>();
+    public DbSet<Harbora.Domain.Ai.AiProviderCredential> AiProviderCredentials => Set<Harbora.Domain.Ai.AiProviderCredential>();
+    public DbSet<Harbora.Domain.Ai.AiModel> AiModels => Set<Harbora.Domain.Ai.AiModel>();
+    public DbSet<Harbora.Domain.Ai.AiPlan> AiPlans => Set<Harbora.Domain.Ai.AiPlan>();
+    public DbSet<Harbora.Domain.Ai.AiPlanModel> AiPlanModels => Set<Harbora.Domain.Ai.AiPlanModel>();
+    public DbSet<Harbora.Domain.Ai.AiSubscription> AiSubscriptions => Set<Harbora.Domain.Ai.AiSubscription>();
+    public DbSet<Harbora.Domain.Ai.AiUserApiKey> AiUserApiKeys => Set<Harbora.Domain.Ai.AiUserApiKey>();
+    public DbSet<Harbora.Domain.Ai.AiUsageRecord> AiUsageRecords => Set<Harbora.Domain.Ai.AiUsageRecord>();
+    public DbSet<Harbora.Domain.Services.DatabaseAccessGrant> DatabaseAccessGrants => Set<Harbora.Domain.Services.DatabaseAccessGrant>();
+    public DbSet<Harbora.Domain.Services.DatabaseAccessAudit> DatabaseAccessAudits => Set<Harbora.Domain.Services.DatabaseAccessAudit>();
+    public DbSet<AppTemplateAsset> AppTemplateAssets => Set<AppTemplateAsset>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Harbora.Domain.Jobs.Job> Jobs => Set<Harbora.Domain.Jobs.Job>();
     public DbSet<Setting> Settings => Set<Setting>();
@@ -172,6 +184,90 @@ public class HarboraDbContext : DbContext
         b.Entity<ManagedService>(e => e.HasIndex(x => x.ContainerName).IsUnique());
         b.Entity<MonitoringMetric>(e => e.HasIndex(x => new { x.ServerId, x.Name, x.Timestamp }));
         b.Entity<AppTemplate>(e => e.HasIndex(x => x.Key).IsUnique());
+
+        // Providers, credentials, models and plans are platform configuration, not tenant data —
+        // no workspace filter. Subscriptions and API keys belong to a tenant and carry one.
+        b.Entity<Harbora.Domain.Ai.AiProviderCredential>(e =>
+        {
+            e.HasOne(x => x.AiProvider).WithMany(p => p.Credentials).HasForeignKey(x => x.AiProviderId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<Harbora.Domain.Ai.AiModel>(e =>
+        {
+            e.HasOne(x => x.AiProvider).WithMany().HasForeignKey(x => x.AiProviderId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.Alias).IsUnique();
+        });
+
+        b.Entity<Harbora.Domain.Ai.AiPlanModel>(e =>
+        {
+            e.HasOne(x => x.AiPlan).WithMany(p => p.Models).HasForeignKey(x => x.AiPlanId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.AiModel).WithMany().HasForeignKey(x => x.AiModelId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.AiPlanId, x.AiModelId }).IsUnique();
+        });
+
+        b.Entity<Harbora.Domain.Ai.AiSubscription>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            e.HasOne(x => x.AiPlan).WithMany().HasForeignKey(x => x.AiPlanId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => x.WorkspaceId);
+        });
+
+        // Not filtered: the gateway authenticates a request before it knows which tenant it is for,
+        // so the key must be findable without a workspace already in scope. The lookup is by
+        // prefix and the tenant is then taken from the row.
+        // Usage is tenant data and filtered, but the meter writes it from a request that
+        // authenticated by key rather than by session — so the writer sets WorkspaceId explicitly
+        // from the key's row and reads back with IgnoreQueryFilters where it must.
+        b.Entity<Harbora.Domain.Ai.AiUsageRecord>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            e.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
+            e.HasIndex(x => x.AiUserApiKeyId);
+        });
+
+        b.Entity<Harbora.Domain.Ai.AiUserApiKey>(e =>
+        {
+            e.HasIndex(x => x.Prefix);
+            e.HasIndex(x => new { x.WorkspaceId, x.IsRevoked });
+        });
+
+        // A grant is one tenant's permission over one tenant's database, so it carries the same
+        // filter as everything else they own. The audit trail is filtered too — but note the
+        // sweeper runs without a session and reads these with IgnoreQueryFilters, deliberately.
+        b.Entity<Harbora.Domain.Services.DatabaseAccessGrant>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            e.HasOne(x => x.ManagedService).WithMany().HasForeignKey(x => x.ManagedServiceId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.ManagedServiceId, x.Status });
+            e.HasIndex(x => x.ExpiresAt);
+        });
+
+        b.Entity<Harbora.Domain.Services.DatabaseAccessAudit>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            e.HasIndex(x => new { x.ManagedServiceId, x.CreatedAt });
+        });
+
+        // Versions and assets belong to their template and go with it. No workspace filter: the
+        // catalogue is platform-wide, and a template's own WorkspaceId already scopes a private one.
+        b.Entity<AppTemplateVersion>(e =>
+        {
+            e.HasOne(x => x.AppTemplate).WithMany().HasForeignKey(x => x.AppTemplateId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.AppTemplateId, x.Version }).IsUnique();
+        });
+
+        b.Entity<AppTemplateAsset>(e =>
+        {
+            e.HasOne(x => x.AppTemplate).WithMany().HasForeignKey(x => x.AppTemplateId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.AppTemplateId).IsUnique();
+        });
         b.Entity<Setting>(e => e.HasIndex(x => x.Key).IsUnique());
         b.Entity<Harbora.Domain.Tenancy.InstanceSize>(e => e.HasIndex(x => x.Key).IsUnique());
         b.Entity<Harbora.Domain.Tenancy.Plan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));

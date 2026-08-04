@@ -30,9 +30,12 @@ public sealed partial class DatabasesController(
     Harbora.Infrastructure.Projects.ProjectService projects,
     Harbora.Infrastructure.Services.ServiceUsageService usage,
     Harbora.Infrastructure.Security.ProjectAccessService access,
+    Harbora.Infrastructure.Services.DatabaseAccessService databaseAccess,
+    INodeAgentClient node,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
+    private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
     [HttpGet("")]
     public async Task<IActionResult> Index(Guid? selected, bool reveal = false, CancellationToken ct = default)

@@ -1,8 +1,12 @@
 ﻿@using Harbora.Infrastructure.Navigation
+@inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @using Harbora.Web.Infrastructure
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
-    var groups = NavigationMap.VisibleTo(NavigationCapabilities.For(User));
+    // Simple hides the specialist destinations; their routes stay live, so a bookmark or a link in
+    // a runbook still works for somebody in Simple mode.
+    var panelMode = await PanelModes.GetAsync();
+    var groups = NavigationMap.VisibleTo(NavigationMap.All, NavigationCapabilities.For(User), panelMode);
     var currentController = (string?)ViewContext.RouteData.Values["controller"];
 
     string GroupLabel(string key) => (key, isFa) switch
@@ -11,6 +15,7 @@
         ("deploy",   true) => "استقرار",     ("deploy",   false) => "Deploy",
         ("connect",  true) => "اتصال",       ("connect",  false) => "Connect",
         ("data",     true) => "داده",        ("data",     false) => "Data",
+        ("intelligence", true) => "هوش مصنوعی", ("intelligence", false) => "AI",
         ("insight",  true) => "بینش",        ("insight",  false) => "Insight",
         ("build",    true) => "ساخت",        ("build",    false) => "Build",
         ("platform", true) => "پلتفرم",      ("platform", false) => "Platform",
@@ -28,8 +33,11 @@
         ("routing",      true) => "مسیریابی",       ("routing",      false) => "Routing",
         ("backups",      true) => "پشتیبان‌ها",     ("backups",      false) => "Backups",
         ("monitoring",   true) => "پایش",           ("monitoring",   false) => "Monitoring",
+        ("ai",           true) => "هوش مصنوعی",    ("ai",           false) => "AI",
+        ("ai-admin",     true) => "مدیریت AI",     ("ai-admin",     false) => "AI admin",
         ("audit",        true) => "گزارش رخدادها",  ("audit",        false) => "Audit log",
         ("templates",    true) => "قالب‌ها",         ("templates",    false) => "Templates",
+        ("template-versions", true) => "نسخه‌های قالب", ("template-versions", false) => "Template versions",
         ("git",          _)    => "Git",
         ("users",        true) => "کاربران و تیم", ("users",        false) => "Users & Team",
         ("servers",      true) => "سرورها",         ("servers",      false) => "Servers",

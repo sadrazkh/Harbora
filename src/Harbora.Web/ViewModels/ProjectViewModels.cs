@@ -69,3 +69,34 @@ public class MoveServiceViewModel
     public Environment Target { get; set; } = null!;
     public Harbora.Infrastructure.Networking.WiringVerdict Verdict { get; set; } = null!;
 }
+
+/// <summary>What a customer sees about their AI service.</summary>
+public class AiOverviewViewModel
+{
+    public Harbora.Domain.Ai.AiSubscription? Subscription { get; set; }
+    public Harbora.Domain.Ai.AiPlan? Plan { get; set; }
+
+    public IReadOnlyList<Harbora.Domain.Ai.AiModel> Models { get; set; } = [];
+    public List<Harbora.Domain.Ai.AiUserApiKey> Keys { get; set; } = [];
+
+    /// <summary>Metadata only — never prompts. See AiUsageRecord.</summary>
+    public List<Harbora.Domain.Ai.AiUsageRecord> Recent { get; set; } = [];
+
+    public int RequestsThisPeriod { get; set; }
+    public string EndpointUrl { get; set; } = "/v1";
+}
+
+/// <summary>Everything the AI administration page shows.</summary>
+public class AiAdminViewModel
+{
+    public List<Harbora.Domain.Ai.AiProvider> Providers { get; set; } = [];
+    public List<Harbora.Domain.Ai.AiModel> Models { get; set; } = [];
+    public List<Harbora.Domain.Ai.AiPlan> Plans { get; set; } = [];
+
+    /// <summary>Recent failures, so routing trouble is visible without reading logs.</summary>
+    public List<Harbora.Domain.Ai.AiUsageRecord> RecentFailures { get; set; } = [];
+
+    public decimal SpendLast30Days { get; set; }
+    public decimal ChargedLast30Days { get; set; }
+    public int RequestsLast30Days { get; set; }
+}

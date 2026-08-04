@@ -98,4 +98,11 @@ public record DockerRunRequest(
 public record ContainerInfo(string Id, string Name, string Image, string State, string Status, IReadOnlyDictionary<string, string> Labels);
 public record ImageInfo(string Id, string Tag, DateTimeOffset CreatedAt, long SizeBytes);
 public record ContainerStats(double CpuPercent, long MemoryUsedBytes, long MemoryLimitBytes, long NetRxBytes, long NetTxBytes);
-public record HostInfo(int CpuCores, long TotalMemoryBytes, long TotalDiskBytes, long FreeDiskBytes, string DockerVersion, int ContainersRunning);
+/// <param name="Architecture">
+/// What the host runs — <c>amd64</c>, <c>arm64</c>. Optional and last, so an agent that does not
+/// report it still deserialises. Unknown stays unknown rather than defaulting to a guess: a wrong
+/// guess here refuses images that would have run perfectly well.
+/// </param>
+public record HostInfo(
+    int CpuCores, long TotalMemoryBytes, long TotalDiskBytes, long FreeDiskBytes,
+    string DockerVersion, int ContainersRunning, string? Architecture = null);

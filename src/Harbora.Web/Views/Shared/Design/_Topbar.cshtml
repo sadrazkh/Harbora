@@ -1,4 +1,5 @@
-@using Microsoft.AspNetCore.Mvc.Localization
+﻿@using Microsoft.AspNetCore.Mvc.Localization
+@inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @using Harbora.Infrastructure.Navigation
 @using Harbora.Web.Infrastructure
 @inject IViewLocalizer T
@@ -74,6 +75,20 @@
         <div data-menu class="topbar-menu end-0 hidden w-52">
             <div class="border-b border-line px-3 py-2"><strong class="block truncate text-xs text-ink">@identity</strong><small class="text-[10px] text-ink-faint">@(isFa ? "حساب Harbora" : "Harbora account")</small></div>
             <a href="/settings"><i data-lucide="settings" class="h-4 w-4"></i><span><strong>@(isFa ? "تنظیمات" : "Settings")</strong></span></a>
+            @* Simple / Advanced. The return URL is the page they are on, so switching keeps them
+               where they were rather than dropping them on the dashboard mid-task. *@
+            @{ var mode = await PanelModes.GetAsync(); var toAdvanced = mode == Harbora.Domain.Identity.PanelMode.Simple; }
+            <form asp-controller="Account" asp-action="SetPanelMode" method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="returnUrl" value="@Context.Request.Path@Context.Request.QueryString" />
+                <input type="hidden" name="mode" value="@(toAdvanced ? "Advanced" : "Simple")" />
+                <button type="submit">
+                    <i data-lucide="@(toAdvanced ? "sliders-horizontal" : "gauge")" class="h-4 w-4"></i>
+                    <span>@(toAdvanced
+                        ? (isFa ? "حالت پیشرفته" : "Advanced mode")
+                        : (isFa ? "حالت ساده" : "Simple mode"))</span>
+                </button>
+            </form>
             <form asp-controller="Account" asp-action="SetLanguage" method="post">
                 <input type="hidden" name="returnUrl" value="@Context.Request.Path" /><input type="hidden" name="culture" value="@(isFa ? "en" : "fa")" />
                 <button type="submit"><i data-lucide="languages" class="h-4 w-4"></i><span>@(isFa ? "English" : "فارسی")</span></button>

@@ -1,9 +1,33 @@
 @model TemplateDeployPageViewModel
 @using Harbora.Web.ViewModels
+@inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    // In Simple mode the recommended version is preselected and the picker folds. Open again the
+    // moment the form is rejected — a refusal is often about the version itself.
+    var versionsOpen = Harbora.Infrastructure.Navigation.PanelSections.StartsOpen(
+        await PanelModes.GetAsync(), !ViewData.ModelState.IsValid);
     ViewData["Title"] = isFa ? $"استقرار {Model.Item.Name}" : $"Deploy {Model.Item.Name}";
     var requiredInputs = Model.Item.Manifest.Variables.Where(v => string.IsNullOrWhiteSpace(v.Default) && !v.Secret).ToList();
+
+    var selectedVersion = Model.Versions.FirstOrDefault(v => v.Id == Model.Input.VersionId)
+                          ?? Model.Versions.FirstOrDefault();
+
+    string LifecycleLabel(Harbora.Domain.Templates.VersionLifecycle lifecycle) => (lifecycle, isFa) switch
+    {
+        (Harbora.Domain.Templates.VersionLifecycle.Recommended, true) => "پیشنهادی",
+        (Harbora.Domain.Templates.VersionLifecycle.Recommended, false) => "recommended",
+        (Harbora.Domain.Templates.VersionLifecycle.Stable, true) => "پایدار",
+        (Harbora.Domain.Templates.VersionLifecycle.Stable, false) => "stable",
+        (Harbora.Domain.Templates.VersionLifecycle.PreviousStable, true) => "پایدار قبلی",
+        (Harbora.Domain.Templates.VersionLifecycle.PreviousStable, false) => "previous stable",
+        (Harbora.Domain.Templates.VersionLifecycle.Legacy, true) => "قدیمی",
+        (Harbora.Domain.Templates.VersionLifecycle.Legacy, false) => "legacy",
+        (Harbora.Domain.Templates.VersionLifecycle.Deprecated, true) => "منسوخ",
+        (Harbora.Domain.Templates.VersionLifecycle.Deprecated, false) => "deprecated",
+        _ => isFa ? "پشتیبانی‌نشده" : "unsupported"
+    };
 }
 
 <div class="mx-auto max-w-5xl">
@@ -31,6 +55,77 @@
                 <div><label asp-for="Input.ProjectName" class="form-label">@(isFa ? "نام پروژه" : "Project name")</label><input asp-for="Input.ProjectName" class="form-control" autofocus /><span asp-validation-for="Input.ProjectName" class="field-error"></span></div>
                 <div><label asp-for="Input.ResourceName" class="form-label">@(Model.Item.IsManagedService ? (isFa ? "نام سرویس" : "Service name") : (isFa ? "نام برنامه" : "Application name"))</label><input asp-for="Input.ResourceName" class="form-control" /><span asp-validation-for="Input.ResourceName" class="field-error"></span></div>
             </div>
+
+            @if (Model.HasVersionsButNoneOfferable)
+            {
+                @* Not the same as a template with no versions: this one has them and none can run
+                   here. Saying so is the difference between a person moving on and a person
+                   submitting the same form repeatedly. *@
+                <div class="alert-warning">
+                    <i data-lucide="alert-triangle" class="h-4 w-4 shrink-0"></i>
+                    <span>
+                        @(isFa
+                            ? "هیچ نسخهٔ منتشرشده‌ای از این قالب روی این سرور قابل استقرار نیست."
+                            : "No published version of this template can be deployed on this server.")
+                        @if (Model.NodeArchitecture is { } arch)
+                        {
+                            <span dir="ltr"> (@arch)</span>
+                        }
+                    </span>
+                </div>
+            }
+            else if (Model.Versions.Count > 0)
+            {
+                @if (!versionsOpen && selectedVersion is not null)
+                {
+                    @* Folded, never hidden. Which version installs is the one thing a person must
+                       still be told in Simple mode — the choice is what is being taken away, not
+                       the fact. *@
+                    <p class="text-sm text-ink-muted">
+                        @(isFa ? "نسخه" : "Version"):
+                        <strong class="text-ink" dir="ltr">@selectedVersion.Version</strong>
+                        <span class="text-ink-faint">— @LifecycleLabel(selectedVersion.Lifecycle)</span>
+                    </p>
+                }
+
+                <details class="advanced-panel" open="@versionsOpen">
+                    <summary>
+                        <span><i data-lucide="layers" class="h-4 w-4"></i>@(isFa ? "انتخاب نسخه" : "Choose a version")</span>
+                        <i data-lucide="chevron-down" class="h-4 w-4"></i>
+                    </summary>
+                <div class="border-t border-line p-5">
+                    <label class="form-label" for="version-select">@(isFa ? "نسخه" : "Version")</label>
+                    <select id="version-select" name="Input.VersionId" class="form-control" dir="ltr">
+                        @foreach (var version in Model.Versions)
+                        {
+                            var pinned = Harbora.Infrastructure.Templates.VersionSelection.PinnedImage(version);
+                            <option value="@version.Id"
+                                    selected="@(selectedVersion is not null && version.Id == selectedVersion.Id)"
+                                    data-notes="@(isFa && !string.IsNullOrWhiteSpace(version.UpgradeNotesFa) ? version.UpgradeNotesFa : version.UpgradeNotes)"
+                                    data-warnings="@(isFa && !string.IsNullOrWhiteSpace(version.MigrationWarningsFa) ? version.MigrationWarningsFa : version.MigrationWarnings)"
+                                    data-image="@pinned">
+                                @version.Version — @LifecycleLabel(version.Lifecycle)
+                            </option>
+                        }
+                    </select>
+                    <p class="mt-1 text-xs text-ink-faint">
+                        @(isFa
+                            ? "نسخه با digest تصویر قفل می‌شود، نه با tag؛ همان چیزی نصب می‌شود که اینجا انتخاب کرده‌اید."
+                            : "The version is pinned by image digest, not by tag: what installs is what you picked here.")
+                        @if (Model.NodeArchitecture is { } arch)
+                        {
+                            <span> @(isFa ? "معماری سرور" : "Server architecture"): <span dir="ltr">@arch</span></span>
+                        }
+                        else
+                        {
+                            <span> @(isFa ? "معماری سرور هنوز گزارش نشده، پس نسخه‌ای بر این اساس فیلتر نشده." : "The server has not reported its architecture, so nothing was filtered on it.")</span>
+                        }
+                    </p>
+
+                    <div id="version-notes" class="mt-3 space-y-2"></div>
+                </div>
+                </details>
+            }
 
             @if (Model.Item.NeedsRepository)
             {
@@ -63,7 +158,10 @@
             }
 
             <div class="flex flex-wrap items-center gap-3 border-t border-line pt-5">
-                <button class="btn-primary inline-flex items-center gap-2 px-5 py-2.5"><i data-lucide="rocket" class="h-4 w-4"></i>@(Model.Item.IsManagedService ? (isFa ? "ساخت سرویس" : "Provision service") : (isFa ? "ساخت و استقرار" : "Create & deploy"))</button>
+                @* Disabled rather than hidden: the person came here to deploy and needs to see that
+                   the button exists and why it will not work. The server refuses this case anyway —
+                   a disabled button is a courtesy, never the check. *@
+                <button class="btn-primary inline-flex items-center gap-2 px-5 py-2.5 disabled:opacity-50" disabled="@Model.HasVersionsButNoneOfferable"><i data-lucide="rocket" class="h-4 w-4"></i>@(Model.Item.IsManagedService ? (isFa ? "ساخت سرویس" : "Provision service") : (isFa ? "ساخت و استقرار" : "Create & deploy"))</button>
                 <a href="/templates/@Model.Item.Template.Id" class="btn-secondary">@T["Cancel"]</a>
             </div>
         </section>
@@ -72,7 +170,17 @@
             <section class="rounded-2xl border border-line bg-surface p-5 shadow-panel">
                 <h2 class="text-sm font-semibold text-ink">@(isFa ? "منابعی که ساخته می‌شوند" : "Resources to create")</h2>
                 <div class="mt-4 space-y-3">
-                    <div class="deploy-resource"><span class="rail-icon bg-accent-soft text-accent-text"><i data-lucide="@(Model.Item.IsManagedService ? "database" : "box")" class="h-4 w-4"></i></span><div><strong>@Model.Item.Name</strong><span>@(Model.Item.IsManagedService ? (isFa ? "مدیریت‌شده" : "Managed") : Model.Item.Manifest.Image ?? "Git build")</span></div><i data-lucide="check-circle-2" class="ms-auto h-4 w-4 text-ok"></i></div>
+                    @{
+                        // What will actually be pulled. The manifest's tag is what the catalogue
+                        // shows; the chosen version's digest is what runs, and showing the tag here
+                        // would describe a different thing from the one being created.
+                        var plannedImage = Model.Item.IsManagedService
+                            ? (isFa ? "مدیریت‌شده" : "Managed")
+                            : selectedVersion is not null
+                                ? Harbora.Infrastructure.Templates.VersionSelection.PinnedImage(selectedVersion) ?? Model.Item.Manifest.Image
+                                : Model.Item.Manifest.Image ?? "Git build";
+                    }
+                    <div class="deploy-resource"><span class="rail-icon bg-accent-soft text-accent-text"><i data-lucide="@(Model.Item.IsManagedService ? "database" : "box")" class="h-4 w-4"></i></span><div class="min-w-0"><strong>@Model.Item.Name</strong><span class="truncate" dir="ltr" id="planned-image">@plannedImage</span></div><i data-lucide="check-circle-2" class="ms-auto h-4 w-4 text-ok"></i></div>
                     @foreach (var dependency in Model.Item.Manifest.Requires)
                     {
                         <div class="deploy-resource"><span class="rail-icon bg-info-soft text-info"><i data-lucide="database" class="h-4 w-4"></i></span><div><strong>@dependency.ToUpperInvariant()</strong><span>@(isFa ? "خصوصی و پایدار" : "Private & persistent")</span></div><i data-lucide="check-circle-2" class="ms-auto h-4 w-4 text-ok"></i></div>
@@ -89,3 +197,47 @@
         </aside>
     </form>
 </div>
+
+@section Scripts {
+<script>
+    // Without this the notes belong to whichever version happened to be selected when the page was
+    // rendered, and the resource panel keeps naming an image that is no longer the one being
+    // deployed. Both read as correct, which is what makes them worth wiring.
+    (function () {
+        var select = document.getElementById('version-select');
+        if (!select) return;
+
+        var notes = document.getElementById('version-notes');
+        var image = document.getElementById('planned-image');
+        var warningLabel = @Html.Raw(isFa ? "'هشدار مهاجرت'" : "'Migration warning'");
+
+        function sync() {
+            var option = select.options[select.selectedIndex];
+            if (!option) return;
+
+            notes.textContent = '';
+            var warning = option.getAttribute('data-warnings');
+            if (warning) {
+                var box = document.createElement('div');
+                box.className = 'alert-warning';
+                box.textContent = warningLabel + ': ' + warning;
+                notes.appendChild(box);
+            }
+
+            var note = option.getAttribute('data-notes');
+            if (note) {
+                var line = document.createElement('p');
+                line.className = 'text-xs leading-5 text-ink-muted';
+                line.textContent = note;
+                notes.appendChild(line);
+            }
+
+            var pinned = option.getAttribute('data-image');
+            if (image && pinned) image.textContent = pinned;
+        }
+
+        select.addEventListener('change', sync);
+        sync();
+    })();
+</script>
+}

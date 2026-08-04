@@ -1,0 +1,376 @@
+@model AiAdminViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var message = TempData["Message"] as string;
+    var error = TempData["Error"] as string;
+    var now = DateTimeOffset.UtcNow;
+
+    string Money(decimal v) => v.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
+    var input = "w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink";
+    var label = "block text-xs text-ink-muted mb-1";
+}
+
+<partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+    isFa ? "مدیریت هوش مصنوعی" : "AI administration",
+    isFa
+        ? "ارائه‌دهنده‌ها، توکن‌ها، کاتالوگ مدل و پلن‌ها. توکن‌ها رمزنگاری می‌شوند و پس از ذخیره دیگر نمایش داده نمی‌شوند."
+        : "Providers, tokens, the model catalogue and plans. Tokens are encrypted and never shown again after saving."))" />
+
+@if (message is not null)
+{
+    <div class="alert-success mb-4">@message</div>
+}
+@if (error is not null)
+{
+    <div class="alert-danger mb-4">@error</div>
+}
+
+@* ---- cost, as measured ---- *@
+<div class="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
+    <partial name="Design/_StatCard" model="@(new StatCardModel("activity",
+        isFa ? "درخواست‌ها" : "Requests",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(Model.RequestsLast30Days),
+        isFa ? "۳۰ روز اخیر" : "last 30 days"))" />
+
+    <partial name="Design/_StatCard" model="@(new StatCardModel("wallet",
+        isFa ? "هزینهٔ ارائه‌دهنده" : "Provider cost",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Money(Model.SpendLast30Days)),
+        isFa ? "آنچه به آن‌ها بدهکاریم" : "what we owe upstream"))" />
+
+    <partial name="Design/_StatCard" model="@(new StatCardModel("coins",
+        isFa ? "دریافتی از مشتری" : "Charged",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Money(Model.ChargedLast30Days)),
+        isFa ? "آنچه صورت‌حساب شده" : "billed to tenants"))" />
+
+    <partial name="Design/_StatCard" model="@(new StatCardModel("trending-up",
+        isFa ? "حاشیه" : "Margin",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Money(Model.ChargedLast30Days - Model.SpendLast30Days)),
+        isFa ? "تفاوت دو عدد بالا" : "difference of the two above"))" />
+</div>
+
+<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+    <div class="space-y-6">
+
+        @* ---- providers ---- *@
+        @{ var providerPanel = new PanelModel(isFa ? "ارائه‌دهنده‌ها" : "Providers"); }
+        <partial name="Design/_PanelStart" model="providerPanel" />
+
+        @foreach (var provider in Model.Providers)
+        {
+            <div class="mb-4 rounded-xl border border-line bg-surface-2 p-4">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                        <span class="font-semibold text-ink">@provider.Name</span>
+                        <span class="ms-2 text-xs text-ink-faint">@provider.Type</span>
+                        @if (!provider.IsEnabled)
+                        {
+                            <span class="status-pill bg-danger-soft text-danger ms-2">@(isFa ? "خاموش" : "disabled")</span>
+                        }
+                    </div>
+                    <code dir="ltr" class="text-[11px] text-ink-faint">@provider.BaseUrl</code>
+                </div>
+
+                @if (provider.MonthlyBudget is { } budget)
+                {
+                    var spent = provider.Credentials.Sum(c => c.MonthToDateSpend);
+                    <div class="mt-2 text-xs text-ink-muted">
+                        @(isFa ? "بودجه" : "Budget"): @Money(spent) / @Money(budget)
+                        @if (budget > 0 && spent >= budget)
+                        {
+                            <span class="status-pill bg-danger-soft text-danger ms-2">@(isFa ? "تمام شد" : "exhausted")</span>
+                        }
+                    </div>
+                }
+
+                @* ---- token health ---- *@
+                <div class="mt-3 space-y-2">
+                    @foreach (var credential in provider.Credentials.OrderBy(c => c.Priority))
+                    {
+                        var parked = credential.RateLimitedUntil is { } until && now < until;
+                        var open = credential.ConsecutiveFailures >= Harbora.Infrastructure.Ai.AiCredentialRouter.FailuresBeforeOpen;
+
+                        <div class="rounded-lg border border-line bg-surface p-3">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-sm font-medium text-ink">@credential.Label</span>
+                                    @if (!credential.IsEnabled)
+                                    {
+                                        <span class="status-pill bg-danger-soft text-danger">@(isFa ? "خاموش" : "off")</span>
+                                    }
+                                    else if (parked)
+                                    {
+                                        <span class="status-pill bg-warn-soft text-warn">@(isFa ? "محدودشده" : "rate limited")</span>
+                                    }
+                                    else if (open)
+                                    {
+                                        <span class="status-pill bg-danger-soft text-danger">@(isFa ? "مدار باز" : "circuit open")</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="status-pill bg-ok-soft text-ok">@(isFa ? "سالم" : "healthy")</span>
+                                    }
+                                </div>
+                                <div class="flex items-center gap-2 text-[11px] text-ink-faint">
+                                    <span>p@(credential.Priority) · w@(credential.Weight)</span>
+                                    <form asp-action="ToggleCredential" asp-route-id="@credential.Id" method="post">
+                                        @Html.AntiForgeryToken()
+                                        <button class="hover:text-ink">@(credential.IsEnabled ? (isFa ? "غیرفعال" : "disable") : (isFa ? "فعال" : "enable"))</button>
+                                    </form>
+                                </div>
+                            </div>
+
+                            @* Measured facts only — the router writes these, nothing is probed here. *@
+                            <div class="mt-1 text-[11px] text-ink-faint">
+                                @(credential.LastSuccessAt is { } ok
+                                    ? $"{(isFa ? "آخرین موفق" : "last ok")} {ok.LocalDateTime:MM-dd HH:mm}"
+                                    : (isFa ? "هنوز موفقیتی ثبت نشده" : "no success recorded"))
+                                @if (credential.ConsecutiveFailures > 0)
+                                {
+                                    <span> · @credential.ConsecutiveFailures @(isFa ? "خطای پیاپی" : "consecutive failures")</span>
+                                }
+                                @if (credential.LastFailureReason is { } reason)
+                                {
+                                    <span> · @reason</span>
+                                }
+                                <span> · @(isFa ? "هزینهٔ ماه" : "spend") @Money(credential.MonthToDateSpend)</span>
+                            </div>
+
+                            <form asp-action="RotateCredential" asp-route-id="@credential.Id" method="post"
+                                  class="mt-2 flex flex-wrap items-center gap-2">
+                                @Html.AntiForgeryToken()
+                                <input name="token" type="password" autocomplete="off"
+                                       placeholder="@(isFa ? "توکن جایگزین" : "replacement token")"
+                                       class="min-w-40 flex-1 rounded-lg border border-line bg-surface-2 px-2 py-1.5 text-xs text-ink" />
+                                <button class="rounded-lg border border-line px-3 py-1.5 text-xs text-ink hover:border-accent">
+                                    @(isFa ? "تعویض" : "Rotate")
+                                </button>
+                            </form>
+                        </div>
+                    }
+                </div>
+
+                @* ---- add a token ---- *@
+                <form asp-action="AddCredential" asp-route-providerId="@provider.Id" method="post"
+                      class="mt-3 grid gap-2 sm:grid-cols-[1fr_2fr_auto_auto_auto]">
+                    @Html.AntiForgeryToken()
+                    <input name="label" placeholder="@(isFa ? "برچسب" : "label")" class="@input" />
+                    <input name="token" type="password" autocomplete="off"
+                           placeholder="@(isFa ? "توکن — فقط همین یک بار وارد می‌شود" : "token — entered once, never shown again")"
+                           class="@input" />
+                    <input name="priority" type="number" value="0" title="priority" class="@input w-20" />
+                    <input name="weight" type="number" value="1" title="weight" class="@input w-20" />
+                    <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                        @(isFa ? "افزودن" : "Add")
+                    </button>
+                </form>
+            </div>
+        }
+
+        @* ---- add or edit a provider ---- *@
+        <form asp-action="SaveProvider" method="post" class="grid gap-2 sm:grid-cols-2">
+            @Html.AntiForgeryToken()
+            <div><label class="@label">@(isFa ? "نام" : "Name")</label><input name="name" required class="@input" /></div>
+            <div>
+                <label class="@label">@(isFa ? "نوع" : "Type")</label>
+                <select name="type" class="@input">
+                    <option value="OpenRouter">OpenRouter</option>
+                    <option value="OpenAiCompatible">OpenAI-compatible</option>
+                </select>
+            </div>
+            <div class="sm:col-span-2">
+                <label class="@label">@(isFa ? "آدرس پایه — فقط HTTPS و بیرون از شبکهٔ داخلی" : "Base URL — HTTPS, outside this network")</label>
+                <input name="baseUrl" dir="ltr" placeholder="https://openrouter.ai/api/v1" required class="@input" />
+            </div>
+            <div><label class="@label">@(isFa ? "اولویت" : "Priority")</label><input name="priority" type="number" value="0" class="@input" /></div>
+            <div><label class="@label">@(isFa ? "بودجهٔ ماهانه (اختیاری)" : "Monthly budget (optional)")</label><input name="monthlyBudget" type="number" step="0.01" class="@input" /></div>
+            <label class="flex items-center gap-2 text-sm text-ink sm:col-span-2">
+                <input type="checkbox" name="isEnabled" value="true" checked /> @(isFa ? "فعال" : "Enabled")
+            </label>
+            <div class="sm:col-span-2">
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                    @(isFa ? "ذخیرهٔ ارائه‌دهنده" : "Save provider")
+                </button>
+            </div>
+        </form>
+        <partial name="Design/_PanelEnd" />
+
+        @* ---- models ---- *@
+        @{ var modelPanel = new PanelModel(isFa ? "کاتالوگ مدل" : "Model catalogue"); }
+        <partial name="Design/_PanelStart" model="modelPanel" />
+
+        @if (Model.Models.Count > 0)
+        {
+            <div class="mb-4 overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="text-xs uppercase tracking-wide text-ink-faint">
+                        <tr class="border-b border-line">
+                            <th class="py-2 text-start font-medium">@(isFa ? "نام مستعار" : "Alias")</th>
+                            <th class="py-2 text-start font-medium">@(isFa ? "شناسهٔ ارائه‌دهنده" : "Provider model")</th>
+                            <th class="py-2 text-start font-medium">@(isFa ? "قیمت ورودی/خروجی" : "In / out")</th>
+                            <th class="py-2 text-start font-medium">@(isFa ? "افزوده" : "Markup")</th>
+                            <th class="py-2 text-start font-medium">@(isFa ? "وضعیت" : "State")</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-line">
+                        @foreach (var entry in Model.Models)
+                        {
+                            <tr>
+                                <td class="py-2"><code dir="ltr" class="text-ink">@entry.Alias</code></td>
+                                <td class="py-2 text-ink-muted" dir="ltr">@entry.ProviderModelId</td>
+                                <td class="py-2 text-ink-muted" dir="ltr">
+                                    @(entry.InputPriceOverride?.ToString("0.##") ?? entry.ProviderInputPrice?.ToString("0.##") ?? "—")
+                                    /
+                                    @(entry.OutputPriceOverride?.ToString("0.##") ?? entry.ProviderOutputPrice?.ToString("0.##") ?? "—")
+                                </td>
+                                <td class="py-2 text-ink-muted" dir="ltr">@entry.MarkupPercent%</td>
+                                <td class="py-2">
+                                    @if (entry.IsEnabled)
+                                    {
+                                        <span class="status-pill bg-ok-soft text-ok">@(isFa ? "فعال" : "enabled")</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="status-pill bg-danger-soft text-danger">@(isFa ? "غیرفعال" : "disabled")</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <form asp-action="SaveModel" method="post" class="grid gap-2 sm:grid-cols-2">
+            @Html.AntiForgeryToken()
+            <div>
+                <label class="@label">@(isFa ? "ارائه‌دهنده" : "Provider")</label>
+                <select name="providerId" class="@input">
+                    @foreach (var provider in Model.Providers)
+                    {
+                        <option value="@provider.Id">@provider.Name</option>
+                    }
+                </select>
+            </div>
+            <div><label class="@label">@(isFa ? "نام مستعار (آنچه مشتری صدا می‌زند)" : "Alias (what callers use)")</label><input name="alias" dir="ltr" required class="@input" /></div>
+            <div><label class="@label">@(isFa ? "نام نمایشی" : "Display name")</label><input name="displayName" class="@input" /></div>
+            <div><label class="@label">@(isFa ? "شناسه نزد ارائه‌دهنده" : "Provider model id")</label><input name="providerModelId" dir="ltr" required class="@input" /></div>
+            <div><label class="@label">@(isFa ? "طول زمینه" : "Context length")</label><input name="contextLength" type="number" class="@input" /></div>
+            <div><label class="@label">@(isFa ? "بیشترین خروجی" : "Max output")</label><input name="maxOutputTokens" type="number" class="@input" /></div>
+            <div><label class="@label">@(isFa ? "قیمت ورودی ارائه‌دهنده (هر میلیون)" : "Provider input price (per M)")</label><input name="providerInputPrice" type="number" step="0.0001" class="@input" /></div>
+            <div><label class="@label">@(isFa ? "قیمت خروجی ارائه‌دهنده" : "Provider output price")</label><input name="providerOutputPrice" type="number" step="0.0001" class="@input" /></div>
+            <div><label class="@label">@(isFa ? "قیمت ورودی ما (اختیاری)" : "Our input price (optional)")</label><input name="inputPriceOverride" type="number" step="0.0001" class="@input" /></div>
+            <div><label class="@label">@(isFa ? "قیمت خروجی ما (اختیاری)" : "Our output price (optional)")</label><input name="outputPriceOverride" type="number" step="0.0001" class="@input" /></div>
+            <div><label class="@label">@(isFa ? "درصد افزوده" : "Markup %")</label><input name="markupPercent" type="number" step="0.1" value="0" class="@input" /></div>
+            <div class="flex flex-wrap items-end gap-3 text-sm text-ink">
+                <label class="flex items-center gap-1"><input type="checkbox" name="supportsStreaming" value="true" checked /> stream</label>
+                <label class="flex items-center gap-1"><input type="checkbox" name="supportsTools" value="true" /> tools</label>
+                <label class="flex items-center gap-1"><input type="checkbox" name="supportsVision" value="true" /> vision</label>
+                <label class="flex items-center gap-1"><input type="checkbox" name="supportsEmbeddings" value="true" /> embeddings</label>
+                <label class="flex items-center gap-1"><input type="checkbox" name="isEnabled" value="true" checked /> @(isFa ? "فعال" : "enabled")</label>
+            </div>
+            <div class="sm:col-span-2">
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                    @(isFa ? "ذخیرهٔ مدل" : "Save model")
+                </button>
+                <p class="mt-1 text-[11px] text-ink-faint">
+                    @(isFa
+                        ? "قیمت اختصاصی، قیمت ارائه‌دهنده را جایگزین می‌کند؛ صفر یعنی رایگان. اگر خالی بماند، قیمت ارائه‌دهنده به‌علاوهٔ درصد افزوده حساب می‌شود."
+                        : "Our price replaces the provider's; zero really means free. Left blank, the provider price plus markup is used.")
+                </p>
+            </div>
+        </form>
+        <partial name="Design/_PanelEnd" />
+    </div>
+
+    <aside class="space-y-6">
+        @* ---- plans ---- *@
+        @{ var planPanel = new PanelModel(isFa ? "پلن‌ها" : "Plans"); }
+        <partial name="Design/_PanelStart" model="planPanel" />
+
+        @foreach (var plan in Model.Plans)
+        {
+            <div class="mb-3 rounded-lg border border-line bg-surface-2 p-3">
+                <div class="flex items-center justify-between gap-2">
+                    <span class="text-sm font-semibold text-ink">@plan.Name</span>
+                    <span class="text-xs text-ink-faint" dir="ltr">@Money(plan.MonthlyPrice)/mo</span>
+                </div>
+                <div class="mt-1 text-[11px] text-ink-faint">
+                    @plan.MonthlyTokenLimit.ToString("N0") @(isFa ? "توکن" : "tokens") ·
+                    @plan.RequestsPerMinute @(isFa ? "درخواست/دقیقه" : "req/min") ·
+                    @(plan.HardLimit ? (isFa ? "سقف قطعی" : "hard") : (isFa ? "سقف نرم" : "soft"))
+                </div>
+
+                @* Replaces the whole set: unticking really removes access. *@
+                <form asp-action="SetPlanModels" asp-route-planId="@plan.Id" method="post" class="mt-2">
+                    @Html.AntiForgeryToken()
+                    <div class="space-y-1">
+                        @foreach (var entry in Model.Models)
+                        {
+                            var included = plan.Models.Any(m => m.AiModelId == entry.Id);
+                            <label class="flex items-center gap-2 text-xs text-ink">
+                                <input type="checkbox" name="modelIds" value="@entry.Id" checked="@included" />
+                                <code dir="ltr">@entry.Alias</code>
+                            </label>
+                        }
+                    </div>
+                    <button class="mt-2 rounded-lg border border-line px-3 py-1.5 text-xs text-ink hover:border-accent">
+                        @(isFa ? "ذخیرهٔ مدل‌های پلن" : "Save plan models")
+                    </button>
+                </form>
+            </div>
+        }
+
+        <form asp-action="SavePlan" method="post" class="space-y-2">
+            @Html.AntiForgeryToken()
+            <div><label class="@label">@(isFa ? "نام" : "Name")</label><input name="name" required class="@input" /></div>
+            <div class="grid grid-cols-2 gap-2">
+                <div><label class="@label">@(isFa ? "قیمت ماهانه" : "Price/mo")</label><input name="monthlyPrice" type="number" step="0.01" value="0" class="@input" /></div>
+                <div><label class="@label">@(isFa ? "اعتبار" : "Credit")</label><input name="includedCredit" type="number" step="0.01" value="0" class="@input" /></div>
+                <div><label class="@label">@(isFa ? "درخواست/دقیقه" : "Req/min")</label><input name="requestsPerMinute" type="number" value="60" class="@input" /></div>
+                <div><label class="@label">@(isFa ? "توکن/دقیقه" : "Tokens/min")</label><input name="tokensPerMinute" type="number" value="100000" class="@input" /></div>
+                <div><label class="@label">@(isFa ? "درخواست/روز" : "Req/day")</label><input name="requestsPerDay" type="number" value="10000" class="@input" /></div>
+                <div><label class="@label">@(isFa ? "توکن ماهانه" : "Tokens/mo")</label><input name="monthlyTokenLimit" type="number" value="10000000" class="@input" /></div>
+                <div><label class="@label">@(isFa ? "سقف هزینه" : "Spend cap")</label><input name="monthlySpendLimit" type="number" step="0.01" class="@input" /></div>
+                <div><label class="@label">@(isFa ? "بیشترین زمینه" : "Max context")</label><input name="maxContext" type="number" value="128000" class="@input" /></div>
+                <div><label class="@label">@(isFa ? "بیشترین خروجی" : "Max output")</label><input name="maxOutputTokens" type="number" value="8192" class="@input" /></div>
+                <div><label class="@label">@(isFa ? "هم‌زمان" : "Concurrent")</label><input name="concurrentRequests" type="number" value="4" class="@input" /></div>
+            </div>
+            <div class="flex flex-wrap gap-3 text-sm text-ink">
+                <label class="flex items-center gap-1"><input type="checkbox" name="allowStreaming" value="true" checked /> streaming</label>
+                <label class="flex items-center gap-1"><input type="checkbox" name="hardLimit" value="true" checked /> @(isFa ? "سقف قطعی" : "hard limit")</label>
+                <label class="flex items-center gap-1"><input type="checkbox" name="isEnabled" value="true" checked /> @(isFa ? "فعال" : "enabled")</label>
+            </div>
+            <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                @(isFa ? "ذخیرهٔ پلن" : "Save plan")
+            </button>
+        </form>
+        <partial name="Design/_PanelEnd" />
+
+        @* ---- failures ---- *@
+        @{ var failurePanel = new PanelModel(isFa ? "خطاهای اخیر" : "Recent failures"); }
+        <partial name="Design/_PanelStart" model="failurePanel" />
+        @if (Model.RecentFailures.Count == 0)
+        {
+            <p class="text-sm text-ink-faint">@(isFa ? "در ۷ روز گذشته خطایی ثبت نشده." : "Nothing failed in the last 7 days.")</p>
+        }
+        else
+        {
+            <div class="space-y-2">
+                @foreach (var failure in Model.RecentFailures)
+                {
+                    <div class="rounded-lg border border-line bg-surface-2 p-2 text-xs">
+                        <div class="flex items-center justify-between gap-2">
+                            <code dir="ltr" class="text-ink">@failure.RequestedModel</code>
+                            <span class="status-pill bg-danger-soft text-danger">@failure.StatusCode</span>
+                        </div>
+                        <div class="mt-0.5 text-[11px] text-ink-faint" dir="ltr">
+                            @failure.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm")
+                            @if (failure.FailureReason is { } reason) { <span> · @reason</span> }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        <partial name="Design/_PanelEnd" />
+    </aside>
+</div>

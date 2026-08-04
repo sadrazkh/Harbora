@@ -73,6 +73,8 @@ public sealed class ServersController(
             server.TotalMemoryBytes = host.TotalMemoryBytes;
             server.TotalDiskBytes = host.TotalDiskBytes;
             server.DockerVersion = host.DockerVersion;
+            server.Architecture = Harbora.Infrastructure.Monitoring.ReportedFact.Keep(
+                server.Architecture, host.Architecture);
             server.LastHeartbeatAt = clock.UtcNow;
             TempData["Message"] = $"{server.Name} is online (Docker {host.DockerVersion}).";
         }

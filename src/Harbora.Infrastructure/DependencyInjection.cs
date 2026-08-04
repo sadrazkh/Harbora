@@ -134,6 +134,34 @@ public static class DependencyInjection
         // restart has to read as a gap rather than a spike.
         services.AddScoped<Monitoring.NetworkHistory>();
 
+        // The AI gateway. The adapter is registered against the interface so a second provider
+        // shape can be added without touching the routing or metering above it.
+        services.AddScoped<Ai.AiGatewayService>();
+        services.AddScoped<Ai.IAiProviderAdapter, Ai.OpenRouterProviderAdapter>();
+
+        // A singleton, because it is the counter. Scoped, every request would get a fresh one and
+        // every limit would be judged against a history of exactly one request — a rate limiter that
+        // is present, tested, configured and enforces nothing.
+        services.AddSingleton<Ai.AiRateLimiter>();
+
+        // Newer versions of the ready-made apps. The background job checks a setting before it does
+        // anything, so registering it does not start talking to registries.
+        services.AddScoped<IContainerRegistry, Templates.ContainerRegistryClient>();
+
+        // Registered by its own type and then handed to the host, rather than AddHostedService<T>.
+        // That overload registers it only as IHostedService, so the admin page's "check now" button
+        // would fail to resolve it — at runtime, on a page that compiles and looks finished.
+        services.AddSingleton<Templates.RegistryDiscoveryService>();
+        services.AddHostedService(sp => sp.GetRequiredService<Templates.RegistryDiscoveryService>());
+
+        // Outside access to a managed database, and the sweeper that makes "temporary" true.
+        services.AddScoped<Services.DatabaseAccessService>();
+        services.AddHostedService<Services.DatabaseAccessSweeper>();
+
+        // Until the real agent ships, the fake stands in — and warns on every call, so a production
+        // deployment that never configured an agent cannot quietly report tunnels it never made.
+        services.AddSingleton<Application.Abstractions.INodeAgentClient, Nodes.FakeNodeAgentClient>();
+
         // Tenancy quotas + node capacity (PaaS).
         services.AddScoped<IQuotaService, Tenancy.QuotaService>();
         services.AddScoped<INodeCapacityService, Tenancy.NodeCapacityService>();

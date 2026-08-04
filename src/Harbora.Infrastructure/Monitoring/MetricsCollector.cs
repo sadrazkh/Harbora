@@ -65,6 +65,9 @@ public sealed class MetricsCollector(
             server.TotalMemoryBytes = host.TotalMemoryBytes;
             server.TotalDiskBytes = host.TotalDiskBytes;
             server.DockerVersion = host.DockerVersion;
+
+            server.Architecture = ReportedFact.Keep(server.Architecture, host.Architecture);
+
             server.Status = ServerStatus.Online;
             server.LastHeartbeatAt = now;
 

@@ -22,6 +22,464 @@ namespace Harbora.Data.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Harbora.Domain.Ai.AiModel", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AiProviderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Alias")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int?>("ContextLength")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal?>("InputPriceOverride")
+                        .HasColumnType("numeric");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsManuallyManaged")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset?>("LastSyncedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal>("MarkupPercent")
+                        .HasColumnType("numeric");
+
+                    b.Property<int?>("MaxOutputTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal?>("OutputPriceOverride")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal?>("ProviderInputPrice")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("ProviderModelId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal?>("ProviderOutputPrice")
+                        .HasColumnType("numeric");
+
+                    b.Property<bool>("SupportsEmbeddings")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("SupportsResponses")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("SupportsStreaming")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("SupportsTools")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("SupportsVision")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AiProviderId");
+
+                    b.HasIndex("Alias")
+                        .IsUnique();
+
+                    b.ToTable("AiModels");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiPlan", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("AllowStreaming")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("ConcurrentRequests")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text");
+
+                    b.Property<string>("DescriptionFa")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("HardLimit")
+                        .HasColumnType("boolean");
+
+                    b.Property<decimal>("IncludedCredit")
+                        .HasColumnType("numeric");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("MaxContext")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("MaxOutputTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("MonthlyPrice")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal?>("MonthlySpendLimit")
+                        .HasColumnType("numeric");
+
+                    b.Property<long>("MonthlyTokenLimit")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("NameFa")
+                        .HasColumnType("text");
+
+                    b.Property<int>("RequestsPerDay")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("RequestsPerMinute")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TokensPerMinute")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("TrialAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("AiPlans");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiPlanModel", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AiModelId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AiPlanId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("MaxOutputTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("RequestsPerMinute")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AiModelId");
+
+                    b.HasIndex("AiPlanId", "AiModelId")
+                        .IsUnique();
+
+                    b.ToTable("AiPlanModels");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiProvider", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BaseUrl")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ExtraHeadersJson")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<decimal?>("MonthlyBudget")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("AiProviders");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiProviderCredential", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AiProviderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("ConsecutiveFailures")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("EncryptedToken")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("LastFailureAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastFailureReason")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("LastSuccessAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal>("MonthToDateSpend")
+                        .HasColumnType("numeric");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("RateLimitedUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Weight")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AiProviderId");
+
+                    b.ToTable("AiProviderCredentials");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiSubscription", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AiPlanId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("EndsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<decimal>("PeriodSpend")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTimeOffset>("PeriodStartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("PeriodTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AiPlanId");
+
+                    b.HasIndex("WorkspaceId");
+
+                    b.ToTable("AiSubscriptions");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiUsageRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AiPlanId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AiProviderCredentialId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AiProviderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AiUserApiKeyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("CachedInputTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<decimal>("ChargedCost")
+                        .HasColumnType("numeric");
+
+                    b.Property<bool>("ClientDisconnected")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("CorrelationId")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("DurationMs")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("text");
+
+                    b.Property<long>("InputTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("OutputTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<decimal>("ProviderCost")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("ProviderModelId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RequestedModel")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("StatusCode")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("Streaming")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AiUserApiKeyId");
+
+                    b.HasIndex("WorkspaceId", "CreatedAt");
+
+                    b.ToTable("AiUsageRecords");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiUserApiKey", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AllowedIps")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsRevoked")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("KeyHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Prefix")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Scopes")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Prefix");
+
+                    b.HasIndex("WorkspaceId", "IsRevoked");
+
+                    b.ToTable("AiUserApiKeys");
+                });
+
             modelBuilder.Entity("Harbora.Domain.Apps.App", b =>
                 {
                     b.Property<Guid>("Id")
@@ -130,6 +588,9 @@ namespace Harbora.Data.Migrations
                         .HasColumnType("integer");
 
                     b.Property<Guid?>("TemplateId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("TemplateVersionId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
@@ -814,6 +1275,9 @@ namespace Harbora.Data.Migrations
                     b.Property<DateTimeOffset?>("LastLoginAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("PanelMode")
+                        .HasColumnType("integer");
+
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1366,6 +1830,9 @@ namespace Harbora.Data.Migrations
                     b.Property<bool>("AgentUseMtls")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("Architecture")
+                        .HasColumnType("text");
+
                     b.Property<int>("CpuCores")
                         .HasColumnType("integer");
 
@@ -1414,6 +1881,122 @@ namespace Harbora.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Servers");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Services.DatabaseAccessAudit", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ActorEmail")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ClientIp")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Detail")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("GrantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ManagedServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ManagedServiceId", "CreatedAt");
+
+                    b.ToTable("DatabaseAccessAudits");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Services.DatabaseAccessGrant", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AllowedIps")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedByEmail")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ExtensionCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("GatewayHost")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("GatewayPort")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ManagedServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RevokedReason")
+                        .HasColumnType("text");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("TlsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("TunnelId")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Username")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.HasIndex("ManagedServiceId", "Status");
+
+                    b.ToTable("DatabaseAccessGrants");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Services.ManagedService", b =>
@@ -1590,6 +2173,123 @@ namespace Harbora.Data.Migrations
                     b.ToTable("AppTemplates");
                 });
 
+            modelBuilder.Entity("Harbora.Domain.Templates.AppTemplateAsset", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AppTemplateId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Format")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("License")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("LicenseNote")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Path")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceUrl")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("WorksOnBothThemes")
+                        .HasColumnType("boolean");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AppTemplateId")
+                        .IsUnique();
+
+                    b.ToTable("AppTemplateAssets");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Templates.AppTemplateVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("AllowsDowngrade")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("AppTemplateId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("DiscoveredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ImageDigest")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ImageRepository")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ImageTag")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Lifecycle")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ManifestJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("MigrationWarnings")
+                        .HasColumnType("text");
+
+                    b.Property<string>("MigrationWarningsFa")
+                        .HasColumnType("text");
+
+                    b.Property<string>("MinimumNodeVersion")
+                        .HasColumnType("text");
+
+                    b.Property<int>("Publication")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("ReleasedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SupportedArchitectures")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UpgradeNotes")
+                        .HasColumnType("text");
+
+                    b.Property<string>("UpgradeNotesFa")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AppTemplateId", "Version")
+                        .IsUnique();
+
+                    b.ToTable("AppTemplateVersions");
+                });
+
             modelBuilder.Entity("Harbora.Domain.Tenancy.InstanceSize", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1724,6 +2424,58 @@ namespace Harbora.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("UsageRecords");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiModel", b =>
+                {
+                    b.HasOne("Harbora.Domain.Ai.AiProvider", "AiProvider")
+                        .WithMany()
+                        .HasForeignKey("AiProviderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("AiProvider");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiPlanModel", b =>
+                {
+                    b.HasOne("Harbora.Domain.Ai.AiModel", "AiModel")
+                        .WithMany()
+                        .HasForeignKey("AiModelId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Harbora.Domain.Ai.AiPlan", "AiPlan")
+                        .WithMany("Models")
+                        .HasForeignKey("AiPlanId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("AiModel");
+
+                    b.Navigation("AiPlan");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiProviderCredential", b =>
+                {
+                    b.HasOne("Harbora.Domain.Ai.AiProvider", "AiProvider")
+                        .WithMany("Credentials")
+                        .HasForeignKey("AiProviderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("AiProvider");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiSubscription", b =>
+                {
+                    b.HasOne("Harbora.Domain.Ai.AiPlan", "AiPlan")
+                        .WithMany()
+                        .HasForeignKey("AiPlanId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("AiPlan");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Apps.App", b =>
@@ -1890,6 +2642,17 @@ namespace Harbora.Data.Migrations
                     b.Navigation("Server");
                 });
 
+            modelBuilder.Entity("Harbora.Domain.Services.DatabaseAccessGrant", b =>
+                {
+                    b.HasOne("Harbora.Domain.Services.ManagedService", "ManagedService")
+                        .WithMany()
+                        .HasForeignKey("ManagedServiceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ManagedService");
+                });
+
             modelBuilder.Entity("Harbora.Domain.Services.ManagedService", b =>
                 {
                     b.HasOne("Harbora.Domain.Projects.Environment", "Environment")
@@ -1898,6 +2661,38 @@ namespace Harbora.Data.Migrations
                         .OnDelete(DeleteBehavior.SetNull);
 
                     b.Navigation("Environment");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Templates.AppTemplateAsset", b =>
+                {
+                    b.HasOne("Harbora.Domain.Templates.AppTemplate", "AppTemplate")
+                        .WithMany()
+                        .HasForeignKey("AppTemplateId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("AppTemplate");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Templates.AppTemplateVersion", b =>
+                {
+                    b.HasOne("Harbora.Domain.Templates.AppTemplate", "AppTemplate")
+                        .WithMany()
+                        .HasForeignKey("AppTemplateId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("AppTemplate");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiPlan", b =>
+                {
+                    b.Navigation("Models");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Ai.AiProvider", b =>
+                {
+                    b.Navigation("Credentials");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Apps.App", b =>

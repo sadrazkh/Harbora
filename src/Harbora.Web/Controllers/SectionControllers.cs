@@ -84,16 +84,44 @@ public sealed class TemplatesController(
         var item = BuildItem(template);
         if (item is null) return NotFound();
         if (!await CanDeployAsync(item)) return Forbid();
+
+        var (versions, architecture, hasVersions) = await VersionChoicesAsync(template.Id, ct);
         return View(new Harbora.Web.ViewModels.TemplateDeployPageViewModel
         {
             Item = item,
+            Versions = versions,
+            NodeArchitecture = architecture,
+            HasVersionsButNoneOfferable = hasVersions && versions.Count == 0,
             Input = new Harbora.Web.ViewModels.TemplateDeployInput
             {
                 TemplateId = template.Id,
                 ProjectName = item.Name,
-                ResourceName = item.Name
+                ResourceName = item.Name,
+
+                // Preselected rather than left blank, so the form reflects what will happen if
+                // somebody submits it without touching the selector.
+                VersionId = versions.FirstOrDefault()?.Id
             }
         });
+    }
+
+    /// <summary>
+    /// The versions to offer, what the server runs, and whether this template has versions at all.
+    ///
+    /// The third value matters: "no versions" and "versions, none of them usable here" produce the
+    /// same empty list and need opposite messages — one is an ordinary template, the other is an
+    /// entry somebody will otherwise keep trying to deploy.
+    /// </summary>
+    private async Task<(IReadOnlyList<Harbora.Domain.Templates.AppTemplateVersion> Versions, string? Architecture, bool HasVersions)>
+        VersionChoicesAsync(Guid templateId, CancellationToken ct)
+    {
+        var architecture = await db.Servers.Where(s => s.IsLocal)
+            .Select(s => s.Architecture).FirstOrDefaultAsync(ct);
+
+        var all = await db.AppTemplateVersions.AsNoTracking()
+            .Where(v => v.AppTemplateId == templateId).ToListAsync(ct);
+
+        return (Harbora.Infrastructure.Templates.VersionSelection.Offerable(all, architecture), architecture, all.Count > 0);
     }
 
     [HttpPost("/templates/{id:guid}/deploy")]
@@ -112,7 +140,7 @@ public sealed class TemplatesController(
             ModelState.AddModelError(nameof(input.RepositoryUrl), IsFa ? "آدرس مخزن Git لازم است." : "A Git repository URL is required.");
 
         if (!ModelState.IsValid)
-            return View(new Harbora.Web.ViewModels.TemplateDeployPageViewModel { Item = item, Input = input });
+            return View(await RedrawAsync(item, input, ct));
 
         try
         {
@@ -125,7 +153,8 @@ public sealed class TemplatesController(
                 input.RepositoryUrl,
                 input.GitRef,
                 input.Variables,
-                input.DeployNow), ct);
+                input.DeployNow,
+                input.VersionId), ct);
 
             await audit.LogAsync("template.deploy", "template", id.ToString(),
                 HttpContext.Connection.RemoteIpAddress?.ToString(),
@@ -145,8 +174,30 @@ public sealed class TemplatesController(
         catch (InvalidOperationException ex)
         {
             ModelState.AddModelError(string.Empty, ex.Message);
-            return View(new Harbora.Web.ViewModels.TemplateDeployPageViewModel { Item = item, Input = input });
+            return View(await RedrawAsync(item, input, ct));
         }
+    }
+
+    /// <summary>
+    /// The page again after a refusal, with the version list reloaded.
+    ///
+    /// Reloaded rather than carried in a hidden field: the reason the submission failed may be that
+    /// a version was withdrawn, and redrawing the old list would offer it again.
+    /// </summary>
+    private async Task<Harbora.Web.ViewModels.TemplateDeployPageViewModel> RedrawAsync(
+        Harbora.Web.ViewModels.TemplateCatalogItemViewModel item,
+        Harbora.Web.ViewModels.TemplateDeployInput input,
+        CancellationToken ct)
+    {
+        var (versions, architecture, hasVersions) = await VersionChoicesAsync(input.TemplateId, ct);
+        return new Harbora.Web.ViewModels.TemplateDeployPageViewModel
+        {
+            Item = item,
+            Input = input,
+            Versions = versions,
+            NodeArchitecture = architecture,
+            HasVersionsButNoneOfferable = hasVersions && versions.Count == 0
+        };
     }
 
     /// <summary>

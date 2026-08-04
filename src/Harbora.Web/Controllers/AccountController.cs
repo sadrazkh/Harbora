@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Web.Infrastructure;
@@ -6,6 +6,7 @@ using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Localization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -16,7 +17,8 @@ public sealed class AccountController(
     HarboraDbContext db,
     IPasswordHasher hasher,
     IAuditLogger audit,
-    Harbora.Application.Abstractions.ISystemClock clock) : Controller
+    Harbora.Application.Abstractions.ISystemClock clock,
+    Harbora.Web.Infrastructure.PanelModeProvider panelModes) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
@@ -74,6 +76,32 @@ public sealed class AccountController(
     {
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         return Redirect("/account/login");
+    }
+
+    /// <summary>
+    /// Switches between the simple and full panel.
+    ///
+    /// The choice is written to the account, not a cookie, so it follows the person to another
+    /// device. They are returned to the page they were on: switching mode mid-task and landing on
+    /// the dashboard loses whatever they were doing.
+    /// </summary>
+    [HttpPost("/account/panel-mode")]
+    [ValidateAntiForgeryToken]
+    [Authorize]
+    public async Task<IActionResult> SetPanelMode(string mode, string? returnUrl, CancellationToken ct)
+    {
+        // An unrecognised value clears the preference rather than guessing, which puts the person
+        // back on whatever default an administrator chose.
+        Harbora.Domain.Identity.PanelMode? chosen =
+            Enum.TryParse<Harbora.Domain.Identity.PanelMode>(mode, ignoreCase: true, out var parsed)
+                ? parsed
+                : null;
+
+        await panelModes.SetAsync(chosen, ct);
+
+        // LocalRedirect refuses an absolute URL, so a crafted returnUrl cannot bounce somebody off
+        // the panel to another site.
+        return LocalRedirect(string.IsNullOrWhiteSpace(returnUrl) ? "/" : returnUrl);
     }
 
     /// <summary>Language switcher — sets the culture cookie and returns to the current page.</summary>

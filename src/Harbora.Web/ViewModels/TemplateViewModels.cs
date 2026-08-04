@@ -51,10 +51,32 @@ public sealed class TemplateDeployInput
     public string? GitRef { get; set; } = "main";
     public Dictionary<string, string> Variables { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool DeployNow { get; set; } = true;
+
+    /// <summary>Which version to install. Null means the recommended one.</summary>
+    public Guid? VersionId { get; set; }
 }
 
 public sealed class TemplateDeployPageViewModel
 {
     public required TemplateCatalogItemViewModel Item { get; init; }
     public required TemplateDeployInput Input { get; init; }
+
+    /// <summary>
+    /// The versions this person may pick, best first. Empty for a template that has none — the
+    /// selector is then not drawn at all rather than drawn with one disabled entry.
+    /// </summary>
+    public IReadOnlyList<AppTemplateVersion> Versions { get; init; } = [];
+
+    /// <summary>
+    /// What this server runs, when it has told us. Null is shown as unknown rather than assumed:
+    /// filtering on a guess refuses versions that would have run.
+    /// </summary>
+    public string? NodeArchitecture { get; init; }
+
+    /// <summary>
+    /// True when the template has versions but none can be deployed here — a draft-only entry, or
+    /// one built for another architecture. The form is then closed with a reason instead of
+    /// accepting a submission that is certain to fail.
+    /// </summary>
+    public bool HasVersionsButNoneOfferable { get; init; }
 }

@@ -138,6 +138,7 @@
                     { <form asp-controller="Databases" asp-action="Start" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary py-1.5 text-xs"><i data-lucide="play" class="h-3.5 w-3.5"></i>@T["Start"]</button></form> }
                     <form asp-controller="Databases" asp-action="TestConnection" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary py-1.5 text-xs"><i data-lucide="plug-zap" class="h-3.5 w-3.5"></i>@(isFa ? "تست اتصال" : "Test")</button></form>
                     <form asp-controller="Databases" asp-action="Measure" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary py-1.5 text-xs"><i data-lucide="ruler" class="h-3.5 w-3.5"></i>@(isFa ? "اندازه‌گیری" : "Measure")</button></form>
+                    <a href="/databases/@db.Id/access" class="btn-secondary py-1.5 text-xs"><i data-lucide="key-round" class="h-3.5 w-3.5"></i>@(isFa ? "دسترسی خارجی" : "External access")</a>
                 </div>
             }
         </section>

@@ -1,0 +1,189 @@
+@model TemplateVersionAdminViewModel
+@using Harbora.Domain.Templates
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var message = TempData["Message"] as string;
+    var error = TempData["Error"] as string;
+
+    string LifecycleLabel(VersionLifecycle lifecycle) => (lifecycle, isFa) switch
+    {
+        (VersionLifecycle.Recommended, true) => "پیشنهادی",     (VersionLifecycle.Recommended, false) => "recommended",
+        (VersionLifecycle.Stable, true) => "پایدار",             (VersionLifecycle.Stable, false) => "stable",
+        (VersionLifecycle.PreviousStable, true) => "پایدار قبلی", (VersionLifecycle.PreviousStable, false) => "previous stable",
+        (VersionLifecycle.Legacy, true) => "قدیمی",              (VersionLifecycle.Legacy, false) => "legacy",
+        (VersionLifecycle.Deprecated, true) => "منسوخ",          (VersionLifecycle.Deprecated, false) => "deprecated",
+        _ => isFa ? "پشتیبانی‌نشده" : "unsupported"
+    };
+}
+
+<partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+    isFa ? "نسخه‌های اپ‌های آماده" : "Ready-app versions",
+    isFa
+        ? "کدام نسخه به مشتری پیشنهاد می‌شود. چیزی خودکار منتشر نمی‌شود؛ رجیستری فقط پیش‌نویس می‌سازد."
+        : "Which versions are offered. Nothing is published automatically — a registry only ever produces a draft.",
+    Model.TotalDrafts > 0
+        ? (isFa ? $"{Model.TotalDrafts} پیش‌نویس" : $"{Model.TotalDrafts} draft")
+        : null))" />
+
+@if (message is not null)
+{
+    <div class="alert-success mb-4">@message</div>
+}
+@if (error is not null)
+{
+    <div class="alert-danger mb-4">@error</div>
+}
+
+@* ---- discovery ---- *@
+@{ var discoveryPanel = new PanelModel(isFa ? "بررسی رجیستری" : "Registry checks"); }
+<partial name="Design/_PanelStart" model="discoveryPanel" />
+
+<p class="text-sm leading-6 text-ink-muted">
+    @(isFa
+        ? "وقتی روشن باشد، Harbora روزی یک بار از رجیستری‌های عمومی می‌پرسد که نسخهٔ تازه‌تری منتشر شده یا نه. این یعنی درخواست خروجی از این سرور به شخص ثالث، پس پیش‌فرض خاموش است."
+        : "When on, Harbora asks the public registries once a day whether newer versions exist. That means outbound requests from this server to a third party, which is why it is off by default.")
+</p>
+<p class="mt-1 text-xs text-ink-faint">
+    @(isFa
+        ? "هرچه پیدا شود پیش‌نویس است. انتشار همیشه تصمیم شماست."
+        : "Whatever it finds arrives as a draft. Publishing is always your decision.")
+</p>
+
+<div class="mt-4 flex flex-wrap items-center gap-3">
+    <form asp-action="SetDiscovery" method="post">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="enabled" value="@((!Model.DiscoveryEnabled).ToString().ToLowerInvariant())" />
+        <button class="@(Model.DiscoveryEnabled ? "btn-secondary" : "btn-primary") px-4 py-2 text-sm">
+            @(Model.DiscoveryEnabled ? (isFa ? "خاموش کن" : "Turn off") : (isFa ? "روشن کن" : "Turn on"))
+        </button>
+    </form>
+
+    <form asp-action="RunDiscovery" method="post">
+        @Html.AntiForgeryToken()
+        <button class="btn-secondary px-4 py-2 text-sm">@(isFa ? "همین حالا بررسی کن" : "Check now")</button>
+    </form>
+
+    @if (Model.DiscoveryEnabled)
+    {
+        <span class="status-pill bg-ok-soft text-ok">@(isFa ? "روشن" : "on")</span>
+    }
+    else
+    {
+        <span class="status-pill bg-surface-2 text-ink-faint">@(isFa ? "خاموش" : "off")</span>
+    }
+</div>
+<partial name="Design/_PanelEnd" />
+
+@* ---- versions ---- *@
+<div class="mt-6 space-y-5">
+    @foreach (var group in Model.Templates)
+    {
+        <section class="rounded-xl border border-line bg-surface shadow-panel">
+            <header class="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3.5">
+                <div class="flex items-center gap-2">
+                    <h2 class="text-[15px] font-semibold text-ink">@(isFa && !string.IsNullOrWhiteSpace(group.Template.NameFa) ? group.Template.NameFa : group.Template.Name)</h2>
+                    @if (group.DraftCount > 0)
+                    {
+                        <span class="status-pill bg-warn-soft text-warn">@group.DraftCount @(isFa ? "پیش‌نویس" : "draft")</span>
+                    }
+                    @if (group.NothingOffered)
+                    {
+                        @* Worth saying loudly: the catalogue page looks identical either way. *@
+                        <span class="status-pill bg-danger-soft text-danger">@(isFa ? "چیزی ارائه نمی‌شود" : "nothing offered")</span>
+                    }
+                </div>
+                <code dir="ltr" class="text-[11px] text-ink-faint">@group.Template.Key</code>
+            </header>
+
+            <div class="p-5">
+                @if (group.Versions.Count == 0)
+                {
+                    <partial name="Design/_EmptyState" model="@(new EmptyStateModel("layers",
+                        isFa ? "این قالب نسخه‌ای ندارد و از manifest خودش نصب می‌شود." : "This template has no versions and installs from its own manifest."))" />
+                }
+                else
+                {
+                    <div class="space-y-2">
+                        @foreach (var version in group.Versions)
+                        {
+                            <div class="rounded-lg border border-line bg-surface-2 p-3">
+                                <div class="flex flex-wrap items-center justify-between gap-2">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <code dir="ltr" class="text-sm font-medium text-ink">@version.Version</code>
+
+                                        @if (version.Publication == VersionPublication.Published)
+                                        {
+                                            <span class="status-pill bg-ok-soft text-ok">@(isFa ? "منتشرشده" : "published")</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="status-pill bg-warn-soft text-warn">@(isFa ? "پیش‌نویس" : "draft")</span>
+                                        }
+
+                                        <span class="status-pill bg-accent-soft text-accent-text">@LifecycleLabel(version.Lifecycle)</span>
+
+                                        @if (string.IsNullOrWhiteSpace(version.ImageDigest))
+                                        {
+                                            @* Cannot be deployed at all. Said here rather than
+                                               discovered by a customer at the moment they try. *@
+                                            <span class="status-pill bg-danger-soft text-danger">@(isFa ? "بدون digest" : "no digest")</span>
+                                        }
+                                        @if (version.DiscoveredAt is { } discovered)
+                                        {
+                                            <span class="text-[11px] text-ink-faint" dir="ltr">
+                                                @(isFa ? "یافته‌شده" : "found") @discovered.LocalDateTime.ToString("yyyy-MM-dd")
+                                            </span>
+                                        }
+                                    </div>
+
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <form asp-action="SetLifecycle" asp-route-id="@version.Id" method="post" class="flex items-center gap-1">
+                                            @Html.AntiForgeryToken()
+                                            <select name="lifecycle" class="rounded-lg border border-line bg-surface px-2 py-1.5 text-xs text-ink">
+                                                @foreach (var value in Enum.GetValues<VersionLifecycle>())
+                                                {
+                                                    <option value="@((int)value)" selected="@(value == version.Lifecycle)">@LifecycleLabel(value)</option>
+                                                }
+                                            </select>
+                                            <button class="rounded-lg border border-line px-3 py-1.5 text-xs text-ink hover:border-accent">
+                                                @(isFa ? "ذخیره" : "Save")
+                                            </button>
+                                        </form>
+
+                                        @if (version.Publication == VersionPublication.Published)
+                                        {
+                                            <form asp-action="Withdraw" asp-route-id="@version.Id" method="post">
+                                                @Html.AntiForgeryToken()
+                                                <button class="rounded-lg border border-line px-3 py-1.5 text-xs text-ink hover:border-accent">
+                                                    @(isFa ? "برداشتن" : "Withdraw")
+                                                </button>
+                                            </form>
+                                        }
+                                        else
+                                        {
+                                            <form asp-action="Publish" asp-route-id="@version.Id" method="post">
+                                                @Html.AntiForgeryToken()
+                                                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-xs font-semibold">
+                                                    @(isFa ? "انتشار" : "Publish")
+                                                </button>
+                                            </form>
+                                        }
+                                    </div>
+                                </div>
+
+                                <code dir="ltr" class="mt-1 block truncate text-[11px] text-ink-faint">
+                                    @version.ImageRepository@(version.ImageDigest is { } d ? "@" + d : ":" + version.ImageTag)
+                                </code>
+
+                                @if (version.MigrationWarnings is { } warning)
+                                {
+                                    <p class="mt-1 text-[11px] text-warn">@warning</p>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </section>
+    }
+</div>
