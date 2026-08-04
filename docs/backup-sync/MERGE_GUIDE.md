@@ -25,6 +25,10 @@ should not have to discover by reading diffs.
 | `9a182d0` | `docs(backup-sync): define architecture and implementation plan` |
 | `76feb10` | `feat(backup): add backup domain model and contracts` |
 | `0ca68a4` | `feat(backup): integrate kopia backup engine` |
+| `493ae40` | `docs(backup-sync): add merge guide and correct the module layout` |
+| `1dab1ba` | `docs(backup-sync): correct the branch base and record the HEAD incident` |
+| `f14d52b` | `Add modular backup system with feature-flag integration` — the service layer, jobs and scheduler. Committed by the other actor in this repository rather than by the session that wrote it; the content is the intended change, the message is not in this branch's style. |
+| `687ef15` | `feat(ui): add backup management experience` |
 
 ---
 
@@ -43,21 +47,30 @@ should not have to discover by reading diffs.
 - Schema for four new tables.
 - 101 new tests. Full suite: **2335 passed, 0 failed.**
 
+- **Service layer** — repositories (create/health/delete), snapshots (queue/run/browse/delete),
+  policies (validate/save/schedule), restores (queue/run), retention.
+- **Background jobs** — snapshot, restore, verify, prune, repository health, dispatched through a
+  new `IJobHandler` seam so the core dispatcher needs no reference to the module.
+- **Policy scheduler** — a hosted service that fires due policies and queues maintenance. Returns
+  immediately when the flag is off.
+- **UI** — Backup Center and a snapshot browser, built from the existing design system, with the
+  sidebar entry contributed only when the feature is on.
+- 116 new tests. Full suite: **2350 passed, 0 failed.**
+
 **Not built in this branch — and there is no placeholder pretending otherwise.**
 
 | Missing | Consequence |
 |---|---|
-| Service layer and API endpoints | Nothing calls the engines yet outside tests |
-| Background jobs (snapshot / verify / prune / health) | `JobKind` members exist; no handlers are registered |
-| Policy scheduler | Policies can be stored; nothing runs them |
-| UI | No pages, no navigation entries, no buttons |
-| App/volume targets, database providers | Directory sources only |
+| App / Docker-volume / database targets | Directory sources only; the resolver refuses the rest with a message saying so |
+| REST API endpoints | The UI posts to MVC actions; there is no `/api/v1/backup/*` yet |
 | Sync module | Not started — no projects, no entities |
 | Agent backup dispatch | Existing node agent untouched |
 | Docker compose services for Kopia/Syncthing | Not added |
+| Download of a snapshot artifact | No short-lived link; restore-to-a-new-folder is the way to inspect a backup |
 
-**So: after merging, the backup module cannot be driven from the panel.** It is a tested engine
-layer with schema, wired into DI, behind a flag that is off. That is the honest description.
+**So: after merging and enabling the flag, an operator can create a local or S3 repository, back up
+an allowed directory on a schedule or on demand, browse the result, restore part or all of it into a
+confined destination, and see it verified and pruned.** Everything beyond that is listed above.
 
 ---
 
@@ -75,6 +88,9 @@ Kept as small as possible. Nothing unrelated was touched and no repository-wide 
 | `src/Harbora.Web/Program.cs` | One `AddBackupModule(...)` call + one `using` |
 | `src/Harbora.Web/appsettings.json` | `Features` section, `Backups:Kopia`, `Backups:Module` |
 | `tests/Harbora.Tests/Harbora.Tests.csproj` | Three project references |
+| `src/Harbora.Application/Abstractions/IJobQueue.cs` | New `IJobHandler` interface (additive) |
+| `src/Harbora.Infrastructure/Jobs/JobDispatcher.cs` | Consults registered `IJobHandler`s before the existing switch; the built-in kinds are untouched |
+| `src/Harbora.Web/Views/Shared/Design/_Sidebar.cshtml` | One `Augment(...)` call + one label pair |
 
 No existing migration was edited. No existing test was deleted or skipped.
 
@@ -107,10 +123,17 @@ schema change.
                 "ConfigDirectory": "/var/lib/harbora/kopia",
                 "CacheDirectory": "/var/lib/harbora/kopia/cache" },
     "Module": { "RestoreRoot": "/var/lib/harbora/restore",
-                "StagingDirectory": "/var/lib/harbora/backups" }
+                "StagingDirectory": "/var/lib/harbora/backups",
+                "AllowedSourceRoots": [] }
   }
 }
 ```
+
+**`AllowedSourceRoots` is empty by default and that is deliberate.** Until it names directories, no
+directory policy can be created and nothing can be backed up. A backup engine pointed at an arbitrary
+path is an arbitrary-file read with a download button on the end of it, and the default must not be
+"anywhere the panel user can read" — which includes `/etc` and Harbora's own key directory. The UI
+says so on the page rather than failing later.
 
 No new environment variables, no new Docker services, no new package dependencies, no version bumps.
 
@@ -171,16 +194,21 @@ never writes to `Backups`, `BackupDestinations`, `BackupSchedules` or `BackupDel
 2. **SFTP repositories are refused.** The existing destination type requires a pinned host key;
    `BackupRepository` has no column for one. Adding it is a small follow-up. A repository that
    skipped the check would be worse than one not offered.
-3. **Restore is not yet audited**, because nothing calls it outside tests. The audit entry must land
-   with the service layer, not after it.
+3. **Restore audit covers request, completion and failure.** What it does not yet cover is a
+   per-entry record of what was overwritten — the job row says a restore overwrote live data, not
+   which files.
 
 **Functional.**
 
-4. Service layer, API, jobs, scheduler, UI — the bulk of the original brief.
-5. App/volume targets need the existing Docker one-off tar path; database targets need
-   `IDatabaseBackupProvider` implementations. The contract is defined; nothing implements it.
+4. REST API endpoints (`/api/v1/backup/*`). The UI drives MVC actions; there is no versioned API,
+   no OpenAPI document and no idempotency-key handling yet.
+5. App/volume targets need a volume-inspect call the platform's Docker abstraction does not expose;
+   database targets need `IDatabaseBackupProvider` implementations. The contract is defined and
+   nothing implements it, so the resolver refuses those target types outright.
 6. Sync and the always-on encrypted node: not started.
 7. Container-backed integration tests: not written, and could not have been verified here.
+8. Snapshot download: no short-lived one-time link. Restoring into a new folder is the way to
+   inspect a backup today.
 
 ---
 
@@ -191,11 +219,16 @@ Stated precisely, because "tested" is a word worth being exact about.
 | Check | Result |
 |---|---|
 | `dotnet build Harbora.slnx` | Succeeded, **0 warnings, 0 errors** |
-| `dotnet test Harbora.slnx` | **2335 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
+| `dotnet test Harbora.slnx` | **2350 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
 | Migration reviewed for additive-only | Confirmed |
 | Backup round trip (snapshot → restore → byte comparison) | Passing, native engine, local repository |
 | Encryption at rest of stored artifacts | Asserted in test |
 | Path traversal via hostile archive entry | Asserted: refused and reported |
+| Restore confirmation over live data | Asserted: refused without the typed folder name |
+| Restore destination confinement | Asserted for `..` and absolute paths |
+| Source-root confinement | Asserted: a directory outside the allowlist is refused before queueing |
+| Tenant isolation, both directions | Asserted: scoped context cannot see another workspace; unscoped sees all |
+| **Panel rendered in a browser** | **NOT DONE — no run of the app; the views compile, but were not viewed** |
 | **Docker Compose health checks** | **NOT RUN — Docker is not installed on this machine** |
 | **Kopia CLI against a real binary** | **NOT RUN — no Kopia binary available** |
 | **Syncthing** | **NOT RUN — module not built** |
