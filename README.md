@@ -1,13 +1,16 @@
 # Harbora
 
+**[فارسی](README.fa.md)** · English
+
 A self-hosted, **multi-tenant PaaS** — install it on a VPS with one command, open the web UI, and
 deploy/manage all your apps. Then resell it: give customers their own quota-limited, network-isolated
 workspaces across your primary and helper servers. Bilingual (فارسی/English, RTL/LTR), PWA, with a CLI.
 
 > **Status:** feature-complete against its spec — app deployment (Git / Dockerfile / image / templates),
 > visual routing designer, managed databases, backups (local + S3), monitoring + alerts, Git webhooks +
-> OAuth, multi-server agents, and a full multi-tenant layer (plans, quotas, capacity scheduler, provider
-> console, per-tenant network isolation, usage metering). Builds clean; run it on a VPS to use it live.
+> OAuth, node agents (including behind NAT), and a full multi-tenant layer (plans, quotas, capacity
+> scheduler, provider console, per-tenant network isolation, usage metering). Builds clean; run it on
+> a VPS to use it live.
 
 ---
 
@@ -306,9 +309,50 @@ file also drives CI. To reuse a different name: `harbora init --app my-name`.
 
 ---
 
-## 🧩 Add helper servers (multi-server)
+## 🧩 Add nodes (multi-server)
 
-On each worker VPS:
+### Node Agent v1 — recommended
+
+A lightweight systemd service on the node. **It opens no inbound port**: the node dials the panel, so
+adding one needs no firewall rule, no public IP and no port-forward. Works behind NAT.
+
+In the panel: **Nodes → Add a node** → copy the command. On the node, as root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/node-agent/install.sh \
+  | bash -s -- --control-plane https://panel.example.com --token hbr_enroll_xxx --name web-01
+```
+
+The token is **single-use and short-lived**. The node registers, gets a permanent id and its own
+certificate, and the enrollment token is never used again — the ongoing link is **mTLS** against a CA
+the panel owns. Revoke, re-enroll and rotate are all one click.
+
+Once enrolled the node becomes a scheduling target automatically: new apps land on whichever node has
+room, the same as before. Add `--region`, `--environment` or `--labels k=v` as placement hints.
+
+The panel can never run a shell command on the node. It sends **named verbs** from a fixed
+allowlist — deploy a workload, read a status, snapshot a volume — each with a schema, a permission
+check and an audit entry. There is deliberately no "run this command" verb.
+
+Full guide: **[docs/node-agent/installation.md](docs/node-agent/installation.md)** ·
+security model: **[docs/node-agent/security.md](docs/node-agent/security.md)**
+
+### Nodes behind NAT
+
+A node on a home connection or a private network has no reachable address, so the panel's proxy
+cannot open a socket to it and every route would time out — deploys succeed and the site is dead.
+Open the node in **Nodes** and press **“Serve through the ingress tunnel”**. The node opens a second
+outbound connection and the panel routes customer traffic back down it. Nothing about the app
+changes — same domain, same certificate, same routing rules.
+
+The tunnel reaches **only ports the node itself published for a deployed workload**, and it names a
+port rather than an address, so it cannot be turned into a port-forward into the customer's private
+network. Deleting a workload withdraws its port with no separate step to forget.
+
+### The older HTTP agent
+
+Still supported. It listens on a port and the panel connects **in**, so it needs an inbound rule and a
+reachable address:
 
 ```bash
 git clone https://github.com/sadrazkh/Harbora /opt/harbora/app && cd /opt/harbora/app/deploy
@@ -317,8 +361,8 @@ export HARBORA_AGENT_TOKEN=$(openssl rand -hex 24); echo "$HARBORA_AGENT_TOKEN"
 docker compose -f agent.compose.yml up -d
 ```
 
-Then **Servers → Add a server** → `http://<worker-ip>:9700` + that token. New apps auto-schedule onto
-whichever node has room. Optional **mTLS** (client certificate) hardens the panel↔agent link.
+Then **Servers → Add a server** → `http://<worker-ip>:9700` + that token. Optional **mTLS** hardens
+the link. Prefer Node Agent v1 for anything new.
 
 ---
 
@@ -338,6 +382,11 @@ whichever node has room. Optional **mTLS** (client certificate) hardens the pane
   download; restore (with a typed confirm).
 - **Monitoring + alerts**: host/container metrics, live CPU chart, app health, disk/backup/crash
   warnings; notify via email / Telegram / Discord / custom webhook.
+- **Node agents**: a systemd service that **opens no inbound port** — the node dials the panel, so
+  enrolling one needs no firewall rule and works behind NAT. Single-use enrollment token, then mTLS
+  against the panel's own CA; revoke, rotate and re-enroll from the UI. The panel sends **named verbs
+  from a fixed allowlist**, never a shell command. Silent update with rollback, drain before update,
+  and a safe uninstaller that asks whether to keep the workloads.
 - **Multi-tenant PaaS**: plans, instance sizes, quotas, capacity-aware scheduler, provider console,
   per-tenant network isolation, usage metering.
 - **UI/UX**: premium Tailwind dashboard, dark mode, RTL/LTR, PWA (installable + offline shell), bilingual.
@@ -350,7 +399,7 @@ Clean, modular .NET solution (`Harbora.slnx`):
 
 ```
 Domain → Application (ports) → Infrastructure / Data → Web
-                                             + Agent (remote nodes) · Cli · Shared
+                                    + NodeAgent (+ Contracts) · Agent · Cli · Shared
 ```
 
 - **Reverse proxy: Traefik** — hot-reloads dynamic config (no restart), built-in Let's Encrypt, discovers
@@ -358,8 +407,11 @@ Domain → Application (ports) → Infrastructure / Data → Web
 - **CSS: Tailwind** — original, premium look (not a stock admin template), first-class dark mode + RTL/LTR.
 - **Frontend: Vue islands via Vite** — compiled into `wwwroot/build`; Razor hydrates only interactive
   nodes. **No separate SPA server.**
-- **Containers: Docker.DotNet** — one `IDockerEngine` seam (local in-process, or a remote agent over HTTP);
-  no shell-string commands.
+- **Containers: Docker.DotNet** — one `IDockerEngine` seam (local in-process, a v1 node over its own
+  channel, or the older agent over HTTP); no shell-string commands.
+- **Nodes: a versioned contract**, not an API surface that drifted. `contracts/node-agent/v1/` holds
+  the JSON schema, the framing and the compatibility rules; the C# mirror is checked against it by
+  conformance tests, so the two ends cannot disagree silently.
 - **Live logs: SignalR.** **Jobs: background worker + Redis.** **DB: PostgreSQL + EF Core.**
 
 ## 🛠 Local development
@@ -396,7 +448,11 @@ dotnet run --project src/Harbora.Web                             # auto-migrates
 ## ⚠️ Known limitations
 
 - Multi-server routes cross-node via published host ports (no shared overlay), so an app and the managed
-  services it attaches to should live on the same node.
+  services it attaches to should live on the same node. On a NAT'd node the panel's ingress tunnel
+  carries that traffic instead, which means the panel is on the path of every request to that node —
+  fine for ordinary web apps, worth measuring before you put a busy one behind it.
+- A v1 node runs prebuilt images. Building from source happens on the panel; the node is told a digest
+  to pull, never a repository to clone.
 - Git OAuth requires registering an OAuth app (client id/secret); token connection needs no setup.
 - Usage metering records the billing *basis* (GB-hours / vCPU-hours from committed size); there's no
   invoicing/payment engine yet.
