@@ -126,7 +126,22 @@ public sealed class TunnelSupervisor(
                 catch (OperationCanceledException) { return; }
             }
 
-            await tunnel.RunAsync(gateway, identity, registration, targets, ct);
+            try
+            {
+                await tunnel.RunAsync(gateway, identity, registration, targets, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception e)
+            {
+                // This loop runs detached, so anything that escapes here is never observed by
+                // anyone: the tunnel would stop retrying and go on reporting whatever state it was
+                // last in. Recording it and looping is what makes "retrying forever is the safe
+                // default" true rather than aspirational.
+                log.LogError(e, "Tunnel {Key} failed unexpectedly; retrying.", registration.Key);
+            }
 
             if (ct.IsCancellationRequested) return;
 

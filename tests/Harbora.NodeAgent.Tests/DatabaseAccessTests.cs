@@ -544,7 +544,10 @@ public sealed class DatabaseAccessTests : IDisposable
                     await remote.WriteAsync(Encoding.UTF8.GetBytes(response), ct);
                     await remote.FlushAsync(ct);
 
-                    owner.Record(registration.GrantId);
+                    // Key rather than GrantId: an ingress registration carries no grant, so the
+                    // tunnel's own name is what identifies it on both ends. For a database tunnel
+                    // the two are the same string.
+                    owner.Record(registration.Key);
                     _ = framer;
                 }, ct);
 

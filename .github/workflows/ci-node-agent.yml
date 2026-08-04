@@ -43,6 +43,12 @@ jobs:
             exit 1
           fi
 
+      # The gateway and the agent run against each other here: real sockets, real mTLS, real HTTP.
+      # Every way ingress breaks is a disagreement between the two codebases, and this is the only
+      # suite with both of them in the room.
+      - name: End-to-end ingress tunnel
+        run: dotnet test tests/Harbora.NodeIngress.Tests/Harbora.NodeIngress.Tests.csproj -c Release --verbosity normal
+
   publish-check:
     runs-on: ubuntu-latest
     strategy:

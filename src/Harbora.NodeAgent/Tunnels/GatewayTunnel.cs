@@ -94,7 +94,13 @@ public sealed class GatewayTunnel(
         {
             SetState(State with { Status = TunnelStatus.Closed });
         }
-        catch (Exception e) when (e is IOException or InvalidDataException or EndOfStreamException or System.Net.Sockets.SocketException)
+        // AuthenticationException belongs here as much as IOException does. A gateway certificate the
+        // node will not accept, or a node certificate the gateway will not, is the most likely thing
+        // to go wrong on a first connection — and left uncaught it escaped into the supervisor's
+        // detached task, where it killed the retry loop and left the tunnel reporting "connecting"
+        // for ever with no error to show anyone.
+        catch (Exception e) when (e is IOException or InvalidDataException or EndOfStreamException
+                                   or System.Net.Sockets.SocketException or System.Security.Authentication.AuthenticationException)
         {
             SetState(State with
             {

@@ -327,3 +327,45 @@ deploy, and a probe failing for a container still starting would move a working 
 it does not need.
 
 1305 tests on the panel's suite, up from 1283; 438 + 17 gated on the agent's, up from 417.
+
+---
+
+## 12. An end-to-end test for the ingress tunnel, and two defects it found
+
+**Added** — `tests/Harbora.NodeIngress.Tests/**`, 15 tests.
+
+The one project that references both codebases, and the reason it exists: `Harbora.NodeAgent.Tests`
+is deliberately free of EF Core and ASP.NET, `Harbora.Tests` is deliberately free of the agent, and
+neither can host a test that runs the real gateway and the real agent against each other. Adding the
+missing half to either would undo the isolation both were arranged for, so the seam gets its own
+project and its own CI step.
+
+Nothing in it is a double. `NodeTunnelGateway` listens on a real port; the node dials it over real
+mutually-authenticated TLS with a certificate the panel's own CA signed; frames cross a real socket;
+the node dials the app with the real `TcpLocalDialer`; and a real HTTP server answers. What is
+checked is not that each class matches its interface but that the two codebases agree with each
+other — which is where this feature can actually break.
+
+Covered: the request and its answer; method, path, headers and body surviving; bodies larger than one
+frame in both directions; 25 concurrent requests multiplexed without crossing over; several apps on
+one node; two nodes not reaching each other; an unpublished port refused; a port that stops resolving
+once its workload is deleted; a listener bound before any node connects; losing and regaining the
+tunnel on the same panel port; a reconnect replacing rather than duplicating; an app that stopped
+listening; an unsigned certificate; a revoked node.
+
+**Two defects it found, both fixed here.**
+
+- `NodeCertificateAuthority.IssueGatewayCertificateAsync` built its certificate with
+  `CreateFromPem`, which carries an ephemeral key. Schannel refuses to *serve* TLS with one, so a
+  panel on Windows bound the gateway and then failed every handshake with nothing on either side
+  saying why. The agent had already learned this for its own credential; the gateway had not. Fixed
+  with the same PKCS#12 round-trip.
+- `GatewayTunnel.RunAsync` did not catch `AuthenticationException`, so a rejected certificate escaped
+  into `TunnelSupervisor`'s detached task, killed the retry loop, and left the tunnel reporting
+  "connecting" for ever with no error. Now recorded as a retryable failure — and the supervise loop
+  catches anything else too, because a loop nobody observes must not be able to die quietly.
+
+Neither is reachable from the panel's own suite or the agent's: one needs a TLS handshake between
+them, the other needs a certificate the other side rejects.
+
+1305 on the panel's suite, 438 + 17 gated on the agent's, 15 end-to-end.

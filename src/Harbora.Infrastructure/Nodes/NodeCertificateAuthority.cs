@@ -206,9 +206,15 @@ public sealed class NodeCertificateAuthority(
 
         using var issued = request.Create(ca, notBefore, notBefore + TimeSpan.FromDays(365), serial);
 
-        // Re-created from PEM so the returned certificate owns a key handle the TLS stack accepts on
-        // Windows as well as Linux; the same round-trip the agent does for its own credential.
-        return X509Certificate2.CreateFromPem(issued.ExportCertificatePem(), key.ExportPkcs8PrivateKeyPem());
+        // The PKCS#12 round-trip is not redundant, for the same reason the agent does it for its own
+        // credential: a certificate built by CreateFromPem carries an ephemeral key, and Schannel
+        // refuses to *serve* TLS with one — "the platform does not support ephemeral keys". A panel
+        // on Linux never notices. A panel on Windows binds the gateway, then fails every handshake,
+        // so every tunnel is refused with nothing on either side saying why.
+        using var ephemeral = X509Certificate2.CreateFromPem(
+            issued.ExportCertificatePem(), key.ExportPkcs8PrivateKeyPem());
+
+        return X509CertificateLoader.LoadPkcs12(ephemeral.Export(X509ContentType.Pkcs12), password: null);
     }
 
     /// <summary>

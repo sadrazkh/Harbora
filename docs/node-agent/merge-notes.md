@@ -22,6 +22,7 @@ src/Harbora.Web/Infrastructure/Node*.cs      client-certificate resolution, chan
 src/Harbora.Data/Migrations/*_NodeAgentV1.*  four new tables
 tests/Harbora.NodeAgent.Tests/**             the agent's suite
 tests/Harbora.Tests/Node*Tests.cs            the control plane's
+tests/Harbora.NodeIngress.Tests/**           both at once: real sockets, real mTLS, real HTTP
 deploy/node-agent/**                         installer, uninstaller, unit, release script
 deploy/traefik/dynamic/node-agent.yml        mTLS routing for the node endpoints
 docs/node-agent/**                           installation, security, control plane, troubleshooting
