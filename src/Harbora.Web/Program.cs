@@ -4,6 +4,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Infrastructure;
 using Harbora.Infrastructure.Backups;
+using Harbora.Modules.Backup.Infrastructure;
 using Harbora.Web.Data;
 using Harbora.Web.Infrastructure;
 using Harbora.Web.Realtime;
@@ -39,6 +40,12 @@ builder.Services.AddDbContext<HarboraDbContext>(o =>
 
 // ---- Infrastructure adapters (Docker, Git, Traefik, security, jobs, deploy engine) ----
 builder.Services.AddHarboraInfrastructure(builder.Configuration);
+
+// ---- Backup module (docs/backup-sync/ARCHITECTURE.md) ----
+// Registered unconditionally; Features:Backup governs what the module DOES, not whether its types
+// can be constructed. A conditional registration would turn a mis-set flag into a resolution
+// failure at request time rather than a feature that is simply off.
+builder.Services.AddBackupModule(builder.Configuration);
 
 // The SignalR-backed log stream is the host's implementation of the Application port.
 builder.Services.AddScoped<IDeploymentLogStream, SignalRDeploymentLogStream>();

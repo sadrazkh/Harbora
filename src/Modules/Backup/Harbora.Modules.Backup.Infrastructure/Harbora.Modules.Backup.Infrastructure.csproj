@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Engine adapters and the services that drive them. The only project in the module allowed to
+    start a process, touch the filesystem or talk to storage.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Harbora.Modules.Backup.Contracts\Harbora.Modules.Backup.Contracts.csproj" />
+    <ProjectReference Include="..\Harbora.Modules.Backup.Domain\Harbora.Modules.Backup.Domain.csproj" />
+    <ProjectReference Include="..\..\..\Harbora.Application\Harbora.Application.csproj" />
+    <ProjectReference Include="..\..\..\Harbora.Infrastructure\Harbora.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\Harbora.Data\Harbora.Data.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Harbora.Modules.Backup.Infrastructure</RootNamespace>
+  </PropertyGroup>
+
+</Project>

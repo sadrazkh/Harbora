@@ -14,6 +14,7 @@
   <Folder Name="/src/Modules/Backup/">
     <Project Path="src/Modules/Backup/Harbora.Modules.Backup.Contracts/Harbora.Modules.Backup.Contracts.csproj" />
     <Project Path="src/Modules/Backup/Harbora.Modules.Backup.Domain/Harbora.Modules.Backup.Domain.csproj" />
+    <Project Path="src/Modules/Backup/Harbora.Modules.Backup.Infrastructure/Harbora.Modules.Backup.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Harbora.NodeAgent.Tests/Harbora.NodeAgent.Tests.csproj" />
