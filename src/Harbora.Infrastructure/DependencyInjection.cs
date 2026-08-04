@@ -144,6 +144,16 @@ public static class DependencyInjection
         // is present, tested, configured and enforces nothing.
         services.AddSingleton<Ai.AiRateLimiter>();
 
+        // Newer versions of the ready-made apps. The background job checks a setting before it does
+        // anything, so registering it does not start talking to registries.
+        services.AddScoped<IContainerRegistry, Templates.ContainerRegistryClient>();
+
+        // Registered by its own type and then handed to the host, rather than AddHostedService<T>.
+        // That overload registers it only as IHostedService, so the admin page's "check now" button
+        // would fail to resolve it — at runtime, on a page that compiles and looks finished.
+        services.AddSingleton<Templates.RegistryDiscoveryService>();
+        services.AddHostedService(sp => sp.GetRequiredService<Templates.RegistryDiscoveryService>());
+
         // Outside access to a managed database, and the sweeper that makes "temporary" true.
         services.AddScoped<Services.DatabaseAccessService>();
         services.AddHostedService<Services.DatabaseAccessSweeper>();

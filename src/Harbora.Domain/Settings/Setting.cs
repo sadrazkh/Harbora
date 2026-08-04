@@ -22,4 +22,11 @@ public static class SettingKeys
     public const string AcmeEmail = "acme.email";
     public const string DefaultCulture = "ui.default_culture";
     public const string TelemetryEnabled = "telemetry.enabled";
+
+    /// <summary>
+    /// Whether Harbora may ask public container registries about newer versions of the ready-made
+    /// apps. Off unless set: it means outbound requests to a third party from this server, spending
+    /// their anonymous rate limit, and that is an operator's decision rather than a default.
+    /// </summary>
+    public const string RegistryDiscoveryEnabled = "templates.registry_discovery";
 }

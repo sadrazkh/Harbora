@@ -58,6 +58,8 @@ public static class NavigationMap
         ]),
         new("build", [
             new("templates", "Templates", "Index", "shapes"),
+            // Deciding which versions customers are offered is a different job from installing one.
+            new("template-versions", "TemplateVersions", "Index", "layers", Capabilities.PlatformManage, Advanced: true),
             new("git", "Git", "Index", "git-branch", Capabilities.GitManage, Advanced: true)
         ]),
         new("platform", [
