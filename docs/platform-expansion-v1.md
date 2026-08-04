@@ -119,6 +119,34 @@ control-plane decisions. `FakeNodeAgentClient` stands in until the real agent sh
 duplicate logins the way a real database would, and **warns on every call**, so an unconfigured
 production deployment cannot quietly report tunnels it never made.
 
+It also answers `IsSimulated`, and that single answer is what closes the worst hole this feature
+could have had. Without it the page would issue a username, a password and a connection string
+pointing at `gateway.invalid` — Harbora's records showing a healthy active grant while the customer
+gets a name-resolution error and reports a broken database. The default on the interface is `false`,
+so a real agent needs no change to answer correctly and a client that forgets to answer is treated as
+real rather than quietly disabling the feature.
+
+### The page
+
+`/databases/{id}/access`, behind `databases.manage` for anything that changes.
+
+Every action **returns the page instead of redirecting**. Redirect-after-post would have to carry the
+password through TempData, and TempData here is cookie-backed — that would write a live database
+password into the customer's cookie jar, where it outlives the page they were told to copy it from.
+
+`ExternalAccessAvailability` is asked again when the form is submitted, not only when it was drawn:
+the database may have stopped, or the agent gone away, in the minutes since somebody opened it. The
+simulated-agent refusal is checked first, because a person told "start the database" would start it,
+try again, and still get nothing.
+
+Revoking is the one action that works even with a simulated agent. A grant that cannot be closed is
+worse than one that was never issued.
+
+Closed grants stay listed. "Who opened this database in March, and for how long" is a question that
+gets asked, and a list showing only what is open cannot answer it. Every row says whose it is, when
+it ends, how many extensions it has left, and — in warning colour — when its allowlist is empty and
+it can be reached from anywhere.
+
 ---
 
 ## 3. Simple and Advanced modes
@@ -251,9 +279,6 @@ template was shipped rather than an unsafe one. A test asserts no manifest mount
 **The TCP gateway does not exist.** Only its contract, and a fake that returns a placeholder host.
 Production database tunnelling is not real until the node agent ships.
 
-**The database-grant UI is not built.** The data model, rules and migrations behind it are complete
-and tested; grants are created through the API.
-
 **The gateway has not been exercised against a real provider.** Without a provider key it is testable
 only up to the network boundary.
 
@@ -265,12 +290,12 @@ period quotas, but per-minute throttling needs a shared counter and is not wired
 
 ## Testing
 
-1,428 tests. Mutation testing was run on every rule where a wrong answer is silent — version
+1,446 tests. Mutation testing was run on every rule where a wrong answer is silent — version
 selection and resolution, the ready-app catalogue, host architecture, database access policy,
 credential routing, failure classification, pricing, usage parsing, plan access, API keys and the
-administration controller — for 108 mutants, all caught. `scripts/mutate-ai-admin.py` and
-`scripts/mutate-template-versions.py` hold the last two runs: changes that compile, leave the screen
-looking correct, and each break something nobody would notice.
+administration controller, external access availability and grant scoping — for 120 mutants, all
+caught. The `scripts/mutate-*.py` files hold the last three runs: changes that compile, leave the
+screen looking correct, and each break something nobody would notice.
 
 `UiBaselineTests` guards the approved interface: design tokens present in both themes, every view's
 tags balanced (an extra `</div>` closes the layout early and pushes content outside it), the retired

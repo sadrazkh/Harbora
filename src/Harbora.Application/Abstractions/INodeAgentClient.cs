@@ -33,6 +33,18 @@ public sealed record NodeResult(bool Ok, string? Error);
 /// </summary>
 public interface INodeAgentClient
 {
+    /// <summary>
+    /// True when this client only pretends to reach a node.
+    ///
+    /// A default of false so the real agent needs no change to answer correctly, and so a client
+    /// that forgets to answer is treated as real rather than quietly disabling the feature.
+    ///
+    /// It exists because of what the alternative looks like: a page that issues a username, a
+    /// password and a connection string pointing at a gateway nobody opened. Harbora's records show
+    /// an active grant; the customer gets a name-resolution error and reports a broken database.
+    /// </summary>
+    bool IsSimulated => false;
+
     Task<NodeCapabilities> GetCapabilitiesAsync(Guid serverId, CancellationToken ct);
 
     Task<NodeResult> DeployWorkloadAsync(Guid serverId, string workloadId, string image, CancellationToken ct);

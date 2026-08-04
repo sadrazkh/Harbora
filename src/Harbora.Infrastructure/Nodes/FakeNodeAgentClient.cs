@@ -20,6 +20,13 @@ public sealed class FakeNodeAgentClient(ILogger<FakeNodeAgentClient> logger) : I
     private readonly ConcurrentDictionary<string, TcpTunnel> _tunnels = new();
     private readonly ConcurrentDictionary<string, string> _grants = new();
 
+    /// <summary>
+    /// Said plainly, so that no screen offers a customer a connection to something this class made
+    /// up. The lifecycle above it still runs against this fake in tests — what is refused is
+    /// presenting its output to a person as though it worked.
+    /// </summary>
+    public bool IsSimulated => true;
+
     /// <summary>Everything asked of it, in order, for tests to assert against.</summary>
     public IReadOnlyCollection<string> Calls => _calls;
     private readonly ConcurrentQueue<string> _calls = new();

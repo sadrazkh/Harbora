@@ -1,0 +1,332 @@
+@model DatabaseAccessPageViewModel
+@using Harbora.Domain.Services
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    ViewData["Title"] = Model.Database.Name;
+    var now = DateTimeOffset.UtcNow;
+
+    var presets = Harbora.Infrastructure.Services.DatabaseAccessPolicy.Presets;
+    var maxExtensions = Harbora.Infrastructure.Services.DatabaseAccessPolicy.MaximumExtensions;
+
+    string Window(TimeSpan span) => span.TotalHours < 1
+        ? (isFa ? $"{span.TotalMinutes:0} دقیقه" : $"{span.TotalMinutes:0} minutes")
+        : (isFa ? $"{span.TotalHours:0} ساعت" : $"{span.TotalHours:0} hours");
+
+    string StatusLabel(DatabaseAccessStatus status) => (status, isFa) switch
+    {
+        (DatabaseAccessStatus.Pending, true) => "در انتظار",   (DatabaseAccessStatus.Pending, false) => "pending",
+        (DatabaseAccessStatus.Active, true) => "فعال",          (DatabaseAccessStatus.Active, false) => "active",
+        (DatabaseAccessStatus.Expired, true) => "منقضی",        (DatabaseAccessStatus.Expired, false) => "expired",
+        (DatabaseAccessStatus.Revoked, true) => "باطل‌شده",     (DatabaseAccessStatus.Revoked, false) => "revoked",
+        _ => isFa ? "ناموفق" : "failed"
+    };
+
+    string StatusClass(DatabaseAccessStatus status) => status switch
+    {
+        DatabaseAccessStatus.Active => "bg-ok-soft text-ok",
+        DatabaseAccessStatus.Pending => "bg-warn-soft text-warn",
+        DatabaseAccessStatus.Failed => "bg-danger-soft text-danger",
+        _ => "bg-surface-2 text-ink-faint"
+    };
+}
+
+<div class="mx-auto max-w-5xl">
+    <nav class="mb-5 flex items-center gap-2 text-xs text-ink-faint">
+        <a href="/databases" class="hover:text-accent-text">@(isFa ? "دیتابیس‌ها" : "Databases")</a>
+        <i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i>
+        <a href="/databases/@Model.Database.Id" class="hover:text-accent-text">@Model.Database.Name</a>
+        <i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i>
+        <span class="text-ink-muted">@(isFa ? "دسترسی خارجی" : "External access")</span>
+    </nav>
+
+    <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+        isFa ? "دسترسی خارجی" : "External access",
+        isFa
+            ? "اجازهٔ اتصال از بیرون Harbora به این دیتابیس. هر مجوز یک کاربر مستقل روی دیتابیس می‌سازد که با بسته شدن مجوز حذف می‌شود."
+            : "Permission for something outside Harbora to reach this database. Each grant creates its own login, removed when the grant closes."))" />
+
+    @if (Model.Message is not null)
+    {
+        <div class="alert-success mb-4">@Model.Message</div>
+    }
+    @if (Model.Error is not null)
+    {
+        <div class="alert-danger mb-4">@Model.Error</div>
+    }
+
+    @* ---- the one and only sight of the password ---- *@
+    @if (Model.Issued is { } issued)
+    {
+        <section class="mb-6 rounded-2xl border border-ok/30 bg-ok-soft p-5">
+            <div class="flex items-center gap-2 text-sm font-semibold text-ok">
+                <i data-lucide="key-round" class="h-4 w-4"></i>
+                @(issued.Rotated
+                    ? (isFa ? "رمز جدید — فقط همین یک بار نمایش داده می‌شود" : "New password — shown this once only")
+                    : (isFa ? "دسترسی ساخته شد — رمز فقط همین یک بار نمایش داده می‌شود" : "Access created — the password is shown this once only"))
+            </div>
+            <p class="mt-1 text-xs leading-5 text-ok">
+                @(isFa
+                    ? "Harbora فقط hash این رمز را نگه می‌دارد. اگر این صفحه را ببندید، راهی برای بازیابی آن نیست و باید رمز را تعویض کنید."
+                    : "Harbora keeps only a hash of this. Once you leave this page it cannot be recovered — you would have to rotate it.")
+            </p>
+
+            <div class="mt-4 space-y-3">
+                <div>
+                    <span class="block text-[11px] uppercase tracking-wide text-ok">@(isFa ? "نام کاربری" : "Username")</span>
+                    <code dir="ltr" class="mt-1 block break-all rounded-lg bg-surface px-3 py-2 text-sm text-ink">@issued.Username</code>
+                </div>
+                <div>
+                    <span class="block text-[11px] uppercase tracking-wide text-ok">@(isFa ? "رمز" : "Password")</span>
+                    <code dir="ltr" class="mt-1 block break-all rounded-lg bg-surface px-3 py-2 text-sm text-ink">@issued.Password</code>
+                </div>
+                @if (issued.ConnectionString is { } connection)
+                {
+                    <div>
+                        <span class="block text-[11px] uppercase tracking-wide text-ok">@(isFa ? "رشتهٔ اتصال" : "Connection string")</span>
+                        <code dir="ltr" class="mt-1 block break-all rounded-lg bg-surface px-3 py-2 text-sm text-ink">@connection</code>
+                    </div>
+                }
+                @if (issued.ExpiresAt is { } expires)
+                {
+                    <p class="text-xs text-ok">
+                        @(isFa ? "تا" : "Valid until") <span dir="ltr">@expires.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</span>
+                    </p>
+                }
+            </div>
+        </section>
+    }
+
+    <div class="grid gap-6 lg:grid-cols-[1fr_20rem]">
+        <div class="space-y-6">
+            @* ---- new grant ---- *@
+            @if (Model.Unavailable is { } unavailable)
+            {
+                @* Said rather than hidden. A missing form reads as a feature that was removed; this
+                   explains what is actually missing and stops anyone waiting for it to appear. *@
+                <div class="alert-warning">
+                    <i data-lucide="plug-zap" class="h-4 w-4 shrink-0"></i>
+                    <span>@(isFa ? unavailable.ReasonFa : unavailable.Reason)</span>
+                </div>
+            }
+            else
+            {
+                var newPanel = new PanelModel(isFa ? "مجوز تازه" : "New grant");
+                <partial name="Design/_PanelStart" model="newPanel" />
+
+                <form asp-action="IssueAccess" asp-route-id="@Model.Database.Id" method="post" class="space-y-4">
+                    @Html.AntiForgeryToken()
+
+                    <div>
+                        <label class="form-label">@(isFa ? "مدت" : "Duration")</label>
+                        <select name="minutes" class="form-control" id="access-minutes">
+                            @foreach (var preset in presets)
+                            {
+                                <option value="@((int)preset.TotalMinutes)" selected="@(preset == TimeSpan.FromHours(1))">@Window(preset)</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="form-label" for="allowed-ips">@(isFa ? "آدرس‌های مجاز" : "Allowed addresses")</label>
+                        <input id="allowed-ips" name="allowedIps" dir="ltr" class="form-control"
+                               placeholder="203.0.113.4, 198.51.100.0/24" />
+                        <p class="mt-1 text-xs text-ink-faint">
+                            @(isFa
+                                ? "خالی بگذارید تا از هر جایی قابل اتصال باشد. یک آدرس یا CIDR در هر بار، با کاما جدا شده."
+                                : "Leave empty to allow connections from anywhere. One address or CIDR each, comma separated.")
+                        </p>
+                    </div>
+
+                    <label class="flex items-start gap-3 rounded-xl border border-line bg-surface-2 p-4">
+                        <input type="checkbox" name="kind" value="@((int)DatabaseAccessKind.Persistent)"
+                               id="persistent-toggle" class="mt-0.5 h-4 w-4 rounded border-line-strong text-accent" />
+                        <span>
+                            <span class="block text-sm font-medium text-ink">@(isFa ? "دسترسی دائمی" : "Persistent access")</span>
+                            <span class="mt-1 block text-xs leading-5 text-ink-faint">
+                                @(isFa
+                                    ? "تا وقتی کسی آن را نبندد باز می‌ماند. برای دسترسی یک‌بارهٔ کوتاه از آن استفاده نکنید."
+                                    : "Stays open until somebody closes it. Not for a one-off look at the data.")
+                            </span>
+                        </span>
+                    </label>
+
+                    <button class="btn-primary inline-flex items-center gap-2 px-5 py-2.5">
+                        <i data-lucide="key-round" class="h-4 w-4"></i>@(isFa ? "ساخت مجوز" : "Create grant")
+                    </button>
+                </form>
+                <partial name="Design/_PanelEnd" />
+            }
+
+            @* ---- existing grants ---- *@
+            @{ var grantPanel = new PanelModel(isFa ? "مجوزها" : "Grants"); }
+            <partial name="Design/_PanelStart" model="grantPanel" />
+
+            @if (Model.Grants.Count == 0)
+            {
+                <partial name="Design/_EmptyState" model="@(new EmptyStateModel("key-round",
+                    isFa ? "هنوز این دیتابیس به بیرون باز نشده است." : "This database has never been opened to the outside."))" />
+            }
+            else
+            {
+                <div class="space-y-3">
+                    @foreach (var grant in Model.Grants)
+                    {
+                        var usable = Harbora.Infrastructure.Services.DatabaseAccessPolicy.IsUsable(grant, now);
+                        <div class="rounded-xl border border-line bg-surface-2 p-4">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <div class="flex items-center gap-2">
+                                    <code dir="ltr" class="text-sm text-ink">@grant.Username</code>
+                                    <span class="status-pill @StatusClass(grant.Status)">@StatusLabel(grant.Status)</span>
+                                    @if (grant.Kind == DatabaseAccessKind.Persistent)
+                                    {
+                                        <span class="status-pill bg-warn-soft text-warn">@(isFa ? "دائمی" : "persistent")</span>
+                                    }
+                                </div>
+                                <span class="text-[11px] text-ink-faint" dir="ltr">
+                                    @grant.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm")
+                                </span>
+                            </div>
+
+                            <div class="mt-1 text-xs text-ink-faint">
+                                @if (grant.Kind == DatabaseAccessKind.Temporary && grant.ExpiresAt is { } expires)
+                                {
+                                    <span>
+                                        @(usable ? (isFa ? "تا" : "until") : (isFa ? "پایان یافته در" : "ended"))
+                                        <span dir="ltr">@expires.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</span>
+                                    </span>
+                                }
+                                @if (grant.ExtensionCount > 0)
+                                {
+                                    <span> · @grant.ExtensionCount/@maxExtensions @(isFa ? "تمدید" : "extensions")</span>
+                                }
+                                @if (grant.CreatedByEmail is { } author)
+                                {
+                                    <span> · @author</span>
+                                }
+                                <span>
+                                    ·
+                                    @* Empty means anywhere, and that is worth saying on every row rather
+                                       than only in the form somebody filled in weeks ago. *@
+                                    @if (string.IsNullOrWhiteSpace(grant.AllowedIps))
+                                    {
+                                        <span class="text-warn">@(isFa ? "از هر آدرسی" : "from anywhere")</span>
+                                    }
+                                    else
+                                    {
+                                        <span dir="ltr">@grant.AllowedIps</span>
+                                    }
+                                </span>
+                            </div>
+
+                            @if (grant.GatewayHost is { } host && grant.GatewayPort is { } port && usable)
+                            {
+                                <code dir="ltr" class="mt-2 block text-[11px] text-ink-muted">@host:@port</code>
+                            }
+
+                            @if (usable)
+                            {
+                                <div class="mt-3 flex flex-wrap items-center gap-2">
+                                    @if (grant.Kind == DatabaseAccessKind.Temporary && grant.ExtensionCount < maxExtensions)
+                                    {
+                                        <form asp-action="ExtendAccess" asp-route-id="@Model.Database.Id" asp-route-grantId="@grant.Id" method="post" class="flex items-center gap-1">
+                                            @Html.AntiForgeryToken()
+                                            <select name="minutes" class="rounded-lg border border-line bg-surface px-2 py-1.5 text-xs text-ink">
+                                                @foreach (var preset in presets)
+                                                {
+                                                    <option value="@((int)preset.TotalMinutes)">@Window(preset)</option>
+                                                }
+                                            </select>
+                                            <button class="rounded-lg border border-line px-3 py-1.5 text-xs text-ink hover:border-accent">
+                                                @(isFa ? "تمدید" : "Extend")
+                                            </button>
+                                        </form>
+                                    }
+
+                                    <form asp-action="RotateAccess" asp-route-id="@Model.Database.Id" asp-route-grantId="@grant.Id" method="post">
+                                        @Html.AntiForgeryToken()
+                                        <button class="rounded-lg border border-line px-3 py-1.5 text-xs text-ink hover:border-accent">
+                                            @(isFa ? "تعویض رمز" : "Rotate password")
+                                        </button>
+                                    </form>
+
+                                    <form asp-action="RevokeAccess" asp-route-id="@Model.Database.Id" asp-route-grantId="@grant.Id" method="post">
+                                        @Html.AntiForgeryToken()
+                                        <button class="btn-danger px-3 py-1.5 text-xs">@(isFa ? "بستن" : "Close")</button>
+                                    </form>
+                                </div>
+                            }
+                            else if (grant.RevokedReason is { } reason)
+                            {
+                                <p class="mt-2 text-[11px] text-ink-faint">@reason</p>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+            <partial name="Design/_PanelEnd" />
+        </div>
+
+        <aside class="space-y-4">
+            <section class="rounded-2xl border border-line bg-surface p-5 shadow-panel">
+                <h2 class="text-sm font-semibold text-ink">@(isFa ? "این دیتابیس" : "This database")</h2>
+                <dl class="mt-3 space-y-2 text-xs">
+                    <div class="flex justify-between gap-2"><dt class="text-ink-faint">@(isFa ? "موتور" : "Engine")</dt><dd class="text-ink" dir="ltr">@Model.Database.Type @Model.Database.Version</dd></div>
+                    <div class="flex justify-between gap-2"><dt class="text-ink-faint">@(isFa ? "وضعیت" : "Status")</dt><dd class="text-ink">@Model.Database.Status</dd></div>
+                    @if (!string.IsNullOrWhiteSpace(Model.Database.DatabaseName))
+                    {
+                        <div class="flex justify-between gap-2"><dt class="text-ink-faint">@(isFa ? "نام" : "Name")</dt><dd class="text-ink" dir="ltr">@Model.Database.DatabaseName</dd></div>
+                    }
+                </dl>
+            </section>
+
+            <section class="rounded-2xl border border-warn/25 bg-warn-soft p-4 text-xs leading-5 text-warn">
+                <div class="flex gap-2">
+                    <i data-lucide="shield-alert" class="mt-0.5 h-4 w-4 shrink-0"></i>
+                    <p>
+                        @(isFa
+                            ? "اتصال از طریق gateway انجام می‌شود، نه مستقیم به سرور — کسی که وصل می‌شود نمی‌فهمد دیتابیس کجا اجرا می‌شود. مجوز موقت خودش بسته می‌شود؛ مجوز دائمی نه."
+                            : "Connections go through the gateway, never straight to the server, so whoever connects never learns where the database runs. A temporary grant closes itself; a persistent one does not.")
+                    </p>
+                </div>
+            </section>
+
+            @if (Model.History.Count > 0)
+            {
+                var historyPanel = new PanelModel(isFa ? "رخدادها" : "History");
+                <partial name="Design/_PanelStart" model="historyPanel" />
+                <div class="space-y-2">
+                    @foreach (var entry in Model.History)
+                    {
+                        <div class="text-[11px]">
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="font-medium text-ink">@entry.Action</span>
+                                <span class="text-ink-faint" dir="ltr">@entry.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm")</span>
+                            </div>
+                            <div class="text-ink-faint">
+                                @entry.ActorEmail
+                                @if (entry.Detail is { } detail) { <span> · @detail</span> }
+                            </div>
+                        </div>
+                    }
+                </div>
+                <partial name="Design/_PanelEnd" />
+            }
+        </aside>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    // A persistent grant has no window, so leaving the duration selector live would let somebody
+    // choose "15 minutes" for something that never expires and believe it.
+    (function () {
+        var toggle = document.getElementById('persistent-toggle');
+        var minutes = document.getElementById('access-minutes');
+        if (!toggle || !minutes) return;
+
+        function sync() { minutes.disabled = toggle.checked; }
+        toggle.addEventListener('change', sync);
+        sync();
+    })();
+</script>
+}
