@@ -20,12 +20,6 @@
         ManagedServiceType.MongoDb => "mongodb",
         _ => "database"
     };
-    string TypeGlyph(ManagedServiceType type) => type switch
-    {
-        ManagedServiceType.PostgreSql => "PG", ManagedServiceType.MySql => "MY",
-        ManagedServiceType.MariaDb => "MA", ManagedServiceType.Redis => "R",
-        ManagedServiceType.MongoDb => "MO", _ => "DB"
-    };
     string Tone(ServiceStatus status) => status switch
     {
         ServiceStatus.Running => "is-ok", ServiceStatus.Provisioning => "is-info",
@@ -82,7 +76,7 @@
                     <tr class="database-row @(selected?.Database.Id == database.Id ? "is-selected" : "")"
                         data-name="@($"{database.Name} {database.Type} {database.Project} {database.Environment}".ToLowerInvariant())">
                         <td><a href="/databases?selected=@database.Id" class="resource-identity">
-                            <span class="template-logo" data-template-key="@TypeKey(database.Type)">@TypeGlyph(database.Type)</span>
+                            <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(TypeKey(database.Type), database.Name))" />
                             <span><strong>@database.Name</strong><small>@database.Type · @database.Version</small></span>
                         </a></td>
                         <td><div class="table-primary">@database.Project</div><div class="table-secondary">@database.Environment</div></td>
@@ -126,7 +120,7 @@
         var db = selected.Database;
         <section class="rail-panel database-inspector">
             <div class="flex items-start gap-3">
-                <span class="template-logo h-11 w-11" data-template-key="@TypeKey(db.Type)">@TypeGlyph(db.Type)</span>
+                <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(TypeKey(db.Type), db.Name, "h-11 w-11"))" />
                 <div class="min-w-0 flex-1"><div class="flex items-center gap-2"><h2 class="truncate font-semibold text-ink">@db.Name</h2><span class="resource-status @Tone(db.Status)"><i></i>@db.Status</span></div><p class="text-xs text-ink-faint">@db.Type @db.Version · @db.Environment</p></div>
             </div>
             @if (selected.CanManage)
@@ -191,7 +185,7 @@
     }
     else
     {
-        <section class="rail-panel"><div class="rail-heading"><div><span>@(isFa ? "ساخت سریع" : "Quick provision")</span><small>@(isFa ? "موتورهای پشتیبانی‌شده" : "Supported engines")</small></div></div><div class="quick-start-grid mt-3">@foreach (var item in Model.Catalog){<a href="/databases/create?type=@item.Type" class="quick-start-item"><span class="template-logo" data-template-key="@TypeKey(item.Type)">@TypeGlyph(item.Type)</span><span><strong>@(isFa ? item.DisplayNameFa : item.DisplayName)</strong><small>@item.Versions.FirstOrDefault()</small></span></a>}</div></section>
+        <section class="rail-panel"><div class="rail-heading"><div><span>@(isFa ? "ساخت سریع" : "Quick provision")</span><small>@(isFa ? "موتورهای پشتیبانی‌شده" : "Supported engines")</small></div></div><div class="quick-start-grid mt-3">@foreach (var item in Model.Catalog){<a href="/databases/create?type=@item.Type" class="quick-start-item"><partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(TypeKey(item.Type), isFa ? item.DisplayNameFa : item.DisplayName))" /><span><strong>@(isFa ? item.DisplayNameFa : item.DisplayName)</strong><small>@item.Versions.FirstOrDefault()</small></span></a>}</div></section>
     }
 }
 

@@ -1,0 +1,29 @@
+@model Harbora.Web.ViewModels.TemplateLogoModel
+@inject Harbora.Web.Infrastructure.TemplateLogoSet Logos
+@*
+    The one place a template's mark is drawn.
+
+    It used to be eleven places. Ten of them hand-rolled a switch over template keys returning two
+    letters — "W" for WordPress, "GI" for Gitea — and only the catalogue card ever rendered the
+    logo files that ship in this repository. So every ready app looked like a placeholder on the
+    dashboard, on the app list, on both create forms, and every tile added since inherited the same
+    gap by copying its neighbour.
+
+    A partial rather than a helper because the markup is the part that kept being reinvented.
+*@
+@{
+    var icon = Harbora.Infrastructure.Templates.TemplateIcon.For(Model.Key, Model.Name, Logos.Has);
+}
+<span class="template-logo @Model.SizeClass" data-template-key="@Model.Key" @Model.Extra>
+    @if (icon.HasImage)
+    {
+        @* Lazy and async so a long catalogue does not block first paint. object-contain because a
+           mark squeezed into a square slot must not be stretched to fill it. *@
+        <img src="@icon.ImagePath" alt="@Model.Name" width="24" height="24"
+             loading="lazy" decoding="async" class="h-full w-full object-contain p-1.5" />
+    }
+    else
+    {
+        @icon.Initials
+    }
+</span>

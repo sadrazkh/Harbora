@@ -43,6 +43,10 @@ builder.Services.AddHarboraInfrastructure(builder.Configuration);
 // The SignalR-backed log stream is the host's implementation of the Application port.
 builder.Services.AddScoped<IDeploymentLogStream, SignalRDeploymentLogStream>();
 builder.Services.AddScoped<Harbora.Web.Infrastructure.PanelModeProvider>();
+
+// Which logos ship in this build. A singleton because the answer cannot change while the process
+// runs, and the alternative was a filesystem stat per tile per request.
+builder.Services.AddSingleton<Harbora.Web.Infrastructure.TemplateLogoSet>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUser, HttpCurrentUser>();
 // Drives the DbContext's global query filters. Registered here (not in Infrastructure) because only

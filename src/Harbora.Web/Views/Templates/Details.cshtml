@@ -17,7 +17,7 @@
     <div class="template-hero p-6 md:p-8">
         <div class="relative z-10 flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
             <div class="flex min-w-0 items-start gap-4">
-                <span class="template-logo h-16 w-16 rounded-2xl text-xl" data-template-key="@Model.Template.Key">@Model.Name[..Math.Min(2, Model.Name.Length)].ToUpperInvariant()</span>
+                <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(Model.Template.Key, Model.Name, "h-16 w-16 rounded-2xl text-xl"))" />
                 <div class="min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-2xl font-bold tracking-tight text-ink">@Model.Name</h1>

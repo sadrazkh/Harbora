@@ -9,6 +9,19 @@ public sealed record PanelModel(string Title, string? LinkText = null, string? L
 public sealed record StatCardModel(string Icon, string Label, MetricView Value, string? Delta = null);
 
 /// <summary>
+/// A template's mark, wherever it is drawn.
+/// </summary>
+/// <param name="Key">The template key — also the logo file's name by convention.</param>
+/// <param name="Name">Used for the alt text, and for the initials when no logo ships.</param>
+/// <param name="SizeClass">Extra classes for slots that are not the default size.</param>
+/// <param name="Extra">Raw attributes a caller needs on the element, such as a script hook.</param>
+public sealed record TemplateLogoModel(
+    string? Key,
+    string? Name,
+    string? SizeClass = null,
+    Microsoft.AspNetCore.Html.IHtmlContent? Extra = null);
+
+/// <summary>
 /// A specialist block that folds in Simple mode and is open in Advanced.
 ///
 /// <paramref name="Open"/> is a decision rather than a preference:

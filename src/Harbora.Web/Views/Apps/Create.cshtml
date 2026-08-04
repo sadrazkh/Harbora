@@ -15,13 +15,6 @@
     var environments = ViewBag.Environments as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
     var quickStarts = ViewBag.QuickStarts as IReadOnlyList<TemplateCatalogItemViewModel> ?? [];
 
-    string Glyph(TemplateCatalogItemViewModel item) => item.Template.Key switch
-    {
-        "wordpress" => "W", "ghost" => "G", "node" => "JS", "aspnet" => ".N",
-        "laravel" => "L", "redis-commander" => "R", "uptime-kuma" => "U",
-        "postgres" => "PG", "mysql" => "MY", "mariadb" => "MA", "redis" => "R", "mongodb" => "MO",
-        _ => item.Name.Trim().Length > 1 ? item.Name.Trim()[..2].ToUpperInvariant() : item.Name.ToUpperInvariant()
-    };
 }
 
 <nav class="breadcrumb mb-4" aria-label="breadcrumb">
@@ -47,7 +40,7 @@
             @foreach (var item in quickStarts)
             {
                 <a href="/templates/@item.Template.Id/deploy" class="create-template-card">
-                    <span class="template-logo" data-template-key="@item.Template.Key">@Glyph(item)</span>
+                    <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(item.Template.Key, item.Name))" />
                     <span class="min-w-0 flex-1"><strong>@item.Name</strong><small>@(item.IsManagedService ? (isFa ? "دیتابیس مدیریت‌شده" : "Managed database") : item.IsStack ? $"{item.ResourceCount} resources" : item.Template.Category)</small></span>
                     @if (item.Manifest.Featured) { <span class="featured-dot" title="Featured"><i data-lucide="star" class="h-3 w-3"></i></span> }
                     <i data-lucide="chevron-right" class="h-4 w-4 text-ink-faint rtl:rotate-180"></i>

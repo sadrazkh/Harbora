@@ -107,6 +107,25 @@ public class UiBaselineTests
     }
 
     [Fact]
+    public void Only_one_partial_draws_a_template_logo()
+    {
+        // There were eleven of these. Ten hand-rolled a switch over template keys returning two
+        // letters, and only the catalogue card ever rendered the logo files that ship in this
+        // repository — so every ready app looked like a placeholder everywhere else, and each new
+        // tile inherited the gap by copying its neighbour.
+        //
+        // Asserted on the markup because that is what kept being reinvented: a rule the callers can
+        // ignore is a rule the twelfth caller will.
+        var offenders = Directory.EnumerateFiles(ViewsRoot(), "*.cshtml", SearchOption.AllDirectories)
+            .Where(p => Path.GetFileName(p) != "_TemplateLogo.cshtml")
+            .Where(p => Regex.IsMatch(File.ReadAllText(p), @"class=""template-logo"))
+            .Select(p => Path.GetRelativePath(ViewsRoot(), p))
+            .ToList();
+
+        offenders.Should().BeEmpty("every tile must render Design/_TemplateLogo");
+    }
+
+    [Fact]
     public void No_view_reintroduces_the_retired_colour_ramp()
     {
         // The pre-redesign indigo ramp. Anything still using it renders a different purple from the

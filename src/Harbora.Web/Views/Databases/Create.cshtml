@@ -12,12 +12,6 @@
         ManagedServiceType.MariaDb => "mariadb", ManagedServiceType.Redis => "redis",
         ManagedServiceType.MongoDb => "mongodb", _ => "database"
     };
-    string Glyph(ManagedServiceType type) => type switch
-    {
-        ManagedServiceType.PostgreSql => "PG", ManagedServiceType.MySql => "MY",
-        ManagedServiceType.MariaDb => "MA", ManagedServiceType.Redis => "R",
-        ManagedServiceType.MongoDb => "MO", _ => "DB"
-    };
 }
 
 <nav class="breadcrumb mb-4" aria-label="breadcrumb"><a href="/databases">@T["Databases"]</a><i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i><span>@(isFa ? "ساخت سرویس" : "Create service")</span></nav>
@@ -34,7 +28,7 @@
                 {
                     <label class="database-engine-card">
                         <input class="sr-only" type="radio" asp-for="Type" value="@item.Type" data-type-radio data-label="@(isFa ? item.DisplayNameFa : item.DisplayName)" />
-                        <span class="template-logo" data-template-key="@Key(item.Type)">@Glyph(item.Type)</span>
+                        <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(Key(item.Type), item.DisplayName))" />
                         <span><strong>@(isFa ? item.DisplayNameFa : item.DisplayName)</strong><small>@(isFa ? "پورت داخلی" : "Private port") @item.InternalPort</small></span>
                         <i data-lucide="circle-check" class="source-check h-4 w-4"></i>
                     </label>
@@ -67,7 +61,7 @@
 
     <aside class="create-review">
         <div class="sticky top-4">
-            <div class="review-heading"><span class="template-logo" data-review-logo data-template-key="@Key(Model.Type)">@Glyph(Model.Type)</span><div><strong data-review-engine>@Model.Type</strong><small>@(isFa ? "طرح ایجاد سرویس" : "Provisioning plan")</small></div></div>
+            <div class="review-heading"><partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(Key(Model.Type), Model.Type.ToString(), Extra: new Microsoft.AspNetCore.Html.HtmlString("data-review-logo")))" /><div><strong data-review-engine>@Model.Type</strong><small>@(isFa ? "طرح ایجاد سرویس" : "Provisioning plan")</small></div></div>
             <dl class="review-list">
                 <div><dt>@T["Version"]</dt><dd data-review-version>—</dd></div>
                 <div><dt>@(isFa ? "پورت داخلی" : "Private port")</dt><dd data-review-port>—</dd></div>

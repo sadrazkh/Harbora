@@ -18,12 +18,6 @@
     var who = User.Identity?.Name is { Length: > 0 } name ? name.Split('@')[0] : null;
     var completedSteps = (Model.ServersOnline > 0 ? 1 : 0) + (Model.DomainsTotal > 0 ? 1 : 0) + (Model.AppCount > 0 ? 1 : 0) + (Model.BackupSchedulesEnabled > 0 ? 1 : 0);
     var platformHealthy = Model.DockerAvailable && Model.ServersTotal > 0 && Model.ServersOnline == Model.ServersTotal && Model.FailedDeployments == 0;
-    string TemplateGlyph(StarterTemplate template) => template.Key switch
-    {
-        "wordpress" => "W", "ghost" => "G", "node" => "JS", "aspnet" => ".N", "laravel" => "L",
-        "redis-commander" => "R", "uptime-kuma" => "U", _ => template.Name.Trim().Length > 1 ? template.Name.Trim()[..2].ToUpperInvariant() : template.Name.ToUpperInvariant()
-    };
-    string DbGlyph(StarterDatabase database) => database.Type switch { "PostgreSql" => "PG", "MySql" => "MY", "MariaDb" => "MA", "Redis" => "R", "MongoDb" => "MO", _ => "DB" };
     string DbKey(StarterDatabase database) => database.Type switch { "PostgreSql" => "postgres", "MySql" => "mysql", "MariaDb" => "mariadb", "Redis" => "redis", "MongoDb" => "mongodb", _ => "database" };
 }
 
@@ -76,7 +70,7 @@
         <div class="dashboard-template-grid">
             @foreach (var template in Model.StarterApps.Take(8))
             {
-                <a href="/templates/@template.Id/deploy"><span class="template-logo" data-template-key="@template.Key">@TemplateGlyph(template)</span><strong>@(isFa && !string.IsNullOrWhiteSpace(template.NameFa) ? template.NameFa : template.Name)</strong><small>@template.Category</small></a>
+                <a href="/templates/@template.Id/deploy"><partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(template.Key, isFa && !string.IsNullOrWhiteSpace(template.NameFa) ? template.NameFa : template.Name))" /><strong>@(isFa && !string.IsNullOrWhiteSpace(template.NameFa) ? template.NameFa : template.Name)</strong><small>@template.Category</small></a>
             }
         </div>
     </div>
@@ -86,7 +80,7 @@
         <div class="dashboard-database-grid">
             @foreach (var database in Model.StarterDatabases)
             {
-                <a href="/databases/create?type=@database.Type"><span class="template-logo" data-template-key="@DbKey(database)">@DbGlyph(database)</span><strong>@(isFa && !string.IsNullOrWhiteSpace(database.NameFa) ? database.NameFa : database.Name)</strong><small>@(isFa ? "ساخت با یک کلیک" : "One-click provision")</small></a>
+                <a href="/databases/create?type=@database.Type"><partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(DbKey(database), isFa && !string.IsNullOrWhiteSpace(database.NameFa) ? database.NameFa : database.Name))" /><strong>@(isFa && !string.IsNullOrWhiteSpace(database.NameFa) ? database.NameFa : database.Name)</strong><small>@(isFa ? "ساخت با یک کلیک" : "One-click provision")</small></a>
             }
         </div>
         <a href="/backups" class="panel-help">@(isFa ? "بعد از ایجاد، پشتیبان خودکار تنظیم کنید" : "Configure automated backups after provisioning")<i data-lucide="arrow-right" class="h-3.5 w-3.5 rtl:rotate-180"></i></a>

@@ -39,12 +39,6 @@
         AppStatus.Stopped => "is-idle",
         _ => "is-warn"
     };
-    string TemplateGlyph(string key, string name) => key switch
-    {
-        "wordpress" => "W", "ghost" => "G", "node" => "JS", "aspnet" => ".N",
-        "laravel" => "L", "redis-commander" => "R", "uptime-kuma" => "U",
-        _ => name.Trim().Length > 1 ? name.Trim()[..2].ToUpperInvariant() : name.ToUpperInvariant()
-    };
 }
 
 <div class="page-heading">
@@ -168,7 +162,7 @@
             @foreach (var item in Model.QuickStarts)
             {
                 <a href="/templates/@item.Template.Id/deploy" class="quick-start-item">
-                    <span class="template-logo" data-template-key="@item.Template.Key">@TemplateGlyph(item.Template.Key, item.Name)</span>
+                    <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(item.Template.Key, item.Name))" />
                     <span><strong>@item.Name</strong><small>@(item.IsStack ? $"{item.ResourceCount} resources" : item.Template.Category)</small></span>
                 </a>
             }
