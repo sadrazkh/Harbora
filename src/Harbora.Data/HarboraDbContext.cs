@@ -65,6 +65,19 @@ public class HarboraDbContext : DbContext
     public DbSet<Backup> Backups => Set<Backup>();
     public DbSet<BackupSchedule> BackupSchedules => Set<BackupSchedule>();
     public DbSet<BackupDelivery> BackupDeliveries => Set<BackupDelivery>();
+
+    // Backup module (docs/backup-sync/ARCHITECTURE.md). Separate tables from the four above rather
+    // than extra columns on them: a repository is a managed store with its own history and garbage
+    // collection, a destination is a path an artifact file is written to, and conflating the two
+    // would make the two restore paths hard to tell apart.
+    public DbSet<Harbora.Modules.Backup.Domain.BackupRepository> BackupRepositories =>
+        Set<Harbora.Modules.Backup.Domain.BackupRepository>();
+    public DbSet<Harbora.Modules.Backup.Domain.BackupPolicy> BackupPolicies =>
+        Set<Harbora.Modules.Backup.Domain.BackupPolicy>();
+    public DbSet<Harbora.Modules.Backup.Domain.BackupSnapshot> BackupSnapshots =>
+        Set<Harbora.Modules.Backup.Domain.BackupSnapshot>();
+    public DbSet<Harbora.Modules.Backup.Domain.RestoreJob> RestoreJobs =>
+        Set<Harbora.Modules.Backup.Domain.RestoreJob>();
     public DbSet<MonitoringMetric> MonitoringMetrics => Set<MonitoringMetric>();
     public DbSet<MetricRollup> MetricRollups => Set<MetricRollup>();
     public DbSet<Alert> Alerts => Set<Alert>();
@@ -338,8 +351,106 @@ public class HarboraDbContext : DbContext
             e.Property(x => x.ClaimStamp).IsConcurrencyToken();
         });
 
+        ConfigureBackupModule(b);
+
         DeclareApplicationGeneratedKeys(b);
         ApplyWorkspaceFilters(b);
+    }
+
+    /// <summary>
+    /// Backup module schema (docs/backup-sync/ARCHITECTURE.md § 7). Kept in its own method so the
+    /// module's storage shape is reviewable in one place and stays easy to lift out.
+    /// </summary>
+    private static void ConfigureBackupModule(ModelBuilder b)
+    {
+        b.Entity<Harbora.Modules.Backup.Domain.BackupRepository>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(128).IsRequired();
+            e.Property(x => x.Provider).HasMaxLength(64);
+            e.Property(x => x.Endpoint).HasMaxLength(512);
+            e.Property(x => x.Bucket).HasMaxLength(255);
+            e.Property(x => x.Region).HasMaxLength(64);
+            e.Property(x => x.BasePath).HasMaxLength(1024);
+            e.Property(x => x.EngineRepositoryId).HasMaxLength(256);
+            // Bounded because it holds engine output. Redacted before it gets here, but a length cap
+            // means a runaway stderr cannot bloat the row regardless.
+            e.Property(x => x.LastError).HasMaxLength(2048);
+
+            e.HasIndex(x => new { x.WorkspaceId, x.Name }).IsUnique();
+            e.HasIndex(x => new { x.WorkspaceId, x.Status });
+        });
+
+        b.Entity<Harbora.Modules.Backup.Domain.BackupPolicy>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(128).IsRequired();
+            e.Property(x => x.TargetRef).HasMaxLength(512).IsRequired();
+            e.Property(x => x.Schedule).HasMaxLength(128).IsRequired();
+            e.Property(x => x.Timezone).HasMaxLength(64).IsRequired();
+            e.Property(x => x.CompressionAlgorithm).HasMaxLength(32);
+            e.Property(x => x.IncludePatterns).HasMaxLength(4096);
+            e.Property(x => x.ExcludePatterns).HasMaxLength(4096);
+            e.Property(x => x.PreBackupHook).HasMaxLength(2048);
+            e.Property(x => x.PostBackupHook).HasMaxLength(2048);
+
+            // Retention has no identity apart from its policy and is always read and written with
+            // it, so it is owned rather than a table of its own.
+            e.OwnsOne(x => x.Retention);
+
+            e.HasOne(x => x.Repository).WithMany().HasForeignKey(x => x.RepositoryId)
+                // Restrict, not Cascade. Deleting a repository row must not silently delete the
+                // policies pointing at it — the operator is told what still depends on it instead.
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasIndex(x => new { x.WorkspaceId, x.Enabled });
+            // The scheduler's hot path: which policies are due.
+            e.HasIndex(x => new { x.Enabled, x.NextRunAt });
+        });
+
+        b.Entity<Harbora.Modules.Backup.Domain.BackupSnapshot>(e =>
+        {
+            e.Property(x => x.TargetRef).HasMaxLength(512).IsRequired();
+            e.Property(x => x.EngineSnapshotId).HasMaxLength(256);
+            e.Property(x => x.FailureReason).HasMaxLength(2048);
+            e.Property(x => x.VerificationNote).HasMaxLength(1024);
+            e.Property(x => x.Warnings).HasMaxLength(4096);
+            e.Property(x => x.CorrelationId).HasMaxLength(64);
+
+            // Computed from StartedAt/CompletedAt; there is nothing to store.
+            e.Ignore(x => x.Duration);
+            e.Ignore(x => x.IsTerminal);
+            e.Ignore(x => x.IsRestorable);
+
+            e.HasOne(x => x.Repository).WithMany().HasForeignKey(x => x.RepositoryId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Policy).WithMany().HasForeignKey(x => x.PolicyId)
+                // A deleted policy must not take its history with it: "what did we back up last
+                // month" has to survive someone tidying up a schedule.
+                .OnDelete(DeleteBehavior.SetNull);
+
+            e.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
+            e.HasIndex(x => new { x.RepositoryId, x.Status });
+            // Retention groups by target, newest first.
+            e.HasIndex(x => new { x.WorkspaceId, x.TargetType, x.TargetRef, x.CreatedAt });
+        });
+
+        b.Entity<Harbora.Modules.Backup.Domain.RestoreJob>(e =>
+        {
+            e.Property(x => x.Destination).HasMaxLength(1024).IsRequired();
+            e.Property(x => x.Entries).HasMaxLength(8192);
+            e.Property(x => x.FailureReason).HasMaxLength(2048);
+            e.Property(x => x.SafetySnapshotRef).HasMaxLength(1024);
+            e.Property(x => x.CorrelationId).HasMaxLength(64);
+
+            e.Ignore(x => x.IsTerminal);
+
+            e.HasOne(x => x.Snapshot).WithMany().HasForeignKey(x => x.SnapshotId)
+                // Restrict: a restore is an audit record of a destructive act. It must not vanish
+                // because the snapshot it came from was later pruned.
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
+            e.HasIndex(x => x.Status);
+        });
     }
 
     /// <summary>
@@ -384,6 +495,23 @@ public class HarboraDbContext : DbContext
         b.Entity<Backup>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<BackupDestination>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<BackupSchedule>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+
+        // Backup module. Each carries its own WorkspaceId rather than being filtered through its
+        // parent, for the reason spelled out on Deployment below: a navigation filter over a
+        // non-nullable key becomes an INNER JOIN, which hides rows whose parent is momentarily
+        // missing — and the prune and health jobs exist precisely to find those.
+        //
+        // The jobs that read these run unscoped (SystemWorkspaceScope). A sweeper that accidentally
+        // runs with a REQUEST scope reads nothing here and reports success having done nothing:
+        // no exception, no alert, and a backup schedule that looks healthy while never running.
+        b.Entity<Harbora.Modules.Backup.Domain.BackupRepository>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Modules.Backup.Domain.BackupPolicy>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Modules.Backup.Domain.BackupSnapshot>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Modules.Backup.Domain.RestoreJob>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Alert>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<GitProvider>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<WorkspaceMember>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);

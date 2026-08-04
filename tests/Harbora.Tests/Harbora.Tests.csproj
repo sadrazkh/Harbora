@@ -24,6 +24,8 @@
     <ProjectReference Include="..\..\src\Harbora.Web\Harbora.Web.csproj" />
     <ProjectReference Include="..\..\src\Harbora.Cli\Harbora.Cli.csproj" />
     <ProjectReference Include="..\..\src\Harbora.NodeAgent.Contracts\Harbora.NodeAgent.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Backup\Harbora.Modules.Backup.Contracts\Harbora.Modules.Backup.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Backup\Harbora.Modules.Backup.Domain\Harbora.Modules.Backup.Domain.csproj" />
   </ItemGroup>
 
 </Project>

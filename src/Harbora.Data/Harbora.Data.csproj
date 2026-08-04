@@ -4,6 +4,12 @@
     <ProjectReference Include="..\Harbora.Domain\Harbora.Domain.csproj" />
     <ProjectReference Include="..\Harbora.Application\Harbora.Application.csproj" />
     <ProjectReference Include="..\Harbora.Shared\Harbora.Shared.csproj" />
+    <!--
+      The backup module's entities, for DbSets and the migration. The only inward edge from the core
+      to Modules/, and it is not a cycle: Harbora.Modules.Backup.Domain sits below this project and never
+      references it back.
+    -->
+    <ProjectReference Include="..\Modules\Backup\Harbora.Modules.Backup.Domain\Harbora.Modules.Backup.Domain.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -9,7 +9,15 @@ public enum JobKind
     Backup = 1,
     ServiceProvision = 2,
     /// <summary>A scheduled job run on demand — durable, so "run now" survives a restart.</summary>
-    CronRun = 3
+    CronRun = 3,
+
+    // Backup module (docs/backup-sync/ARCHITECTURE.md § 6). Appended, never renumbered: existing
+    // rows hold these by value, and reordering would turn a queued deployment into a prune.
+    BackupSnapshot = 4,
+    BackupRestore = 5,
+    BackupVerify = 6,
+    BackupPrune = 7,
+    RepositoryHealthCheck = 8
 }
 
 public enum JobStatus
