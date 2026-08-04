@@ -134,6 +134,11 @@ public static class DependencyInjection
         // restart has to read as a gap rather than a spike.
         services.AddScoped<Monitoring.NetworkHistory>();
 
+        // The AI gateway. The adapter is registered against the interface so a second provider
+        // shape can be added without touching the routing or metering above it.
+        services.AddScoped<Ai.AiGatewayService>();
+        services.AddScoped<Ai.IAiProviderAdapter, Ai.OpenRouterProviderAdapter>();
+
         // Outside access to a managed database, and the sweeper that makes "temporary" true.
         services.AddScoped<Services.DatabaseAccessService>();
         services.AddHostedService<Services.DatabaseAccessSweeper>();
