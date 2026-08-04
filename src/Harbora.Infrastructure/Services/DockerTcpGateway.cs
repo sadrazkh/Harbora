@@ -106,7 +106,7 @@ public sealed class DockerTcpGateway(
     private async Task SafeRemoveAsync(string containerName, CancellationToken ct)
     {
         try { await docker.RemoveContainerAsync(containerName, force: true, ct); }
-        catch (Docker.DotNet.DockerContainerNotFoundException)
+        catch (global::Docker.DotNet.DockerContainerNotFoundException)
         {
             // Already gone is the outcome this wanted. Logging it as a failure — which it did —
             // raises an alarm about an open port on a grant that never opened one, and an alarm
