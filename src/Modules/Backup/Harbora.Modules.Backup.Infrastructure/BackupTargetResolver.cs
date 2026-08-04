@@ -69,6 +69,7 @@ public interface IBackupTargetResolver
 /// <inheritdoc />
 public sealed class BackupTargetResolver(
     IDockerEngine docker,
+    IDatabaseTargetStager databases,
     IOptions<BackupModuleOptions> options,
     ILogger<BackupTargetResolver> logger) : IBackupTargetResolver
 {
@@ -83,9 +84,10 @@ public sealed class BackupTargetResolver(
         {
             BackupTargetType.Directory => ValidateDirectory(targetRef),
             BackupTargetType.DockerVolume => ValidateVolume(targetRef),
+            BackupTargetType.Database => ValidateDatabase(targetRef),
 
-            BackupTargetType.Application or BackupTargetType.Database => new ResolvedTarget(false, Error:
-                $"{targetType} targets are not implemented yet."),
+            BackupTargetType.Application => new ResolvedTarget(false, Error:
+                "Application targets are not implemented yet."),
 
             _ => new ResolvedTarget(false, Error: $"{targetType} is not a target this module can read.")
         };
@@ -101,6 +103,7 @@ public sealed class BackupTargetResolver(
         {
             BackupTargetType.Directory => TargetLease.Ok(validation.SourcePath!),
             BackupTargetType.DockerVolume => await StageVolumeAsync(targetRef, ct),
+            BackupTargetType.Database => await databases.StageAsync(Guid.Parse(targetRef), ct),
             _ => TargetLease.Fail($"{targetType} is not a target this module can read.")
         };
     }
@@ -149,6 +152,21 @@ public sealed class BackupTargetResolver(
         EngineArgumentGuard.IsSafeVolumeName(volumeName)
             ? new ResolvedTarget(true, volumeName)
             : new ResolvedTarget(false, Error: $"'{volumeName}' is not a valid Docker volume name.");
+
+    /// <summary>
+    /// A database target is a managed-service id.
+    ///
+    /// <para>
+    /// Only the shape is checked here. Whether the service exists, which engine it runs and whether
+    /// its password still decrypts are all questions that need the database and the master key, and
+    /// this method is the one that must stay free of side effects — so they are answered when the
+    /// lease is acquired on the worker.
+    /// </para>
+    /// </summary>
+    private static ResolvedTarget ValidateDatabase(string serviceId) =>
+        Guid.TryParse(serviceId, out _)
+            ? new ResolvedTarget(true, serviceId)
+            : new ResolvedTarget(false, Error: "A database target must be a managed database's id.");
 
     /// <summary>
     /// Copies a volume's contents into the staging area so the engine can read them as a directory.

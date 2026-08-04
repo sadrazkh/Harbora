@@ -156,7 +156,10 @@ public sealed class BackupApiController(
     {
         if (Disabled) return NotFound();
 
-        var supported = new[] { BackupTargetType.Directory, BackupTargetType.DockerVolume };
+        var supported = new[]
+        {
+            BackupTargetType.Directory, BackupTargetType.DockerVolume, BackupTargetType.Database
+        };
 
         return Ok(new
         {

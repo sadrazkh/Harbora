@@ -43,9 +43,30 @@ public interface IDatabaseBackupProvider
 public sealed record DatabaseConnection(
     string Host,
     int Port,
-    string Username,
+    string User,
     string Password,
     string? DatabaseName = null);
+
+/// <summary>
+/// How to reach the database in order to run its client.
+///
+/// <para>
+/// Needed because the panel is not on the database's network and does not carry its client tools.
+/// The dump runs in a container built from the database's <b>own image</b>, so the client version
+/// always matches the server — <c>pg_dump</c> refuses to dump a server newer than itself, which is
+/// exactly what happens the first time someone upgrades a database and the nightly backup starts
+/// failing for reasons nobody connects to the upgrade.
+/// </para>
+/// </summary>
+public sealed record DatabaseExecutionContext(
+    string ClientImage,
+    string? NetworkMode,
+
+    // Docker volume holding the staging directory, mounted into the client container.
+    string StagingVolume,
+
+    // Where that volume is mounted inside the client container.
+    string ContainerMountPath);
 
 /// <summary>
 /// A dump about to be taken.
@@ -58,30 +79,34 @@ public sealed record DatabaseConnection(
 public sealed record DatabaseBackupContext(
     DatabaseEngine Engine,
     DatabaseConnection Connection,
-    string OutputPath,
+    DatabaseExecutionContext Execution,
 
-    // Null dumps every database the credentials can see.
-    string? DatabaseName = null,
+    // Directory on the panel where the dump should land. Created with restrictive permissions and
+    // deleted once the snapshot has taken it.
+    string OutputDirectory,
 
-    // Only honoured by engines with a schema concept.
-    string? SchemaName = null,
-
-    bool Compress = true);
+    // Base name for the artifact, without extension. Generated, never user input.
+    string OutputName);
 
 public sealed record DatabaseRestoreContext(
     DatabaseEngine Engine,
     DatabaseConnection Connection,
-    string InputPath,
+    DatabaseExecutionContext Execution,
+
+    // Directory holding the dump, already mounted into the client container.
+    string InputDirectory,
+
+    string FileName,
 
     // Restore into a database other than the one it came from. The safe choice when inspecting.
-    string? TargetDatabaseName = null,
-
-    bool DropExisting = false);
+    string? TargetDatabaseName = null);
 
 public sealed record DatabaseBackupVerificationContext(
     DatabaseEngine Engine,
     DatabaseConnection Connection,
-    string InputPath,
+    DatabaseExecutionContext Execution,
+    string InputDirectory,
+    string FileName,
 
     // Scratch database to load into. Dropped afterwards whatever the outcome.
     string ScratchDatabaseName);

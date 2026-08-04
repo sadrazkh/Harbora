@@ -75,7 +75,7 @@ public sealed class BackupApiTests : IDisposable
             NullLogger<BackupSnapshotService>.Instance);
 
         var restores = new RestoreService(
-            _db, new StubResolver(), new StubCredentials(), _jobs,
+            _db, new StubResolver(), new StubCredentials(), new StubDatabaseRestores(), _jobs,
             new RecordingBackupNotifications(), new Caller(_workspace), new SilentAudit(),
             Options.Create(_options), NullLogger<RestoreService>.Instance);
 
@@ -99,7 +99,7 @@ public sealed class BackupApiTests : IDisposable
     }
 
     private BackupTargetResolver Resolver() => new(
-        new FakeDockerEngine(), Options.Create(_options), NullLogger<BackupTargetResolver>.Instance);
+        new FakeDockerEngine(), new StubDatabaseStager(), Options.Create(_options), NullLogger<BackupTargetResolver>.Instance);
 
     private BackupSnapshot AddSnapshot(
         BackupSnapshotStatus status = BackupSnapshotStatus.Completed,

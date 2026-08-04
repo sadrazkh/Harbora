@@ -57,6 +57,22 @@ public static class BackupModuleServiceCollectionExtensions
 
         services.AddScoped<IBackupTargetResolver, BackupTargetResolver>();
         services.AddScoped<IBackupNotificationService, BackupNotificationService>();
+        services.AddScoped<IDatabaseTargetStager, DatabaseTargetStager>();
+        services.AddScoped<IDatabaseRestoreExecutor, DatabaseRestoreExecutor>();
+
+        // One provider instance per engine, all served by the same container-based implementation:
+        // the per-engine differences live in DatabaseDumpCommands, which is pure and tested there.
+        // Mongo and Redis are registered too, so asking for them yields their specific refusal
+        // rather than "no provider" — the reason is what tells an operator what to do instead.
+        foreach (var engine in Enum.GetValues<DatabaseEngine>())
+        {
+            var captured = engine;
+            services.AddScoped<IDatabaseBackupProvider>(sp => new ContainerDatabaseBackupProvider(
+                captured,
+                sp.GetRequiredService<Harbora.Application.Abstractions.IDockerEngine>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<ContainerDatabaseBackupProvider>>()));
+        }
+        services.AddScoped<IDatabaseBackupProviderResolver, DatabaseBackupProviderResolver>();
 
         services.AddScoped<BackupRepositoryService>();
         services.AddScoped<BackupSnapshotService>();

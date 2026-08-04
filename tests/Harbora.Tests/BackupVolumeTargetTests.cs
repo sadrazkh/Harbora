@@ -41,7 +41,8 @@ public sealed class BackupVolumeTargetTests : IDisposable
         Directory.CreateDirectory(_options.AllowedSourceRoots[0]);
 
         _resolver = new BackupTargetResolver(
-            _docker, Options.Create(_options), NullLogger<BackupTargetResolver>.Instance);
+            _docker, new StubDatabaseStager(), Options.Create(_options),
+            NullLogger<BackupTargetResolver>.Instance);
     }
 
     [Fact]
@@ -165,15 +166,29 @@ public sealed class BackupVolumeTargetTests : IDisposable
         Directory.Exists(path).Should().BeTrue("releasing a directory lease must not delete the source");
     }
 
-    [Theory]
-    [InlineData(BackupTargetType.Application)]
-    [InlineData(BackupTargetType.Database)]
-    public void Refuses_target_types_that_are_not_implemented_rather_than_guessing(BackupTargetType type)
+    [Fact]
+    public void Refuses_target_types_that_are_not_implemented_rather_than_guessing()
     {
-        var result = _resolver.Validate(type, "anything");
+        var result = _resolver.Validate(BackupTargetType.Application, "anything");
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Contain("not implemented");
+    }
+
+    /// <summary>
+    /// Only the shape is checked at queue time. Whether the service exists, which engine it runs and
+    /// whether its password still decrypts all need the database and the master key, and this method
+    /// is the one that must stay free of side effects.
+    /// </summary>
+    [Fact]
+    public void A_database_target_is_checked_for_shape_only()
+    {
+        _resolver.Validate(BackupTargetType.Database, Guid.CreateVersion7().ToString())
+            .Succeeded.Should().BeTrue();
+
+        var malformed = _resolver.Validate(BackupTargetType.Database, "the-production-one");
+        malformed.Succeeded.Should().BeFalse();
+        malformed.Error.Should().Contain("id");
     }
 
     public void Dispose()
@@ -181,4 +196,32 @@ public sealed class BackupVolumeTargetTests : IDisposable
         try { if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true); }
         catch (IOException) { /* a locked temp file is not a test failure */ }
     }
+}
+
+/// <summary>
+/// Stands in for the database stager where a test is about some other target. Database staging has
+/// its own tests; letting it be exercised incidentally here would only make failures ambiguous.
+/// </summary>
+internal sealed class StubDatabaseStager : IDatabaseTargetStager
+{
+    public Task<(DatabasePlan? Plan, string? Error)> PlanAsync(Guid serviceId, CancellationToken ct)
+        => Task.FromResult<(DatabasePlan?, string?)>((null, "not used in this test"));
+
+    public Task<TargetLease> StageAsync(Guid serviceId, CancellationToken ct)
+        => Task.FromResult(TargetLease.Fail("not used in this test"));
+}
+
+/// <summary>Stands in for the database half of a restore, for tests about the generic path.</summary>
+internal sealed class StubDatabaseRestores : IDatabaseRestoreExecutor
+{
+    public string? Name { get; init; }
+    public List<(Guid ServiceId, string Directory)> Loaded { get; } = [];
+
+    public Task<DatabaseRestoreResult> LoadAsync(Guid serviceId, string restoredDirectory, CancellationToken ct)
+    {
+        Loaded.Add((serviceId, restoredDirectory));
+        return Task.FromResult(new DatabaseRestoreResult(true));
+    }
+
+    public Task<string?> DescribeAsync(Guid serviceId, CancellationToken ct) => Task.FromResult(Name);
 }

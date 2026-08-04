@@ -131,9 +131,18 @@
                         <option value="@r.Id">@r.Name (@r.Engine)</option>
                     }
                 </select>
-                <input type="hidden" name="targetType" value="@BackupTargetType.Directory" />
+                <select name="targetType" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                    <option value="@BackupTargetType.Directory">@(isFa ? "پوشه" : "Directory")</option>
+                    <option value="@BackupTargetType.DockerVolume">@(isFa ? "Volume داکر" : "Docker volume")</option>
+                    <option value="@BackupTargetType.Database">@(isFa ? "دیتابیس" : "Database")</option>
+                </select>
                 <input name="targetRef" required placeholder="@(Model.AllowedSourceRoots.FirstOrDefault() ?? "/var/lib/harbora/data")"
                        class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <p class="text-[11px] text-ink-faint">
+                    @(isFa
+                        ? "پوشه: مسیر مجاز · Volume: نام آن · دیتابیس: شناسهٔ سرویس"
+                        : "Directory: an allowed path · Volume: its name · Database: the service's id")
+                </p>
                 <button class="w-full rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
                     @(isFa ? "شروع پشتیبان‌گیری" : "Start backup")
                 </button>
@@ -254,7 +263,11 @@
                         <option value="@r.Id">@r.Name</option>
                     }
                 </select>
-                <input type="hidden" name="targetType" value="@BackupTargetType.Directory" />
+                <select name="targetType" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                    <option value="@BackupTargetType.Directory">@(isFa ? "پوشه" : "Directory")</option>
+                    <option value="@BackupTargetType.DockerVolume">@(isFa ? "Volume داکر" : "Docker volume")</option>
+                    <option value="@BackupTargetType.Database">@(isFa ? "دیتابیس" : "Database")</option>
+                </select>
                 <input name="targetRef" required placeholder="/var/lib/harbora/data"
                        class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                 <input name="schedule" value="0 3 * * *"

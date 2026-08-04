@@ -43,6 +43,7 @@ public sealed class RestoreService(
     HarboraDbContext db,
     IBackupEngineResolver engines,
     IRepositoryCredentialReader credentials,
+    IDatabaseRestoreExecutor databaseRestores,
     IJobQueue jobs,
     IBackupNotificationService notifications,
     ICurrentUser currentUser,
@@ -51,6 +52,22 @@ public sealed class RestoreService(
     ILogger<RestoreService> logger)
 {
     private readonly BackupModuleOptions _options = options.Value;
+
+    /// <summary>
+    /// Removes the intermediate copy a database restore lands in. Best-effort, logged loudly: a dump
+    /// left behind is a plaintext copy of an entire database on disk.
+    /// </summary>
+    private void CleanupDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "A restored database dump could not be removed from {Path}.", path);
+        }
+    }
 
     public async Task<RestoreOutcome> QueueAsync(Guid workspaceId, RestoreRequest request, CancellationToken ct)
     {
@@ -65,25 +82,55 @@ public sealed class RestoreService(
             return new RestoreOutcome(false, Error:
                 $"This backup is {snapshot.Status} — only a completed backup can be restored.");
 
-        // Every restore destination is confined to the configured root. The check is on the RESOLVED
-        // path, so "..", a symlinked parent and an absolute path outside all fail the same way.
-        var check = PathGuard.ResolveWithin(_options.RestoreRoot, request.Destination);
-        if (!check.Allowed)
-            return new RestoreOutcome(false, Error:
-                $"The destination must be inside {_options.RestoreRoot} ({check.Rejection}).");
+        string destination;
+        bool overwritesLive;
 
-        var destination = check.ResolvedPath!;
-        var overwritesLive = Directory.Exists(destination)
+        if (request.RestoreType is RestoreType.Database)
+        {
+            // For a database the destination is the database itself, named by its managed-service
+            // id. The filesystem location the dump lands in first is derived at run time and is not
+            // the user's to choose.
+            if (!Guid.TryParse(request.Destination, out var serviceId))
+                return new RestoreOutcome(false, Error:
+                    "A database restore needs the target database's id as its destination.");
+
+            var name = await databaseRestores.DescribeAsync(serviceId, ct);
+            if (name is null)
+                return new RestoreOutcome(false, Error: "That database no longer exists.");
+
+            destination = serviceId.ToString();
+
+            // Always. Loading a dump replaces the contents of a live database — there is no version
+            // of this that leaves what is there alone.
+            overwritesLive = true;
+
+            if (!string.Equals(request.ConfirmationText?.Trim(), name, StringComparison.Ordinal))
+                return new RestoreOutcome(false, Error:
+                    $"This will replace the contents of the database '{name}'. Type '{name}' to confirm.");
+        }
+        else
+        {
+            // Every filesystem destination is confined to the configured root. The check is on the
+            // RESOLVED path, so "..", a symlinked parent and an absolute path outside all fail the
+            // same way.
+            var check = PathGuard.ResolveWithin(_options.RestoreRoot, request.Destination);
+            if (!check.Allowed)
+                return new RestoreOutcome(false, Error:
+                    $"The destination must be inside {_options.RestoreRoot} ({check.Rejection}).");
+
+            destination = check.ResolvedPath!;
+            overwritesLive = Directory.Exists(destination)
                              && Directory.EnumerateFileSystemEntries(destination).Any()
                              && request.ConflictStrategy is not RestoreConflictStrategy.RestoreToNewLocation;
 
-        if (overwritesLive)
-        {
-            var expected = Path.GetFileName(destination.TrimEnd(Path.DirectorySeparatorChar));
-            if (!string.Equals(request.ConfirmationText?.Trim(), expected, StringComparison.Ordinal))
-                return new RestoreOutcome(false, Error:
-                    $"This restore would write over existing data in '{expected}'. " +
-                    $"Type '{expected}' to confirm.");
+            if (overwritesLive)
+            {
+                var expected = Path.GetFileName(destination.TrimEnd(Path.DirectorySeparatorChar));
+                if (!string.Equals(request.ConfirmationText?.Trim(), expected, StringComparison.Ordinal))
+                    return new RestoreOutcome(false, Error:
+                        $"This restore would write over existing data in '{expected}'. " +
+                        $"Type '{expected}' to confirm.");
+            }
         }
 
         // Two restores into one destination produce a result neither of them describes.
@@ -177,19 +224,55 @@ public sealed class RestoreService(
             job.Progress = 20;
             await db.SaveChangesAsync(ct);
 
+            var isDatabase = job.RestoreType is RestoreType.Database;
+
+            // A database dump lands in the staging area first, because that is the only directory
+            // the database's client container can also see. It is deleted afterwards: a dump on disk
+            // is the whole database in the clear.
+            var filesDestination = isDatabase
+                ? Path.Combine(_options.StagingDirectory, $"dbrestore-{job.Id:N}")
+                : job.Destination;
+
             var engine = engines.Resolve(repository.Engine);
             var result = await engine.RestoreAsync(new RestoreBackupRequest(
                 repository.Id,
                 snapshot.EngineSnapshotId,
                 password,
-                job.Destination,
-                job.ConflictStrategy,
+                filesDestination,
+                // The staging directory is ours and always empty, so Fail would be a false alarm.
+                isDatabase ? RestoreConflictStrategy.Overwrite : job.ConflictStrategy,
                 job.Entries?.Split('\n', StringSplitOptions.RemoveEmptyEntries)), ct);
 
             if (!result.Succeeded)
             {
+                if (isDatabase) CleanupDirectory(filesDestination);
                 await FailAsync(job, result.Error ?? "The restore failed.", ct);
                 return;
+            }
+
+            // A database restore has a second half: the files are on disk, but nothing has reached
+            // the server yet. It is not complete until it has.
+            if (isDatabase)
+            {
+                try
+                {
+                    job.Progress = 70;
+                    await db.SaveChangesAsync(ct);
+
+                    var loaded = await databaseRestores.LoadAsync(
+                        Guid.Parse(job.Destination), filesDestination, ct);
+
+                    if (!loaded.Succeeded)
+                    {
+                        await FailAsync(job,
+                            loaded.Error ?? "The dump was restored to disk but could not be loaded.", ct);
+                        return;
+                    }
+                }
+                finally
+                {
+                    CleanupDirectory(filesDestination);
+                }
             }
 
             job.Status = RestoreJobStatus.Completed;

@@ -80,7 +80,7 @@ public sealed class BackupServiceTests : IDisposable
         _db,
         new StubEngineResolver(),
         new StubCredentialReader("password"),
-        new BackupTargetResolver(Docker, Options.Create(_options), NullLogger<BackupTargetResolver>.Instance),
+        new BackupTargetResolver(Docker, new StubDatabaseStager(), Options.Create(_options), NullLogger<BackupTargetResolver>.Instance),
         _jobs,
         _notifications,
         new StubCaller(_workspace),
@@ -91,6 +91,7 @@ public sealed class BackupServiceTests : IDisposable
         _db,
         new StubEngineResolver(),
         new StubCredentialReader("password"),
+        new StubDatabaseRestores(),
         _jobs,
         _notifications,
         new StubCaller(_workspace),
@@ -296,7 +297,8 @@ public sealed class BackupServiceTests : IDisposable
 
         using var scoped = ContextFor(new FixedWorkspaceScope(_workspace));
         var restores = new RestoreService(
-            scoped, new StubEngineResolver(), new StubCredentialReader("password"), _jobs,
+            scoped, new StubEngineResolver(), new StubCredentialReader("password"),
+            new StubDatabaseRestores(), _jobs,
             _notifications, new StubCaller(_workspace), new NoopAudit(),
             Options.Create(_options), NullLogger<RestoreService>.Instance);
 
