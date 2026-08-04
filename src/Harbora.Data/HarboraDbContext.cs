@@ -73,6 +73,7 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Ai.AiPlanModel> AiPlanModels => Set<Harbora.Domain.Ai.AiPlanModel>();
     public DbSet<Harbora.Domain.Ai.AiSubscription> AiSubscriptions => Set<Harbora.Domain.Ai.AiSubscription>();
     public DbSet<Harbora.Domain.Ai.AiUserApiKey> AiUserApiKeys => Set<Harbora.Domain.Ai.AiUserApiKey>();
+    public DbSet<Harbora.Domain.Ai.AiUsageRecord> AiUsageRecords => Set<Harbora.Domain.Ai.AiUsageRecord>();
     public DbSet<Harbora.Domain.Services.DatabaseAccessGrant> DatabaseAccessGrants => Set<Harbora.Domain.Services.DatabaseAccessGrant>();
     public DbSet<Harbora.Domain.Services.DatabaseAccessAudit> DatabaseAccessAudits => Set<Harbora.Domain.Services.DatabaseAccessAudit>();
     public DbSet<AppTemplateAsset> AppTemplateAssets => Set<AppTemplateAsset>();
@@ -218,6 +219,16 @@ public class HarboraDbContext : DbContext
         // Not filtered: the gateway authenticates a request before it knows which tenant it is for,
         // so the key must be findable without a workspace already in scope. The lookup is by
         // prefix and the tenant is then taken from the row.
+        // Usage is tenant data and filtered, but the meter writes it from a request that
+        // authenticated by key rather than by session — so the writer sets WorkspaceId explicitly
+        // from the key's row and reads back with IgnoreQueryFilters where it must.
+        b.Entity<Harbora.Domain.Ai.AiUsageRecord>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            e.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
+            e.HasIndex(x => x.AiUserApiKeyId);
+        });
+
         b.Entity<Harbora.Domain.Ai.AiUserApiKey>(e =>
         {
             e.HasIndex(x => x.Prefix);
