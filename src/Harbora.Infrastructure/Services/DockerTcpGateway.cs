@@ -57,6 +57,12 @@ public sealed class DockerTcpGateway(
 
         try
         {
+            // RunContainerAsync does not pull — every other caller pulls first, and this one did
+            // not, so the very first grant on a fresh host failed with "No such image" after the
+            // login had already been created. Idempotent, so the second grant costs nothing.
+            await docker.PullImageAsync(TcpGatewayPlan.Image,
+                new Progress<string>(line => logger.LogDebug("gateway image: {Line}", line)), ct);
+
             await docker.RunContainerAsync(new DockerRunRequest(
                 Image: TcpGatewayPlan.Image,
                 ContainerName: containerName,
@@ -100,11 +106,17 @@ public sealed class DockerTcpGateway(
     private async Task SafeRemoveAsync(string containerName, CancellationToken ct)
     {
         try { await docker.RemoveContainerAsync(containerName, force: true, ct); }
+        catch (Docker.DotNet.DockerContainerNotFoundException)
+        {
+            // Already gone is the outcome this wanted. Logging it as a failure — which it did —
+            // raises an alarm about an open port on a grant that never opened one, and an alarm
+            // that cries wolf is how the real one gets ignored.
+        }
         catch (Exception ex)
         {
-            // Logged loudly. A gateway that will not go away is a port still open on a grant the
-            // panel believes it has closed, which is the one failure this feature must not have
-            // silently.
+            // Anything else is loud. A gateway that will not go away is a port still open on a
+            // grant the panel believes it has closed, which is the one failure this feature must
+            // not have quietly.
             logger.LogError(ex, "The database gateway {Container} could not be removed.", containerName);
         }
     }
