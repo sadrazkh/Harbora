@@ -55,14 +55,19 @@ should not have to discover by reading diffs.
   immediately when the flag is off.
 - **UI** — Backup Center and a snapshot browser, built from the existing design system, with the
   sidebar entry contributed only when the feature is on.
-- 116 new tests. Full suite: **2350 passed, 0 failed.**
+- **REST API** — `/api/v1/backup/*`: repositories, targets, policies, snapshots (list, browse,
+  queue, delete) and restore jobs. Paged, filterable, sortable, Problem Details, idempotency keys
+  backed by a table. Documented in [API.md](API.md).
+- **Docker volume targets** — staged into the backup area by a read-only helper mount, held by a
+  lease that deletes the staged copy when the snapshot finishes.
+- 143 new tests. Full suite: **2377 passed, 0 failed.**
 
 **Not built in this branch — and there is no placeholder pretending otherwise.**
 
 | Missing | Consequence |
 |---|---|
-| App / Docker-volume / database targets | Directory sources only; the resolver refuses the rest with a message saying so |
-| REST API endpoints | The UI posts to MVC actions; there is no `/api/v1/backup/*` yet |
+| Application and database targets | Directory and Docker volume only; the resolver refuses the rest with a message saying so |
+| Machine-generated OpenAPI | `docs/backup-sync/API.md` is the reference; no `/openapi` document is served |
 | Sync module | Not started — no projects, no entities |
 | Agent backup dispatch | Existing node agent untouched |
 | Docker compose services for Kopia/Syncthing | Not added |
@@ -98,8 +103,14 @@ No existing migration was edited. No existing test was deleted or skipped.
 
 ## 4. Migration
 
-`20260804183506_BackupModule` — **purely additive**: 4 `CreateTable`, 12 `CreateIndex`, no `AlterColumn`
-and no change to any existing table. `Down` drops only the four new tables.
+Two migrations, both **purely additive** — no `AlterColumn`, no change to any existing table.
+
+| Migration | Adds |
+|---|---|
+| `20260804183506_BackupModule` | 4 tables, 12 indexes |
+| `…_BackupIdempotency` | `BackupIdempotencyRecords` + 2 indexes (one unique on workspace + endpoint + key) |
+
+`Down` drops only the new tables.
 
 ```bash
 dotnet ef database update --project src/Harbora.Data --startup-project src/Harbora.Web
@@ -200,11 +211,14 @@ never writes to `Backups`, `BackupDestinations`, `BackupSchedules` or `BackupDel
 
 **Functional.**
 
-4. REST API endpoints (`/api/v1/backup/*`). The UI drives MVC actions; there is no versioned API,
-   no OpenAPI document and no idempotency-key handling yet.
-5. App/volume targets need a volume-inspect call the platform's Docker abstraction does not expose;
-   database targets need `IDatabaseBackupProvider` implementations. The contract is defined and
-   nothing implements it, so the resolver refuses those target types outright.
+4. **Machine-generated OpenAPI.** The project has no OpenAPI package; adding one emits a document
+   describing every controller in the panel, which is wider than this branch should reach on its
+   own. Wire `Microsoft.AspNetCore.OpenApi` and gate it to Development.
+5. Application and database targets need `IDatabaseBackupProvider` implementations and app-metadata
+   capture. The contract is defined and nothing implements it, so the resolver refuses those target
+   types outright rather than half-working.
+   **Docker volume staging has never run against a real daemon** — the orchestration is tested with
+   a fake engine, but the `cp -a` into a shared staging volume is CI's first real exercise of it.
 6. Sync and the always-on encrypted node: not started.
 7. Container-backed integration tests: not written, and could not have been verified here.
 8. Snapshot download: no short-lived one-time link. Restoring into a new folder is the way to
@@ -219,7 +233,7 @@ Stated precisely, because "tested" is a word worth being exact about.
 | Check | Result |
 |---|---|
 | `dotnet build Harbora.slnx` | Succeeded, **0 warnings, 0 errors** |
-| `dotnet test Harbora.slnx` | **2350 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
+| `dotnet test Harbora.slnx` | **2377 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
 | Migration reviewed for additive-only | Confirmed |
 | Backup round trip (snapshot → restore → byte comparison) | Passing, native engine, local repository |
 | Encryption at rest of stored artifacts | Asserted in test |
@@ -228,6 +242,10 @@ Stated precisely, because "tested" is a word worth being exact about.
 | Restore destination confinement | Asserted for `..` and absolute paths |
 | Source-root confinement | Asserted: a directory outside the allowlist is refused before queueing |
 | Tenant isolation, both directions | Asserted: scoped context cannot see another workspace; unscoped sees all |
+| API paging, filtering, sorting, idempotency replay | Asserted at controller level |
+| No secret in an API response | Asserted by reflecting over the DTO, so a field added later fails |
+| Volume staging orchestration (mounts, arguments, cleanup) | Asserted against a fake Docker engine |
+| **Volume staging against a real Docker daemon** | **NOT RUN — no Docker on this machine** |
 | **Panel rendered in a browser** | **NOT DONE — no run of the app; the views compile, but were not viewed** |
 | **Docker Compose health checks** | **NOT RUN — Docker is not installed on this machine** |
 | **Kopia CLI against a real binary** | **NOT RUN — no Kopia binary available** |
