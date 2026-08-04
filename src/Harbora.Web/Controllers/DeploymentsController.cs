@@ -229,7 +229,7 @@ public sealed class DeploymentsController(
     {
         var deployment = await db.Deployments.AsNoTracking()
             .Where(d => d.Id == id && d.App!.WorkspaceId == WorkspaceId)
-            .Select(d => new { d.AppId }).FirstOrDefaultAsync(ct);
+            .Select(d => new { d.AppId, d.Status }).FirstOrDefaultAsync(ct);
         if (deployment is null) return NotFound();
         if (!await access.CanSeeAppAsync(deployment.AppId, ct)) return NotFound();
 
@@ -239,6 +239,10 @@ public sealed class DeploymentsController(
             .Select(l => new { seq = l.Sequence, stream = l.Stream.ToString(), l.Message, ts = l.Timestamp })
             .ToListAsync(ct);
 
-        return Json(lines);
+        // The status travels with the lines. Without it the polling fallback — the path taken when
+        // the socket cannot open — had no way to learn the deployment had ended: it polled every
+        // 1.5 seconds for ever, and the progress bar it was supposed to move never moved.
+        // The row is already loaded here for the access check, so this costs nothing.
+        return Json(new { status = deployment.Status.ToString(), lines });
     }
 }

@@ -10,8 +10,58 @@
     </div>
 </div>
 
-@* Staged progress (server-rendered; the Vue island updates it live in production). *@
+@* Staged progress. Server-rendered so a page opened mid-deploy is right on arrival; moved live by
+   Scripts/deployProgress.ts from the status the socket (or the polling fallback) reports. *@
 <partial name="_DeployProgress" model="Model.Status" />
+
+@{
+    var deployIsFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var appUrl = $"/apps/details/{Model.AppId}";
+    var appLabel = Model.App?.Name ?? (deployIsFa ? "برنامه" : "the application");
+}
+
+@* The two endings. Both rendered here and revealed by the script, so somebody who watched the
+   deployment and somebody who opened the page afterwards see the same thing — and so the wording
+   stays translated in one place instead of being built in JavaScript. *@
+<div class="mb-4 rounded-xl border border-ok/30 bg-ok-soft p-5" data-deploy-outcome="Succeeded"
+     hidden="@(Model.Status is not Harbora.Domain.Common.DeploymentStatus.Succeeded)">
+    <div class="flex flex-wrap items-center justify-between gap-4">
+        <div class="flex items-start gap-3">
+            <span class="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-ok text-white">
+                <i data-lucide="check" class="h-5 w-5"></i>
+            </span>
+            <div>
+                <strong class="block text-sm font-semibold text-ok">
+                    @(deployIsFa ? "استقرار با موفقیت انجام شد" : "Deployed successfully")
+                </strong>
+                <span class="mt-0.5 block text-xs leading-5 text-ok">
+                    @(deployIsFa
+                        ? $"«{appLabel}» زنده است و ترافیک را می‌گیرد."
+                        : $"{appLabel} is live and taking traffic.")
+                </span>
+            </div>
+        </div>
+        <a href="@appUrl" class="rounded-lg bg-ok px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
+            @(deployIsFa ? "رفتن به برنامه" : "Open the application")
+        </a>
+    </div>
+</div>
+
+<div class="mb-4 rounded-xl border border-line bg-surface p-5" data-deploy-outcome="Ended"
+     hidden="@(Model.Status is not (Harbora.Domain.Common.DeploymentStatus.Failed
+                                    or Harbora.Domain.Common.DeploymentStatus.Cancelled
+                                    or Harbora.Domain.Common.DeploymentStatus.RolledBack))">
+    <div class="flex flex-wrap items-center justify-between gap-4">
+        <p class="text-sm text-ink-muted">
+            @(deployIsFa
+                ? "این استقرار به پایان رسید. لاگ کامل پایین همین صفحه است."
+                : "This deployment has ended. The full log is below.")
+        </p>
+        <a href="@appUrl" class="btn-secondary px-4 py-2 text-sm">
+            @(deployIsFa ? "رفتن به برنامه" : "Open the application")
+        </a>
+    </div>
+</div>
 
 @{
     var changes = ViewBag.ConfigChanges as IReadOnlyList<Harbora.Infrastructure.Deployments.ConfigChange> ?? [];
@@ -149,9 +199,17 @@
             if (window.__harboraLogsMounted) return; // Vue island active
             fetch('/deployments/@Model.Id/logs?after=' + last)
                 .then(function (r) { return r.json(); })
-                .then(function (lines) {
-                    lines.forEach(function (l) { out.textContent += l.message + '\n'; last = l.seq; });
+                .then(function (payload) {
+                    (payload.lines || []).forEach(function (l) { out.textContent += l.message + '\n'; last = l.seq; });
                     out.scrollTop = out.scrollHeight;
+
+                    // Moves the progress bar on this path too, and stops the poll once the
+                    // deployment has ended. Without it `done` was never set and this ran for ever.
+                    if (payload.status) {
+                        window.dispatchEvent(new CustomEvent('harbora:deployment-status',
+                            { detail: { status: payload.status } }));
+                        if (terminal.indexOf(payload.status) !== -1) done = true;
+                    }
                 })
                 .finally(function () { if (!done) setTimeout(poll, 1500); });
         }

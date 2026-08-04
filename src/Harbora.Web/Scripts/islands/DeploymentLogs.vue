@@ -19,10 +19,27 @@ async function scrollToEnd() {
   if (pre.value) pre.value.scrollTop = pre.value.scrollHeight;
 }
 
+/**
+ * Announces the status to the rest of the page.
+ *
+ * The staged progress bar is Razor's and sits outside this island; the socket is the island's.
+ * Publishing over the DOM keeps that boundary — for a long time the island received every status
+ * and used it for nothing but the coloured dot above the log pane, while the bar it was documented
+ * to drive never moved.
+ */
+function publish(next: string) {
+  status.value = next;
+  window.dispatchEvent(new CustomEvent('harbora:deployment-status', { detail: { status: next } }));
+}
+
 async function backfill() {
   const res = await fetch(`/deployments/${props.deploymentId}/logs?after=${lastSeq}`);
-  const data: LogLine[] = await res.json();
-  for (const l of data) { lines.value.push(l.message); lastSeq = l.seq; }
+  const data: { status: string; lines: LogLine[] } = await res.json();
+  for (const l of data.lines) { lines.value.push(l.message); lastSeq = l.seq; }
+
+  // The status comes back with the lines, so the polling fallback below finishes and the bar
+  // reaches its last step even when the socket never opened.
+  if (data.status) publish(data.status);
   await scrollToEnd();
 }
 
@@ -40,7 +57,7 @@ onMounted(async () => {
     await scrollToEnd();
   });
   connection.on('status', (payload: { status: string }) => {
-    status.value = payload.status;
+    publish(payload.status);
   });
 
   try {
@@ -59,10 +76,13 @@ onMounted(async () => {
 
 onUnmounted(() => { connection?.stop(); });
 
+// Design tokens, not raw palette values. text-brand-300 was a class from the retired colour ramp
+// and had not resolved to anything since the redesign, so the "in progress" state rendered with no
+// colour at all.
 const statusClass = () =>
-  status.value === 'Succeeded' ? 'text-emerald-400'
-    : terminal.includes(status.value) ? 'text-red-400'
-      : 'text-brand-300 animate-pulse';
+  status.value === 'Succeeded' ? 'text-ok'
+    : terminal.includes(status.value) ? 'text-danger'
+      : 'text-accent-text animate-pulse';
 </script>
 
 <template>

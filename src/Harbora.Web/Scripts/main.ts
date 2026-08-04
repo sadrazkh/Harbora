@@ -3,6 +3,7 @@ import { createApp } from 'vue';
 import DeploymentLogs from './islands/DeploymentLogs.vue';
 import RouteDesigner from './islands/RouteDesigner.vue';
 import MetricsChart from './islands/MetricsChart.vue';
+import { mountDeployProgress } from './deployProgress';
 
 // "Islands" pattern: Razor renders the page; we hydrate only the interactive nodes.
 // Each island is a mount point identified by id/selector — like initialising a jQuery plugin,
@@ -41,6 +42,10 @@ for (const [id, mount] of Object.entries(islands)) {
   const el = document.getElementById(id);
   if (el) mount(el);
 }
+
+// Razor owns the progress bar; the island owns the socket. This wires the two through the DOM so
+// neither has to know about the other.
+mountDeployProgress();
 
 // ---- icons ----
 // Declared as `data-lucide` attributes in Razor rather than inlined SVG, so a partial stays

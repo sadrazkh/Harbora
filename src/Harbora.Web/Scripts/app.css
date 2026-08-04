@@ -152,6 +152,29 @@
 }
 @keyframes hbr-spin { to { transform: rotate(360deg); } }
 
+/* The step in progress. A ring expanding out of the mark, so the step number stays readable the
+   whole time — a pulsing opacity on the mark itself makes the one thing you are waiting on the one
+   thing you cannot read. */
+@keyframes harbora-step-pulse {
+  0%   { box-shadow: 0 0 0 0    rgb(var(--brand) / 0.55); }
+  70%  { box-shadow: 0 0 0 10px rgb(var(--brand) / 0);    }
+  100% { box-shadow: 0 0 0 0    rgb(var(--brand) / 0);    }
+}
+
+/* Travel along the line leaving the active step. The wait people notice is the one in the middle of
+   a step, where nothing else on the page is moving. */
+@keyframes harbora-step-flow {
+  from { background-position: 100% 0; }
+  to   { background-position: -50% 0; }
+}
+
+/* Someone who has asked not to see motion still needs to know which step is running; the colour and
+   the ring carry that on their own. */
+@media (prefers-reduced-motion: reduce) {
+  .deploy-step[data-state="active"] .deploy-step-mark::after,
+  .deploy-step[data-state="active"] .deploy-step-line { animation: none; }
+}
+
 /* ---- Product UI primitives -------------------------------------------------
    Razor pages use these for the controls that repeat across the panel. Keeping them here prevents
    fifty almost-identical button/input recipes from drifting one page at a time. */
@@ -351,6 +374,65 @@
   .cli-callout strong { @apply block text-xs text-ink; }
   .cli-callout code { @apply my-2 block rounded-lg bg-code px-3 py-2 text-xs text-code-ink; }
   .cli-callout small { @apply block text-[10px] text-ink-muted; }
+  /* ---- staged deployment progress ----
+     Each step carries data-state and the look is defined here alone, so the browser moves the bar
+     by flipping one attribute rather than swapping lists of utility classes it would have to keep
+     in step with the Razor that first rendered them. */
+  .deploy-steps { @apply flex items-center gap-2; }
+  .deploy-step { @apply flex items-center; }
+  .deploy-step:not(:last-child) { @apply flex-1; }
+
+  .deploy-step-mark {
+    @apply relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full
+           text-xs font-bold transition-colors duration-300;
+  }
+  .deploy-step-label { @apply ms-2 whitespace-nowrap text-xs font-medium transition-colors duration-300; }
+  .deploy-step-line { @apply mx-2 h-0.5 flex-1 rounded bg-surface-2 transition-colors duration-500; }
+
+  /* Only one of the three glyphs is ever shown. */
+  .deploy-step-tick,
+  .deploy-step-cross { @apply hidden; }
+
+  .deploy-step[data-state="pending"] .deploy-step-mark { @apply border border-line-strong bg-surface-2 text-ink-faint; }
+  .deploy-step[data-state="pending"] .deploy-step-label { @apply text-ink-faint; }
+
+  .deploy-step[data-state="done"] .deploy-step-mark { @apply bg-ok text-white; }
+  .deploy-step[data-state="done"] .deploy-step-label { @apply text-ok; }
+  .deploy-step[data-state="done"] .deploy-step-line { @apply bg-ok; }
+  .deploy-step[data-state="done"] .deploy-step-number { @apply hidden; }
+  .deploy-step[data-state="done"] .deploy-step-tick { @apply inline; }
+
+  .deploy-step[data-state="failed"] .deploy-step-mark { @apply bg-danger text-white; }
+  .deploy-step[data-state="failed"] .deploy-step-label { @apply text-danger; }
+  .deploy-step[data-state="failed"] .deploy-step-number { @apply hidden; }
+  .deploy-step[data-state="failed"] .deploy-step-cross { @apply inline; }
+
+  .deploy-step[data-state="cancelled"] .deploy-step-mark { @apply bg-surface-2 text-ink-muted border border-line-strong; }
+  .deploy-step[data-state="cancelled"] .deploy-step-label { @apply text-ink-muted; }
+
+  /* The step in progress. The ring pulses outward rather than the whole mark fading, so the number
+     stays readable — a step whose label you cannot read while you wait is worse than a static one. */
+  .deploy-step[data-state="active"] .deploy-step-mark { @apply bg-accent text-white; }
+  .deploy-step[data-state="active"] .deploy-step-label { @apply text-accent-text; }
+  .deploy-step[data-state="active"] .deploy-step-mark::after {
+    content: "";
+    @apply absolute inset-0 rounded-full;
+    box-shadow: 0 0 0 0 rgb(var(--brand) / 0.55);
+    animation: harbora-step-pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  /* The line leaving the active step fills as a hint that something is happening between two
+     boxes — the wait people actually notice is the one in the middle of a step, not at its edge. */
+  .deploy-step[data-state="active"] .deploy-step-line {
+    background: linear-gradient(90deg, rgb(var(--brand)) 0%, rgb(var(--surface-2)) 60%);
+    background-size: 250% 100%;
+    animation: harbora-step-flow 1.8s linear infinite;
+  }
+  [dir="rtl"] .deploy-step[data-state="active"] .deploy-step-line {
+    background: linear-gradient(270deg, rgb(var(--brand)) 0%, rgb(var(--surface-2)) 60%);
+    background-size: 250% 100%;
+  }
+
   .advanced-panel { @apply overflow-hidden rounded-2xl border border-line bg-surface shadow-panel; }
   .advanced-panel summary { @apply flex cursor-pointer list-none items-center justify-between p-4 text-sm font-semibold text-ink; }
   .advanced-panel summary span { @apply flex items-center gap-2; }
