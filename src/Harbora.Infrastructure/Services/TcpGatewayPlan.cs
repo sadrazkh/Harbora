@@ -78,7 +78,16 @@ public static class TcpGatewayPlan
     /// this is the one place a rejection can happen before the database sees a connection at all.
     /// Returns null when an entry cannot be parsed: a typo must close the door, never widen it.
     /// </summary>
-    public static string? Config(string target, int targetPort, string? allowedIps)
+    /// <param name="requireTls">
+    /// Reject a client that does not begin by asking for encryption.
+    ///
+    /// PostgreSQL with <c>ssl=on</c> still accepts plaintext — a client passing
+    /// <c>sslmode=disable</c> connects in the clear, over a port on the internet, and nothing tells
+    /// anyone. Forcing it on the server means owning its <c>pg_hba.conf</c>, including local access.
+    /// The gateway is ours, and a PostgreSQL connection opens with a fixed eight-byte SSLRequest, so
+    /// the check belongs here: what we hand out as required becomes required.
+    /// </param>
+    public static string? Config(string target, int targetPort, string? allowedIps, bool requireTls = false)
     {
         var allow = new List<string>();
 
@@ -107,6 +116,16 @@ public static class TcpGatewayPlan
         {
             config.AppendLine($"  acl allowed src {string.Join(' ', allow)}");
             config.AppendLine("  tcp-request connection reject if !allowed");
+        }
+
+        if (requireTls)
+        {
+            // The first message a libpq client sends when it wants encryption: length 8, request
+            // code 80877103. Anything else is a plaintext session and is dropped before the
+            // database sees it.
+            config.AppendLine("  tcp-request inspect-delay 5s");
+            config.AppendLine("  tcp-request content accept if { req.payload(0,8) -m bin 0000000804d2162f }");
+            config.AppendLine("  tcp-request content reject");
         }
 
         config.AppendLine("  default_backend service");
