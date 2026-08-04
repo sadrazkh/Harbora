@@ -72,13 +72,25 @@ command-line flags, which is readable by any local user via `/proc/<pid>/cmdline
 
 ```json
 {
-  "supported": ["Directory", "DockerVolume"],
+  "supported": ["Directory", "DockerVolume", "Database"],
   "allowedSourceRoots": ["/srv/data"],
-  "unsupported": [{ "type": "Database", "reason": "Database targets are not implemented yet." }]
+  "unsupported": [{ "type": "Application", "reason": "Application targets are not implemented yet." }]
 }
 ```
 
 `allowedSourceRoots` is empty by default and **no directory can be backed up until it is set**.
+
+`targetRef` depends on the type: an allowed path for `Directory`, the volume's name for
+`DockerVolume`, and the managed database's **id** for `Database`.
+
+**Database engines.** PostgreSQL, MySQL and MariaDB are dumped through their own client. MongoDB and
+Redis are refused with a specific reason: Redis has no logical dump and its data volume is the honest
+artifact (use `DockerVolume`), and `mongodump` has no way to take a password that does not end up in
+the process table.
+
+**Restoring a database** uses `"restoreType": "Database"` with the **service id** as `destination`,
+and `confirmationText` set to the database's display name. It always replaces the live contents —
+there is no version of loading a dump that leaves what is there alone.
 
 ---
 

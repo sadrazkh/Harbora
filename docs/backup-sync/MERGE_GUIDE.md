@@ -60,13 +60,17 @@ should not have to discover by reading diffs.
   backed by a table. Documented in [API.md](API.md).
 - **Docker volume targets** — staged into the backup area by a read-only helper mount, held by a
   lease that deletes the staged copy when the snapshot finishes.
-- 143 new tests. Full suite: **2377 passed, 0 failed.**
+- **Database targets** — PostgreSQL, MySQL and MariaDB, dumped through the database's own client
+  running in a container built from its own image, and restored the same way. Shell-free commands,
+  password via environment, dump deleted after use.
+- 177 new tests. Full suite: **2411 passed, 0 failed.**
 
 **Not built in this branch — and there is no placeholder pretending otherwise.**
 
 | Missing | Consequence |
 |---|---|
-| Application and database targets | Directory and Docker volume only; the resolver refuses the rest with a message saying so |
+| Application targets | Directory, Docker volume and database only; the resolver refuses the rest with a message saying so |
+| MongoDB and Redis backup | Refused with a specific reason — Redis has no logical dump (back up its volume), and `mongodump` cannot take a password that stays out of the process table |
 | Machine-generated OpenAPI | `docs/backup-sync/API.md` is the reference; no `/openapi` document is served |
 | Sync module | Not started — no projects, no entities |
 | Agent backup dispatch | Existing node agent untouched |
@@ -214,11 +218,16 @@ never writes to `Backups`, `BackupDestinations`, `BackupSchedules` or `BackupDel
 4. **Machine-generated OpenAPI.** The project has no OpenAPI package; adding one emits a document
    describing every controller in the panel, which is wider than this branch should reach on its
    own. Wire `Microsoft.AspNetCore.OpenApi` and gate it to Development.
-5. Application and database targets need `IDatabaseBackupProvider` implementations and app-metadata
-   capture. The contract is defined and nothing implements it, so the resolver refuses those target
-   types outright rather than half-working.
-   **Docker volume staging has never run against a real daemon** — the orchestration is tested with
-   a fake engine, but the `cp -a` into a shared staging volume is CI's first real exercise of it.
+5. Application targets need app-metadata capture (definition, image, env names, secret *references*,
+   volumes, ports, domains). Not started; the resolver refuses them outright rather than half-working.
+6. **MongoDB** needs a credential file so `mongodump` can authenticate without the password reaching
+   the process table. **Redis** would need its RDB/AOF handled as a volume — which already works via
+   the Docker volume target, so the refusal points there.
+7. **Nothing container-backed has run against a real daemon.** Volume staging, database dumps and
+   database restores are all tested against a fake Docker engine: the images, mounts, arguments and
+   environment are pinned, but the first real `pg_dump` is CI's.
+8. A database restore currently loads into the database it came from. Restoring into a *different*
+   database means creating a service and restoring there; a target-database picker is follow-up.
 6. Sync and the always-on encrypted node: not started.
 7. Container-backed integration tests: not written, and could not have been verified here.
 8. Snapshot download: no short-lived one-time link. Restoring into a new folder is the way to
@@ -233,7 +242,7 @@ Stated precisely, because "tested" is a word worth being exact about.
 | Check | Result |
 |---|---|
 | `dotnet build Harbora.slnx` | Succeeded, **0 warnings, 0 errors** |
-| `dotnet test Harbora.slnx` | **2377 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
+| `dotnet test Harbora.slnx` | **2411 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
 | Migration reviewed for additive-only | Confirmed |
 | Backup round trip (snapshot → restore → byte comparison) | Passing, native engine, local repository |
 | Encryption at rest of stored artifacts | Asserted in test |
@@ -245,7 +254,9 @@ Stated precisely, because "tested" is a word worth being exact about.
 | API paging, filtering, sorting, idempotency replay | Asserted at controller level |
 | No secret in an API response | Asserted by reflecting over the DTO, so a field added later fails |
 | Volume staging orchestration (mounts, arguments, cleanup) | Asserted against a fake Docker engine |
-| **Volume staging against a real Docker daemon** | **NOT RUN — no Docker on this machine** |
+| Database dump/restore commands (no shell, password in env, identifiers allowlisted) | Asserted directly |
+| Database provider (own image, read-only dump mount, empty-dump refusal, scratch cleanup) | Asserted against a fake Docker engine |
+| **Anything container-backed against a real Docker daemon** | **NOT RUN — no Docker on this machine** |
 | **Panel rendered in a browser** | **NOT DONE — no run of the app; the views compile, but were not viewed** |
 | **Docker Compose health checks** | **NOT RUN — Docker is not installed on this machine** |
 | **Kopia CLI against a real binary** | **NOT RUN — no Kopia binary available** |
