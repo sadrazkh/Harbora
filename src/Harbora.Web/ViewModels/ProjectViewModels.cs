@@ -69,3 +69,19 @@ public class MoveServiceViewModel
     public Environment Target { get; set; } = null!;
     public Harbora.Infrastructure.Networking.WiringVerdict Verdict { get; set; } = null!;
 }
+
+/// <summary>What a customer sees about their AI service.</summary>
+public class AiOverviewViewModel
+{
+    public Harbora.Domain.Ai.AiSubscription? Subscription { get; set; }
+    public Harbora.Domain.Ai.AiPlan? Plan { get; set; }
+
+    public IReadOnlyList<Harbora.Domain.Ai.AiModel> Models { get; set; } = [];
+    public List<Harbora.Domain.Ai.AiUserApiKey> Keys { get; set; } = [];
+
+    /// <summary>Metadata only — never prompts. See AiUsageRecord.</summary>
+    public List<Harbora.Domain.Ai.AiUsageRecord> Recent { get; set; } = [];
+
+    public int RequestsThisPeriod { get; set; }
+    public string EndpointUrl { get; set; } = "/v1";
+}

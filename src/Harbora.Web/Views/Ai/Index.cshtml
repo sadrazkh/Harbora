@@ -1,0 +1,266 @@
+﻿@model AiOverviewViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var newKey = TempData["NewAiKey"] as string;
+    var message = TempData["Message"] as string;
+    var error = TempData["Error"] as string;
+
+    string Money(decimal value) => value.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
+}
+
+<partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+    isFa ? "هوش مصنوعی" : "AI",
+    isFa
+        ? "با یک کلید Harbora به مدل‌های پلن خودتان وصل شوید. درخواست‌ها از سرور Harbora ارسال می‌شوند."
+        : "Reach the models on your plan with one Harbora key. Requests are sent from Harbora's own servers."))" />
+
+@if (message is not null)
+{
+    <div class="mb-4 rounded-lg border border-ok bg-ok-soft px-4 py-2 text-sm text-ok">@message</div>
+}
+@if (error is not null)
+{
+    <div class="mb-4 rounded-lg border border-danger bg-danger-soft px-4 py-2 text-sm text-danger">@error</div>
+}
+
+@* The one moment the secret exists in a page. It is not stored anywhere it could be rendered
+   again, so this is genuinely the only chance to copy it. *@
+@if (newKey is not null)
+{
+    <section class="mb-6 rounded-xl border border-accent bg-accent-soft p-4">
+        <div class="text-sm font-semibold text-ink">@(isFa ? "کلید تازه — فقط همین یک بار نمایش داده می‌شود" : "Your new key — shown only once")</div>
+        <p class="mt-1 text-xs text-ink-muted">
+            @(isFa
+                ? "این کلید جای دیگری ذخیره نشده و قابل بازیابی نیست. اگر گمش کردید، باید کلید تازه بسازید."
+                : "It is not stored anywhere and cannot be shown again. If you lose it, create another.")
+        </p>
+        <code dir="ltr" class="mt-3 block break-all rounded-lg bg-surface px-3 py-2 font-mono text-sm text-ink">@newKey</code>
+    </section>
+}
+
+@if (Model.Plan is null)
+{
+    <partial name="Design/_EmptyState" model="@(new EmptyStateModel(
+        Icon: "sparkles",
+        Message: isFa
+            ? "برای این فضای کاری اشتراک هوش مصنوعی فعال نیست. از مدیر پلتفرم بخواهید یک پلن اختصاص دهد."
+            : "This workspace has no active AI subscription. Ask your platform administrator to assign a plan.",
+        ActionText: null,
+        ActionUrl: null))" />
+}
+else
+{
+    var plan = Model.Plan;
+    var subscription = Model.Subscription!;
+
+    <div class="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
+        <partial name="Design/_StatCard" model="@(new StatCardModel("credit-card",
+            isFa ? "پلن" : "Plan",
+            Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(
+                isFa && !string.IsNullOrWhiteSpace(plan.NameFa) ? plan.NameFa : plan.Name),
+            plan.HardLimit ? (isFa ? "سقف قطعی" : "hard limit") : (isFa ? "سقف نرم" : "soft limit")))" />
+
+        <partial name="Design/_StatCard" model="@(new StatCardModel("activity",
+            isFa ? "درخواست‌ها" : "Requests",
+            Harbora.Infrastructure.Monitoring.MetricDisplay.For(Model.RequestsThisPeriod),
+            isFa ? "۳۰ روز اخیر" : "last 30 days"))" />
+
+        <partial name="Design/_StatCard" model="@(new StatCardModel("coins",
+            isFa ? "توکن‌های این دوره" : "Tokens this period",
+            Harbora.Infrastructure.Monitoring.MetricDisplay.For(subscription.PeriodTokens),
+            $"{(isFa ? "از" : "of")} {plan.MonthlyTokenLimit:N0}"))" />
+
+        <partial name="Design/_StatCard" model="@(new StatCardModel("wallet",
+            isFa ? "هزینهٔ این دوره" : "Spend this period",
+            Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Money(subscription.PeriodSpend)),
+            $"{(isFa ? "اعتبار" : "credit")} {Money(plan.IncludedCredit)}"))" />
+    </div>
+
+    <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div class="space-y-6">
+            @* ---- how to connect ---- *@
+            @{ var connectPanel = new PanelModel(isFa ? "اتصال" : "Connect"); }
+            <partial name="Design/_PanelStart" model="connectPanel" />
+            <p class="text-sm text-ink-muted">
+                @(isFa
+                    ? "این سرویس با کلاینت‌های سازگار OpenAI کار می‌کند. کافی است آدرس پایه و کلید را عوض کنید."
+                    : "Works with any OpenAI-compatible client. Point the base URL here and use your Harbora key.")
+            </p>
+            <pre dir="ltr" class="mt-3 overflow-x-auto rounded-lg bg-terminal p-3 font-mono text-[11px] leading-relaxed text-terminal-ink"><code>curl @Model.EndpointUrl/chat/completions \
+  -H "Authorization: Bearer har_…" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"@(Model.Models.FirstOrDefault()?.Alias ?? "model-alias")","messages":[{"role":"user","content":"Hello"}]}'</code></pre>
+            <p class="mt-2 text-[11px] text-ink-faint">
+                @(isFa
+                    ? "توکن هیچ ارائه‌دهنده‌ای در اختیار شما قرار نمی‌گیرد؛ درخواست‌ها از زیرساخت Harbora ارسال می‌شوند."
+                    : "You never hold a provider token — requests are sent from Harbora's infrastructure.")
+            </p>
+            <partial name="Design/_PanelEnd" />
+
+            @* ---- keys ---- *@
+            @{ var keysPanel = new PanelModel(isFa ? "کلیدهای API" : "API keys"); }
+            <partial name="Design/_PanelStart" model="keysPanel" />
+            @if (Model.Keys.Count == 0)
+            {
+                <p class="text-sm text-ink-faint">@(isFa ? "هنوز کلیدی نساخته‌اید." : "No keys yet.")</p>
+            }
+            else
+            {
+                <div class="divide-y divide-line">
+                    @foreach (var key in Model.Keys)
+                    {
+                        <div class="flex flex-wrap items-center justify-between gap-2 py-2.5">
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="truncate text-sm font-medium text-ink">@key.Label</span>
+                                    @if (key.IsRevoked)
+                                    {
+                                        <span class="status-pill bg-danger-soft text-danger">@(isFa ? "باطل" : "revoked")</span>
+                                    }
+                                </div>
+                                <code dir="ltr" class="text-[11px] text-ink-faint">@key.Prefix…</code>
+                                <span class="text-[11px] text-ink-faint">
+                                    · @(key.LastUsedAt is { } used
+                                        ? $"{(isFa ? "آخرین استفاده" : "last used")} {used.LocalDateTime:yyyy-MM-dd}"
+                                        : (isFa ? "استفاده نشده" : "never used"))
+                                </span>
+                            </div>
+                            @if (!key.IsRevoked)
+                            {
+                                <form asp-action="RevokeKey" asp-route-id="@key.Id" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <button class="text-xs text-danger hover:underline">@(isFa ? "باطل کن" : "Revoke")</button>
+                                </form>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+
+            <form asp-action="CreateKey" method="post" class="mt-4 flex flex-wrap items-center gap-2">
+                @Html.AntiForgeryToken()
+                <input name="label" placeholder="@(isFa ? "برچسب، مثلاً staging" : "Label, e.g. staging")"
+                       class="min-w-48 flex-1 rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink" />
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                    @(isFa ? "ساخت کلید" : "Create key")
+                </button>
+            </form>
+            <partial name="Design/_PanelEnd" />
+
+            @* ---- recent requests, metadata only ---- *@
+            @{ var historyPanel = new PanelModel(isFa ? "درخواست‌های اخیر" : "Recent requests"); }
+            <partial name="Design/_PanelStart" model="historyPanel" />
+            @if (Model.Recent.Count == 0)
+            {
+                <p class="text-sm text-ink-faint">@(isFa ? "هنوز درخواستی ثبت نشده." : "Nothing recorded yet.")</p>
+            }
+            else
+            {
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="text-xs uppercase tracking-wide text-ink-faint">
+                            <tr class="border-b border-line">
+                                <th class="py-2 text-start font-medium">@(isFa ? "زمان" : "When")</th>
+                                <th class="py-2 text-start font-medium">@(isFa ? "مدل" : "Model")</th>
+                                <th class="py-2 text-start font-medium">@(isFa ? "توکن" : "Tokens")</th>
+                                <th class="py-2 text-start font-medium">@(isFa ? "هزینه" : "Cost")</th>
+                                <th class="py-2 text-start font-medium">@(isFa ? "وضعیت" : "Status")</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-line">
+                            @foreach (var row in Model.Recent)
+                            {
+                                <tr>
+                                    <td class="py-2 text-ink-muted" dir="ltr">@row.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm")</td>
+                                    <td class="py-2 text-ink">@row.RequestedModel</td>
+                                    <td class="py-2 text-ink-muted" dir="ltr">@((row.InputTokens + row.OutputTokens).ToString("N0"))</td>
+                                    <td class="py-2 text-ink-muted" dir="ltr">@Money(row.ChargedCost)</td>
+                                    <td class="py-2">
+                                        @if (row.ClientDisconnected)
+                                        {
+                                            <span class="status-pill bg-warn-soft text-warn">@(isFa ? "قطع شد" : "disconnected")</span>
+                                        }
+                                        else if (row.StatusCode >= 400)
+                                        {
+                                            <span class="status-pill bg-danger-soft text-danger">@row.StatusCode</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="status-pill bg-ok-soft text-ok">@(isFa ? "موفق" : "ok")</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <p class="mt-3 text-[11px] text-ink-faint">
+                    @(isFa
+                        ? "متن درخواست و پاسخ ذخیره نمی‌شود — فقط اطلاعات لازم برای صورت‌حساب و بررسی خطا."
+                        : "Prompts and responses are not stored — only what billing and debugging need.")
+                </p>
+            }
+            <partial name="Design/_PanelEnd" />
+        </div>
+
+        <aside class="space-y-6">
+            @{ var modelsPanel = new PanelModel(isFa ? "مدل‌های در دسترس" : "Available models"); }
+            <partial name="Design/_PanelStart" model="modelsPanel" />
+            @if (Model.Models.Count == 0)
+            {
+                <p class="text-sm text-ink-faint">@(isFa ? "پلن شما هنوز مدلی ندارد." : "Your plan includes no models yet.")</p>
+            }
+            else
+            {
+                <div class="space-y-2">
+                    @foreach (var entry in Model.Models)
+                    {
+                        <div class="rounded-lg border border-line bg-surface-2 p-2.5">
+                            <code dir="ltr" class="block text-xs font-medium text-ink">@entry.Alias</code>
+                            <div class="mt-0.5 text-[11px] text-ink-faint">
+                                @entry.DisplayName
+                                @if (entry.ContextLength is { } context)
+                                {
+                                    <span> · @context.ToString("N0") @(isFa ? "توکن زمینه" : "ctx")</span>
+                                }
+                            </div>
+                            <div class="mt-1 flex flex-wrap gap-1">
+                                @if (entry.SupportsStreaming) { <span class="status-pill bg-accent-soft text-accent-text">stream</span> }
+                                @if (entry.SupportsTools) { <span class="status-pill bg-accent-soft text-accent-text">tools</span> }
+                                @if (entry.SupportsVision) { <span class="status-pill bg-accent-soft text-accent-text">vision</span> }
+                                @if (entry.SupportsEmbeddings) { <span class="status-pill bg-accent-soft text-accent-text">embeddings</span> }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            <partial name="Design/_PanelEnd" />
+
+            @{ var limitsPanel = new PanelModel(isFa ? "محدودیت‌های پلن" : "Plan limits"); }
+            <partial name="Design/_PanelStart" model="limitsPanel" />
+            <dl class="space-y-2 text-sm">
+                <div class="flex items-baseline justify-between gap-3">
+                    <dt class="text-ink-muted">@(isFa ? "درخواست در دقیقه" : "Requests / minute")</dt>
+                    <dd class="text-ink" dir="ltr">@Model.Plan.RequestsPerMinute</dd>
+                </div>
+                <div class="flex items-baseline justify-between gap-3">
+                    <dt class="text-ink-muted">@(isFa ? "توکن در دقیقه" : "Tokens / minute")</dt>
+                    <dd class="text-ink" dir="ltr">@Model.Plan.TokensPerMinute.ToString("N0")</dd>
+                </div>
+                <div class="flex items-baseline justify-between gap-3">
+                    <dt class="text-ink-muted">@(isFa ? "درخواست هم‌زمان" : "Concurrent")</dt>
+                    <dd class="text-ink" dir="ltr">@Model.Plan.ConcurrentRequests</dd>
+                </div>
+                <div class="flex items-baseline justify-between gap-3">
+                    <dt class="text-ink-muted">@(isFa ? "بیشترین خروجی" : "Max output")</dt>
+                    <dd class="text-ink" dir="ltr">@Model.Plan.MaxOutputTokens.ToString("N0")</dd>
+                </div>
+                <div class="flex items-baseline justify-between gap-3">
+                    <dt class="text-ink-muted">@(isFa ? "Streaming" : "Streaming")</dt>
+                    <dd class="text-ink">@(Model.Plan.AllowStreaming ? (isFa ? "بله" : "yes") : (isFa ? "خیر" : "no"))</dd>
+                </div>
+            </dl>
+            <partial name="Design/_PanelEnd" />
+        </aside>
+    </div>
+}

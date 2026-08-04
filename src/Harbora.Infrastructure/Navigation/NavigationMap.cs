@@ -44,6 +44,11 @@ public static class NavigationMap
         new("data", [
             new("backups", "Backups", "Index", "archive")
         ]),
+        // AI sits in its own group rather than under Insight: it is a service somebody uses, not a
+        // report they read, and burying it under monitoring is how a feature goes unnoticed.
+        new("intelligence", [
+            new("ai", "Ai", "Index", "sparkles")
+        ]),
         new("insight", [
             new("monitoring", "Monitoring", "Index", "activity"),
             new("audit", "Audit", "Index", "scroll-text", Advanced: true)
