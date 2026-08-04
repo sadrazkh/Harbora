@@ -45,9 +45,9 @@ public static class ReadyAppCatalog
         repository: "docker.n8n.io/n8nio/n8n",
         versions:
         [
-            ("1.63.4", "sha256:0f8b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+            ("1.63.4", "sha256:30b489c3328ebe8251e1a0509e9b7aeda72a170440e2d07196149e4556c0ee0f",
                 VersionLifecycle.Recommended, "amd64,arm64", null, null),
-            ("1.58.2", "sha256:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b",
+            ("1.58.2", "sha256:638a21e9bca01fcd9e29e9d1355f64b18681d0c8554a1bde78646e6a2993bf63",
                 VersionLifecycle.PreviousStable, "amd64,arm64", null, null)
         ],
         licenseNote: "n8n project mark, used to identify the application.");
@@ -71,7 +71,7 @@ public static class ReadyAppCatalog
         repository: "docker",
         versions:
         [
-            ("27-dind-rootless", "sha256:2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c",
+            ("27-dind-rootless", "sha256:e2ac8e8f66ae21a060b0a8e3005c70f6ed9441aabf409434463d1f6eecd38026",
                 VersionLifecycle.Recommended, "amd64,arm64",
                 "Runs rootless. The host Docker socket is never mounted.",
                 "Enabling privileged features exposes the node. An administrator must turn this on deliberately.")
@@ -95,7 +95,7 @@ public static class ReadyAppCatalog
         requires: ["postgres", "redis"],
         versions:
         [
-            ("24.10.0", "sha256:3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d",
+            ("24.10.0", "sha256:e78e9c2c62d6246bb6a840a34b17edf468ef2eade7ef5752296d616674cc4984",
                 VersionLifecycle.Recommended, "amd64",
                 "Requires PostgreSQL and Redis. Run the upgrade job after switching versions.",
                 "Sentry migrations are one-way. Back the database up before upgrading.")
@@ -116,9 +116,9 @@ public static class ReadyAppCatalog
         requires: ["postgres"],
         versions:
         [
-            ("1.22.3", "sha256:4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e",
+            ("1.22.3", "sha256:76f516a1a8c27e8f8e9773639bf337c0176547a2d42a80843e3f2536787341c6",
                 VersionLifecycle.Recommended, "amd64,arm64", null, null),
-            ("1.21.11", "sha256:5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f",
+            ("1.21.11", "sha256:0056032dc8c6ab70583e4a105b9ee0dc72dce4f4fbc8022c98bcec46b0273883",
                 VersionLifecycle.PreviousStable, "amd64,arm64", null, null)
         ],
         licenseNote: "Gitea project mark, used to identify the application.");
@@ -135,7 +135,7 @@ public static class ReadyAppCatalog
         requires: ["mongodb"],
         versions:
         [
-            ("6.12.1", "sha256:6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a",
+            ("6.12.1", "sha256:019609629a41ef3f3c22a5b143c318f5d2a6390c5fb5fdec62e0575a1fd15a89",
                 VersionLifecycle.Recommended, "amd64",
                 "Needs MongoDB with a replica set. The bundled MongoDB template is configured for it.",
                 null)
@@ -155,7 +155,7 @@ public static class ReadyAppCatalog
         repository: "quay.io/minio/minio",
         versions:
         [
-            ("RELEASE.2024-10-13", "sha256:7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b",
+            ("RELEASE.2024-10-13T13-34-11Z", "sha256:9535594ad4122b7a78c6632788a989b96d9199b483d3bd71a5ceae73a922cdfa",
                 VersionLifecycle.Recommended, "amd64,arm64", null, null)
         ],
         licenseNote: "MinIO project mark, used to identify the application.");
@@ -171,9 +171,9 @@ public static class ReadyAppCatalog
         repository: "grafana/grafana",
         versions:
         [
-            ("11.3.0", "sha256:8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c",
+            ("11.3.0", "sha256:a0f881232a6fb71a0554a47d0fe2203b6888fe77f4cefb7ea62bed7eb54e13c3",
                 VersionLifecycle.Recommended, "amd64,arm64", null, null),
-            ("10.4.11", "sha256:9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+            ("10.4.11", "sha256:594013a7e4bbc9271def30b8cc89f32b8f979cc2fd152d107bf6c8c340d52117",
                 VersionLifecycle.PreviousStable, "amd64,arm64", null, null)
         ],
         licenseNote: "Grafana Labs project mark, used to identify the application.");
@@ -192,7 +192,7 @@ public static class ReadyAppCatalog
         requires: ["postgres"],
         versions:
         [
-            ("v0.50.21", "sha256:0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e",
+            ("v0.50.21", "sha256:fd268495163eb77930102b05171c9cac2f99f679a855478584e821b4c1aa36a8",
                 VersionLifecycle.Recommended, "amd64,arm64", null, null)
         ],
         licenseNote: "Metabase project mark, used to identify the application.");

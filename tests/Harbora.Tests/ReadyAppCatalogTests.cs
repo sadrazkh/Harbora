@@ -48,6 +48,50 @@ public class ReadyAppCatalogTests
     }
 
     [Fact]
+    public void No_digest_is_a_hand_written_placeholder()
+    {
+        // Every digest in this catalogue was once invented — `0f8b1c2d3e4f5a6b...`, a walking hex
+        // pattern typed by hand. They are the right length, the right alphabet and the right prefix,
+        // so every test here passed, the catalogue rendered, the deploy form offered them and the
+        // pull failed with "manifest unknown" on a page that had already promised the app.
+        //
+        // A real digest is a hash: consecutive bytes do not count upwards. This catches the shape of
+        // a fabrication rather than the fabrication itself, which is the only part a test can know.
+        foreach (var app in ReadyAppCatalog.All())
+        foreach (var version in app.Versions)
+        {
+            var hex = version.ImageDigest!["sha256:".Length..]
+                .Select(c => Convert.ToInt32(c.ToString(), 16)).ToArray();
+
+            // Several lags, because the placeholders that were here interleaved two counters —
+            // 8b9c0d1e2f… climbs by one every *second* character, so a check on neighbours alone
+            // sees nothing wrong. A hash has no such relationship at any small lag; for each lag the
+            // commonest difference should turn up around one time in sixteen.
+            for (var lag = 1; lag <= 4; lag++)
+            {
+                var counts = new int[16];
+                for (var i = 0; i + lag < hex.Length; i++)
+                    counts[(hex[i + lag] - hex[i] + 16) % 16]++;
+
+                var pairs = hex.Length - lag;
+                counts.Max().Should().BeLessThan(pairs * 6 / 10,
+                    $"{app.Template.Key} {version.Version} looks counted rather than hashed " +
+                    $"(lag {lag}): {version.ImageDigest}");
+            }
+        }
+    }
+
+    [Fact]
+    public void No_two_versions_share_a_digest()
+    {
+        // Two versions with the same digest are the same image under two names — which means at
+        // least one of them was copied rather than resolved.
+        var digests = ReadyAppCatalog.All().SelectMany(a => a.Versions).Select(v => v.ImageDigest).ToList();
+
+        digests.Should().OnlyHaveUniqueItems();
+    }
+
+    [Fact]
     public void No_version_relies_on_the_latest_tag()
     {
         foreach (var app in ReadyAppCatalog.All())

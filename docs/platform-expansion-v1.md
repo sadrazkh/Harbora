@@ -42,7 +42,7 @@ somebody with an old link or a scripted call asks for the id directly.
 
 ### Choosing a version, and the bug it uncovered
 
-Until this phase **not one of the thirteen ready apps could be installed, and none of them appeared
+Until this phase **not one of the eight ready apps could be installed, and none of them appeared
 in the catalogue.**
 
 Their manifests carried a port, variables, volumes and links — and no `image`. A manifest with no
@@ -53,7 +53,17 @@ existing test passed: the suite checked digests, logos, licences, lifecycles and
 and never once parsed a manifest it had built.
 
 The manifest now names `repository:tag` so it parses and so the catalogue can describe the app; the
-chosen version's digest replaces it at deploy time. Both are asserted, including that they name the
+chosen version's digest replaces it at deploy time.
+
+That fixed the catalogue and left a second fault underneath it: **every pinned digest was invented**.
+`sha256:0f8b1c2d3e4f5a6b…` is a hex pattern typed by hand — right length, right alphabet, right
+prefix, so every test passed, the catalogue rendered and the deploy form offered the app, and the
+pull would have failed with "manifest unknown" on a page that had already promised it. Found by
+querying the real registries from the server after deploying, not by any test. All eleven digests
+were re-resolved against the registry (and one MinIO tag corrected — `RELEASE.2024-10-13` is not a
+tag that exists; the real one carries a timestamp). `No_digest_is_a_hand_written_placeholder` now
+looks for structure a hash does not have, at several lags, because the placeholders interleaved two
+counters and a check on neighbouring characters saw nothing wrong. Both are asserted, including that they name the
 same version — a page showing one version while deploying another is worse than either alone.
 
 The selector itself is on the deploy form: offerable versions best-first, upgrade notes and migration
