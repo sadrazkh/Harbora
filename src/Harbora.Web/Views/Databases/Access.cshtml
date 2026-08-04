@@ -279,6 +279,39 @@
                 </dl>
             </section>
 
+            @{
+                var encrypted = Harbora.Infrastructure.Services.DatabaseTls.Available(Model.Database.Type);
+            }
+            @* Said outright, either way. An unencrypted connection over a published port sends the
+               password and every row in the clear, and that is not something to leave a person to
+               infer from the absence of a note. *@
+            @if (encrypted)
+            {
+                <section class="rounded-2xl border border-ok/25 bg-ok-soft p-4 text-xs leading-5 text-ok">
+                    <div class="flex gap-2">
+                        <i data-lucide="lock-keyhole" class="mt-0.5 h-4 w-4 shrink-0"></i>
+                        <p>
+                            @(isFa
+                                ? "اتصال رمزنگاری می‌شود (TLS). رشتهٔ اتصال خودش این را الزامی می‌کند؛ آن پارامتر را برندارید. گواهی self-signed است، پس رمزنگاری هست ولی هویت سرور تأیید نمی‌شود."
+                                : "The connection is encrypted with TLS. The connection string requires it — do not remove that parameter. The certificate is self-signed, so this encrypts the traffic without proving who is at the other end.")
+                        </p>
+                    </div>
+                </section>
+            }
+            else
+            {
+                <section class="rounded-2xl border border-danger/25 bg-danger-soft p-4 text-xs leading-5 text-danger">
+                    <div class="flex gap-2">
+                        <i data-lucide="shield-alert" class="mt-0.5 h-4 w-4 shrink-0"></i>
+                        <p>
+                            @(isFa
+                                ? "این موتور رمزنگاری اتصال را پشتیبانی نمی‌کند. رمز و داده رمزنگاری‌نشده از اینترنت رد می‌شوند — فهرست آدرس‌های مجاز را حتماً پر کنید."
+                                : "This engine cannot encrypt the connection. The password and every row cross the internet in the clear — fill in the allowed addresses.")
+                        </p>
+                    </div>
+                </section>
+            }
+
             <section class="rounded-2xl border border-warn/25 bg-warn-soft p-4 text-xs leading-5 text-warn">
                 <div class="flex gap-2">
                     <i data-lucide="shield-alert" class="mt-0.5 h-4 w-4 shrink-0"></i>

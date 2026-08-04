@@ -84,13 +84,20 @@ public static class DatabaseCredentialManager
     /// The connection string a person copies. Built here so the password appears in exactly one
     /// place in the codebase and can be kept out of everything else.
     /// </summary>
+    /// <param name="tlsParameter">
+    /// What to append so the client insists on encryption — <c>sslmode=require</c> and the like.
+    /// Null when the server cannot offer it, and then the string carries no such promise: a
+    /// connection string that says <c>sslmode=require</c> to a server with SSL off simply fails, and
+    /// one that quietly says <c>prefer</c> encrypts nothing while looking like it does.
+    /// </param>
     public static string ConnectionString(
-        string engine, string host, int port, string username, string password, string database)
+        string engine, string host, int port, string username, string password, string database,
+        string? tlsParameter = null)
     {
         var user = Uri.EscapeDataString(username);
         var secret = Uri.EscapeDataString(password);
 
-        return engine.ToLowerInvariant() switch
+        var url = engine.ToLowerInvariant() switch
         {
             "postgresql" or "postgres" => $"postgresql://{user}:{secret}@{host}:{port}/{database}",
             "mysql" or "mariadb" => $"mysql://{user}:{secret}@{host}:{port}/{database}",
@@ -98,6 +105,8 @@ public static class DatabaseCredentialManager
             "redis" => $"redis://:{secret}@{host}:{port}",
             _ => $"{engine.ToLowerInvariant()}://{user}:{secret}@{host}:{port}/{database}"
         };
+
+        return string.IsNullOrWhiteSpace(tlsParameter) ? url : $"{url}?{tlsParameter}";
     }
 
     private static string RandomString(int length)

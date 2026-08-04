@@ -66,12 +66,44 @@ public sealed class ManagedServiceEngine(
             await docker.PullImageAsync(image, new Progress<string>(l => logger.LogDebug("{Svc}: {Line}", svc.Name, l)), ct);
             await RemoveContainerByNameAsync(docker, svc.ContainerName, ct);
 
+            var volumes = new List<(string, string, bool)> { (svc.VolumeName, def.DataMountPath, false) };
+            var command = def.Command(creds);
+
+            // PostgreSQL will not encrypt a connection without a certificate it can read, and the
+            // moment external access publishes a port that stops being a private-network trade-off:
+            // the password and every row after it would cross the internet in the clear. MariaDB and
+            // MySQL make their own certificate at first start, so they are left alone.
+            if (DatabaseTls.NeedsConfiguring(svc.Type))
+            {
+                var certVolume = DatabaseTls.VolumeName(svc.ContainerName);
+                await docker.EnsureVolumeAsync(certVolume, ct);
+
+                var prepared = await docker.RunOneOffAsync(new DockerOneOffRequest(
+                    Image: DatabaseTls.PrepareImage,
+                    Command: DatabaseTls.PrepareCommand(svc.ContainerName),
+                    Binds: [(certVolume, DatabaseTls.MountPath, false)]), null, ct);
+
+                if (prepared == 0)
+                {
+                    volumes.Add((certVolume, DatabaseTls.MountPath, true));
+                    command = DatabaseTls.ServerCommand();
+                }
+                else
+                {
+                    // Started without encryption rather than not started at all: a database that
+                    // refuses to boot because a certificate could not be written is a worse outcome
+                    // than one that boots unencrypted and says so on the access page.
+                    logger.LogError(
+                        "Could not prepare a TLS certificate for {Svc}; it will start unencrypted.", svc.Name);
+                }
+            }
+
             await docker.RunContainerAsync(new DockerRunRequest(
                 image, svc.ContainerName, network,
                 def.Env(creds),
                 new Dictionary<string, string> { ["harbora.managed"] = "true", ["harbora.service"] = svc.Name },
-                new[] { (svc.VolumeName, def.DataMountPath, false) },
-                def.Port, 0, 0, null, def.Command(creds)), ct);
+                volumes,
+                def.Port, 0, 0, null, command), ct);
 
             foreach (var extra in networks.Skip(1))
                 await docker.ConnectNetworkAsync(svc.ContainerName, extra, ct);
