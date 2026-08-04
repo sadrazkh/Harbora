@@ -82,6 +82,18 @@ public class ReadyAppCatalogTests
     }
 
     [Fact]
+    public void No_shipped_version_claims_to_have_been_discovered()
+    {
+        // DiscoveredAt means "the registry check found this tag". A version written into this
+        // catalogue was not found, and stamping one made every shipped version read as newly
+        // discovered on the admin page — and left nothing able to tell a shipped version from a
+        // discovered one, which is what the orphan sweep needs to know.
+        foreach (var app in ReadyAppCatalog.All())
+        foreach (var version in app.Versions)
+            version.DiscoveredAt.Should().BeNull($"{app.Template.Key} {version.Version} ships here");
+    }
+
+    [Fact]
     public void No_two_versions_share_a_digest()
     {
         // Two versions with the same digest are the same image under two names — which means at

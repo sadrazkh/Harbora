@@ -87,10 +87,18 @@ public sealed class DbSeeder(HarboraDbContext db)
                 if (stored is null)
                 {
                     version.AppTemplateId = template.Id;
-                    version.DiscoveredAt = DateTimeOffset.UtcNow;
+
+                    // DiscoveredAt is deliberately left null. It means "the registry check found
+                    // this tag", and a version that ships in this catalogue was not found — it was
+                    // written here. Stamping it made every shipped version read as newly discovered
+                    // on the admin page, and left nothing able to tell the two apart.
                     db.AppTemplateVersions.Add(version);
                     continue;
                 }
+
+                // Clears the stamp on rows seeded before that was fixed, so the distinction is true
+                // of the data and not only of new rows.
+                stored.DiscoveredAt = null;
 
                 // The pin and the manifest are product data and are refreshed. Publication is not:
                 // an administrator who withdrew a version did so deliberately.
@@ -102,6 +110,24 @@ public sealed class DbSeeder(HarboraDbContext db)
                 stored.UpgradeNotes = version.UpgradeNotes;
                 stored.MigrationWarnings = version.MigrationWarnings;
             }
+
+            // A version this catalogue used to ship and no longer does — most often because a tag
+            // was corrected, which leaves the old row behind pointing at an image that no longer
+            // resolves. Published, it is still offered on the deploy form and fails at pull time.
+            //
+            // Withdrawn rather than deleted: an app deployed from it still refers to it, and the
+            // row is the only record of what that app was installed from. Discovered versions are
+            // excluded by DiscoveredAt — they were never in this catalogue, and removing them would
+            // undo the registry job's work on every boot.
+            var shipped = app.Versions.Select(v => v.Version).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var withdrawn = await db.AppTemplateVersions
+                .Where(v => v.AppTemplateId == template.Id
+                            && v.DiscoveredAt == null
+                            && v.Publication == VersionPublication.Published)
+                .ToListAsync();
+
+            foreach (var orphan in withdrawn.Where(v => !shipped.Contains(v.Version)))
+                orphan.Publication = VersionPublication.Draft;
 
             var asset = await db.AppTemplateAssets.FirstOrDefaultAsync(a => a.AppTemplateId == template.Id);
             if (asset is null)
