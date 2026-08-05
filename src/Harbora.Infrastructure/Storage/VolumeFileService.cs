@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Harbora.Application.Abstractions;
 using Harbora.Infrastructure.Deployments;
 using Microsoft.Extensions.Logging;
@@ -62,17 +62,14 @@ public sealed class VolumeFileService(
 
         if (exit != 0) return null;
 
-        try
-        {
-            // The helper prints one base64 line; anything else means the command did not do what
-            // it was supposed to, and decoding garbage would hand the browser a corrupt download.
-            return Convert.FromBase64String(output.ToString().Trim());
-        }
-        catch (FormatException)
-        {
+        // Through the same rule the listing goes through, for the same reason: the stream is framed
+        // and decoding it raw throws, after which the read returns nothing and the browser is told
+        // the file does not exist.
+        var content = VolumeFileCommands.ParseBase64(output.ToString());
+        if (content is null)
             log.LogWarning("Unreadable base64 while reading {Path} from {Volume}.", normalisedPath, volumeName);
-            return null;
-        }
+
+        return content;
     }
 
     public async Task<VolumeFileOutcome> WriteAsync(

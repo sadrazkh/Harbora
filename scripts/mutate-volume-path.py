@@ -117,6 +117,14 @@ MUTANTS = [
      'line.TrimStart(FrameBytes)',
      'line'),
 
+    (CMD, "the framed base64 stream is decoded raw, so every download 404s",
+     'var cleaned = new string(output.Where(IsBase64Character).ToArray());',
+     'var cleaned = output;'),
+
+    (CMD, "anything that is not base64 is decoded as if it were",
+     "char.IsAsciiLetterOrDigit(c) || c is",
+     "true || c is"),
+
     (CMD, "an empty name is listed",
      'if (parts[3].Length == 0) continue;',
      ''),

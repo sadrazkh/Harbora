@@ -161,6 +161,50 @@ public class VolumeFileCommandTests
         entries[0].SizeBytes.Should().Be(21);
     }
 
+    // --- reading a file back out ---
+
+    [Fact]
+    public void A_framed_base64_stream_still_decodes()
+    {
+        // The same non-TTY header that broke the listing. Decoding the raw stream throws, the read
+        // returns nothing, and the browser is told the file does not exist — which is how a file
+        // plainly sitting in the volume becomes a 404.
+        var header = new string([(char)1, (char)0, (char)0, (char)0, (char)0, (char)0, (char)0, (char)8]);
+
+        var bytes = VolumeFileCommands.ParseBase64(header + "aGVsbG8=");
+
+        System.Text.Encoding.UTF8.GetString(bytes!).Should().Be("hello");
+    }
+
+    [Fact]
+    public void A_stream_split_across_lines_decodes_as_one_file()
+    {
+        // The helper prints one line, but nothing guarantees the daemon delivers it as one frame.
+        var split = string.Join(Environment.NewLine, "aGVs", "bG8=");
+
+        VolumeFileCommands.ParseBase64(split).Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("mc: <ERROR> no such file")]
+    public void Nothing_usable_reads_as_no_file_rather_than_an_empty_one(string? output)
+    {
+        // An empty byte array would be written to disk on a download and saved as a corrupt file,
+        // which is worse than the download failing.
+        VolumeFileCommands.ParseBase64(output).Should().BeNull();
+    }
+
+    [Fact]
+    public void An_empty_file_is_not_the_same_as_no_file()
+    {
+        // A genuinely empty file base64-encodes to nothing at all, so the two look identical on the
+        // wire; the guard above deliberately treats that as no file rather than inventing one.
+        VolumeFileCommands.ParseBase64("").Should().BeNull();
+    }
+
     [Fact]
     public void Windows_line_endings_do_not_become_part_of_a_filename()
     {

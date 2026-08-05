@@ -81,6 +81,29 @@ public static class VolumeFileCommands
     /// A line it cannot make sense of is skipped rather than guessed at: the alternative is an
     /// entry with an invented name or size appearing in somebody's file list.
     /// </summary>
+    /// <summary>
+    /// The bytes of a file the helper printed as base64, or null when the stream held no file.
+    ///
+    /// Docker's framing again — the same non-TTY header that broke the listing and, before that,
+    /// the bucket measurement and the volume size. Base64 has a closed alphabet, so anything
+    /// outside it is framing or something the shell said, and dropping it is exact rather than a
+    /// guess. Decoding the raw stream instead throws, the read returns nothing, and the browser is
+    /// told the file does not exist.
+    /// </summary>
+    public static byte[]? ParseBase64(string? output)
+    {
+        if (string.IsNullOrWhiteSpace(output)) return null;
+
+        var cleaned = new string(output.Where(IsBase64Character).ToArray());
+        if (cleaned.Length == 0) return null;
+
+        try { return Convert.FromBase64String(cleaned); }
+        catch (FormatException) { return null; }
+    }
+
+    private static bool IsBase64Character(char c) =>
+        char.IsAsciiLetterOrDigit(c) || c is '+' or '/' or '=';
+
     /// <summary>The control bytes Docker puts in front of each frame of a non-TTY stream.</summary>
     private static readonly char[] FrameBytes =
         Enumerable.Range(0, 32).Select(c => (char)c).ToArray();
