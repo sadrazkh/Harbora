@@ -123,6 +123,35 @@ public sealed class StorageController(
         return Back(IsFa ? $"باکت «{name}» ساخته شد." : $"Bucket {name} was created.");
     }
 
+    /// <summary>
+    /// Asks the storage server how much is in the bucket.
+    ///
+    /// On demand rather than on every page load: measuring runs a container, and a page that starts
+    /// one per bucket per visit is a page that gets slower the more somebody has. The figure keeps
+    /// its timestamp so it is read as a measurement taken at a moment rather than as a live number.
+    /// </summary>
+    [HttpPost("buckets/{id:guid}/measure")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> Measure(Guid id, CancellationToken ct)
+    {
+        var bucket = await db.StorageBuckets.FirstOrDefaultAsync(b => b.Id == id, ct);
+        if (bucket is null) return NotFound();
+
+        var used = await storage.MeasureAsync(bucket.Name, ct);
+
+        // The timestamp is written even when the figure is not: "asked, and it did not answer" and
+        // "never asked" are different states, and the page shows them differently.
+        bucket.MeasuredAt = DateTimeOffset.UtcNow;
+        if (used is not null) bucket.UsedBytes = used;
+        await db.SaveChangesAsync(ct);
+
+        return Back(used is null
+            ? (IsFa ? "اندازه‌گیری نشد؛ سرور ذخیره‌سازی جواب نداد." : "It could not be measured — the storage server did not answer.")
+            : (IsFa ? "اندازه‌گیری شد." : "Measured."),
+            error: used is null);
+    }
+
     [HttpPost("buckets/{id:guid}/delete")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
