@@ -119,7 +119,20 @@ public sealed class HomeController(
             .Select(t => new StarterTemplate(t.Id, t.Key, t.Name, t.NameFa, t.Category, t.IconUrl))
             .ToListAsync(ct);
 
-        vm.StarterApps = templates.Where(t => t.Category != "database").Take(8).ToList();
+        // The operator's choice, in their order. This used to be "the first eight alphabetically",
+        // which is not an order anybody picked — a template added later could quietly push one off
+        // the page.
+        var offerable = templates.Where(t => t.Category != "database").ToList();
+        var featured = Harbora.Infrastructure.Templates.FeaturedTemplates.Resolve(
+            Harbora.Infrastructure.Templates.FeaturedTemplates.Parse(
+                await db.Settings.IgnoreQueryFilters()
+                    .Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.FeaturedTemplates)
+                    .Select(s => s.Value).FirstOrDefaultAsync(ct)),
+            offerable.Select(t => t.Key).ToList());
+
+        vm.StarterApps = featured
+            .Select(key => offerable.First(t => t.Key == key))
+            .ToList();
 
         // Databases are provisioned from the engine catalog, not from app templates. Reading the
         // catalog means a tile exists only for an engine this installation can really start.

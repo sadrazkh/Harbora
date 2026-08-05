@@ -1,0 +1,152 @@
+@model AdminSettingsViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var message = TempData["Message"] as string;
+
+    // Chosen first and in order, then the rest. The form reads top to bottom the way the dashboard
+    // will read left to right.
+    var ordered = Model.Featured
+        .Select(key => Model.Templates.First(t => t.Key == key))
+        .Concat(Model.Templates.Where(t => !Model.Featured.Contains(t.Key)))
+        .ToList();
+}
+
+<partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+    isFa ? "تنظیمات پلتفرم" : "Platform settings",
+    isFa
+        ? "چیزهایی که برای همه تغییر می‌کنند. تنظیمات شخصی هر کاربر جای دیگری است."
+        : "The settings that change the platform for everybody. Personal preferences live elsewhere."))" />
+
+@if (message is not null)
+{
+    <div class="alert-success mb-4">@message</div>
+}
+
+<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+    <div class="space-y-6">
+        @{ var featuredPanel = new PanelModel(isFa ? "اپ‌های آماده روی داشبورد" : "Ready apps on the dashboard"); }
+        <partial name="Design/_PanelStart" model="featuredPanel" />
+
+        <p class="mb-4 text-sm leading-6 text-ink-muted">
+            @(isFa
+                ? $"کدام اپ‌ها اول دیده شوند و به چه ترتیبی. حداکثر {Model.FeaturedSlots} تا. اگر هیچ‌کدام را تیک نزنید، همان ترتیب الفبایی قبلی می‌ماند."
+                : $"Which applications people see first, and in what order. Up to {Model.FeaturedSlots}. Tick none and the previous alphabetical order stays.")
+        </p>
+
+        <form asp-action="SaveFeatured" method="post">
+            @Html.AntiForgeryToken()
+
+            @* The order is the order these post in, which is the order they are listed. Dragging
+               would be nicer and is not worth a dependency for a list of this size. *@
+            <div class="grid gap-2 sm:grid-cols-2">
+                @foreach (var template in ordered)
+                {
+                    var chosen = Model.Featured.Contains(template.Key);
+                    <label class="flex items-center gap-3 rounded-xl border @(chosen ? "border-accent/40 bg-accent-soft" : "border-line bg-surface-2") p-3">
+                        <input type="checkbox" name="keys" value="@template.Key" checked="@chosen"
+                               class="h-4 w-4 rounded border-line-strong text-accent" />
+                        <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(template.Key, isFa && !string.IsNullOrWhiteSpace(template.NameFa) ? template.NameFa : template.Name))" />
+                        <span class="min-w-0">
+                            <strong class="block truncate text-sm text-ink">@(isFa && !string.IsNullOrWhiteSpace(template.NameFa) ? template.NameFa : template.Name)</strong>
+                            <small class="text-[11px] text-ink-faint">@template.Category</small>
+                        </span>
+                    </label>
+                }
+            </div>
+
+            <button class="btn-primary mt-4">@(isFa ? "ذخیره" : "Save")</button>
+        </form>
+        <partial name="Design/_PanelEnd" />
+
+        @{ var defaultsPanel = new PanelModel(isFa ? "پیش‌فرض‌های پنل" : "Panel defaults"); }
+        <partial name="Design/_PanelStart" model="defaultsPanel" />
+
+        <form asp-action="SavePanel" method="post" class="grid gap-4 sm:grid-cols-2">
+            @Html.AntiForgeryToken()
+
+            <div>
+                <label class="form-label" for="default-mode">@(isFa ? "حالت پیش‌فرض پنل" : "Default panel mode")</label>
+                <select id="default-mode" name="defaultMode" class="form-control">
+                    <option value="">@(isFa ? "بر اساس نقش کاربر" : "Decided by the person's role")</option>
+                    <option value="Simple" selected="@(Model.DefaultPanelMode == "Simple")">@(isFa ? "ساده" : "Simple")</option>
+                    <option value="Advanced" selected="@(Model.DefaultPanelMode == "Advanced")">@(isFa ? "پیشرفته" : "Advanced")</option>
+                </select>
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa
+                        ? "فقط برای کسانی که خودشان انتخابی نکرده‌اند. انتخاب شخصی همیشه بر این مقدم است."
+                        : "Only for people who have not chosen. A personal choice always wins over this.")
+                </p>
+            </div>
+
+            <div>
+                <label class="form-label" for="default-culture">@(isFa ? "زبان پیش‌فرض" : "Default language")</label>
+                <select id="default-culture" name="defaultCulture" class="form-control">
+                    <option value="">@(isFa ? "فارسی (پیش‌فرض سیستم)" : "Persian (system default)")</option>
+                    <option value="fa" selected="@(Model.DefaultCulture == "fa")">فارسی</option>
+                    <option value="en" selected="@(Model.DefaultCulture == "en")">English</option>
+                </select>
+            </div>
+
+            <div class="sm:col-span-2">
+                <button class="btn-primary">@(isFa ? "ذخیره" : "Save")</button>
+            </div>
+        </form>
+        <partial name="Design/_PanelEnd" />
+
+        @{ var platformPanel = new PanelModel(isFa ? "هویت پلتفرم" : "Platform identity"); }
+        <partial name="Design/_PanelStart" model="platformPanel" />
+
+        <form asp-action="SavePlatform" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <div>
+                <label class="form-label" for="platform-name">@(isFa ? "نام پلتفرم" : "Platform name")</label>
+                <input id="platform-name" name="platformName" value="@Model.PlatformName" class="form-control" />
+            </div>
+            <button class="btn-primary">@(isFa ? "ذخیره" : "Save")</button>
+        </form>
+        <partial name="Design/_PanelEnd" />
+    </div>
+
+    <aside class="space-y-6">
+        @{ var elsewherePanel = new PanelModel(isFa ? "جاهای دیگر" : "Elsewhere"); }
+        <partial name="Design/_PanelStart" model="elsewherePanel" />
+
+        @* Linked rather than duplicated. A second control for the same setting is a second place it
+           can disagree with itself. *@
+        <div class="space-y-3 text-sm">
+            <a href="/admin/templates" class="flex items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 p-3 hover:border-accent/40">
+                <span>
+                    <strong class="block text-ink">@(isFa ? "نسخه‌های قالب" : "Template versions")</strong>
+                    <small class="text-[11px] text-ink-faint">
+                        @(isFa ? "انتشار نسخه‌ها و بررسی رجیستری" : "Publishing versions and registry checks")
+                    </small>
+                </span>
+                <span class="status-pill @(Model.RegistryDiscoveryEnabled ? "bg-ok-soft text-ok" : "bg-surface-2 text-ink-faint")">
+                    @(Model.RegistryDiscoveryEnabled ? (isFa ? "روشن" : "on") : (isFa ? "خاموش" : "off"))
+                </span>
+            </a>
+
+            <a href="/admin/ai" class="block rounded-lg border border-line bg-surface-2 p-3 hover:border-accent/40">
+                <strong class="block text-ink">@(isFa ? "مدیریت هوش مصنوعی" : "AI administration")</strong>
+                <small class="text-[11px] text-ink-faint">
+                    @(isFa ? "ارائه‌دهنده‌ها، توکن‌ها، مدل‌ها و پلن‌ها" : "Providers, tokens, models and plans")
+                </small>
+            </a>
+
+            <a href="/plans" class="block rounded-lg border border-line bg-surface-2 p-3 hover:border-accent/40">
+                <strong class="block text-ink">@(isFa ? "پلن‌ها و سهمیه‌ها" : "Plans and quotas")</strong>
+                <small class="text-[11px] text-ink-faint">
+                    @(isFa ? "حافظه، CPU، دیسک و اندازه‌های مجاز" : "Memory, CPU, disk and allowed sizes")
+                </small>
+            </a>
+
+            <a href="/settings" class="block rounded-lg border border-line bg-surface-2 p-3 hover:border-accent/40">
+                <strong class="block text-ink">@(isFa ? "دامنه، SSL و توکن‌ها" : "Domain, SSL and tokens")</strong>
+                <small class="text-[11px] text-ink-faint">
+                    @(isFa ? "تنظیماتی که همان‌جا مانده‌اند" : "The settings that stayed there")
+                </small>
+            </a>
+        </div>
+        <partial name="Design/_PanelEnd" />
+    </aside>
+</div>

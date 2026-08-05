@@ -68,7 +68,9 @@ public static class NavigationMap
             new("nodes", "Nodes", "Index", "cpu", Capabilities.ServersManage),
             new("plans", "Plans", "Index", "credit-card", Capabilities.PlansManage),
             new("tenants", "Tenants", "Index", "building-2", Capabilities.TenantsManage),
-            new("settings", "Settings", "Index", "settings")
+            new("settings", "Settings", "Index", "settings"),
+            // How the platform behaves for everybody, as opposed to the preferences on /settings.
+            new("platform-settings", "AdminSettings", "Index", "settings-2", Capabilities.PlatformManage, Advanced: true)
         ])
     ];
 

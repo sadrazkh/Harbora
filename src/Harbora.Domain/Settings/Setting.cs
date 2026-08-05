@@ -29,4 +29,12 @@ public static class SettingKeys
     /// their anonymous rate limit, and that is an operator's decision rather than a default.
     /// </summary>
     public const string RegistryDiscoveryEnabled = "templates.registry_discovery";
+
+    /// <summary>
+    /// Which ready-made apps to put in front of people, in order. Comma-separated template keys.
+    ///
+    /// Empty means "the first few alphabetically", which is what the dashboard did with no way to
+    /// change it — so the apps an operator most wants installed were wherever the alphabet put them.
+    /// </summary>
+    public const string FeaturedTemplates = "templates.featured";
 }
