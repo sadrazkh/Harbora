@@ -50,6 +50,36 @@
     </section>
 }
 
+@if (quickStarts.Any(q => !string.IsNullOrWhiteSpace(q.Manifest.Image)))
+{
+    <section class="create-section">
+        <div class="section-heading"><div><h2><i data-lucide="container" class="h-4 w-4"></i>@(isFa ? "آدرس ایمیج اپ‌های آماده" : "Ready-app image addresses")</h2><p>@(isFa ? "اگر ترجیح می‌دهید خودتان راه‌اندازی کنید، آدرس را بردارید. با کلیک کپی می‌شود." : "If you would rather wire it up yourself, take the address. Click to copy.")</p></div></div>
+        <div class="grid gap-2 sm:grid-cols-2">
+            @foreach (var item in quickStarts.Where(q => !string.IsNullOrWhiteSpace(q.Manifest.Image)))
+            {
+                <div class="flex items-center gap-3 rounded-xl border border-line bg-surface-2 p-3">
+                    <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(item.Template.Key, item.Name))" />
+                    <div class="min-w-0 flex-1">
+                        <strong class="block truncate text-sm text-ink">@item.Name</strong>
+                        @* The stable tag, which is what the deploy form would pick by default. *@
+                        <code dir="ltr" class="mt-0.5 block truncate text-[11px] text-ink-muted" data-copy-text>@item.Manifest.Image</code>
+                    </div>
+                    <div class="flex shrink-0 flex-col items-end gap-1">
+                        @if (item.Manifest.WebsiteUrl is { Length: > 0 } site)
+                        {
+                            <a href="@site" target="_blank" rel="noopener noreferrer" class="text-[11px] text-accent-text hover:underline">@(isFa ? "سایت" : "Site")</a>
+                        }
+                        @if (item.Manifest.DocumentationUrl is { Length: > 0 } docs)
+                        {
+                            <a href="@docs" target="_blank" rel="noopener noreferrer" class="text-[11px] text-accent-text hover:underline">@(isFa ? "مستندات" : "Docs")</a>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </section>
+}
+
 <div class="create-divider"><span>@(isFa ? "یا سورس خودتان را متصل کنید" : "or connect your own source")</span></div>
 
 <form asp-controller="Apps" asp-action="Create" method="post" class="create-layout">
@@ -142,7 +172,7 @@
                 <label class="form-field md:col-span-2"><span>@(isFa ? "دستور پیش از انتشار" : "Release command")</span><input asp-for="ReleaseCommand" placeholder="dotnet ef database update" class="form-control" dir="ltr" /><small>@(isFa ? "اگر شکست بخورد، ترافیک روی نسخه فعلی می‌ماند." : "If it fails, traffic stays on the current version.")</small></label>
                 <label data-cron-only class="form-field hidden"><span>@(isFa ? "دستور اجرا" : "Command to run")</span><input asp-for="Command" placeholder="php artisan schedule:run" class="form-control" dir="ltr" /></label>
                 <label data-cron-only class="form-field hidden"><span>@(isFa ? "زمان‌بندی Cron" : "Cron schedule")</span><input asp-for="CronExpression" placeholder="0 3 * * *" class="form-control" dir="ltr" /></label>
-                <label data-git-only class="option-row md:col-span-2"><input asp-for="PreviewsEnabled" type="checkbox" /><span><strong>@(isFa ? "محیط Preview برای branchها" : "Preview environments for branches")</strong><small>@(isFa ? "سکرت‌ها به Preview کپی نمی‌شوند." : "Secrets are never copied to previews.")</small></span></label>
+                <label data-git-only class="option-row md:col-span-2"><input asp-for="PreviewsEnabled" type="checkbox" checked="@(Model.PreviewsEnabled || (ViewBag.PreviewsDefault is true))" /><span><strong>@(isFa ? "محیط Preview برای branchها" : "Preview environments for branches")</strong><small>@(isFa ? "سکرت‌ها به Preview کپی نمی‌شوند." : "Secrets are never copied to previews.")</small></span></label>
             </div>
         <partial name="Design/_AdvancedEnd" />
     </div>
@@ -165,6 +195,15 @@
 </form>
 
 @section Scripts {
+<script>
+    // Click an address to copy it. One handler for every element that opts in.
+    document.querySelectorAll('[data-copy-text]').forEach(function (el) {
+        el.style.cursor = 'copy';
+        el.addEventListener('click', function () {
+            navigator.clipboard?.writeText(el.textContent.trim());
+        });
+    });
+</script>
 <script>
 (() => {
     const createAndDeployLabel = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "ایجاد و استقرار برنامه" : "Create and deploy application"));

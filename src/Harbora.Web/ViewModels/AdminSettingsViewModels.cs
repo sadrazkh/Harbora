@@ -1,5 +1,8 @@
 namespace Harbora.Web.ViewModels;
 
+/// <summary>One resource plan an operator can make the default.</summary>
+public sealed record SizeChoiceViewModel(string Key, string Name, double CpuCores, long MemoryBytes);
+
 /// <summary>One ready-made app an operator can choose to put in front of people.</summary>
 public sealed record TemplateChoiceViewModel(
     string Key, string Name, string? NameFa, string Category, string? IconUrl);
@@ -21,6 +24,14 @@ public sealed class AdminSettingsViewModel
     public string? DefaultPanelMode { get; init; }
     public string? DefaultCulture { get; init; }
     public string? PlatformName { get; init; }
+
+    public IReadOnlyList<SizeChoiceViewModel> Sizes { get; init; } = [];
+
+    /// <summary>Preselected on every create form. Empty means nothing is preselected.</summary>
+    public string? DefaultInstanceSize { get; init; }
+
+    /// <summary>Whether branch previews start on for a new Git-backed application.</summary>
+    public bool PreviewsDefault { get; init; }
 
     /// <summary>Shown here because it is a platform decision, though it is changed on its own page.</summary>
     public bool RegistryDiscoveryEnabled { get; init; }

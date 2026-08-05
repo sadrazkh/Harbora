@@ -384,12 +384,20 @@ public sealed class AppsController(
 
             // Only forward. Offering an older release as an "update" is how somebody downgrades a
             // database schema by accident.
+            ViewBag.Repository = Harbora.Infrastructure.Templates.ImageReference
+                .RepositoryOf(current is null ? app.PrebuiltImage : current.ImageRepository);
+
             ViewBag.UpdateVersions = Harbora.Infrastructure.Templates.VersionSelection
                 .Offerable(all, architecture)
                 .Where(v => current is null || string.CompareOrdinal(v.Version, current.Version) > 0)
                 .Where(v => v.Id != app.TemplateVersionId)
                 .ToList();
         }
+
+        // Also for an app that came from an image rather than a template: naming a release tag is
+        // useful whether or not Harbora curated the version list.
+        ViewBag.Repository ??= Harbora.Infrastructure.Templates.ImageReference.RepositoryOf(app.PrebuiltImage);
+        ViewBag.CurrentTag = Harbora.Infrastructure.Templates.ImageReference.TagOf(app.PrebuiltImage);
 
         if (app.Kind == ServiceKind.Cron)
             ViewBag.CronRuns = await db.CronRuns
@@ -501,6 +509,75 @@ public sealed class AppsController(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("app.version_updated", "app", $"{app.Name}={version.Version}", ClientIp, ct: ct);
+
+        var deploymentId = await deployEngine.QueueDeploymentAsync(
+            new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, app.GitRef), ct);
+
+        return RedirectToAction("Details", "Deployments", new { id = deploymentId });
+    }
+
+    /// <summary>
+    /// Moves an app to a release tag the person names, from the repository it already pulls from.
+    ///
+    /// The tag is resolved to a digest before anything is stored. Deploying <c>repo:tag</c> as
+    /// written would undo the whole point of pinning — the same "version" would install different
+    /// software on different days — and a tag that does not exist would fail at pull time, after the
+    /// page had already said the update was under way.
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/tag")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
+    public async Task<IActionResult> UpdateTag(
+        Guid id, string? tag, [FromServices] IContainerRegistry registry, CancellationToken ct)
+    {
+        if (!await access.CanTouchAppAsync(id, Capabilities.AppsDeploy, ct)) return Forbid();
+
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        var fa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+        if (!Harbora.Infrastructure.Templates.ImageReference.IsUsableTag(tag))
+        {
+            TempData["Error"] = fa
+                ? "این تگ معتبر نیست. فقط حروف، رقم، نقطه، خط تیره و زیرخط."
+                : "That is not a usable tag. Letters, digits, dots, dashes and underscores only.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var repository = Harbora.Infrastructure.Templates.ImageReference.RepositoryOf(app.PrebuiltImage);
+        if (app.TemplateVersionId is { } versionId)
+            repository = await db.AppTemplateVersions.AsNoTracking()
+                .Where(v => v.Id == versionId).Select(v => v.ImageRepository).FirstOrDefaultAsync(ct)
+                ?? repository;
+
+        if (string.IsNullOrWhiteSpace(repository))
+        {
+            TempData["Error"] = fa
+                ? "این برنامه از یک ایمیج ساخته نشده، پس مخزنی برای گرفتن تگ ندارد."
+                : "This app was not built from an image, so there is no repository to take a tag from.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var digest = await registry.ResolveDigestAsync(repository, tag!.Trim(), ct);
+        if (digest is null)
+        {
+            // Refused rather than stored unpinned. "Could not check" and "does not exist" are both
+            // reasons not to hand somebody a release nobody verified.
+            TempData["Error"] = fa
+                ? $"تگ «{tag}» در {repository} پیدا نشد یا رجیستری پاسخ نداد. چیزی تغییر نکرد."
+                : $"Tag \"{tag}\" was not found in {repository}, or the registry did not answer. Nothing changed.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        app.PrebuiltImage = $"{repository}@{digest}";
+
+        // No longer one of the curated versions. Saying so is more honest than leaving a link to a
+        // version this app is not on any more.
+        app.TemplateVersionId = null;
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("app.tag_updated", "app", $"{app.Name}={repository}:{tag}", ClientIp, ct: ct);
 
         var deploymentId = await deployEngine.QueueDeploymentAsync(
             new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, app.GitRef), ct);
@@ -905,10 +982,25 @@ public sealed class AppsController(
             ? null
             : plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        // The platform default, preselected. Without one, every create form started at "no ceiling",
+        // which is the option nobody picks on purpose and the one that costs the most.
+        var defaultSize = await db.Settings.IgnoreQueryFilters()
+            .Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.DefaultInstanceSize)
+            .Select(s => s.Value).FirstOrDefaultAsync(ct);
+
+        ViewBag.DefaultSize = defaultSize;
+        ViewBag.PreviewsDefault = string.Equals(
+            await db.Settings.IgnoreQueryFilters()
+                .Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.PreviewsDefault)
+                .Select(s => s.Value).FirstOrDefaultAsync(ct),
+            "true", StringComparison.OrdinalIgnoreCase);
+
         var sizes = await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct);
         ViewBag.Sizes = sizes
             .Where(s => allowed is null || allowed.Contains(s.Key))
-            .Select(s => new SelectListItem($"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key))
+            .Select(s => new SelectListItem(
+                $"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key,
+                string.Equals(s.Key, defaultSize, StringComparison.OrdinalIgnoreCase)))
             .ToList();
     }
 

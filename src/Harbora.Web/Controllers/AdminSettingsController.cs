@@ -69,6 +69,25 @@ public sealed class AdminSettingsController(
         return RedirectToAction(nameof(Index));
     }
 
+    [HttpPost("resources")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SaveResources(string? defaultSize, bool previewsDefault, CancellationToken ct)
+    {
+        // Only a size that exists. Storing a key that was later withdrawn would leave every create
+        // form preselecting nothing, silently, with the setting still reading as though it applied.
+        var size = string.IsNullOrWhiteSpace(defaultSize)
+            ? string.Empty
+            : await db.InstanceSizes.Where(s => s.Key == defaultSize && s.IsEnabled)
+                .Select(s => s.Key).FirstOrDefaultAsync(ct) ?? string.Empty;
+
+        await WriteAsync(SettingKeys.DefaultInstanceSize, size, ct);
+        await WriteAsync(SettingKeys.PreviewsDefault, previewsDefault ? "true" : "false", ct);
+        await audit.LogAsync("platform.resource_defaults", "setting", size, ClientIp, ct: ct);
+
+        TempData["Message"] = IsFa ? "پیش‌فرض‌های منابع ذخیره شد." : "Resource defaults saved.";
+        return RedirectToAction(nameof(Index));
+    }
+
     [HttpPost("platform")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SavePlatform(string? platformName, CancellationToken ct)
@@ -118,6 +137,12 @@ public sealed class AdminSettingsController(
                 Harbora.Web.Infrastructure.PanelModeProvider.DefaultModeSettingKey, ct),
             DefaultCulture = await ReadAsync(SettingKeys.DefaultCulture, ct),
             PlatformName = await ReadAsync(SettingKeys.PlatformName, ct),
+            Sizes = await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder)
+                .Select(s => new SizeChoiceViewModel(s.Key, s.Name, s.CpuCores, s.MemoryBytes))
+                .ToListAsync(ct),
+            DefaultInstanceSize = await ReadAsync(SettingKeys.DefaultInstanceSize, ct),
+            PreviewsDefault = string.Equals(
+                await ReadAsync(SettingKeys.PreviewsDefault, ct), "true", StringComparison.OrdinalIgnoreCase),
             RegistryDiscoveryEnabled = string.Equals(
                 await ReadAsync(SettingKeys.RegistryDiscoveryEnabled, ct), "true", StringComparison.OrdinalIgnoreCase)
         };

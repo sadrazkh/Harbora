@@ -93,6 +93,47 @@
         </form>
         <partial name="Design/_PanelEnd" />
 
+        @{ var resourcePanel = new PanelModel(isFa ? "پیش‌فرض منابع" : "Resource defaults"); }
+        <partial name="Design/_PanelStart" model="resourcePanel" />
+
+        <form asp-action="SaveResources" method="post" class="space-y-4">
+            @Html.AntiForgeryToken()
+
+            <div>
+                <label class="form-label" for="default-size">@(isFa ? "اندازهٔ پیش‌فرض" : "Default instance size")</label>
+                <select id="default-size" name="defaultSize" class="form-control">
+                    <option value="">@(isFa ? "هیچ‌کدام (بدون سقف)" : "None (no ceiling)")</option>
+                    @foreach (var size in Model.Sizes)
+                    {
+                        <option value="@size.Key" selected="@(size.Key == Model.DefaultInstanceSize)">
+                            @size.Name — @size.CpuCores vCPU / @(size.MemoryBytes / 1024 / 1024) MB
+                        </option>
+                    }
+                </select>
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa
+                        ? "روی فرم ساخت اپ و دیتابیس از پیش انتخاب می‌شود. تا الان هیچ پیش‌فرضی نبود و همه‌چیز از «بدون سقف» شروع می‌کرد."
+                        : "Preselected on the application and database create forms. There was no default, so everything started at \"no ceiling\".")
+                </p>
+            </div>
+
+            <label class="flex items-start gap-3 rounded-xl border border-line bg-surface-2 p-3">
+                <input type="checkbox" name="previewsDefault" value="true" checked="@Model.PreviewsDefault"
+                       class="mt-0.5 h-4 w-4 rounded border-line-strong text-accent" />
+                <span>
+                    <span class="block text-sm font-medium text-ink">@(isFa ? "محیط Preview به‌صورت پیش‌فرض روشن" : "Branch previews on by default")</span>
+                    <span class="mt-1 block text-xs leading-5 text-ink-faint">
+                        @(isFa
+                            ? "فقط برای اپ‌هایی که از Git می‌آیند. سکرت‌ها هیچ‌وقت به Preview کپی نمی‌شوند."
+                            : "Only for Git-backed applications. Secrets are never copied into a preview.")
+                    </span>
+                </span>
+            </label>
+
+            <button class="btn-primary">@(isFa ? "ذخیره" : "Save")</button>
+        </form>
+        <partial name="Design/_PanelEnd" />
+
         @{ var platformPanel = new PanelModel(isFa ? "هویت پلتفرم" : "Platform identity"); }
         <partial name="Design/_PanelStart" model="platformPanel" />
 

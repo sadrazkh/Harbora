@@ -645,9 +645,15 @@ public sealed partial class DatabasesController(
             : plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        var defaultSize = await db.Settings.IgnoreQueryFilters()
+            .Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.DefaultInstanceSize)
+            .Select(s => s.Value).FirstOrDefaultAsync(ct);
+
         ViewBag.Sizes = (await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct))
             .Where(s => allowed is null || allowed.Contains(s.Key))
-            .Select(s => new SelectListItem($"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key))
+            .Select(s => new SelectListItem(
+                $"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key,
+                string.Equals(s.Key, defaultSize, StringComparison.OrdinalIgnoreCase)))
             .ToList();
     }
 

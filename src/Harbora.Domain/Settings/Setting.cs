@@ -37,4 +37,14 @@ public static class SettingKeys
     /// change it — so the apps an operator most wants installed were wherever the alphabet put them.
     /// </summary>
     public const string FeaturedTemplates = "templates.featured";
+
+    /// <summary>
+    /// The resource plan preselected on every create form. Empty means no ceiling is preselected,
+    /// which is what happened before — and an unlimited default is the one nobody chooses on
+    /// purpose.
+    /// </summary>
+    public const string DefaultInstanceSize = "resources.default_size";
+
+    /// <summary>Whether branch previews start switched on for a new Git-backed application.</summary>
+    public const string PreviewsDefault = "apps.previews_default";
 }
