@@ -50,3 +50,17 @@ public sealed record AppDataEditViewModel
     public required string Content { get; init; }
     public bool IsReadOnly { get; init; }
 }
+
+/// <param name="Attached">Whether this application already holds this database's variables.</param>
+/// <param name="Prefix">
+/// The prefix this database writes under when the plain names are taken by another one. Shown
+/// because the second database an application attaches is read from a different variable, and
+/// nothing else on the screen would say which.
+/// </param>
+public sealed record AppDatabaseLinkViewModel(
+    Guid Id,
+    string Name,
+    Harbora.Domain.Common.ManagedServiceType Type,
+    string ContainerName,
+    bool Attached,
+    string Prefix);

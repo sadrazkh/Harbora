@@ -214,6 +214,91 @@
             var diskShare = Harbora.Infrastructure.Monitoring.AllocationReading
                 .Of(diskUsed, Model.DiskLimitBytes);
         }
+        @* ---- databases ----
+           The page said nothing about them at all: the only way to attach one was to know to open
+           each database in turn, and nothing here listed what this application was already using.
+           So "one app, several databases" was supported by everything except the screen somebody
+           would try it on. *@
+        @{
+            var links = ViewBag.Databases as List<AppDatabaseLinkViewModel> ?? [];
+            var attached = links.Where(l => l.Attached).ToList();
+            var available = links.Where(l => !l.Attached).ToList();
+            var here = Context.Request.Path + Context.Request.QueryString;
+        }
+        <section class="rounded-xl border border-line bg-surface p-4">
+            <div class="mb-3 font-semibold">@(isFa ? "دیتابیس‌ها" : "Databases")</div>
+
+            @if (attached.Count == 0)
+            {
+                <p class="text-xs text-ink-faint">@(isFa ? "به هیچ دیتابیسی وصل نیست." : "Not connected to any database.")</p>
+            }
+            else
+            {
+                <div class="space-y-2">
+                    @foreach (var link in attached)
+                    {
+                        <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 p-2.5">
+                            <span class="min-w-0">
+                                <a href="/databases/@link.Id" class="block truncate text-sm text-ink hover:text-accent-text" dir="ltr">@link.Name</a>
+                                <small class="text-[11px] text-ink-faint">@link.Type</small>
+                            </span>
+                            <form asp-controller="Databases" asp-action="Detach" asp-route-id="@link.Id" method="post">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="appId" value="@Model.Id" />
+                                <input type="hidden" name="returnUrl" value="@here" />
+                                <button class="text-[11px] text-ink-faint hover:text-danger">@(isFa ? "جدا کن" : "Detach")</button>
+                            </form>
+                        </div>
+                    }
+                </div>
+
+                @if (attached.Count > 1)
+                {
+                    @* Which variable holds which. With more than one database the plain names belong
+                       to whichever got them first, and the rest are read from their own prefix —
+                       nothing else on the screen would say which. *@
+                    <p class="mt-2 text-[11px] leading-5 text-ink-faint">
+                        @(isFa
+                            ? "با بیش از یک دیتابیس، نام‌های ساده مال اولی است و بقیه با پیشوند خودشان خوانده می‌شوند:"
+                            : "With more than one, the plain names belong to the first and the rest are read from their own prefix:")
+                        @foreach (var link in attached.Skip(1))
+                        {
+                            <code dir="ltr" class="ms-1">@(link.Prefix)DATABASE_URL</code>
+                        }
+                    </p>
+                }
+            }
+
+            @if (available.Count > 0)
+            {
+                <form asp-controller="Databases" asp-action="Attach" method="post" class="mt-3 space-y-2">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="appId" value="@Model.Id" />
+                    <input type="hidden" name="returnUrl" value="@here" />
+                    <select name="id" class="form-control text-sm">
+                        @foreach (var link in available)
+                        {
+                            <option value="@link.Id">@link.Name · @link.Type</option>
+                        }
+                    </select>
+                    <button class="btn-secondary w-full justify-center text-sm">@(isFa ? "اتصال دیتابیس" : "Attach a database")</button>
+                </form>
+                <p class="mt-1 text-[11px] text-ink-faint">
+                    @(isFa
+                        ? "بعد از اتصال، اپ را دوباره دیپلوی کنید تا متغیرها اعمال شوند."
+                        : "Redeploy the application afterwards to apply the variables.")
+                </p>
+            }
+            else if (attached.Count == 0)
+            {
+                <p class="mt-2 text-[11px] text-ink-faint">
+                    @(isFa
+                        ? "در این محیط دیتابیسی نیست. دیتابیس فقط داخل شبکهٔ خصوصی همان محیط وصل می‌شود."
+                        : "There is no database in this environment. One can only attach inside its own private network.")
+                </p>
+            }
+        </section>
+
         <section class="rounded-xl border border-line bg-surface p-4">
             <div class="mb-3 flex items-center justify-between gap-2">
                 <div class="font-semibold">@(isFa ? "منابع" : "Resources")</div>

@@ -588,7 +588,7 @@ public sealed partial class DatabasesController(
     [HttpPost("{id:guid}/attach")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
-    public async Task<IActionResult> Attach(Guid id, Guid appId, CancellationToken ct)
+    public async Task<IActionResult> Attach(Guid id, Guid appId, string? returnUrl, CancellationToken ct)
     {
         await Guard(id, ct);
         if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();
@@ -642,7 +642,12 @@ public sealed partial class DatabasesController(
                 ? $"به {app.Name} وصل شد. برای اعمال متغیرها اپ را دوباره دیپلوی کنید."
                 : $"Attached to {app.Name}. Redeploy the app to apply the new variables.");
 
-        return RedirectToAction(nameof(Details), new { id });
+        // Back where the person was. Attaching from an application's page and landing on the
+        // database's is a jump that loses their place — and the app page is where they go next to
+        // attach the second one.
+        return string.IsNullOrWhiteSpace(returnUrl)
+            ? RedirectToAction(nameof(Details), new { id })
+            : LocalRedirect(returnUrl);
     }
 
     /// <summary>
@@ -652,7 +657,7 @@ public sealed partial class DatabasesController(
     [HttpPost("{id:guid}/detach")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
-    public async Task<IActionResult> Detach(Guid id, Guid appId, CancellationToken ct)
+    public async Task<IActionResult> Detach(Guid id, Guid appId, string? returnUrl, CancellationToken ct)
     {
         await Guard(id, ct);
         if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();

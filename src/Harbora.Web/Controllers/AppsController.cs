@@ -28,6 +28,7 @@ public sealed class AppsController(
     IDomainInspector domains,
     Harbora.Infrastructure.Projects.ProjectService projects,
     Harbora.Infrastructure.Security.ProjectAccessService access,
+    Harbora.Infrastructure.Services.ServiceUsageService serviceUsage,
     IJobQueue jobs,
     ICurrentUser currentUser) : Controller
 {
@@ -369,6 +370,29 @@ public sealed class AppsController(
         // The sizes this workspace may move between, so the resize control offers the same list the
         // create form did rather than a free-text box.
         ViewBag.Sizes = await SizeChoicesAsync(app.InstanceSizeKey, ct);
+
+        // The databases this application is wired to, and the ones it could be.
+        //
+        // The application page said nothing about databases at all: the only way to attach one was
+        // to know to open each database in turn and attach the app from there, and nothing here
+        // listed what it was already using. So "one app, several databases" was supported by
+        // everything except the screen somebody would try it on.
+        var siblings = app.EnvironmentId is { } envId
+            ? await db.ManagedServices.AsNoTracking()
+                .Where(s => s.WorkspaceId == WorkspaceId && s.EnvironmentId == envId)
+                .OrderBy(s => s.Name).ToListAsync(ct)
+            : [];
+
+        var wiredTo = serviceUsage
+            .ConnectionsFor([app], siblings.Select(s => s.ContainerName))
+            .TryGetValue(app.Id, out var hosts) ? hosts : [];
+
+        ViewBag.Databases = siblings
+            .Select(s => new AppDatabaseLinkViewModel(
+                s.Id, s.Name, s.Type, s.ContainerName,
+                wiredTo.Contains(s.ContainerName),
+                Harbora.Infrastructure.Services.AttachKeys.PrefixFor(s.Name)))
+            .ToList();
 
         // Disk, alongside memory and CPU. A tier sells storage now, so the page that shows what a
         // tier gave this app has to show that figure too — and how much of it is gone.
