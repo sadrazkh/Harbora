@@ -174,6 +174,28 @@ public sealed class DbSeeder(HarboraDbContext db)
             if (existing.IsBuiltIn && existing.DiskBytes == 0) existing.DiskBytes = s.DiskBytes;
         }
 
+        // Storage tiers, seeded like the compute ones. Without them the bucket form has no plan to
+        // offer and every bucket gets no ceiling, which is the option nobody chooses on purpose.
+        if (!await db.StoragePlans.AnyAsync())
+        {
+            db.StoragePlans.AddRange(
+                new Harbora.Domain.Storage.StoragePlan
+                {
+                    Name = "Starter", NameFa = "شروع",
+                    QuotaBytes = 10 * GB, MaxBuckets = 2, MonthlyPrice = 2, IsDefault = true, SortOrder = 1
+                },
+                new Harbora.Domain.Storage.StoragePlan
+                {
+                    Name = "Standard", NameFa = "استاندارد",
+                    QuotaBytes = 100 * GB, MaxBuckets = 10, MonthlyPrice = 12, SortOrder = 2
+                },
+                new Harbora.Domain.Storage.StoragePlan
+                {
+                    Name = "Scale", NameFa = "بزرگ",
+                    QuotaBytes = 1024 * GB, MaxBuckets = 0, MonthlyPrice = 80, SortOrder = 3
+                });
+        }
+
         if (!await db.Plans.AnyAsync())
         {
             db.Plans.AddRange(

@@ -113,6 +113,9 @@ public class HarboraDbContext : DbContext
     public DbSet<Setting> Settings => Set<Setting>();
     public DbSet<Harbora.Domain.Tenancy.Plan> Plans => Set<Harbora.Domain.Tenancy.Plan>();
     public DbSet<Harbora.Domain.Tenancy.InstanceSize> InstanceSizes => Set<Harbora.Domain.Tenancy.InstanceSize>();
+
+    public DbSet<Harbora.Domain.Storage.StorageBucket> StorageBuckets => Set<Harbora.Domain.Storage.StorageBucket>();
+    public DbSet<Harbora.Domain.Storage.StoragePlan> StoragePlans => Set<Harbora.Domain.Storage.StoragePlan>();
     public DbSet<Harbora.Domain.Tenancy.UsageRecord> UsageRecords => Set<Harbora.Domain.Tenancy.UsageRecord>();
 
     protected override void OnModelCreating(ModelBuilder b)
@@ -349,6 +352,21 @@ public class HarboraDbContext : DbContext
         });
         b.Entity<Setting>(e => e.HasIndex(x => x.Key).IsUnique());
         b.Entity<Harbora.Domain.Tenancy.InstanceSize>(e => e.HasIndex(x => x.Key).IsUnique());
+
+        b.Entity<Harbora.Domain.Storage.StorageBucket>(e =>
+        {
+            // A bucket belongs to a workspace and is only ever shown through it. Without the filter
+            // the storage page would list every tenant's buckets to whoever opened it.
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+
+            // Unique across the platform, not per workspace: the storage server has one namespace,
+            // so two tenants asking for "uploads" is a collision wherever it is not caught first.
+            e.HasIndex(x => x.Name).IsUnique();
+            e.HasOne(x => x.StoragePlan).WithMany().HasForeignKey(x => x.StoragePlanId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        b.Entity<Harbora.Domain.Storage.StoragePlan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
         b.Entity<Harbora.Domain.Tenancy.Plan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
         b.Entity<Harbora.Domain.Tenancy.UsageRecord>(e => e.HasIndex(x => new { x.WorkspaceId, x.Period }).IsUnique());
         b.Entity<AuditLog>(e => e.HasIndex(x => x.CreatedAt));

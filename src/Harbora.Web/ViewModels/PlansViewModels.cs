@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Domain.Tenancy;
 using Harbora.Infrastructure.Tenancy;
 
@@ -10,6 +10,9 @@ public sealed class PlansPageViewModel
     public bool IsProvider { get; set; }
     public List<Plan> Plans { get; set; } = new();
     public List<InstanceSize> Sizes { get; set; } = new();
+
+    /// <summary>The object-storage tiers, listed beside the compute ones and edited the same way.</summary>
+    public List<Harbora.Domain.Storage.StoragePlan> StoragePlans { get; set; } = new();
 
     /// <summary>
     /// Tenants already past a limit. Carried on the model rather than in ViewBag: it is a typed

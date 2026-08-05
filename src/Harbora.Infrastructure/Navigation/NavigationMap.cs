@@ -42,7 +42,11 @@ public static class NavigationMap
             new("routing", "Routes", "Index", "route", Capabilities.RoutesManage, Advanced: true)
         ]),
         new("data", [
-            new("backups", "Backups", "Index", "archive")
+            new("backups", "Backups", "Index", "archive"),
+            // Object storage sits beside backups rather than under Deploy: it is where data lives,
+            // and the page says so itself when no S3 server is configured — which is why it is a
+            // permanent entry rather than one contributed by a feature flag like sync's.
+            new("storage", "Storage", "Index", "hard-drive")
         ]),
         // AI sits in its own group rather than under Insight: it is a service somebody uses, not a
         // report they read, and burying it under monitoring is how a feature goes unnoticed.

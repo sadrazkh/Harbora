@@ -1,0 +1,159 @@
+@model StoragePageViewModel
+@using Harbora.Domain.Storage
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var message = TempData["Message"] as string;
+    var error = TempData["Error"] as string;
+
+    string Bytes(long b) => Harbora.Infrastructure.Tenancy.ByteSize.Format(
+        b, isFa ? "نامحدود" : "unlimited");
+}
+
+<partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+    isFa ? "فضای ذخیره‌سازی" : "Object storage",
+    isFa
+        ? "باکت S3 برای فایل‌هایی که اپ آپلود می‌کند و مرورگر دانلود. جدا از والیوم، که به یک اپ بسته است، و جدا از پشتیبان."
+        : "S3 buckets for the files an application uploads and a browser downloads. Separate from a volume, which belongs to one application, and from a backup."))" />
+
+@if (message is not null) { <div class="alert-success mb-4">@message</div> }
+@if (error is not null) { <div class="alert-danger mb-4">@error</div> }
+
+@if (!Model.IsConfigured)
+{
+    @* Said plainly rather than shown as an empty list with a button that fails. Object storage is a
+       service an operator has to run; the panel cannot conjure one. *@
+    <div class="alert-warning mb-6">
+        <i data-lucide="triangle-alert" class="h-4 w-4 shrink-0"></i>
+        <div>
+            <p>
+                @(isFa
+                    ? "فضای ذخیره‌سازی روی این نصب راه‌اندازی نشده. یک سرور سازگار با S3 (مثلاً MinIO) لازم است و بعد این کلیدها:"
+                    : "Object storage is not set up on this installation. It needs an S3-compatible server — MinIO, for example — and then these keys:")
+            </p>
+            <code dir="ltr" class="mt-1 block text-[11px]">@Model.WhatIsMissing</code>
+        </div>
+    </div>
+}
+
+@if (Model.Buckets.Count == 0 && Model.IsConfigured)
+{
+    <partial name="Design/_EmptyState" model="@(new EmptyStateModel("hard-drive",
+        isFa ? "هنوز باکتی ساخته نشده." : "No buckets yet."))" />
+}
+else if (Model.Buckets.Count > 0)
+{
+    <div class="mb-6 space-y-3">
+        @foreach (var bucket in Model.Buckets)
+        {
+            var reading = Harbora.Infrastructure.Monitoring.AllocationReading.Of(bucket.UsedBytes, bucket.QuotaBytes);
+            <section class="rounded-xl border border-line bg-surface p-5 shadow-panel">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <strong class="text-sm text-ink" dir="ltr">@bucket.Name</strong>
+                            @if (bucket.PlanName is { } plan)
+                            {
+                                <span class="status-pill bg-accent-soft text-accent-text">@plan</span>
+                            }
+                            @if (bucket.Status != BucketStatus.Ready)
+                            {
+                                <span class="status-pill bg-warn-soft text-warn">@bucket.Status</span>
+                            }
+                        </div>
+                        <p class="mt-1 text-xs text-ink-faint" dir="ltr">
+                            @(isFa ? "مصرف:" : "Used:")
+                            @* Never measured is not empty. A bucket reported as 0 B that has a
+                               terabyte in it is the kind of number people plan against. *@
+                            @(bucket.UsedBytes is { } used ? Bytes(used) : (isFa ? "اندازه‌گیری نشده" : "not measured"))
+                            / @Bytes(bucket.QuotaBytes)
+                        </p>
+                        @if (reading.HasShare)
+                        {
+                            <div class="mt-2 h-1.5 w-48 overflow-hidden rounded-full bg-surface-2">
+                                <div class="h-full @(reading.IsOver ? "bg-warn" : "bg-accent-hover")" style="width:@(reading.Percent)%"></div>
+                            </div>
+                        }
+                        @if (bucket.FailureReason is { } reason)
+                        {
+                            <p class="mt-1 text-[11px] text-danger">@reason</p>
+                        }
+                    </div>
+
+                    <form asp-action="Delete" asp-route-id="@bucket.Id" method="post"
+                          onsubmit="return confirm('@(isFa ? "باکت حذف شود؟ فقط وقتی خالی باشد." : "Delete this bucket? Only works when it is empty.")');">
+                        @Html.AntiForgeryToken()
+                        <button class="btn-secondary px-3 py-1.5 text-xs">@(isFa ? "حذف" : "Delete")</button>
+                    </form>
+                </div>
+
+                <dl class="mt-4 grid gap-3 border-t border-line pt-3 text-xs sm:grid-cols-3">
+                    <div>
+                        <dt class="text-ink-faint">Endpoint</dt>
+                        <dd class="text-ink" dir="ltr"><code>@Model.Endpoint</code></dd>
+                    </div>
+                    <div>
+                        <dt class="text-ink-faint">Access key</dt>
+                        <dd class="text-ink" dir="ltr"><code>@bucket.AccessKey</code></dd>
+                    </div>
+                    <div>
+                        <dt class="text-ink-faint">Secret key</dt>
+                        <dd class="text-ink" dir="ltr">
+                            @if (bucket.SecretKey is { } secret)
+                            {
+                                <code>@secret</code>
+                            }
+                            else
+                            {
+                                @* One at a time, and only on a click. A page that prints every
+                                   secret is a page nobody can screen-share. *@
+                                <a href="/storage?reveal=@bucket.Id" class="text-accent-text hover:underline">
+                                    @(isFa ? "نمایش" : "Reveal")
+                                </a>
+                            }
+                        </dd>
+                    </div>
+                </dl>
+            </section>
+        }
+    </div>
+}
+
+@if (Model.IsConfigured)
+{
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "باکت جدید" : "New bucket")</h2>
+
+        <form asp-action="Create" method="post" class="grid gap-4 sm:grid-cols-2">
+            @Html.AntiForgeryToken()
+            <div>
+                <label class="form-label" for="bucket-name">@(isFa ? "نام باکت" : "Bucket name")</label>
+                <input id="bucket-name" name="name" required class="form-control font-mono" dir="ltr" placeholder="my-app-uploads" />
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa
+                        ? "حروف کوچک، رقم و خط تیره. در کل پلتفرم یکتاست، چون سرور ذخیره‌سازی یک فضای نام دارد."
+                        : "Lowercase letters, digits and hyphens. Unique across the platform, because the storage server has one namespace.")
+                </p>
+            </div>
+
+            @if (Model.Plans.Count > 0)
+            {
+                <div>
+                    <label class="form-label" for="bucket-plan">@(isFa ? "پلن فضا" : "Storage plan")</label>
+                    <select id="bucket-plan" name="storagePlanId" class="form-control">
+                        @foreach (var plan in Model.Plans)
+                        {
+                            <option value="@plan.Id" selected="@plan.IsDefault">
+                                @(isFa && !string.IsNullOrWhiteSpace(plan.NameFa) ? plan.NameFa : plan.Name)
+                                — @Bytes(plan.QuotaBytes)@(plan.MonthlyPrice > 0 ? $" · ${plan.MonthlyPrice}/mo" : "")
+                            </option>
+                        }
+                    </select>
+                </div>
+            }
+
+            <div class="sm:col-span-2">
+                <button class="btn-primary px-4 py-2">@(isFa ? "ساخت باکت" : "Create bucket")</button>
+            </div>
+        </form>
+    </section>
+}

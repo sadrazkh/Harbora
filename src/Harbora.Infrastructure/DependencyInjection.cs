@@ -120,6 +120,9 @@ public static class DependencyInjection
         // Who is actually using a database — needed before deleting one, and by the architecture view.
         services.AddScoped<Services.ServiceUsageService>();
         services.AddScoped<Storage.VolumeFileService>();
+        services.Configure<Storage.ObjectStorageOptions>(
+            config.GetSection(Storage.ObjectStorageOptions.SectionName));
+        services.AddScoped<Storage.ObjectStorageAdmin>();
         services.AddScoped<IManagedServiceEngine>(sp => sp.GetRequiredService<Services.ManagedServiceEngine>());
 
         // Backups (config + volume/db), storage (local + S3), and the schedule runner.

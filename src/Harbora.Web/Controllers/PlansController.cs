@@ -35,7 +35,8 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
             // attached and hiding them makes a plan look deleted when it is not.
             Plans = await db.Plans.Where(p => p.IsEnabled || IsProvider)
                 .OrderBy(p => p.MonthlyPrice).ToListAsync(ct),
-            Sizes = await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct)
+            Sizes = await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct),
+            StoragePlans = await db.StoragePlans.OrderBy(p => p.SortOrder).ThenBy(p => p.MonthlyPrice).ToListAsync(ct)
         };
 
         // Who a limit change would already be biting. Shown because lowering a limit does not take
@@ -112,6 +113,35 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
         // not delete somebody's apps. They keep what they have and cannot add more, and the list
         // says who they are so it is a decision rather than a surprise.
         TempData["Message"] = "Plan updated. Tenants already over the new limits keep what they have.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Corrects a storage tier.
+    ///
+    /// Its own list rather than a field on the compute plan: object storage is bought in different
+    /// amounts from memory, by people who may not want more memory at all, and folding the two
+    /// together would mean the only way to buy more space is to buy a bigger server.
+    /// </summary>
+    [HttpPost("storage/{id:guid}")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.PlansManage)]
+    public async Task<IActionResult> UpdateStoragePlan(
+        Guid id, string name, long quotaGb, int maxBuckets, decimal monthlyPrice, CancellationToken ct)
+    {
+        var plan = await db.StoragePlans.FirstOrDefaultAsync(p => p.Id == id, ct);
+        if (plan is null) return NotFound();
+
+        plan.Name = string.IsNullOrWhiteSpace(name) ? plan.Name : name.Trim();
+        plan.QuotaBytes = quotaGb * 1024 * 1024 * 1024;
+        plan.MaxBuckets = Math.Max(0, maxBuckets);
+        plan.MonthlyPrice = monthlyPrice;
+        await db.SaveChangesAsync(ct);
+
+        // Says what it does not do. A bucket keeps the ceiling it was created with — it is copied
+        // onto the row, like an instance's memory limit — so this changes what the next bucket gets.
+        TempData["Message"] =
+            $"'{plan.Name}' updated. Buckets already created keep the quota they were given.";
         return RedirectToAction(nameof(Index));
     }
 

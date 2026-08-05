@@ -365,6 +365,51 @@
         </div>
     </section>
 
+    @* ---- object storage tiers ----
+       Their own list rather than a column on the plans above: storage is bought in different
+       amounts from memory, by people who may not want more memory at all. *@
+    @if (Model.StoragePlans.Count > 0)
+    {
+        <section class="mb-8 rounded-xl border border-line bg-surface p-5">
+            <h2 class="text-[15px] font-semibold text-ink mb-1">@(isFa ? "پلن‌های فضای ذخیره‌سازی" : "Object storage plans")</h2>
+            <p class="text-xs text-ink-faint mb-4">
+                @(isFa
+                    ? "باکت‌هایی که از قبل ساخته شده‌اند همان سقفی را که موقع ساخت گرفته‌اند نگه می‌دارند."
+                    : "Buckets already created keep the quota they were given.")
+            </p>
+
+            <div class="space-y-3">
+                @foreach (var sp in Model.StoragePlans)
+                {
+                    <form asp-controller="Plans" asp-action="UpdateStoragePlan" asp-route-id="@sp.Id" method="post"
+                          class="grid gap-3 rounded-lg border border-line bg-surface-2 p-3 sm:grid-cols-4">
+                        @Html.AntiForgeryToken()
+                        <div>
+                            <label class="form-label" for="spname-@sp.Id">@(isFa ? "نام" : "Name")</label>
+                            <input id="spname-@sp.Id" name="name" value="@sp.Name" class="form-control" />
+                        </div>
+                        <div>
+                            <label class="form-label" for="spquota-@sp.Id">@(isFa ? "سقف هر باکت (GB)" : "Quota per bucket (GB)")</label>
+                            <input id="spquota-@sp.Id" name="quotaGb" type="number" min="0" value="@(sp.QuotaBytes / 1024 / 1024 / 1024)" class="form-control" dir="ltr" />
+                        </div>
+                        <div>
+                            <label class="form-label" for="spmax-@sp.Id">@(isFa ? "حداکثر تعداد باکت" : "Maximum buckets")</label>
+                            <input id="spmax-@sp.Id" name="maxBuckets" type="number" min="0" value="@sp.MaxBuckets" class="form-control" dir="ltr" />
+                        </div>
+                        <div>
+                            <label class="form-label" for="spprice-@sp.Id">@(isFa ? "قیمت ماهانه" : "Monthly price")</label>
+                            <div class="flex items-center gap-2">
+                                <input id="spprice-@sp.Id" name="monthlyPrice" type="number" step="0.01" min="0" value="@sp.MonthlyPrice" class="form-control" dir="ltr" />
+                                <button class="btn-primary shrink-0 px-3 py-2 text-sm">@(isFa ? "ذخیره" : "Save")</button>
+                            </div>
+                        </div>
+                    </form>
+                }
+            </div>
+            <p class="mt-2 text-xs text-ink-faint">@(isFa ? "۰ یعنی بدون محدودیت." : "0 means no limit.")</p>
+        </section>
+    }
+
     @* ---- who a limit change is already biting ----
        Lowering a limit takes nothing away from anyone, so without this the effect is invisible. *@
     @if (Model.Overages.Count > 0)
