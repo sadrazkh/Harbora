@@ -74,6 +74,59 @@
 </div>
 <partial name="Design/_PanelEnd" />
 
+@* ---- database engines ----
+   A database is not provisioned from a template manifest, it comes from the service catalogue —
+   which is why its version list was two entries written in C# and had no page at all, while the
+   ready-made apps below had this one. *@
+@{ var servicePanel = new PanelModel(isFa ? "نسخه‌های دیتابیس‌ها" : "Database versions"); }
+<partial name="Design/_PanelStart" model="servicePanel" />
+
+<p class="text-sm leading-6 text-ink-muted">
+    @(isFa
+        ? "کدام نسخه‌ها موقع ساخت دیتابیس پیشنهاد شوند. با ویرگول جدا کنید؛ اولی همان چیزی است که اگر کسی انتخابی نکند ساخته می‌شود."
+        : "Which versions are offered when somebody creates a database. Comma separated; the first is what gets created when nobody chooses.")
+</p>
+<p class="mt-1 text-xs text-ink-faint">
+    @(isFa
+        ? "خالی بگذارید تا همان فهرست پیش‌فرض Harbora برگردد. دیتابیس‌هایی که الان کار می‌کنند تغییری نمی‌کنند."
+        : "Leave it empty to go back to the list Harbora ships with. Databases already running are unaffected.")
+</p>
+
+<div class="mt-4 space-y-3">
+    @foreach (var service in Model.Services)
+    {
+        <form asp-action="SaveServiceVersions" asp-route-type="@service.Type" method="post"
+              class="flex flex-wrap items-end gap-3 rounded-lg border border-line bg-surface-2 p-3">
+            @Html.AntiForgeryToken()
+            <div class="min-w-[16rem] flex-1">
+                <label class="form-label" for="svc-@service.Type">
+                    @service.DisplayName
+                    <code dir="ltr" class="ms-1 text-[11px] font-normal text-ink-faint">@service.ImageRepository</code>
+                </label>
+                <input id="svc-@service.Type" name="versions" value="@string.Join(",", service.Chosen)"
+                       placeholder="@string.Join(",", service.Shipped)"
+                       class="form-control font-mono text-sm" dir="ltr" autocomplete="off" />
+            </div>
+            <button class="btn-secondary px-4 py-2 text-sm">@(isFa ? "ذخیره" : "Save")</button>
+            <p class="w-full text-[11px] text-ink-faint">
+                @(isFa ? "الان ارائه می‌شود:" : "Currently offered:")
+                <span dir="ltr" class="text-ink-muted">@string.Join(" · ", service.Offered)</span>
+                @if (service.IsOverridden)
+                {
+                    @* Worth distinguishing: an operator looking at this needs to know whether they
+                       are seeing their own choice or the shipped default. *@
+                    <span class="status-pill ms-1 bg-accent-soft text-accent-text">@(isFa ? "تنظیم‌شده" : "yours")</span>
+                }
+                else
+                {
+                    <span class="status-pill ms-1 bg-surface-2 text-ink-faint">@(isFa ? "پیش‌فرض" : "shipped")</span>
+                }
+            </p>
+        </form>
+    }
+</div>
+<partial name="Design/_PanelEnd" />
+
 @* ---- versions ---- *@
 <div class="mt-6 space-y-5">
     @foreach (var group in Model.Templates)

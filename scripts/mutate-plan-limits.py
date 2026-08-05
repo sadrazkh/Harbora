@@ -21,10 +21,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 READING = ROOT / "src" / "Harbora.Infrastructure" / "Monitoring" / "AllocationReading.cs"
 OVERAGE = ROOT / "src" / "Harbora.Infrastructure" / "Tenancy" / "PlanOverage.cs"
 ENTRY = ROOT / "src" / "Harbora.Infrastructure" / "Templates" / "TemplateVersionEntry.cs"
+SVCVER = ROOT / "src" / "Harbora.Infrastructure" / "Services" / "ServiceVersions.cs"
 
 FILTER = ("FullyQualifiedName~AllocationReadingTests|"
           "FullyQualifiedName~PlanOverageTests|"
-          "FullyQualifiedName~TemplateVersionEntryTests")
+          "FullyQualifiedName~TemplateVersionEntryTests|"
+          "FullyQualifiedName~ServiceVersionsTests")
 
 MUTANTS = [
     # --- how full something is ---
@@ -87,12 +89,16 @@ MUTANTS = [
      ''),
 
     (ENTRY, "a duplicate is left to the unique index",
-     'if (existingVersions.Any(v => string.Equals(v?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase)))\n            return VersionEntryPlan.Refused(VersionEntryRefusal.AlreadyExists);',
+     'if (existingVersions.Any(v => string.Equals(v?.Trim(), trimmed, StringComparison.Ordinal)))\n            return VersionEntryPlan.Refused(VersionEntryRefusal.AlreadyExists);',
      ''),
 
-    (ENTRY, "a duplicate in another case slips past",
-     'StringComparison.OrdinalIgnoreCase))',
-     'StringComparison.Ordinal))'),
+    (ENTRY, "case folded away, so a real tag is refused as a duplicate of a different image",
+     'string.Equals(v?.Trim(), trimmed, StringComparison.Ordinal)',
+     'string.Equals(v?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase)'),
+
+    (ENTRY, "padding hides a duplicate",
+     'string.Equals(v?.Trim(), trimmed, StringComparison.Ordinal)',
+     'string.Equals(v, trimmed, StringComparison.Ordinal)'),
 
     (ENTRY, "a missing repository is not noticed until the lookup",
      'if (repo is null) return VersionEntryPlan.Refused(VersionEntryRefusal.UnknownRepository);',
@@ -129,6 +135,35 @@ MUTANTS = [
     (ENTRY, "a refused plan is built anyway",
      'if (!plan.Allowed) throw new InvalidOperationException("A refused plan must not be built.");',
      ''),
+
+    # --- which database versions are offered ---
+    (SVCVER, "an emptied list leaves the dropdown with nothing in it",
+     'return chosen.Count > 0 ? chosen : shipped;',
+     'return chosen;'),
+
+    (SVCVER, "the operator's list is merged with the shipped one instead of replacing it",
+     'return chosen.Count > 0 ? chosen : shipped;',
+     'return chosen.Count > 0 ? chosen.Concat(shipped).ToList() : shipped;'),
+
+    (SVCVER, "the order typed is sorted away, changing which version is the default",
+     'return chosen.Count > 0 ? chosen : shipped;',
+     'return chosen.Count > 0 ? chosen.Order().ToList() : shipped;'),
+
+    (SVCVER, "an entry that could not be a tag is offered anyway",
+     'if (!ImageReference.IsUsableTag(piece)) continue;',
+     ''),
+
+    (SVCVER, "the same version is offered twice",
+     'if (seen.Add(piece)) versions.Add(piece);',
+     'versions.Add(piece);'),
+
+    (SVCVER, "case folded away, so one legitimate tag swallows another",
+     'new HashSet<string>(StringComparer.Ordinal)',
+     'new HashSet<string>(StringComparer.OrdinalIgnoreCase)'),
+
+    (SVCVER, "dropped entries are never reported to whoever typed them",
+     '.Where(piece => !ImageReference.IsUsableTag(piece))',
+     '.Where(piece => false)'),
 ]
 
 originals = {path: path.read_text(encoding="utf-8") for path in {m[0] for m in MUTANTS}}

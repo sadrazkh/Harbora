@@ -26,9 +26,30 @@ public sealed class TemplateVersionGroupViewModel
     public string? Repository { get; init; }
 }
 
+/// <summary>
+/// One database engine's version list. Separate from the template groups above because a database
+/// is not provisioned from a template manifest — it comes from the service catalogue, which is why
+/// this list had no admin page at all while the applications next to it had one.
+/// </summary>
+/// <param name="Shipped">What Harbora offers when nobody has chosen. Shown so an operator can see what they are replacing.</param>
+/// <param name="Chosen">The operator's list, empty when they have not made one.</param>
+public sealed record ServiceVersionGroupViewModel(
+    Harbora.Domain.Common.ManagedServiceType Type,
+    string DisplayName,
+    string ImageRepository,
+    IReadOnlyList<string> Shipped,
+    IReadOnlyList<string> Chosen)
+{
+    public IReadOnlyList<string> Offered => Chosen.Count > 0 ? Chosen : Shipped;
+    public bool IsOverridden => Chosen.Count > 0;
+}
+
 public sealed class TemplateVersionAdminViewModel
 {
     public IReadOnlyList<TemplateVersionGroupViewModel> Templates { get; init; } = [];
+
+    /// <summary>The database engines, whose versions live in a different place entirely.</summary>
+    public IReadOnlyList<ServiceVersionGroupViewModel> Services { get; init; } = [];
 
     /// <summary>Whether Harbora is allowed to ask registries anything at all.</summary>
     public bool DiscoveryEnabled { get; init; }

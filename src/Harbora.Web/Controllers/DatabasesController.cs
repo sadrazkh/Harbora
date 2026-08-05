@@ -8,6 +8,7 @@ using Harbora.Domain.Backups;
 using Harbora.Domain.Common;
 using Harbora.Domain.Monitoring;
 using Harbora.Domain.Services;
+using Harbora.Infrastructure.Services;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -124,7 +125,7 @@ public sealed partial class DatabasesController(
         return View(new DatabasesPageViewModel
         {
             Databases = rows,
-            Catalog = engine.Catalog,
+            Catalog = await ServiceCatalogReader.EffectiveAsync(db, engine, ct),
             Selected = overview
         });
     }
@@ -266,7 +267,10 @@ public sealed partial class DatabasesController(
     [Authorize(Policy = Capabilities.DatabasesManage)]
     public async Task<IActionResult> Create(CreateServiceViewModel model, CancellationToken ct)
     {
-        var entry = engine.Catalog.FirstOrDefault(c => c.Type == model.Type);
+        // The operator's list, not the shipped one — the form offered theirs, and validating
+        // against a different list refuses the option the page just showed.
+        var catalog = await ServiceCatalogReader.EffectiveAsync(db, engine, ct);
+        var entry = catalog.FirstOrDefault(c => c.Type == model.Type);
         if (entry is null) ModelState.AddModelError(nameof(model.Type), "Unknown service type.");
         else if (!string.IsNullOrWhiteSpace(model.Version) &&
                  !entry.Versions.Contains(model.Version, StringComparer.OrdinalIgnoreCase))
@@ -624,7 +628,7 @@ public sealed partial class DatabasesController(
 
     private async Task PopulateCreateAsync(CancellationToken ct)
     {
-        ViewBag.Catalog = engine.Catalog;
+        ViewBag.Catalog = await ServiceCatalogReader.EffectiveAsync(db, engine, ct);
         var environmentQuery = db.Environments.AsNoTracking().Where(e => e.WorkspaceId == WorkspaceId);
         if (await access.VisibleProjectIdsAsync(ct) is { } visible)
             environmentQuery = environmentQuery.Where(e => visible.Contains(e.ProjectId));

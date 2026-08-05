@@ -78,11 +78,30 @@ public class TemplateVersionEntryTests
     }
 
     [Fact]
-    public void A_duplicate_is_recognised_whatever_its_case_or_padding()
+    public void Padding_around_a_duplicate_does_not_hide_it()
     {
-        TemplateVersionEntry.Plan(" RELEASE.2024-10-13 ", "quay.io/minio/minio",
-                ["release.2024-10-13"])
+        TemplateVersionEntry.Plan("  1.70.1  ", "ghcr.io/n8n-io/n8n", Existing)
             .Refusal.Should().Be(VersionEntryRefusal.AlreadyExists);
+    }
+
+    [Fact]
+    public void Padding_on_the_stored_side_does_not_hide_it_either()
+    {
+        // The stored list is whatever is in the database, which includes rows written by seed data
+        // and by imported catalogues rather than only by this code. A padded row would let the
+        // duplicate through to the unique index, which is a 500 on a page used correctly.
+        TemplateVersionEntry.Plan("1.70.1", "ghcr.io/n8n-io/n8n", [" 1.70.1 "])
+            .Refusal.Should().Be(VersionEntryRefusal.AlreadyExists);
+    }
+
+    [Fact]
+    public void Two_tags_differing_only_in_case_are_two_tags()
+    {
+        // A container tag is case-sensitive, and MinIO really does publish
+        // "RELEASE.2024-10-13T13-34-11Z". Folding case would refuse a genuine tag on the grounds
+        // that a different image already exists.
+        TemplateVersionEntry.Plan("RELEASE.2024-10-13", "quay.io/minio/minio", ["release.2024-10-13"])
+            .Allowed.Should().BeTrue();
     }
 
     [Fact]

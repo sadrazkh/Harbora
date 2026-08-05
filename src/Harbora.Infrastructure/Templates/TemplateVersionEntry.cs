@@ -64,10 +64,13 @@ public static class TemplateVersionEntry
         var repo = ImageReference.RepositoryOf(repository);
         if (repo is null) return VersionEntryPlan.Refused(VersionEntryRefusal.UnknownRepository);
 
-        // Checked here rather than left to the unique index, which would surface as a 500 on a
-        // page an operator was using correctly. Case-insensitive: "1.2" and "1.2" differing only
-        // in case are the same release to everyone except the index.
-        if (existingVersions.Any(v => string.Equals(v?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase)))
+        // Checked here rather than left to the unique index, which would surface as a 500 on a page
+        // an operator was using correctly.
+        //
+        // Case-sensitive, because a container tag is: MinIO publishes
+        // "RELEASE.2024-10-13T13-34-11Z", and folding case would refuse a real tag on the grounds
+        // that a differently-capitalised one already exists — which is a different image.
+        if (existingVersions.Any(v => string.Equals(v?.Trim(), trimmed, StringComparison.Ordinal)))
             return VersionEntryPlan.Refused(VersionEntryRefusal.AlreadyExists);
 
         return new VersionEntryPlan(VersionEntryRefusal.None, repo, trimmed);

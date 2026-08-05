@@ -47,4 +47,15 @@ public static class SettingKeys
 
     /// <summary>Whether branch previews start switched on for a new Git-backed application.</summary>
     public const string PreviewsDefault = "apps.previews_default";
+
+    /// <summary>
+    /// Which versions of one database engine are offered, comma-separated and in the order they
+    /// appear. Empty means the list Harbora ships with.
+    ///
+    /// The shipped list is two entries per engine, written in C#, so offering PostgreSQL 17 — or
+    /// keeping 14 for an application that needs it — took a release. The applications had a version
+    /// admin page and the databases beside them had nothing.
+    /// </summary>
+    public static string ServiceVersions(ManagedServiceType type) =>
+        $"services.versions.{type.ToString().ToLowerInvariant()}";
 }

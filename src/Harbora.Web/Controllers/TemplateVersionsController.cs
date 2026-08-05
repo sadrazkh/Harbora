@@ -2,7 +2,9 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Settings;
+using Harbora.Domain.Common;
 using Harbora.Domain.Templates;
+using Harbora.Infrastructure.Services;
 using Harbora.Infrastructure.Templates;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
@@ -24,6 +26,7 @@ public sealed class TemplateVersionsController(
     HarboraDbContext db,
     IAuditLogger audit,
     IContainerRegistry registry,
+    IManagedServiceEngine engine,
     Harbora.Infrastructure.Templates.RegistryDiscoveryService discovery) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -241,6 +244,58 @@ public sealed class TemplateVersionsController(
         return RedirectToAction(nameof(Index));
     }
 
+    /// <summary>
+    /// The versions of one database engine that customers may choose from.
+    ///
+    /// The shipped list is two entries written in C#, so offering PostgreSQL 17 — or keeping an
+    /// older one for an application that needs it — took a release, while the ready-made apps beside
+    /// them had this whole page.
+    /// </summary>
+    [HttpPost("services/{type}")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SaveServiceVersions(
+        ManagedServiceType type, string? versions, CancellationToken ct)
+    {
+        // Named rather than dropped. Half a list disappearing without a word is worse than a
+        // refusal: the save reports success and the operator assumes what they typed is stored.
+        var rejected = ServiceVersions.Rejected(versions);
+        if (rejected.Count > 0)
+        {
+            TempData["Error"] = IsFa
+                ? $"این‌ها شکل درستی برای تگ ندارند و چیزی ذخیره نشد: {string.Join("، ", rejected)}"
+                : $"These are not shapes a tag can have, so nothing was saved: {string.Join(", ", rejected)}";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var stored = ServiceVersions.Format(ServiceVersions.Parse(versions));
+        await WriteAsync(SettingKeys.ServiceVersions(type), stored, ct);
+        await audit.LogAsync("service.versions", "setting", $"{type}={stored}", ClientIp, ct: ct);
+
+        var shipped = engine.Catalog.FirstOrDefault(c => c.Type == type)?.Versions ?? [];
+        TempData["Message"] = stored.Length == 0
+            ? (IsFa
+                ? $"فهرست {type} خالی شد، پس همان نسخه‌های پیش‌فرض ارائه می‌شوند: {string.Join("، ", shipped)}"
+                : $"The {type} list was cleared, so the shipped versions are offered again: {string.Join(", ", shipped)}")
+            : (IsFa
+                ? $"نسخه‌های {type} ذخیره شد. اولی پیش‌فرض ساخت است."
+                : $"{type} versions saved. The first one is what a new database gets by default.");
+
+        return RedirectToAction(nameof(Index));
+    }
+
+    private async Task WriteAsync(string key, string value, CancellationToken ct)
+    {
+        var setting = await db.Settings.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Key == key, ct);
+        if (setting is null)
+        {
+            setting = new Setting { Key = key };
+            db.Settings.Add(setting);
+        }
+
+        setting.Value = value;
+        await db.SaveChangesAsync(ct);
+    }
+
     [HttpPost("discovery")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SetDiscovery(bool enabled, CancellationToken ct)
@@ -289,6 +344,21 @@ public sealed class TemplateVersionsController(
 
     private async Task<TemplateVersionAdminViewModel> BuildAsync(CancellationToken ct)
     {
+        var serviceGroups = new List<ServiceVersionGroupViewModel>();
+        foreach (var entry in engine.Catalog)
+        {
+            var stored = await db.Settings.IgnoreQueryFilters()
+                .Where(s => s.Key == SettingKeys.ServiceVersions(entry.Type))
+                .Select(s => s.Value).FirstOrDefaultAsync(ct);
+
+            serviceGroups.Add(new ServiceVersionGroupViewModel(
+                entry.Type,
+                IsFa ? entry.DisplayNameFa : entry.DisplayName,
+                ImageReference.RepositoryOf(entry.DefaultImage) ?? entry.DefaultImage,
+                entry.Versions,
+                ServiceVersions.Parse(stored)));
+        }
+
         var templates = await db.AppTemplates.Where(t => t.IsBuiltIn)
             .OrderBy(t => t.Name).ToListAsync(ct);
 
@@ -300,6 +370,7 @@ public sealed class TemplateVersionsController(
 
         return new TemplateVersionAdminViewModel
         {
+            Services = serviceGroups,
             DiscoveryEnabled = string.Equals(discoveryEnabled, "true", StringComparison.OrdinalIgnoreCase),
             Templates = templates.Select(t => new TemplateVersionGroupViewModel
             {
