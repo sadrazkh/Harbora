@@ -31,7 +31,13 @@ public sealed record ApplicationRowViewModel(
     string? LastCommit,
     bool CanOperate,
     double? CpuPercent,
-    long? MemoryBytes);
+    long? MemoryBytes,
+    /// <summary>
+    /// What this app was allotted, so the measurement above it has a denominator. The list showed
+    /// the sample alone — and "512 MB" answers nothing on its own, since full or empty depends
+    /// entirely on whether the app was given 512 MB or 8 GB. Zero means no ceiling was set.
+    /// </summary>
+    long MemoryLimitBytes = 0);
 
 public sealed class DatabasesPageViewModel
 {
@@ -61,7 +67,9 @@ public sealed record DatabaseRowViewModel(
     long? MemoryBytes,
     int LinkedApps,
     DateTimeOffset? LastBackupAt,
-    BackupStatus? LastBackupStatus);
+    BackupStatus? LastBackupStatus,
+    /// <summary>The allotted memory, for the same reason as on an application row.</summary>
+    long MemoryLimitBytes = 0);
 
 public sealed class DatabaseOverviewViewModel
 {

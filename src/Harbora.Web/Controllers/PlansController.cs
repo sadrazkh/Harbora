@@ -2,6 +2,7 @@
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Tenancy;
+using Harbora.Infrastructure.Tenancy;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -39,23 +40,17 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
 
         // Who a limit change would already be biting. Shown because lowering a limit does not take
         // anything away — so without this it is a decision whose effect nobody sees.
+        //
+        // Which limits count is a rule of its own: this list checked apps, databases and CPU, and
+        // skipped memory and disk, so halving a plan's memory produced no visible effect anywhere.
         if (IsProvider)
         {
-            var overs = new List<(string Tenant, string Plan, string Problem)>();
-
             foreach (var ws in await db.Workspaces.AsNoTracking().ToListAsync(ct))
             {
                 var usage = await quota.GetUsageAsync(ws.Id, ct);
-
-                if (usage.MaxApps > 0 && usage.Apps > usage.MaxApps)
-                    overs.Add((ws.Name, usage.PlanName, $"{usage.Apps} apps, limit {usage.MaxApps}"));
-                if (usage.MaxServices > 0 && usage.Services > usage.MaxServices)
-                    overs.Add((ws.Name, usage.PlanName, $"{usage.Services} databases, limit {usage.MaxServices}"));
-                if (usage.MaxCpuCores > 0 && usage.CpuUsed > usage.MaxCpuCores)
-                    overs.Add((ws.Name, usage.PlanName, $"{usage.CpuUsed:0.##} cores, limit {usage.MaxCpuCores:0.##}"));
+                vm.Overages.AddRange(PlanOverage.For(usage)
+                    .Select(b => new TenantOverPlanViewModel(ws.Name, usage.PlanName, b)));
             }
-
-            ViewBag.OverPlan = overs;
         }
 
         return View(vm);

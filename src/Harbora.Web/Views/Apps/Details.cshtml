@@ -194,13 +194,12 @@
                     ? $"{value / 1024 / 1024:0.#} MB"
                     : $"{value / 1024 / 1024 / 1024:0.##} GB";
 
-            double? Share(double? used, double allowed) =>
-                used is null || allowed <= 0 ? null : Math.Clamp(used.Value / allowed * 100, 0, 100);
-
-            var memoryShare = Share(memoryUsed, Model.MemoryLimitBytes);
-            var cpuShare = Model.CpuLimit > 0 && cpuPercent is not null
-                ? Math.Clamp(cpuPercent.Value / (Model.CpuLimit * 100) * 100, 0, 100)
-                : (double?)null;
+            // The same rule the lists and the plan page use. It was written inline here, where
+            // nothing could test it and each copy could drift.
+            var memoryShare = Harbora.Infrastructure.Monitoring.AllocationReading
+                .Of(memoryUsed, Model.MemoryLimitBytes);
+            var cpuShare = Harbora.Infrastructure.Monitoring.AllocationReading
+                .Of(cpuPercent, Model.CpuLimit * 100);
         }
         <section class="rounded-xl border border-line bg-surface p-4">
             <div class="mb-3 flex items-center justify-between gap-2">
@@ -225,9 +224,19 @@
                     </div>
                     @* Only drawn when there is a ceiling to draw it against. A bar with no maximum
                        is a shape that implies a number nobody set. *@
-                    @if (memoryShare is { } share)
+                    @if (memoryShare.HasShare)
                     {
-                        <span class="metric-track mt-1"><i style="width:@share.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%"></i></span>
+                        <span class="metric-track mt-1"><i style="width:@memoryShare.Percent%"></i></span>
+                        @if (memoryShare.IsOver)
+                        {
+                            @* Real, and worth saying: shrinking an app does not shrink the running
+                               container — the new ceiling applies at the next deployment. *@
+                            <p class="mt-1 text-[11px] text-warn">
+                                @(isFa
+                                    ? "بالاتر از سقف جدید است؛ با استقرار بعدی اعمال می‌شود."
+                                    : "Over the new ceiling — it applies at the next deployment.")
+                            </p>
+                        }
                     }
                 </div>
 
@@ -241,9 +250,9 @@
                                 : (isFa ? "· بدون سقف" : "· no limit"))
                         </span>
                     </div>
-                    @if (cpuShare is { } cshare)
+                    @if (cpuShare.HasShare)
                     {
-                        <span class="metric-track is-violet mt-1"><i style="width:@cshare.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%"></i></span>
+                        <span class="metric-track is-violet mt-1"><i style="width:@cpuShare.Percent%"></i></span>
                     }
                 </div>
             </div>

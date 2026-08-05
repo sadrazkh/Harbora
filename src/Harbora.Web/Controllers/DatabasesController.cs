@@ -240,7 +240,8 @@ public sealed partial class DatabasesController(
             s.StorageBytes, s.StorageMeasuredAt, cpu,
             memory is null ? null : (long?)memory.Value,
             connections.Count(c => c.Value.Contains(s.ContainerName)),
-            latestBackup?.FinishedAt ?? latestBackup?.CreatedAt, latestBackup?.Status);
+            latestBackup?.FinishedAt ?? latestBackup?.CreatedAt, latestBackup?.Status,
+            s.MemoryLimitBytes);
     }
 
     [HttpGet("create")]

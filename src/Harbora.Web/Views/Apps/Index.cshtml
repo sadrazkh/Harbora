@@ -4,9 +4,13 @@
     ViewData["Title"] = "Applications";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var environments = Model.Apps.Select(a => a.Environment).Where(e => e != "—").Distinct().Order().ToList();
-    string Bytes(long? bytes) => bytes is null ? "—" : bytes < 1024 * 1024
-        ? $"{bytes / 1024.0:0.#} KB"
-        : $"{bytes / 1024.0 / 1024:0.#} MB";
+    string Bytes(long? bytes) => bytes switch
+    {
+        null => "—",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        < 1024L * 1024 * 1024 => $"{bytes / 1024.0 / 1024:0.#} MB",
+        _ => $"{bytes / 1024.0 / 1024 / 1024:0.##} GB"
+    };
     string CssPercent(double? value) => Math.Clamp(value ?? 0, 0, 100)
         .ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
@@ -121,8 +125,41 @@
                             { <span class="table-secondary">@(isFa ? "بدون دامنه" : "No domain")</span> }
                         </td>
                         <td><span class="resource-status @Tone(app.Status)"><i></i>@app.Status</span></td>
-                        <td><div class="metric-reading">@(app.CpuPercent is null ? "—" : $"{app.CpuPercent:0.#}%")</div><span class="metric-track"><i style="width:@CssPercent(app.CpuPercent)%"></i></span></td>
-                        <td><div class="metric-reading">@Bytes(app.MemoryBytes)</div><span class="table-secondary">@(app.MemoryBytes is null ? (isFa ? "هنوز اندازه‌گیری نشده" : "Not measured yet") : (isFa ? "آخرین نمونه" : "Latest sample"))</span></td>
+                        <td>
+                            <div class="metric-reading">@(app.CpuPercent is null ? "—" : $"{app.CpuPercent:0.#}%")</div>
+                            @* No track when nothing was measured: an empty bar and an idle app look
+                               identical and mean opposite things. *@
+                            @if (app.CpuPercent is not null)
+                            {
+                                <span class="metric-track"><i style="width:@CssPercent(app.CpuPercent)%"></i></span>
+                            }
+                        </td>
+                        <td>
+                            @* The sample used to stand alone, and on its own it answers nothing —
+                               whether 512 MB is full or empty depends entirely on what the app was
+                               given. Now it is read against its allocation. *@
+                            @{ var memory = Harbora.Infrastructure.Monitoring.AllocationReading.Of(app.MemoryBytes, app.MemoryLimitBytes); }
+                            <div class="metric-reading" dir="ltr">
+                                @Bytes(app.MemoryBytes)@(app.MemoryLimitBytes > 0 ? $" / {Bytes(app.MemoryLimitBytes)}" : "")
+                            </div>
+                            @if (memory.HasShare)
+                            {
+                                <span class="metric-track"><i style="width:@memory.Percent%"></i></span>
+                                <span class="table-secondary">
+                                    @(memory.IsOver
+                                        ? (isFa ? "بالاتر از سقف — تا استقرار بعدی" : "over its limit until redeployed")
+                                        : (isFa ? $"٪{memory.Percent} از تخصیص" : $"{memory.Percent}% of allocation"))
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="table-secondary">
+                                    @(app.MemoryBytes is null
+                                        ? (isFa ? "هنوز اندازه‌گیری نشده" : "Not measured yet")
+                                        : (isFa ? "بدون سقف حافظه" : "No memory ceiling"))
+                                </span>
+                            }
+                        </td>
                         <td>
                             @if (app.LastDeploymentNumber is { } number)
                             {

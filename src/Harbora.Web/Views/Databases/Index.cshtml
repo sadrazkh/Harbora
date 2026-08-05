@@ -82,8 +82,38 @@
                         <td><div class="table-primary">@database.Project</div><div class="table-secondary">@database.Environment</div></td>
                         <td><span class="resource-status @Tone(database.Status)"><i></i>@database.Status</span></td>
                         <td><div class="table-primary">@Gb(database.StorageBytes)</div><div class="table-secondary">@(database.StorageMeasuredAt is null ? (isFa ? "اندازه‌گیری نشده" : "not measured") : database.StorageMeasuredAt.Value.LocalDateTime.ToString("MM/dd HH:mm"))</div></td>
-                        <td><div class="metric-reading">@(database.CpuPercent is null ? "—" : $"{database.CpuPercent:0.#}%")</div><span class="metric-track"><i style="width:@CssPercent(database.CpuPercent)%"></i></span></td>
-                        <td><div class="metric-reading">@Gb(database.MemoryBytes)</div><span class="table-secondary">@(database.MemoryBytes is null ? (isFa ? "هنوز اندازه‌گیری نشده" : "Not measured yet") : (isFa ? "آخرین نمونه" : "Latest sample"))</span></td>
+                        <td>
+                            <div class="metric-reading">@(database.CpuPercent is null ? "—" : $"{database.CpuPercent:0.#}%")</div>
+                            @if (database.CpuPercent is not null)
+                            {
+                                <span class="metric-track"><i style="width:@CssPercent(database.CpuPercent)%"></i></span>
+                            }
+                        </td>
+                        <td>
+                            @* Read against what the database was allotted. The sample alone said
+                               nothing about whether it is running out. *@
+                            @{ var memory = Harbora.Infrastructure.Monitoring.AllocationReading.Of(database.MemoryBytes, database.MemoryLimitBytes); }
+                            <div class="metric-reading" dir="ltr">
+                                @Gb(database.MemoryBytes)@(database.MemoryLimitBytes > 0 ? $" / {Gb(database.MemoryLimitBytes)}" : "")
+                            </div>
+                            @if (memory.HasShare)
+                            {
+                                <span class="metric-track"><i style="width:@memory.Percent%"></i></span>
+                                <span class="table-secondary">
+                                    @(memory.IsOver
+                                        ? (isFa ? "بالاتر از سقف" : "over its limit")
+                                        : (isFa ? $"٪{memory.Percent} از تخصیص" : $"{memory.Percent}% of allocation"))
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="table-secondary">
+                                    @(database.MemoryBytes is null
+                                        ? (isFa ? "هنوز اندازه‌گیری نشده" : "Not measured yet")
+                                        : (isFa ? "بدون سقف حافظه" : "No memory ceiling"))
+                                </span>
+                            }
+                        </td>
                         <td><span class="linked-count"><i data-lucide="boxes" class="h-3.5 w-3.5"></i>@database.LinkedApps</span></td>
                         <td>
                             @if (database.LastBackupAt is { } backupAt)

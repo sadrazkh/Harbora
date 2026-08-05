@@ -1,58 +1,112 @@
-﻿@model PlansPageViewModel
+@model PlansPageViewModel
+@using Harbora.Infrastructure.Monitoring
+@using Harbora.Infrastructure.Tenancy
 @{
     ViewData["Title"] = "Plans";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var u = Model.Usage;
-    string Mb(long b) => b <= 0 ? "∞" : $"{b / 1024 / 1024} MB";
-    string Bar(double used, double max)
-    {
-        if (max <= 0) return "5";
-        var pct = Math.Min(100, used / max * 100);
-        return pct.ToString("0");
-    }
+
+    // Sizes are read in MB and GB, not in bytes. A plan showing "2048 MB" of memory next to
+    // "21474836480" of disk is a form nobody can check their own work on.
+    string Mem(long b) => b <= 0
+        ? (isFa ? "نامحدود" : "unlimited")
+        : b >= 1024L * 1024 * 1024 ? $"{b / 1024.0 / 1024 / 1024:0.##} GB" : $"{b / 1024 / 1024} MB";
+    string Disk(long b) => b <= 0
+        ? (isFa ? "نامحدود" : "unlimited")
+        : $"{b / 1024.0 / 1024 / 1024:0.##} GB";
+    string Count(int n) => n <= 0 ? (isFa ? "نامحدود" : "unlimited") : n.ToString();
+    string Cores(double c) => c <= 0 ? (isFa ? "نامحدود" : "unlimited") : c.ToString("0.##");
 }
-<h1 class="text-2xl font-bold tracking-tight text-ink mb-1">@(isFa ? "پلن و مصرف" : "Plan & Usage")</h1>
+<h1 class="text-2xl font-bold tracking-tight text-ink mb-1">@(isFa ? "پلن و مصرف" : "Plan &amp; Usage")</h1>
 <p class="text-ink-muted text-sm mb-6">@(isFa ? "پلن فعلی:" : "Current plan:") <span class="text-ink font-medium">@u.PlanName</span>
     @if (u.Suspended){<span class="ms-2 text-xs rounded bg-danger/15 text-danger px-2 py-0.5">@(isFa ? "معلق" : "suspended")</span>}
 </p>
 
-<div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+@{
+    var message = TempData["Message"] as string;
+    var error = TempData["Error"] as string;
+}
+@if (message is not null)
+{
+    <div class="alert-success mb-4">@message</div>
+}
+@if (error is not null)
+{
+    <div class="alert-danger mb-4">@error</div>
+}
+
+@* ---- what this workspace is using ----
+   Memory and CPU here are what has been *reserved* — the sum of the sizes given to every app and
+   database — not what they are measured to be using. They were labelled plainly "Memory", which
+   reads as a measurement, and the difference between the two is most of a host's capacity. Each
+   card says which of the two it is. *@
+<div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
     @{
-        (string label, string used, double u1, double m1)[] cards =
+        (string Label, string Note, string Text, AllocationReading Reading)[] cards =
         {
-            (isFa ? "اپلیکیشن‌ها" : "Apps", $"{u.Apps} / {(u.MaxApps == 0 ? "∞" : u.MaxApps.ToString())}", u.Apps, u.MaxApps),
-            (isFa ? "سرویس‌ها" : "Services", $"{u.Services} / {(u.MaxServices == 0 ? "∞" : u.MaxServices.ToString())}", u.Services, u.MaxServices),
-            (isFa ? "حافظه" : "Memory", $"{Mb(u.MemoryUsedBytes)} / {Mb(u.MaxMemoryBytes)}", u.MemoryUsedBytes, u.MaxMemoryBytes),
-            ("CPU", $"{u.CpuUsed:0.##} / {(u.MaxCpuCores == 0 ? "∞" : u.MaxCpuCores.ToString("0.##"))}", u.CpuUsed, u.MaxCpuCores),
+            (isFa ? "اپلیکیشن‌ها" : "Apps", isFa ? "ساخته‌شده" : "created",
+                $"{u.Apps} / {Count(u.MaxApps)}", AllocationReading.OfCount(u.Apps, u.MaxApps)),
+            (isFa ? "دیتابیس‌ها" : "Databases", isFa ? "ساخته‌شده" : "created",
+                $"{u.Services} / {Count(u.MaxServices)}", AllocationReading.OfCount(u.Services, u.MaxServices)),
+            (isFa ? "حافظه" : "Memory", isFa ? "رزروشده، نه مصرف اندازه‌گیری‌شده" : "reserved, not measured use",
+                $"{Mem(u.MemoryUsedBytes)} / {Mem(u.MaxMemoryBytes)}", AllocationReading.Of(u.MemoryUsedBytes, u.MaxMemoryBytes)),
+            ("CPU", isFa ? "رزروشده، نه مصرف اندازه‌گیری‌شده" : "reserved, not measured use",
+                $"{u.CpuUsed:0.##} / {Cores(u.MaxCpuCores)}", AllocationReading.Of(u.CpuUsed, u.MaxCpuCores)),
+            (isFa ? "دیسک" : "Disk", isFa ? "اندازه‌گیری‌شده" : "measured",
+                $"{Disk(u.DiskUsedBytes)} / {Disk(u.MaxDiskBytes)}", AllocationReading.Of(u.DiskUsedBytes, u.MaxDiskBytes)),
         };
     }
     @foreach (var c in cards)
     {
         <div class="rounded-xl border border-line bg-surface p-4">
-            <div class="text-ink-muted text-sm">@c.label</div>
-            <div class="mt-1 text-xl font-bold">@c.used</div>
-            <div class="mt-2 h-1.5 rounded-full bg-surface-2 overflow-hidden">
-                <div class="h-full bg-accent-hover" style="width:@(Bar(c.u1, c.m1))%"></div>
-            </div>
+            <div class="text-ink-muted text-sm">@c.Label</div>
+            <div class="mt-1 text-xl font-bold" dir="ltr">@c.Text</div>
+            <div class="mt-0.5 text-[11px] text-ink-faint">@c.Note</div>
+            @* No bar without a denominator. The old one drew 5% for every unlimited resource, so
+               "∞" always looked very slightly full. *@
+            @if (c.Reading.HasShare)
+            {
+                <div class="mt-2 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+                    <div class="h-full @(c.Reading.IsOver ? "bg-warn" : "bg-accent-hover")" style="width:@(c.Reading.Percent)%"></div>
+                </div>
+            }
         </div>
     }
 </div>
+
+@if (u.DiskUnmeasured > 0)
+{
+    @* Said rather than folded into the number. A disk figure missing half its volumes is not a
+       smaller figure, it is an incomplete one. *@
+    <p class="-mt-4 mb-8 text-xs text-warn">
+        @(isFa
+            ? $"{u.DiskUnmeasured} حجم هنوز اندازه‌گیری نشده، پس رقم دیسک کامل نیست."
+            : $"{u.DiskUnmeasured} volume(s) have never been measured, so the disk figure is incomplete.")
+    </p>
+}
 
 <h2 class="text-lg font-semibold text-ink mb-3">@(isFa ? "پلن‌های ارائه‌شده" : "Offered plans")</h2>
 <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
     @foreach (var p in Model.Plans)
     {
-        <div class="rounded-xl border border-line bg-surface p-5">
-            <div class="flex items-center justify-between">
+        <div class="rounded-xl border border-line bg-surface p-5 @(p.IsEnabled ? "" : "opacity-60")">
+            <div class="flex items-center justify-between gap-2">
                 <span class="font-semibold text-lg">@(isFa ? p.NameFa : p.Name)</span>
                 @if (p.MonthlyPrice > 0){<span class="text-accent-text font-semibold">$@p.MonthlyPrice<span class="text-xs text-ink-faint">/mo</span></span>}
             </div>
+            @if (!p.IsEnabled)
+            {
+                <span class="mt-1 inline-block text-[11px] text-warn">@(isFa ? "به مشتری جدید ارائه نمی‌شود" : "not offered to new tenants")</span>
+            }
             <ul class="mt-3 space-y-1 text-sm text-ink-muted">
-                <li>@(p.MaxApps == 0 ? (isFa ? "اپ نامحدود" : "Unlimited apps") : $"{p.MaxApps} apps")</li>
-                <li>@(p.MaxServices == 0 ? (isFa ? "سرویس نامحدود" : "Unlimited services") : $"{p.MaxServices} services")</li>
-                <li>@(isFa ? "حافظه:" : "Memory:") @Mb(p.MaxMemoryBytes)</li>
-                <li>@(isFa ? "پردازنده:" : "CPU:") @(p.MaxCpuCores == 0 ? "∞" : p.MaxCpuCores.ToString("0.##"))</li>
-                @if (!string.IsNullOrWhiteSpace(p.AllowedSizeKeys)){<li>@(isFa ? "اندازه‌ها:" : "Sizes:") @p.AllowedSizeKeys</li>}
+                <li>@(isFa ? "اپلیکیشن:" : "Apps:") @Count(p.MaxApps)</li>
+                <li>@(isFa ? "دیتابیس:" : "Databases:") @Count(p.MaxServices)</li>
+                <li>@(isFa ? "حافظه:" : "Memory:") @Mem(p.MaxMemoryBytes)</li>
+                <li>@(isFa ? "پردازنده:" : "CPU:") @Cores(p.MaxCpuCores)</li>
+                @* The plan carried a disk limit, the quota check enforced it, and the card that
+                   sells the plan never mentioned it. *@
+                <li>@(isFa ? "دیسک:" : "Disk:") @Disk(p.MaxDiskBytes)</li>
+                @if (!string.IsNullOrWhiteSpace(p.AllowedSizeKeys)){<li>@(isFa ? "اندازه‌های مجاز:" : "Allowed sizes:") <span dir="ltr" class="font-mono text-xs">@p.AllowedSizeKeys</span></li>}
             </ul>
         </div>
     }
@@ -64,80 +118,177 @@
     {
         <div class="flex items-center justify-between p-3 text-sm">
             <span class="font-medium">@(isFa ? s.NameFa : s.Name) <span class="text-ink-faint font-mono">@s.Key</span></span>
-            <span class="text-ink-muted">@s.CpuCores vCPU · @(s.MemoryBytes / 1024 / 1024) MB</span>
+            <span class="text-ink-muted" dir="ltr">@s.CpuCores vCPU · @Mem(s.MemoryBytes)</span>
         </div>
     }
 </div>
 
 @if (Model.IsProvider)
 {
-    <section class="rounded-xl border border-line bg-surface p-5 max-w-2xl">
-        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "ساخت پلن جدید" : "Create a plan")</h2>
-        <form asp-controller="Plans" asp-action="CreatePlan" method="post" class="grid sm:grid-cols-2 gap-3">
+    @* ---- the fields, said once ----
+       Both forms below use the same labels and the same units. The edit form used to be eight bare
+       boxes in a four-column grid with a legend underneath, so working out which box was memory
+       meant counting along a row that wrapped. *@
+    <section class="rounded-xl border border-line bg-surface p-5 max-w-3xl">
+        <h2 class="text-[15px] font-semibold text-ink mb-1">@(isFa ? "ساخت پلن جدید" : "Create a plan")</h2>
+        <p class="text-xs text-ink-faint mb-4">@(isFa ? "در هر سقفی، ۰ یعنی نامحدود." : "In any limit, 0 means unlimited.")</p>
+
+        <form asp-controller="Plans" asp-action="CreatePlan" method="post" class="grid gap-4 sm:grid-cols-2">
             @Html.AntiForgeryToken()
-            <input name="name" placeholder="Name" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
-            <input name="monthlyPrice" type="number" step="0.01" placeholder="Price /mo" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
-            <input name="maxApps" type="number" value="1" placeholder="Max apps" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
-            <input name="maxServices" type="number" value="1" placeholder="Max services" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
-            <input name="maxMemoryMb" type="number" value="1024" placeholder="Max memory (MB)" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
-            <input name="maxCpu" type="number" step="0.25" value="1" placeholder="Max CPU cores" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
-            @* This field existed on the plan and on this screen, and the form never sent it — so
-               every plan carried a disk limit of zero while a column promised one. *@
-            <input name="maxDiskGb" type="number" value="0" placeholder="Max disk (GB)" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
-            <input name="allowedSizeKeys" placeholder="nano,micro,small" class="sm:col-span-2 rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm font-mono" />
-            <div class="sm:col-span-2"><button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@(isFa ? "ذخیره" : "Save")</button></div>
+
+            <div>
+                <label class="form-label" for="new-name">@(isFa ? "نام پلن" : "Plan name")</label>
+                <input id="new-name" name="name" required class="form-control" placeholder="@(isFa ? "مثلاً: استاندارد" : "e.g. Standard")" />
+            </div>
+            <div>
+                <label class="form-label" for="new-price">@(isFa ? "قیمت ماهانه" : "Monthly price")</label>
+                <input id="new-price" name="monthlyPrice" type="number" step="0.01" min="0" value="0" class="form-control" dir="ltr" />
+                <p class="mt-1 text-xs text-ink-faint">@(isFa ? "به دلار. ۰ یعنی رایگان." : "In dollars. 0 is free.")</p>
+            </div>
+            <div>
+                <label class="form-label" for="new-apps">@(isFa ? "حداکثر تعداد اپلیکیشن" : "Maximum applications")</label>
+                <input id="new-apps" name="maxApps" type="number" min="0" value="1" class="form-control" dir="ltr" />
+            </div>
+            <div>
+                <label class="form-label" for="new-services">@(isFa ? "حداکثر تعداد دیتابیس" : "Maximum databases")</label>
+                <input id="new-services" name="maxServices" type="number" min="0" value="1" class="form-control" dir="ltr" />
+            </div>
+            <div>
+                <label class="form-label" for="new-memory">@(isFa ? "حافظه — مگابایت (MB)" : "Memory — megabytes (MB)")</label>
+                <input id="new-memory" name="maxMemoryMb" type="number" min="0" value="1024" class="form-control" dir="ltr" />
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa
+                        ? "مجموع حافظهٔ رزروشدهٔ همهٔ اپ‌ها و دیتابیس‌های این مشتری. ۱۰۲۴ یعنی ۱ گیگابایت."
+                        : "The total reserved by all of this tenant's apps and databases. 1024 is 1 GB.")
+                </p>
+            </div>
+            <div>
+                <label class="form-label" for="new-cpu">@(isFa ? "پردازنده — تعداد هسته" : "CPU — cores")</label>
+                <input id="new-cpu" name="maxCpu" type="number" step="0.25" min="0" value="1" class="form-control" dir="ltr" />
+                <p class="mt-1 text-xs text-ink-faint">@(isFa ? "اعشاری مجاز است؛ ۰٫۵ یعنی نصف یک هسته." : "Fractions are fine; 0.5 is half a core.")</p>
+            </div>
+            <div>
+                <label class="form-label" for="new-disk">@(isFa ? "دیسک — گیگابایت (GB)" : "Disk — gigabytes (GB)")</label>
+                <input id="new-disk" name="maxDiskGb" type="number" min="0" value="0" class="form-control" dir="ltr" />
+            </div>
+            <div>
+                <label class="form-label" for="new-sizes">@(isFa ? "اندازه‌های مجاز" : "Allowed instance sizes")</label>
+                <input id="new-sizes" name="allowedSizeKeys" class="form-control font-mono" dir="ltr" placeholder="nano,micro,small" />
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa ? "با ویرگول جدا کنید. خالی یعنی همهٔ اندازه‌ها مجازند." : "Comma separated. Empty means every size is allowed.")
+                    @if (Model.Sizes.Count > 0)
+                    {
+                        <span dir="ltr" class="font-mono">(@string.Join(", ", Model.Sizes.Select(s => s.Key)))</span>
+                    }
+                </p>
+            </div>
+
+            <div class="sm:col-span-2"><button class="btn-primary px-4 py-2">@(isFa ? "ساخت پلن" : "Create plan")</button></div>
         </form>
-        <p class="mt-2 text-xs text-ink-faint">@(isFa ? "۰ یعنی نامحدود." : "0 means unlimited.")</p>
     </section>
 
     @* ---- correcting a plan ----
        Plans could only be created, so a wrong limit or a changed price meant a new plan and moving
        every tenant across by hand. *@
     <section class="mt-8 rounded-xl border border-line bg-surface p-5">
-        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "ویرایش پلن‌ها" : "Edit plans")</h2>
+        <h2 class="text-[15px] font-semibold text-ink mb-1">@(isFa ? "ویرایش پلن‌های موجود" : "Edit existing plans")</h2>
+        <p class="text-xs text-ink-faint mb-4">
+            @(isFa
+                ? "کم کردن یک سقف چیزی را از مشتری نمی‌گیرد: آنچه دارد می‌ماند و فقط نمی‌تواند مورد تازه‌ای اضافه کند."
+                : "Lowering a limit takes nothing away: a tenant keeps what they have and simply cannot add more.")
+        </p>
+
         <div class="space-y-4">
             @foreach (var p in Model.Plans)
             {
-                <form asp-controller="Plans" asp-action="UpdatePlan" asp-route-id="@p.Id" method="post"
-                      class="grid sm:grid-cols-4 gap-2 items-center">
-                    @Html.AntiForgeryToken()
-                    <input name="name" value="@p.Name" class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
-                    <input name="monthlyPrice" type="number" step="0.01" value="@p.MonthlyPrice" class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
-                    <input name="maxApps" type="number" value="@p.MaxApps" class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
-                    <input name="maxServices" type="number" value="@p.MaxServices" class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
-                    <input name="maxMemoryMb" type="number" value="@(p.MaxMemoryBytes / 1024 / 1024)" class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
-                    <input name="maxCpu" type="number" step="0.25" value="@p.MaxCpuCores" class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
-                    <input name="maxDiskGb" type="number" value="@(p.MaxDiskBytes / 1024 / 1024 / 1024)" class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
-                    <input name="allowedSizeKeys" value="@p.AllowedSizeKeys" class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm font-mono" />
-                    <div class="sm:col-span-4 flex items-center gap-2">
-                        <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-sm">@(isFa ? "ذخیره" : "save")</button>
-                        @if (!p.IsDefault)
-                        {
-                            <span></span>
-                        }
-                        <span class="text-xs text-ink-faint">
-                            @(isFa ? "نام / قیمت / اپ / دیتابیس / حافظه(MB) / CPU / دیسک(GB) / سایزها"
-                                   : "name / price / apps / databases / memory MB / cpu / disk GB / sizes")
+                <details class="rounded-xl border border-line bg-surface-2" open="@(Model.Plans.Count == 1)">
+                    <summary class="flex cursor-pointer flex-wrap items-center justify-between gap-2 px-4 py-3">
+                        <span class="flex items-center gap-2">
+                            <strong class="text-sm text-ink">@(isFa ? p.NameFa : p.Name)</strong>
+                            @if (p.IsDefault)
+                            {
+                                <span class="status-pill bg-accent-soft text-accent-text">@(isFa ? "پیش‌فرض" : "default")</span>
+                            }
+                            @if (!p.IsEnabled)
+                            {
+                                <span class="status-pill bg-warn-soft text-warn">@(isFa ? "برداشته‌شده" : "withdrawn")</span>
+                            }
                         </span>
+                        @* The summary line carries the figures, so the common case — checking a
+                           limit — does not need the form to be opened at all. *@
+                        <span class="text-xs text-ink-muted" dir="ltr">
+                            @Count(p.MaxApps) apps · @Count(p.MaxServices) db · @Mem(p.MaxMemoryBytes) · @Cores(p.MaxCpuCores) vCPU · @Disk(p.MaxDiskBytes)
+                        </span>
+                    </summary>
+
+                    <div class="border-t border-line p-4">
+                        <form asp-controller="Plans" asp-action="UpdatePlan" asp-route-id="@p.Id" method="post"
+                              class="grid gap-4 sm:grid-cols-2">
+                            @Html.AntiForgeryToken()
+
+                            <div>
+                                <label class="form-label" for="name-@p.Id">@(isFa ? "نام پلن" : "Plan name")</label>
+                                <input id="name-@p.Id" name="name" value="@p.Name" required class="form-control" />
+                            </div>
+                            <div>
+                                <label class="form-label" for="price-@p.Id">@(isFa ? "قیمت ماهانه" : "Monthly price")</label>
+                                <input id="price-@p.Id" name="monthlyPrice" type="number" step="0.01" min="0" value="@p.MonthlyPrice" class="form-control" dir="ltr" />
+                            </div>
+                            <div>
+                                <label class="form-label" for="apps-@p.Id">@(isFa ? "حداکثر تعداد اپلیکیشن" : "Maximum applications")</label>
+                                <input id="apps-@p.Id" name="maxApps" type="number" min="0" value="@p.MaxApps" class="form-control" dir="ltr" />
+                            </div>
+                            <div>
+                                <label class="form-label" for="services-@p.Id">@(isFa ? "حداکثر تعداد دیتابیس" : "Maximum databases")</label>
+                                <input id="services-@p.Id" name="maxServices" type="number" min="0" value="@p.MaxServices" class="form-control" dir="ltr" />
+                            </div>
+                            <div>
+                                <label class="form-label" for="memory-@p.Id">@(isFa ? "حافظه — مگابایت (MB)" : "Memory — megabytes (MB)")</label>
+                                <input id="memory-@p.Id" name="maxMemoryMb" type="number" min="0" value="@(p.MaxMemoryBytes / 1024 / 1024)" class="form-control" dir="ltr" />
+                                <p class="mt-1 text-xs text-ink-faint">@(isFa ? $"الان: {Mem(p.MaxMemoryBytes)}" : $"Currently {Mem(p.MaxMemoryBytes)}")</p>
+                            </div>
+                            <div>
+                                <label class="form-label" for="cpu-@p.Id">@(isFa ? "پردازنده — تعداد هسته" : "CPU — cores")</label>
+                                <input id="cpu-@p.Id" name="maxCpu" type="number" step="0.25" min="0" value="@p.MaxCpuCores" class="form-control" dir="ltr" />
+                            </div>
+                            <div>
+                                <label class="form-label" for="disk-@p.Id">@(isFa ? "دیسک — گیگابایت (GB)" : "Disk — gigabytes (GB)")</label>
+                                <input id="disk-@p.Id" name="maxDiskGb" type="number" min="0" value="@(p.MaxDiskBytes / 1024 / 1024 / 1024)" class="form-control" dir="ltr" />
+                            </div>
+                            <div>
+                                <label class="form-label" for="sizes-@p.Id">@(isFa ? "اندازه‌های مجاز" : "Allowed instance sizes")</label>
+                                <input id="sizes-@p.Id" name="allowedSizeKeys" value="@p.AllowedSizeKeys" class="form-control font-mono" dir="ltr" placeholder="nano,micro,small" />
+                                <p class="mt-1 text-xs text-ink-faint">@(isFa ? "خالی یعنی همهٔ اندازه‌ها." : "Empty means every size.")</p>
+                            </div>
+
+                            <div class="sm:col-span-2">
+                                <button class="btn-primary px-4 py-2">@(isFa ? "ذخیرهٔ تغییرات" : "Save changes")</button>
+                            </div>
+                        </form>
+
+                        <form asp-controller="Plans" asp-action="SetEnabled" asp-route-id="@p.Id" method="post" class="mt-3 border-t border-line pt-3">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="enabled" value="@((!p.IsEnabled).ToString().ToLowerInvariant())" />
+                            <button class="text-xs @(p.IsEnabled ? "text-warn" : "text-ok")">
+                                @(p.IsEnabled
+                                    ? (isFa ? "برداشتن از فهرست پلن‌های جدید" : "withdraw from new tenants")
+                                    : (isFa ? "در دسترس کردن دوباره" : "make available again"))
+                            </button>
+                            <p class="mt-1 text-[11px] text-ink-faint">
+                                @(isFa
+                                    ? "مشتری‌هایی که روی این پلن هستند تغییری نمی‌کنند؛ تا وقتی کسی روی آن باشد برداشتن رد می‌شود."
+                                    : "Tenants on this plan are unaffected, and withdrawing is refused while anybody is on it.")
+                            </p>
+                        </form>
                     </div>
-                </form>
-                <form asp-controller="Plans" asp-action="SetEnabled" asp-route-id="@p.Id" method="post">
-                    @Html.AntiForgeryToken()
-                    <input type="hidden" name="enabled" value="@((!p.IsEnabled).ToString().ToLowerInvariant())" />
-                    <button class="text-xs @(p.IsEnabled ? "text-warn" : "text-ok")">
-                        @(p.IsEnabled
-                            ? (isFa ? "برداشتن از فهرست پلن‌های جدید" : "withdraw from new tenants")
-                            : (isFa ? "در دسترس کردن دوباره" : "make available again"))
-                    </button>
-                </form>
+                </details>
             }
         </div>
     </section>
 
     @* ---- who a limit change is already biting ----
        Lowering a limit takes nothing away from anyone, so without this the effect is invisible. *@
-    var over = ViewBag.OverPlan as List<(string Tenant, string Plan, string Problem)> ?? new();
-    @if (over.Count > 0)
+    @if (Model.Overages.Count > 0)
     {
         <section class="mt-8 rounded-xl border border-warn bg-warn-soft p-5">
             <h2 class="font-semibold text-warn mb-2">@(isFa ? "بالاتر از سقف پلن" : "Over their plan")</h2>
@@ -147,11 +298,22 @@
                     : "Nothing has been taken away from them; they simply cannot add anything new.")
             </p>
             <div class="space-y-1 text-sm">
-                @foreach (var row in over)
+                @foreach (var row in Model.Overages)
                 {
+                    @* Formatted per resource: bytes as MB, cores as cores. A single format for all
+                       of them is how "4294967296 memory, limit 2147483648" gets onto a screen. *@
+                    var b = row.Breach;
+                    var problem = b.Resource switch
+                    {
+                        PlanResource.Memory => $"{Mem((long)b.Used)} / {Mem((long)b.Limit)}",
+                        PlanResource.Disk => $"{Disk((long)b.Used)} / {Disk((long)b.Limit)}",
+                        PlanResource.Cpu => $"{b.Used:0.##} / {b.Limit:0.##} " + (isFa ? "هسته" : "cores"),
+                        PlanResource.Services => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "دیتابیس" : "databases"),
+                        _ => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "اپلیکیشن" : "apps")
+                    };
                     <div class="flex flex-wrap justify-between gap-2">
-                        <span class="text-ink">@row.Tenant <span class="text-ink-faint">· @row.Plan</span></span>
-                        <span class="text-warn">@row.Problem</span>
+                        <span class="text-ink">@row.Tenant <span class="text-ink-faint">· @row.PlanName</span></span>
+                        <span class="text-warn" dir="ltr">@problem</span>
                     </div>
                 }
             </div>

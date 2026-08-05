@@ -92,7 +92,8 @@ public sealed class AppsController(
                     a.InstanceSizeKey, deployment?.Status, deployment?.Number,
                     deployment?.FinishedAt ?? deployment?.CreatedAt,
                     deployment?.CommitSha is { Length: > 0 } sha ? sha[..Math.Min(7, sha.Length)] : null,
-                    operable.Contains(a.Id), cpu, memory is null ? null : (long?)memory.Value);
+                    operable.Contains(a.Id), cpu, memory is null ? null : (long?)memory.Value,
+                    a.MemoryLimitBytes);
             }).ToList(),
             QuickStarts = await FeaturedCardsAsync(6, ct)
         });

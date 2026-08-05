@@ -14,13 +14,20 @@ public sealed class QuotaService(HarboraDbContext db) : IQuotaService
     public async Task<WorkspaceUsage> GetUsageAsync(Guid workspaceId, CancellationToken ct)
     {
         var (plan, apps, services, mem, cpu, suspended) = await SnapshotAsync(workspaceId, ct);
+
+        // Disk is reported here too. It was enforced on create and shown on the pricing card, and
+        // the usage screen — the one place a person looks to find out where they stand — had no
+        // disk on it at all.
+        var disk = await DiskUsageAsync(workspaceId, ct);
+
         return new WorkspaceUsage(
             plan?.Name ?? "Default",
             apps, plan?.MaxApps ?? 0,
             services, plan?.MaxServices ?? 0,
             mem, plan?.MaxMemoryBytes ?? 0,
             cpu, plan?.MaxCpuCores ?? 0,
-            suspended);
+            suspended,
+            disk.MeasuredBytes, plan?.MaxDiskBytes ?? 0, disk.UnmeasuredResources);
     }
 
     public async Task<QuotaCheck> CanAddAppAsync(Guid workspaceId, string? instanceSizeKey, Guid? excludeAppId, CancellationToken ct)
