@@ -84,6 +84,8 @@ public class BucketProvisioningTests
 
     // --- the commands ---
 
+    private const string JsonLine = "{\"prefix\":\"uploads\",\"size\":19,\"objects\":1}";
+
     private const string Nasty = "x\"; mc admin user add hb evil evilpass; echo \"";
 
     [Fact]
@@ -214,6 +216,20 @@ public class BucketProvisioningTests
         var output = "42\n{\"status\":\"success\",\"size\":700}\n";
 
         BucketCommands.ParseUsage(output).Should().Be(700);
+    }
+
+    [Fact]
+    public void Dockers_framing_bytes_do_not_make_the_measurement_unreadable()
+    {
+        // A container with no TTY has its output framed: every line arrives with a few control
+        // bytes on the front. StorageMeasurement documents the same trap from the same source, and
+        // observed it on a real server — requiring the line to start with a brace meant every
+        // measurement came back unreadable and the bucket read as never measured.
+        // The eight-byte stream header Docker puts in front of every frame.
+        var header = new string([(char)1, (char)0, (char)0, (char)0, (char)0, (char)0, (char)0, (char)71]);
+        var framed = header + JsonLine;
+
+        BucketCommands.ParseUsage(framed).Should().Be(19);
     }
 
     [Fact]

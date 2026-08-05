@@ -89,8 +89,19 @@ public static class BucketCommands
 
         foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
-            var trimmed = line.Trim();
-            if (!trimmed.StartsWith('{')) continue;
+            // Read from the first brace rather than requiring the line to start with one. Docker
+            // frames the output of a container with no TTY, so each line arrives with a few control
+            // bytes stuck to the front — StorageMeasurement documents the same trap from the same
+            // source, and requiring position zero meant every measurement came back unreadable and
+            // the bucket was reported as never measured.
+            //
+            // A pass that stripped control characters first went in here and came out again: this
+            // line already skips them, so the strip changed no outcome, and a redundant guard reads
+            // as the one doing the work until somebody weakens the one that is.
+            var start = line.IndexOf('{');
+            if (start < 0) continue;
+
+            var trimmed = line[start..].Trim();
 
             try
             {

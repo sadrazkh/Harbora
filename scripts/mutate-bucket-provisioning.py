@@ -80,8 +80,8 @@ MUTANTS = [
      'if (string.IsNullOrWhiteSpace(output)) return null;',
      'if (string.IsNullOrWhiteSpace(output)) return 0;'),
 
-    (CMD, "a line that is not json is read as a measurement",
-     "if (!trimmed.StartsWith('{')) continue;",
+    (CMD, "a line with no json in it is read as a measurement",
+     'if (start < 0) continue;',
      ''),
 
     (CMD, "a negative size is accepted as a measurement",
