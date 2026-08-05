@@ -80,6 +80,12 @@ public sealed class CreateServiceViewModel
     [Required] public string Name { get; set; } = string.Empty;
     public ManagedServiceType Type { get; set; } = ManagedServiceType.PostgreSql;
     public string Version { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The resource plan. A database used to take whatever it wanted while the application beside
+    /// it was capped to the byte and counted against the workspace's quota.
+    /// </summary>
+    public string? InstanceSizeKey { get; set; }
 }
 
 public sealed class DashboardViewModel

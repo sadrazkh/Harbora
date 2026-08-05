@@ -9,7 +9,7 @@ public interface IQuotaService
 {
     Task<WorkspaceUsage> GetUsageAsync(Guid workspaceId, CancellationToken ct);
     Task<QuotaCheck> CanAddAppAsync(Guid workspaceId, string? instanceSizeKey, Guid? excludeAppId, CancellationToken ct);
-    Task<QuotaCheck> CanAddServiceAsync(Guid workspaceId, CancellationToken ct);
+    Task<QuotaCheck> CanAddServiceAsync(Guid workspaceId, string? instanceSizeKey, CancellationToken ct);
 }
 
 public sealed record QuotaCheck(bool Allowed, string? Reason)

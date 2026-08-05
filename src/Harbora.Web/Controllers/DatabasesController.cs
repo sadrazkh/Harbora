@@ -172,7 +172,7 @@ public sealed partial class DatabasesController(
             ModelState.AddModelError(nameof(model.Version), "The selected database version is not supported.");
         }
 
-        var check = await quota.CanAddServiceAsync(WorkspaceId, ct);
+        var check = await quota.CanAddServiceAsync(WorkspaceId, model.InstanceSizeKey, ct);
         if (!check.Allowed) ModelState.AddModelError(string.Empty, check.Reason ?? "Plan quota exceeded.");
 
         var environment = await projects.ResolveEnvironmentAsync(WorkspaceId, model.EnvironmentId, ct);
@@ -212,6 +212,21 @@ public sealed partial class DatabasesController(
             DatabaseName = entry.HasDatabaseName ? slug.Replace('-', '_') : string.Empty,
             EncryptedPassword = protector.Protect(Harbora.Infrastructure.Services.ServiceCredentials.Generate())
         };
+
+        // The chosen plan becomes the container's ceiling. Resolved here rather than at provision
+        // time so the row records what was agreed, and a size later withdrawn from the catalogue
+        // does not silently un-limit a running database.
+        if (!string.IsNullOrWhiteSpace(model.InstanceSizeKey))
+        {
+            var size = await db.InstanceSizes.FirstOrDefaultAsync(s => s.Key == model.InstanceSizeKey, ct);
+            if (size is not null)
+            {
+                service.InstanceSizeKey = size.Key;
+                service.MemoryLimitBytes = size.MemoryBytes;
+                service.CpuLimit = size.CpuCores;
+            }
+        }
+
         db.ManagedServices.Add(service);
         await db.SaveChangesAsync(ct);
 
@@ -455,6 +470,23 @@ public sealed partial class DatabasesController(
             .OrderBy(e => e.Project!.Name).ThenByDescending(e => e.IsDefault).ThenBy(e => e.Name)
             .Select(e => new SelectListItem($"{e.Project!.Name} · {e.Name}", e.Id.ToString()))
             .ToListAsync(ct);
+
+        // The same list the application form offers, filtered by the same plan. A database that can
+        // be any size while the app beside it is capped is not a plan, it is a suggestion.
+        var plan = await db.Workspaces.Where(w => w.Id == WorkspaceId)
+                .Select(w => w.PlanId).FirstOrDefaultAsync(ct) is { } planId
+            ? await db.Plans.FirstOrDefaultAsync(p => p.Id == planId, ct)
+            : await db.Plans.FirstOrDefaultAsync(p => p.IsDefault, ct);
+
+        var allowed = plan is null || string.IsNullOrWhiteSpace(plan.AllowedSizeKeys)
+            ? null
+            : plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        ViewBag.Sizes = (await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct))
+            .Where(s => allowed is null || allowed.Contains(s.Key))
+            .Select(s => new SelectListItem($"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key))
+            .ToList();
     }
 
 

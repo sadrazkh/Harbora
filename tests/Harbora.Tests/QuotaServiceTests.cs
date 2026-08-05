@@ -135,7 +135,7 @@ public class QuotaServiceTests : IDisposable
         GivenPlan(maxDiskGb: 2);
         GivenDatabase(3 * Gb);
 
-        var check = await Service().CanAddServiceAsync(_workspace, default);
+        var check = await Service().CanAddServiceAsync(_workspace, null, default);
 
         check.Allowed.Should().BeFalse();
         check.Reason.Should().Contain("disk");
@@ -148,7 +148,7 @@ public class QuotaServiceTests : IDisposable
         GivenDatabase(1 * Gb);
 
         (await Service().CanAddAppAsync(_workspace, null, null, default)).Allowed.Should().BeTrue();
-        (await Service().CanAddServiceAsync(_workspace, default)).Allowed.Should().BeTrue();
+        (await Service().CanAddServiceAsync(_workspace, null, default)).Allowed.Should().BeTrue();
     }
 
     [Fact]

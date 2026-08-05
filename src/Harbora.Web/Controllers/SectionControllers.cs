@@ -90,6 +90,7 @@ public sealed class TemplatesController(
         {
             Item = item,
             Versions = versions,
+            Sizes = await SizeChoicesAsync(ct),
             NodeArchitecture = architecture,
             HasVersionsButNoneOfferable = hasVersions && versions.Count == 0,
             Input = new Harbora.Web.ViewModels.TemplateDeployInput
@@ -112,6 +113,30 @@ public sealed class TemplatesController(
     /// same empty list and need opposite messages — one is an ordinary template, the other is an
     /// entry somebody will otherwise keep trying to deploy.
     /// </summary>
+    /// <summary>
+    /// The resource plans this workspace may pick from, filtered by its plan — the same list and the
+    /// same filter the application form uses, so a template cannot create a database of a size the
+    /// person could not have chosen directly.
+    /// </summary>
+    private async Task<List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem>> SizeChoicesAsync(CancellationToken ct)
+    {
+        var plan = await db.Workspaces.Where(w => w.Id == WorkspaceId)
+                .Select(w => w.PlanId).FirstOrDefaultAsync(ct) is { } planId
+            ? await db.Plans.FirstOrDefaultAsync(p => p.Id == planId, ct)
+            : await db.Plans.FirstOrDefaultAsync(p => p.IsDefault, ct);
+
+        var allowed = plan is null || string.IsNullOrWhiteSpace(plan.AllowedSizeKeys)
+            ? null
+            : plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return (await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct))
+            .Where(s => allowed is null || allowed.Contains(s.Key))
+            .Select(s => new Microsoft.AspNetCore.Mvc.Rendering.SelectListItem(
+                $"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key))
+            .ToList();
+    }
+
     private async Task<(IReadOnlyList<Harbora.Domain.Templates.AppTemplateVersion> Versions, string? Architecture, bool HasVersions)>
         VersionChoicesAsync(Guid templateId, CancellationToken ct)
     {
@@ -154,7 +179,10 @@ public sealed class TemplatesController(
                 input.GitRef,
                 input.Variables,
                 input.DeployNow,
-                input.VersionId), ct);
+                // Named, because a positional argument list this long is how the next parameter
+                // added in the middle silently becomes somebody else's value.
+                InstanceSizeKey: input.InstanceSizeKey,
+                VersionId: input.VersionId), ct);
 
             await audit.LogAsync("template.deploy", "template", id.ToString(),
                 HttpContext.Connection.RemoteIpAddress?.ToString(),
@@ -195,6 +223,7 @@ public sealed class TemplatesController(
             Item = item,
             Input = input,
             Versions = versions,
+            Sizes = await SizeChoicesAsync(ct),
             NodeArchitecture = architecture,
             HasVersionsButNoneOfferable = hasVersions && versions.Count == 0
         };

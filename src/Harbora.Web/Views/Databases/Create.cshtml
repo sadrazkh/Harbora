@@ -3,6 +3,7 @@
     ViewData["Title"] = "Create database";
     var catalog = ViewBag.Catalog as IReadOnlyList<Harbora.Application.Abstractions.ServiceCatalogEntry> ?? [];
     var environments = ViewBag.Environments as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
+    var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var versionMap = catalog.ToDictionary(c => c.Type.ToString(), c => c.Versions);
     var portMap = catalog.ToDictionary(c => c.Type.ToString(), c => c.InternalPort);
@@ -44,6 +45,8 @@
                 @if (environments.Count > 0)
                 {
                     <label class="form-field md:col-span-2"><span>@(isFa ? "پروژه و محیط" : "Project environment")</span><select asp-for="EnvironmentId" asp-items="environments" class="form-control"></select><small>@(isFa ? "این انتخاب شبکه خصوصی و اپ‌های قابل اتصال را تعیین می‌کند." : "This determines the private network and which apps can attach.")</small></label>
+
+                <label class="form-field"><span>@(isFa ? "اندازه منبع" : "Instance size")</span><select asp-for="InstanceSizeKey" asp-items="sizes" class="form-control"></select><small>@(isFa ? "سقف حافظه و CPU این دیتابیس، و سهمی که از quota فضای کاری می‌گیرد." : "The memory and CPU ceiling for this database, and what it takes from the workspace quota.")</small></label>
                 }
             </div>
         </section>

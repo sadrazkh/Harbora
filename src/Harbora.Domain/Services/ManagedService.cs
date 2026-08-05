@@ -41,6 +41,19 @@ public class ManagedService : BaseEntity
     /// which is worse than saying nothing at all.
     /// </summary>
     public bool TlsEnabled { get; set; }
+
+    /// <summary>
+    /// The resource plan this database runs under, or null for one created before databases had
+    /// one. Null means unlimited, which is what every managed service was until now: apps were
+    /// capped and sized, and a database could take the whole host.
+    /// </summary>
+    public string? InstanceSizeKey { get; set; }
+
+    /// <summary>Hard memory ceiling handed to the container. Zero means none.</summary>
+    public long MemoryLimitBytes { get; set; }
+
+    /// <summary>CPU ceiling in cores. Zero means none.</summary>
+    public double CpuLimit { get; set; }
     public string DatabaseName { get; set; } = string.Empty;
 
     public string VolumeName { get; set; } = string.Empty;

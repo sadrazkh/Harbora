@@ -24,6 +24,12 @@ public sealed record TemplateDeployRequest(
     bool DeployNow,
 
     /// <summary>
+    /// The resource plan for everything this template creates — the app and the databases beside
+    /// it. Optional and last so existing callers keep working; null means the platform default.
+    /// </summary>
+    string? InstanceSizeKey = null,
+
+    /// <summary>
     /// The version the person picked, or null to take the recommended one. Optional and last so
     /// every existing caller keeps working unchanged.
     /// </summary>
@@ -76,9 +82,16 @@ public sealed class TemplateDeploymentService(
 
         foreach (var _ in dependencyTypes)
         {
-            var serviceQuota = await quota.CanAddServiceAsync(request.WorkspaceId, ct);
+            var serviceQuota = await quota.CanAddServiceAsync(request.WorkspaceId, request.InstanceSizeKey, ct);
             if (!serviceQuota.Allowed) throw new InvalidOperationException(serviceQuota.Reason ?? "Service quota exceeded.");
         }
+
+        // Resolved once and applied to everything this template creates. Without it a stack
+        // template made an app with a ceiling and two databases with none.
+        var size = string.IsNullOrWhiteSpace(request.InstanceSizeKey)
+            ? null
+            : await db.InstanceSizes.AsNoTracking()
+                .FirstOrDefaultAsync(s => s.Key == request.InstanceSizeKey, ct);
 
         var server = await db.Servers.Where(s => s.IsLocal)
             .Select(s => new { s.Id, s.Architecture }).FirstOrDefaultAsync(ct)
@@ -128,7 +141,10 @@ public sealed class TemplateDeploymentService(
                 InternalPort = definition.Port,
                 Username = "harbora",
                 DatabaseName = database,
-                EncryptedPassword = protector.Protect(password)
+                EncryptedPassword = protector.Protect(password),
+                InstanceSizeKey = size?.Key,
+                MemoryLimitBytes = size?.MemoryBytes ?? 0,
+                CpuLimit = size?.CpuCores ?? 0
             };
 
             var credentials = new ServiceCreds(container, definition.Port, service.Username, password, database);
@@ -167,6 +183,9 @@ public sealed class TemplateDeploymentService(
                 : VersionSelection.PinnedImage(version) ?? manifest.Image,
             GitRef = string.IsNullOrWhiteSpace(request.GitRef) ? "main" : request.GitRef.Trim(),
             ContainerPort = manifest.Port ?? 80,
+            InstanceSizeKey = size?.Key,
+            MemoryLimitBytes = size?.MemoryBytes ?? 0,
+            CpuLimit = size?.CpuCores ?? 0,
             HealthCheckPath = string.IsNullOrWhiteSpace(manifest.HealthPath) ? "/" : manifest.HealthPath,
             Status = AppStatus.Created
         };

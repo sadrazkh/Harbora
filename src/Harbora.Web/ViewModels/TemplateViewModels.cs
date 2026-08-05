@@ -54,6 +54,9 @@ public sealed class TemplateDeployInput
 
     /// <summary>Which version to install. Null means the recommended one.</summary>
     public Guid? VersionId { get; set; }
+
+    /// <summary>The resource plan for the app and every database this template creates with it.</summary>
+    public string? InstanceSizeKey { get; set; }
 }
 
 public sealed class TemplateDeployPageViewModel
@@ -79,4 +82,10 @@ public sealed class TemplateDeployPageViewModel
     /// accepting a submission that is certain to fail.
     /// </summary>
     public bool HasVersionsButNoneOfferable { get; init; }
+
+    /// <summary>
+    /// The resource plans this workspace may pick from. Empty when the platform has none defined,
+    /// and then the selector is not drawn rather than drawn empty.
+    /// </summary>
+    public IReadOnlyList<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> Sizes { get; init; } = [];
 }

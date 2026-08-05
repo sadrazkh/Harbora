@@ -114,7 +114,10 @@ public sealed class ManagedServiceEngine(
                 def.Env(creds),
                 new Dictionary<string, string> { ["harbora.managed"] = "true", ["harbora.service"] = svc.Name },
                 volumes,
-                def.Port, 0, 0, null, command), ct);
+                // Zero and zero until now: an app was sized and capped, and the database beside it
+                // could take every core and every byte on the host. Zero still means unlimited, for
+                // the services that predate this.
+                def.Port, svc.MemoryLimitBytes, svc.CpuLimit, null, command), ct);
 
             foreach (var extra in networks.Skip(1))
                 await docker.ConnectNetworkAsync(svc.ContainerName, extra, ct);

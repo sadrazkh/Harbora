@@ -53,13 +53,25 @@ public sealed class QuotaService(HarboraDbContext db) : IQuotaService
         return QuotaCheck.Ok;
     }
 
-    public async Task<QuotaCheck> CanAddServiceAsync(Guid workspaceId, CancellationToken ct)
+    public async Task<QuotaCheck> CanAddServiceAsync(
+        Guid workspaceId, string? instanceSizeKey, CancellationToken ct)
     {
-        var (plan, _, services, _, _, suspended) = await SnapshotAsync(workspaceId, ct);
+        var (plan, _, services, mem, cpu, suspended) = await SnapshotAsync(workspaceId, ct);
         if (suspended) return QuotaCheck.Deny("This workspace is suspended.");
         if (plan is null) return QuotaCheck.Ok;
         if (plan.MaxServices > 0 && services >= plan.MaxServices)
             return QuotaCheck.Deny($"Service limit reached ({plan.MaxServices}).");
+
+        // The same check an app gets. Without it a plan could cap applications precisely and let a
+        // database of any size sit next to them.
+        var size = await SizeAsync(instanceSizeKey, ct);
+        if (size is not null && !IsSizeAllowed(plan, size.Key))
+            return QuotaCheck.Deny($"Instance size '{size.Key}' is not allowed on the {plan.Name} plan.");
+
+        if (plan.MaxMemoryBytes > 0 && mem + (size?.MemoryBytes ?? 0) > plan.MaxMemoryBytes)
+            return QuotaCheck.Deny("Memory quota exceeded for this plan.");
+        if (plan.MaxCpuCores > 0 && cpu + (size?.CpuCores ?? 0) > plan.MaxCpuCores)
+            return QuotaCheck.Deny("CPU quota exceeded for this plan.");
 
         var disk = await DiskUsageAsync(workspaceId, ct);
         if (!DiskQuota.Allows(plan.MaxDiskBytes, disk))
@@ -109,6 +121,12 @@ public sealed class QuotaService(HarboraDbContext db) : IQuotaService
         var apps = await appsQuery.CountAsync(ct);
         var mem = await appsQuery.SumAsync(a => (long?)a.MemoryLimitBytes, ct) ?? 0;
         var cpu = await appsQuery.SumAsync(a => (double?)a.CpuLimit, ct) ?? 0;
+
+        // Databases count too. They did not, so a plan's memory limit measured half the workspace
+        // and a tenant could sit inside their quota while the host ran out of memory.
+        var serviceQuery = db.ManagedServices.AsNoTracking().Where(s => s.WorkspaceId == workspaceId);
+        mem += await serviceQuery.SumAsync(s => (long?)s.MemoryLimitBytes, ct) ?? 0;
+        cpu += await serviceQuery.SumAsync(s => (double?)s.CpuLimit, ct) ?? 0;
         var services = await db.ManagedServices.AsNoTracking().CountAsync(s => s.WorkspaceId == workspaceId, ct);
 
         return (plan, apps, services, mem, cpu, ws?.IsSuspended ?? false);

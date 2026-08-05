@@ -94,7 +94,7 @@ public class DatabaseAccessPageTests
     {
         public Task<WorkspaceUsage> GetUsageAsync(Guid w, CancellationToken ct) => throw new NotSupportedException();
         public Task<QuotaCheck> CanAddAppAsync(Guid w, string? s, Guid? e, CancellationToken ct) => Task.FromResult(QuotaCheck.Ok);
-        public Task<QuotaCheck> CanAddServiceAsync(Guid w, CancellationToken ct) => Task.FromResult(QuotaCheck.Ok);
+        public Task<QuotaCheck> CanAddServiceAsync(Guid w, string? size, CancellationToken ct) => Task.FromResult(QuotaCheck.Ok);
     }
 
     private static DatabaseAccessGrant Grant(Fixture f, Guid? serviceId = null, Guid? workspaceId = null) =>

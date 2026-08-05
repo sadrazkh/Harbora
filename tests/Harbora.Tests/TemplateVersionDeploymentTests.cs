@@ -29,7 +29,7 @@ public class TemplateVersionDeploymentTests
         public Task<QuotaCheck> CanAddAppAsync(Guid w, string? size, Guid? exclude, CancellationToken ct) =>
             Task.FromResult(QuotaCheck.Ok);
 
-        public Task<QuotaCheck> CanAddServiceAsync(Guid w, CancellationToken ct) =>
+        public Task<QuotaCheck> CanAddServiceAsync(Guid w, string? size, CancellationToken ct) =>
             Task.FromResult(QuotaCheck.Ok);
     }
 
