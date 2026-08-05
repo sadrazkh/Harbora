@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Infrastructure.Tenancy;
 using Xunit;
 
@@ -114,7 +114,11 @@ public class InstanceSizeDiskTests
     // --- one way of writing bytes ---
 
     [Theory]
-    [InlineData(512, "0.5 KB")]
+    // Under a kilobyte, in bytes: 19 rounds to "0 KB", and a real measurement reading as nothing is
+    // the same lie as an unmeasured one shown as empty.
+    [InlineData(19, "19 B")]
+    [InlineData(1023, "1023 B")]
+    [InlineData(1024, "1 KB")]
     [InlineData(2 * 1024, "2 KB")]
     [InlineData(256 * 1024 * 1024, "256 MB")]
     [InlineData(1536L * 1024 * 1024, "1.5 GB")]

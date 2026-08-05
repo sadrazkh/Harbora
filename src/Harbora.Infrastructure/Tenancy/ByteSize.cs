@@ -1,4 +1,4 @@
-namespace Harbora.Infrastructure.Tenancy;
+﻿namespace Harbora.Infrastructure.Tenancy;
 
 /// <summary>
 /// One way of writing a number of bytes.
@@ -16,6 +16,9 @@ public static class ByteSize
     public static string Format(long bytes, string unlimited = "unlimited") => bytes switch
     {
         <= 0 => unlimited,
+        // Under a kilobyte, said in bytes. Nineteen bytes rounds to "0 KB", and a real measurement
+        // that reads as nothing is the same lie as an unmeasured one shown as empty.
+        < 1024 => $"{bytes} B",
         < 1024L * 1024 => $"{bytes / 1024.0:0.#} KB",
         < 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024):0.#} MB",
         _ => $"{bytes / (1024.0 * 1024 * 1024):0.##} GB"
