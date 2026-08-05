@@ -335,6 +335,11 @@ public sealed class AppsController(
             .Include(a => a.Domains)
             .Include(a => a.Deployments.OrderByDescending(d => d.Number).Take(20))
             .Include(a => a.GitRepository)
+            // Without this the page's Volumes collection is always empty, which is not "this
+            // application has no storage" — it is "nobody asked". The Data button and the storage
+            // panel are both drawn from it, so the entire file browser was invisible on every
+            // application, including the template ones that do have volumes.
+            .Include(a => a.Volumes)
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
