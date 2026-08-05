@@ -1,4 +1,4 @@
-using Docker.DotNet;
+﻿using Docker.DotNet;
 using Docker.DotNet.Models;
 using Harbora.Application.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -339,11 +339,33 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
 
     // --- helpers ---
 
+    /// <summary>
+    /// Splits an image reference into what Docker's pull API wants: a repository and a tag *or*
+    /// a digest.
+    ///
+    /// The digest case is the one that mattered and was missing. This platform pins by digest
+    /// everywhere — <c>VersionSelection.PinnedImage</c> produces <c>repo@sha256:…</c>, and it is
+    /// what every ready-made application is deployed from. Splitting on the last colon put the
+    /// digest's own separator in the middle, produced a repository of <c>repo@sha256</c>, and
+    /// Docker refused the whole pull with "invalid reference format" — so the pinning that the
+    /// version model exists for was the thing that made an image unpullable.
+    /// </summary>
     private static (string Repo, string Tag) SplitImage(string image)
     {
+        // Everything before the @ is the repository; the digest goes where a tag would, which is
+        // what the API accepts for a pull by digest.
+        var at = image.IndexOf('@');
+        if (at > 0) return (image[..at], image[(at + 1)..]);
+
         var idx = image.LastIndexOf(':');
         // treat "host:port/repo" (colon before a slash) as untagged
         if (idx < 0 || image.LastIndexOf('/') > idx) return (image, "latest");
         return (image[..idx], image[(idx + 1)..]);
     }
+
+    /// <summary>
+    /// The same split, reachable from a test. Public because the alternative is trusting by
+    /// inspection the one line whose failure made every digest-pinned image unpullable.
+    /// </summary>
+    public static (string Repo, string Tag) SplitImageReference(string image) => SplitImage(image);
 }
