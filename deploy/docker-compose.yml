@@ -57,6 +57,41 @@ services:
     networks:
       - harbora
 
+  # Object storage for the Storage section: buckets, per-bucket keys and quotas.
+  #
+  # Published through Traefik on its own hostname rather than by opening a port on the host — the
+  # S3 API has to be reachable by a customer's client, and 443 is already terminated and
+  # certificate-managed. The console is deliberately not published: it is a second way in to every
+  # bucket, authenticated separately from the panel.
+  minio:
+    image: quay.io/minio/minio@sha256:9535594ad4122b7a78c6632788a989b96d9199b483d3bd71a5ceae73a922cdfa
+    container_name: harbora-minio
+    restart: unless-stopped
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # What a client is told to connect to, so pre-signed URLs are signed for the address the
+      # customer actually uses rather than for the container name the panel reaches it by.
+      MINIO_SERVER_URL: https://${S3_DOMAIN}
+    volumes:
+      - harbora_objects:/data
+    networks:
+      - harbora
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=harbora
+      - traefik.http.routers.harbora-s3.rule=Host(`${S3_DOMAIN}`)
+      - traefik.http.routers.harbora-s3.entrypoints=websecure
+      - traefik.http.routers.harbora-s3.tls.certresolver=letsencrypt
+      - traefik.http.services.harbora-s3.loadbalancer.server.port=9000
+
   panel:
     image: harbora/panel:latest
     # Build from the cloned repo on first run (no registry required). `docker compose up -d --build`.
@@ -77,6 +112,12 @@ services:
       # Surfaced so `harbora info` can report what the panel is actually configured with.
       PANEL_DOMAIN: ${PANEL_DOMAIN}
       ROOT_DOMAIN: ${ROOT_DOMAIN}
+      # Object storage. The panel administers MinIO over the platform network; customers are given
+      # the public address, which is not the same string and must not be.
+      Storage__S3__Endpoint: "http://minio:9000"
+      Storage__S3__PublicEndpoint: "https://${S3_DOMAIN}"
+      Storage__S3__AccessKey: ${MINIO_ROOT_USER}
+      Storage__S3__SecretKey: ${MINIO_ROOT_PASSWORD}
     # Without this a panel whose process has died or hung stays "running" forever: Docker never
     # restarts it, and every request gets a 502 with nothing to explain why. Observed in production.
     healthcheck:
@@ -112,6 +153,7 @@ networks:
     external: false
 
 volumes:
+  harbora_objects:
   harbora_pgdata:
   harbora_redis:
   harbora_acme:

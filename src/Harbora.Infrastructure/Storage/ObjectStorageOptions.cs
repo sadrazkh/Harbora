@@ -32,6 +32,20 @@ public sealed class ObjectStorageOptions
 
     public string Region { get; set; } = "us-east-1";
 
+    /// <summary>
+    /// The image the administrative client runs from. The storage server's own image ships
+    /// <c>mc</c>, so this is the same pin the catalogue already carries and there is no second
+    /// image to keep current.
+    /// </summary>
+    public string ClientImage { get; set; } =
+        "quay.io/minio/minio@sha256:9535594ad4122b7a78c6632788a989b96d9199b483d3bd71a5ceae73a922cdfa";
+
+    /// <summary>
+    /// The Docker network the helper joins. The storage server's name only resolves there; without
+    /// it the helper dials a name that does not exist and the failure reads as bad credentials.
+    /// </summary>
+    public string Network { get; set; } = "harbora";
+
     /// <summary>Whether anything here is usable at all.</summary>
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(Endpoint) &&

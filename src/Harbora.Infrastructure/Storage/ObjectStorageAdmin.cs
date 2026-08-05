@@ -1,34 +1,38 @@
-using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
+using Harbora.Application.Abstractions;
+using Harbora.Infrastructure.Deployments;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Harbora.Infrastructure.Storage;
 
-/// <summary>The credential issued for one bucket.</summary>
+/// <summary>The credential issued for one bucket, and only that bucket.</summary>
 public sealed record BucketCredential(string AccessKey, string SecretKey);
 
-/// <summary>What a provisioning attempt did, and why it did not.</summary>
+/// <summary>What an attempt did, and why it did not.</summary>
 public sealed record BucketProvisionResult(bool Ok, BucketCredential? Credential, string? Reason)
 {
     public static BucketProvisionResult Failed(string reason) => new(false, null, reason);
 }
 
 /// <summary>
-/// Creating and removing buckets on the platform's object storage.
+/// Creating, measuring and removing buckets on the platform's object storage.
 ///
-/// It talks S3 rather than a vendor's admin API on purpose: creating a bucket, deleting one and
-/// reading its size are plain S3 operations that MinIO, Ceph and AWS all answer the same way. The
-/// one thing that is not — issuing a per-bucket credential — is done by deriving one deterministically
-/// and is documented as the compromise it is, rather than by binding the platform to MinIO's
-/// admin protocol.
+/// It drives the MinIO client in a throwaway container rather than speaking S3 over HTTP. That is
+/// what makes a real per-bucket credential possible: creating a scoped user, attaching a policy and
+/// setting a quota have no plain-S3 equivalent, and the alternatives were a single shared key —
+/// which cannot be revoked for one tenant — or a key derived from the bucket name, which cannot be
+/// rotated at all.
 ///
-/// Every method reports rather than throws. An operator who has not set object storage up at all is
-/// the common case, and a page that 500s is a worse answer than one that says what is missing.
+/// The client comes out of the storage server's own image, so there is no second image to pin.
+///
+/// Every method reports rather than throws. An operator who has not set object storage up is the
+/// common case, and a page that 500s is a worse answer than one that says what is missing.
 /// </summary>
 public sealed class ObjectStorageAdmin(
-    IHttpClientFactory httpFactory,
+    IServerEngineFactory engines,
+    Harbora.Data.HarboraDbContext db,
     IOptions<ObjectStorageOptions> options,
     ILogger<ObjectStorageAdmin> log)
 {
@@ -39,14 +43,13 @@ public sealed class ObjectStorageAdmin(
     public string CustomerEndpoint => _opt.CustomerEndpoint;
 
     /// <summary>
-    /// Creates the bucket and returns the credential for it.
+    /// Creates the bucket, a user that can reach only it, and its quota.
     ///
-    /// The credential is derived from the platform's own secret and the bucket name, so it is
-    /// reproducible without storing a second copy anywhere — and it is still stored encrypted on
-    /// the row, because deriving it again requires the platform secret and the page has to be able
-    /// to show it to somebody who asks.
+    /// The secret is generated rather than derived: a derived one is the same secret every time the
+    /// same bucket name is used, on every installation that shares the platform key, and it cannot
+    /// be rotated without renaming the bucket.
     /// </summary>
-    public async Task<BucketProvisionResult> CreateAsync(string bucket, CancellationToken ct)
+    public async Task<BucketProvisionResult> CreateAsync(string bucket, long quotaBytes, CancellationToken ct)
     {
         if (!IsConfigured)
             return BucketProvisionResult.Failed(
@@ -55,86 +58,100 @@ public sealed class ObjectStorageAdmin(
         if (!BucketName.IsValid(bucket))
             return BucketProvisionResult.Failed("That is not a name a bucket can have.");
 
-        try
-        {
-            var response = await SendAsync(HttpMethod.Put, bucket, ct);
+        var credential = new BucketCredential(
+            // Prefixed so a key is recognisable as Harbora's when somebody finds one in a log.
+            "hb" + Random(12).ToLowerInvariant(),
+            Random(28));
 
-            // 409 is "you already own this", which for a create is the desired end state and not a
-            // failure — a retried provision must not look like a problem to investigate.
-            if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.Conflict)
-                return BucketProvisionResult.Failed(
-                    $"The storage server refused to create the bucket ({(int)response.StatusCode}).");
+        var exit = await RunAsync(BucketCommands.Provision(
+            _opt.Endpoint, _opt.AccessKey, _opt.SecretKey,
+            bucket, credential.AccessKey, credential.SecretKey,
+            BucketPolicy.For(bucket), BucketPolicy.NameFor(bucket),
+            BucketCommands.QuotaArgument(quotaBytes)), ct);
 
-            return new BucketProvisionResult(true, Derive(bucket), null);
-        }
-        catch (Exception e)
+        // Named by the step that failed. "It did not work" sends an operator to the logs; "the
+        // storage server could not be reached" and "the bucket was made but its key was not" want
+        // very different things done about them.
+        return exit switch
         {
-            log.LogWarning(e, "Could not create bucket {Bucket}.", bucket);
-            return BucketProvisionResult.Failed("The storage server could not be reached.");
-        }
+            0 => new BucketProvisionResult(true, credential, null),
+            11 => BucketProvisionResult.Failed(
+                "The storage server refused the platform's own credentials. Check Storage:S3:AccessKey and SecretKey."),
+            12 => BucketProvisionResult.Failed("The storage server would not create the bucket."),
+            14 => BucketProvisionResult.Failed("The bucket was created but its access policy could not be stored."),
+            15 => BucketProvisionResult.Failed("The bucket was created but its key could not be issued."),
+            16 => BucketProvisionResult.Failed("The bucket was created but its quota could not be set."),
+            _ => BucketProvisionResult.Failed("The storage server could not be reached.")
+        };
     }
 
-    /// <summary>Removes a bucket. Only succeeds when it is empty, which is the server's rule and a good one.</summary>
-    public async Task<BucketProvisionResult> DeleteAsync(string bucket, CancellationToken ct)
+    /// <summary>Removes the bucket and the credential that could reach it. Refused while it holds objects.</summary>
+    public async Task<BucketProvisionResult> DeleteAsync(string bucket, string accessKey, CancellationToken ct)
     {
         if (!IsConfigured) return BucketProvisionResult.Failed("Object storage is not configured.");
 
-        try
+        var exit = await RunAsync(BucketCommands.Remove(
+            _opt.Endpoint, _opt.AccessKey, _opt.SecretKey,
+            bucket, accessKey, BucketPolicy.NameFor(bucket)), ct);
+
+        return exit switch
         {
-            var response = await SendAsync(HttpMethod.Delete, bucket, ct);
-
-            if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
-                return BucketProvisionResult.Failed(
-                    "The bucket still has objects in it. Empty it first — Harbora will not delete somebody's data to remove a container for it.");
-
-            // Already gone is the desired end state.
-            if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NotFound)
-                return BucketProvisionResult.Failed($"The storage server refused ({(int)response.StatusCode}).");
-
-            return new BucketProvisionResult(true, null, null);
-        }
-        catch (Exception e)
-        {
-            log.LogWarning(e, "Could not delete bucket {Bucket}.", bucket);
-            return BucketProvisionResult.Failed("The storage server could not be reached.");
-        }
+            0 => new BucketProvisionResult(true, null, null),
+            21 => BucketProvisionResult.Failed(
+                "The bucket still has objects in it. Empty it first — Harbora will not delete somebody's data to remove the container for it."),
+            _ => BucketProvisionResult.Failed("The storage server could not be reached.")
+        };
     }
 
     /// <summary>
-    /// The credential for a bucket.
-    ///
-    /// Derived rather than random so it can be recomputed after a restore, and salted with the
-    /// administrative secret so knowing a bucket name is not enough to know its key. This is the
-    /// compromise: a real per-user credential needs a vendor admin API, and binding the platform to
-    /// one is the thing this class exists to avoid.
+    /// What the bucket holds, or null when nobody could ask. Null is reported as never measured
+    /// rather than as empty.
     /// </summary>
-    private BucketCredential Derive(string bucket)
+    public async Task<long?> MeasureAsync(string bucket, CancellationToken ct)
     {
-        var access = "hb" + Hash($"access:{bucket}")[..18].ToLowerInvariant();
-        var secret = Hash($"secret:{bucket}")[..40];
+        if (!IsConfigured) return null;
 
-        return new BucketCredential(access, secret);
+        var output = new StringBuilder();
+        var exit = await RunAsync(
+            BucketCommands.Measure(_opt.Endpoint, _opt.AccessKey, _opt.SecretKey, bucket),
+            ct, output);
+
+        return exit == 0 ? BucketCommands.ParseUsage(output.ToString()) : null;
     }
 
-    private string Hash(string input)
+    private static string Random(int length) =>
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(length))[..length];
+
+    private async Task<int> RunAsync(
+        IReadOnlyList<string> command, CancellationToken ct, StringBuilder? output = null)
     {
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(_opt.SecretKey));
-        return Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(input)));
-    }
+        try
+        {
+            // On the control plane's own machine: the storage server is reached over the platform
+            // network, which is where the panel is, not wherever a tenant's workload happens to run.
+            var serverId = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions
+                .FirstOrDefaultAsync(db.Servers.Where(s => s.IsLocal).Select(s => s.Id), ct);
 
-    private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string bucket, CancellationToken ct)
-    {
-        var client = httpFactory.CreateClient(nameof(ObjectStorageAdmin));
-        client.Timeout = TimeSpan.FromSeconds(20);
+            var docker = await engines.ResolveAsync(serverId, ct);
 
-        var request = new HttpRequestMessage(method, $"{_opt.Endpoint.TrimEnd('/')}/{bucket}");
-
-        // Basic rather than SigV4: MinIO accepts it for administrative calls over a private
-        // network, and a hand-rolled SigV4 implementation is a large amount of subtle code to get
-        // wrong in a way that only shows up against one vendor.
-        var token = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_opt.AccessKey}:{_opt.SecretKey}"));
-        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);
-
-        return await client.SendAsync(request, ct);
+            return await docker.RunOneOffAsync(
+                new DockerOneOffRequest(
+                    _opt.ClientImage, command, [],
+                    Env: null,
+                    // The helper has to resolve the storage server's name, which only exists on the
+                    // platform network. Without this it dials a name that does not resolve and the
+                    // failure reads as bad credentials.
+                    NetworkMode: _opt.Network),
+                output is null ? null : new InlineProgress<string>(line =>
+                {
+                    lock (output) output.AppendLine(line);
+                }),
+                ct);
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "An object storage command could not be run.");
+            return -1;
+        }
     }
 }

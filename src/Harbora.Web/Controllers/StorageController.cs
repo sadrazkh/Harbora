@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Storage;
@@ -97,7 +97,7 @@ public sealed class StorageController(
                     : $"The {plan.Name} plan allows {plan.MaxBuckets} bucket(s) and they are all in use.", error: true);
         }
 
-        var result = await storage.CreateAsync(name, ct);
+        var result = await storage.CreateAsync(name, plan?.QuotaBytes ?? 0, ct);
 
         // Nothing is recorded when the server refused. A row in Failed state would be a bucket in
         // the list that cannot be used and cannot be explained; a refusal with the reason on screen
@@ -131,7 +131,7 @@ public sealed class StorageController(
         var bucket = await db.StorageBuckets.FirstOrDefaultAsync(b => b.Id == id, ct);
         if (bucket is null) return NotFound();
 
-        var result = await storage.DeleteAsync(bucket.Name, ct);
+        var result = await storage.DeleteAsync(bucket.Name, bucket.AccessKey, ct);
 
         // The row stays when the server refused. Removing it would hide a bucket that still exists
         // and still holds somebody's objects, and nothing would ever list it again.

@@ -193,6 +193,18 @@ repair_env() {
     repaired=1; }
   backfill_env POSTGRES_USER "harbora" && repaired=1
   backfill_env POSTGRES_DB "harbora" && repaired=1
+
+  # Object storage, added after the first installs existed. Derived from the panel's own hostname so
+  # an upgrade needs no answers: "panel.example.com" becomes "s3.example.com", and the nip.io case
+  # works the same way. Generated once and then left alone — regenerating the root password on every
+  # run would orphan every bucket key already issued.
+  local _panel
+  _panel="$(sed -n 's/^PANEL_DOMAIN=//p' .env | head -1)"
+  backfill_env S3_DOMAIN "s3.${_panel#panel.}" && repaired=1
+  backfill_env MINIO_ROOT_USER "harbora" && repaired=1
+  backfill_env MINIO_ROOT_PASSWORD "$(openssl rand -hex 24)" && {
+    warn "Generated the object-storage root password. / رمز ریشهٔ فضای ذخیره‌سازی ساخته شد."
+    repaired=1; }
   [ "$repaired" -eq 1 ] && ok "Repaired .env (existing values untouched)." || true
 }
 
@@ -216,6 +228,9 @@ POSTGRES_USER=harbora
 POSTGRES_DB=harbora
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
 HARBORA_MASTER_KEY=$(openssl rand -base64 32)
+S3_DOMAIN=s3.${PANEL_DOMAIN#panel.}
+MINIO_ROOT_USER=harbora
+MINIO_ROOT_PASSWORD=$(openssl rand -hex 24)
 EOF
   chmod 600 .env
   ok "Config written (secrets generated, mode 600)."
