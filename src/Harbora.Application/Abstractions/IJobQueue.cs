@@ -20,6 +20,45 @@ public interface IJobQueue
 }
 
 /// <summary>
+/// Executes one kind of persisted job.
+///
+/// <para>
+/// The seam that lets a module own its own background work. <c>JobDispatcher</c> maps a stored
+/// (kind, target) pair back to a call, and it lives in Infrastructure — which cannot see the module
+/// projects that reference it. Without this, every new job kind would have to be wired into a switch
+/// in the core, and the core would need a reference to every module that has one.
+/// </para>
+/// <para>
+/// Handlers are resolved per job, inside the worker's own scope, and must be idempotent: a job whose
+/// process crashed mid-run is claimed again and re-executed.
+/// </para>
+/// </summary>
+public interface IJobHandler
+{
+    Domain.Jobs.JobKind Kind { get; }
+
+    Task ExecuteAsync(Guid targetId, CancellationToken ct);
+}
+
+/// <summary>
+/// Remembers what an <c>Idempotency-Key</c> already produced, so a retried request returns the
+/// original result instead of starting the work a second time.
+///
+/// <para>
+/// Platform-level rather than per-module: more than one module's API needs it, and the alternative
+/// was one module depending on another to reuse a table.
+/// </para>
+/// </summary>
+public interface IIdempotencyStore
+{
+    /// <summary>The id the original call produced, or null if this key is new or has expired.</summary>
+    Task<Guid?> FindAsync(string endpoint, string key, CancellationToken ct);
+
+    /// <summary>Record what this key produced. Losing a race with an identical request is not an error.</summary>
+    Task RememberAsync(Guid workspaceId, string endpoint, string key, Guid resultId, CancellationToken ct);
+}
+
+/// <summary>
 /// Tracks the cancellation token sources of jobs executing in THIS process, so a cancel request can
 /// actually interrupt work already underway instead of only marking a row.
 /// </summary>

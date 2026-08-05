@@ -11,6 +11,16 @@
     <Project Path="src/Harbora.Shared/Harbora.Shared.csproj" />
     <Project Path="src/Harbora.Web/Harbora.Web.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/Backup/">
+    <Project Path="src/Modules/Backup/Harbora.Modules.Backup.Contracts/Harbora.Modules.Backup.Contracts.csproj" />
+    <Project Path="src/Modules/Backup/Harbora.Modules.Backup.Domain/Harbora.Modules.Backup.Domain.csproj" />
+    <Project Path="src/Modules/Backup/Harbora.Modules.Backup.Infrastructure/Harbora.Modules.Backup.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Sync/">
+    <Project Path="src/Modules/Sync/Harbora.Modules.Sync.Contracts/Harbora.Modules.Sync.Contracts.csproj" />
+    <Project Path="src/Modules/Sync/Harbora.Modules.Sync.Domain/Harbora.Modules.Sync.Domain.csproj" />
+    <Project Path="src/Modules/Sync/Harbora.Modules.Sync.Infrastructure/Harbora.Modules.Sync.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Harbora.NodeAgent.Tests/Harbora.NodeAgent.Tests.csproj" />
     <Project Path="tests/Harbora.NodeIngress.Tests/Harbora.NodeIngress.Tests.csproj" />

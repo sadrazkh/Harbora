@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Entities and their invariants. No EF, no HTTP, no process execution: this project sits below
+    Harbora.Data (which references it for DbSets and the migration), so a dependency on Data here
+    would be a cycle.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Harbora.Domain\Harbora.Domain.csproj" />
+    <ProjectReference Include="..\Harbora.Modules.Backup.Contracts\Harbora.Modules.Backup.Contracts.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Harbora.Modules.Backup.Domain</RootNamespace>
+  </PropertyGroup>
+
+</Project>
