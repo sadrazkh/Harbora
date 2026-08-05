@@ -126,6 +126,26 @@ public class UiBaselineTests
     }
 
     [Fact]
+    public void The_logo_plate_outranks_the_per_key_tints()
+    {
+        // Ten template keys carry their own tinted chip, written for the two-letter fallback. A real
+        // mark brings its own colour, so it needs a neutral plate — and CSS decides that by
+        // specificity, not by order: `.template-logo[data-template-key="mongodb"]` is (0,2,0) and
+        // beats `.template-logo:has(img)` at (0,1,1). Shipped that way, the plate applied to twelve
+        // marks and silently skipped the other ten, which is where the dark ones were.
+        // Comments stripped first: the rule carries an explanation that quotes the losing selector,
+        // and the first version of this test matched its own footnote.
+        var css = Regex.Replace(
+            File.ReadAllText(Path.Combine(RepoRoot(), "src", "Harbora.Web", "Scripts", "app.css")),
+            @"/\*.*?\*/", "", RegexOptions.Singleline);
+
+        css.Should().Contain(".template-logo[data-template-key]:has(img)",
+            "the plate must match the attribute too, or the per-key tints outrank it");
+        css.Should().NotContain(".template-logo:has(img)",
+            "that form loses to every per-key tint");
+    }
+
+    [Fact]
     public void No_view_reintroduces_the_retired_colour_ramp()
     {
         // The pre-redesign indigo ramp. Anything still using it renders a different purple from the

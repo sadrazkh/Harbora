@@ -213,7 +213,12 @@
      in the tint's own foreground colour. A brand mark brings its own colour and some of them are
      nearly black — Ghost is #15171A, Sentry #362D59 — so on the dark-mode tint they disappeared.
      The plate is the same in both themes precisely so no brand colour can vanish in one of them. */
-  .template-logo:has(img) {
+  /* The attribute selector is load-bearing, not decoration. Ten of these keys have a tint below,
+     and `.template-logo[data-template-key="mongodb"]` (0,2,0) outranks `.template-logo:has(img)`
+     (0,1,1) — so the plate silently did not apply to almost half the marks, which is where the dark
+     ones were: MongoDB's green on dark green, MariaDB's near-black on a dark tint. Matching the
+     attribute too makes this (0,2,1) and it wins. Every chip carries the attribute. */
+  .template-logo[data-template-key]:has(img) {
     background: rgb(248 250 252);
     @apply ring-1 ring-inset ring-black/5;
   }
