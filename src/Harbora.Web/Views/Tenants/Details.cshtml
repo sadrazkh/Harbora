@@ -14,14 +14,27 @@
 
 @{
     var u = Model.Usage;
-    string Mb(long b) => b <= 0 ? "∞" : $"{b / 1024 / 1024} MB";
-    string Pct(double used, double max) => max <= 0 ? "5" : Math.Min(100, used / max * 100).ToString("0");
-    (string label, string txt, double used, double max)[] usageCards =
+    string Mb(long b) => b <= 0
+        ? (isFa ? "نامحدود" : "unlimited")
+        : b >= 1024L * 1024 * 1024 ? $"{b / 1024.0 / 1024 / 1024:0.##} GB" : $"{b / 1024 / 1024} MB";
+    string Gb(long b) => b <= 0 ? (isFa ? "نامحدود" : "unlimited") : $"{b / 1024.0 / 1024 / 1024:0.##} GB";
+    string Num(int n) => n <= 0 ? (isFa ? "نامحدود" : "unlimited") : n.ToString();
+
+    // Memory and CPU here are what this tenant has reserved, not what they are measured to use.
+    // The label said "Memory", which reads as a measurement, and the gap between the two is most
+    // of a host's capacity. Disk was not on this page at all.
+    (string Label, string Note, string Text, Harbora.Infrastructure.Monitoring.AllocationReading Reading)[] usageCards =
     {
-        (isFa ? "اپلیکیشن‌ها" : "Apps", $"{u.Apps} / {(u.MaxApps == 0 ? "∞" : u.MaxApps.ToString())}", u.Apps, u.MaxApps),
-        (isFa ? "سرویس‌ها" : "Services", $"{u.Services} / {(u.MaxServices == 0 ? "∞" : u.MaxServices.ToString())}", u.Services, u.MaxServices),
-        (isFa ? "حافظه" : "Memory", $"{Mb(u.MemoryUsedBytes)} / {Mb(u.MaxMemoryBytes)}", u.MemoryUsedBytes, u.MaxMemoryBytes),
-        ("CPU", $"{u.CpuUsed:0.##} / {(u.MaxCpuCores == 0 ? "∞" : u.MaxCpuCores.ToString("0.##"))}", u.CpuUsed, u.MaxCpuCores),
+        (isFa ? "اپلیکیشن‌ها" : "Apps", "", $"{u.Apps} / {Num(u.MaxApps)}",
+            Harbora.Infrastructure.Monitoring.AllocationReading.OfCount(u.Apps, u.MaxApps)),
+        (isFa ? "دیتابیس‌ها" : "Databases", "", $"{u.Services} / {Num(u.MaxServices)}",
+            Harbora.Infrastructure.Monitoring.AllocationReading.OfCount(u.Services, u.MaxServices)),
+        (isFa ? "حافظه" : "Memory", isFa ? "رزروشده" : "reserved", $"{Mb(u.MemoryUsedBytes)} / {Mb(u.MaxMemoryBytes)}",
+            Harbora.Infrastructure.Monitoring.AllocationReading.Of(u.MemoryUsedBytes, u.MaxMemoryBytes)),
+        ("CPU", isFa ? "رزروشده" : "reserved", $"{u.CpuUsed:0.##} / {(u.MaxCpuCores <= 0 ? (isFa ? "نامحدود" : "unlimited") : u.MaxCpuCores.ToString("0.##"))}",
+            Harbora.Infrastructure.Monitoring.AllocationReading.Of(u.CpuUsed, u.MaxCpuCores)),
+        (isFa ? "دیسک" : "Disk", isFa ? "اندازه‌گیری‌شده" : "measured", $"{Gb(u.DiskUsedBytes)} / {Gb(u.MaxDiskBytes)}",
+            Harbora.Infrastructure.Monitoring.AllocationReading.Of(u.DiskUsedBytes, u.MaxDiskBytes)),
     };
 }
 <div class="rounded-xl border border-line bg-surface p-5 mb-6">
@@ -29,18 +42,34 @@
         <h2 class="font-semibold">@(isFa ? "مصرف نسبت به پلن" : "Usage vs plan") <span class="text-ink-faint text-sm">· @u.PlanName</span></h2>
         @if (Model.Suspended){<span class="text-xs rounded bg-danger/15 text-danger px-2 py-0.5">@(isFa ? "معلق" : "suspended")</span>}
     </div>
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="grid grid-cols-2 lg:grid-cols-5 gap-4">
         @foreach (var c in usageCards)
         {
             <div>
-                <div class="text-ink-muted text-sm">@c.label</div>
-                <div class="mt-1 font-bold">@c.txt</div>
-                <div class="mt-2 h-1.5 rounded-full bg-surface-2 overflow-hidden">
-                    <div class="h-full bg-accent-hover" style="width:@Pct(c.used, c.max)%"></div>
-                </div>
+                <div class="text-ink-muted text-sm">@c.Label</div>
+                <div class="mt-1 font-bold" dir="ltr">@c.Text</div>
+                @if (c.Note.Length > 0)
+                {
+                    <div class="mt-0.5 text-[11px] text-ink-faint">@c.Note</div>
+                }
+                @* No bar without a denominator: the old one drew 5% for every unlimited resource. *@
+                @if (c.Reading.HasShare)
+                {
+                    <div class="mt-2 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+                        <div class="h-full @(c.Reading.IsOver ? "bg-warn" : "bg-accent-hover")" style="width:@(c.Reading.Percent)%"></div>
+                    </div>
+                }
             </div>
         }
     </div>
+    @if (u.DiskUnmeasured > 0)
+    {
+        <p class="mt-3 text-xs text-warn">
+            @(isFa
+                ? $"{u.DiskUnmeasured} حجم هنوز اندازه‌گیری نشده، پس رقم دیسک کامل نیست."
+                : $"{u.DiskUnmeasured} volume(s) have never been measured, so the disk figure is incomplete.")
+        </p>
+    }
 </div>
 
 <div class="rounded-xl border border-line bg-surface p-5 mb-6">
