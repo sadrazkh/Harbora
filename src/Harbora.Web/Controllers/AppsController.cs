@@ -94,7 +94,7 @@ public sealed class AppsController(
                     deployment?.CommitSha is { Length: > 0 } sha ? sha[..Math.Min(7, sha.Length)] : null,
                     operable.Contains(a.Id), cpu, memory is null ? null : (long?)memory.Value);
             }).ToList(),
-            QuickStarts = (await LoadTemplateCardsAsync(ct)).Where(t => !t.IsManagedService).Take(6).ToList()
+            QuickStarts = await FeaturedCardsAsync(6, ct)
         });
     }
 
@@ -968,7 +968,10 @@ public sealed class AppsController(
             .ToList();
         ViewBag.Templates = templates.Select(t => new SelectListItem($"{t.Name}", t.Id.ToString())).ToList();
         var quickStarts = await LoadTemplateCardsAsync(ct);
-        ViewBag.QuickStarts = quickStarts.Where(t => !t.IsManagedService).Take(6)
+        // The operator's chosen order, the same one the dashboard uses. Taking the first six by
+        // category then name meant the admin could choose which ready apps come first and this page
+        // would still show a different six.
+        ViewBag.QuickStarts = (await FeaturedCardsAsync(6, ct))
             .Concat(quickStarts.Where(t => t.IsManagedService).Take(4)).ToList();
 
         ViewBag.Servers = await db.Servers.OrderByDescending(s => s.IsLocal).ThenBy(s => s.Name)
@@ -1002,6 +1005,25 @@ public sealed class AppsController(
                 $"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key,
                 string.Equals(s.Key, defaultSize, StringComparison.OrdinalIgnoreCase)))
             .ToList();
+    }
+
+    /// <summary>
+    /// The ready apps to put in front of somebody, in the order an operator chose on
+    /// /admin/settings. Falls back to the catalogue's own order when nobody has chosen.
+    /// </summary>
+    private async Task<List<TemplateCatalogItemViewModel>> FeaturedCardsAsync(int count, CancellationToken ct)
+    {
+        var cards = (await LoadTemplateCardsAsync(ct)).Where(c => !c.IsManagedService).ToList();
+
+        var featured = Harbora.Infrastructure.Templates.FeaturedTemplates.Resolve(
+            Harbora.Infrastructure.Templates.FeaturedTemplates.Parse(
+                await db.Settings.IgnoreQueryFilters()
+                    .Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.FeaturedTemplates)
+                    .Select(s => s.Value).FirstOrDefaultAsync(ct)),
+            cards.Select(c => c.Template.Key).ToList(),
+            count);
+
+        return featured.Select(key => cards.First(c => c.Template.Key == key)).ToList();
     }
 
     private async Task<IReadOnlyList<TemplateCatalogItemViewModel>> LoadTemplateCardsAsync(CancellationToken ct)
