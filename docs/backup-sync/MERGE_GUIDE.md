@@ -4,9 +4,29 @@ Read this before merging. It records what is finished, what is deliberately not,
 should not have to discover by reading diffs.
 
 - **Source branch:** `feature/harbora-backup-sync`
-- **Base:** `df95b0d` (`Mutation-test what publishes ports and what goes into SQL`), which is also
-  `origin/master`. The branch is a clean fast-forward from it — merging needs no rebase.
-- **Not merged, not rebased, not pushed.**
+- **Base:** `df95b0d` (`Mutation-test what publishes ports and what goes into SQL`).
+- **Merged into `master` locally. Not pushed** — publishing is the maintainer's call.
+
+### How the merge was done, and what it needed
+
+`master` had moved five commits ahead (the managed-service TLS work), so this is a real merge, not a
+fast-forward. `master` was merged **into the feature branch first**, so `master` never held an
+untested intermediate state; only once the merged tree built and the whole suite passed was `master`
+advanced onto it.
+
+Git auto-merged `HarboraDbContextModelSnapshot.cs` with no conflict — which is exactly the file where
+a clean auto-merge can still be wrong, because it is generated and nothing about it fails to compile
+when it drifts from the model. It was verified rather than trusted:
+
+```bash
+dotnet ef migrations has-pending-model-changes --project src/Harbora.Data --startup-project src/Harbora.Web
+# → No changes have been made to the model since the last migration.
+```
+
+**Migration order interleaves, and that is fine.** `master`'s `20260804191858_ManagedServiceTls`
+falls between this branch's `…183506_BackupModule` and `…201737_BackupIdempotency`. EF applies
+migrations in timestamp order regardless of which branch produced them, and none of them touch the
+same tables.
 
 > **One incident, recorded rather than tidied away.** Partway through this branch, something else
 > operating in this repository committed `df95b0d` onto the feature branch, switched `HEAD` back to
@@ -233,6 +253,24 @@ dotnet ef migrations remove --project src/Harbora.Data --startup-project src/Har
 
 then re-add after merging.
 
+## 7a. Before you turn a flag on
+
+Merging is the low-risk half. **Enabling is where the untested code starts running**, so do it in
+this order:
+
+1. Apply migrations. Safe with the flags off — the new tables stay empty and nothing reads them.
+2. Set `Backups:Module:AllowedSourceRoots` (and `Sync:Module:AllowedRoots`). Both fail closed: until
+   they name a directory, nothing can be backed up or synced. This is a deliberate speed bump.
+3. Bring up the compose overlay and confirm the containers actually start — `cap_drop: ALL` on
+   Syncthing is the first thing to relax if the daemon will not.
+4. Turn on **`Features:Backup` only**, and take one backup of a small directory. Then restore it into
+   a fresh folder and compare the contents yourself. That single round trip exercises the archive,
+   the encryption, the storage hand-off and the extraction path at once.
+5. Only then try a Docker volume, then a database. Each adds a container-backed step that has never
+   run outside a fake engine.
+6. `Features:Sync` last, and `Features:EncryptedSyncNode` only after you have tested the arrangement
+   yourself — it is experimental and its failure mode is silent.
+
 ## 8. Rollback
 
 Nothing to undo at runtime while the flag is off. To remove entirely:
@@ -311,7 +349,9 @@ Stated precisely, because "tested" is a word worth being exact about.
 | Check | Result |
 |---|---|
 | `dotnet build Harbora.slnx` | Succeeded, **0 warnings, 0 errors** |
-| `dotnet test Harbora.slnx` | **2465 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
+| `dotnet test Harbora.slnx` (branch alone) | **2465 passed, 0 failed**, 17 skipped (pre-existing) |
+| `dotnet test Harbora.slnx` (**after merging master**) | **2486 passed, 0 failed** — this branch plus master's TLS work, together |
+| EF model snapshot matches the model after the merge | `has-pending-model-changes` reports none |
 | Sync API paging, filtering, idempotency, tenancy, no-password-in-response | Asserted at controller level |
 | Sync API exposes no restore-shaped route | Asserted by reflecting over the controller's methods |
 | Application metadata excludes secret values | Asserted on the written JSON, not just the code |
