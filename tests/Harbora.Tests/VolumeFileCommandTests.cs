@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Infrastructure.Storage;
 using Xunit;
 
@@ -143,6 +143,22 @@ public class VolumeFileCommandTests
     public void An_empty_directory_lists_nothing_rather_than_failing(string? output)
     {
         VolumeFileCommands.ParseListing(output).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Dockers_framing_bytes_do_not_make_the_listing_read_as_empty()
+    {
+        // A container with no TTY has its output framed, so the type field arrives with control
+        // bytes on the front and matches neither "d" nor "f" — every entry is skipped and the
+        // folder reads as empty while the file is plainly there. Observed on a real server, after
+        // the same trap had already been documented twice elsewhere.
+        var header = new string([(char)1, (char)0, (char)0, (char)0, (char)0, (char)0, (char)0, (char)30]);
+
+        var entries = VolumeFileCommands.ParseListing(header + "f|21|1700000000|note.txt");
+
+        entries.Should().ContainSingle();
+        entries[0].Name.Should().Be("note.txt");
+        entries[0].SizeBytes.Should().Be(21);
     }
 
     [Fact]

@@ -86,8 +86,8 @@ MUTANTS = [
      '["sh", "-c", ReadScript, absoluteFile];'),
 
     (CMD, "a filename containing the separator is truncated",
-     "line.TrimEnd('\\r').Split('|', 4)",
-     "line.TrimEnd('\\r').Split('|')"),
+     "Split('|', 4)",
+     "Split('|')"),
 
     (CMD, "a malformed line becomes an entry with an invented name",
      'if (parts.Length != 4) continue;',
@@ -112,6 +112,10 @@ MUTANTS = [
     (CMD, "the order is whatever the shell happened to print",
      ORDER_CLAUSE,
      '        return entries;'),
+
+    (CMD, "docker's framing bytes are left on the type field, so every folder reads as empty",
+     'line.TrimStart(FrameBytes)',
+     'line'),
 
     (CMD, "an empty name is listed",
      'if (parts[3].Length == 0) continue;',

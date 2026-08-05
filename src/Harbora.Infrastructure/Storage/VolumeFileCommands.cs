@@ -81,6 +81,10 @@ public static class VolumeFileCommands
     /// A line it cannot make sense of is skipped rather than guessed at: the alternative is an
     /// entry with an invented name or size appearing in somebody's file list.
     /// </summary>
+    /// <summary>The control bytes Docker puts in front of each frame of a non-TTY stream.</summary>
+    private static readonly char[] FrameBytes =
+        Enumerable.Range(0, 32).Select(c => (char)c).ToArray();
+
     public static IReadOnlyList<VolumeEntry> ParseListing(string? output)
     {
         if (string.IsNullOrWhiteSpace(output)) return [];
@@ -91,7 +95,16 @@ public static class VolumeFileCommands
         {
             // Exactly three splits, so everything after the third separator is the name — a
             // filename may legitimately contain one, and splitting on all of them would truncate it.
-            var parts = line.TrimEnd('\r').Split('|', 4);
+            // Docker frames the output of a container with no TTY: every line arrives with a few
+            // control bytes on the front, so the type field reads as something matching neither "d"
+            // nor "f", every entry is skipped, and the folder renders as empty while the file is
+            // plainly in the volume. StorageMeasurement documented this trap and BucketCommands hit
+            // it again — this is the third parser written against the same stream.
+            //
+            // Only the leading ones go. Stripping every control character would also edit a
+            // filename that legitimately contains one, and this listing is what the download link
+            // beside it is built from.
+            var parts = line.TrimStart(FrameBytes).TrimEnd('\r').Split('|', 4);
             if (parts.Length != 4) continue;
 
             var isDirectory = parts[0] == "d";
