@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
@@ -76,6 +76,7 @@ public class DatabaseAccessPageTests
             db,
             new FakeManagedServiceEngine(),
             new AlwaysAllowedQuota(),
+            new PlacesOnTheFirstServer(db),
             protector,
             new Harbora.Infrastructure.Projects.ProjectService(db, new Clock()),
             new ServiceUsageService(db, protector),
@@ -88,6 +89,21 @@ public class DatabaseAccessPageTests
         };
 
         return new Fixture(db, controller, database, workspaceId);
+    }
+
+    /// <summary>
+    /// Places on whatever server the fixture created. The real scheduler needs capacity reports
+    /// from a node, which this test has no business standing up — it is about the access page.
+    /// </summary>
+    private sealed class PlacesOnTheFirstServer(HarboraDbContext db) : ISchedulerService
+    {
+        public Task<PlacementResult> PlaceAsync(long memoryBytes, double cpu, string? pool, CancellationToken ct) =>
+            Task.FromResult(db.Servers.Select(s => s.Id).FirstOrDefault() is { } id && id != Guid.Empty
+                ? PlacementResult.Placed(id)
+                : PlacementResult.Fail("No server."));
+
+        public Task<PlacementResult> CheckAsync(Guid serverId, long memoryBytes, double cpu, CancellationToken ct) =>
+            Task.FromResult(PlacementResult.Placed(serverId));
     }
 
     private sealed class AlwaysAllowedQuota : IQuotaService

@@ -137,7 +137,17 @@ public enum ManagedServiceType
     MySql = 1,
     MariaDb = 2,
     Redis = 3,
-    MongoDb = 4
+    MongoDb = 4,
+
+    // Message brokers. An environment that holds several apps and several databases usually holds
+    // one of these too, and until now the only way to get one was to deploy it as an ordinary
+    // application and wire it up by hand.
+    //
+    // They are managed services rather than templates for the same reason a database is: Harbora
+    // generates the credentials, puts it on the environment's private network, and injects the
+    // connection into whatever attaches to it.
+    RabbitMq = 5,
+    Nats = 6
 }
 
 public enum ServiceStatus

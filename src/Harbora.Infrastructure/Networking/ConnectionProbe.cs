@@ -1,4 +1,4 @@
-using Harbora.Domain.Common;
+﻿using Harbora.Domain.Common;
 using Harbora.Infrastructure.Services;
 
 namespace Harbora.Infrastructure.Networking;
@@ -48,6 +48,13 @@ public static class ConnectionProbe
         ManagedServiceType.MongoDb =>
             "MongoDB's shell changed name between the versions Harbora offers, so its connection is " +
             "not tested automatically yet.",
+
+        // A broker's clients speak AMQP and NATS, not a shell. Probing one means opening a real
+        // protocol connection, which is a client library rather than a command — said plainly here
+        // rather than left as a button that returns nothing.
+        ManagedServiceType.RabbitMq or ManagedServiceType.Nats =>
+            "A message broker speaks its own protocol rather than answering a shell client, so " +
+            "Harbora does not test its connection automatically.",
         _ => null
     };
 

@@ -30,6 +30,13 @@ public sealed class AdminSettingsViewModel
     /// </summary>
     public bool? QuickStartDefault { get; init; }
     public bool? OverviewDefault { get; init; }
+
+    /// <summary>
+    /// Whether the optional modules are switched on in configuration. Reported rather than
+    /// toggled: each needs an engine running on the host before its pages can do anything.
+    /// </summary>
+    public bool SyncEnabled { get; init; }
+    public bool BackupEnabled { get; init; }
     public string? PlatformName { get; init; }
 
     public IReadOnlyList<SizeChoiceViewModel> Sizes { get; init; } = [];

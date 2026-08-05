@@ -27,6 +27,7 @@ public sealed partial class DatabasesController(
     HarboraDbContext db,
     IManagedServiceEngine engine,
     IQuotaService quota,
+    ISchedulerService scheduler,
     ISecretProtector protector,
     Harbora.Infrastructure.Projects.ProjectService projects,
     Harbora.Infrastructure.Services.ServiceUsageService usage,
@@ -301,7 +302,28 @@ public sealed partial class DatabasesController(
             return View(model);
         }
 
-        var serverId = await db.Servers.Where(s => s.IsLocal).Select(s => s.Id).FirstAsync(ct);
+        // The chosen tier, resolved before placement because placement needs to know how much this
+        // database is asking for.
+        var size = string.IsNullOrWhiteSpace(model.InstanceSizeKey)
+            ? null
+            : await db.InstanceSizes.FirstOrDefaultAsync(s => s.Key == model.InstanceSizeKey, ct);
+
+        // Placed the way an application is. This read `IsLocal` and nothing else, so a fleet could
+        // have a dozen nodes and every database still landed on the control plane's own machine —
+        // the panel's host filled up while the nodes it was scheduling applications onto sat empty,
+        // and there was no way to say otherwise.
+        var placement = model.ServerId is { } chosenServer && await db.Servers.AnyAsync(s => s.Id == chosenServer, ct)
+            ? await scheduler.CheckAsync(chosenServer, size?.MemoryBytes ?? 0, size?.CpuCores ?? 0, ct)
+            : await scheduler.PlaceAsync(size?.MemoryBytes ?? 0, size?.CpuCores ?? 0, null, ct);
+
+        if (!placement.Ok)
+        {
+            ModelState.AddModelError(string.Empty, placement.Reason ?? "No server has capacity for this database.");
+            await PopulateCreateAsync(ct);
+            return View(model);
+        }
+
+        var serverId = placement.ServerId!.Value;
         var service = new ManagedService
         {
             WorkspaceId = WorkspaceId,
@@ -321,19 +343,15 @@ public sealed partial class DatabasesController(
             EncryptedPassword = protector.Protect(Harbora.Infrastructure.Services.ServiceCredentials.Generate())
         };
 
-        // The chosen plan becomes the container's ceiling. Resolved here rather than at provision
-        // time so the row records what was agreed, and a size later withdrawn from the catalogue
+        // The chosen plan becomes the container's ceiling. Recorded on the row rather than read at
+        // provision time so it keeps what was agreed, and a tier later withdrawn from the catalogue
         // does not silently un-limit a running database.
-        if (!string.IsNullOrWhiteSpace(model.InstanceSizeKey))
+        if (size is not null)
         {
-            var size = await db.InstanceSizes.FirstOrDefaultAsync(s => s.Key == model.InstanceSizeKey, ct);
-            if (size is not null)
-            {
-                service.InstanceSizeKey = size.Key;
-                service.MemoryLimitBytes = size.MemoryBytes;
-                service.DiskLimitBytes = size.DiskBytes;
-                service.CpuLimit = size.CpuCores;
-            }
+            service.InstanceSizeKey = size.Key;
+            service.MemoryLimitBytes = size.MemoryBytes;
+            service.DiskLimitBytes = size.DiskBytes;
+            service.CpuLimit = size.CpuCores;
         }
 
         db.ManagedServices.Add(service);
@@ -649,6 +667,11 @@ public sealed partial class DatabasesController(
     private async Task PopulateCreateAsync(CancellationToken ct)
     {
         ViewBag.Catalog = await ServiceCatalogReader.EffectiveAsync(db, engine, ct);
+
+        // The same list the application form offers. Only shown when there is a choice to make.
+        ViewBag.Servers = await db.Servers.OrderByDescending(s => s.IsLocal).ThenBy(s => s.Name)
+            .Select(s => new SelectListItem(s.IsLocal ? s.Name + " (local)" : s.Name, s.Id.ToString()))
+            .ToListAsync(ct);
         var environmentQuery = db.Environments.AsNoTracking().Where(e => e.WorkspaceId == WorkspaceId);
         if (await access.VisibleProjectIdsAsync(ct) is { } visible)
             environmentQuery = environmentQuery.Where(e => visible.Contains(e.ProjectId));

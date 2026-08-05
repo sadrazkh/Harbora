@@ -1,4 +1,4 @@
-using Harbora.Domain.Common;
+﻿using Harbora.Domain.Common;
 
 namespace Harbora.Infrastructure.Services;
 
@@ -52,6 +52,13 @@ public static class CredentialRotationPlan
         ManagedServiceType.MongoDb =>
             "MongoDB's shell changed name between the versions Harbora offers, so rotating its password " +
             "is not automated yet. Change it in the database and update the attached services by hand.",
+
+        // Both brokers take their credentials at startup — RabbitMQ from the environment, NATS from
+        // its command line — so changing one means recreating the container rather than running a
+        // statement against it.
+        ManagedServiceType.RabbitMq or ManagedServiceType.Nats =>
+            "A broker takes its credentials when it starts, so changing the password means " +
+            "rebuilding the container. Rebuild it after changing the password here.",
         _ => null
     };
 

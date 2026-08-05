@@ -27,6 +27,7 @@ ICONS = {
     "mongodb": "mongodb", "wordpress": "wordpress", "ghost": "ghost", "laravel": "laravel",
     "node": "nodedotjs", "aspnet": "dotnet", "meilisearch": "meilisearch",
     "nginx-static": "nginx", "redis-commander": "redis", "uptime-kuma": "uptimekuma",
+    "rabbitmq": "rabbitmq", "nats": "natsdotio",
 }
 
 

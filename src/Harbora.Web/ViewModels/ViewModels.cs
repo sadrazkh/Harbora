@@ -86,6 +86,13 @@ public sealed class CreateServiceViewModel
     /// it was capped to the byte and counted against the workspace's quota.
     /// </summary>
     public string? InstanceSizeKey { get; set; }
+
+    /// <summary>
+    /// Which machine to put it on, or null to let the scheduler choose the one with the most room.
+    /// Databases used to be pinned to the control plane's own host with no way to say otherwise,
+    /// so a fleet of nodes filled with applications while every database piled onto the panel.
+    /// </summary>
+    public Guid? ServerId { get; set; }
 }
 
 public sealed class DashboardViewModel

@@ -214,5 +214,54 @@
             </a>
         </div>
         <partial name="Design/_PanelEnd" />
+
+        @* ---- the optional modules ----
+           Both are complete and both are off unless configuration says otherwise, and an off module
+           contributes no sidebar entry at all. From inside the panel there is no way to tell that
+           apart from a feature that was never built, so it is said here. *@
+        @{ var modulePanel = new PanelModel(isFa ? "ماژول‌های اختیاری" : "Optional modules"); }
+        <partial name="Design/_PanelStart" model="modulePanel" />
+
+        <div class="space-y-3 text-sm">
+            @foreach (var module in new[]
+            {
+                (Name: isFa ? "همگام‌سازی فایل" : "File sync",
+                 On: Model.SyncEnabled,
+                 Key: "Features:Sync",
+                 Needs: isFa
+                    ? "به یک موتور Syncthing روی همین میزبان و فهرست مسیرهای مجاز نیاز دارد. تا وقتی روشن نشده، بخش استوریج در منو ظاهر نمی‌شود."
+                    : "Needs a Syncthing engine on this host and an allow-list of directories. Until it is on, the storage section is absent from the menu.",
+                 Href: "/sync"),
+                (Name: isFa ? "پشتیبان‌گیری" : "Backups",
+                 On: Model.BackupEnabled,
+                 Key: "Features:Backup",
+                 Needs: isFa
+                    ? "به مقصد پشتیبان و موتور آن نیاز دارد."
+                    : "Needs a backup destination and its engine.",
+                 Href: "/backups")
+            })
+            {
+                <div class="rounded-lg border border-line bg-surface-2 p-3">
+                    <div class="flex items-center justify-between gap-2">
+                        <strong class="text-ink">@module.Name</strong>
+                        <span class="status-pill @(module.On ? "bg-ok-soft text-ok" : "bg-surface-2 text-ink-faint")">
+                            @(module.On ? (isFa ? "روشن" : "on") : (isFa ? "خاموش" : "off"))
+                        </span>
+                    </div>
+                    @if (module.On)
+                    {
+                        <a href="@module.Href" class="mt-1 block text-[11px] text-accent-text hover:underline">
+                            @(isFa ? "بازکردن" : "Open") @module.Href
+                        </a>
+                    }
+                    else
+                    {
+                        <p class="mt-1 text-[11px] leading-5 text-ink-faint">@module.Needs</p>
+                        <code dir="ltr" class="mt-1 block text-[11px] text-ink-muted">@module.Key = true</code>
+                    }
+                </div>
+            }
+        </div>
+        <partial name="Design/_PanelEnd" />
     </aside>
 </div>

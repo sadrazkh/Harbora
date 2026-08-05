@@ -1,4 +1,4 @@
-@model CreateServiceViewModel
+﻿@model CreateServiceViewModel
 @{
     ViewData["Title"] = "Create database";
     var catalog = ViewBag.Catalog as IReadOnlyList<Harbora.Application.Abstractions.ServiceCatalogEntry> ?? [];
@@ -7,12 +7,10 @@
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var versionMap = catalog.ToDictionary(c => c.Type.ToString(), c => c.Versions);
     var portMap = catalog.ToDictionary(c => c.Type.ToString(), c => c.InternalPort);
-    string Key(ManagedServiceType type) => type switch
-    {
-        ManagedServiceType.PostgreSql => "postgres", ManagedServiceType.MySql => "mysql",
-        ManagedServiceType.MariaDb => "mariadb", ManagedServiceType.Redis => "redis",
-        ManagedServiceType.MongoDb => "mongodb", _ => "database"
-    };
+    // The shared rule, so a broker added to the catalogue gets its own mark here too rather than
+    // the generic database one.
+    string Key(ManagedServiceType type) => Harbora.Infrastructure.Services.ServiceTypeKey.For(type);
+    var servers = ViewBag.Servers as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
 }
 
 <nav class="breadcrumb mb-4" aria-label="breadcrumb"><a href="/databases">@T["Databases"]</a><i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i><span>@(isFa ? "ساخت سرویس" : "Create service")</span></nav>
@@ -47,6 +45,13 @@
                     <label class="form-field md:col-span-2"><span>@(isFa ? "پروژه و محیط" : "Project environment")</span><select asp-for="EnvironmentId" asp-items="environments" class="form-control"></select><small>@(isFa ? "این انتخاب شبکه خصوصی و اپ‌های قابل اتصال را تعیین می‌کند." : "This determines the private network and which apps can attach.")</small></label>
 
                 <label class="form-field"><span>@(isFa ? "اندازه منبع" : "Instance size")</span><select asp-for="InstanceSizeKey" asp-items="sizes" class="form-control"></select><small>@(isFa ? "سقف حافظه و CPU این دیتابیس، و سهمی که از quota فضای کاری می‌گیرد." : "The memory and CPU ceiling for this database, and what it takes from the workspace quota.")</small></label>
+
+                @* Only when there is a choice. Databases used to be pinned to the control plane's
+                   own machine with no way to say otherwise. *@
+                @if (servers.Count > 1)
+                {
+                    <label class="form-field"><span>@(isFa ? "سرور" : "Server")</span><select asp-for="ServerId" asp-items="servers" class="form-control"></select><small>@(isFa ? "خالی بگذارید تا خودکار روی سروری با بیشترین ظرفیت آزاد ساخته شود." : "Leave it and the scheduler picks the machine with the most free capacity.")</small></label>
+                }
                 }
             </div>
         </section>

@@ -24,7 +24,9 @@ namespace Harbora.Web.Controllers;
 [Route("admin/settings")]
 public sealed class AdminSettingsController(
     HarboraDbContext db,
-    IAuditLogger audit) : Controller
+    IAuditLogger audit,
+    Microsoft.Extensions.Options.IOptions<Harbora.Modules.Sync.Infrastructure.SyncFeatureOptions> syncFeatures,
+    Microsoft.Extensions.Options.IOptions<Harbora.Modules.Backup.Infrastructure.BackupFeatureOptions> backupFeatures) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
     private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -159,7 +161,14 @@ public sealed class AdminSettingsController(
             PreviewsDefault = string.Equals(
                 await ReadAsync(SettingKeys.PreviewsDefault, ct), "true", StringComparison.OrdinalIgnoreCase),
             RegistryDiscoveryEnabled = string.Equals(
-                await ReadAsync(SettingKeys.RegistryDiscoveryEnabled, ct), "true", StringComparison.OrdinalIgnoreCase)
+                await ReadAsync(SettingKeys.RegistryDiscoveryEnabled, ct), "true", StringComparison.OrdinalIgnoreCase),
+
+            // These two are configuration, not settings: they need an engine on the host before
+            // they can do anything, so they are reported here rather than switched here. Reported
+            // at all because a complete section that is simply invisible reads as a missing
+            // feature — there is no way, from inside the panel, to tell the two apart.
+            SyncEnabled = syncFeatures.Value.Sync,
+            BackupEnabled = backupFeatures.Value.Backup
         };
     }
 }

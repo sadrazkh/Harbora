@@ -1,4 +1,4 @@
-@model DatabasesPageViewModel
+﻿@model DatabasesPageViewModel
 @using Harbora.Web.ViewModels
 @{
     ViewData["Title"] = "Databases";
@@ -11,15 +11,9 @@
         : bytes < 1024L * 1024 * 1024
             ? $"{bytes / 1024.0 / 1024:0.#} MB"
             : $"{bytes / 1024.0 / 1024 / 1024:0.##} GB";
-    string TypeKey(ManagedServiceType type) => type switch
-    {
-        ManagedServiceType.PostgreSql => "postgres",
-        ManagedServiceType.MySql => "mysql",
-        ManagedServiceType.MariaDb => "mariadb",
-        ManagedServiceType.Redis => "redis",
-        ManagedServiceType.MongoDb => "mongodb",
-        _ => "database"
-    };
+    // One rule, shared with the list/page beside this one: a service whose mark is right in one
+    // place and generic in the other looks like two different things.
+    string TypeKey(ManagedServiceType type) => Harbora.Infrastructure.Services.ServiceTypeKey.For(type);
     string Tone(ServiceStatus status) => status switch
     {
         ServiceStatus.Running => "is-ok", ServiceStatus.Provisioning => "is-info",

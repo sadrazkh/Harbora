@@ -1,4 +1,4 @@
-@model DatabaseOverviewViewModel
+﻿@model DatabaseOverviewViewModel
 @using Harbora.Domain.Common
 @using Harbora.Domain.Backups
 @{
@@ -26,15 +26,9 @@
         _ => "is-warn"
     };
 
-    string TypeKey(ManagedServiceType type) => type switch
-    {
-        ManagedServiceType.PostgreSql => "postgres",
-        ManagedServiceType.MySql => "mysql",
-        ManagedServiceType.MariaDb => "mariadb",
-        ManagedServiceType.Redis => "redis",
-        ManagedServiceType.MongoDb => "mongodb",
-        _ => "database"
-    };
+    // One rule, shared with the list/page beside this one: a service whose mark is right in one
+    // place and generic in the other looks like two different things.
+    string TypeKey(ManagedServiceType type) => Harbora.Infrastructure.Services.ServiceTypeKey.For(type);
 }
 
 @* A database's own page. Its settings used to live in a strip beside the list of its siblings —

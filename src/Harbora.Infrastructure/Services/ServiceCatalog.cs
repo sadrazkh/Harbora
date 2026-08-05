@@ -107,6 +107,50 @@ public static class ServiceCatalog
                     ["REDIS_HOST"] = c.Host, ["REDIS_PORT"] = c.Port.ToString(), ["REDIS_PASSWORD"] = c.Password
                 }
             },
+            [ManagedServiceType.RabbitMq] = new()
+            {
+                Type = ManagedServiceType.RabbitMq, DisplayName = "RabbitMQ", DisplayNameFa = "RabbitMQ",
+                // The management image, not the plain one: a broker whose queues cannot be looked at
+                // is a broker nobody can debug, and the difference is one tag.
+                ImageRepo = "rabbitmq", Versions = ["4-management-alpine", "3.13-management-alpine"],
+                Port = 5672, DataMountPath = "/var/lib/rabbitmq", HasDatabaseName = false,
+                Env = c => new()
+                {
+                    ["RABBITMQ_DEFAULT_USER"] = c.User,
+                    ["RABBITMQ_DEFAULT_PASS"] = c.Password
+                },
+                Conn = c => ($"amqp://{c.User}:{c.Password}@{c.Host}:{c.Port}/",
+                             $"amqp://{c.User}:{Mask(c.Password)}@{c.Host}:{c.Port}/"),
+                AttachEnv = c => new()
+                {
+                    // Both spellings: the .NET and Java clients read AMQP_URL, most Node and Python
+                    // libraries read RABBITMQ_URL, and an app that gets only the other one fails at
+                    // startup with a message about a missing variable rather than about a broker.
+                    ["AMQP_URL"] = $"amqp://{c.User}:{c.Password}@{c.Host}:{c.Port}/",
+                    ["RABBITMQ_URL"] = $"amqp://{c.User}:{c.Password}@{c.Host}:{c.Port}/",
+                    ["RABBITMQ_HOST"] = c.Host, ["RABBITMQ_PORT"] = c.Port.ToString(),
+                    ["RABBITMQ_USER"] = c.User, ["RABBITMQ_PASSWORD"] = c.Password
+                }
+            },
+            [ManagedServiceType.Nats] = new()
+            {
+                Type = ManagedServiceType.Nats, DisplayName = "NATS", DisplayNameFa = "NATS",
+                ImageRepo = "nats", Versions = ["2.10-alpine", "2.9-alpine"],
+                Port = 4222, DataMountPath = "/data", HasDatabaseName = false,
+                Env = _ => new(),
+                // NATS takes its credentials on the command line rather than from the environment,
+                // and JetStream is off unless asked for — a broker that loses every message on
+                // restart is not what somebody adding one to an environment expects.
+                Command = c => ["--jetstream", "--store_dir", "/data", "--user", c.User, "--pass", c.Password],
+                Conn = c => ($"nats://{c.User}:{c.Password}@{c.Host}:{c.Port}",
+                             $"nats://{c.User}:{Mask(c.Password)}@{c.Host}:{c.Port}"),
+                AttachEnv = c => new()
+                {
+                    ["NATS_URL"] = $"nats://{c.User}:{c.Password}@{c.Host}:{c.Port}",
+                    ["NATS_HOST"] = c.Host, ["NATS_PORT"] = c.Port.ToString(),
+                    ["NATS_USER"] = c.User, ["NATS_PASSWORD"] = c.Password
+                }
+            },
             [ManagedServiceType.MongoDb] = new()
             {
                 Type = ManagedServiceType.MongoDb, DisplayName = "MongoDB", DisplayNameFa = "MongoDB",
