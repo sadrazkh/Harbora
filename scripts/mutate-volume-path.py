@@ -117,9 +117,13 @@ MUTANTS = [
      'line.TrimStart(FrameBytes)',
      'line'),
 
-    (CMD, "the framed base64 stream is decoded raw, so every download 404s",
-     'var cleaned = new string(output.Where(IsBase64Character).ToArray());',
-     'var cleaned = output;'),
+    (CMD, "the whole stream is filtered at once, so pull chatter is glued onto the file",
+     'var cleaned = new string(line.Where(IsBase64Character).ToArray());',
+     'var cleaned = new string(output.Where(IsBase64Character).ToArray());'),
+
+    (CMD, "the first decodable line wins, so pull chatter is returned as the file",
+     'if (decoded.Length > 0) found = decoded;',
+     'if (decoded.Length > 0) found ??= decoded;'),
 
     (CMD, "anything that is not base64 is decoded as if it were",
      "char.IsAsciiLetterOrDigit(c) || c is",

@@ -94,11 +94,35 @@ public static class VolumeFileCommands
     {
         if (string.IsNullOrWhiteSpace(output)) return null;
 
-        var cleaned = new string(output.Where(IsBase64Character).ToArray());
-        if (cleaned.Length == 0) return null;
+        // Line by line, and the last one that decodes wins.
+        //
+        // The image pull writes to this same stream — "Status: Image is up to date for alpine:3.20"
+        // and friends — and those characters are almost all inside the base64 alphabet, so filtering
+        // the whole stream at once glues them onto the front of the file and the decode fails on
+        // everything. StorageMeasurement met this exact problem and answered it the same way: find
+        // the payload rather than assume it is the only thing said.
+        //
+        // The helper prints the file with no wrapping, so it is one line; taking the last decodable
+        // one puts the file after the pull chatter rather than in front of it.
+        byte[]? found = null;
 
-        try { return Convert.FromBase64String(cleaned); }
-        catch (FormatException) { return null; }
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var cleaned = new string(line.Where(IsBase64Character).ToArray());
+            if (cleaned.Length == 0) continue;
+
+            try
+            {
+                var decoded = Convert.FromBase64String(cleaned);
+                if (decoded.Length > 0) found = decoded;
+            }
+            catch (FormatException)
+            {
+                // Not the payload. A pull status line, a warning, or a frame boundary.
+            }
+        }
+
+        return found;
     }
 
     private static bool IsBase64Character(char c) =>

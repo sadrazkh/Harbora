@@ -177,12 +177,29 @@ public class VolumeFileCommandTests
     }
 
     [Fact]
-    public void A_stream_split_across_lines_decodes_as_one_file()
+    public void The_image_pull_chatter_does_not_swallow_the_file()
     {
-        // The helper prints one line, but nothing guarantees the daemon delivers it as one frame.
-        var split = string.Join(Environment.NewLine, "aGVs", "bG8=");
+        // RunOneOffAsync reports the image pull into the same buffer, and those words are almost
+        // all inside the base64 alphabet — filtering the whole stream at once glues
+        // "StatusImageisuptodateforalpine320" onto the front of the file and nothing decodes. This
+        // was a real 404 on a file plainly sitting in the volume.
+        var stream = string.Join('\n',
+            "Pulling from library/alpine",
+            "Digest: sha256:abc",
+            "Status: Image is up to date for alpine:3.20",
+            "aGVsbG8=");
 
-        VolumeFileCommands.ParseBase64(split).Should().NotBeNull();
+        System.Text.Encoding.UTF8.GetString(VolumeFileCommands.ParseBase64(stream)!).Should().Be("hello");
+    }
+
+    [Fact]
+    public void The_payload_is_taken_from_the_end_rather_than_the_start()
+    {
+        // Pull chatter comes first and the file last. A line early in the stream that happens to
+        // decode is noise; the helper's own output is the final word.
+        var stream = string.Join('\n', "abcd", "aGVsbG8=");
+
+        System.Text.Encoding.UTF8.GetString(VolumeFileCommands.ParseBase64(stream)!).Should().Be("hello");
     }
 
     [Theory]
