@@ -1,4 +1,4 @@
-namespace Harbora.Modules.Backup.Domain;
+namespace Harbora.Shared;
 
 /// <summary>Why a path was refused. Distinct cases so the message shown can be specific.</summary>
 public enum PathRejection

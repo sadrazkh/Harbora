@@ -1,3 +1,4 @@
+using Harbora.Shared;
 using System.Formats.Tar;
 using System.IO.Compression;
 using Harbora.Application.Abstractions;

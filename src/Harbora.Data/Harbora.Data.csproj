@@ -10,6 +10,7 @@
       references it back.
     -->
     <ProjectReference Include="..\Modules\Backup\Harbora.Modules.Backup.Domain\Harbora.Modules.Backup.Domain.csproj" />
+    <ProjectReference Include="..\Modules\Sync\Harbora.Modules.Sync.Domain\Harbora.Modules.Sync.Domain.csproj" />
   </ItemGroup>
 
   <ItemGroup>

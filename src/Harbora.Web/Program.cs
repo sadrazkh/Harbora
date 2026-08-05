@@ -5,6 +5,7 @@ using Harbora.Data;
 using Harbora.Infrastructure;
 using Harbora.Infrastructure.Backups;
 using Harbora.Modules.Backup.Infrastructure;
+using Harbora.Modules.Sync.Infrastructure;
 using Harbora.Web.Data;
 using Harbora.Web.Infrastructure;
 using Harbora.Web.Realtime;
@@ -46,6 +47,9 @@ builder.Services.AddHarboraInfrastructure(builder.Configuration);
 // can be constructed. A conditional registration would turn a mis-set flag into a resolution
 // failure at request time rather than a feature that is simply off.
 builder.Services.AddBackupModule(builder.Configuration);
+// Sync is a separate module on purpose: deletions propagate, so it must never be mistaken for, or
+// counted as, a backup (docs/backup-sync/THREAT_MODEL.md T9).
+builder.Services.AddSyncModule(builder.Configuration);
 
 // The SignalR-backed log stream is the host's implementation of the Application port.
 builder.Services.AddScoped<IDeploymentLogStream, SignalRDeploymentLogStream>();

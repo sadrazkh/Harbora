@@ -80,6 +80,18 @@ public class HarboraDbContext : DbContext
         Set<Harbora.Modules.Backup.Domain.RestoreJob>();
     public DbSet<Harbora.Modules.Backup.Domain.BackupIdempotencyRecord> BackupIdempotencyRecords =>
         Set<Harbora.Modules.Backup.Domain.BackupIdempotencyRecord>();
+
+    // Sync module. Deliberately no overlap with the backup tables above: a sync space has no
+    // snapshots, no retention and no restore, because there is no earlier state to go back to.
+    // Sharing a model would have made the two look interchangeable in the UI.
+    public DbSet<Harbora.Modules.Sync.Domain.SyncSpace> SyncSpaces =>
+        Set<Harbora.Modules.Sync.Domain.SyncSpace>();
+    public DbSet<Harbora.Modules.Sync.Domain.SyncDevice> SyncDevices =>
+        Set<Harbora.Modules.Sync.Domain.SyncDevice>();
+    public DbSet<Harbora.Modules.Sync.Domain.SyncSpaceMember> SyncSpaceMembers =>
+        Set<Harbora.Modules.Sync.Domain.SyncSpaceMember>();
+    public DbSet<Harbora.Modules.Sync.Domain.SyncConflict> SyncConflicts =>
+        Set<Harbora.Modules.Sync.Domain.SyncConflict>();
     public DbSet<MonitoringMetric> MonitoringMetrics => Set<MonitoringMetric>();
     public DbSet<MetricRollup> MetricRollups => Set<MetricRollup>();
     public DbSet<Alert> Alerts => Set<Alert>();
@@ -465,6 +477,64 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => new { x.WorkspaceId, x.Endpoint, x.Key }).IsUnique();
             e.HasIndex(x => x.ExpiresAt);
         });
+
+        ConfigureSyncModule(b);
+    }
+
+    /// <summary>Sync module schema. Its own method for the same reason the backup module has one.</summary>
+    private static void ConfigureSyncModule(ModelBuilder b)
+    {
+        b.Entity<Harbora.Modules.Sync.Domain.SyncSpace>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(128).IsRequired();
+            e.Property(x => x.LocalPath).HasMaxLength(1024).IsRequired();
+            e.Property(x => x.EngineFolderId).HasMaxLength(128);
+            e.Property(x => x.IgnorePatterns).HasMaxLength(4096);
+            e.Property(x => x.LastError).HasMaxLength(2048);
+
+            e.HasIndex(x => new { x.WorkspaceId, x.Name }).IsUnique();
+            e.HasIndex(x => x.EngineFolderId);
+        });
+
+        b.Entity<Harbora.Modules.Sync.Domain.SyncDevice>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(128).IsRequired();
+            // 8 groups of 7 plus separators.
+            e.Property(x => x.EngineDeviceId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Address).HasMaxLength(256);
+            e.Property(x => x.ClientVersion).HasMaxLength(64);
+
+            e.HasIndex(x => new { x.WorkspaceId, x.EngineDeviceId }).IsUnique();
+        });
+
+        b.Entity<Harbora.Modules.Sync.Domain.SyncSpaceMember>(e =>
+        {
+            e.HasOne(x => x.SyncSpace).WithMany(s => s.Members).HasForeignKey(x => x.SyncSpaceId)
+                // A space that goes takes its memberships with it: a membership has no meaning
+                // without the folder it shares.
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.SyncDevice).WithMany().HasForeignKey(x => x.SyncDeviceId)
+                // A device does not: removing one that still shares folders should say so rather
+                // than silently unsharing them.
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasIndex(x => new { x.SyncSpaceId, x.SyncDeviceId }).IsUnique();
+        });
+
+        b.Entity<Harbora.Modules.Sync.Domain.SyncConflict>(e =>
+        {
+            e.Property(x => x.RelativePath).HasMaxLength(1024).IsRequired();
+            e.Property(x => x.OriginalRelativePath).HasMaxLength(1024).IsRequired();
+            e.Property(x => x.OriginatingDevice).HasMaxLength(64);
+
+            e.Ignore(x => x.IsOpen);
+
+            e.HasOne(x => x.SyncSpace).WithMany().HasForeignKey(x => x.SyncSpaceId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasIndex(x => new { x.SyncSpaceId, x.Resolution });
+            e.HasIndex(x => new { x.SyncSpaceId, x.RelativePath });
+        });
     }
 
     /// <summary>
@@ -529,6 +599,16 @@ public class HarboraDbContext : DbContext
         // The key is client-chosen, so two tenants can pick the same string. Filtered so one can
         // never replay the other's result.
         b.Entity<Harbora.Modules.Backup.Domain.BackupIdempotencyRecord>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+
+        // Sync module. The status refresher runs unscoped, like every other sweeper here.
+        b.Entity<Harbora.Modules.Sync.Domain.SyncSpace>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Modules.Sync.Domain.SyncDevice>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Modules.Sync.Domain.SyncSpaceMember>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Modules.Sync.Domain.SyncConflict>()
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Alert>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<GitProvider>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);

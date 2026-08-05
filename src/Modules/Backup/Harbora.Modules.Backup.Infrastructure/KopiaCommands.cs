@@ -1,3 +1,4 @@
+using Harbora.Shared;
 using Harbora.Modules.Backup.Domain;
 
 namespace Harbora.Modules.Backup.Infrastructure;

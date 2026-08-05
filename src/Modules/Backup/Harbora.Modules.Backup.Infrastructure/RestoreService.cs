@@ -1,3 +1,4 @@
+using Harbora.Shared;
 using System.Text.Json;
 using Harbora.Application.Abstractions;
 using Harbora.Data;

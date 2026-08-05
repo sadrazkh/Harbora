@@ -1,3 +1,4 @@
+using Harbora.Shared;
 using Harbora.Application.Abstractions;
 using Harbora.Modules.Backup.Contracts;
 using Harbora.Modules.Backup.Domain;

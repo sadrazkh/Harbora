@@ -7,6 +7,7 @@
     <ProjectReference Include="..\Harbora.Domain\Harbora.Domain.csproj" />
     <ProjectReference Include="..\Harbora.Shared\Harbora.Shared.csproj" />
     <ProjectReference Include="..\Modules\Backup\Harbora.Modules.Backup.Infrastructure\Harbora.Modules.Backup.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Sync\Harbora.Modules.Sync.Infrastructure\Harbora.Modules.Sync.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>

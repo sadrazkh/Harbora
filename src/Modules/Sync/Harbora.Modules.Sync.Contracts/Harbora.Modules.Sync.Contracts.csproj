@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    References nothing, for the same reason the backup contracts do not: this is what an engine
+    adapter or an out-of-process agent compiles against.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Harbora.Modules.Sync.Contracts</RootNamespace>
+  </PropertyGroup>
+
+</Project>

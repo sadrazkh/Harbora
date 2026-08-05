@@ -1,3 +1,4 @@
+using Harbora.Shared;
 using FluentAssertions;
 using Harbora.Modules.Backup.Domain;
 using Xunit;
