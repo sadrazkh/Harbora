@@ -51,7 +51,9 @@ public sealed class AdminSettingsController(
 
     [HttpPost("panel")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> SavePanel(string? defaultMode, string? defaultCulture, CancellationToken ct)
+    public async Task<IActionResult> SavePanel(
+        string? defaultMode, string? defaultCulture, string? quickStartDefault, string? overviewDefault,
+        CancellationToken ct)
     {
         // Only what it understands. An unrecognised value is cleared rather than stored, or the
         // setting silently stops applying and the default it names never happens.
@@ -63,6 +65,15 @@ public sealed class AdminSettingsController(
 
         await WriteAsync(Harbora.Web.Infrastructure.PanelModeProvider.DefaultModeSettingKey, mode, ct);
         await WriteAsync(SettingKeys.DefaultCulture, culture, ct);
+
+        // Stored through the same rule that reads them, so "" means "the shipped answer" on both
+        // sides. Writing "false" for an unset dropdown would hide a panel nobody chose to hide.
+        await WriteAsync(SettingKeys.QuickStartDefault,
+            Harbora.Infrastructure.Navigation.RailVisibility.Format(
+                Harbora.Infrastructure.Navigation.RailVisibility.ParseSetting(quickStartDefault)), ct);
+        await WriteAsync(SettingKeys.OverviewDefault,
+            Harbora.Infrastructure.Navigation.RailVisibility.Format(
+                Harbora.Infrastructure.Navigation.RailVisibility.ParseSetting(overviewDefault)), ct);
         await audit.LogAsync("platform.panel_defaults", "setting", $"{mode}/{culture}", ClientIp, ct: ct);
 
         TempData["Message"] = IsFa ? "پیش‌فرض‌های پنل ذخیره شد." : "Panel defaults saved.";
@@ -136,6 +147,10 @@ public sealed class AdminSettingsController(
             DefaultPanelMode = await ReadAsync(
                 Harbora.Web.Infrastructure.PanelModeProvider.DefaultModeSettingKey, ct),
             DefaultCulture = await ReadAsync(SettingKeys.DefaultCulture, ct),
+            QuickStartDefault = Harbora.Infrastructure.Navigation.RailVisibility
+                .ParseSetting(await ReadAsync(SettingKeys.QuickStartDefault, ct)),
+            OverviewDefault = Harbora.Infrastructure.Navigation.RailVisibility
+                .ParseSetting(await ReadAsync(SettingKeys.OverviewDefault, ct)),
             PlatformName = await ReadAsync(SettingKeys.PlatformName, ct),
             Sizes = await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder)
                 .Select(s => new SizeChoiceViewModel(s.Key, s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes))

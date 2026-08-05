@@ -23,6 +23,13 @@ public sealed class AdminSettingsViewModel
     /// <summary>Null when no platform default is set, and each person's role decides.</summary>
     public string? DefaultPanelMode { get; init; }
     public string? DefaultCulture { get; init; }
+
+    /// <summary>
+    /// Whether the side panels start open for people who have not chosen. Null means the shipped
+    /// answer, which is not the same for both — and is why these are nullable rather than bool.
+    /// </summary>
+    public bool? QuickStartDefault { get; init; }
+    public bool? OverviewDefault { get; init; }
     public string? PlatformName { get; init; }
 
     public IReadOnlyList<SizeChoiceViewModel> Sizes { get; init; } = [];

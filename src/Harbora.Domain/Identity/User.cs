@@ -31,6 +31,17 @@ public class User : BaseEntity
     /// </summary>
     public PanelMode? PanelMode { get; set; }
 
+    /// <summary>
+    /// Whether the ready-made apps shelf beside the application list is open, or null when this
+    /// person has never said. On the account for the same reason the panel mode is: a browser flag
+    /// would make it a property of the laptop, and the same person would meet the panel again on
+    /// their phone.
+    /// </summary>
+    public bool? ShowQuickStart { get; set; }
+
+    /// <summary>Whether the counts panel beside the application list is open. Null is "never said".</summary>
+    public bool? ShowOverview { get; set; }
+
     public DateTimeOffset? LastLoginAt { get; set; }
 
     public ICollection<ApiToken> Tokens { get; set; } = new List<ApiToken>();

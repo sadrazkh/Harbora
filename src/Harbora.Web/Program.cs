@@ -54,6 +54,7 @@ builder.Services.AddSyncModule(builder.Configuration);
 // The SignalR-backed log stream is the host's implementation of the Application port.
 builder.Services.AddScoped<IDeploymentLogStream, SignalRDeploymentLogStream>();
 builder.Services.AddScoped<Harbora.Web.Infrastructure.PanelModeProvider>();
+builder.Services.AddScoped<Harbora.Web.Infrastructure.RailPreferences>();
 
 // Which logos ship in this build. A singleton because the answer cannot change while the process
 // runs, and the alternative was a filesystem stat per tile per request.

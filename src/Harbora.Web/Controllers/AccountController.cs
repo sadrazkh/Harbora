@@ -125,6 +125,30 @@ public sealed class AccountController(
         return LocalRedirect(string.IsNullOrWhiteSpace(returnUrl) ? "/" : returnUrl);
     }
 
+    /// <summary>
+    /// Folds a side panel away, or brings it back.
+    ///
+    /// On the account rather than in local storage, like the panel mode above and for the same
+    /// reason: somebody who put the ready-made apps shelf away has said something about how they
+    /// want to work, not about the laptop they were sitting at.
+    /// </summary>
+    [HttpPost("/account/rail")]
+    [ValidateAntiForgeryToken]
+    [Authorize]
+    public async Task<IActionResult> SetRail(
+        string panel, bool open, string? returnUrl,
+        [FromServices] Harbora.Web.Infrastructure.RailPreferences rails, CancellationToken ct)
+    {
+        // An unrecognised panel name changes nothing rather than folding whichever one happens to
+        // be first in the enum.
+        if (!Enum.TryParse<Harbora.Infrastructure.Navigation.RailPanel>(panel, ignoreCase: true, out var which))
+            return LocalRedirect(string.IsNullOrWhiteSpace(returnUrl) ? "/" : returnUrl);
+
+        await rails.SetAsync(which, open, ct);
+
+        return LocalRedirect(string.IsNullOrWhiteSpace(returnUrl) ? "/" : returnUrl);
+    }
+
     /// <summary>Language switcher — sets the culture cookie and returns to the current page.</summary>
     [HttpPost("/account/language")]
     [ValidateAntiForgeryToken]

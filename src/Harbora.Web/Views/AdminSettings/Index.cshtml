@@ -87,6 +87,31 @@
                 </select>
             </div>
 
+            @* The side panels on the applications page. Only for people who have not chosen — a
+               person's own toggle always wins, and stays with them across devices. *@
+            <div>
+                <label class="form-label" for="quickstart-default">@(isFa ? "«شروع سریع» به‌صورت پیش‌فرض" : "Quick start panel by default")</label>
+                <select id="quickstart-default" name="quickStartDefault" class="form-control">
+                    <option value="">@(isFa ? "بسته (پیش‌فرض Harbora)" : "Closed (Harbora's default)")</option>
+                    <option value="true" selected="@(Model.QuickStartDefault == true)">@(isFa ? "باز" : "Open")</option>
+                    <option value="false" selected="@(Model.QuickStartDefault == false)">@(isFa ? "بسته" : "Closed")</option>
+                </select>
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa
+                        ? "قفسهٔ اپ‌های آماده. وقتی بسته باشد فقط لوگوها دیده می‌شوند، نه اینکه ناپدید شود."
+                        : "The ready-made apps shelf. Closed shows the marks only — it is folded, never removed.")
+                </p>
+            </div>
+
+            <div>
+                <label class="form-label" for="overview-default">@(isFa ? "«نمای کلی» به‌صورت پیش‌فرض" : "Overview panel by default")</label>
+                <select id="overview-default" name="overviewDefault" class="form-control">
+                    <option value="">@(isFa ? "باز (پیش‌فرض Harbora)" : "Open (Harbora's default)")</option>
+                    <option value="true" selected="@(Model.OverviewDefault == true)">@(isFa ? "باز" : "Open")</option>
+                    <option value="false" selected="@(Model.OverviewDefault == false)">@(isFa ? "بسته" : "Closed")</option>
+                </select>
+            </div>
+
             <div class="sm:col-span-2">
                 <button class="btn-primary">@(isFa ? "ذخیره" : "Save")</button>
             </div>

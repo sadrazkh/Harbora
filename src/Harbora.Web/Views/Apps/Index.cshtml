@@ -1,5 +1,6 @@
 @model ApplicationsPageViewModel
 @using Harbora.Web.ViewModels
+@inject Harbora.Web.Infrastructure.RailPreferences Rails
 @{
     ViewData["Title"] = "Applications";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -193,22 +194,83 @@
 </section>
 
 @section RightRail {
+    @* Each panel folds to its heading and its toggle. Never removed: a setting that makes a feature
+       disappear entirely is a setting nobody finds their way back from — the discipline
+       PanelSections holds inside a form, applied to the rail. *@
+    @{
+        var quickStartOpen = await Rails.IsOpenAsync(Harbora.Infrastructure.Navigation.RailPanel.QuickStart);
+        var overviewOpen = await Rails.IsOpenAsync(Harbora.Infrastructure.Navigation.RailPanel.Overview);
+        var here = Context.Request.Path + Context.Request.QueryString;
+    }
+
     <section class="rail-panel">
-        <div class="rail-heading"><div><span>@(isFa ? "شروع سریع" : "Quick start")</span><small>@(isFa ? "پروژه آماده و واقعی" : "Deployable templates")</small></div><a href="/templates">@(isFa ? "همه" : "View all")</a></div>
-        <div class="quick-start-grid mt-3">
-            @foreach (var item in Model.QuickStarts)
-            {
-                <a href="/templates/@item.Template.Id/deploy" class="quick-start-item">
-                    <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(item.Template.Key, item.Name))" />
-                    <span><strong>@item.Name</strong><small>@(item.IsStack ? $"{item.ResourceCount} resources" : item.Template.Category)</small></span>
-                </a>
-            }
+        <div class="rail-heading">
+            <div><span>@(isFa ? "شروع سریع" : "Quick start")</span><small>@(isFa ? "پروژه آماده و واقعی" : "Deployable templates")</small></div>
+            <form asp-controller="Account" asp-action="SetRail" method="post" class="inline">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="panel" value="QuickStart" />
+                <input type="hidden" name="open" value="@((!quickStartOpen).ToString().ToLowerInvariant())" />
+                <input type="hidden" name="returnUrl" value="@here" />
+                <button type="submit" class="rail-toggle" title="@(quickStartOpen ? (isFa ? "بستن" : "Hide") : (isFa ? "بازکردن" : "Show"))"
+                        aria-expanded="@quickStartOpen.ToString().ToLowerInvariant()">
+                    <i data-lucide="@(quickStartOpen ? "chevron-up" : "chevron-down")" class="h-4 w-4"></i>
+                </button>
+            </form>
         </div>
-        <a href="/apps/create#quick-start" class="rail-action">@(isFa ? "مرور همه روش‌های ساخت" : "Browse all create options")<i data-lucide="arrow-right" class="h-4 w-4 rtl:rotate-180"></i></a>
+        @if (quickStartOpen)
+        {
+            <div class="quick-start-grid mt-3">
+                @foreach (var item in Model.QuickStarts)
+                {
+                    <a href="/templates/@item.Template.Id/deploy" class="quick-start-item">
+                        <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(item.Template.Key, item.Name))" />
+                        <span><strong>@item.Name</strong><small>@(item.IsStack ? $"{item.ResourceCount} resources" : item.Template.Category)</small></span>
+                    </a>
+                }
+            </div>
+            <a href="/apps/create#quick-start" class="rail-action">@(isFa ? "مرور همه روش‌های ساخت" : "Browse all create options")<i data-lucide="arrow-right" class="h-4 w-4 rtl:rotate-180"></i></a>
+        }
+        else
+        {
+            @* Closed, and still a way in: the marks alone, which is what "only the icons" means. *@
+            <div class="rail-icons mt-2">
+                @foreach (var item in Model.QuickStarts)
+                {
+                    <a href="/templates/@item.Template.Id/deploy" title="@item.Name">
+                        <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(item.Template.Key, item.Name))" />
+                    </a>
+                }
+            </div>
+        }
     </section>
 
     <section class="rail-panel">
-        <div class="rail-heading"><div><span>@(isFa ? "نمای کلی" : "Applications overview")</span><small>@(isFa ? "وضعیت فعلی" : "Current state")</small></div></div>
+        <div class="rail-heading">
+            <div><span>@(isFa ? "نمای کلی" : "Applications overview")</span><small>@(isFa ? "وضعیت فعلی" : "Current state")</small></div>
+            <form asp-controller="Account" asp-action="SetRail" method="post" class="inline">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="panel" value="Overview" />
+                <input type="hidden" name="open" value="@((!overviewOpen).ToString().ToLowerInvariant())" />
+                <input type="hidden" name="returnUrl" value="@here" />
+                <button type="submit" class="rail-toggle" title="@(overviewOpen ? (isFa ? "بستن" : "Hide") : (isFa ? "بازکردن" : "Show"))"
+                        aria-expanded="@overviewOpen.ToString().ToLowerInvariant()">
+                    <i data-lucide="@(overviewOpen ? "chevron-up" : "chevron-down")" class="h-4 w-4"></i>
+                </button>
+            </form>
+        </div>
+        @if (!overviewOpen)
+        {
+            @* Folded to the four counts on one line — the numbers are the whole point of the panel,
+               so hiding them entirely would be removing it rather than folding it. *@
+            <div class="rail-icons mt-2 text-xs">
+                <span class="text-ok">@Model.Running</span>
+                <span class="text-info">@Model.Building</span>
+                <span class="text-ink-muted">@Model.Stopped</span>
+                <span class="text-danger">@Model.Failed</span>
+            </div>
+        }
+        else
+        {
         <div class="overview-total"><strong>@Model.Apps.Count</strong><span>@(isFa ? "کل برنامه‌ها" : "total applications")</span></div>
         <div class="status-distribution">
             @if (Model.Apps.Count > 0)
@@ -225,6 +287,7 @@
             <div class="summary-cell"><span class="text-ink-muted">@Model.Stopped</span>@T["Stopped"]</div>
             <div class="summary-cell"><span class="text-danger">@Model.Failed</span>@T["Failed"]</div>
         </div>
+        }
     </section>
 }
 

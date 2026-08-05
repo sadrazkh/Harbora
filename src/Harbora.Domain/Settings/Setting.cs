@@ -49,6 +49,16 @@ public static class SettingKeys
     public const string PreviewsDefault = "apps.previews_default";
 
     /// <summary>
+    /// Whether the ready-made apps shelf starts open, for people who have not chosen. Empty means
+    /// the shipped answer, which is closed — it is a shelf of things to install, and it is in the
+    /// way once somebody has installed them.
+    /// </summary>
+    public const string QuickStartDefault = "panel.quickstart_default";
+
+    /// <summary>Whether the counts panel starts open. Empty means the shipped answer, which is open.</summary>
+    public const string OverviewDefault = "panel.overview_default";
+
+    /// <summary>
     /// Which versions of one database engine are offered, comma-separated and in the order they
     /// appear. Empty means the list Harbora ships with.
     ///
