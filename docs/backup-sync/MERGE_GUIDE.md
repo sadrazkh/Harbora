@@ -63,13 +63,17 @@ should not have to discover by reading diffs.
 - **Database targets** — PostgreSQL, MySQL and MariaDB, dumped through the database's own client
   running in a container built from its own image, and restored the same way. Shell-free commands,
   password via environment, dump deleted after use.
-- 177 new tests. Full suite: **2411 passed, 0 failed.**
+- **Sync module** — its own contracts, domain, Syncthing engine, service, status refresher, UI and
+  sidebar entry. Shares nothing with Backup by design.
+- 204 new tests. Full suite: **2438 passed, 0 failed.**
 
 **Not built in this branch — and there is no placeholder pretending otherwise.**
 
 | Missing | Consequence |
 |---|---|
 | Application targets | Directory, Docker volume and database only; the resolver refuses the rest with a message saying so |
+| Sync REST API | The sync UI drives MVC actions; there is no `/api/v1/sync/*` yet |
+| Always-on encrypted node, end to end | The mode and its guards exist and are tested; no node has ever been run in it |
 | MongoDB and Redis backup | Refused with a specific reason — Redis has no logical dump (back up its volume), and `mongodump` cannot take a password that stays out of the process table |
 | Machine-generated OpenAPI | `docs/backup-sync/API.md` is the reference; no `/openapi` document is served |
 | Sync module | Not started — no projects, no entities |
@@ -228,6 +232,13 @@ never writes to `Backups`, `BackupDestinations`, `BackupSchedules` or `BackupDel
    environment are pinned, but the first real `pg_dump` is CI's.
 8. A database restore currently loads into the database it came from. Restoring into a *different*
    database means creating a service and restoring there; a target-database picker is follow-up.
+9. **Syncthing's REST calls have never run against a real daemon.** They are written against the
+   `/rest/config` API (v1.23+, where per-folder and per-device endpoints replaced whole-config PUTs).
+   Smoke-test create-folder and share-device once before enabling `Features:Sync`.
+10. `EncryptedSyncNode` is off by default and marked experimental wherever it appears. The guarantee
+    comes from Syncthing's untrusted-device support, not from Harbora, and the failure mode — the
+    node quietly holding plaintext — is not something Harbora can detect. Do not present it as
+    settled to users.
 6. Sync and the always-on encrypted node: not started.
 7. Container-backed integration tests: not written, and could not have been verified here.
 8. Snapshot download: no short-lived one-time link. Restoring into a new folder is the way to
@@ -242,7 +253,9 @@ Stated precisely, because "tested" is a word worth being exact about.
 | Check | Result |
 |---|---|
 | `dotnet build Harbora.slnx` | Succeeded, **0 warnings, 0 errors** |
-| `dotnet test Harbora.slnx` | **2411 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
+| `dotnet test Harbora.slnx` | **2438 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
+| Sync device-id, mode and conflict-name parsing | Asserted directly |
+| **Syncthing against a real daemon** | **NOT RUN — none installed on this machine** |
 | Migration reviewed for additive-only | Confirmed |
 | Backup round trip (snapshot → restore → byte comparison) | Passing, native engine, local repository |
 | Encryption at rest of stored artifacts | Asserted in test |

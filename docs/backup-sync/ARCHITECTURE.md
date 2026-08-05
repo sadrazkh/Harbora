@@ -84,7 +84,20 @@ One consequence is recorded honestly: both `IBackupEngine` types are in scope in
 `Harbora.Application.Abstractions`. That file carries an explicit `using` alias rather than relying
 on resolution order.
 
-Sync (`src/Modules/Sync/`) is not yet created — see § 10.
+Sync mirrors the same three-project shape:
+
+```
+src/Modules/Sync/
+├── Harbora.Modules.Sync.Contracts/       ISyncEngine, DTOs, enums   → (nothing)
+├── Harbora.Modules.Sync.Domain/          entities + validation      → Harbora.Domain, Contracts
+└── Harbora.Modules.Sync.Infrastructure/  Syncthing adapter, services
+```
+
+**The two modules do not reference each other.** When Sync needed path confinement, `PathGuard`
+moved to `Harbora.Shared` rather than Sync taking a dependency on Backup — it is a general control,
+not a backup concept. `SyncFeatureOptions` binds the same `Features` configuration section as
+`BackupFeatureOptions` rather than sharing a class, for the same reason: two small classes over one
+config section keeps two deliberately unrelated modules independent.
 
 ### Dependency rules
 
@@ -141,6 +154,15 @@ Task<SyncFolderStatusResult> GetFolderStatusAsync(Guid folderId, CancellationTok
 ```
 
 Adapter: `SyncthingSyncEngine`, against Syncthing's REST API.
+
+**Why the API here and the CLI for Kopia.** Not an inconsistency. Kopia offers a short-lived
+invocation, so the CLI avoids holding a repository unlocked inside the panel for its whole uptime.
+Syncthing *is* a daemon either way — there is no short-lived alternative to prefer, and its API is
+simply how it is configured. No process is spawned by the sync module at all.
+
+Its endpoint must stay on loopback or a private network: Syncthing's API is a direct path to every
+file it holds, with its own authentication, and publishing it puts a second front door on the
+platform (THREAT_MODEL T7).
 
 ---
 
