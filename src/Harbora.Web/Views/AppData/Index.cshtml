@@ -1,0 +1,191 @@
+@model AppDataViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var message = TempData["Message"] as string;
+    var error = TempData["Error"] as string;
+    var volume = Model.Volumes.FirstOrDefault(v => v.Id == Model.SelectedVolumeId);
+
+    string Size(long bytes) => Harbora.Infrastructure.Tenancy.ByteSize.Format(bytes, "—");
+}
+
+<nav class="breadcrumb mb-4" aria-label="breadcrumb">
+    <a href="/apps">@(isFa ? "برنامه‌ها" : "Applications")</a>
+    <i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i>
+    <a href="/apps/details/@Model.AppId">@Model.AppName</a>
+    <i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i>
+    <span>@(isFa ? "داده" : "Data")</span>
+</nav>
+
+<partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+    isFa ? "داده" : "Data",
+    isFa
+        ? "فایل‌هایی که این برنامه نگه می‌دارد. تغییر اینجا مستقیم روی همان چیزی است که برنامه می‌خواند."
+        : "The files this application keeps. Changing something here changes what the application reads."))" />
+
+@if (message is not null) { <div class="alert-success mb-4">@message</div> }
+@if (error is not null) { <div class="alert-danger mb-4">@error</div> }
+
+@if (Model.Volumes.Count == 0)
+{
+    <partial name="Design/_EmptyState" model="@(new EmptyStateModel("hard-drive",
+        isFa
+            ? "این برنامه والیومی ندارد، پس چیزی بین استقرارها نگه نمی‌دارد."
+            : "This application has no volume, so it keeps nothing between deployments."))" />
+}
+else
+{
+    <div class="mb-4 flex flex-wrap items-center gap-2">
+        @foreach (var v in Model.Volumes)
+        {
+            <a href="/apps/@Model.AppId/data?volumeId=@v.Id"
+               class="rounded-lg border px-3 py-1.5 text-xs @(v.Id == Model.SelectedVolumeId ? "border-accent/40 bg-accent-soft text-accent-text" : "border-line bg-surface-2 text-ink-muted hover:border-accent/30")">
+                <code dir="ltr">@v.MountPath</code>
+                @if (v.ReadOnly)
+                {
+                    <span class="ms-1 text-[10px] text-warn">@(isFa ? "فقط‌خواندنی" : "read-only")</span>
+                }
+            </a>
+        }
+    </div>
+
+    @if (volume is not null)
+    {
+        <div class="rounded-xl border border-line bg-surface shadow-panel">
+            @* Where we are, and every step back. The root is always reachable in one click, which
+               matters most when somebody is several folders deep and lost. *@
+            <div class="flex flex-wrap items-center gap-1 border-b border-line px-5 py-3 text-xs">
+                <a href="/apps/@Model.AppId/data?volumeId=@volume.Id" class="text-accent-text hover:underline">
+                    <code dir="ltr">@volume.MountPath</code>
+                </a>
+                @foreach (var crumb in Model.Crumbs)
+                {
+                    <i data-lucide="chevron-right" class="h-3 w-3 text-ink-faint rtl:rotate-180"></i>
+                    <a href="/apps/@Model.AppId/data?volumeId=@volume.Id&amp;path=@Uri.EscapeDataString(crumb.Path)"
+                       class="text-accent-text hover:underline" dir="ltr">@crumb.Name</a>
+                }
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="resource-table min-w-[640px]">
+                    <thead><tr>
+                        <th>@(isFa ? "نام" : "Name")</th>
+                        <th>@(isFa ? "اندازه" : "Size")</th>
+                        <th>@(isFa ? "آخرین تغییر" : "Modified")</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody>
+                        @if (Model.Parent is { } parent)
+                        {
+                            <tr>
+                                <td colspan="4">
+                                    <a href="/apps/@Model.AppId/data?volumeId=@volume.Id&amp;path=@Uri.EscapeDataString(parent)"
+                                       class="flex items-center gap-2 text-sm text-ink-muted hover:text-ink">
+                                        <i data-lucide="corner-left-up" class="h-4 w-4"></i>..
+                                    </a>
+                                </td>
+                            </tr>
+                        }
+
+                        @foreach (var entry in Model.Entries)
+                        {
+                            var full = Model.Path.Length == 0 ? entry.Name : $"{Model.Path}/{entry.Name}";
+                            <tr>
+                                <td>
+                                    @if (entry.IsDirectory)
+                                    {
+                                        <a href="/apps/@Model.AppId/data?volumeId=@volume.Id&amp;path=@Uri.EscapeDataString(full)"
+                                           class="flex items-center gap-2 text-sm text-ink hover:text-accent-text">
+                                            <i data-lucide="folder" class="h-4 w-4 text-accent-text"></i>
+                                            <span dir="ltr">@entry.Name</span>
+                                        </a>
+                                    }
+                                    else
+                                    {
+                                        <span class="flex items-center gap-2 text-sm text-ink">
+                                            <i data-lucide="file" class="h-4 w-4 text-ink-faint"></i>
+                                            <span dir="ltr">@entry.Name</span>
+                                        </span>
+                                    }
+                                </td>
+                                <td class="table-secondary" dir="ltr">@(entry.IsDirectory ? "—" : Size(entry.SizeBytes))</td>
+                                <td class="table-secondary" dir="ltr">
+                                    @* Unknown rather than 1970: a timestamp the runtime would not
+                                       give is a gap, not a date. *@
+                                    @(entry.ModifiedAt?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? "—")
+                                </td>
+                                <td>
+                                    <div class="row-actions">
+                                        @if (!entry.IsDirectory)
+                                        {
+                                            <a href="/apps/@Model.AppId/data/download?volumeId=@volume.Id&amp;path=@Uri.EscapeDataString(full)"
+                                               title="@(isFa ? "دانلود" : "Download")"><i data-lucide="download" class="h-4 w-4"></i></a>
+
+                                            @if (!Model.IsReadOnly && entry.SizeBytes <= 512 * 1024)
+                                            {
+                                                <a href="/apps/@Model.AppId/data/edit?volumeId=@volume.Id&amp;path=@Uri.EscapeDataString(full)"
+                                                   title="@(isFa ? "ویرایش" : "Edit")"><i data-lucide="pencil" class="h-4 w-4"></i></a>
+                                            }
+                                        }
+
+                                        @if (!Model.IsReadOnly)
+                                        {
+                                            <form asp-action="Delete" asp-route-id="@Model.AppId" method="post"
+                                                  onsubmit="return confirm('@(isFa ? "حذف شود؟ برگشتی ندارد." : "Delete this? It cannot be undone.")');">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="volumeId" value="@volume.Id" />
+                                                <input type="hidden" name="path" value="@full" />
+                                                <button title="@(isFa ? "حذف" : "Delete")"><i data-lucide="trash-2" class="h-4 w-4"></i></button>
+                                            </form>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+
+                        @if (Model.Entries.Count == 0)
+                        {
+                            <tr><td colspan="4" class="p-8 text-center text-sm text-ink-faint">
+                                @(isFa ? "این پوشه خالی است." : "This folder is empty.")
+                            </td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (!Model.IsReadOnly)
+            {
+                <div class="flex flex-wrap items-end gap-4 border-t border-line p-5">
+                    <form asp-action="Upload" asp-route-id="@Model.AppId" method="post" enctype="multipart/form-data"
+                          class="flex flex-wrap items-end gap-2">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="volumeId" value="@volume.Id" />
+                        <input type="hidden" name="path" value="@Model.Path" />
+                        <div>
+                            <label class="form-label" for="upload-file">@(isFa ? "بارگذاری فایل" : "Upload a file")</label>
+                            <input id="upload-file" name="file" type="file" required class="form-control text-sm" />
+                        </div>
+                        <button class="btn-primary px-4 py-2 text-sm">@(isFa ? "بارگذاری" : "Upload")</button>
+                    </form>
+
+                    <form asp-action="NewFolder" asp-route-id="@Model.AppId" method="post"
+                          class="flex flex-wrap items-end gap-2">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="volumeId" value="@volume.Id" />
+                        <input type="hidden" name="path" value="@Model.Path" />
+                        <div>
+                            <label class="form-label" for="new-folder">@(isFa ? "پوشهٔ جدید" : "New folder")</label>
+                            <input id="new-folder" name="name" required class="form-control text-sm" dir="ltr" />
+                        </div>
+                        <button class="btn-secondary px-4 py-2 text-sm">@(isFa ? "بساز" : "Create")</button>
+                    </form>
+
+                    <p class="w-full text-[11px] text-ink-faint">
+                        @(isFa
+                            ? $"حداکثر {Harbora.Infrastructure.Storage.VolumeFileService.MaxFileBytes / 1024 / 1024} مگابایت برای هر فایل. تغییرات فوری‌اند؛ ممکن است برنامه برای خواندنشان نیاز به ری‌استارت داشته باشد."
+                            : $"Up to {Harbora.Infrastructure.Storage.VolumeFileService.MaxFileBytes / 1024 / 1024} MB per file. Changes are immediate; the application may need a restart before it reads them.")
+                    </p>
+                </div>
+            }
+        </div>
+    }
+}

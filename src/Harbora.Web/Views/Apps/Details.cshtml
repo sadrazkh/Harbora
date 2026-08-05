@@ -29,6 +29,12 @@
             <form asp-controller="Apps" asp-action="RunNow" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">▶ @T["Run now"]</button></form>
         }
         <form asp-controller="Apps" asp-action="Restart" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">↻ @T["Restart"]</button></form>
+        @* Only when there is something to browse. An app with no volume keeps nothing between
+           deployments, and a Data button leading to "there is nothing here" is a dead button. *@
+        @if (Model.Volumes.Count > 0)
+        {
+            <a href="/apps/@Model.Id/data" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm inline-flex items-center gap-1.5"><i data-lucide="folder-open" class="h-4 w-4"></i>@(isFa ? "داده" : "Data")</a>
+        }
         @if (running)
         {
             <form asp-controller="Apps" asp-action="Stop" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">⏸ @T["Stop"]</button></form>
