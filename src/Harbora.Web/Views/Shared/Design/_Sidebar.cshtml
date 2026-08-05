@@ -1,6 +1,7 @@
 ﻿@using Harbora.Infrastructure.Navigation
 @inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @inject Microsoft.Extensions.Options.IOptions<Harbora.Modules.Backup.Infrastructure.BackupFeatureOptions> BackupFeatures
+@inject Microsoft.Extensions.Options.IOptions<Harbora.Modules.Sync.Infrastructure.SyncFeatureOptions> SyncFeatures
 @using Harbora.Web.Infrastructure
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -11,6 +12,8 @@
     // offers a destination whose feature is switched off.
     var navSource = Harbora.Modules.Backup.Infrastructure.BackupNavigation.Augment(
         NavigationMap.All, BackupFeatures.Value.Backup);
+    navSource = Harbora.Modules.Sync.Infrastructure.SyncNavigation.Augment(
+        navSource, SyncFeatures.Value.Sync);
     var groups = NavigationMap.VisibleTo(navSource, NavigationCapabilities.For(User), panelMode);
     var currentController = (string?)ViewContext.RouteData.Values["controller"];
 
@@ -38,6 +41,7 @@
         ("routing",      true) => "مسیریابی",       ("routing",      false) => "Routing",
         ("backups",      true) => "پشتیبان‌ها",     ("backups",      false) => "Backups",
         ("backup-center", true) => "مرکز پشتیبان",  ("backup-center", false) => "Backup Center",
+        ("sync",         true) => "همگام‌سازی",     ("sync",         false) => "Sync",
         ("monitoring",   true) => "پایش",           ("monitoring",   false) => "Monitoring",
         ("ai",           true) => "هوش مصنوعی",    ("ai",           false) => "AI",
         ("ai-admin",     true) => "مدیریت AI",     ("ai-admin",     false) => "AI admin",

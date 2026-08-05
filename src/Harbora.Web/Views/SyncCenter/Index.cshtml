@@ -1,0 +1,308 @@
+@model Harbora.Web.Controllers.SyncCenterViewModel
+@using Harbora.Modules.Sync.Contracts
+@{
+    ViewData["Title"] = "Sync";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+
+    string Size(long b) => b <= 0 ? "—" : b < 1048576 ? $"{b / 1024.0:0} KB" : $"{b / 1048576.0:0.0} MB";
+
+    string SpaceClass(SyncSpaceStatus s) => s switch
+    {
+        SyncSpaceStatus.UpToDate => "bg-ok/15 text-ok",
+        SyncSpaceStatus.Syncing => "bg-accent-hover/15 text-accent-text animate-pulse",
+        SyncSpaceStatus.HasConflicts => "bg-warn/15 text-warn",
+        SyncSpaceStatus.WaitingForDevices => "bg-warn/15 text-warn",
+        SyncSpaceStatus.Error => "bg-danger/15 text-danger",
+        _ => "bg-slate-500/15 text-ink"
+    };
+
+    string DeviceClass(SyncDeviceStatus s) => s switch
+    {
+        SyncDeviceStatus.Connected => "bg-ok/15 text-ok",
+        SyncDeviceStatus.ConnectedViaRelay => "bg-warn/15 text-warn",
+        SyncDeviceStatus.Disconnected => "bg-slate-500/15 text-ink",
+        SyncDeviceStatus.Revoked => "bg-danger/15 text-danger",
+        _ => "bg-accent-hover/15 text-accent-text"
+    };
+
+    var header = new Harbora.Web.ViewModels.PageHeaderModel(
+        isFa ? "همگام‌سازی" : "Sync",
+        isFa
+            ? "همگام‌سازی پوشه میان دستگاه‌ها. این پشتیبان‌گیری نیست."
+            : "Keep folders in step across devices. This is not a backup.");
+}
+
+<div class="mb-6">
+    <partial name="Design/_PageHeader" model="header" />
+</div>
+
+@*
+    The single most important sentence on this page. Sync replicates deletions and encryption within
+    seconds; anyone treating a sync space as their backup finds out during an incident.
+*@
+<div class="mb-6 rounded-xl border border-warn bg-warn-soft text-warn px-4 py-3 text-sm">
+    <strong>@(isFa ? "همگام‌سازی جایگزین پشتیبان نیست." : "Sync is not a backup.")</strong>
+    @(isFa
+        ? " اگر فایلی را حذف یا خراب کنید، همان تغییر به همهٔ دستگاه‌ها منتقل می‌شود — معمولاً در چند ثانیه. برای بازگشت به گذشته از مرکز پشتیبان استفاده کنید."
+        : " Deleting or corrupting a file here sends that change to every device, usually within seconds. Use Backup Center for anything you may need to go back to.")
+</div>
+
+@if (msg is not null)
+{
+    <div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>
+}
+@if (err is not null)
+{
+    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>
+}
+
+@if (Model.LocalDeviceId is null)
+{
+    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-3 text-sm">
+        @(isFa
+            ? "Syncthing در دسترس نیست. تا وقتی BaseUrl و ApiKey درست تنظیم نشوند هیچ همگام‌سازی‌ای انجام نمی‌شود."
+            : "Syncthing is not reachable. Nothing will synchronise until its BaseUrl and ApiKey are set correctly.")
+    </div>
+}
+
+@if (Model.AllowedRoots.Count == 0)
+{
+    <div class="mb-4 rounded-lg bg-warn-soft border border-warn text-warn px-4 py-3 text-sm">
+        @(isFa
+            ? "هیچ پوشه‌ای برای همگام‌سازی مجاز نشده است. تا تنظیم Sync:Module:AllowedRoots نمی‌توان فضایی ساخت."
+            : "No sync directories are allowed yet. Set Sync:Module:AllowedRoots before creating a space.")
+    </div>
+}
+
+<div class="grid lg:grid-cols-3 gap-6 mb-6">
+
+    <!-- This node's identity -->
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "این دستگاه" : "This node")</h2>
+        <p class="text-[12px] text-ink-faint mb-2">
+            @(isFa
+                ? "این شناسه را روی دستگاه دیگر وارد کنید. جفت‌شدن دوطرفه است."
+                : "Enter this id on the other device. Pairing is mutual.")
+        </p>
+        <code class="block break-all rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-[11px] text-ink">
+            @(Model.LocalDeviceId ?? (isFa ? "در دسترس نیست" : "unavailable"))
+        </code>
+    </section>
+
+    <!-- Devices -->
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "دستگاه‌ها" : "Devices")</h2>
+
+        <div class="space-y-2 mb-3 text-sm">
+            @if (Model.Devices.Count == 0)
+            {
+                <p class="text-ink-faint">@(isFa ? "هنوز دستگاهی ثبت نشده." : "No devices yet.")</p>
+            }
+            @foreach (var d in Model.Devices)
+            {
+                <div class="flex items-center justify-between gap-2">
+                    <span class="truncate" title="@d.EngineDeviceId">
+                        @d.Name
+                        @if (d.IsUntrusted)
+                        {
+                            <span class="ms-1 text-[11px] text-warn">@(isFa ? "رمزنگاری‌شده" : "encrypted-only")</span>
+                        }
+                    </span>
+                    <span class="flex items-center gap-2 shrink-0">
+                        @if (d.ConnectionKind == SyncConnectionKind.Relay)
+                        {
+                            <span class="text-[11px] text-warn" title="@(isFa ? "از طریق سرور واسط" : "through a third-party relay")">relay</span>
+                        }
+                        <span class="rounded px-1.5 py-0.5 text-[11px] @DeviceClass(d.Status)">@d.Status</span>
+                    </span>
+                </div>
+            }
+        </div>
+
+        <details>
+            <summary class="cursor-pointer text-sm text-accent-text">+ @(isFa ? "افزودن دستگاه" : "Add device")</summary>
+            <form asp-action="RegisterDevice" method="post" class="mt-3 space-y-2">
+                @Html.AntiForgeryToken()
+                <input name="name" required placeholder="@(isFa ? "نام" : "Name")"
+                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <input name="engineDeviceId" required placeholder="XXXXXXX-XXXXXXX-…"
+                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-[11px] font-mono" />
+
+                @if (Model.EncryptedNodeAllowed)
+                {
+                    <label class="flex items-start gap-2 text-[12px] text-ink-faint">
+                        <input type="checkbox" name="untrusted" value="true" class="mt-0.5" />
+                        <span>
+                            @(isFa ? "این دستگاه فقط نسخهٔ رمزنگاری‌شده بگیرد" : "This device receives an encrypted copy only")
+                            <span class="text-warn">(@(isFa ? "آزمایشی" : "experimental"))</span>
+                        </span>
+                    </label>
+                }
+
+                <button class="w-full rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@T["Save"]</button>
+            </form>
+        </details>
+    </section>
+
+    <!-- Create a space -->
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "فضای جدید" : "New sync space")</h2>
+        <form asp-action="CreateSpace" method="post" class="space-y-2">
+            @Html.AntiForgeryToken()
+            <input name="name" required placeholder="@(isFa ? "نام" : "Name")"
+                   class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            <input name="localPath" required placeholder="@(Model.AllowedRoots.FirstOrDefault() ?? "/srv/sync/documents")"
+                   class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+
+            <select name="mode" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                <option value="@SyncMode.SendAndReceive">@(isFa ? "ارسال و دریافت" : "Send and receive")</option>
+                <option value="@SyncMode.SendOnly">@(isFa ? "فقط ارسال" : "Send only")</option>
+                <option value="@SyncMode.ReceiveOnly">@(isFa ? "فقط دریافت" : "Receive only")</option>
+            </select>
+
+            <select name="versioningMode" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                <option value="@SyncVersioningMode.None">@(isFa ? "بدون نگهداری نسخه" : "Keep no old versions")</option>
+                <option value="@SyncVersioningMode.Trash">@(isFa ? "سطل بازیافت (روز)" : "Trash can (days)")</option>
+                <option value="@SyncVersioningMode.Simple">@(isFa ? "چند نسخهٔ آخر" : "Keep N versions")</option>
+            </select>
+            <input name="versioningParameter" type="number" min="0" value="7"
+                   class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            <p class="text-[11px] text-ink-faint">
+                @(isFa
+                    ? "نگهداری نسخه آسیب را کم می‌کند، ولی همگام‌سازی را به پشتیبان تبدیل نمی‌کند."
+                    : "Versioning limits the damage; it does not make sync a backup.")
+            </p>
+
+            <button class="w-full rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                @(isFa ? "ساخت فضا" : "Create space")
+            </button>
+        </form>
+    </section>
+</div>
+
+<!-- Spaces -->
+<section class="rounded-xl border border-line bg-surface p-5 mb-6">
+    <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "فضاهای همگام‌سازی" : "Sync spaces")</h2>
+
+    @if (Model.Spaces.Count == 0)
+    {
+        <p class="text-sm text-ink-faint">@(isFa ? "هنوز فضایی ساخته نشده." : "No sync spaces yet.")</p>
+    }
+    else
+    {
+        <div class="space-y-4">
+            @foreach (var s in Model.Spaces)
+            {
+                <div class="rounded-lg border border-line p-4">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <div class="min-w-0">
+                            <span class="font-semibold text-ink">@s.Name</span>
+                            <span class="ms-2 text-[11px] text-ink-faint truncate">@s.LocalPath</span>
+                        </div>
+                        <span class="flex items-center gap-2 shrink-0">
+                            <span class="rounded px-1.5 py-0.5 text-[11px] @SpaceClass(s.Status)">@s.Status</span>
+                            <form asp-action="Refresh" asp-route-spaceId="@s.Id" method="post" class="inline">
+                                @Html.AntiForgeryToken()
+                                <button class="text-[11px] text-accent-text hover:underline">@(isFa ? "تازه‌سازی" : "refresh")</button>
+                            </form>
+                            <form asp-action="SetPaused" asp-route-spaceId="@s.Id" method="post" class="inline">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="paused" value="@((!s.IsPaused).ToString().ToLowerInvariant())" />
+                                <button class="text-[11px] text-accent-text hover:underline">
+                                    @(s.IsPaused ? (isFa ? "ادامه" : "resume") : (isFa ? "توقف" : "pause"))
+                                </button>
+                            </form>
+                        </span>
+                    </div>
+
+                    <div class="flex flex-wrap gap-4 text-[11px] text-ink-faint mb-3">
+                        <span>@(isFa ? "در انتظار" : "Pending"): @s.PendingFiles (@Size(s.PendingBytes))</span>
+                        <span>@(isFa ? "کل" : "Total"): @s.TotalFiles (@Size(s.TotalBytes))</span>
+                        @if (s.ConflictCount > 0)
+                        {
+                            <span class="text-warn">@(isFa ? "تعارض" : "Conflicts"): @s.ConflictCount</span>
+                        }
+                        @if (s.LastSyncAt is { } at)
+                        {
+                            <span>@(isFa ? "آخرین" : "Last"): @at.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</span>
+                        }
+                    </div>
+
+                    @if (s.LastError is { Length: > 0 })
+                    {
+                        <p class="text-[11px] text-danger mb-2">@s.LastError</p>
+                    }
+
+                    <details>
+                        <summary class="cursor-pointer text-[12px] text-accent-text">@(isFa ? "اشتراک با دستگاه" : "Share with a device")</summary>
+                        <form asp-action="Pair" asp-route-spaceId="@s.Id" method="post" class="mt-2 flex flex-wrap gap-2">
+                            @Html.AntiForgeryToken()
+                            <select name="deviceId" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                                @foreach (var d in Model.Devices)
+                                {
+                                    <option value="@d.Id">@d.Name</option>
+                                }
+                            </select>
+                            <select name="mode" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                                <option value="@SyncMode.SendAndReceive">@(isFa ? "ارسال و دریافت" : "Send and receive")</option>
+                                <option value="@SyncMode.SendOnly">@(isFa ? "فقط ارسال" : "Send only")</option>
+                                <option value="@SyncMode.ReceiveOnly">@(isFa ? "فقط دریافت" : "Receive only")</option>
+                                <option value="@SyncMode.EncryptedReceiveOnly">@(isFa ? "فقط دریافت رمزنگاری‌شده" : "Encrypted receive only")</option>
+                            </select>
+                            <input name="encryptionPassword" type="password" autocomplete="new-password"
+                                   placeholder="@(isFa ? "رمز (فقط حالت رمزنگاری‌شده)" : "Password (encrypted mode only)")"
+                                   class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                            <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@(isFa ? "افزودن" : "Add")</button>
+                        </form>
+                    </details>
+                </div>
+            }
+        </div>
+    }
+</section>
+
+<!-- Conflicts -->
+<section class="rounded-xl border border-line bg-surface p-5">
+    <h2 class="text-[15px] font-semibold text-ink mb-1">@(isFa ? "تعارض‌ها" : "Conflicts")</h2>
+    <p class="text-[11px] text-ink-faint mb-3">
+        @(isFa
+            ? "Harbora تصمیم شما را ثبت می‌کند و هیچ فایلی را حذف یا جابه‌جا نمی‌کند."
+            : "Harbora records your decision. It does not move or delete any file.")
+    </p>
+
+    @if (Model.Conflicts.Count == 0)
+    {
+        <p class="text-sm text-ink-faint">@(isFa ? "تعارضی وجود ندارد." : "No conflicts.")</p>
+    }
+    else
+    {
+        <div class="space-y-3">
+            @foreach (var c in Model.Conflicts)
+            {
+                <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line/50 pb-3">
+                    <div class="min-w-0">
+                        <div class="text-sm text-ink truncate" title="@c.RelativePath">@c.OriginalRelativePath</div>
+                        <div class="text-[11px] text-ink-faint">
+                            @Size(c.SizeBytes) · @c.DetectedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm")
+                            @if (c.OriginatingDevice is { Length: > 0 })
+                            {
+                                <span> · @(isFa ? "از" : "from") @c.OriginatingDevice</span>
+                            }
+                        </div>
+                    </div>
+                    <form asp-action="ResolveConflict" asp-route-conflictId="@c.Id" method="post" class="flex gap-2">
+                        @Html.AntiForgeryToken()
+                        <select name="resolution" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                            <option value="@SyncConflictResolution.KeptLocal">@(isFa ? "نسخهٔ محلی را نگه داشتم" : "I kept the local copy")</option>
+                            <option value="@SyncConflictResolution.KeptRemote">@(isFa ? "نسخهٔ متعارض را نگه داشتم" : "I kept the conflicting copy")</option>
+                            <option value="@SyncConflictResolution.KeptBoth">@(isFa ? "هر دو را نگه داشتم" : "I kept both")</option>
+                        </select>
+                        <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@(isFa ? "ثبت" : "Record")</button>
+                    </form>
+                </div>
+            }
+        </div>
+    }
+</section>
