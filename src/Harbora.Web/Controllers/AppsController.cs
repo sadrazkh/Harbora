@@ -29,11 +29,14 @@ public sealed class AppsController(
     Harbora.Infrastructure.Projects.ProjectService projects,
     Harbora.Infrastructure.Security.ProjectAccessService access,
     Harbora.Infrastructure.Services.ServiceUsageService serviceUsage,
+    IServerEngineFactory engines,
+    ILogger<AppsController> logger,
     IJobQueue jobs,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
+    private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -448,6 +451,124 @@ public sealed class AppsController(
     /// this writes the intent and says so. Silently doing nothing visible, or restarting somebody's
     /// production app because a dropdown moved, are both worse than saying which it is.
     /// </summary>
+    /// <summary>
+    /// Gives an application somewhere to keep files.
+    ///
+    /// Volumes could only arrive from a template, so an application built from an image or a
+    /// repository had nowhere to put anything that survives a deploy — and the Data browser, which
+    /// only appears when there is a volume, was unreachable for most of the platform. "There is no
+    /// file access" was true, and this is why.
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/volumes")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
+    public async Task<IActionResult> AddVolume(Guid id, string mountPath, CancellationToken ct)
+    {
+        if (!await access.CanTouchAppAsync(id, Capabilities.AppsEnv, ct)) return Forbid();
+
+        var app = await db.Apps.Include(a => a.Volumes)
+            .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        var refusal = Harbora.Infrastructure.Storage.MountPath.Check(mountPath);
+        if (refusal != Harbora.Infrastructure.Storage.MountPathRefusal.None)
+        {
+            TempData["Error"] = ExplainMount(refusal);
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var normalised = Harbora.Infrastructure.Storage.MountPath.Normalise(mountPath)!;
+
+        // Compared on the normalised form, so "/data" and "/data/" cannot both be added and then
+        // collide at deploy time, where the message is about a duplicate bind rather than about
+        // what somebody typed.
+        if (app.Volumes.Any(v => v.MountPath == normalised))
+        {
+            TempData["Error"] = IsFa
+                ? $"«{normalised}» از قبل هست."
+                : $"{normalised} is already mounted.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        app.Volumes.Add(new Volume
+        {
+            Name = Harbora.Infrastructure.Storage.MountPath.VolumeNameFor(app.Slug, normalised),
+            MountPath = normalised
+        });
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("app.volume_added", "app", $"{app.Name}:{normalised}", ClientIp, ct: ct);
+
+        // Says what it does not do. The volume is a row until the next deployment creates the
+        // container that mounts it, and a person who uploads a file before then would be writing
+        // into something the running container cannot see.
+        TempData["Message"] = IsFa
+            ? $"«{normalised}» اضافه شد. با استقرار بعدی به کانتینر وصل می‌شود."
+            : $"{normalised} was added. It is attached to the container on the next deployment.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// Stops mounting a directory. The data is kept unless it is explicitly asked for.
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/volumes/{volumeId:guid}/remove")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
+    public async Task<IActionResult> RemoveVolume(Guid id, Guid volumeId, bool deleteData, CancellationToken ct)
+    {
+        if (!await access.CanTouchAppAsync(id, Capabilities.AppsEnv, ct)) return Forbid();
+
+        var app = await db.Apps.Include(a => a.Volumes)
+            .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        var volume = app.Volumes.FirstOrDefault(v => v.Id == volumeId);
+        if (volume is null) return NotFound();
+
+        var name = volume.Name;
+        var path = volume.MountPath;
+        app.Volumes.Remove(volume);
+        await db.SaveChangesAsync(ct);
+
+        // Two different acts, and the second is not undoable. Forgetting the mount leaves the data
+        // on the host where it can be mounted again; deleting it is gone.
+        if (deleteData)
+        {
+            var docker = await engines.ResolveAsync(app.ServerId, ct);
+            try { await docker.RemoveVolumeAsync(name, ct); }
+            catch (Exception e) { logger.LogWarning(e, "Volume {Volume} was unmounted but not deleted.", name); }
+        }
+
+        await audit.LogAsync(
+            deleteData ? "app.volume_deleted" : "app.volume_detached", "app",
+            $"{app.Name}:{path}", ClientIp, ct: ct);
+
+        TempData["Message"] = deleteData
+            ? (IsFa ? $"«{path}» و داده‌هایش حذف شد." : $"{path} and its data were deleted.")
+            : (IsFa
+                ? $"«{path}» دیگر وصل نمی‌شود. داده‌ها روی سرور ماندند."
+                : $"{path} is no longer mounted. The data is still on the server.");
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    private string ExplainMount(Harbora.Infrastructure.Storage.MountPathRefusal refusal) => (refusal, IsFa) switch
+    {
+        (Harbora.Infrastructure.Storage.MountPathRefusal.Missing, true) => "مسیر را بنویسید، مثلاً /data",
+        (Harbora.Infrastructure.Storage.MountPathRefusal.Missing, false) => "Type a path, for example /data",
+        (Harbora.Infrastructure.Storage.MountPathRefusal.NotAbsolute, true) =>
+            "مسیر باید با / شروع شود؛ مسیر نسبی به پوشهٔ کاری ایمیج حساب می‌شود که معلوم نیست کجاست.",
+        (Harbora.Infrastructure.Storage.MountPathRefusal.NotAbsolute, false) =>
+            "The path must start with /. A relative one is resolved against the image's working directory, which is not visible from here.",
+        (Harbora.Infrastructure.Storage.MountPathRefusal.Unsafe, true) => "این مسیر نویسه‌های غیرمجاز دارد.",
+        (Harbora.Infrastructure.Storage.MountPathRefusal.Unsafe, false) => "That path contains something a path cannot contain.",
+        (Harbora.Infrastructure.Storage.MountPathRefusal.TooLong, true) => "مسیر خیلی بلند است.",
+        (Harbora.Infrastructure.Storage.MountPathRefusal.TooLong, false) => "That path is too long.",
+        (_, true) =>
+            "این پوشه مال خود ایمیج است. سوار کردن والیوم خالی روی آن، محتوای ایمیج را با هیچ جایگزین می‌کند و کانتینر بالا نمی‌آید.",
+        (_, false) =>
+            "That directory belongs to the image. Mounting an empty volume over it replaces the image's own files with nothing, and the container does not start."
+    };
+
     [HttpPost("/apps/{id:guid}/size")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.AppsEnv)]
