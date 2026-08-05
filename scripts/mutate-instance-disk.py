@@ -69,6 +69,10 @@ MUTANTS = [
      'true\n            ? null'),
 
     # --- one way of writing bytes ---
+    (BYTES, "an empty measurement is reported as unlimited",
+     'public static string Measured(long bytes) => bytes <= 0 ? "0 B" : Format(bytes);',
+     'public static string Measured(long bytes) => Format(bytes);'),
+
     (BYTES, "nothing is written as zero rather than as unlimited",
      '<= 0 => unlimited,',
      '<= 0 => "0 B",'),

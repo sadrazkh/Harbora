@@ -13,6 +13,15 @@ public static class ByteSize
     /// Bytes as a person reads them. Zero or less is unlimited, which is what a zero means on every
     /// limit in this platform.
     /// </summary>
+    /// <summary>
+    /// A measurement, where zero means the thing is empty.
+    ///
+    /// Separate from <see cref="Format"/> because the two answer different questions with the same
+    /// number. A ceiling of zero means "no ceiling"; a measurement of zero means "nothing in it",
+    /// and running both through one function made an empty bucket report its usage as "unlimited".
+    /// </summary>
+    public static string Measured(long bytes) => bytes <= 0 ? "0 B" : Format(bytes);
+
     public static string Format(long bytes, string unlimited = "unlimited") => bytes switch
     {
         <= 0 => unlimited,

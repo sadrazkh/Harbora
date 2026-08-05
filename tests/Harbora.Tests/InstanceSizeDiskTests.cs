@@ -128,6 +128,17 @@ public class InstanceSizeDiskTests
     }
 
     [Fact]
+    public void A_measurement_of_nothing_is_nothing_rather_than_unlimited()
+    {
+        // The two answer different questions with the same number. A ceiling of zero means "no
+        // ceiling"; a measurement of zero means the bucket is empty — and one function for both
+        // made an empty bucket report its usage as "unlimited".
+        ByteSize.Measured(0).Should().Be("0 B");
+        ByteSize.Measured(19).Should().Be("19 B");
+        ByteSize.Measured(2 * 1024).Should().Be("2 KB");
+    }
+
+    [Fact]
     public void Nothing_is_unlimited_rather_than_zero()
     {
         ByteSize.Format(0).Should().Be("unlimited");

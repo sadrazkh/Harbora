@@ -64,7 +64,11 @@ else if (Model.Buckets.Count > 0)
                             @(isFa ? "مصرف:" : "Used:")
                             @* Never measured is not empty. A bucket reported as 0 B that has a
                                terabyte in it is the kind of number people plan against. *@
-                            @(bucket.UsedBytes is { } used ? Bytes(used) : (isFa ? "اندازه‌گیری نشده" : "not measured"))
+                            @* A measurement, not a ceiling: an empty bucket holds 0 B, which is not
+                               the same statement as "no limit". *@
+                            @(bucket.UsedBytes is { } used
+                                ? Harbora.Infrastructure.Tenancy.ByteSize.Measured(used)
+                                : (isFa ? "اندازه‌گیری نشده" : "not measured"))
                             / @Bytes(bucket.QuotaBytes)
                             @if (bucket.MeasuredAt is { } at)
                             {
