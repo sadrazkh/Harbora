@@ -1,0 +1,64 @@
+# syntax=docker/dockerfile:1
+
+# The panel image plus the Kopia CLI.
+#
+# Separate from the root Dockerfile on purpose. Harbora drives Kopia as a short-lived local process
+# (docs/backup-sync/ARCHITECTURE.md § 5), so the binary must live inside the panel container — but
+# Features:Backup is off by default, and every deployment should not carry a binary it never runs.
+# Used only by deploy/backup-sync.compose.yml.
+#
+# TWO STEPS, and the order matters — this image extends the panel rather than rebuilding it, so the
+# base has to exist first:
+#
+#   docker compose -f docker-compose.yml build panel
+#   docker compose -f docker-compose.yml -f backup-sync.compose.yml up -d --build
+#
+# (The overlay's `build:` replaces the base one when Compose merges the two files, so the first
+# command is what actually produces harbora/panel:latest.)
+
+ARG PANEL_IMAGE=harbora/panel:latest
+FROM ${PANEL_IMAGE} AS base
+
+# Pinned by the caller. Never `latest` — a tag whose meaning changes under you is not a dependency,
+# it is a surprise waiting for the next rebuild.
+ARG KOPIA_VERSION=0.17.0
+ARG TARGETARCH
+
+# The download is verified against the checksum file published alongside the release, and the build
+# fails if it does not match. Fetching a binary over TLS proves who served it, not what it is;
+# without this step a compromised or truncated download becomes the thing taking your backups.
+#
+# NOTE: the checksums file is fetched from the same release, so this defends against corruption and
+# a bad mirror, not against a compromised upstream release. For that, pin the expected sha256 in
+# your own build and compare against it.
+RUN set -eux; \
+    case "${TARGETARCH:-amd64}" in \
+        amd64) KOPIA_ARCH="x64" ;; \
+        arm64) KOPIA_ARCH="arm64" ;; \
+        *) echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    TARBALL="kopia-${KOPIA_VERSION}-linux-${KOPIA_ARCH}.tar.gz"; \
+    BASE_URL="https://github.com/kopia/kopia/releases/download/v${KOPIA_VERSION}"; \
+    cd /tmp; \
+    curl -fsSLO "${BASE_URL}/${TARBALL}"; \
+    curl -fsSLO "${BASE_URL}/checksums.txt"; \
+    grep " ${TARBALL}\$" checksums.txt | sha256sum -c -; \
+    tar xzf "${TARBALL}"; \
+    install -m 0755 "kopia-${KOPIA_VERSION}-linux-${KOPIA_ARCH}/kopia" /usr/local/bin/kopia; \
+    rm -rf /tmp/kopia-* /tmp/checksums.txt; \
+    kopia --version
+
+RUN mkdir -p /var/lib/harbora/kopia/cache /var/lib/harbora/restore
+
+# No USER switch here, and that is deliberate rather than an oversight.
+#
+# The base panel image runs as root, and the panel mounts /var/run/docker.sock to drive Docker
+# directly. Dropping to a non-root user in this overlay would look like hardening and would break
+# Docker access on the next deploy — every build, every volume backup, every database dump.
+#
+# Running the panel unprivileged is worth doing and is a change to the base image, not to a backup
+# overlay: it needs the socket's group mapped onto the runtime user (or a socket proxy), and it
+# affects the whole product. Recorded as follow-up in docs/backup-sync/MERGE_GUIDE.md rather than
+# smuggled in here.
+
+ENTRYPOINT ["dotnet", "Harbora.Web.dll"]

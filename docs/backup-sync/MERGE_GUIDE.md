@@ -77,7 +77,7 @@ should not have to discover by reading diffs.
 | Machine-generated OpenAPI | `docs/backup-sync/API.md` is the reference; no `/openapi` document is served |
 | Sync module | Not started — no projects, no entities |
 | Agent backup dispatch | Existing node agent untouched |
-| Docker compose services for Kopia/Syncthing | Not added |
+| Compose actually run | The files exist and the YAML parses; nothing was started, because there is no Docker here |
 | Download of a snapshot artifact | No short-lived link; restore-to-a-new-folder is the way to inspect a backup |
 
 **So: after merging and enabling the flag, an operator can create a local or S3 repository, back up
@@ -159,7 +159,28 @@ path is an arbitrary-file read with a download button on the end of it, and the 
 "anywhere the panel user can read" — which includes `/etc` and Harbora's own key directory. The UI
 says so on the page rather than failing later.
 
-No new environment variables, no new Docker services, no new package dependencies, no version bumps.
+No new package dependencies and no version bumps.
+
+### Deployment (optional overlay)
+
+`deploy/backup-sync.compose.yml` + `deploy/Dockerfile.panel-kopia` + `deploy/backup-sync.env.example`.
+Apply only when a flag is being switched on. **Two steps, in order** — the overlay's `build:`
+replaces the base one when Compose merges the files, so the base image must exist first:
+
+```bash
+docker compose -f docker-compose.yml build panel
+docker compose -f docker-compose.yml -f backup-sync.compose.yml up -d --build
+```
+
+**Syncthing is a service; Kopia is not.** Syncthing is a daemon Harbora talks to over HTTP. Kopia is
+driven as a short-lived local CLI process, so its binary goes *inside* the panel image — hence the
+Dockerfile rather than a second service. A `kopia server` container would be a second unlocked
+repository holder and a second control surface, which is what the CLI choice avoided.
+
+**Ports.** Syncthing's admin API is published to `127.0.0.1` only: it is a direct path to every file
+it holds, authenticated separately from Harbora. The sync protocol port (22000) *is* meant to be
+reachable — it is TLS with mutual device-id authentication, and closing it only forces traffic
+through a public relay, which is slower and puts a third party on the path.
 
 ---
 
@@ -240,7 +261,16 @@ never writes to `Backups`, `BackupDestinations`, `BackupSchedules` or `BackupDel
 9. **Syncthing's REST calls have never run against a real daemon.** They are written against the
    `/rest/config` API (v1.23+, where per-folder and per-device endpoints replaced whole-config PUTs).
    Smoke-test create-folder and share-device once before enabling `Features:Sync`.
-10. `EncryptedSyncNode` is off by default and marked experimental wherever it appears. The guarantee
+10. **Compose has never been run.** Three specific unknowns, all stated in the files themselves:
+    the image tags (`syncthing/syncthing:1.27.9`, Kopia `0.17.0`) were not verified against a
+    registry and should be repinned by digest; `cap_drop: ALL` on Syncthing may be too strict for an
+    entrypoint that drops privileges itself, and is the first thing to relax if the container will
+    not start; and the Kopia install in `Dockerfile.panel-kopia` was never built.
+11. **The panel still runs as root**, because it drives `/var/run/docker.sock`. The Kopia overlay
+    deliberately does *not* switch users — that would look like hardening and break Docker access on
+    the next deploy. Running the panel unprivileged needs the socket's group mapped onto the runtime
+    user (or a socket proxy) and is a change to the base image, not to a backup overlay.
+12. `EncryptedSyncNode` is off by default and marked experimental wherever it appears. The guarantee
     comes from Syncthing's untrusted-device support, not from Harbora, and the failure mode — the
     node quietly holding plaintext — is not something Harbora can detect. Do not present it as
     settled to users.
@@ -261,6 +291,8 @@ Stated precisely, because "tested" is a word worth being exact about.
 | `dotnet test Harbora.slnx` | **2453 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
 | Sync API paging, filtering, idempotency, tenancy, no-password-in-response | Asserted at controller level |
 | Sync API exposes no restore-shaped route | Asserted by reflecting over the controller's methods |
+| Compose YAML parses, with the intended port bindings and caps | Parsed and inspected with a YAML parser |
+| **`docker compose up`, health checks, image tags, Kopia install** | **NOT RUN — no Docker and no registry access here** |
 | Sync device-id, mode and conflict-name parsing | Asserted directly |
 | **Syncthing against a real daemon** | **NOT RUN — none installed on this machine** |
 | Migration reviewed for additive-only | Confirmed |

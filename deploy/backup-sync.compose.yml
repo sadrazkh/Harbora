@@ -1,0 +1,175 @@
+# Harbora Backup & Sync — development/optional overlay.
+#
+# TWO STEPS, in this order:
+#
+#   docker compose -f docker-compose.yml build panel
+#   docker compose -f docker-compose.yml -f backup-sync.compose.yml up -d --build
+#
+# The first is not optional. This overlay's panel build extends harbora/panel:latest, and Compose
+# REPLACES the base `build:` when it merges the files — so without the first command the base image
+# does not exist and the second fails on a missing FROM.
+#
+# Apply this ONLY when Features:Backup or Features:Sync is being switched on. With the flags off the
+# platform does not talk to either engine, and this file adds a daemon and a volume for nothing.
+#
+# ---------------------------------------------------------------------------------------------
+# Why Syncthing is a service here and Kopia is not
+# ---------------------------------------------------------------------------------------------
+# Syncthing IS a daemon: it holds folders open, watches them, and is configured over its REST API.
+# Harbora talks to it over HTTP, so it belongs in Compose.
+#
+# Kopia is NOT a service. Harbora drives it as a short-lived CLI invocation per operation
+# (docs/backup-sync/ARCHITECTURE.md § 5), and EngineProcessRunner starts it as a LOCAL process — so
+# the binary has to exist inside the panel container, not beside it. That is what
+# deploy/Dockerfile.panel-kopia is for, and why there is no `kopia:` service below. A container
+# running `kopia server` would be a second unlocked repository holder and a second control surface
+# to protect, which is the arrangement that was deliberately avoided.
+#
+# ---------------------------------------------------------------------------------------------
+# Image versions — READ THIS
+# ---------------------------------------------------------------------------------------------
+# Pinned by tag, never `latest`, and driven by variables so a bump is a .env change rather than an
+# edit here.
+#
+# These tags were NOT verified against a registry: the machine this branch was written on has no
+# Docker and no registry access. Confirm the tag exists, then repin by digest — a digest is the only
+# form that cannot change under you:
+#
+#   docker image inspect syncthing/syncthing:${SYNCTHING_VERSION} --format '{{index .RepoDigests 0}}'
+#
+# and put the resulting sha256 in .env. Do not copy a digest from documentation, including this file:
+# a plausible-looking digest that nobody observed passes review and fails on deploy.
+
+services:
+
+  syncthing:
+    image: syncthing/syncthing:${SYNCTHING_VERSION:-1.27.9}
+    container_name: harbora-syncthing
+    restart: unless-stopped
+
+    # Non-root. The image honours PUID/PGID; these must own the volumes below.
+    environment:
+      PUID: ${SYNCTHING_UID:-1000}
+      PGID: ${SYNCTHING_GID:-1000}
+      # Harbora authenticates to the REST API with this. Set it explicitly rather than letting
+      # Syncthing generate one into its config, or the panel has no way to learn it without someone
+      # reading a file out of the container. Generate with: openssl rand -hex 32
+      # Quoted: the ":?" form's message contains ": ", which YAML would otherwise read as a nested
+      # mapping and refuse to parse.
+      STGUIAPIKEY: "${SYNCTHING_API_KEY:?set SYNCTHING_API_KEY — generate with 'openssl rand -hex 32'}"
+      # Telemetry off by default. What this daemon syncs is nobody else's business.
+      STNOUPGRADE: "1"
+
+    ports:
+      # ---- Admin API: LOOPBACK ONLY, and this is not negotiable ----
+      # Syncthing's REST API is a direct path to every file it holds and to its own configuration,
+      # with authentication entirely separate from Harbora's. Published to 0.0.0.0 it is a second
+      # front door on the platform (THREAT_MODEL T7). Harbora is the interface; this is plumbing.
+      - "127.0.0.1:${SYNCTHING_API_PORT:-8384}:8384"
+
+      # ---- Sync protocol: MEANT to be reachable ----
+      # Different from the line above on purpose. This is how devices actually connect, it is TLS
+      # with mutual device-id authentication, and a device that was never paired cannot use it.
+      # Closing it does not make anything safer — it only forces every transfer through a public
+      # relay, which is slower AND puts a third party on the path.
+      - "${SYNCTHING_SYNC_PORT:-22000}:22000/tcp"
+      - "${SYNCTHING_SYNC_PORT:-22000}:22000/udp"
+
+      # Local discovery. Loopback-published would defeat it; drop the line entirely on a host where
+      # devices are not on the same LAN.
+      - "${SYNCTHING_DISCOVERY_PORT:-21027}:21027/udp"
+
+    volumes:
+      - harbora_syncthing_config:/var/syncthing/config
+      # The folders themselves. Must match Sync:Module:AllowedRoots, and must be the SAME host path
+      # the panel sees — Harbora resolves conflicts by walking the directory itself.
+      - ${SYNC_DATA_PATH:-/srv/harbora/sync}:/var/syncthing/data
+
+    # No read_only: Syncthing writes its config, its index database and the synced files. Locked
+    # down by capability instead, which is the control that actually applies to it.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # UNVERIFIED, and the first thing to relax if the container will not start. `cap_drop: ALL` is
+    # the right default, but this image's entrypoint drops privileges to PUID/PGID itself, and that
+    # may need CHOWN / SETUID / SETGID / DAC_OVERRIDE back. It could not be tested here — no Docker
+    # on the machine this was written on — so it is stated as an unknown rather than asserted to
+    # work. A permissions error on first `docker compose up` is this line, not your configuration.
+
+    healthcheck:
+      # /rest/noauth/health needs no API key, so the check does not depend on the credential being
+      # right — a daemon that is up with a bad key should report healthy and fail loudly in the
+      # panel, not look dead here.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8384/rest/noauth/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+    # Sample limits. A first-scan of a large folder is genuinely memory-hungry; raise rather than
+    # remove, and watch the container before deciding.
+    deploy:
+      resources:
+        limits:
+          cpus: "${SYNCTHING_CPU_LIMIT:-1.0}"
+          memory: ${SYNCTHING_MEMORY_LIMIT:-1g}
+
+    networks:
+      - harbora
+
+    # Deliberately NO traefik labels. Nothing about this daemon should be routable from outside.
+
+  panel:
+    # Adds the Kopia CLI to the panel image. Everything else — env, volumes, labels — comes from
+    # docker-compose.yml; Compose merges the two.
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.panel-kopia
+      args:
+        KOPIA_VERSION: ${KOPIA_VERSION:-0.17.0}
+    environment:
+      Features__Backup: ${FEATURE_BACKUP:-false}
+      Features__Sync: ${FEATURE_SYNC:-false}
+      # Experimental. The node stores ciphertext it cannot read — a guarantee that comes from
+      # Syncthing's untrusted-device support, not from Harbora, whose failure mode (the node quietly
+      # holding plaintext) Harbora cannot detect.
+      Features__EncryptedSyncNode: ${FEATURE_ENCRYPTED_SYNC_NODE:-false}
+
+      Backups__Kopia__BinaryPath: /usr/local/bin/kopia
+      Backups__Kopia__ConfigDirectory: /var/lib/harbora/kopia
+      Backups__Kopia__CacheDirectory: /var/lib/harbora/kopia/cache
+      Backups__Module__RestoreRoot: /var/lib/harbora/restore
+      Backups__Module__StagingDirectory: /var/lib/harbora/backups
+      Backups__Module__StagingVolume: harbora_backups
+
+      Sync__Syncthing__BaseUrl: http://syncthing:8384
+      Sync__Syncthing__ApiKey: ${SYNCTHING_API_KEY}
+
+    volumes:
+      - harbora_kopia:/var/lib/harbora/kopia
+      # Restore destinations are confined to this directory. Kept OFF the panel's other volumes so a
+      # restore cannot land on top of the build cache or the Data Protection keyring.
+      - harbora_restore:/var/lib/harbora/restore
+      # Same host path Syncthing mounts, so conflict scanning sees the same files.
+      - ${SYNC_DATA_PATH:-/srv/harbora/sync}:/srv/harbora/sync
+
+    depends_on:
+      syncthing:
+        condition: service_healthy
+
+volumes:
+  harbora_kopia:
+    name: harbora_kopia
+  harbora_restore:
+    name: harbora_restore
+  harbora_syncthing_config:
+    # Explicit name, like harbora_backups above it: Compose otherwise prefixes with the project
+    # directory, and a renamed volume here means Syncthing comes back with no device identity and a
+    # brand new device id — every pairing broken, silently.
+    name: harbora_syncthing_config
+
+networks:
+  harbora:
+    name: harbora
+    external: false
