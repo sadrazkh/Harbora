@@ -49,9 +49,30 @@ public sealed class AccountController(
         // it. At this point the request has no workspace claim, so the global filter would match
         // nothing and every user would sign in scoped to an empty workspace — an empty dashboard,
         // and any app they create stamped with Guid.Empty.
-        var workspaceId = await db.WorkspaceMembers.IgnoreQueryFilters()
+        var memberships = await db.WorkspaceMembers.IgnoreQueryFilters()
             .Where(m => m.UserId == user.Id)
-            .Select(m => m.WorkspaceId).FirstOrDefaultAsync();
+            .Select(m => m.WorkspaceId).ToListAsync();
+
+        // FirstOrDefaultAsync used to stand here. Over an empty set it returns Guid.Empty — not
+        // null, not an error, an ordinary-looking id — which went straight into the workspace claim
+        // and scoped the person to a workspace that does not exist.
+        var resolution = Harbora.Infrastructure.Security.WorkspaceMembership.Resolve(
+            memberships, await db.Workspaces.IgnoreQueryFilters().Select(w => w.Id).ToListAsync());
+
+        if (resolution.WorkspaceId is not { } workspaceId)
+        {
+            await audit.LogAsync("user.login_no_workspace", "user", user.Id.ToString(), ClientIp,
+                actorEmailOverride: user.Email, userIdOverride: user.Id);
+            ModelState.AddModelError(string.Empty, resolution.Reason!);
+            return View(model);
+        }
+
+        // Repairs an account that predates the fix, on the way through, so nobody has to be found
+        // and mended by hand.
+        if (memberships.Count == 0)
+            db.WorkspaceMembers.Add(
+                Harbora.Infrastructure.Security.WorkspaceMembership.For(workspaceId, user.Id, user.Role));
+
         await db.SaveChangesAsync();
 
         var claims = new List<Claim>

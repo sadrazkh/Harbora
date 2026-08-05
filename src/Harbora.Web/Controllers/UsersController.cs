@@ -68,13 +68,29 @@ public sealed class UsersController(
         if (await db.Users.IgnoreQueryFilters().AnyAsync(u => u.Email == email, ct))
             return Back("That email address already has an account.", error: true);
 
-        db.Users.Add(new User
+        var created = new User
         {
             Email = email,
             DisplayName = string.IsNullOrWhiteSpace(displayName) ? email : displayName.Trim(),
             PasswordHash = hasher.Hash(password),
             Role = role
-        });
+        };
+        db.Users.Add(created);
+
+        // The membership is the account. Without it the person signs in to Guid.Empty: an empty
+        // dashboard, an empty app list, and anything they create stamped with a workspace that does
+        // not exist. Every user made through this form was born that way, and nothing failed —
+        // every page returned 200.
+        var workspaceId = await db.Workspaces.IgnoreQueryFilters()
+            .Where(w => w.Id == currentUser.WorkspaceId).Select(w => (Guid?)w.Id).FirstOrDefaultAsync(ct)
+            ?? await db.Workspaces.IgnoreQueryFilters().Select(w => (Guid?)w.Id).FirstOrDefaultAsync(ct);
+
+        if (workspaceId is null)
+            return Back("This installation has no workspace to add the account to.", error: true);
+
+        db.WorkspaceMembers.Add(
+            Harbora.Infrastructure.Security.WorkspaceMembership.For(workspaceId.Value, created.Id, role));
+
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("user.created", "user", email, ClientIp, ct: ct);
