@@ -78,8 +78,8 @@ public class HarboraDbContext : DbContext
         Set<Harbora.Modules.Backup.Domain.BackupSnapshot>();
     public DbSet<Harbora.Modules.Backup.Domain.RestoreJob> RestoreJobs =>
         Set<Harbora.Modules.Backup.Domain.RestoreJob>();
-    public DbSet<Harbora.Modules.Backup.Domain.BackupIdempotencyRecord> BackupIdempotencyRecords =>
-        Set<Harbora.Modules.Backup.Domain.BackupIdempotencyRecord>();
+    public DbSet<IdempotencyRecord> IdempotencyRecords =>
+        Set<IdempotencyRecord>();
 
     // Sync module. Deliberately no overlap with the backup tables above: a sync space has no
     // snapshots, no retention and no restore, because there is no earlier state to go back to.
@@ -466,7 +466,7 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => x.Status);
         });
 
-        b.Entity<Harbora.Modules.Backup.Domain.BackupIdempotencyRecord>(e =>
+        b.Entity<IdempotencyRecord>(e =>
         {
             e.Property(x => x.Key).HasMaxLength(128).IsRequired();
             e.Property(x => x.Endpoint).HasMaxLength(128).IsRequired();
@@ -598,7 +598,7 @@ public class HarboraDbContext : DbContext
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         // The key is client-chosen, so two tenants can pick the same string. Filtered so one can
         // never replay the other's result.
-        b.Entity<Harbora.Modules.Backup.Domain.BackupIdempotencyRecord>()
+        b.Entity<IdempotencyRecord>()
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
 
         // Sync module. The status refresher runs unscoped, like every other sweeper here.

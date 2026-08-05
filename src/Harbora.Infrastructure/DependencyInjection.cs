@@ -127,6 +127,9 @@ public static class DependencyInjection
         // connection options may be resolved per request/node. Registering the storage adapter as a
         // singleton captured that scoped engine and made Development startup fail DI validation.
         services.AddScoped<IBackupStorage, Backups.BackupStorage>();
+        // Idempotency-Key handling, shared by every module's API. Platform-level rather than in one
+        // module, so a second module does not have to depend on the first to reuse the table.
+        services.AddScoped<IIdempotencyStore, Common.IdempotencyStore>();
         services.AddScoped<Backups.BackupEngine>();
         // Sends a copy of each finished backup to Telegram/email, alongside the stored artifact.
         services.AddScoped<Backups.BackupDeliveryService>();

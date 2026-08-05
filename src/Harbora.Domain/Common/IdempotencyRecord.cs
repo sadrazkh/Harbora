@@ -1,6 +1,6 @@
-using Harbora.Domain.Common;
 
-namespace Harbora.Modules.Backup.Domain;
+
+namespace Harbora.Domain.Common;
 
 /// <summary>
 /// Remembers what an <c>Idempotency-Key</c> already produced.
@@ -16,7 +16,7 @@ namespace Harbora.Modules.Backup.Domain;
 /// the same string, and one must never see the other's result.
 /// </para>
 /// </summary>
-public class BackupIdempotencyRecord : BaseEntity
+public class IdempotencyRecord : BaseEntity
 {
     public Guid WorkspaceId { get; set; }
 

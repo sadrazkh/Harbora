@@ -41,6 +41,24 @@ public interface IJobHandler
 }
 
 /// <summary>
+/// Remembers what an <c>Idempotency-Key</c> already produced, so a retried request returns the
+/// original result instead of starting the work a second time.
+///
+/// <para>
+/// Platform-level rather than per-module: more than one module's API needs it, and the alternative
+/// was one module depending on another to reuse a table.
+/// </para>
+/// </summary>
+public interface IIdempotencyStore
+{
+    /// <summary>The id the original call produced, or null if this key is new or has expired.</summary>
+    Task<Guid?> FindAsync(string endpoint, string key, CancellationToken ct);
+
+    /// <summary>Record what this key produced. Losing a race with an identical request is not an error.</summary>
+    Task RememberAsync(Guid workspaceId, string endpoint, string key, Guid resultId, CancellationToken ct);
+}
+
+/// <summary>
 /// Tracks the cancellation token sources of jobs executing in THIS process, so a cancel request can
 /// actually interrupt work already underway instead of only marking a row.
 /// </summary>

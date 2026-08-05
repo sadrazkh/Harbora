@@ -37,6 +37,7 @@ public sealed class BackupApiController(
     BackupPolicyService policies,
     RestoreService restores,
     IBackupTargetResolver targets,
+    IIdempotencyStore idempotency,
     ICurrentUser currentUser,
     IOptions<BackupFeatureOptions> features,
     IOptions<BackupModuleOptions> moduleOptions) : ControllerBase
@@ -418,35 +419,14 @@ public sealed class BackupApiController(
         if (key.Length is 0 or > 128)
             return (Invalid("Idempotency-Key", "The key must be between 1 and 128 characters."), null);
 
-        var now = DateTimeOffset.UtcNow;
-        var existing = await db.BackupIdempotencyRecords
-            .FirstOrDefaultAsync(r => r.Endpoint == endpoint && r.Key == key && r.ExpiresAt > now, ct);
-
-        return (null, existing?.ResultId);
+        return (null, await idempotency.FindAsync(endpoint, key, ct));
     }
 
     private async Task RememberAsync(string endpoint, Guid resultId, CancellationToken ct)
     {
         if (!Request.Headers.TryGetValue("Idempotency-Key", out var raw)) return;
 
-        db.BackupIdempotencyRecords.Add(new BackupIdempotencyRecord
-        {
-            WorkspaceId = WorkspaceId,
-            Endpoint = endpoint,
-            Key = raw.ToString().Trim(),
-            ResultId = resultId
-        });
-
-        try
-        {
-            await db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException)
-        {
-            // Lost a race with a concurrent identical request. The unique index is what makes that
-            // safe: the other caller's row stands, and the work was already de-duplicated by the
-            // service's own per-target guard.
-        }
+        await idempotency.RememberAsync(WorkspaceId, endpoint, raw.ToString().Trim(), resultId, ct);
     }
 
     private static async Task<PagedResponse<TDto>> PageAsync<TEntity, TDto>(

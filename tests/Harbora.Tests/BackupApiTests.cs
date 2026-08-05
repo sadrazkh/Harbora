@@ -6,6 +6,7 @@ using Harbora.Domain.Jobs;
 using Harbora.Modules.Backup.Contracts;
 using Harbora.Modules.Backup.Domain;
 using Harbora.Modules.Backup.Infrastructure;
+using Harbora.Infrastructure.Common;
 using Harbora.Tests.Fakes;
 using Harbora.Web.Controllers.Api;
 using Microsoft.AspNetCore.Http;
@@ -87,6 +88,7 @@ public sealed class BackupApiTests : IDisposable
             new BackupPolicyService(_db),
             restores,
             Resolver(),
+            new IdempotencyStore(_db, new FixedClock(DateTimeOffset.UtcNow)),
             new Caller(_workspace),
             Options.Create(new BackupFeatureOptions { Backup = enabled }),
             Options.Create(_options));
