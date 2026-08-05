@@ -167,6 +167,27 @@ public class ReadyAppCatalogTests
     }
 
     [Fact]
+    public void Every_logo_is_the_projects_own_mark_rather_than_a_drawing_of_one()
+    {
+        // These were drawn: a few circles and short paths in the project's colour, which is a guess
+        // with a brand colour on it. The real marks carry the project's name in a title element and
+        // path data far longer than anything anyone would hand-place.
+        foreach (var app in ReadyAppCatalog.All())
+        {
+            var relative = app.Asset.Path.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
+            var svg = File.ReadAllText(Path.Combine(LogoRoot(), relative));
+
+            svg.Should().Contain("<title>", $"{app.Template.Key} must carry the project's own name");
+
+            var geometry = System.Text.RegularExpressions.Regex.Matches(svg, @"\sd=""([^""]*)""")
+                .Sum(m => m.Groups[1].Value.Length);
+
+            geometry.Should().BeGreaterThan(200,
+                $"{app.Template.Key}'s outline is too simple to be the real mark");
+        }
+    }
+
+    [Fact]
     public void Every_logo_keeps_its_aspect_ratio()
     {
         // A viewBox with equal sides is what stops the card stretching the mark when the slot is

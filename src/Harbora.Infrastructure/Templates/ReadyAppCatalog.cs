@@ -50,7 +50,7 @@ public static class ReadyAppCatalog
             ("1.58.2", "sha256:638a21e9bca01fcd9e29e9d1355f64b18681d0c8554a1bde78646e6a2993bf63",
                 VersionLifecycle.PreviousStable, "amd64,arm64", null, null)
         ],
-        licenseNote: "n8n project mark, used to identify the application.");
+        licenseNote: "n8n project mark from the Simple Icons set (CC0), used to identify the application.");
 
     /// <summary>
     /// A sandbox for running containers, not a Docker socket on a plate.
@@ -76,7 +76,7 @@ public static class ReadyAppCatalog
                 "Runs rootless. The host Docker socket is never mounted.",
                 "Enabling privileged features exposes the node. An administrator must turn this on deliberately.")
         ],
-        licenseNote: "Docker project mark, used to identify the application.",
+        licenseNote: "Docker project mark from the Simple Icons set (CC0), used to identify the application.",
         // Draft on purpose: the secure runtime lands in a later phase and this must not be
         // deployable before it does.
         publication: VersionPublication.Draft);
@@ -100,7 +100,7 @@ public static class ReadyAppCatalog
                 "Requires PostgreSQL and Redis. Run the upgrade job after switching versions.",
                 "Sentry migrations are one-way. Back the database up before upgrading.")
         ],
-        licenseNote: "Sentry project mark, used to identify the application.");
+        licenseNote: "Sentry project mark from the Simple Icons set (CC0), used to identify the application.");
 
     private static ReadyApp GitService() => Build(
         key: "gitea", name: "Gitea", nameFa: "گیتی‌آ", category: "developer-tools",
@@ -121,7 +121,7 @@ public static class ReadyAppCatalog
             ("1.21.11", "sha256:0056032dc8c6ab70583e4a105b9ee0dc72dce4f4fbc8022c98bcec46b0273883",
                 VersionLifecycle.PreviousStable, "amd64,arm64", null, null)
         ],
-        licenseNote: "Gitea project mark, used to identify the application.");
+        licenseNote: "Gitea project mark from the Simple Icons set (CC0), used to identify the application.");
 
     private static ReadyApp Chat() => Build(
         key: "rocketchat", name: "Rocket.Chat", nameFa: "راکت‌چت", category: "collaboration",
@@ -140,7 +140,7 @@ public static class ReadyAppCatalog
                 "Needs MongoDB with a replica set. The bundled MongoDB template is configured for it.",
                 null)
         ],
-        licenseNote: "Rocket.Chat project mark, used to identify the application.");
+        licenseNote: "Rocket.Chat project mark from the Simple Icons set (CC0), used to identify the application.");
 
     // ---- the eight completing the set ----
 
@@ -158,7 +158,7 @@ public static class ReadyAppCatalog
             ("RELEASE.2024-10-13T13-34-11Z", "sha256:9535594ad4122b7a78c6632788a989b96d9199b483d3bd71a5ceae73a922cdfa",
                 VersionLifecycle.Recommended, "amd64,arm64", null, null)
         ],
-        licenseNote: "MinIO project mark, used to identify the application.");
+        licenseNote: "MinIO project mark from the Simple Icons set (CC0), used to identify the application.");
 
     private static ReadyApp Dashboards() => Build(
         key: "grafana", name: "Grafana", nameFa: "گرافانا", category: "observability",
@@ -176,7 +176,7 @@ public static class ReadyAppCatalog
             ("10.4.11", "sha256:594013a7e4bbc9271def30b8cc89f32b8f979cc2fd152d107bf6c8c340d52117",
                 VersionLifecycle.PreviousStable, "amd64,arm64", null, null)
         ],
-        licenseNote: "Grafana Labs project mark, used to identify the application.");
+        licenseNote: "Grafana Labs project mark from the Simple Icons set (CC0), used to identify the application.");
 
     private static ReadyApp BusinessIntelligence() => Build(
         key: "metabase", name: "Metabase", nameFa: "متابیس", category: "data",
@@ -195,7 +195,7 @@ public static class ReadyAppCatalog
             ("v0.50.21", "sha256:fd268495163eb77930102b05171c9cac2f99f679a855478584e821b4c1aa36a8",
                 VersionLifecycle.Recommended, "amd64,arm64", null, null)
         ],
-        licenseNote: "Metabase project mark, used to identify the application.");
+        licenseNote: "Metabase project mark from the Simple Icons set (CC0), used to identify the application.");
 
     // ---- construction ----
 

@@ -208,6 +208,16 @@
   .template-logo {
     @apply grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-accent-soft text-xs font-extrabold tracking-tight text-accent-text ring-1 ring-inset ring-accent/10;
   }
+  /* A chip holding a real mark gets a plate that does not move with the theme.
+     The tinted chips below were designed for the two-letter fallback, where the letters are drawn
+     in the tint's own foreground colour. A brand mark brings its own colour and some of them are
+     nearly black — Ghost is #15171A, Sentry #362D59 — so on the dark-mode tint they disappeared.
+     The plate is the same in both themes precisely so no brand colour can vanish in one of them. */
+  .template-logo:has(img) {
+    background: rgb(248 250 252);
+    @apply ring-1 ring-inset ring-black/5;
+  }
+
   .template-logo[data-template-key="wordpress"] { @apply bg-info-soft text-info ring-info/10; }
   .template-logo[data-template-key="ghost"] { @apply bg-slate-100 text-slate-900 ring-slate-400/10; }
   .template-logo[data-template-key="uptime-kuma"] { @apply bg-ok-soft text-ok ring-ok/10; }
