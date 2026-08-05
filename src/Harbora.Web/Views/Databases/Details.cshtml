@@ -108,9 +108,13 @@ else if (moving)
         Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Gb(db.MemoryBytes)),
         Model.MemoryLimitBytes > 0 ? (isFa ? $"سقف {Gb(Model.MemoryLimitBytes)}" : $"limit {Gb(Model.MemoryLimitBytes)}") : (isFa ? "بدون سقف" : "no limit")))" />
 
+    @* The tier's disk figure belongs beside the measurement, for the same reason the memory limit
+       does: "12 GB" answers nothing without the ceiling it is being measured against. *@
     <partial name="Design/_StatCard" model="@(new StatCardModel("hard-drive", isFa ? "داده" : "Storage",
         Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Gb(db.StorageBytes)),
-        db.StorageMeasuredAt?.LocalDateTime.ToString("yyyy-MM-dd HH:mm")))" />
+        Model.DiskLimitBytes > 0
+            ? (isFa ? $"سقف {Gb(Model.DiskLimitBytes)}" : $"limit {Gb(Model.DiskLimitBytes)}")
+            : db.StorageMeasuredAt?.LocalDateTime.ToString("yyyy-MM-dd HH:mm")))" />
 
     <partial name="Design/_StatCard" model="@(new StatCardModel("boxes", isFa ? "اپ متصل" : "Linked apps",
         Harbora.Infrastructure.Monitoring.MetricDisplay.For(db.LinkedApps)))" />

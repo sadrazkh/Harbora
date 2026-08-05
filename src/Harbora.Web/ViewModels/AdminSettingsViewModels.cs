@@ -1,7 +1,7 @@
-namespace Harbora.Web.ViewModels;
+﻿namespace Harbora.Web.ViewModels;
 
 /// <summary>One resource plan an operator can make the default.</summary>
-public sealed record SizeChoiceViewModel(string Key, string Name, double CpuCores, long MemoryBytes);
+public sealed record SizeChoiceViewModel(string Key, string Name, double CpuCores, long MemoryBytes, long DiskBytes);
 
 /// <summary>One ready-made app an operator can choose to put in front of people.</summary>
 public sealed record TemplateChoiceViewModel(

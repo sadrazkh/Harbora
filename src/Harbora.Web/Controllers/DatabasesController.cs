@@ -197,6 +197,7 @@ public sealed partial class DatabasesController(
             RunningImage = service.RunningImage,
             InstanceSizeKey = service.InstanceSizeKey,
             MemoryLimitBytes = service.MemoryLimitBytes,
+            DiskLimitBytes = service.DiskLimitBytes,
             CpuLimit = service.CpuLimit,
             TlsEnabled = service.TlsEnabled
         };
@@ -218,7 +219,8 @@ public sealed partial class DatabasesController(
         return (await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct))
             .Where(s => allowed is null || allowed.Contains(s.Key))
             .Select(s => new SelectListItem(
-                $"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key,
+                Harbora.Infrastructure.Tenancy.InstanceSizeLabel.For(
+                    s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes), s.Key,
                 string.Equals(s.Key, current, StringComparison.OrdinalIgnoreCase)))
             .ToList();
     }
@@ -329,6 +331,7 @@ public sealed partial class DatabasesController(
             {
                 service.InstanceSizeKey = size.Key;
                 service.MemoryLimitBytes = size.MemoryBytes;
+                service.DiskLimitBytes = size.DiskBytes;
                 service.CpuLimit = size.CpuCores;
             }
         }
@@ -409,9 +412,26 @@ public sealed partial class DatabasesController(
             ? null
             : await db.InstanceSizes.FirstOrDefaultAsync(s => s.Key == instanceSizeKey, ct);
 
+        // The same refusal an app gets. A database is the resource most likely to be over a smaller
+        // tier's disk, and moving it there without saying so would leave a figure on the page that
+        // its own data already exceeds.
+        if (size is { DiskBytes: > 0 })
+        {
+            var stored = new Harbora.Infrastructure.Tenancy.DiskUsage(
+                svc.StorageBytes ?? 0, svc.StorageBytes is null ? 1 : 0);
+
+            if (svc.StorageBytes is not null
+                && Harbora.Infrastructure.Tenancy.InstanceDisk.Explain(size.DiskBytes, stored) is { } tooSmall)
+            {
+                TempData["Error"] = tooSmall;
+                return RedirectToAction(nameof(Details), new { id });
+            }
+        }
+
         svc.InstanceSizeKey = size?.Key;
         svc.MemoryLimitBytes = size?.MemoryBytes ?? 0;
         svc.CpuLimit = size?.CpuCores ?? 0;
+        svc.DiskLimitBytes = size?.DiskBytes ?? 0;
         await db.SaveChangesAsync(ct);
 
         TempData["Message"] = IsFa

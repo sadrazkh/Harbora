@@ -133,7 +133,8 @@ public sealed class TemplatesController(
         return (await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct))
             .Where(s => allowed is null || allowed.Contains(s.Key))
             .Select(s => new Microsoft.AspNetCore.Mvc.Rendering.SelectListItem(
-                $"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key))
+                Harbora.Infrastructure.Tenancy.InstanceSizeLabel.For(
+                    s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes), s.Key))
             .ToList();
     }
 

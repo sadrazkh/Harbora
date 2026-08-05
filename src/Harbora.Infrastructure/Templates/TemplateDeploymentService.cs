@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
@@ -144,6 +144,7 @@ public sealed class TemplateDeploymentService(
                 EncryptedPassword = protector.Protect(password),
                 InstanceSizeKey = size?.Key,
                 MemoryLimitBytes = size?.MemoryBytes ?? 0,
+                DiskLimitBytes = size?.DiskBytes ?? 0,
                 CpuLimit = size?.CpuCores ?? 0
             };
 
@@ -185,6 +186,7 @@ public sealed class TemplateDeploymentService(
             ContainerPort = manifest.Port ?? 80,
             InstanceSizeKey = size?.Key,
             MemoryLimitBytes = size?.MemoryBytes ?? 0,
+                DiskLimitBytes = size?.DiskBytes ?? 0,
             CpuLimit = size?.CpuCores ?? 0,
             HealthCheckPath = string.IsNullOrWhiteSpace(manifest.HealthPath) ? "/" : manifest.HealthPath,
             Status = AppStatus.Created

@@ -52,6 +52,9 @@ public class ManagedService : BaseEntity
     /// <summary>Hard memory ceiling handed to the container. Zero means none.</summary>
     public long MemoryLimitBytes { get; set; }
 
+    /// <summary>The disk the chosen tier comes with, for the same reason as on an app. Zero is no ceiling.</summary>
+    public long DiskLimitBytes { get; set; }
+
     /// <summary>CPU ceiling in cores. Zero means none.</summary>
     public double CpuLimit { get; set; }
     public string DatabaseName { get; set; } = string.Empty;

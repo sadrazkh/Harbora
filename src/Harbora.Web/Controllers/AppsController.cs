@@ -220,6 +220,7 @@ public sealed class AppsController(
             TemplateId = model.TemplateId,
             InstanceSizeKey = size?.Key,
             MemoryLimitBytes = size?.MemoryBytes ?? 0,
+            DiskLimitBytes = size?.DiskBytes ?? 0,
             CpuLimit = size?.CpuCores ?? 0
         };
 
@@ -369,6 +370,12 @@ public sealed class AppsController(
         // create form did rather than a free-text box.
         ViewBag.Sizes = await SizeChoicesAsync(app.InstanceSizeKey, ct);
 
+        // Disk, alongside memory and CPU. A tier sells storage now, so the page that shows what a
+        // tier gave this app has to show that figure too — and how much of it is gone.
+        var disk = await AppDiskUsageAsync(app.Id, ct);
+        ViewBag.DiskUsed = disk.MeasuredBytes;
+        ViewBag.DiskCaveat = Harbora.Infrastructure.Tenancy.InstanceDisk.Caveat(disk);
+
         // Where this app could go next. An app installed from a ready-made template had no way to
         // move to a newer release at all: the version was pinned at creation and nothing offered
         // another, so "update n8n" meant deleting it and starting again.
@@ -440,9 +447,24 @@ public sealed class AppsController(
             ? null
             : await db.InstanceSizes.FirstOrDefaultAsync(s => s.Key == instanceSizeKey, ct);
 
+        // A tier now comes with disk, so moving down to one smaller than what this app already
+        // stores has to be refused here. Nothing is deleted to make it fit — shrinking a tier is
+        // not consent to lose data, and a resize that silently could not hold what was there would
+        // be discovered when a write failed.
+        if (size is { DiskBytes: > 0 })
+        {
+            var stored = await AppDiskUsageAsync(app.Id, ct);
+            if (Harbora.Infrastructure.Tenancy.InstanceDisk.Explain(size.DiskBytes, stored) is { } tooSmall)
+            {
+                TempData["Error"] = tooSmall;
+                return RedirectToAction(nameof(Details), new { id });
+            }
+        }
+
         app.InstanceSizeKey = size?.Key;
         app.MemoryLimitBytes = size?.MemoryBytes ?? 0;
         app.CpuLimit = size?.CpuCores ?? 0;
+        app.DiskLimitBytes = size?.DiskBytes ?? 0;
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("app.resized", "app", $"{app.Name}={size?.Key ?? "unlimited"}", ClientIp, ct: ct);
@@ -602,7 +624,8 @@ public sealed class AppsController(
         return (await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct))
             .Where(s => allowed is null || allowed.Contains(s.Key))
             .Select(s => new SelectListItem(
-                $"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key,
+                Harbora.Infrastructure.Tenancy.InstanceSizeLabel.For(
+                    s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes), s.Key,
                 string.Equals(s.Key, current, StringComparison.OrdinalIgnoreCase)))
             .ToList();
     }
@@ -1012,6 +1035,25 @@ public sealed class AppsController(
     /// The ready apps to put in front of somebody, in the order an operator chose on
     /// /admin/settings. Falls back to the catalogue's own order when nobody has chosen.
     /// </summary>
+    /// <summary>
+    /// What this app's own volumes are measured to hold, and how much was never measured.
+    ///
+    /// Both halves, because they are answers to different questions: a workspace with nine
+    /// unmeasured volumes has an unknown total, not a small one. <see cref="InstanceDisk"/> decides
+    /// what to do about that; this only reports it.
+    /// </summary>
+    private async Task<Harbora.Infrastructure.Tenancy.DiskUsage> AppDiskUsageAsync(Guid appId, CancellationToken ct)
+    {
+        var volumes = await db.Volumes.AsNoTracking()
+            .Where(v => v.AppId == appId)
+            .Select(v => v.StorageBytes)
+            .ToListAsync(ct);
+
+        return new Harbora.Infrastructure.Tenancy.DiskUsage(
+            volumes.Where(b => b is not null).Sum(b => b!.Value),
+            volumes.Count(b => b is null));
+    }
+
     private async Task<List<TemplateCatalogItemViewModel>> FeaturedCardsAsync(int count, CancellationToken ct)
     {
         var cards = (await LoadTemplateCardsAsync(ct)).Where(c => !c.IsManagedService).ToList();

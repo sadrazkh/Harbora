@@ -116,6 +116,116 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
     }
 
     /// <summary>
+    /// Adds a resource tier.
+    ///
+    /// Tiers were seeded and then read-only forever: the entity's own comment says the provider can
+    /// add custom sizes and there was nowhere to do it. That mattered little while a tier was CPU
+    /// and memory; it matters now that it carries a disk figure, because a field nobody can set is
+    /// a field that stays at whatever it was seeded with.
+    /// </summary>
+    [HttpPost("sizes")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.PlansManage)]
+    public async Task<IActionResult> CreateSize(
+        string key, string name, double cpuCores, long memoryMb, long diskGb, int sortOrder,
+        CancellationToken ct)
+    {
+        var slug = Harbora.Infrastructure.Tenancy.InstanceSizeKey.Normalise(key);
+        if (slug is null)
+        {
+            TempData["Error"] = "A size needs a key: lowercase letters, digits and dashes.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        // Checked rather than left to the unique index, which surfaces as a 500 on a page somebody
+        // was using correctly.
+        if (await db.InstanceSizes.AnyAsync(s => s.Key == slug, ct))
+        {
+            TempData["Error"] = $"A size with the key '{slug}' already exists.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        db.InstanceSizes.Add(new InstanceSize
+        {
+            Key = slug,
+            Name = string.IsNullOrWhiteSpace(name) ? slug : name.Trim(),
+            NameFa = string.IsNullOrWhiteSpace(name) ? slug : name.Trim(),
+            CpuCores = cpuCores,
+            MemoryBytes = memoryMb * 1024 * 1024,
+            DiskBytes = diskGb * 1024 * 1024 * 1024,
+            SortOrder = sortOrder
+        });
+        await db.SaveChangesAsync(ct);
+
+        TempData["Message"] = $"Size '{slug}' added.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Corrects a tier.
+    ///
+    /// The key is deliberately not editable: apps and databases store it, and renaming it would
+    /// leave every one of them pointing at a size that no longer exists — silently, since a missing
+    /// size reads as "no limit".
+    /// </summary>
+    [HttpPost("sizes/{id:guid}")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.PlansManage)]
+    public async Task<IActionResult> UpdateSize(
+        Guid id, string name, double cpuCores, long memoryMb, long diskGb, int sortOrder,
+        CancellationToken ct)
+    {
+        var size = await db.InstanceSizes.FirstOrDefaultAsync(s => s.Id == id, ct);
+        if (size is null) return NotFound();
+
+        size.Name = string.IsNullOrWhiteSpace(name) ? size.Name : name.Trim();
+        size.CpuCores = cpuCores;
+        size.MemoryBytes = memoryMb * 1024 * 1024;
+        size.DiskBytes = diskGb * 1024 * 1024 * 1024;
+        size.SortOrder = sortOrder;
+        await db.SaveChangesAsync(ct);
+
+        // Says what it does not do. Instances already on this tier keep the figures they were given
+        // — they carry their own copy — so a change here is about what happens next, not a resize
+        // of everything running.
+        TempData["Message"] =
+            $"'{size.Name}' updated. Instances already on it keep their current limits until they are resized.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Stops offering a tier. Refused while anything is on it, for the same reason a plan is: a
+    /// size that vanished reads as "no limit" everywhere it was named.
+    /// </summary>
+    [HttpPost("sizes/{id:guid}/disable")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.PlansManage)]
+    public async Task<IActionResult> SetSizeEnabled(Guid id, bool enabled, CancellationToken ct)
+    {
+        var size = await db.InstanceSizes.FirstOrDefaultAsync(s => s.Id == id, ct);
+        if (size is null) return NotFound();
+
+        if (!enabled)
+        {
+            var apps = await db.Apps.IgnoreQueryFilters().CountAsync(a => a.InstanceSizeKey == size.Key, ct);
+            var services = await db.ManagedServices.IgnoreQueryFilters()
+                .CountAsync(s => s.InstanceSizeKey == size.Key, ct);
+
+            if (apps + services > 0)
+            {
+                TempData["Error"] = $"{apps + services} resource(s) are on '{size.Name}'. " +
+                    "Move them first, or their limits would silently read as unlimited.";
+                return RedirectToAction(nameof(Index));
+            }
+        }
+
+        size.IsEnabled = enabled;
+        await db.SaveChangesAsync(ct);
+        TempData["Message"] = enabled ? $"'{size.Name}' is offered again." : $"'{size.Name}' is no longer offered.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
     /// Takes a plan out of circulation. Refused while tenants are on it: a workspace whose plan
     /// vanished falls back to the default one, which is a silent change to what they are allowed.
     /// </summary>

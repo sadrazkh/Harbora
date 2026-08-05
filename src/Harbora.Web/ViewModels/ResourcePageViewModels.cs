@@ -95,6 +95,9 @@ public sealed class DatabaseOverviewViewModel
     public long MemoryLimitBytes { get; init; }
     public double CpuLimit { get; init; }
 
+    /// <summary>The disk the tier came with, so the measured figure has a ceiling beside it.</summary>
+    public long DiskLimitBytes { get; init; }
+
     /// <summary>Whether connections to it are encrypted, as recorded at the last provision.</summary>
     public bool TlsEnabled { get; init; }
 }

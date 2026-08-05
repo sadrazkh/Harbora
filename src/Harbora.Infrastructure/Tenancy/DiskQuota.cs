@@ -49,10 +49,7 @@ public static class DiskQuota
             ? null
             : $"{usage.UnmeasuredResources} volume(s) have never been measured, so the real figure is higher.";
 
-    private static string Format(long bytes) => bytes switch
-    {
-        <= 0 => "unlimited",
-        < 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024):0.#} MB",
-        _ => $"{bytes / (1024.0 * 1024 * 1024):0.##} GB"
-    };
+    // One formatter for the whole platform. A refusal that says "40960 MB" while the picker that
+    // sold the tier says "40 GB" reads as two different limits to the person comparing them.
+    private static string Format(long bytes) => ByteSize.Format(bytes);
 }

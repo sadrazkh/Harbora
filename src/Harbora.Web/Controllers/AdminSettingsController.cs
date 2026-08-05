@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Identity;
@@ -138,7 +138,7 @@ public sealed class AdminSettingsController(
             DefaultCulture = await ReadAsync(SettingKeys.DefaultCulture, ct),
             PlatformName = await ReadAsync(SettingKeys.PlatformName, ct),
             Sizes = await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder)
-                .Select(s => new SizeChoiceViewModel(s.Key, s.Name, s.CpuCores, s.MemoryBytes))
+                .Select(s => new SizeChoiceViewModel(s.Key, s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes))
                 .ToListAsync(ct),
             DefaultInstanceSize = await ReadAsync(SettingKeys.DefaultInstanceSize, ct),
             PreviewsDefault = string.Equals(

@@ -95,6 +95,13 @@ public class App : BaseEntity
     public long MemoryLimitBytes { get; set; }
     public double CpuLimit { get; set; }
 
+    /// <summary>
+    /// The disk the chosen tier comes with, copied here for the same reason memory is: the tier can
+    /// be edited or withdrawn later, and a page reporting "18 GB of 40 GB" must keep meaning what
+    /// it meant when the app was placed. Zero is no ceiling.
+    /// </summary>
+    public long DiskLimitBytes { get; set; }
+
     /// <summary>Id of the deployment currently serving traffic (for rollback comparisons).</summary>
     public Guid? ActiveDeploymentId { get; set; }
 

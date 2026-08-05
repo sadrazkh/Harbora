@@ -1,4 +1,4 @@
-@model PlansPageViewModel
+﻿@model PlansPageViewModel
 @using Harbora.Infrastructure.Monitoring
 @using Harbora.Infrastructure.Tenancy
 @{
@@ -118,10 +118,89 @@
     {
         <div class="flex items-center justify-between p-3 text-sm">
             <span class="font-medium">@(isFa ? s.NameFa : s.Name) <span class="text-ink-faint font-mono">@s.Key</span></span>
-            <span class="text-ink-muted" dir="ltr">@s.CpuCores vCPU · @Mem(s.MemoryBytes)</span>
+            <span class="text-ink-muted" dir="ltr">@s.CpuCores vCPU · @Mem(s.MemoryBytes) · @Disk(s.DiskBytes)</span>
         </div>
     }
 </div>
+
+@if (Model.IsProvider)
+{
+    @* ---- editing the tiers ----
+       Sizes were seeded and then read-only forever, which mattered little while a tier was CPU and
+       memory and matters now that it carries a disk figure: a field nobody can set stays at
+       whatever it was seeded with. *@
+    <section class="mb-8 rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-1">@(isFa ? "ویرایش اندازه‌ها" : "Edit instance sizes")</h2>
+        <p class="text-xs text-ink-faint mb-4">
+            @(isFa
+                ? "کلید قابل تغییر نیست: اپ‌ها و دیتابیس‌ها همان را ذخیره کرده‌اند. تغییر سقف‌ها فقط روی چیزهایی اثر دارد که بعداً روی این اندازه بروند."
+                : "The key cannot change — apps and databases store it. Changing the limits affects what moves onto this tier next, not what is already on it.")
+        </p>
+
+        <div class="space-y-3">
+            @foreach (var s in Model.Sizes)
+            {
+                <form asp-controller="Plans" asp-action="UpdateSize" asp-route-id="@s.Id" method="post"
+                      class="grid gap-3 rounded-lg border border-line bg-surface-2 p-3 sm:grid-cols-5">
+                    @Html.AntiForgeryToken()
+                    <div>
+                        <label class="form-label" for="sname-@s.Id">@(isFa ? "نام" : "Name") <code dir="ltr" class="text-[11px] font-normal text-ink-faint">@s.Key</code></label>
+                        <input id="sname-@s.Id" name="name" value="@s.Name" class="form-control" />
+                    </div>
+                    <div>
+                        <label class="form-label" for="scpu-@s.Id">@(isFa ? "هسته" : "vCPU")</label>
+                        <input id="scpu-@s.Id" name="cpuCores" type="number" step="0.25" min="0" value="@s.CpuCores" class="form-control" dir="ltr" />
+                    </div>
+                    <div>
+                        <label class="form-label" for="smem-@s.Id">@(isFa ? "حافظه (MB)" : "Memory (MB)")</label>
+                        <input id="smem-@s.Id" name="memoryMb" type="number" min="0" value="@(s.MemoryBytes / 1024 / 1024)" class="form-control" dir="ltr" />
+                    </div>
+                    <div>
+                        <label class="form-label" for="sdisk-@s.Id">@(isFa ? "دیسک (GB)" : "Disk (GB)")</label>
+                        <input id="sdisk-@s.Id" name="diskGb" type="number" min="0" value="@(s.DiskBytes / 1024 / 1024 / 1024)" class="form-control" dir="ltr" />
+                    </div>
+                    <div>
+                        <label class="form-label" for="sorder-@s.Id">@(isFa ? "ترتیب" : "Order")</label>
+                        <div class="flex items-center gap-2">
+                            <input id="sorder-@s.Id" name="sortOrder" type="number" value="@s.SortOrder" class="form-control" dir="ltr" />
+                            <button class="btn-primary shrink-0 px-3 py-2 text-sm">@(isFa ? "ذخیره" : "Save")</button>
+                        </div>
+                    </div>
+                </form>
+            }
+        </div>
+
+        <form asp-controller="Plans" asp-action="CreateSize" method="post"
+              class="mt-4 grid gap-3 border-t border-line pt-4 sm:grid-cols-5">
+            @Html.AntiForgeryToken()
+            <div>
+                <label class="form-label" for="new-size-key">@(isFa ? "کلید" : "Key")</label>
+                <input id="new-size-key" name="key" required class="form-control font-mono" dir="ltr" placeholder="xlarge" />
+            </div>
+            <div>
+                <label class="form-label" for="new-size-name">@(isFa ? "نام" : "Name")</label>
+                <input id="new-size-name" name="name" class="form-control" placeholder="X-Large" />
+            </div>
+            <div>
+                <label class="form-label" for="new-size-cpu">@(isFa ? "هسته" : "vCPU")</label>
+                <input id="new-size-cpu" name="cpuCores" type="number" step="0.25" min="0" value="8" class="form-control" dir="ltr" />
+            </div>
+            <div>
+                <label class="form-label" for="new-size-mem">@(isFa ? "حافظه (MB)" : "Memory (MB)")</label>
+                <input id="new-size-mem" name="memoryMb" type="number" min="0" value="8192" class="form-control" dir="ltr" />
+            </div>
+            <div>
+                <label class="form-label" for="new-size-disk">@(isFa ? "دیسک (GB)" : "Disk (GB)")</label>
+                <div class="flex items-center gap-2">
+                    <input id="new-size-disk" name="diskGb" type="number" min="0" value="160" class="form-control" dir="ltr" />
+                    <input name="sortOrder" type="hidden" value="99" />
+                    <button class="btn-secondary shrink-0 px-3 py-2 text-sm">@(isFa ? "افزودن" : "Add")</button>
+                </div>
+            </div>
+        </form>
+        <p class="mt-2 text-xs text-ink-faint">@(isFa ? "۰ در هر سقف یعنی بدون محدودیت." : "0 in any limit means no ceiling.")</p>
+    </section>
+}
 
 @if (Model.IsProvider)
 {

@@ -200,6 +200,13 @@
                 .Of(memoryUsed, Model.MemoryLimitBytes);
             var cpuShare = Harbora.Infrastructure.Monitoring.AllocationReading
                 .Of(cpuPercent, Model.CpuLimit * 100);
+
+            // Disk is measured rather than sampled — the volumes are walked on a schedule — so it
+            // reads as a fact with a date, not as a live figure.
+            var diskUsed = ViewBag.DiskUsed as long?;
+            var diskCaveat = ViewBag.DiskCaveat as string;
+            var diskShare = Harbora.Infrastructure.Monitoring.AllocationReading
+                .Of(diskUsed, Model.DiskLimitBytes);
         }
         <section class="rounded-xl border border-line bg-surface p-4">
             <div class="mb-3 flex items-center justify-between gap-2">
@@ -253,6 +260,29 @@
                     @if (cpuShare.HasShare)
                     {
                         <span class="metric-track is-violet mt-1"><i style="width:@cpuShare.Percent%"></i></span>
+                    }
+                </div>
+
+                @* Storage, which a tier now comes with. It was on the plan, enforced on create and
+                   shown on no page belonging to a resource. *@
+                <div>
+                    <div class="flex items-baseline justify-between text-xs">
+                        <span class="text-ink-muted">@(isFa ? "دیسک" : "Disk")</span>
+                        <span class="text-ink">
+                            @Bytes(diskUsed)
+                            @(Model.DiskLimitBytes > 0
+                                ? $"/ {Bytes(Model.DiskLimitBytes)}"
+                                : (isFa ? "· بدون سقف" : "· no limit"))
+                        </span>
+                    </div>
+                    @if (diskShare.HasShare)
+                    {
+                        <span class="metric-track mt-1"><i style="width:@diskShare.Percent%"></i></span>
+                    }
+                    @if (diskCaveat is not null)
+                    {
+                        @* An unmeasured volume makes the figure incomplete, not smaller. *@
+                        <p class="mt-1 text-[11px] text-warn">@diskCaveat</p>
                     }
                 </div>
             </div>

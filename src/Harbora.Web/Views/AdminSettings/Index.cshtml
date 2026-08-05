@@ -1,4 +1,4 @@
-@model AdminSettingsViewModel
+﻿@model AdminSettingsViewModel
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var message = TempData["Message"] as string;
@@ -106,7 +106,7 @@
                     @foreach (var size in Model.Sizes)
                     {
                         <option value="@size.Key" selected="@(size.Key == Model.DefaultInstanceSize)">
-                            @size.Name — @size.CpuCores vCPU / @(size.MemoryBytes / 1024 / 1024) MB
+                            @Harbora.Infrastructure.Tenancy.InstanceSizeLabel.For(size.Name, size.CpuCores, size.MemoryBytes, size.DiskBytes)
                         </option>
                     }
                 </select>

@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260805162426_InstanceSizeDisk")]
+    partial class InstanceSizeDisk
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -520,9 +523,6 @@ namespace Harbora.Data.Migrations
 
                     b.Property<int?>("DesiredReplicas")
                         .HasColumnType("integer");
-
-                    b.Property<long>("DiskLimitBytes")
-                        .HasColumnType("bigint");
 
                     b.Property<string>("DockerfilePath")
                         .HasColumnType("text");
@@ -2464,9 +2464,6 @@ namespace Harbora.Data.Migrations
                     b.Property<string>("DatabaseName")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<long>("DiskLimitBytes")
-                        .HasColumnType("bigint");
 
                     b.Property<string>("EncryptedPassword")
                         .IsRequired()

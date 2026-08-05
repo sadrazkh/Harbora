@@ -151,16 +151,27 @@ public sealed class DbSeeder(HarboraDbContext db)
     private async Task SeedTenancyAsync()
     {
         const long MB = 1024 * 1024;
+        const long GB = 1024 * MB;
         foreach (var s in new[]
         {
-            new InstanceSize { Key = "nano",   Name = "Nano",   NameFa = "نانو",   CpuCores = 0.25, MemoryBytes = 256 * MB,  IsBuiltIn = true, SortOrder = 1 },
-            new InstanceSize { Key = "micro",  Name = "Micro",  NameFa = "میکرو",  CpuCores = 0.5,  MemoryBytes = 512 * MB,  IsBuiltIn = true, SortOrder = 2 },
-            new InstanceSize { Key = "small",  Name = "Small",  NameFa = "کوچک",   CpuCores = 1,    MemoryBytes = 1024 * MB, IsBuiltIn = true, SortOrder = 3 },
-            new InstanceSize { Key = "medium", Name = "Medium", NameFa = "متوسط",  CpuCores = 2,    MemoryBytes = 2048 * MB, IsBuiltIn = true, SortOrder = 4 },
-            new InstanceSize { Key = "large",  Name = "Large",  NameFa = "بزرگ",   CpuCores = 4,    MemoryBytes = 4096 * MB, IsBuiltIn = true, SortOrder = 5 },
+            new InstanceSize { Key = "nano",   Name = "Nano",   NameFa = "نانو",   CpuCores = 0.25, MemoryBytes = 256 * MB,  DiskBytes = 5 * GB,  IsBuiltIn = true, SortOrder = 1 },
+            new InstanceSize { Key = "micro",  Name = "Micro",  NameFa = "میکرو",  CpuCores = 0.5,  MemoryBytes = 512 * MB,  DiskBytes = 10 * GB, IsBuiltIn = true, SortOrder = 2 },
+            new InstanceSize { Key = "small",  Name = "Small",  NameFa = "کوچک",   CpuCores = 1,    MemoryBytes = 1024 * MB, DiskBytes = 20 * GB, IsBuiltIn = true, SortOrder = 3 },
+            new InstanceSize { Key = "medium", Name = "Medium", NameFa = "متوسط",  CpuCores = 2,    MemoryBytes = 2048 * MB, DiskBytes = 40 * GB, IsBuiltIn = true, SortOrder = 4 },
+            new InstanceSize { Key = "large",  Name = "Large",  NameFa = "بزرگ",   CpuCores = 4,    MemoryBytes = 4096 * MB, DiskBytes = 80 * GB, IsBuiltIn = true, SortOrder = 5 },
         })
         {
-            if (!await db.InstanceSizes.AnyAsync(x => x.Key == s.Key)) db.InstanceSizes.Add(s);
+            var existing = await db.InstanceSizes.FirstOrDefaultAsync(x => x.Key == s.Key);
+            if (existing is null) { db.InstanceSizes.Add(s); continue; }
+
+            // Backfilled onto the built-in tiers that predate the column, because a tier whose
+            // storage reads as "no ceiling" is what every tier looked like before and shows the
+            // operator nothing. Only where it is still unset, and only on Harbora's own tiers — a
+            // size somebody created themselves is theirs, including their decision to leave it open.
+            //
+            // Safe to do without asking: a tier's disk figure only ever refuses a resize *down*
+            // below what is already stored. Nothing running is stopped, moved or shrunk.
+            if (existing.IsBuiltIn && existing.DiskBytes == 0) existing.DiskBytes = s.DiskBytes;
         }
 
         if (!await db.Plans.AnyAsync())
