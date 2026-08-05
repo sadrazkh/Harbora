@@ -251,4 +251,37 @@ public class VersionChangeTests
         plan.Notes.Should().BeEmpty();
         plan.Warnings.Should().BeEmpty();
     }
+
+    [Fact]
+    public void The_version_offered_first_is_the_stable_one()
+    {
+        // What the deploy form preselects. Recommended is the operator's "use this"; anything else
+        // arriving first would make the default a matter of insertion order.
+        var versions = new[]
+        {
+            new AppTemplateVersion { Version = "2.0", Lifecycle = VersionLifecycle.Legacy, Publication = VersionPublication.Published, ImageDigest = "sha256:a", ImageRepository = "r" },
+            new AppTemplateVersion { Version = "1.9", Lifecycle = VersionLifecycle.Recommended, Publication = VersionPublication.Published, ImageDigest = "sha256:b", ImageRepository = "r" },
+            new AppTemplateVersion { Version = "2.1", Lifecycle = VersionLifecycle.Stable, Publication = VersionPublication.Published, ImageDigest = "sha256:c", ImageRepository = "r" }
+        };
+
+        VersionSelection.Offerable(versions).First().Version.Should().Be("1.9");
+        VersionSelection.Default(versions)!.Version.Should().Be("1.9");
+    }
+
+    [Fact]
+    public void A_deprecated_release_is_still_offered_but_never_first()
+    {
+        // Offered with a warning rather than hidden: somebody mid-migration may need it. First would
+        // make it the default for everybody who never opens the selector.
+        var versions = new[]
+        {
+            new AppTemplateVersion { Version = "1.0", Lifecycle = VersionLifecycle.Deprecated, Publication = VersionPublication.Published, ImageDigest = "sha256:a", ImageRepository = "r" },
+            new AppTemplateVersion { Version = "2.0", Lifecycle = VersionLifecycle.Stable, Publication = VersionPublication.Published, ImageDigest = "sha256:b", ImageRepository = "r" }
+        };
+
+        var offerable = VersionSelection.Offerable(versions);
+
+        offerable.Should().HaveCount(2);
+        offerable.First().Version.Should().Be("2.0");
+    }
 }

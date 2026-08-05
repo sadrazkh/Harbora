@@ -368,6 +368,29 @@ public sealed class AppsController(
         // create form did rather than a free-text box.
         ViewBag.Sizes = await SizeChoicesAsync(app.InstanceSizeKey, ct);
 
+        // Where this app could go next. An app installed from a ready-made template had no way to
+        // move to a newer release at all: the version was pinned at creation and nothing offered
+        // another, so "update n8n" meant deleting it and starting again.
+        if (app.TemplateId is { } templateId)
+        {
+            var architecture = await db.Servers.Where(s => s.IsLocal)
+                .Select(s => s.Architecture).FirstOrDefaultAsync(ct);
+
+            var all = await db.AppTemplateVersions.AsNoTracking()
+                .Where(v => v.AppTemplateId == templateId).ToListAsync(ct);
+
+            var current = all.FirstOrDefault(v => v.Id == app.TemplateVersionId);
+            ViewBag.CurrentVersion = current;
+
+            // Only forward. Offering an older release as an "update" is how somebody downgrades a
+            // database schema by accident.
+            ViewBag.UpdateVersions = Harbora.Infrastructure.Templates.VersionSelection
+                .Offerable(all, architecture)
+                .Where(v => current is null || string.CompareOrdinal(v.Version, current.Version) > 0)
+                .Where(v => v.Id != app.TemplateVersionId)
+                .ToList();
+        }
+
         if (app.Kind == ServiceKind.Cron)
             ViewBag.CronRuns = await db.CronRuns
                 .Where(r => r.AppId == app.Id)
@@ -421,6 +444,68 @@ public sealed class AppsController(
             : $"Size set to {size?.Name ?? "no limit"}. It applies on the next deployment.";
 
         return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// Moves an app to another version of the template it came from.
+    ///
+    /// The version's pinned digest becomes the image and a deployment is queued, so the update goes
+    /// through the same health gate and rollback as any other release — an update that bypassed them
+    /// would be the one deploy on the platform with no way back.
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/version")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
+    public async Task<IActionResult> UpdateVersion(Guid id, Guid versionId, CancellationToken ct)
+    {
+        if (!await access.CanTouchAppAsync(id, Capabilities.AppsDeploy, ct)) return Forbid();
+
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        if (app.TemplateId is not { } templateId)
+        {
+            TempData["Error"] = "This app was not installed from a template.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var version = await db.AppTemplateVersions.AsNoTracking()
+            .FirstOrDefaultAsync(v => v.Id == versionId && v.AppTemplateId == templateId, ct);
+
+        if (version is null)
+        {
+            TempData["Error"] = "That version does not belong to this app's template.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        // Checked again here, not only when the list was drawn: a version can be withdrawn between
+        // somebody opening the page and pressing the button.
+        var architecture = await db.Servers.Where(s => s.IsLocal)
+            .Select(s => s.Architecture).FirstOrDefaultAsync(ct);
+
+        if (Harbora.Infrastructure.Templates.VersionSelection.Refuse(version, architecture) is { } refusal)
+        {
+            TempData["Error"] = refusal.Reason;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var image = Harbora.Infrastructure.Templates.VersionSelection.PinnedImage(version);
+        if (image is null)
+        {
+            TempData["Error"] = "That version has no pinned image digest.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        app.PrebuiltImage = image;
+        app.TemplateVersionId = version.Id;
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("app.version_updated", "app", $"{app.Name}={version.Version}", ClientIp, ct: ct);
+
+        var deploymentId = await deployEngine.QueueDeploymentAsync(
+            new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, app.GitRef), ct);
+
+        return RedirectToAction("Details", "Deployments", new { id = deploymentId });
     }
 
     /// <summary>The sizes this workspace's plan allows, with the current one preselected.</summary>

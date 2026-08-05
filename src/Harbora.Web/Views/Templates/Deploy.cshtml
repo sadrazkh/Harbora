@@ -175,6 +175,35 @@
                 </label>
             }
 
+            @* What this actually pulls, and where the project lives. Somebody who would rather run
+               it themselves should not have to read the source to find either. *@
+            <div class="rounded-xl border border-line bg-surface-2 p-4">
+                <div class="text-xs font-semibold text-ink">@(isFa ? "منبع" : "Source")</div>
+                @if (selectedVersion is not null)
+                {
+                    <code dir="ltr" class="mt-2 block break-all rounded bg-code text-code-ink px-2 py-1 text-[11px]" data-copy-text>@(Harbora.Infrastructure.Templates.VersionSelection.PinnedImage(selectedVersion) ?? Model.Item.Manifest.Image)</code>
+                }
+                else if (Model.Item.Manifest.Image is { Length: > 0 } manifestImage)
+                {
+                    <code dir="ltr" class="mt-2 block break-all rounded bg-code text-code-ink px-2 py-1 text-[11px]" data-copy-text>@manifestImage</code>
+                }
+
+                <div class="mt-2 flex flex-wrap gap-3 text-[11px]">
+                    @if (Model.Item.Manifest.WebsiteUrl is { Length: > 0 } website)
+                    {
+                        <a href="@website" target="_blank" rel="noopener noreferrer" class="text-accent-text hover:underline">
+                            <i data-lucide="external-link" class="inline h-3 w-3"></i> @(isFa ? "سایت پروژه" : "Project site")
+                        </a>
+                    }
+                    @if (Model.Item.Manifest.DocumentationUrl is { Length: > 0 } docs)
+                    {
+                        <a href="@docs" target="_blank" rel="noopener noreferrer" class="text-accent-text hover:underline">
+                            <i data-lucide="book-open" class="inline h-3 w-3"></i> @(isFa ? "مستندات" : "Documentation")
+                        </a>
+                    }
+                </div>
+            </div>
+
             <div class="flex flex-wrap items-center gap-3 border-t border-line pt-5">
                 @* Disabled rather than hidden: the person came here to deploy and needs to see that
                    the button exists and why it will not work. The server refuses this case anyway —
@@ -257,5 +286,12 @@
         select.addEventListener('change', sync);
         sync();
     })();
+
+    document.querySelectorAll('[data-copy-text]').forEach(function (el) {
+        el.style.cursor = 'copy';
+        el.addEventListener('click', function () {
+            navigator.clipboard?.writeText(el.textContent.trim());
+        });
+    });
 </script>
 }
