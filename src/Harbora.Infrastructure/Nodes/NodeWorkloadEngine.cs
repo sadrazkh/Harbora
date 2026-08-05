@@ -276,12 +276,42 @@ public sealed class NodeWorkloadEngine(
     }
 
     /// <summary>
-    /// Null, meaning "not measured". The node reports host pressure on its heartbeat; per-container
-    /// statistics are not in the contract, and a fabricated zero would draw a flat line across a
-    /// container that is actually busy.
+    /// A resource sample from the node, or null when it did not produce one.
+    ///
+    /// This used to be null unconditionally: per-container statistics were not in the contract, so
+    /// every chart for an application on a node was empty — which reads as an idle application
+    /// rather than as an unanswered question. <c>GetWorkloadStats</c> answers it now.
+    ///
+    /// Null still means "not measured" and is returned in three cases, all of them real: an older
+    /// agent that does not implement the verb, a node that cannot be reached, and a container the
+    /// runtime declined to read. None of them is a reading of zero.
     /// </summary>
-    public Task<ContainerStats?> GetStatsAsync(string containerId, CancellationToken ct) =>
-        Task.FromResult<ContainerStats?>(null);
+    public async Task<ContainerStats?> GetStatsAsync(string containerId, CancellationToken ct)
+    {
+        var outcome = await commands.SendAsync(
+            nodeId, NodeContracts.NodeCommands.GetWorkloadStats,
+            new WorkloadRequest { TenantId = PlatformTenant, WorkloadId = containerId },
+            // A fresh sample every time. An idempotency key that repeated would hand back a reading
+            // from a minute ago as though it were now.
+            idempotencyKey: $"stats:{nodeId}:{containerId}:{DateTimeOffset.UtcNow:yyyyMMddHHmmss}",
+            tenantScope: PlatformTenant,
+            ct: ct);
+
+        // Deliberately not thrown. A missing measurement is not a failed operation, and a node that
+        // predates the verb must not turn every page that draws a chart into an error.
+        if (!outcome.Succeeded) return null;
+
+        var sample = outcome.ResultAs<WorkloadStats>()?.Containers.FirstOrDefault();
+        if (sample is null) return null;
+
+        // The panel's shape has no nulls, so a partial reading cannot be represented. One that is
+        // missing the two figures every caller uses is treated as no reading at all rather than
+        // flattened into zeroes.
+        if (sample.CpuPercent is not { } cpu || sample.MemoryUsedBytes is not { } memory) return null;
+
+        return new ContainerStats(
+            cpu, memory, sample.MemoryLimitBytes ?? 0, sample.NetRxBytes ?? 0, sample.NetTxBytes ?? 0);
+    }
 
     // --- logs ---
 

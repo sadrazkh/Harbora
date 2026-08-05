@@ -33,7 +33,7 @@
       "description": "Closed allowlist. There is no member that executes an arbitrary shell command.",
       "enum": [
         "DeployWorkload", "UpdateWorkload", "StopWorkload", "StartWorkload", "RestartWorkload",
-        "DeleteWorkload", "GetWorkloadStatus", "ListWorkloads", "StreamLogs",
+        "DeleteWorkload", "GetWorkloadStatus", "GetWorkloadStats", "ListWorkloads", "StreamLogs",
         "CreateNetwork", "DeleteNetwork",
         "CreateVolume", "SnapshotVolume", "RestoreVolume",
         "CreateDatabaseAccessGrant", "RevokeDatabaseAccessGrant", "RotateDatabaseAccessCredential",
@@ -847,6 +847,32 @@
         "workloadsStopped": { "type": "integer", "minimum": 0 },
         "workloadsRemaining": { "type": "integer", "minimum": 0 },
         "timedOut": { "type": "boolean" }
+      }
+    },
+
+    "workloadStats": {
+      "type": "object",
+      "description": "A point-in-time resource reading for one workload's containers. Every figure is nullable and absent when the runtime did not report it: a control plane that reads a missing value as zero draws an idle application, which is the opposite of what an unmeasured one means.",
+      "required": ["workloadId", "containers"],
+      "properties": {
+        "workloadId": { "type": "string" },
+        "sampledAt": { "type": "string", "format": "date-time" },
+        "containers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "containerId": { "type": ["string", "null"] },
+              "cpuPercent": { "type": ["number", "null"], "minimum": 0 },
+              "memoryUsedBytes": { "type": ["integer", "null"], "minimum": 0 },
+              "memoryLimitBytes": { "type": ["integer", "null"], "minimum": 0 },
+              "netRxBytes": { "type": ["integer", "null"], "minimum": 0 },
+              "netTxBytes": { "type": ["integer", "null"], "minimum": 0 }
+            }
+          }
+        }
       }
     },
 

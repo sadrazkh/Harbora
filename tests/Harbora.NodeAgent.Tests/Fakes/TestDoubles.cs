@@ -118,8 +118,15 @@ public sealed class TestCertificateAuthority : IDisposable
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
         request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign, true));
 
+        // Wide enough that a pinned test clock cannot fall outside it.
+        //
+        // This was `UtcNow.AddDays(-1)`, while the suites that use it pin their own clock to a fixed
+        // date and sign leaf certificates at that date. The two agreed only while the fixed date
+        // stayed within a day of the real one — so the whole suite passed for a while and then
+        // failed permanently, everywhere, on a date nobody changed anything on. A fixture that
+        // expires is a fixture that will strand somebody.
         _certificate = request.CreateSelfSigned(
-            DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(5));
+            DateTimeOffset.UtcNow.AddYears(-5), DateTimeOffset.UtcNow.AddYears(5));
     }
 
     public string CertificatePem => _certificate.ExportCertificatePem();
@@ -293,6 +300,16 @@ public sealed class FakeContainerRuntime : IContainerRuntime
         if (found is not null && HealthOverride is { } health) found = found with { Healthy = health };
         return Task.FromResult(found);
     }
+
+    /// <summary>
+    /// What the runtime would report for a container, keyed by name. Absent means the runtime
+    /// declined to answer — the ordinary case for a container that is starting or already gone, and
+    /// the one a caller must not read as a reading of zero.
+    /// </summary>
+    public Dictionary<string, RuntimeContainerStats> Stats { get; } = new(StringComparer.Ordinal);
+
+    public Task<RuntimeContainerStats?> GetStatsAsync(string idOrName, CancellationToken ct) =>
+        Task.FromResult(Stats.TryGetValue(idOrName, out var stats) ? stats : null);
 
     public Task<string> CreateAndStartAsync(ContainerCreateRequest request, CancellationToken ct)
     {

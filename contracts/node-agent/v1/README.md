@@ -109,6 +109,7 @@ The `payload` of a `commandEnvelope`, by verb:
 | `RestartWorkload` | `workloads:write` | `workloadRequest` | `acknowledgedResult` |
 | `DeleteWorkload` | `workloads:write` | `deleteWorkloadRequest` | `acknowledgedResult` |
 | `GetWorkloadStatus` | `workloads:read` | `workloadRequest` | `workloadStatus` |
+| `GetWorkloadStats` | `workloads:read` | `workloadRequest` | `workloadStats` |
 | `ListWorkloads` | `workloads:read` | `listWorkloadsRequest` | `listWorkloadsResult` |
 | `StreamLogs` | `workloads:read` | `streamLogsRequest` | `acknowledgedResult` (+ `log.chunk` frames) |
 | `CreateNetwork` | `networks:write` | `networkRequest` | `acknowledgedResult` |

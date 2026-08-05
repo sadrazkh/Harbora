@@ -31,6 +31,15 @@ public interface IContainerRuntime
 
     Task<RuntimeContainer?> InspectAsync(string idOrName, CancellationToken ct);
 
+    /// <summary>
+    /// One resource sample for a running container, or null when the runtime would not give one.
+    ///
+    /// Null rather than a zeroed reading: the stats call fails intermittently on a container that is
+    /// starting or going away, and a caller that treats "could not read" as "reading of zero" draws
+    /// an idle application at exactly the moment something is wrong with it.
+    /// </summary>
+    Task<RuntimeContainerStats?> GetStatsAsync(string idOrName, CancellationToken ct);
+
     Task<string> CreateAndStartAsync(ContainerCreateRequest request, CancellationToken ct);
 
     Task StopAsync(string idOrName, int gracePeriodSeconds, CancellationToken ct);
@@ -83,6 +92,17 @@ public sealed record RuntimeContainer(
     IReadOnlyDictionary<string, string> Labels,
     IReadOnlyDictionary<int, int> PublishedPorts,
     IReadOnlyDictionary<string, string> NetworkIpAddresses);
+
+/// <summary>
+/// One resource sample. Every figure is nullable and stays null when the runtime did not report it,
+/// so "not measured" survives the whole way to the screen instead of arriving there as a zero.
+/// </summary>
+public sealed record RuntimeContainerStats(
+    double? CpuPercent,
+    long? MemoryUsedBytes,
+    long? MemoryLimitBytes,
+    long? NetRxBytes,
+    long? NetTxBytes);
 
 /// <summary>
 /// A container about to be created. Everything the runtime needs, with the security-relevant knobs

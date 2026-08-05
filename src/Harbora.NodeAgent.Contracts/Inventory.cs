@@ -1,4 +1,4 @@
-namespace Harbora.NodeAgent.Contracts;
+﻿namespace Harbora.NodeAgent.Contracts;
 
 /// <summary>
 /// Everything the control plane needs to schedule onto this node. Sent at enrollment, on every
@@ -112,3 +112,32 @@ public sealed record ContainerStatus(
     string Image,
     bool Healthy,
     int RestartCount);
+
+/// <summary>
+/// A resource reading for one workload, answered by <c>GetWorkloadStats</c>.
+///
+/// Every figure is nullable and stays null when the runtime did not report it. A control plane that
+/// reads a missing value as zero draws an idle application, which is the opposite of what an
+/// unmeasured one means — and the panel had no per-container figures from a node at all until this
+/// existed, so every chart for a node-hosted app was empty and looked like silence rather than like
+/// an unanswered question.
+/// </summary>
+public sealed record WorkloadStats
+{
+    public required string WorkloadId { get; init; }
+    public DateTimeOffset SampledAt { get; init; }
+    public IReadOnlyList<WorkloadContainerStats> Containers { get; init; } = [];
+}
+
+/// <summary>One container inside a workload. Named apart from the control plane's own
+/// <c>ContainerStats</c>, which is a different shape for a different purpose.</summary>
+public sealed record WorkloadContainerStats
+{
+    public required string Name { get; init; }
+    public string? ContainerId { get; init; }
+    public double? CpuPercent { get; init; }
+    public long? MemoryUsedBytes { get; init; }
+    public long? MemoryLimitBytes { get; init; }
+    public long? NetRxBytes { get; init; }
+    public long? NetTxBytes { get; init; }
+}

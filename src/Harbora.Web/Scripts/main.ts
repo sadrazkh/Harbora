@@ -32,15 +32,23 @@ const islands: Record<string, IslandMounter> = {
       name: el.dataset.name!,
       label: el.dataset.label || '',
       color: el.dataset.color || '#818cf8',
-      resource: el.dataset.resource,
+      // A resource the caller may already see. The container name used to be passed here and put
+      // straight into the query, which made it the key to any tenant's series.
+      appId: el.dataset.appId,
+      serviceId: el.dataset.serviceId,
+      limit: el.dataset.limit ? Number(el.dataset.limit) : undefined,
+      unit: (el.dataset.unit as 'bytes' | 'percent' | 'raw' | undefined),
       height: el.dataset.height ? Number(el.dataset.height) : undefined,
     }).mount(el);
   },
 };
 
 for (const [id, mount] of Object.entries(islands)) {
+  // By id for the pages that have one of something, and by attribute for the pages that have
+  // several — an application shows a chart per measurement, and ids are unique.
   const el = document.getElementById(id);
   if (el) mount(el);
+  document.querySelectorAll<HTMLElement>(`[data-island="${id}"]`).forEach(mount);
 }
 
 // Razor owns the progress bar; the island owns the socket. This wires the two through the DOM so

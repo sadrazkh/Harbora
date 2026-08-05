@@ -128,6 +128,38 @@ public sealed class DockerContainerRuntime(IDockerClient client, ILogger<DockerC
                 ?? new Dictionary<string, string>())).ToList();
     }
 
+    public async Task<RuntimeContainerStats?> GetStatsAsync(string idOrName, CancellationToken ct)
+    {
+        ContainerStatsResponse? snapshot = null;
+
+        try
+        {
+            await client.Containers.GetContainerStatsAsync(
+                idOrName, new ContainerStatsParameters { Stream = false },
+                new Progress<ContainerStatsResponse>(s => snapshot = s), ct);
+        }
+        catch (DockerApiException)
+        {
+            // A container that is starting, stopping or already gone. Null, not zeroes: the caller
+            // has to be able to tell "no reading" from "a reading of nothing".
+            return null;
+        }
+
+        if (snapshot is null) return null;
+
+        return new RuntimeContainerStats(
+            // The control plane's formula, shared through the contract so the same container reads
+            // the same number wherever it runs.
+            ContainerCpu.Percent(
+                snapshot.CPUStats.CPUUsage.TotalUsage - snapshot.PreCPUStats.CPUUsage.TotalUsage,
+                snapshot.CPUStats.SystemUsage - snapshot.PreCPUStats.SystemUsage,
+                snapshot.CPUStats.OnlineCPUs),
+            (long)snapshot.MemoryStats.Usage,
+            (long)snapshot.MemoryStats.Limit,
+            (long)(snapshot.Networks?.Values.Sum(n => (decimal)n.RxBytes) ?? 0),
+            (long)(snapshot.Networks?.Values.Sum(n => (decimal)n.TxBytes) ?? 0));
+    }
+
     public async Task<RuntimeContainer?> InspectAsync(string idOrName, CancellationToken ct)
     {
         try

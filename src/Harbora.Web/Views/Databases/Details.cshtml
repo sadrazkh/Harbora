@@ -114,6 +114,28 @@ else if (moving)
         Harbora.Infrastructure.Monitoring.MetricDisplay.For(db.LinkedApps)))" />
 </div>
 
+@* The cards above are this moment. These are the same figures over time, which is what answers
+   "is this normal" and "when did it start" — the questions somebody opens a database page with. *@
+<div class="mb-6 grid gap-4 rounded-xl border border-line bg-surface p-4 sm:grid-cols-2">
+    <div data-island="metrics-chart"
+         data-name="mem.used"
+         data-label="@(isFa ? "حافظه" : "Memory")"
+         data-color="#818cf8"
+         data-service-id="@db.Id"
+         data-unit="bytes"
+         data-limit="@Model.MemoryLimitBytes"
+         data-height="90"></div>
+
+    <div data-island="metrics-chart"
+         data-name="cpu.percent"
+         data-label="CPU"
+         data-color="#34d399"
+         data-service-id="@db.Id"
+         data-unit="percent"
+         data-limit="@(Model.CpuLimit * 100)"
+         data-height="90"></div>
+</div>
+
 <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
     <div class="space-y-6">
         @{

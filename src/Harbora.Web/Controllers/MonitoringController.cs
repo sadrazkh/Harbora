@@ -18,6 +18,7 @@ public sealed class MonitoringController(
     HarboraDbContext db,
     IDockerEngine docker,
     ICurrentUser currentUser,
+    Harbora.Infrastructure.Security.ProjectAccessService access,
     ILogger<MonitoringController> logger) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -98,9 +99,55 @@ public sealed class MonitoringController(
     /// of averages hides exactly the spike someone is looking for.
     /// </summary>
     [HttpGet("metrics")]
-    public async Task<IActionResult> Metrics(string name, string? resource, int minutes = 60, CancellationToken ct = default)
+    public async Task<IActionResult> Metrics(
+        string name, Guid? appId, Guid? serviceId, int minutes = 60, CancellationToken ct = default)
     {
-        var server = await db.Servers.Where(s => s.IsLocal).Select(s => s.Id).FirstOrDefaultAsync(ct);
+        // Which server, and which container on it.
+        //
+        // This used to take the container name straight from the query string and filter on it,
+        // with nothing but [Authorize] in front. That was survivable only because the one caller
+        // never passed a resource — the moment a per-application chart does, a container name
+        // becomes the key to another tenant's CPU and memory series. So the caller names a resource
+        // it already has the right to see, and the container name is derived here.
+        //
+        // It also read the *local* server unconditionally, so an application placed on a node
+        // charted nothing at all and looked idle rather than unmeasured.
+        Guid server;
+        string? resource;
+
+        if (appId is { } app)
+        {
+            if (!await access.CanSeeAppAsync(app, ct)) return Forbid();
+
+            var (appServer, appContainer) = await ContainerForAppAsync(app, ct);
+            if (appServer == Guid.Empty) return NotFound();
+
+            server = appServer;
+            resource = appContainer;
+
+            // No active deployment yet. Nothing has run, so there is nothing to have measured —
+            // and an empty series says that better than the host's numbers would.
+            if (resource is null) return Json(Array.Empty<object>());
+        }
+        else if (serviceId is { } service)
+        {
+            if (!await access.CanSeeServiceAsync(service, ct)) return Forbid();
+
+            var row = await db.ManagedServices.AsNoTracking()
+                .Where(s => s.Id == service)
+                .Select(s => new { s.ServerId, s.ContainerName })
+                .FirstOrDefaultAsync(ct);
+            if (row is null) return NotFound();
+
+            server = row.ServerId;
+            resource = row.ContainerName;
+        }
+        else
+        {
+            // The host's own series, which is what the monitoring page has always drawn.
+            server = await db.Servers.Where(s => s.IsLocal).Select(s => s.Id).FirstOrDefaultAsync(ct);
+            resource = null;
+        }
 
         // A year, so "is this a trend" is answerable at all.
         var window = TimeSpan.FromMinutes(Math.Clamp(minutes, 5, 60 * 24 * 365));
@@ -131,5 +178,31 @@ public sealed class MonitoringController(
             .ToListAsync(ct);
 
         return Json(points);
+    }
+
+    /// <summary>
+    /// The machine an application runs on and the container its metrics are recorded against, or a
+    /// null container when it has never been deployed.
+    ///
+    /// The name is derived from the active deployment rather than stored, which is why it cannot
+    /// simply be looked up: it changes with every release, and the metric rows carry whichever one
+    /// was running at the time.
+    /// </summary>
+    private async Task<(Guid Server, string? Container)> ContainerForAppAsync(Guid appId, CancellationToken ct)
+    {
+        var app = await db.Apps.AsNoTracking()
+            .Where(a => a.Id == appId)
+            .Select(a => new { a.ServerId, a.Slug, a.ActiveDeploymentId })
+            .FirstOrDefaultAsync(ct);
+
+        if (app is null) return (Guid.Empty, null);
+        if (app.ActiveDeploymentId is not { } deploymentId) return (app.ServerId, null);
+
+        var number = await db.Deployments.AsNoTracking()
+            .Where(d => d.Id == deploymentId).Select(d => (int?)d.Number).FirstOrDefaultAsync(ct);
+
+        return (app.ServerId, number is { } n
+            ? Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.Slug, n)
+            : null);
     }
 }

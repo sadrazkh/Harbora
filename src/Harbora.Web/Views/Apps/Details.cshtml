@@ -287,6 +287,40 @@
                 </div>
             </div>
 
+            @* ---- the same figures over time ----
+               A single latest sample answers "is it alive". It does not answer "is this normal",
+               "when did it start" or "is it creeping up", which are the questions somebody has
+               when they open this page — and those were only answerable from the monitoring page,
+               which reports the host rather than this container. The dashed line is what the app
+               was allotted, so the gap between the two is the thing being looked at. *@
+            <div class="mt-4 space-y-4 border-t border-line pt-4">
+                <div data-island="metrics-chart"
+                     data-name="mem.used"
+                     data-label="@(isFa ? "حافظه" : "Memory")"
+                     data-color="#818cf8"
+                     data-app-id="@Model.Id"
+                     data-unit="bytes"
+                     data-limit="@Model.MemoryLimitBytes"
+                     data-height="90"></div>
+
+                <div data-island="metrics-chart"
+                     data-name="cpu.percent"
+                     data-label="CPU"
+                     data-color="#34d399"
+                     data-app-id="@Model.Id"
+                     data-unit="percent"
+                     data-limit="@(Model.CpuLimit * 100)"
+                     data-height="90"></div>
+
+                <div data-island="metrics-chart"
+                     data-name="net.rx"
+                     data-label="@(isFa ? "ترافیک ورودی" : "Network in")"
+                     data-color="#f59e0b"
+                     data-app-id="@Model.Id"
+                     data-unit="bytes"
+                     data-height="70"></div>
+            </div>
+
             @if (sizes.Count > 0)
             {
                 <form asp-controller="Apps" asp-action="Resize" asp-route-id="@Model.Id" method="post" class="mt-4 space-y-2">

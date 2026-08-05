@@ -1,4 +1,4 @@
-using Harbora.NodeAgent.Contracts;
+﻿using Harbora.NodeAgent.Contracts;
 using Harbora.NodeAgent.Runtime;
 using Harbora.NodeAgent.State;
 using Microsoft.Extensions.Logging;
@@ -171,6 +171,68 @@ public sealed class GetWorkloadStatusHandler(WorkloadRegistry registry, Workload
             return context.Ok(new WorkloadStatus { WorkloadId = request.WorkloadId, State = "absent", Healthy = false });
 
         return context.Ok(await deployer.StatusAsync(record, ct));
+    }
+}
+
+/// <summary>
+/// One resource sample for a workload's containers.
+///
+/// <para>
+/// It exists because the control plane had no per-container figures from a node at all: its
+/// engine's stats call returned null by design, so every chart for an application on a node was
+/// empty. Empty reads as an idle application rather than as an unanswered question, which is the
+/// distinction this whole codebase keeps having to defend.
+/// </para>
+///
+/// <para>
+/// Nothing here is filled in when the runtime declines to answer. A container that is starting,
+/// stopping or already gone produces no reading, and a zero in its place is a claim.
+/// </para>
+/// </summary>
+public sealed class GetWorkloadStatsHandler(WorkloadRegistry registry, IContainerRuntime runtime, TimeProvider clock)
+    : WorkloadHandlerBase(registry), INodeCommandHandler
+{
+    public string Command => NodeCommands.GetWorkloadStats;
+
+    public async Task<CommandResult> HandleAsync(CommandContext context, CancellationToken ct)
+    {
+        var request = context.Envelope.PayloadAs<WorkloadRequest>();
+        if (request is null) return context.Fail(NodeErrorCode.ValidationFailed, "The payload has no workload id.");
+
+        // Resolve goes through the tenant filter, so a control plane naming somebody else's
+        // workload gets the same answer as one naming a workload that does not exist.
+        if (Resolve(context, request.WorkloadId) is not { } record)
+            return context.Ok(new WorkloadStats
+            {
+                WorkloadId = request.WorkloadId,
+                SampledAt = clock.GetUtcNow(),
+                Containers = []
+            });
+
+        var readings = new List<WorkloadContainerStats>();
+        foreach (var container in record.Spec.Containers)
+        {
+            var name = record.ContainerName(container.Name);
+            var sample = await runtime.GetStatsAsync(name, ct);
+
+            readings.Add(new WorkloadContainerStats
+            {
+                Name = container.Name,
+                ContainerId = name,
+                CpuPercent = sample?.CpuPercent,
+                MemoryUsedBytes = sample?.MemoryUsedBytes,
+                MemoryLimitBytes = sample?.MemoryLimitBytes,
+                NetRxBytes = sample?.NetRxBytes,
+                NetTxBytes = sample?.NetTxBytes
+            });
+        }
+
+        return context.Ok(new WorkloadStats
+        {
+            WorkloadId = record.WorkloadId,
+            SampledAt = clock.GetUtcNow(),
+            Containers = readings
+        });
     }
 }
 

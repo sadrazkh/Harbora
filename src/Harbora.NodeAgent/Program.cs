@@ -1,4 +1,4 @@
-using Docker.DotNet;
+﻿using Docker.DotNet;
 using Harbora.NodeAgent;
 using Harbora.NodeAgent.Auditing;
 using Harbora.NodeAgent.Commands;
@@ -144,6 +144,9 @@ builder.Services.AddSingleton<INodeCommandHandler, StartWorkloadHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, RestartWorkloadHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, DeleteWorkloadHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, GetWorkloadStatusHandler>();
+// Registering it is what advertises it: SupportedCommands is read from the wired handlers, so a
+// control plane learns this node can answer for stats without a separate flag to fall out of step.
+builder.Services.AddSingleton<INodeCommandHandler, GetWorkloadStatsHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, ListWorkloadsHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, StreamLogsHandler>();
 

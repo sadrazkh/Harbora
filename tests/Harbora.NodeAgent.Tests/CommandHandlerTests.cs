@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.NodeAgent.Commands;
 using Harbora.NodeAgent.Commands.Handlers;
 using Harbora.NodeAgent.Contracts;
@@ -123,6 +123,85 @@ public sealed class CommandHandlerTests : IDisposable
 
         result.Status.Should().Be(CommandStatus.Succeeded);
         result.Result!.Value.GetProperty("state").GetString().Should().Be("absent");
+    }
+
+    // --- statistics ---
+
+    [Fact]
+    public async Task Stats_report_what_the_runtime_gave_for_each_container()
+    {
+        var record = await DeployedAsync();
+        var container = record.Spec.Containers[0];
+        _runtime.Stats[record.ContainerName(container.Name)] =
+            new RuntimeContainerStats(12.5, 256 * 1024 * 1024, 512 * 1024 * 1024, 900, 100);
+
+        var handler = new GetWorkloadStatsHandler(_registry, _runtime, _clock);
+        var payload = new WorkloadRequest { WorkloadId = record.WorkloadId, TenantId = "tenant-1" };
+
+        var result = await handler.HandleAsync(Context(NodeCommands.GetWorkloadStats, payload), CancellationToken.None);
+
+        result.Status.Should().Be(CommandStatus.Succeeded);
+        var first = result.Result!.Value.GetProperty("containers")[0];
+        first.GetProperty("cpuPercent").GetDouble().Should().Be(12.5);
+        first.GetProperty("memoryUsedBytes").GetInt64().Should().Be(256 * 1024 * 1024);
+    }
+
+    [Fact]
+    public async Task A_container_the_runtime_would_not_read_reports_nothing_rather_than_zero()
+    {
+        // The ordinary case for a container that is starting or already gone. Zeroes here would
+        // draw an idle application at exactly the moment something is wrong with it — which is the
+        // reason the control plane's own charts were empty before this verb existed.
+        var record = await DeployedAsync();
+
+        var handler = new GetWorkloadStatsHandler(_registry, _runtime, _clock);
+        var payload = new WorkloadRequest { WorkloadId = record.WorkloadId, TenantId = "tenant-1" };
+
+        var result = await handler.HandleAsync(Context(NodeCommands.GetWorkloadStats, payload), CancellationToken.None);
+
+        result.Status.Should().Be(CommandStatus.Succeeded);
+
+        // Read back through the contract type, which is what the control plane does. On the wire an
+        // unreported figure is an absent property rather than an explicit null — the distinction the
+        // caller has to end up with is null, and that is what this asserts.
+        var stats = System.Text.Json.JsonSerializer.Deserialize<WorkloadStats>(
+            result.Result!.Value.GetRawText(),
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+
+        stats!.Containers.Should().ContainSingle();
+        stats.Containers[0].CpuPercent.Should().BeNull();
+        stats.Containers[0].MemoryUsedBytes.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Stats_for_another_tenants_workload_are_not_returned()
+    {
+        // Read verbs leak. The tenant filter is the same one every other verb applies, and a
+        // resource reading is still a disclosure about somebody else's workload.
+        var record = await DeployedAsync();
+        _runtime.Stats[record.ContainerName(record.Spec.Containers[0].Name)] =
+            new RuntimeContainerStats(99, 1, 1, 1, 1);
+
+        var handler = new GetWorkloadStatsHandler(_registry, _runtime, _clock);
+        var payload = new WorkloadRequest { WorkloadId = record.WorkloadId, TenantId = "tenant-2" };
+
+        var result = await handler.HandleAsync(
+            Context(NodeCommands.GetWorkloadStats, payload, tenantId: "tenant-2"), CancellationToken.None);
+
+        result.Status.Should().Be(CommandStatus.Succeeded);
+        result.Result!.Value.GetProperty("containers").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Stats_for_an_unknown_workload_are_empty_rather_than_an_error()
+    {
+        var handler = new GetWorkloadStatsHandler(_registry, _runtime, _clock);
+        var payload = new WorkloadRequest { WorkloadId = "never-deployed", TenantId = "tenant-1" };
+
+        var result = await handler.HandleAsync(Context(NodeCommands.GetWorkloadStats, payload), CancellationToken.None);
+
+        result.Status.Should().Be(CommandStatus.Succeeded);
+        result.Result!.Value.GetProperty("containers").GetArrayLength().Should().Be(0);
     }
 
     // --- listing ---

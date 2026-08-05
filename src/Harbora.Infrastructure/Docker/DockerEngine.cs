@@ -222,13 +222,17 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
 
         if (snapshot is null) return null;
 
-        var cpuDelta = snapshot.CPUStats.CPUUsage.TotalUsage - snapshot.PreCPUStats.CPUUsage.TotalUsage;
-        var systemDelta = snapshot.CPUStats.SystemUsage - snapshot.PreCPUStats.SystemUsage;
-        var cpuCount = snapshot.CPUStats.OnlineCPUs == 0 ? 1 : snapshot.CPUStats.OnlineCPUs;
-        var cpuPercent = systemDelta > 0 ? (double)cpuDelta / systemDelta * cpuCount * 100.0 : 0;
+        // The shared formula, so a container reads the same here as it does on a node. It was
+        // written out here and would have been written out again in the agent — two copies of this
+        // arithmetic means the same container reads differently depending on where it is running,
+        // and the difference gets blamed on the node.
+        var cpuPercent = Harbora.NodeAgent.Contracts.ContainerCpu.Percent(
+            snapshot.CPUStats.CPUUsage.TotalUsage - snapshot.PreCPUStats.CPUUsage.TotalUsage,
+            snapshot.CPUStats.SystemUsage - snapshot.PreCPUStats.SystemUsage,
+            snapshot.CPUStats.OnlineCPUs);
 
         return new ContainerStats(
-            Math.Round(cpuPercent, 2),
+            cpuPercent ?? 0,
             (long)snapshot.MemoryStats.Usage,
             (long)snapshot.MemoryStats.Limit,
             (long)(snapshot.Networks?.Values.Sum(n => (decimal)n.RxBytes) ?? 0),
