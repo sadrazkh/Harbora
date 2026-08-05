@@ -64,3 +64,16 @@ public sealed record AppDatabaseLinkViewModel(
     string ContainerName,
     bool Attached,
     string Prefix);
+
+/// <summary>
+/// A database this application cannot attach to, because it lives on another private network.
+///
+/// Carried so the page can offer the one action that resolves it — moving the application into
+/// that environment — rather than explaining the refusal and leaving the person there.
+/// </summary>
+public sealed record AppDatabaseElsewhereViewModel(
+    Guid Id,
+    string Name,
+    Harbora.Domain.Common.ManagedServiceType Type,
+    string Where,
+    Guid EnvironmentId);

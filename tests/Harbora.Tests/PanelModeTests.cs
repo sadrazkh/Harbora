@@ -91,7 +91,25 @@ public class NavigationModeTests
         var simple = NavigationMap.VisibleTo(NavigationMap.All, Everything, PanelMode.Simple)
             .SelectMany(g => g.Items).Select(i => i.Key).ToList();
 
-        simple.Should().NotContain(["networks", "routing", "audit", "git"]);
+        simple.Should().NotContain(["routing", "audit", "git"]);
+    }
+
+    [Fact]
+    public void Networks_is_no_longer_a_specialist_destination()
+    {
+        // It was, and that was wrong. Networks draws the private network each environment runs on
+        // and the internal address every service answers at — the one fact somebody needs when
+        // wiring two services together, and the one they otherwise guess at. It also holds the move
+        // that resolves an attach refused for crossing environments.
+        //
+        // Hiding it in Advanced meant the people most confused by the boundary were exactly the
+        // ones who could not see the page that explains it. Reversed deliberately, and the old
+        // expectation is corrected here rather than deleted, so the change is a decision on the
+        // record instead of a test that quietly stopped covering something.
+        var simple = NavigationMap.VisibleTo(NavigationMap.All, Everything, PanelMode.Simple)
+            .SelectMany(g => g.Items).Select(i => i.Key).ToList();
+
+        simple.Should().Contain("networks");
     }
 
     [Fact]

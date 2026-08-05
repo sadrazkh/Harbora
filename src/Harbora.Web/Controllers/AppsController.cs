@@ -395,6 +395,24 @@ public sealed class AppsController(
             .ConnectionsFor([app], siblings.Select(s => s.ContainerName))
             .TryGetValue(app.Id, out var hosts) ? hosts : [];
 
+        // The databases this application cannot reach, and why.
+        //
+        // An environment is a private network, so a database in another one cannot be attached —
+        // the hostname would not resolve. That was explained and left there: the person could see
+        // the refusal and had nowhere to go with it. The move already existed, on a page in
+        // Advanced mode that most people never open.
+        ViewBag.Elsewhere = app.EnvironmentId is null
+            ? new List<AppDatabaseElsewhereViewModel>()
+            : await db.ManagedServices.AsNoTracking()
+                .Include(s => s.Environment).ThenInclude(e => e!.Project)
+                .Where(s => s.WorkspaceId == WorkspaceId && s.EnvironmentId != app.EnvironmentId)
+                .OrderBy(s => s.Name)
+                .Select(s => new AppDatabaseElsewhereViewModel(
+                    s.Id, s.Name, s.Type,
+                    s.Environment!.Project!.Name + " · " + s.Environment.Name,
+                    s.EnvironmentId!.Value))
+                .ToListAsync(ct);
+
         ViewBag.Databases = siblings
             .Select(s => new AppDatabaseLinkViewModel(
                 s.Id, s.Name, s.Type, s.ContainerName,

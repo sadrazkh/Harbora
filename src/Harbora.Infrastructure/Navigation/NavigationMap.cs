@@ -37,7 +37,12 @@ public static class NavigationMap
             new("deployments", "Deployments", "Index", "rocket")
         ]),
         new("connect", [
-            new("networks", "Networks", "Index", "network", Advanced: true),
+            // Not Advanced any more. It is the page that draws the private network each environment
+            // runs on and the internal address every service answers at — the one fact somebody
+            // needs when wiring two services together, and the one they otherwise guess. Hiding it
+            // in Advanced meant the people most confused by the boundary were the ones who could
+            // not see it, and the move that resolves a cross-network attach lived there too.
+            new("networks", "Networks", "Index", "network"),
             new("domains", "Domains", "Index", "globe"),
             new("routing", "Routes", "Index", "route", Capabilities.RoutesManage, Advanced: true)
         ]),
