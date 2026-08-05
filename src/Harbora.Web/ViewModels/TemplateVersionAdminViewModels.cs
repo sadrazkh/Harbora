@@ -17,6 +17,13 @@ public sealed class TemplateVersionGroupViewModel
     /// </summary>
     public bool NothingOffered => Versions.Count > 0 && Versions.All(v =>
         v.Publication != VersionPublication.Published || v.Lifecycle == VersionLifecycle.Unsupported);
+
+    /// <summary>
+    /// The repository a hand-typed tag would be looked up on, or null when this template names no
+    /// image anywhere. Shown next to the field: "add version 1.71.0" means nothing without saying
+    /// of what, and it is also the address somebody may want to open and read the releases on.
+    /// </summary>
+    public string? Repository { get; init; }
 }
 
 public sealed class TemplateVersionAdminViewModel

@@ -96,6 +96,44 @@
             </header>
 
             <div class="p-5">
+                @* ---- adding one by hand ----
+                   What is in the dropdown was whatever shipped plus whatever discovery found, and
+                   discovery only ever looks forward. This is how an operator decides. *@
+                <form asp-action="AddVersion" asp-route-templateId="@group.Template.Id" method="post"
+                      class="mb-4 flex flex-wrap items-end gap-3 rounded-lg border border-line bg-surface-2 p-3">
+                    @Html.AntiForgeryToken()
+                    <div class="min-w-[12rem] flex-1">
+                        <label class="form-label" for="tag-@group.Template.Id">@(isFa ? "افزودن نسخه — تگ ریلیز" : "Add a version — release tag")</label>
+                        <input id="tag-@group.Template.Id" name="tag" class="form-control font-mono text-sm" dir="ltr"
+                               placeholder="@(group.Versions.FirstOrDefault()?.ImageTag ?? "1.0.0")"
+                               autocomplete="off" />
+                    </div>
+                    <button class="btn-secondary px-4 py-2 text-sm" @(group.Repository is null ? "disabled" : "")>
+                        @(isFa ? "افزودن" : "Add")
+                    </button>
+                    <p class="w-full text-[11px] text-ink-faint">
+                        @if (group.Repository is { } repository)
+                        {
+                            <span>
+                                @(isFa ? "تگ روی این مخزن پرسیده می‌شود:" : "The tag is looked up on:")
+                                <code dir="ltr" class="text-ink-muted">@repository</code>
+                                @(isFa
+                                    ? "— اگر پیدا شود با digest قفل و بلافاصله در فهرست انتخاب نسخه دیده می‌شود."
+                                    : "— if it exists it is pinned by digest and appears in the version list straight away.")
+                            </span>
+                        }
+                        else
+                        {
+                            @* Said rather than left as a field that refuses everything typed into it. *@
+                            <span class="text-warn">
+                                @(isFa
+                                    ? "این قالب هیچ ایمیجی معرفی نکرده، پس جایی برای پرسیدن تگ نیست."
+                                    : "This template names no image, so there is no repository to ask for a tag.")
+                            </span>
+                        }
+                    </p>
+                </form>
+
                 @if (group.Versions.Count == 0)
                 {
                     <partial name="Design/_EmptyState" model="@(new EmptyStateModel("layers",
@@ -168,6 +206,18 @@
                                                 </button>
                                             </form>
                                         }
+
+                                        @* Deleting the row, not just hiding it. Refused server-side
+                                           while any app is on this version — withdrawing is the
+                                           reversible way to stop offering something. *@
+                                        <form asp-action="RemoveVersion" asp-route-id="@version.Id" method="post"
+                                              onsubmit="return confirm('@(isFa ? "این نسخه از فهرست حذف شود؟" : "Delete this version from the list?")');">
+                                            @Html.AntiForgeryToken()
+                                            <button class="rounded-lg border border-line px-3 py-1.5 text-xs text-ink-faint hover:border-danger hover:text-danger"
+                                                    title="@(isFa ? "حذف از فهرست" : "Delete from the list")">
+                                                @(isFa ? "حذف" : "Delete")
+                                            </button>
+                                        </form>
                                     </div>
                                 </div>
 

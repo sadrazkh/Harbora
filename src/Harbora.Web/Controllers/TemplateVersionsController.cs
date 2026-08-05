@@ -3,6 +3,7 @@ using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Settings;
 using Harbora.Domain.Templates;
+using Harbora.Infrastructure.Templates;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -22,6 +23,7 @@ namespace Harbora.Web.Controllers;
 public sealed class TemplateVersionsController(
     HarboraDbContext db,
     IAuditLogger audit,
+    IContainerRegistry registry,
     Harbora.Infrastructure.Templates.RegistryDiscoveryService discovery) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -33,6 +35,138 @@ public sealed class TemplateVersionsController(
         ViewData["Title"] = "Template versions";
         return View(await BuildAsync(ct));
     }
+
+    /// <summary>
+    /// Puts a version into the dropdown by hand.
+    ///
+    /// The list could only be published or withdrawn: what was in it came from the shipped
+    /// manifests and from discovery, which follows the shape already in the catalogue and only ever
+    /// looks forward. So a template that shipped with no versions had an empty dropdown for good,
+    /// and an older release — the one a customer mid-upgrade needs to go back to — could not be
+    /// offered at all.
+    /// </summary>
+    [HttpPost("{templateId:guid}/versions")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> AddVersion(Guid templateId, string? tag, CancellationToken ct)
+    {
+        var template = await db.AppTemplates.FirstOrDefaultAsync(t => t.Id == templateId, ct);
+        if (template is null) return NotFound();
+
+        var siblings = await db.AppTemplateVersions
+            .Where(v => v.AppTemplateId == templateId)
+            .ToListAsync(ct);
+
+        // The same derivation the page showed next to the field. Two of them would be two answers
+        // to "which repository is this tag looked up on", and the one on screen is the one somebody
+        // typed against.
+        var basedOn = BaseOf(siblings);
+        var plan = TemplateVersionEntry.Plan(
+            tag, RepositoryOf(template, siblings), siblings.Select(v => v.Version));
+        if (!plan.Allowed)
+        {
+            TempData["Error"] = Explain(plan.Refusal);
+            return RedirectToAction(nameof(Index));
+        }
+
+        // Resolved before anything is stored, exactly as discovery does. A version row without a
+        // digest is an option on the deploy form that fails every time it is chosen — and this one
+        // would be published, so it would be the first thing a customer saw.
+        var digest = await registry.ResolveDigestAsync(plan.Repository, plan.Tag, ct);
+        if (digest is null)
+        {
+            TempData["Error"] = IsFa
+                ? $"«{plan.Tag}» روی {plan.Repository} پیدا نشد، یا رجیستری جواب نداد. چیزی اضافه نشد."
+                : $"'{plan.Tag}' was not found on {plan.Repository}, or the registry did not answer. Nothing was added.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        db.AppTemplateVersions.Add(TemplateVersionEntry.Build(
+            templateId, plan, digest, basedOn, template.ManifestJson));
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("template.version_added", "template_version",
+            $"{template.Key}={plan.Tag}", ClientIp, ct: ct);
+
+        TempData["Message"] = IsFa
+            ? $"نسخهٔ {plan.Tag} اضافه و منتشر شد و از حالا در فهرست انتخاب نسخه دیده می‌شود."
+            : $"{plan.Tag} was added and published; it is now in the version list.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Takes a version out of the list for good.
+    ///
+    /// Refused while any application is on it. Withdrawing is the reversible way to stop offering
+    /// something; deleting the row an app points at leaves that app referring to a version that no
+    /// longer exists, and the next thing to read it finds nothing where a pinned image should be.
+    /// </summary>
+    [HttpPost("versions/{id:guid}/remove")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RemoveVersion(Guid id, CancellationToken ct)
+    {
+        var version = await db.AppTemplateVersions.FirstOrDefaultAsync(v => v.Id == id, ct);
+        if (version is null) return NotFound();
+
+        // Across every workspace: this is a platform-wide catalogue, and the tenant filter would
+        // count only the operator's own apps and report a version as unused because somebody else's
+        // tenant is the one running it.
+        var inUse = await db.Apps.IgnoreQueryFilters().CountAsync(a => a.TemplateVersionId == id, ct);
+        if (inUse > 0)
+        {
+            TempData["Error"] = IsFa
+                ? $"{inUse} برنامه روی این نسخه هستند، پس حذف نشد. برای اینکه دیگر پیشنهاد نشود «برداشتن» را بزنید."
+                : $"{inUse} application(s) are on this version, so it was not deleted. Use withdraw to stop offering it.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        db.AppTemplateVersions.Remove(version);
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("template.version_removed", "template_version", version.Version, ClientIp, ct: ct);
+
+        TempData["Message"] = IsFa ? $"نسخهٔ {version.Version} حذف شد." : $"{version.Version} was deleted.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// The version a new one should be modelled on: the recommended one when there is one, then the
+    /// best of the rest. Only versions that actually name a repository — one that does not cannot
+    /// tell us where to look.
+    /// </summary>
+    private static AppTemplateVersion? BaseOf(IReadOnlyCollection<AppTemplateVersion> versions) =>
+        versions
+            .Where(v => !string.IsNullOrWhiteSpace(v.ImageRepository))
+            .OrderByDescending(v => v.Lifecycle == VersionLifecycle.Recommended)
+            .ThenBy(v => v.Lifecycle)
+            .FirstOrDefault();
+
+    /// <summary>
+    /// Where this template's images live: whatever its versions already use, and failing that
+    /// whatever its own manifest names. Null when it names nothing anywhere.
+    /// </summary>
+    private static string? RepositoryOf(AppTemplate template, IReadOnlyCollection<AppTemplateVersion> versions)
+    {
+        var fromVersion = BaseOf(versions)?.ImageRepository;
+        if (!string.IsNullOrWhiteSpace(fromVersion)) return ImageReference.RepositoryOf(fromVersion);
+
+        return TemplateManifest.TryParse(template.ManifestJson, out var manifest, out _)
+            ? ImageReference.RepositoryOf(manifest?.Image)
+            : null;
+    }
+
+    private string Explain(VersionEntryRefusal refusal) => (refusal, IsFa) switch
+    {
+        (VersionEntryRefusal.MissingTag, true) => "تگ نسخه را بنویسید.",
+        (VersionEntryRefusal.MissingTag, false) => "Type a version tag.",
+        (VersionEntryRefusal.InvalidTag, true) =>
+            "این تگ شکل درستی ندارد. فقط حرف و رقم و _ . - مجاز است و نباید با . یا - شروع شود.",
+        (VersionEntryRefusal.InvalidTag, false) =>
+            "That is not a shape a registry tag can have: letters, digits, underscore, period and dash only, not starting with a period or dash.",
+        (VersionEntryRefusal.UnknownRepository, true) =>
+            "این قالب هیچ ایمیجی معرفی نکرده، پس معلوم نیست تگ را از کجا بپرسیم.",
+        (VersionEntryRefusal.UnknownRepository, false) =>
+            "This template names no image, so there is no repository to ask for that tag.",
+        (_, true) => "این نسخه از قبل در فهرست هست.",
+        (_, false) => "That version is already in the list."
+    };
 
     [HttpPost("versions/{id:guid}/publish")]
     [ValidateAntiForgeryToken]
@@ -170,6 +304,7 @@ public sealed class TemplateVersionsController(
             Templates = templates.Select(t => new TemplateVersionGroupViewModel
             {
                 Template = t,
+                Repository = RepositoryOf(t, versions.Where(v => v.AppTemplateId == t.Id).ToList()),
 
                 // Drafts first: they are the ones needing a decision, and a page that buries them
                 // under twenty published rows is a page where they are never seen.
