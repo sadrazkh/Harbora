@@ -254,16 +254,18 @@
 
                 @if (attached.Count > 1)
                 {
-                    @* Which variable holds which. With more than one database the plain names belong
-                       to whichever got them first, and the rest are read from their own prefix —
-                       nothing else on the screen would say which. *@
+                    @* Which variable holds which. Every database also writes a prefixed copy of its
+                       own names; the plain ones go to whichever database asked for them first, so
+                       two of the same engine share nothing. The prefix is shown rather than a whole
+                       variable name, because the names differ per engine — writing
+                       "PREFIX_DATABASE_URL" beside a Redis would name a variable it never sets. *@
                     <p class="mt-2 text-[11px] leading-5 text-ink-faint">
                         @(isFa
-                            ? "با بیش از یک دیتابیس، نام‌های ساده مال اولی است و بقیه با پیشوند خودشان خوانده می‌شوند:"
-                            : "With more than one, the plain names belong to the first and the rest are read from their own prefix:")
-                        @foreach (var link in attached.Skip(1))
+                            ? "هر دیتابیس یک نسخهٔ پیشونددار از متغیرهای خودش هم می‌نویسد. نام‌های ساده به اولی می‌رسد که آن‌ها را خواسته باشد:"
+                            : "Each database also writes a prefixed copy of its own variables. The plain names go to whichever asked for them first:")
+                        @foreach (var link in attached)
                         {
-                            <code dir="ltr" class="ms-1">@(link.Prefix)DATABASE_URL</code>
+                            <code dir="ltr" class="ms-1">@(link.Prefix)*</code>
                         }
                     </p>
                 }
