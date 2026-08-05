@@ -179,6 +179,96 @@
     </div>
 
     <div class="space-y-6">
+        @* ---- What this app is using, against what it is allowed to use ----
+           The page showed neither. "Is this app out of memory" could only be answered from the
+           monitoring page, which reports the host rather than this container. *@
+        @{
+            var cpuPercent = ViewBag.CpuPercent as double?;
+            var memoryUsed = ViewBag.MemoryUsed as double?;
+            var measuredAt = ViewBag.MeasuredAt as DateTimeOffset?;
+            var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
+
+            string Bytes(double? value) => value is null or 0
+                ? "—"
+                : value < 1024L * 1024 * 1024
+                    ? $"{value / 1024 / 1024:0.#} MB"
+                    : $"{value / 1024 / 1024 / 1024:0.##} GB";
+
+            double? Share(double? used, double allowed) =>
+                used is null || allowed <= 0 ? null : Math.Clamp(used.Value / allowed * 100, 0, 100);
+
+            var memoryShare = Share(memoryUsed, Model.MemoryLimitBytes);
+            var cpuShare = Model.CpuLimit > 0 && cpuPercent is not null
+                ? Math.Clamp(cpuPercent.Value / (Model.CpuLimit * 100) * 100, 0, 100)
+                : (double?)null;
+        }
+        <section class="rounded-xl border border-line bg-surface p-4">
+            <div class="mb-3 flex items-center justify-between gap-2">
+                <div class="font-semibold">@(isFa ? "منابع" : "Resources")</div>
+                <span class="text-[11px] text-ink-faint">
+                    @(measuredAt is { } at
+                        ? (isFa ? $"آخرین نمونه {at.LocalDateTime:HH:mm}" : $"sampled {at.LocalDateTime:HH:mm}")
+                        : (isFa ? "هنوز اندازه‌گیری نشده" : "not measured yet"))
+                </span>
+            </div>
+
+            <div class="space-y-3">
+                <div>
+                    <div class="flex items-baseline justify-between text-xs">
+                        <span class="text-ink-muted">@T["Memory"]</span>
+                        <span class="text-ink">
+                            @Bytes(memoryUsed)
+                            @(Model.MemoryLimitBytes > 0
+                                ? $"/ {Bytes(Model.MemoryLimitBytes)}"
+                                : (isFa ? "· بدون سقف" : "· no limit"))
+                        </span>
+                    </div>
+                    @* Only drawn when there is a ceiling to draw it against. A bar with no maximum
+                       is a shape that implies a number nobody set. *@
+                    @if (memoryShare is { } share)
+                    {
+                        <span class="metric-track mt-1"><i style="width:@share.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%"></i></span>
+                    }
+                </div>
+
+                <div>
+                    <div class="flex items-baseline justify-between text-xs">
+                        <span class="text-ink-muted">CPU</span>
+                        <span class="text-ink">
+                            @(cpuPercent is null ? "—" : $"{cpuPercent:0.#}%")
+                            @(Model.CpuLimit > 0
+                                ? (isFa ? $"از {Model.CpuLimit} هسته" : $"of {Model.CpuLimit} vCPU")
+                                : (isFa ? "· بدون سقف" : "· no limit"))
+                        </span>
+                    </div>
+                    @if (cpuShare is { } cshare)
+                    {
+                        <span class="metric-track is-violet mt-1"><i style="width:@cshare.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%"></i></span>
+                    }
+                </div>
+            </div>
+
+            @if (sizes.Count > 0)
+            {
+                <form asp-controller="Apps" asp-action="Resize" asp-route-id="@Model.Id" method="post" class="mt-4 space-y-2">
+                    @Html.AntiForgeryToken()
+                    <select name="instanceSizeKey" class="form-control text-sm">
+                        <option value="">@(isFa ? "بدون سقف" : "No limit")</option>
+                        @foreach (var size in sizes)
+                        {
+                            <option value="@size.Value" selected="@size.Selected">@size.Text</option>
+                        }
+                    </select>
+                    <button class="btn-secondary w-full justify-center py-2 text-sm">@(isFa ? "تغییر اندازه" : "Change size")</button>
+                    <p class="text-[11px] leading-4 text-ink-faint">
+                        @(isFa
+                            ? "سقف روی کانتینر است، پس با استقرار بعدی اعمال می‌شود."
+                            : "The ceiling belongs to the container, so it applies on the next deployment.")
+                    </p>
+                </form>
+            }
+        </section>
+
         @* ---- Release task ----
            Shown because it runs on every deploy and can fail one. Set at create time and then
            invisible, it is a command nobody remembers is there until it breaks a release. *@

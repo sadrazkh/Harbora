@@ -343,6 +343,31 @@ public sealed class AppsController(
                 .OrderBy(a => a.PreviewBranch)
                 .ToListAsync(ct);
 
+        // What it is actually using, against what it is allowed to use. The page showed the limit
+        // nowhere and the usage nowhere, so "is this app out of memory" could only be answered from
+        // the monitoring page — which shows the host, not this container.
+        // The container is named per deployment — old and new coexist during a cutover — so the one
+        // to read is the deployment currently serving, not a name derived from the app alone.
+        var active = app.Deployments.FirstOrDefault(d => d.Id == app.ActiveDeploymentId)
+                     ?? app.Deployments.FirstOrDefault(d => d.Status == DeploymentStatus.Succeeded);
+
+        var containerName = active is null
+            ? Harbora.Infrastructure.Deployments.DeploymentPlanning.LegacyContainerName(app.Slug)
+            : Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.Slug, active.Number);
+
+        var samples = await db.MonitoringMetrics.AsNoTracking()
+            .Where(m => m.ResourceRef == containerName
+                        && (m.Name == "cpu.percent" || m.Name == "mem.used"))
+            .OrderByDescending(m => m.Timestamp).Take(120).ToListAsync(ct);
+
+        ViewBag.CpuPercent = samples.FirstOrDefault(m => m.Name == "cpu.percent")?.Value;
+        ViewBag.MemoryUsed = samples.FirstOrDefault(m => m.Name == "mem.used")?.Value;
+        ViewBag.MeasuredAt = samples.FirstOrDefault()?.Timestamp;
+
+        // The sizes this workspace may move between, so the resize control offers the same list the
+        // create form did rather than a free-text box.
+        ViewBag.Sizes = await SizeChoicesAsync(app.InstanceSizeKey, ct);
+
         if (app.Kind == ServiceKind.Cron)
             ViewBag.CronRuns = await db.CronRuns
                 .Where(r => r.AppId == app.Id)
@@ -351,6 +376,72 @@ public sealed class AppsController(
                 .ToListAsync(ct);
 
         return View(app);
+    }
+
+    /// <summary>
+    /// Moves an app to a different resource plan.
+    ///
+    /// The ceiling belongs to the container, so it takes effect when the container is next created —
+    /// this writes the intent and says so. Silently doing nothing visible, or restarting somebody's
+    /// production app because a dropdown moved, are both worse than saying which it is.
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/size")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
+    public async Task<IActionResult> Resize(Guid id, string? instanceSizeKey, CancellationToken ct)
+    {
+        if (!await access.CanTouchAppAsync(id, Capabilities.AppsEnv, ct)) return Forbid();
+
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        // Excluding this app from the count, or moving from small to small would be measured as
+        // asking for a second app's worth of memory and refused.
+        var check = await quota.CanAddAppAsync(WorkspaceId, instanceSizeKey, excludeAppId: app.Id, ct);
+        if (!check.Allowed)
+        {
+            TempData["Error"] = check.Reason;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var size = string.IsNullOrWhiteSpace(instanceSizeKey)
+            ? null
+            : await db.InstanceSizes.FirstOrDefaultAsync(s => s.Key == instanceSizeKey, ct);
+
+        app.InstanceSizeKey = size?.Key;
+        app.MemoryLimitBytes = size?.MemoryBytes ?? 0;
+        app.CpuLimit = size?.CpuCores ?? 0;
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("app.resized", "app", $"{app.Name}={size?.Key ?? "unlimited"}", ClientIp, ct: ct);
+
+        var fa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+        TempData["Message"] = fa
+            ? $"اندازه روی «{size?.Name ?? "بدون سقف"}» تنظیم شد. با استقرار بعدی اعمال می‌شود."
+            : $"Size set to {size?.Name ?? "no limit"}. It applies on the next deployment.";
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>The sizes this workspace's plan allows, with the current one preselected.</summary>
+    private async Task<List<SelectListItem>> SizeChoicesAsync(string? current, CancellationToken ct)
+    {
+        var plan = await db.Workspaces.Where(w => w.Id == WorkspaceId)
+                .Select(w => w.PlanId).FirstOrDefaultAsync(ct) is { } planId
+            ? await db.Plans.FirstOrDefaultAsync(p => p.Id == planId, ct)
+            : await db.Plans.FirstOrDefaultAsync(p => p.IsDefault, ct);
+
+        var allowed = plan is null || string.IsNullOrWhiteSpace(plan.AllowedSizeKeys)
+            ? null
+            : plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return (await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct))
+            .Where(s => allowed is null || allowed.Contains(s.Key))
+            .Select(s => new SelectListItem(
+                $"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key,
+                string.Equals(s.Key, current, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
     }
 
     /// <summary>

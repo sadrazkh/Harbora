@@ -192,12 +192,34 @@ public sealed partial class DatabasesController(
             Backups = backups,
             NextBackupAt = schedule?.NextRunAt,
             BackupIntervalHours = schedule?.IntervalHours,
+            Sizes = await SizeChoicesAsync(service.InstanceSizeKey, ct),
             RunningImage = service.RunningImage,
             InstanceSizeKey = service.InstanceSizeKey,
             MemoryLimitBytes = service.MemoryLimitBytes,
             CpuLimit = service.CpuLimit,
             TlsEnabled = service.TlsEnabled
         };
+    }
+
+    /// <summary>The sizes this workspace's plan allows, with the current one preselected.</summary>
+    private async Task<List<SelectListItem>> SizeChoicesAsync(string? current, CancellationToken ct)
+    {
+        var plan = await db.Workspaces.Where(w => w.Id == WorkspaceId)
+                .Select(w => w.PlanId).FirstOrDefaultAsync(ct) is { } planId
+            ? await db.Plans.FirstOrDefaultAsync(p => p.Id == planId, ct)
+            : await db.Plans.FirstOrDefaultAsync(p => p.IsDefault, ct);
+
+        var allowed = plan is null || string.IsNullOrWhiteSpace(plan.AllowedSizeKeys)
+            ? null
+            : plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return (await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct))
+            .Where(s => allowed is null || allowed.Contains(s.Key))
+            .Select(s => new SelectListItem(
+                $"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key,
+                string.Equals(s.Key, current, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
     }
 
     /// <summary>One row, built the same way for the list and for a database's own page.</summary>
@@ -338,6 +360,62 @@ public sealed partial class DatabasesController(
     /// otherwise unreachable for every database that already exists. Without this, TLS would have
     /// shipped for new databases and been permanently out of reach for the ones that need it.
     /// </summary>
+    /// <summary>
+    /// Moves a database to a different resource plan.
+    ///
+    /// Stored, then applied by rebuilding the container — which this does not do on its own. A
+    /// database is the one thing on the platform where an unrequested restart is never a small
+    /// thing, so the rebuild stays a separate, deliberate press.
+    /// </summary>
+    [HttpPost("{id:guid}/size")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> Resize(Guid id, string? instanceSizeKey, CancellationToken ct)
+    {
+        await Guard(id, ct);
+
+        var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
+        if (svc is null) return NotFound();
+
+        // Its current allocation is taken off the total first, or moving from small to small would
+        // be measured as asking for a second database's worth and refused.
+        var check = await quota.CanAddServiceAsync(WorkspaceId, instanceSizeKey, ct);
+        if (!check.Allowed && (svc.MemoryLimitBytes > 0 || svc.CpuLimit > 0))
+        {
+            var freed = new { svc.MemoryLimitBytes, svc.CpuLimit };
+            svc.MemoryLimitBytes = 0;
+            svc.CpuLimit = 0;
+            check = await quota.CanAddServiceAsync(WorkspaceId, instanceSizeKey, ct);
+
+            if (!check.Allowed)
+            {
+                svc.MemoryLimitBytes = freed.MemoryLimitBytes;
+                svc.CpuLimit = freed.CpuLimit;
+            }
+        }
+
+        if (!check.Allowed)
+        {
+            TempData["Error"] = check.Reason;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var size = string.IsNullOrWhiteSpace(instanceSizeKey)
+            ? null
+            : await db.InstanceSizes.FirstOrDefaultAsync(s => s.Key == instanceSizeKey, ct);
+
+        svc.InstanceSizeKey = size?.Key;
+        svc.MemoryLimitBytes = size?.MemoryBytes ?? 0;
+        svc.CpuLimit = size?.CpuCores ?? 0;
+        await db.SaveChangesAsync(ct);
+
+        TempData["Message"] = IsFa
+            ? $"اندازه روی «{size?.Name ?? "بدون سقف"}» تنظیم شد. برای اعمال، کانتینر را بازسازی کنید."
+            : $"Size set to {size?.Name ?? "no limit"}. Rebuild the container to apply it.";
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
     [HttpPost("{id:guid}/reprovision")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]

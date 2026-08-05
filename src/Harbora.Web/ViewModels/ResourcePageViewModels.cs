@@ -76,6 +76,9 @@ public sealed class DatabaseOverviewViewModel
     public DateTimeOffset? NextBackupAt { get; init; }
     public int? BackupIntervalHours { get; init; }
 
+    /// <summary>The resource plans this workspace may move between, current one preselected.</summary>
+    public IReadOnlyList<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> Sizes { get; init; } = [];
+
     /// <summary>What the container is actually running, so version drift can be shown.</summary>
     public string? RunningImage { get; init; }
 
