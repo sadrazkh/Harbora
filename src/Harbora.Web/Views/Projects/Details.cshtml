@@ -18,8 +18,17 @@
             <a href="/apps/create@(Model.Selected is null ? "" : $"?environmentId={Model.Selected.Id}")" class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
                 + @(isFa ? "سرویس" : "Service")
             </a>
-            <a href="/databases/create" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">
+            @* Carrying the environment through is what puts the new resource on the same private
+               network as everything else here. Without it a database created from this page landed
+               in the default environment, and attaching it afterwards was refused for being on
+               another network — after it had already been provisioned. *@
+            <a href="/databases/create@(Model.Selected is null ? "" : $"?environmentId={Model.Selected.Id}")"
+               class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">
                 + @(isFa ? "دیتابیس" : "Database")
+            </a>
+            <a href="/databases/create?type=RabbitMq@(Model.Selected is null ? "" : $"&environmentId={Model.Selected.Id}")"
+               class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">
+                + @(isFa ? "بروکر" : "Broker")
             </a>
         </div>
     </div>

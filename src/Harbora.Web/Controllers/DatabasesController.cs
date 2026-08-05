@@ -609,7 +609,19 @@ public sealed partial class DatabasesController(
         }
 
         var env = await engine.BuildAttachEnvAsync(id, ct);
-        foreach (var (key, value) in env)
+
+        // What the application already holds, so a second database of the same engine cannot take
+        // the first one's names. Decrypted here because the decision is "does this value belong to
+        // me", and an unreadable one is treated as somebody else's.
+        var current = app.EnvironmentVariables.ToDictionary(
+            e => e.Key,
+            e => { try { return protector.Unprotect(e.Value); } catch { return (string?)null; } },
+            StringComparer.Ordinal);
+
+        var prefixedOnly = Harbora.Infrastructure.Services.AttachKeys.IsPrefixedOnly(env, current);
+        var final = Harbora.Infrastructure.Services.AttachKeys.For(env, current, service!.Name);
+
+        foreach (var (key, value) in final)
         {
             var existing = app.EnvironmentVariables.FirstOrDefault(e => e.Key == key);
             if (existing is null)
@@ -617,7 +629,19 @@ public sealed partial class DatabasesController(
             else { existing.Value = protector.Protect(value); existing.IsSecret = true; }
         }
         await db.SaveChangesAsync(ct);
-        TempData["Message"] = $"Attached to {app.Name}. Redeploy the app to apply the new variables.";
+
+        // Said plainly when it matters. Somebody attaching a second database and then reading
+        // DATABASE_URL in their code would get the first one, and nothing on the screen would have
+        // suggested it.
+        var prefix = Harbora.Infrastructure.Services.AttachKeys.PrefixFor(service.Name);
+        TempData["Message"] = prefixedOnly
+            ? (IsFa
+                ? $"به {app.Name} وصل شد. چون این اپ از قبل دیتابیس دیگری با همین نام‌ها داشت، متغیرهای این یکی با پیشوند {prefix} نوشته شدند. برای اعمال، اپ را دوباره دیپلوی کنید."
+                : $"Attached to {app.Name}. This application already had another database under the usual names, so this one's variables are written with the {prefix} prefix. Redeploy the app to apply them.")
+            : (IsFa
+                ? $"به {app.Name} وصل شد. برای اعمال متغیرها اپ را دوباره دیپلوی کنید."
+                : $"Attached to {app.Name}. Redeploy the app to apply the new variables.");
+
         return RedirectToAction(nameof(Details), new { id });
     }
 
@@ -637,14 +661,30 @@ public sealed partial class DatabasesController(
         if (app is null) return NotFound();
 
         var env = await engine.BuildAttachEnvAsync(id, ct);
-        var removed = 0;
-        foreach (var (key, _) in env)
-        {
-            var existing = app.EnvironmentVariables.FirstOrDefault(e => e.Key == key);
-            if (existing is null) continue;
+        var service = await db.ManagedServices.AsNoTracking().FirstOrDefaultAsync(s => s.Id == id, ct);
+        var prefix = Harbora.Infrastructure.Services.AttachKeys.PrefixFor(service?.Name ?? string.Empty);
 
-            app.EnvironmentVariables.Remove(existing);
-            removed++;
+        var removed = 0;
+        foreach (var (key, value) in env)
+        {
+            // Both names this database may have written under. Missing the prefixed one would leave
+            // a detached database's connection string in the application forever.
+            foreach (var candidate in new[] { key, prefix + key })
+            {
+                var existing = app.EnvironmentVariables.FirstOrDefault(e => e.Key == candidate);
+                if (existing is null) continue;
+
+                // The value has to still be this database's. The comment above has always said so
+                // and the code did not check: removing by key alone means detaching one database
+                // strips the variables belonging to another that holds the same name — which is
+                // exactly the situation prefixed keys exist to create.
+                string? current;
+                try { current = protector.Unprotect(existing.Value); } catch { current = null; }
+                if (current != value) continue;
+
+                app.EnvironmentVariables.Remove(existing);
+                removed++;
+            }
         }
 
         await db.SaveChangesAsync(ct);
