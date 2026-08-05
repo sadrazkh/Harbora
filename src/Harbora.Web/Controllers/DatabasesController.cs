@@ -79,20 +79,7 @@ public sealed partial class DatabasesController(
             .OrderBy(a => a.Name).ToListAsync(ct);
         var connections = usage.ConnectionsFor(apps, containerNames);
 
-        var rows = services.Select(s =>
-        {
-            var latestBackup = backups.FirstOrDefault(b => b.TargetRef == s.Id.ToString());
-            var cpu = metrics.FirstOrDefault(m => m.ResourceRef == s.ContainerName && m.Name == "cpu.percent")?.Value;
-            var memory = metrics.FirstOrDefault(m => m.ResourceRef == s.ContainerName && m.Name == "mem.used")?.Value;
-            var linked = connections.Count(c => c.Value.Contains(s.ContainerName));
-            return new DatabaseRowViewModel(
-                s.Id, s.Name, s.Type, s.Version, s.Status,
-                s.Environment?.Project?.Name ?? "—", s.Environment?.Name ?? "—",
-                s.ContainerName, s.InternalPort, s.Username, s.DatabaseName, s.VolumeName,
-                s.StorageBytes, s.StorageMeasuredAt, cpu,
-                memory is null ? null : (long?)memory.Value,
-                linked, latestBackup?.FinishedAt ?? latestBackup?.CreatedAt, latestBackup?.Status);
-        }).ToList();
+        var rows = services.Select(s => Row(s, metrics, connections, backups)).ToList();
 
         DatabaseOverviewViewModel? overview = null;
         var selectedRow = rows.FirstOrDefault(r => r.Id == selected) ?? rows.FirstOrDefault();
@@ -140,6 +127,98 @@ public sealed partial class DatabasesController(
             Catalog = engine.Catalog,
             Selected = overview
         });
+    }
+
+    /// <summary>
+    /// Everything one database's own page shows.
+    ///
+    /// Split out of the list action because a database now has a page rather than a strip beside a
+    /// table. A rail can only ever be as wide as what is left over, so the settings that belong to a
+    /// resource ended up compressed next to a list of its siblings.
+    /// </summary>
+    private async Task<DatabaseOverviewViewModel?> BuildOverviewAsync(Guid id, bool reveal, CancellationToken ct)
+    {
+        var service = await db.ManagedServices.AsNoTracking()
+            .Include(s => s.Environment).ThenInclude(e => e!.Project)
+            .FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
+        if (service is null) return null;
+
+        var canManage = await access.CanTouchServiceAsync(service.Id, Capabilities.DatabasesManage, ct);
+        var conn = await engine.GetConnectionInfoAsync(service.Id, ct);
+
+        var metrics = await db.MonitoringMetrics.AsNoTracking()
+            .Where(m => m.ResourceRef == service.ContainerName
+                        && (m.Name == "cpu.percent" || m.Name == "mem.used"))
+            .OrderByDescending(m => m.Timestamp).Take(200).ToListAsync(ct);
+
+        var apps = await db.Apps.AsNoTracking()
+            .Include(a => a.Environment).ThenInclude(e => e!.Project)
+            .Include(a => a.EnvironmentVariables)
+            .Where(a => a.WorkspaceId == WorkspaceId).OrderBy(a => a.Name).ToListAsync(ct);
+
+        var connections = usage.ConnectionsFor(apps, [service.ContainerName]);
+        var usingApps = connections.Where(c => c.Value.Contains(service.ContainerName))
+            .Select(c => apps.First(a => a.Id == c.Key).Name).Order().ToList();
+
+        var network = service.EnvironmentId is { } environmentId
+            ? await db.Environments.AsNoTracking().Where(e => e.Id == environmentId)
+                .Select(e => Harbora.Infrastructure.Networking.EnvironmentNetwork.For(e.Project!.Slug, e.Slug, e.Id))
+                .FirstOrDefaultAsync(ct)
+            : null;
+
+        var backups = await db.Backups.AsNoTracking()
+            .Where(b => b.TargetRef == service.Id.ToString())
+            .OrderByDescending(b => b.CreatedAt).Take(6)
+            .Select(b => new BackupEventViewModel(
+                b.Id, b.Status, b.SizeBytes, b.FinishedAt ?? b.StartedAt ?? b.CreatedAt,
+                b.IsScheduled, b.VerifiedRestorable)).ToListAsync(ct);
+
+        var schedule = await db.BackupSchedules.AsNoTracking()
+            .Where(s => s.TargetRef == service.Id.ToString() && s.IsEnabled)
+            .OrderBy(s => s.NextRunAt).FirstOrDefaultAsync(ct);
+
+        return new DatabaseOverviewViewModel
+        {
+            Database = Row(service, metrics, connections),
+            Connection = reveal && canManage ? conn.ConnectionString : conn.ConnectionStringMasked,
+            Reveal = reveal && canManage,
+            CanManage = canManage,
+            Network = network,
+            UsedBy = usingApps,
+            Apps = apps.Select(a => new ResourceOptionViewModel(
+                a.Id, a.Name,
+                $"{a.Environment?.Project?.Name ?? "—"} · {a.Environment?.Name ?? "—"}",
+                a.EnvironmentId == service.EnvironmentId)).ToList(),
+            Backups = backups,
+            NextBackupAt = schedule?.NextRunAt,
+            BackupIntervalHours = schedule?.IntervalHours,
+            RunningImage = service.RunningImage,
+            InstanceSizeKey = service.InstanceSizeKey,
+            MemoryLimitBytes = service.MemoryLimitBytes,
+            CpuLimit = service.CpuLimit,
+            TlsEnabled = service.TlsEnabled
+        };
+    }
+
+    /// <summary>One row, built the same way for the list and for a database's own page.</summary>
+    private static DatabaseRowViewModel Row(
+        ManagedService s,
+        IReadOnlyList<MonitoringMetric> metrics,
+        IReadOnlyDictionary<Guid, IReadOnlyList<string>> connections,
+        IReadOnlyList<Backup>? backups = null)
+    {
+        var latestBackup = backups?.FirstOrDefault(b => b.TargetRef == s.Id.ToString());
+        var cpu = metrics.FirstOrDefault(m => m.ResourceRef == s.ContainerName && m.Name == "cpu.percent")?.Value;
+        var memory = metrics.FirstOrDefault(m => m.ResourceRef == s.ContainerName && m.Name == "mem.used")?.Value;
+
+        return new DatabaseRowViewModel(
+            s.Id, s.Name, s.Type, s.Version, s.Status,
+            s.Environment?.Project?.Name ?? "—", s.Environment?.Name ?? "—",
+            s.ContainerName, s.InternalPort, s.Username, s.DatabaseName, s.VolumeName,
+            s.StorageBytes, s.StorageMeasuredAt, cpu,
+            memory is null ? null : (long?)memory.Value,
+            connections.Count(c => c.Value.Contains(s.ContainerName)),
+            latestBackup?.FinishedAt ?? latestBackup?.CreatedAt, latestBackup?.Status);
     }
 
     [HttpGet("create")]
@@ -238,7 +317,12 @@ public sealed partial class DatabasesController(
     public async Task<IActionResult> Details(Guid id, bool reveal = false, CancellationToken ct = default)
     {
         if (!await access.CanSeeServiceAsync(id, ct)) return NotFound();
-        return RedirectToAction(nameof(Index), new { selected = id, reveal });
+
+        var overview = await BuildOverviewAsync(id, reveal, ct);
+        if (overview is null) return NotFound();
+
+        ViewData["Title"] = overview.Database.Name;
+        return View(overview);
     }
 
     [HttpPost("{id:guid}/start")]

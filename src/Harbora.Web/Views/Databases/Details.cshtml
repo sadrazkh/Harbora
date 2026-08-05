@@ -1,137 +1,319 @@
-﻿@model Harbora.Domain.Services.ManagedService
+@model DatabaseOverviewViewModel
+@using Harbora.Domain.Common
+@using Harbora.Domain.Backups
 @{
-    ViewData["Title"] = Model.Name;
-    var conn = ViewBag.Connection as string ?? "";
-    var reveal = (bool)(ViewBag.Reveal ?? false);
-    var apps = ViewBag.Apps as IEnumerable<dynamic> ?? Enumerable.Empty<dynamic>();
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var db = Model.Database;
+    ViewData["Title"] = db.Name;
+
     var msg = TempData["Message"] as string;
     var err = TempData["Error"] as string;
-    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
-    var drifted = Harbora.Infrastructure.Services.VersionDrift.HasDrifted(Model.Version, Model.RunningImage);
-    var moving = Harbora.Infrastructure.Services.VersionDrift.IsMoving(Model.Version);
-    string StatusClass(Harbora.Domain.Common.ServiceStatus s) => s switch
+
+    var drifted = Harbora.Infrastructure.Services.VersionDrift.HasDrifted(db.Version, Model.RunningImage);
+    var moving = Harbora.Infrastructure.Services.VersionDrift.IsMoving(db.Version);
+
+    string Gb(long? bytes) => bytes is null or 0
+        ? "—"
+        : bytes < 1024L * 1024 * 1024
+            ? $"{bytes / 1024.0 / 1024:0.#} MB"
+            : $"{bytes / 1024.0 / 1024 / 1024:0.##} GB";
+
+    string Tone(ServiceStatus status) => status switch
     {
-        Harbora.Domain.Common.ServiceStatus.Running => "bg-ok/15 text-ok",
-        Harbora.Domain.Common.ServiceStatus.Failed => "bg-danger/15 text-danger",
-        Harbora.Domain.Common.ServiceStatus.Provisioning => "bg-accent-hover/15 text-accent-text animate-pulse",
-        _ => "bg-slate-500/15 text-ink"
+        ServiceStatus.Running => "is-ok",
+        ServiceStatus.Provisioning => "is-info",
+        ServiceStatus.Failed => "is-danger",
+        _ => "is-warn"
+    };
+
+    string TypeKey(ManagedServiceType type) => type switch
+    {
+        ManagedServiceType.PostgreSql => "postgres",
+        ManagedServiceType.MySql => "mysql",
+        ManagedServiceType.MariaDb => "mariadb",
+        ManagedServiceType.Redis => "redis",
+        ManagedServiceType.MongoDb => "mongodb",
+        _ => "database"
     };
 }
-<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
-    <div>
-        <a href="/databases" class="text-accent-text text-sm">← @T["Databases"]</a>
-        <h1 class="text-2xl font-bold tracking-tight text-ink flex items-center gap-3">@Model.Name
-            <span class="rounded-full px-2.5 py-0.5 text-xs font-medium @StatusClass(Model.Status)">@Model.Status</span>
-        </h1>
-        <p class="text-ink-muted text-sm">
-            @Model.Type · @Model.Version
-            @* The size, with when it was taken: a figure with no timestamp is trusted longer than it
-               should be. *@
-            @if (Model.StorageMeasuredAt is { } measured)
+
+@* A database's own page. Its settings used to live in a strip beside the list of its siblings —
+   which is only ever as wide as whatever is left over, so the controls belonging to one resource
+   were the most cramped thing on the screen. *@
+<nav class="breadcrumb mb-4" aria-label="breadcrumb">
+    <a href="/databases">@T["Databases"]</a>
+    <i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i>
+    <span>@db.Name</span>
+</nav>
+
+<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <div class="flex items-start gap-3">
+        <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(TypeKey(db.Type), db.Name, "h-14 w-14"))" />
+        <div class="min-w-0">
+            <h1 class="flex flex-wrap items-center gap-3 text-2xl font-bold tracking-tight text-ink">
+                @db.Name
+                <span class="resource-status @Tone(db.Status)"><i></i>@db.Status</span>
+            </h1>
+            <p class="mt-1 text-sm text-ink-muted">@db.Type @db.Version · @db.Project · @db.Environment</p>
+        </div>
+    </div>
+
+    @if (Model.CanManage)
+    {
+        <div class="flex flex-wrap gap-2">
+            @if (db.Status == ServiceStatus.Running)
             {
-                <span>· @Harbora.Infrastructure.Services.StorageMeasurement.Describe(Model.StorageBytes)</span>
-                <span class="text-ink-faint">(@(isFa ? "اندازه‌گیری" : "measured") @measured.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC)</span>
+                <form asp-action="Stop" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary"><i data-lucide="pause" class="h-4 w-4"></i>@T["Stop"]</button></form>
             }
             else
             {
-                <span class="text-ink-faint">· @(isFa ? "حجم اندازه‌گیری نشده" : "size not measured")</span>
+                <form asp-action="Start" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary"><i data-lucide="play" class="h-4 w-4"></i>@T["Start"]</button></form>
             }
-        </p>
-    </div>
-    <div class="flex gap-2">
-        <form asp-controller="Databases" asp-action="Start" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-sm">▶ @T["Start"]</button></form>
-        <form asp-controller="Databases" asp-action="Stop" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-sm">⏸ @T["Stop"]</button></form>
-        <form asp-controller="Databases" asp-action="TestConnection" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-sm">🔌 @(isFa ? "تست اتصال" : "Test connection")</button></form>
-        <form asp-controller="Databases" asp-action="Measure" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-sm">📏 @(isFa ? "اندازه‌گیری" : "Measure")</button></form>
-        <form asp-controller="Databases" asp-action="Rotate" asp-route-id="@Model.Id" method="post"
-              onsubmit="return confirm('@(isFa ? "رمز عبور عوض شود؟ سرویس‌های متصل تا وقتی دوباره دیپلوی نشوند از رمز قبلی استفاده می‌کنند." : "Change the password? Attached services keep the old one until they are redeployed.")')">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-sm">🔑 @(isFa ? "تعویض رمز" : "Rotate password")</button></form>
-        <a href="/databases/@Model.Id/remove" class="rounded-lg bg-danger-soft hover:bg-danger-soft text-danger px-3 py-1.5 text-sm">🗑 @T["Remove"]</a>
-    </div>
+            <form asp-action="TestConnection" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary"><i data-lucide="plug-zap" class="h-4 w-4"></i>@(isFa ? "تست اتصال" : "Test")</button></form>
+            <a href="/databases/@db.Id/access" class="btn-primary"><i data-lucide="key-round" class="h-4 w-4"></i>@(isFa ? "دسترسی خارجی" : "External access")</a>
+        </div>
+    }
 </div>
 
-@if (msg is not null)
-{
-    <div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>
-}
-@if (err is not null)
-{
-    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>
-}
+@if (msg is not null) { <div class="alert-success mb-4">@msg</div> }
+@if (err is not null) { <div class="alert-danger mb-4">@err</div> }
 
-@* A database running a different version than the one chosen is the failure nobody recovers from
-   quickly: it will not start on the data directory it already has. *@
+@* A database running a different version from the one chosen will not start on the data directory
+   it already has. It is the failure nobody recovers from quickly, so it is said at the top. *@
 @if (drifted)
 {
-    <div class="mb-4 rounded-lg bg-warn-soft border border-warn text-warn px-4 py-3 text-sm">
-        @(isFa
-            ? $"نسخهٔ انتخاب‌شده «{Model.Version}» است ولی کانتینر در حال اجرا «{Model.RunningImage}» است."
-            : $"The chosen version is \"{Model.Version}\" but the running container is \"{Model.RunningImage}\".")
+    <div class="alert-warning mb-4">
+        <i data-lucide="triangle-alert" class="h-4 w-4 shrink-0"></i>
+        <span>@(isFa
+            ? $"نسخهٔ انتخاب‌شده «{db.Version}» است ولی کانتینر در حال اجرا «{Model.RunningImage}» است."
+            : $"The chosen version is \"{db.Version}\" but the running container is \"{Model.RunningImage}\".")</span>
     </div>
 }
 else if (moving)
 {
-    <div class="mb-4 rounded-lg bg-warn-soft border border-warn text-warn px-4 py-3 text-sm">
-        @(isFa
-            ? "این سرویس به نسخهٔ مشخصی سنجاق نشده، پس ممکن است با ساخته‌شدن دوبارهٔ کانتینر نسخهٔ اصلی‌اش عوض شود و روی داده‌های فعلی بالا نیاید."
-            : "This service is not pinned to a version, so recreating its container can move it to a new major release — which will refuse to start on the data it already has.")
+    <div class="alert-warning mb-4">
+        <i data-lucide="triangle-alert" class="h-4 w-4 shrink-0"></i>
+        <span>@(isFa
+            ? "این سرویس به نسخهٔ مشخصی سنجاق نشده، پس بازسازی کانتینر ممکن است نسخهٔ اصلی‌اش را عوض کند و روی داده‌های فعلی بالا نیاید."
+            : "This service is not pinned to a version, so recreating its container can move it to a new major release — which will refuse to start on the data it already has.")</span>
     </div>
 }
 
-<div class="grid lg:grid-cols-2 gap-6">
-    <section class="rounded-xl border border-line bg-surface p-5">
-        <div class="flex items-center justify-between mb-3">
-            <h2 class="font-semibold">@T["Connection info"]</h2>
-            <a href="/databases/@Model.Id?reveal=@(reveal ? "false" : "true")" class="text-xs text-accent-text">@(reveal ? T["Hide"] : T["Reveal"])</a>
-        </div>
-        <div class="space-y-2 text-sm font-mono">
-            <div class="flex justify-between"><span class="text-ink-faint">host</span><span>@Model.ContainerName</span></div>
-            <div class="flex justify-between"><span class="text-ink-faint">port</span><span>@Model.InternalPort</span></div>
-            @* This address resolves on one private network and nowhere else — including from the
-               internet, which is the point. *@
-            @if (ViewBag.Network is string net && net.Length > 0)
-            {
-                <div class="flex justify-between gap-4"><span class="text-ink-faint">network</span><span class="text-end break-all">@net</span></div>
-            }
-            <div class="flex justify-between"><span class="text-ink-faint">user</span><span>@Model.Username</span></div>
-            @if (!string.IsNullOrEmpty(Model.DatabaseName))
-            {
-                <div class="flex justify-between"><span class="text-ink-faint">database</span><span>@Model.DatabaseName</span></div>
-            }
-        </div>
-        <div class="mt-4 rounded-lg bg-code text-code-ink p-3 text-xs font-mono break-all">@conn</div>
-        <p class="mt-2 text-xs text-ink-faint">
+<div class="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
+    <partial name="Design/_StatCard" model="@(new StatCardModel("activity", "CPU",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(db.CpuPercent, "%"),
+        Model.CpuLimit > 0 ? (isFa ? $"سقف {Model.CpuLimit} هسته" : $"limit {Model.CpuLimit} vCPU") : (isFa ? "بدون سقف" : "no limit")))" />
+
+    <partial name="Design/_StatCard" model="@(new StatCardModel("server", isFa ? "حافظه" : "Memory",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Gb(db.MemoryBytes)),
+        Model.MemoryLimitBytes > 0 ? (isFa ? $"سقف {Gb(Model.MemoryLimitBytes)}" : $"limit {Gb(Model.MemoryLimitBytes)}") : (isFa ? "بدون سقف" : "no limit")))" />
+
+    <partial name="Design/_StatCard" model="@(new StatCardModel("hard-drive", isFa ? "داده" : "Storage",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Gb(db.StorageBytes)),
+        db.StorageMeasuredAt?.LocalDateTime.ToString("yyyy-MM-dd HH:mm")))" />
+
+    <partial name="Design/_StatCard" model="@(new StatCardModel("boxes", isFa ? "اپ متصل" : "Linked apps",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(db.LinkedApps)))" />
+</div>
+
+<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+    <div class="space-y-6">
+        @{
+            var connectionPanel = new PanelModel(
+                T["Connection info"].Value,
+                Model.CanManage ? (Model.Reveal ? T["Hide"].Value : T["Reveal"].Value) : null,
+                Model.CanManage ? $"/databases/{db.Id}?reveal={(!Model.Reveal).ToString().ToLowerInvariant()}" : null);
+        }
+        <partial name="Design/_PanelStart" model="connectionPanel" />
+
+        <p class="mb-3 text-xs leading-5 text-ink-faint">
             @(isFa
-                ? "این آدرس فقط از داخل همین شبکهٔ خصوصی کار می‌کند و از اینترنت در دسترس نیست."
-                : "This address works only from inside that private network. It is not reachable from the internet.")
+                ? "این آدرس فقط داخل شبکهٔ خصوصی پروژه کار می‌کند و از اینترنت در دسترس نیست. برای اتصال از بیرون، «دسترسی خارجی» را باز کنید."
+                : "This address resolves only inside the project's private network and is not reachable from the internet. To connect from outside, open external access.")
         </p>
 
-        @{ var usedBy = ViewBag.UsedBy as List<string> ?? new(); }
-        <div class="mt-4 text-sm">
-            <div class="text-ink-faint mb-1">@(isFa ? "سرویس‌هایی که از آن استفاده می‌کنند" : "Used by")</div>
-            @if (usedBy.Count == 0)
-            {
-                <span class="text-ink-muted">@(isFa ? "هیچ سرویسی" : "No services yet")</span>
-            }
-            else
-            {
-                <span class="text-ink">@string.Join("، ", usedBy)</span>
-            }
-        </div>
-        <p class="mt-2 text-xs text-ink-faint">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "این سرویس فقط از شبکه‌ی داخلی Harbora در دسترس است." : "Reachable only from the internal Harbora network.")</p>
-    </section>
+        <div class="connection-string"><code id="databaseConnection" dir="ltr">@Model.Connection</code><button type="button" data-copy-connection title="@(isFa ? "کپی" : "Copy")"><i data-lucide="copy" class="h-4 w-4"></i></button></div>
 
-    <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="text-[15px] font-semibold text-ink mb-3">@T["Attach to app"]</h2>
-        <p class="text-sm text-ink-muted mb-3">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "متغیرهای اتصال به‌صورت رمزنگاری‌شده به اپ اضافه می‌شوند." : "Connection variables are added to the app, encrypted.")</p>
-        <form asp-controller="Databases" asp-action="Attach" asp-route-id="@Model.Id" method="post" class="flex gap-2">
-            @Html.AntiForgeryToken()
-            <select name="appId" class="flex-1 rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
-                @foreach (var a in apps)
-                {
-                    <option value="@a.Id">@a.Name</option>
-                }
-            </select>
-            <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Attach"]</button>
-        </form>
-    </section>
+        <dl class="connection-grid">
+            <div><dt>Host</dt><dd dir="ltr">@db.ContainerName</dd></div>
+            <div><dt>Port</dt><dd>@db.InternalPort</dd></div>
+            <div><dt>User</dt><dd dir="ltr">@db.Username</dd></div>
+            <div><dt>Database</dt><dd dir="ltr">@(string.IsNullOrWhiteSpace(db.DatabaseName) ? "—" : db.DatabaseName)</dd></div>
+            @if (Model.Network is { Length: > 0 } network)
+            {
+                <div class="col-span-2"><dt>Network</dt><dd class="break-all" dir="ltr">@network</dd></div>
+            }
+            <div class="col-span-2"><dt>Volume</dt><dd class="break-all" dir="ltr">@db.VolumeName</dd></div>
+        </dl>
+        <partial name="Design/_PanelEnd" />
+
+        @{ var backupPanel = new PanelModel(T["Backups"].Value, isFa ? "همه" : "View all", "/backups"); }
+        <partial name="Design/_PanelStart" model="backupPanel" />
+
+        <p class="mb-3 text-xs text-ink-faint">
+            @(Model.BackupIntervalHours is { } hours
+                ? (isFa ? $"هر {hours} ساعت" : $"Every {hours} hours")
+                : (isFa ? "زمان‌بندی نشده" : "Not scheduled"))
+            @if (Model.NextBackupAt is { } next)
+            {
+                <span> · @(isFa ? "بعدی" : "next") <span dir="ltr">@next.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</span></span>
+            }
+        </p>
+
+        @if (Model.Backups.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("cloud-upload",
+                isFa ? "هنوز پشتیبانی گرفته نشده." : "No backup has been taken yet.",
+                isFa ? "زمان‌بندی پشتیبان" : "Set up backups", "/backups"))" />
+        }
+        else
+        {
+            <div class="overflow-x-auto">
+                <table class="resource-table min-w-[560px]">
+                    <thead>
+                        <tr>
+                            <th>@(isFa ? "زمان" : "Date")</th>
+                            <th>@(isFa ? "نوع" : "Type")</th>
+                            <th>@(isFa ? "حجم" : "Size")</th>
+                            <th>@T["Status"]</th>
+                            <th>@(isFa ? "بررسی بازیابی" : "Restore verification")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var backup in Model.Backups)
+                        {
+                            <tr>
+                                <td class="table-primary">@backup.At.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</td>
+                                <td>@(backup.IsScheduled ? (isFa ? "خودکار" : "Scheduled") : (isFa ? "دستی" : "Manual"))</td>
+                                <td>@Gb(backup.SizeBytes)</td>
+                                <td><span class="resource-status @(backup.Status == BackupStatus.Completed ? "is-ok" : backup.Status == BackupStatus.Failed ? "is-danger" : "is-info")"><i></i>@backup.Status</span></td>
+                                <td>@(backup.VerifiedRestorable switch { true => isFa ? "تأیید شده" : "Verified", false => isFa ? "نامعتبر" : "Failed", _ => isFa ? "بررسی نشده" : "Not verified" })</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        <partial name="Design/_PanelEnd" />
+    </div>
+
+    <aside class="space-y-6">
+        @{ var planPanel = new PanelModel(isFa ? "طرح منابع" : "Resource plan"); }
+        <partial name="Design/_PanelStart" model="planPanel" />
+
+        @if (Model.MemoryLimitBytes > 0 || Model.CpuLimit > 0)
+        {
+            <dl class="space-y-2 text-xs">
+                <div class="flex justify-between gap-2"><dt class="text-ink-faint">@(isFa ? "اندازه" : "Size")</dt><dd class="text-ink">@(Model.InstanceSizeKey ?? "—")</dd></div>
+                <div class="flex justify-between gap-2"><dt class="text-ink-faint">@(isFa ? "سقف حافظه" : "Memory limit")</dt><dd class="text-ink" dir="ltr">@Gb(Model.MemoryLimitBytes)</dd></div>
+                <div class="flex justify-between gap-2"><dt class="text-ink-faint">@(isFa ? "سقف CPU" : "CPU limit")</dt><dd class="text-ink" dir="ltr">@Model.CpuLimit</dd></div>
+            </dl>
+        }
+        else
+        {
+            @* Worth saying rather than showing a dash: this database predates resource plans and can
+               take whatever the host has. *@
+            <p class="text-xs leading-5 text-warn">
+                @(isFa
+                    ? "این دیتابیس سقف منابع ندارد و می‌تواند هرچقدر بخواهد از سرور بگیرد. برای اعمال سقف، اندازه‌ای انتخاب کنید و کانتینر را بازسازی کنید."
+                    : "This database has no resource ceiling and can take whatever the host has. Choose a size and rebuild the container to apply one.")
+            </p>
+        }
+
+        <p class="mt-3 text-[11px] leading-4 text-ink-faint">
+            @(Model.TlsEnabled
+                ? (isFa ? "اتصال رمزنگاری می‌شود (TLS)." : "Connections are encrypted with TLS.")
+                : (isFa ? "اتصال رمزنگاری نمی‌شود." : "Connections are not encrypted."))
+        </p>
+        <partial name="Design/_PanelEnd" />
+
+        @{ var attachPanel = new PanelModel(T["Attach to app"].Value); }
+        <partial name="Design/_PanelStart" model="attachPanel" />
+
+        <p class="mb-3 text-xs leading-5 text-ink-faint">
+            @(isFa ? "متغیرهای اتصال رمزنگاری‌شده به اپ تزریق می‌شوند." : "The connection variables are injected into the app, encrypted.")
+        </p>
+
+        @if (Model.CanManage && Model.Apps.Any(a => a.Compatible))
+        {
+            <form asp-action="Attach" asp-route-id="@db.Id" method="post" class="space-y-2">
+                @Html.AntiForgeryToken()
+                <select name="appId" class="form-control text-sm">
+                    @foreach (var app in Model.Apps.Where(a => a.Compatible))
+                    {
+                        <option value="@app.Id">@app.Name · @app.Environment</option>
+                    }
+                </select>
+                <button class="btn-primary w-full justify-center">@T["Attach"]</button>
+            </form>
+        }
+        else if (Model.CanManage)
+        {
+            <p class="text-xs leading-5 text-ink-faint">
+                @(isFa
+                    ? "در این محیط اپی برای اتصال وجود ندارد؛ دیتابیس فقط به اپ همان شبکه متصل می‌شود."
+                    : "No app exists in this environment. A database can only attach inside its private network.")
+            </p>
+        }
+
+        @if (Model.UsedBy.Count > 0)
+        {
+            <div class="mt-3 text-xs text-ink-muted">
+                @(isFa ? "در حال استفاده توسط: " : "Used by: ")<strong class="text-ink">@string.Join(", ", Model.UsedBy)</strong>
+            </div>
+        }
+        <partial name="Design/_PanelEnd" />
+
+        @if (Model.CanManage)
+        {
+            var maintenancePanel = new PanelModel(isFa ? "نگهداری" : "Maintenance");
+            <partial name="Design/_PanelStart" model="maintenancePanel" />
+
+            <div class="space-y-2">
+                <form asp-action="Measure" asp-route-id="@db.Id" method="post">
+                    @Html.AntiForgeryToken()
+                    <button class="btn-secondary w-full justify-center py-2 text-sm"><i data-lucide="ruler" class="h-4 w-4"></i>@(isFa ? "اندازه‌گیری فضا" : "Measure storage")</button>
+                </form>
+
+                <form asp-action="Rotate" asp-route-id="@db.Id" method="post"
+                      onsubmit="return confirm('@(isFa ? "رمز عبور عوض شود؟ سرویس‌های متصل تا وقتی دوباره دیپلوی نشوند از رمز قبلی استفاده می‌کنند." : "Change the password? Attached services keep the old one until they are redeployed.")')">
+                    @Html.AntiForgeryToken()
+                    <button class="btn-secondary w-full justify-center py-2 text-sm"><i data-lucide="key-round" class="h-4 w-4"></i>@(isFa ? "تعویض رمز" : "Rotate password")</button>
+                </form>
+
+                <form asp-action="Reprovision" asp-route-id="@db.Id" method="post">
+                    @Html.AntiForgeryToken()
+                    <button class="btn-secondary w-full justify-center py-2 text-sm"><i data-lucide="rotate-cw" class="h-4 w-4"></i>@(isFa ? "بازسازی کانتینر" : "Rebuild container")</button>
+                </form>
+
+                <p class="text-[11px] leading-4 text-ink-faint">
+                    @(isFa
+                        ? "بازسازی، کانتینر را از نو می‌سازد و سقف منابع و رمزنگاری را اعمال می‌کند. داده‌ها حفظ می‌شوند؛ اتصال‌های باز چند ثانیه قطع می‌شوند."
+                        : "Rebuilding recreates the container and applies the resource ceiling and encryption. The data is kept; open connections drop for a few seconds.")
+                </p>
+            </div>
+            <partial name="Design/_PanelEnd" />
+
+            <section class="rounded-xl border border-danger/30 bg-surface p-5">
+                <h2 class="text-sm font-semibold text-danger">@(isFa ? "منطقهٔ خطر" : "Danger zone")</h2>
+                <p class="mt-1 text-xs leading-5 text-ink-muted">
+                    @(isFa ? "حذف دیتابیس، و در صورت انتخاب، داده‌هایش." : "Remove the database, and its data if you choose to.")
+                </p>
+                <a href="/databases/@db.Id/remove" class="btn-danger mt-3 inline-flex px-4 py-2 text-sm">@T["Delete"]</a>
+            </section>
+        }
+    </aside>
 </div>
+
+@section Scripts {
+<script>
+    (function () {
+        var button = document.querySelector('[data-copy-connection]');
+        var code = document.getElementById('databaseConnection');
+        if (!button || !code) return;
+        button.addEventListener('click', function () {
+            navigator.clipboard?.writeText(code.textContent.trim());
+        });
+    })();
+</script>
+}

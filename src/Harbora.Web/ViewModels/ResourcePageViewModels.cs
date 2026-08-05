@@ -75,6 +75,17 @@ public sealed class DatabaseOverviewViewModel
     public IReadOnlyList<BackupEventViewModel> Backups { get; init; } = [];
     public DateTimeOffset? NextBackupAt { get; init; }
     public int? BackupIntervalHours { get; init; }
+
+    /// <summary>What the container is actually running, so version drift can be shown.</summary>
+    public string? RunningImage { get; init; }
+
+    /// <summary>The resource plan, or null for a database created before they had one.</summary>
+    public string? InstanceSizeKey { get; init; }
+    public long MemoryLimitBytes { get; init; }
+    public double CpuLimit { get; init; }
+
+    /// <summary>Whether connections to it are encrypted, as recorded at the last provision.</summary>
+    public bool TlsEnabled { get; init; }
 }
 
 public sealed record ResourceOptionViewModel(Guid Id, string Name, string Environment, bool Compatible);
