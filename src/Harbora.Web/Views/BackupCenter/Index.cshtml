@@ -135,13 +135,14 @@
                     <option value="@BackupTargetType.Directory">@(isFa ? "پوشه" : "Directory")</option>
                     <option value="@BackupTargetType.DockerVolume">@(isFa ? "Volume داکر" : "Docker volume")</option>
                     <option value="@BackupTargetType.Database">@(isFa ? "دیتابیس" : "Database")</option>
+                    <option value="@BackupTargetType.Application">@(isFa ? "اپلیکیشن" : "Application")</option>
                 </select>
                 <input name="targetRef" required placeholder="@(Model.AllowedSourceRoots.FirstOrDefault() ?? "/var/lib/harbora/data")"
                        class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                 <p class="text-[11px] text-ink-faint">
                     @(isFa
-                        ? "پوشه: مسیر مجاز · Volume: نام آن · دیتابیس: شناسهٔ سرویس"
-                        : "Directory: an allowed path · Volume: its name · Database: the service's id")
+                        ? "پوشه: مسیر مجاز · Volume: نام آن · دیتابیس و اپلیکیشن: شناسهٔ آن"
+                        : "Directory: an allowed path · Volume: its name · Database & Application: its id")
                 </p>
                 <button class="w-full rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
                     @(isFa ? "شروع پشتیبان‌گیری" : "Start backup")
@@ -267,6 +268,7 @@
                     <option value="@BackupTargetType.Directory">@(isFa ? "پوشه" : "Directory")</option>
                     <option value="@BackupTargetType.DockerVolume">@(isFa ? "Volume داکر" : "Docker volume")</option>
                     <option value="@BackupTargetType.Database">@(isFa ? "دیتابیس" : "Database")</option>
+                    <option value="@BackupTargetType.Application">@(isFa ? "اپلیکیشن" : "Application")</option>
                 </select>
                 <input name="targetRef" required placeholder="/var/lib/harbora/data"
                        class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />

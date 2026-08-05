@@ -80,7 +80,7 @@ public sealed class BackupServiceTests : IDisposable
         _db,
         new StubEngineResolver(),
         new StubCredentialReader("password"),
-        new BackupTargetResolver(Docker, new StubDatabaseStager(), Options.Create(_options), NullLogger<BackupTargetResolver>.Instance),
+        new BackupTargetResolver(Docker, new StubDatabaseStager(), new StubApplicationStager(), Options.Create(_options), NullLogger<BackupTargetResolver>.Instance),
         _jobs,
         _notifications,
         new StubCaller(_workspace),

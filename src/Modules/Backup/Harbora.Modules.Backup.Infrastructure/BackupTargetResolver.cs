@@ -71,6 +71,7 @@ public interface IBackupTargetResolver
 public sealed class BackupTargetResolver(
     IDockerEngine docker,
     IDatabaseTargetStager databases,
+    IApplicationTargetStager applications,
     IOptions<BackupModuleOptions> options,
     ILogger<BackupTargetResolver> logger) : IBackupTargetResolver
 {
@@ -86,9 +87,7 @@ public sealed class BackupTargetResolver(
             BackupTargetType.Directory => ValidateDirectory(targetRef),
             BackupTargetType.DockerVolume => ValidateVolume(targetRef),
             BackupTargetType.Database => ValidateDatabase(targetRef),
-
-            BackupTargetType.Application => new ResolvedTarget(false, Error:
-                "Application targets are not implemented yet."),
+            BackupTargetType.Application => ValidateApplication(targetRef),
 
             _ => new ResolvedTarget(false, Error: $"{targetType} is not a target this module can read.")
         };
@@ -105,6 +104,7 @@ public sealed class BackupTargetResolver(
             BackupTargetType.Directory => TargetLease.Ok(validation.SourcePath!),
             BackupTargetType.DockerVolume => await StageVolumeAsync(targetRef, ct),
             BackupTargetType.Database => await databases.StageAsync(Guid.Parse(targetRef), ct),
+            BackupTargetType.Application => await applications.StageAsync(Guid.Parse(targetRef), ct),
             _ => TargetLease.Fail($"{targetType} is not a target this module can read.")
         };
     }
@@ -168,6 +168,15 @@ public sealed class BackupTargetResolver(
         Guid.TryParse(serviceId, out _)
             ? new ResolvedTarget(true, serviceId)
             : new ResolvedTarget(false, Error: "A database target must be a managed database's id.");
+
+    /// <summary>
+    /// An application target is an app id. Shape only here, for the same reason as a database: the
+    /// app's volumes and definition need the database, and this method must stay side-effect free.
+    /// </summary>
+    private static ResolvedTarget ValidateApplication(string appId) =>
+        Guid.TryParse(appId, out _)
+            ? new ResolvedTarget(true, appId)
+            : new ResolvedTarget(false, Error: "An application target must be an application's id.");
 
     /// <summary>
     /// Copies a volume's contents into the staging area so the engine can read them as a directory.

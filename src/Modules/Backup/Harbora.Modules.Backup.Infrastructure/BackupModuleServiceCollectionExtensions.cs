@@ -59,6 +59,7 @@ public static class BackupModuleServiceCollectionExtensions
         services.AddScoped<IBackupNotificationService, BackupNotificationService>();
         services.AddScoped<IDatabaseTargetStager, DatabaseTargetStager>();
         services.AddScoped<IDatabaseRestoreExecutor, DatabaseRestoreExecutor>();
+        services.AddScoped<IApplicationTargetStager, ApplicationTargetStager>();
 
         // One provider instance per engine, all served by the same container-based implementation:
         // the per-engine differences live in DatabaseDumpCommands, which is pure and tested there.

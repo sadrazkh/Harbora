@@ -101,7 +101,8 @@ public sealed class BackupApiTests : IDisposable
     }
 
     private BackupTargetResolver Resolver() => new(
-        new FakeDockerEngine(), new StubDatabaseStager(), Options.Create(_options), NullLogger<BackupTargetResolver>.Instance);
+        new FakeDockerEngine(), new StubDatabaseStager(), new StubApplicationStager(),
+        Options.Create(_options), NullLogger<BackupTargetResolver>.Instance);
 
     private BackupSnapshot AddSnapshot(
         BackupSnapshotStatus status = BackupSnapshotStatus.Completed,

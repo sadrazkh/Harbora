@@ -41,7 +41,7 @@ public sealed class BackupVolumeTargetTests : IDisposable
         Directory.CreateDirectory(_options.AllowedSourceRoots[0]);
 
         _resolver = new BackupTargetResolver(
-            _docker, new StubDatabaseStager(), Options.Create(_options),
+            _docker, new StubDatabaseStager(), new StubApplicationStager(), Options.Create(_options),
             NullLogger<BackupTargetResolver>.Instance);
     }
 
@@ -166,13 +166,26 @@ public sealed class BackupVolumeTargetTests : IDisposable
         Directory.Exists(path).Should().BeTrue("releasing a directory lease must not delete the source");
     }
 
-    [Fact]
-    public void Refuses_target_types_that_are_not_implemented_rather_than_guessing()
+    [Theory]
+    [InlineData(BackupTargetType.Server)]
+    [InlineData(BackupTargetType.Device)]
+    [InlineData(BackupTargetType.Configuration)]
+    public void Refuses_target_types_it_cannot_read_rather_than_guessing(BackupTargetType type)
     {
-        var result = _resolver.Validate(BackupTargetType.Application, "anything");
+        var result = _resolver.Validate(type, "anything");
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Contain("not implemented");
+        result.Error.Should().Contain("not a target this module can read");
+    }
+
+    [Fact]
+    public void An_application_target_is_checked_for_shape_only()
+    {
+        _resolver.Validate(BackupTargetType.Application, Guid.CreateVersion7().ToString())
+            .Succeeded.Should().BeTrue();
+
+        _resolver.Validate(BackupTargetType.Application, "the-main-app")
+            .Error.Should().Contain("id");
     }
 
     /// <summary>
@@ -208,6 +221,16 @@ internal sealed class StubDatabaseStager : IDatabaseTargetStager
         => Task.FromResult<(DatabasePlan?, string?)>((null, "not used in this test"));
 
     public Task<TargetLease> StageAsync(Guid serviceId, CancellationToken ct)
+        => Task.FromResult(TargetLease.Fail("not used in this test"));
+}
+
+/// <summary>Stands in for the application stager where a test is about some other target.</summary>
+internal sealed class StubApplicationStager : IApplicationTargetStager
+{
+    public Task<(bool Ok, string? Error)> ValidateAsync(Guid appId, CancellationToken ct)
+        => Task.FromResult((false, (string?)"not used in this test"));
+
+    public Task<TargetLease> StageAsync(Guid appId, CancellationToken ct)
         => Task.FromResult(TargetLease.Fail("not used in this test"));
 }
 

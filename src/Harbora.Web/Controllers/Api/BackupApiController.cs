@@ -159,7 +159,8 @@ public sealed class BackupApiController(
 
         var supported = new[]
         {
-            BackupTargetType.Directory, BackupTargetType.DockerVolume, BackupTargetType.Database
+            BackupTargetType.Directory, BackupTargetType.DockerVolume, BackupTargetType.Database,
+            BackupTargetType.Application
         };
 
         return Ok(new

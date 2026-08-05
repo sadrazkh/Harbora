@@ -8,11 +8,13 @@ Errors are **RFC 7807 Problem Details**. This differs from `/api/v1`'s `{"error"
 deliberate, because this is a new surface with no clients, where changing the existing endpoints
 would break the CLI.
 
-> **On OpenAPI.** No machine-generated document is served. The project has no OpenAPI package, and
-> adding one would emit a document describing *every* controller in the panel — a broader change and
-> a broader disclosure surface than this branch should introduce on its own. This file is the
-> reference; wiring `Microsoft.AspNetCore.OpenApi` and gating it to Development is listed as
-> follow-up in MERGE_GUIDE.md § 9.
+> **On OpenAPI.** No machine-generated document is served, and this was tried rather than skipped.
+> `Microsoft.AspNetCore.OpenApi` 10.0.4 pulls in `Microsoft.OpenApi` 2.0.0, which carries a **known
+> HIGH severity advisory** (GHSA-v5pm-xwqc-g5wc); pinning 2.1.0, 2.3.0 and 2.4.0 did not clear it
+> either. Adding a known-vulnerable package to a *backup* product for documentation convenience is
+> not a trade worth making, so the packages were removed again. This file is the reference. Revisit
+> when a fixed version ships — and gate the endpoint to Development, since it would otherwise
+> describe every controller in the panel.
 
 ---
 
@@ -72,9 +74,9 @@ command-line flags, which is readable by any local user via `/proc/<pid>/cmdline
 
 ```json
 {
-  "supported": ["Directory", "DockerVolume", "Database"],
+  "supported": ["Directory", "DockerVolume", "Database", "Application"],
   "allowedSourceRoots": ["/srv/data"],
-  "unsupported": [{ "type": "Application", "reason": "Application targets are not implemented yet." }]
+  "unsupported": [{ "type": "Server", "reason": "Server is not a target this module can read." }]
 }
 ```
 

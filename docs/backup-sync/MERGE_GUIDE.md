@@ -29,6 +29,18 @@ should not have to discover by reading diffs.
 | `1dab1ba` | `docs(backup-sync): correct the branch base and record the HEAD incident` |
 | `f14d52b` | `Add modular backup system with feature-flag integration` — the service layer, jobs and scheduler. Committed by the other actor in this repository rather than by the session that wrote it; the content is the intended change, the message is not in this branch's style. |
 | `687ef15` | `feat(ui): add backup management experience` |
+| `57a78a1` | `docs(backup-sync): update merge guide for the service, job and UI work` |
+| `71ad8ff` | `feat(backup): add versioned REST API and Docker volume targets` |
+| `780d2f7` | `docs(backup-sync): record the API, volume targets and the second migration` |
+| `325faa1` | `feat(backup): support managed database targets` |
+| `5ee837b` | `docs(backup-sync): record database targets and what they still cannot do` |
+| `2f8796e` | `feat(sync): add sync module with syncthing engine` |
+| `2b20c63` | `feat(ui): add sync management experience` |
+| `4715ae7` | `docs(backup-sync): record the sync module and its unverified edges` |
+| `b6532be` | `feat(sync): add versioned REST API` |
+| `f085002` | `docs(backup-sync): document the sync API and the rename migration` |
+| `7615881` | `chore(backup-sync): add pinned compose overlay for syncthing and kopia` |
+| _(this one)_ | `feat(backup): support application targets` |
 
 ---
 
@@ -44,9 +56,6 @@ should not have to discover by reading diffs.
   health-check, for **local repositories only**.
 - Safe process execution: argument lists, no shell, password via environment, output redacted.
 - Domain model, retention calculation, path confinement, snapshot lifecycle, policy validation.
-- Schema for four new tables.
-- 101 new tests. Full suite: **2335 passed, 0 failed.**
-
 - **Service layer** — repositories (create/health/delete), snapshots (queue/run/browse/delete),
   policies (validate/save/schedule), restores (queue/run), retention.
 - **Background jobs** — snapshot, restore, verify, prune, repository health, dispatched through a
@@ -65,24 +74,27 @@ should not have to discover by reading diffs.
   password via environment, dump deleted after use.
 - **Sync module** — its own contracts, domain, Syncthing engine, service, status refresher, UI,
   sidebar entry and REST API (`/api/v1/sync/*`). Shares nothing with Backup by design.
-- 219 new tests. Full suite: **2453 passed, 0 failed.**
+- **Application targets** — volumes plus a definition (image, ports, domains, health check, env var
+  NAMES) in one snapshot. Secret VALUES are deliberately excluded.
+- 231 new tests. Full suite: **2465 passed, 0 failed.**
 
 **Not built in this branch — and there is no placeholder pretending otherwise.**
 
 | Missing | Consequence |
 |---|---|
-| Application targets | Directory, Docker volume and database only; the resolver refuses the rest with a message saying so |
+| **Application restore** | An application snapshot is taken and browsable; putting one back means restoring its volumes and reading `application.json` by hand. The capture side is done; the automated rebuild is not |
+| **MongoDB and Redis backup** | Refused with a specific reason rather than half-working — Redis has no logical dump (use the volume target), and `mongodump` cannot take a password that stays out of the process table |
+| **Machine-generated OpenAPI** | Deliberately not added: the package pulls `Microsoft.OpenApi` with a **known high-severity advisory** (GHSA-v5pm-xwqc-g5wc), and no available version cleared it. [API.md](API.md) is the reference |
+| Agent backup dispatch | The existing node agent is untouched; backups run on the panel's own host |
 | Always-on encrypted node, end to end | The mode and its guards exist and are tested; no node has ever been run in it |
-| MongoDB and Redis backup | Refused with a specific reason — Redis has no logical dump (back up its volume), and `mongodump` cannot take a password that stays out of the process table |
-| Machine-generated OpenAPI | `docs/backup-sync/API.md` is the reference; no `/openapi` document is served |
-| Sync module | Not started — no projects, no entities |
-| Agent backup dispatch | Existing node agent untouched |
 | Compose actually run | The files exist and the YAML parses; nothing was started, because there is no Docker here |
-| Download of a snapshot artifact | No short-lived link; restore-to-a-new-folder is the way to inspect a backup |
+| Download of a snapshot artifact | No short-lived link; restore-to-a-new-folder is how a backup is inspected |
 
-**So: after merging and enabling the flag, an operator can create a local or S3 repository, back up
-an allowed directory on a schedule or on demand, browse the result, restore part or all of it into a
-confined destination, and see it verified and pruned.** Everything beyond that is listed above.
+**So: after merging and enabling the flags, an operator can create a repository, back up a directory,
+a Docker volume, a PostgreSQL/MySQL/MariaDB database or a whole application — on a schedule or on
+demand — browse the result, restore it into a confined destination or back into the live database,
+see it verified and pruned, drive all of it over a versioned API, and separately keep folders in step
+across devices.** Everything beyond that is listed above.
 
 ---
 
@@ -92,14 +104,19 @@ Kept as small as possible. Nothing unrelated was touched and no repository-wide 
 
 | File | Change |
 |---|---|
-| `Harbora.slnx` | Three project entries |
-| `src/Harbora.Data/Harbora.Data.csproj` | Reference to `Harbora.Modules.Backup.Domain` |
-| `src/Harbora.Data/HarboraDbContext.cs` | 4 `DbSet`s, 4 query filters, one `ConfigureBackupModule` method |
+| `Harbora.slnx` | Six project entries (three per module) |
+| `src/Harbora.Data/Harbora.Data.csproj` | References to both modules' `Domain` projects |
+| `src/Harbora.Data/HarboraDbContext.cs` | 9 `DbSet`s, 9 query filters, two `Configure*Module` methods |
 | `src/Harbora.Domain/Jobs/Job.cs` | 5 **appended** `JobKind` members |
-| `src/Harbora.Web/Harbora.Web.csproj` | Reference to the module's Infrastructure |
-| `src/Harbora.Web/Program.cs` | One `AddBackupModule(...)` call + one `using` |
-| `src/Harbora.Web/appsettings.json` | `Features` section, `Backups:Kopia`, `Backups:Module` |
-| `tests/Harbora.Tests/Harbora.Tests.csproj` | Three project references |
+| `src/Harbora.Domain/Common/IdempotencyRecord.cs` | Moved up from the backup module so both APIs share it |
+| `src/Harbora.Shared/PathGuard.cs` | Moved out of the backup module — a general path-confinement control, not a backup concept |
+| `src/Harbora.Infrastructure/Common/IdempotencyStore.cs` | New, platform-level |
+| `src/Harbora.Infrastructure/DependencyInjection.cs` | One `IIdempotencyStore` registration |
+| `src/Harbora.Web/Harbora.Web.csproj` | References to both modules' Infrastructure |
+| `src/Harbora.Web/Program.cs` | `AddBackupModule(...)` + `AddSyncModule(...)` + two `using`s |
+| `src/Harbora.Web/appsettings.json` | `Features`, `Backups:Kopia`, `Backups:Module`, `Sync:*` |
+| `tests/Harbora.Tests/Harbora.Tests.csproj` | Five project references |
+| `deploy/` | New overlay: compose file, Kopia Dockerfile, env example. Existing files untouched |
 | `src/Harbora.Application/Abstractions/IJobQueue.cs` | New `IJobHandler` interface (additive) |
 | `src/Harbora.Infrastructure/Jobs/JobDispatcher.cs` | Consults registered `IJobHandler`s before the existing switch; the built-in kinds are untouched |
 | `src/Harbora.Web/Views/Shared/Design/_Sidebar.cshtml` | One `Augment(...)` call + one label pair |
@@ -110,7 +127,8 @@ No existing migration was edited. No existing test was deleted or skipped.
 
 ## 4. Migration
 
-Two migrations, both **purely additive** — no `AlterColumn`, no change to any existing table.
+Four migrations. Three are **purely additive** — no `AlterColumn`, no change to any existing table —
+and the fourth is a rename.
 
 | Migration | Adds |
 |---|---|
@@ -245,17 +263,22 @@ never writes to `Backups`, `BackupDestinations`, `BackupSchedules` or `BackupDel
 
 **Functional.**
 
-4. **Machine-generated OpenAPI.** The project has no OpenAPI package; adding one emits a document
-   describing every controller in the panel, which is wider than this branch should reach on its
-   own. Wire `Microsoft.AspNetCore.OpenApi` and gate it to Development.
-5. Application targets need app-metadata capture (definition, image, env names, secret *references*,
-   volumes, ports, domains). Not started; the resolver refuses them outright rather than half-working.
+4. **Machine-generated OpenAPI — blocked, not skipped.** `Microsoft.AspNetCore.OpenApi` 10.0.4 pulls
+   in `Microsoft.OpenApi` 2.0.0, which carries a **known HIGH severity advisory**
+   (GHSA-v5pm-xwqc-g5wc). Pinning 2.1.0, 2.3.0 and 2.4.0 did not clear it either — verified with
+   `dotnet list package --vulnerable`. Adding a known-vulnerable package to a *backup* product for
+   documentation convenience is not a trade worth making. The packages were added, tested and
+   removed; the csproj is back to where it started. Revisit when a fixed version ships, and gate the
+   endpoint to Development when it does.
+5. **Application restore.** Capture is finished — volumes plus `application.json`, with secret
+   values deliberately excluded. What is missing is the automated rebuild: recreating the app, its
+   volumes, domains and ports from that metadata, and prompting for the secrets left out on purpose.
 6. **MongoDB** needs a credential file so `mongodump` can authenticate without the password reaching
    the process table. **Redis** would need its RDB/AOF handled as a volume — which already works via
    the Docker volume target, so the refusal points there.
-7. **Nothing container-backed has run against a real daemon.** Volume staging, database dumps and
-   database restores are all tested against a fake Docker engine: the images, mounts, arguments and
-   environment are pinned, but the first real `pg_dump` is CI's.
+7. **Nothing container-backed has run against a real daemon.** Volume staging, application staging,
+   database dumps and database restores are all tested against a fake Docker engine: the images,
+   mounts, arguments and environment are pinned, but the first real `pg_dump` is CI's.
 8. A database restore currently loads into the database it came from. Restoring into a *different*
    database means creating a service and restoring there; a target-database picker is follow-up.
 9. **Syncthing's REST calls have never run against a real daemon.** They are written against the
@@ -288,9 +311,10 @@ Stated precisely, because "tested" is a word worth being exact about.
 | Check | Result |
 |---|---|
 | `dotnet build Harbora.slnx` | Succeeded, **0 warnings, 0 errors** |
-| `dotnet test Harbora.slnx` | **2453 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
+| `dotnet test Harbora.slnx` | **2465 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
 | Sync API paging, filtering, idempotency, tenancy, no-password-in-response | Asserted at controller level |
 | Sync API exposes no restore-shaped route | Asserted by reflecting over the controller's methods |
+| Application metadata excludes secret values | Asserted on the written JSON, not just the code |
 | Compose YAML parses, with the intended port bindings and caps | Parsed and inspected with a YAML parser |
 | **`docker compose up`, health checks, image tags, Kopia install** | **NOT RUN — no Docker and no registry access here** |
 | Sync device-id, mode and conflict-name parsing | Asserted directly |
