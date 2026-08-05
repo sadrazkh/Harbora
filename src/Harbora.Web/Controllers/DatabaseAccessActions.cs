@@ -119,7 +119,8 @@ public sealed partial class DatabasesController
             ? null
             : DatabaseCredentialManager.ConnectionString(
                 service.Type.ToString(), grant.GatewayHost, grant.GatewayPort.Value,
-                grant.Username, password, service.DatabaseName);
+                grant.Username, password, service.DatabaseName,
+                service.TlsEnabled ? DatabaseTls.ConnectionParameter(service.Type) : null);
 
         return View("Access", await BuildAccessPageAsync(id, ct, issued: new IssuedCredentialViewModel(
             grant.Username, password, connection, grant.ExpiresAt, Rotated: true)));

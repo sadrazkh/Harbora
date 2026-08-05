@@ -33,7 +33,12 @@ public sealed class DockerTcpGateway(
     public async Task<(GatewayEndpoint? Endpoint, string? Error)> OpenAsync(
         DatabaseAccessGrant grant, ManagedService service, string networkName, CancellationToken ct)
     {
-        var config = TcpGatewayPlan.Config(service.ContainerName, service.InternalPort, grant.AllowedIps);
+        // Only for PostgreSQL: MySQL speaks first on its own connections, so the same check would
+        // reject every client. MariaDB's own TLS is negotiated after that greeting.
+        var requireTls = service.TlsEnabled && service.Type == Harbora.Domain.Common.ManagedServiceType.PostgreSql;
+
+        var config = TcpGatewayPlan.Config(
+            service.ContainerName, service.InternalPort, grant.AllowedIps, requireTls);
         if (config is null)
             return (null, "One of the allowed addresses could not be read. Nothing was opened.");
 

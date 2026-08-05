@@ -147,9 +147,13 @@ public sealed class DatabaseAccessService(
         await AuditAsync(grant, "activated", userEmail, null, ct);
         await db.SaveChangesAsync(ct);
 
+        // Asks for encryption only when the server can actually give it. A string that demands
+        // sslmode=require from a server with SSL off just fails to connect, and one that asks for
+        // "prefer" encrypts nothing while reading as though it does.
         var connection = DatabaseCredentialManager.ConnectionString(
             service.Type.ToString(), gatewayHost, gatewayPort,
-            credential.Username, credential.Password, service.DatabaseName);
+            credential.Username, credential.Password, service.DatabaseName,
+            service.TlsEnabled ? DatabaseTls.ConnectionParameter(service.Type) : null);
 
         return new AccessResult(new IssuedAccess(grant, credential.Password, connection), null);
     }

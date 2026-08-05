@@ -135,6 +135,40 @@ public class TcpGatewayPlanTests
     }
 
     [Fact]
+    public void A_plaintext_client_is_dropped_before_the_database_sees_it()
+    {
+        // PostgreSQL with ssl=on still accepts plaintext: a client passing sslmode=disable connects
+        // in the clear over a port on the internet and nothing tells anyone. Forcing it on the
+        // server means owning its pg_hba.conf, including local access. The gateway is ours.
+        var config = TcpGatewayPlan.Config("harbora-svc-shop", 5432, null, requireTls: true);
+
+        // Length 8, request code 80877103 — the fixed opening of a libpq TLS handshake.
+        config.Should().Contain("req.payload(0,8) -m bin 0000000804d2162f");
+        config.Should().Contain("tcp-request content reject");
+    }
+
+    [Fact]
+    public void An_engine_that_does_not_open_with_that_handshake_is_left_alone()
+    {
+        // MySQL speaks first on its own connections, so the same check would reject every client.
+        var config = TcpGatewayPlan.Config("harbora-svc-shop", 3306, null, requireTls: false);
+
+        config.Should().NotContain("req.payload");
+        config.Should().NotContain("tcp-request content reject");
+    }
+
+    [Fact]
+    public void Requiring_encryption_does_not_replace_the_allowlist()
+    {
+        // Both, or a grant that names its addresses would silently stop enforcing them the moment
+        // encryption was turned on.
+        var config = TcpGatewayPlan.Config("harbora-svc-shop", 5432, "203.0.113.7", requireTls: true);
+
+        config.Should().Contain("tcp-request connection reject if !allowed");
+        config.Should().Contain("req.payload");
+    }
+
+    [Fact]
     public void The_proxy_points_at_the_service_on_the_private_network()
     {
         // The database container is never published itself. What is exposed is this proxy, and

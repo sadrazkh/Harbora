@@ -66,12 +66,55 @@ public sealed class ManagedServiceEngine(
             await docker.PullImageAsync(image, new Progress<string>(l => logger.LogDebug("{Svc}: {Line}", svc.Name, l)), ct);
             await RemoveContainerByNameAsync(docker, svc.ContainerName, ct);
 
+            var volumes = new List<(string, string, bool)> { (svc.VolumeName, def.DataMountPath, false) };
+            var command = def.Command(creds);
+
+            // MariaDB and MySQL make their own certificate at first start; anything else starts
+            // unencrypted unless the block below succeeds.
+            svc.TlsEnabled = DatabaseTls.EncryptedByDefault(svc.Type);
+
+            // PostgreSQL will not encrypt a connection without a certificate it can read, and the
+            // moment external access publishes a port that stops being a private-network trade-off:
+            // the password and every row after it would cross the internet in the clear. MariaDB and
+            // MySQL make their own certificate at first start, so they are left alone.
+            if (DatabaseTls.NeedsConfiguring(svc.Type))
+            {
+                var certVolume = DatabaseTls.VolumeName(svc.ContainerName);
+                await docker.EnsureVolumeAsync(certVolume, ct);
+
+                var (certificate, key) = DatabaseTls.Generate(svc.ContainerName, clock.UtcNow);
+
+                var prepared = await docker.RunOneOffAsync(new DockerOneOffRequest(
+                    // The service's own image, so `id -u postgres` inside it is the uid the
+                    // server will actually run as.
+                    Image: image,
+                    Command: DatabaseTls.PrepareCommand(),
+                    Binds: [(certVolume, DatabaseTls.MountPath, false)],
+                    Env: DatabaseTls.PrepareEnvironment(certificate, key)),
+                    new Progress<string>(l => logger.LogInformation("{Svc} tls: {Line}", svc.Name, l)), ct);
+
+                if (prepared == 0)
+                {
+                    volumes.Add((certVolume, DatabaseTls.MountPath, true));
+                    command = DatabaseTls.ServerCommand();
+                    svc.TlsEnabled = true;
+                }
+                else
+                {
+                    // Started without encryption rather than not started at all: a database that
+                    // refuses to boot because a certificate could not be written is a worse outcome
+                    // than one that boots unencrypted and says so on the access page.
+                    logger.LogError(
+                        "Could not prepare a TLS certificate for {Svc}; it will start unencrypted.", svc.Name);
+                }
+            }
+
             await docker.RunContainerAsync(new DockerRunRequest(
                 image, svc.ContainerName, network,
                 def.Env(creds),
                 new Dictionary<string, string> { ["harbora.managed"] = "true", ["harbora.service"] = svc.Name },
-                new[] { (svc.VolumeName, def.DataMountPath, false) },
-                def.Port, 0, 0, null, def.Command(creds)), ct);
+                volumes,
+                def.Port, 0, 0, null, command), ct);
 
             foreach (var extra in networks.Skip(1))
                 await docker.ConnectNetworkAsync(svc.ContainerName, extra, ct);

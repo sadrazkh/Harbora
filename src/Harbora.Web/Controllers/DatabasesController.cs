@@ -232,6 +232,33 @@ public sealed partial class DatabasesController(
     public async Task<IActionResult> Start(Guid id, CancellationToken ct)
     { await Guard(id, ct); await engine.StartAsync(id, ct); return RedirectToAction(nameof(Details), new { id }); }
 
+    /// <summary>
+    /// Recreates the container from the current definition, keeping the data volume.
+    ///
+    /// It exists because a setting that only applies at creation — encryption is the first — is
+    /// otherwise unreachable for every database that already exists. Without this, TLS would have
+    /// shipped for new databases and been permanently out of reach for the ones that need it.
+    /// </summary>
+    [HttpPost("{id:guid}/reprovision")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> Reprovision(Guid id, CancellationToken ct)
+    {
+        await Guard(id, ct);
+        var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
+        if (svc is null) return NotFound();
+
+        await engine.QueueProvisionAsync(id, ct);
+
+        // Says what it costs. The container is replaced, so open connections drop — the data volume
+        // is kept, which is the part people actually worry about.
+        TempData["Message"] = IsFa
+            ? $"{svc.Name} در حال بازسازی است. داده‌ها حفظ می‌شوند؛ اتصال‌های باز قطع می‌شوند."
+            : $"{svc.Name} is being rebuilt. The data is kept; open connections will drop.";
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
     [HttpPost("{id:guid}/stop")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
