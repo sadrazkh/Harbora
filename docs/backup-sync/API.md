@@ -155,3 +155,94 @@ Restore is the most destructive authenticated operation here, and is guarded acc
 destination is confined to `RestoreRoot`, `Fail` is the default strategy, writing over a non-empty
 destination requires typing that folder's name back, and every request, completion and failure is
 audited.
+
+---
+
+# Sync API — `/api/v1/sync`
+
+Same conventions: bearer token, Problem Details, paging, sorting, `Idempotency-Key`, and **404 on
+every route while `Features:Sync` is off**. Idempotency keys are namespaced per module, so the same
+key used against both APIs is two requests rather than a replay of an unrelated result.
+
+> **There is no restore endpoint here, and there will not be one.** A sync space has no earlier
+> state to go back to — deletions and corruption propagate to every device, usually within seconds.
+> A test reflects over this controller's routes and fails if one ever appears named `Restore`,
+> `Snapshot` or `Recover`. For anything that may need recovering, use the Backup API.
+
+## This node
+
+`GET /node` — the identity another device needs in order to pair, plus what this deployment accepts:
+
+```json
+{
+  "deviceId": "P56IOI7-MZJNU2Y-…",
+  "engineReachable": true,
+  "allowedRoots": ["/srv/sync"],
+  "encryptedNodeAllowed": false,
+  "notice": "Sync replicates deletions. It is not a backup."
+}
+```
+
+`allowedRoots` is empty by default and **no space can be created until it is set**. A sync folder is
+a directory this node both reads *and writes* on a remote device's instruction — a stronger
+capability than backup's read, so the default is closed.
+
+## Spaces
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/spaces` | `?status=` `?sort=name\|-name\|pending\|-pending` |
+| `GET` | `/spaces/{id}` | |
+| `POST` | `/spaces` | Idempotent. Creates the folder in the engine before the row is kept |
+| `POST` | `/spaces/{id}/pause?paused=true` | Stops syncing without removing anything |
+| `POST` | `/spaces/{id}/refresh` | Re-reads status and reconciles the conflict list |
+
+```jsonc
+// POST /spaces
+{
+  "name": "Documents",
+  "localPath": "/srv/sync/documents",   // must resolve inside an allowed root
+  "mode": "SendAndReceive",             // SendAndReceive | SendOnly | ReceiveOnly
+  "versioningMode": "Trash",            // None | Trash | Simple | Staggered
+  "versioningParameter": 7              // days for Trash, versions kept for Simple
+}
+```
+
+Versioning limits the damage sync propagates. It does not make sync a backup.
+
+## Devices and pairings
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/devices` | `?untrusted=true` |
+| `POST` | `/devices` | `deviceId` is the engine's key fingerprint, exchanged out of band |
+| `GET` | `/pairings` | `?spaceId=` |
+| `POST` | `/pairings` | Idempotent. Returns `acceptedByPeer: false` — pairing is mutual |
+| `DELETE` | `/pairings?spaceId=&deviceId=` | The device **keeps the files it already has** |
+
+```jsonc
+// POST /pairings
+{
+  "spaceId": "…", "deviceId": "…",
+  "mode": "EncryptedReceiveOnly",
+  "encryptionPassword": "at-least-12-characters"   // write-only; never returned
+}
+```
+
+**The rule the API enforces in both directions.** An untrusted device exists so it cannot read what
+it stores, so it may only be paired as `EncryptedReceiveOnly` — any other mode would send it readable
+files. And a *trusted* device may not be given an encrypted-only share either, or "which devices can
+read this folder" stops being answerable from the device list. Both return `400` with the field named.
+
+A pairing response reports `isEncrypted`, never the password.
+
+## Conflicts
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/conflicts` | `?spaceId=` `?openOnly=true` |
+| `POST` | `/conflicts/{id}/resolution` | `KeptLocal` \| `KeptRemote` \| `KeptBoth` |
+
+**Recording only.** Harbora writes down what was decided and moves or deletes nothing — whichever
+copy an automatic rule discarded would be somebody's work, and the file operations belong on the
+device holding them. There is deliberately no "resolve automatically".

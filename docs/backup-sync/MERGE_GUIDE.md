@@ -63,16 +63,15 @@ should not have to discover by reading diffs.
 - **Database targets** — PostgreSQL, MySQL and MariaDB, dumped through the database's own client
   running in a container built from its own image, and restored the same way. Shell-free commands,
   password via environment, dump deleted after use.
-- **Sync module** — its own contracts, domain, Syncthing engine, service, status refresher, UI and
-  sidebar entry. Shares nothing with Backup by design.
-- 204 new tests. Full suite: **2438 passed, 0 failed.**
+- **Sync module** — its own contracts, domain, Syncthing engine, service, status refresher, UI,
+  sidebar entry and REST API (`/api/v1/sync/*`). Shares nothing with Backup by design.
+- 219 new tests. Full suite: **2453 passed, 0 failed.**
 
 **Not built in this branch — and there is no placeholder pretending otherwise.**
 
 | Missing | Consequence |
 |---|---|
 | Application targets | Directory, Docker volume and database only; the resolver refuses the rest with a message saying so |
-| Sync REST API | The sync UI drives MVC actions; there is no `/api/v1/sync/*` yet |
 | Always-on encrypted node, end to end | The mode and its guards exist and are tested; no node has ever been run in it |
 | MongoDB and Redis backup | Refused with a specific reason — Redis has no logical dump (back up its volume), and `mongodump` cannot take a password that stays out of the process table |
 | Machine-generated OpenAPI | `docs/backup-sync/API.md` is the reference; no `/openapi` document is served |
@@ -117,6 +116,12 @@ Two migrations, both **purely additive** — no `AlterColumn`, no change to any 
 |---|---|
 | `20260804183506_BackupModule` | 4 tables, 12 indexes |
 | `…_BackupIdempotency` | `BackupIdempotencyRecords` + 2 indexes (one unique on workspace + endpoint + key) |
+| `…_SyncModule` | 4 tables, 7 indexes |
+| `…_IdempotencyToPlatform` | **Rename** of `BackupIdempotencyRecords` → `IdempotencyRecords` |
+
+The rename is **hand-written**. EF scaffolded a `DROP` + `CREATE`, which loses every stored key —
+and in-flight retries would then start their work a second time. `RenameTable` preserves the rows
+and reverses cleanly. If you re-scaffold anything in this area, check it did not revert to a drop.
 
 `Down` drops only the new tables.
 
@@ -253,7 +258,9 @@ Stated precisely, because "tested" is a word worth being exact about.
 | Check | Result |
 |---|---|
 | `dotnet build Harbora.slnx` | Succeeded, **0 warnings, 0 errors** |
-| `dotnet test Harbora.slnx` | **2438 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
+| `dotnet test Harbora.slnx` | **2453 passed, 0 failed**, 17 skipped (pre-existing, in NodeAgent tests) |
+| Sync API paging, filtering, idempotency, tenancy, no-password-in-response | Asserted at controller level |
+| Sync API exposes no restore-shaped route | Asserted by reflecting over the controller's methods |
 | Sync device-id, mode and conflict-name parsing | Asserted directly |
 | **Syncthing against a real daemon** | **NOT RUN — none installed on this machine** |
 | Migration reviewed for additive-only | Confirmed |
