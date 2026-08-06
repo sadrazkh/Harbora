@@ -169,7 +169,7 @@
                         <span class="text-ink">@e.Key @if (e.IsSecret){<span class="text-[10px] not-italic rounded bg-surface-2 px-1 text-warn font-sans">secret</span>}@if (e.AvailableAtBuild){<span class="text-[10px] rounded bg-surface-2 px-1 text-info font-sans">build</span>}</span>
                         <div class="flex items-center gap-2">
                             <span class="text-ink-faint">@(e.IsSecret ? "••••••" : e.Value)</span>
-                            <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@Model.Id" asp-route-envId="@e.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger">✕</button></form>
+                            <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@Model.Id" asp-route-envId="@e.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف متغیر {e.Key}" : $"Delete variable {e.Key}")">✕</button></form>
                         </div>
                     </div>
                 }
@@ -757,7 +757,7 @@
                                 <span data-domain-state class="text-xs text-ink-faint" title="@(isFa ? "در حال بررسی" : "Checking")">…</span>
                                 <button type="button" data-domain-recheck class="text-xs text-ink-faint hover:text-ink"
                                         title="@(isFa ? "بررسی مجدد" : "Re-check")">↻</button>
-                                <form asp-controller="Apps" asp-action="DeleteDomain" asp-route-id="@Model.Id" asp-route-domainId="@dom.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger">✕</button></form>
+                                <form asp-controller="Apps" asp-action="DeleteDomain" asp-route-id="@Model.Id" asp-route-domainId="@dom.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف دامنهٔ {dom.Host}" : $"Delete domain {dom.Host}")">✕</button></form>
                             </div>
                         </div>
                         @* Filled in by the check: the verdict, and the single action that fixes it. *@

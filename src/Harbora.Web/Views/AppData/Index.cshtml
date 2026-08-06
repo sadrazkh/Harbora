@@ -80,7 +80,7 @@ else
                                 <td colspan="4">
                                     <a href="/apps/@Model.AppId/data?volumeId=@volume.Id&amp;path=@Uri.EscapeDataString(parent)"
                                        class="flex items-center gap-2 text-sm text-ink-muted hover:text-ink">
-                                        <i data-lucide="corner-left-up" class="h-4 w-4"></i>..
+                                        <i data-lucide="corner-left-up" class="h-4 w-4" aria-hidden="true"></i><span aria-label="@(isFa ? "پوشهٔ بالاتر" : "Up one folder")">..</span>
                                     </a>
                                 </td>
                             </tr>

@@ -115,7 +115,7 @@
                                             <span>@g.Text</span>
                                             <form asp-controller="Tenants" asp-action="RemoveGrant" asp-route-id="@Model.WorkspaceId" asp-route-grantId="@g.Id" method="post">
                                                 @Html.AntiForgeryToken()
-                                                <button class="text-danger">✕</button>
+                                                <button class="text-danger" aria-label="@(isFa ? "برداشتن" : "Remove")">✕</button>
                                             </form>
                                         </div>
                                     }

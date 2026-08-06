@@ -117,7 +117,7 @@
             {
                 stepNo++;
                 <li class="relative rounded-2xl border border-line bg-canvas p-6">
-                    <span class="absolute -top-3 @(isFa ? "right-6" : "left-6") inline-grid place-items-center w-7 h-7 rounded-full bg-accent text-white text-xs font-bold">@stepNo</span>
+                    <span class="absolute -top-3 start-6 inline-grid place-items-center w-7 h-7 rounded-full bg-accent text-white text-xs font-bold">@stepNo</span>
                     <h3 class="mt-2 font-semibold text-ink">@T[s.Title]</h3>
                     <p class="mt-2 text-sm text-ink-muted leading-relaxed">@T[s.Body]</p>
                 </li>
@@ -148,7 +148,7 @@
                 <div class="relative rounded-2xl border @(featured ? "border-accent/50 bg-gradient-to-b from-accent/10 to-transparent" : "border-line bg-surface") p-6 flex flex-col">
                     @if (featured)
                     {
-                        <span class="absolute -top-3 @(isFa ? "left-6" : "right-6") rounded-full bg-accent px-3 py-1 text-[11px] font-medium text-white">@T["Popular"]</span>
+                        <span class="absolute -top-3 end-6 rounded-full bg-accent px-3 py-1 text-[11px] font-medium text-white">@T["Popular"]</span>
                     }
                     <h3 class="font-semibold text-ink text-lg">@(isFa && !string.IsNullOrWhiteSpace(plan.NameFa) ? plan.NameFa : plan.Name)</h3>
 

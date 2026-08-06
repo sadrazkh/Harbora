@@ -23,7 +23,7 @@
 @if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
 @if (!Model.DockerAvailable)
 {
-    <div class="mb-4 rounded-lg bg-warn-soft border border-warn text-warn px-4 py-2 text-sm">Docker daemon unreachable — live metrics paused.</div>
+    <div class="mb-4 rounded-lg bg-warn-soft border border-warn text-warn px-4 py-2 text-sm">@(isFa ? "دسترسی به Docker daemon نیست — سنجه‌های زنده متوقف‌اند." : "Docker daemon unreachable — live metrics paused.")</div>
 }
 @if (Model.DiskWarning)
 {
@@ -145,8 +145,8 @@
                     }
                 </span>
                 <div class="flex items-center gap-2">
-                    <form asp-controller="Alerts" asp-action="Test" asp-route-id="@a.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-accent-text">test</button></form>
-                    <form asp-controller="Alerts" asp-action="Delete" asp-route-id="@a.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger">✕</button></form>
+                    <form asp-controller="Alerts" asp-action="Test" asp-route-id="@a.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-accent-text">@(isFa ? "آزمایش" : "test")</button></form>
+                    <form asp-controller="Alerts" asp-action="Delete" asp-route-id="@a.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف هشدار {a.Name}" : $"Delete alert {a.Name}")">✕</button></form>
                 </div>
               </div>
               @if (a.LastError is not null)

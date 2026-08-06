@@ -24,19 +24,32 @@ public class LayoutConventionTests
     }
 
     [Fact]
-    public void No_design_partial_uses_a_physical_direction_class()
+    public void No_view_uses_a_physical_direction_class()
     {
         // ml-/mr-/pl-/pr-/left-/right- do not mirror in RTL. Persian is the default culture here,
         // so a physical class is a layout that is wrong for most of the people using it.
+        //
+        // Originally only the Design partials were held to this; widening the net found two
+        // hand-branched insets on the landing page (`isFa ? "right-6" : "left-6"`) doing by hand
+        // what `start-6` does by itself. Every view is covered now. A view with a genuine need for
+        // a physical class — inside a dir="ltr" block, say — goes in the allowlist with its reason.
         var physical = new Regex(
-            @"(?<![\w-])(ml|mr|pl|pr|border-l|border-r|rounded-l|rounded-r)-\w",
+            @"(?<![\w-])(ml|mr|pl|pr|border-l|border-r|rounded-l|rounded-r|text-left|text-right|left|right)-[\w.\[]",
             RegexOptions.Compiled);
 
-        foreach (var file in DesignViews())
+        string[] allowed = [];
+
+        var views = Directory.EnumerateFiles(
+            Path.Combine(TestPaths.WebRoot, "Views"), "*.cshtml", SearchOption.AllDirectories).ToList();
+        views.Should().HaveCountGreaterThan(30);
+
+        foreach (var file in views)
         {
+            if (allowed.Contains(Path.GetFileName(file))) continue;
+
             var offending = physical.Match(File.ReadAllText(file));
             offending.Success.Should().BeFalse(
-                $"{Path.GetFileName(file)} uses '{offending.Value}' — use the logical equivalent (ms/me/ps/pe/border-s/border-e)");
+                $"{Path.GetFileName(file)} uses '{offending.Value}' — use the logical equivalent (ms/me/ps/pe/start/end)");
         }
     }
 
@@ -74,6 +87,45 @@ public class LayoutConventionTests
             File.ReadAllText(file).Should().NotContain("View.Text",
                 $"{name} should render Design/_Metric instead of printing the value itself");
         }
+    }
+
+    [Fact]
+    public void A_control_that_shows_only_a_glyph_still_has_a_name()
+    {
+        // The delete buttons are a lone ✕ and several links are a lone icon. A sighted person
+        // infers the meaning from position; a screen reader announces "button" and nothing else,
+        // which on a row of five identical ✕ buttons is five identical mysteries. Anything whose
+        // visible content has no letters must carry an aria-label or a title.
+        var control = new Regex(@"<(button|a)\b((?:[^<>""]|""[^""]*"")*)>(.*?)</\1>",
+            RegexOptions.Compiled | RegexOptions.Singleline);
+        var tags = new Regex("<[^>]+>", RegexOptions.Compiled);
+        var razor = new Regex(@"@[\w.\[\]()""'?: ]+", RegexOptions.Compiled);
+        var letters = new Regex(@"[A-Za-z؀-ۿ]", RegexOptions.Compiled);
+
+        var unnamed = new List<string>();
+
+        foreach (var file in Directory.EnumerateFiles(
+                     Path.Combine(TestPaths.WebRoot, "Views"), "*.cshtml", SearchOption.AllDirectories))
+            foreach (Match match in control.Matches(File.ReadAllText(file)))
+            {
+                var attributes = match.Groups[2].Value;
+                if (attributes.Contains("aria-label") || attributes.Contains("title=")) continue;
+
+                var inner = match.Groups[3].Value;
+                // A nested element may carry the label (aria-hidden icon + labelled span).
+                if (inner.Contains("aria-label")) continue;
+
+                var visible = razor.Replace(tags.Replace(inner, ""), "");
+                if (letters.IsMatch(visible)) continue;
+                // Razor expressions that render text — @T[…], @name, @(isFa ? … : …) — count as
+                // visible words.
+                if (inner.Contains("@T[") || Regex.IsMatch(inner, @"@[a-zA-Z(]")) continue;
+
+                if (inner.Contains("data-lucide") || visible.Trim().Length is > 0 and <= 3)
+                    unnamed.Add($"{Path.GetFileName(file)}: {inner.Trim()[..Math.Min(40, inner.Trim().Length)]}");
+            }
+
+        unnamed.Should().BeEmpty("a glyph-only control announces nothing to a screen reader");
     }
 
     [Fact]

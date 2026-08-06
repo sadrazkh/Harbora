@@ -126,7 +126,7 @@
             {
                 <div class="flex items-center justify-between">
                     <span>@s.Type · every @s.IntervalHours h · keep @s.RetentionCount</span>
-                    <form asp-controller="Backups" asp-action="DeleteSchedule" asp-route-id="@s.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger">✕</button></form>
+                    <form asp-controller="Backups" asp-action="DeleteSchedule" asp-route-id="@s.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? "حذف زمان‌بندی" : "Delete schedule")">✕</button></form>
                 </div>
                 <div data-when-sftp class="space-y-2" style="display:none">
                     <input name="sftpHost" placeholder="backup.example.com" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
@@ -192,7 +192,7 @@
                         </span>
                         <div class="flex items-center gap-2">
                             <form asp-controller="Backups" asp-action="TestDelivery" asp-route-id="@d.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-accent-text">test</button></form>
-                            <form asp-controller="Backups" asp-action="DeleteDelivery" asp-route-id="@d.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger">✕</button></form>
+                            <form asp-controller="Backups" asp-action="DeleteDelivery" asp-route-id="@d.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? "حذف مقصد ارسال" : "Delete delivery target")">✕</button></form>
                         </div>
                     </div>
                     @if (d.LastError is not null)
