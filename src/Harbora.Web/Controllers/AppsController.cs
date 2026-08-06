@@ -30,6 +30,7 @@ public sealed class AppsController(
     Harbora.Infrastructure.Security.ProjectAccessService access,
     Harbora.Infrastructure.Services.ServiceUsageService serviceUsage,
     IServerEngineFactory engines,
+    IProxyEngine proxy,
     ILogger<AppsController> logger,
     IJobQueue jobs,
     ICurrentUser currentUser) : Controller
@@ -427,6 +428,13 @@ public sealed class AppsController(
                 Harbora.Infrastructure.Services.AttachKeys.PrefixFor(s.Name)))
             .ToList();
 
+        // Protection, read from the routes rather than kept twice: the routes are what Traefik
+        // serves, so anything else is a second source of truth that can disagree with the traffic.
+        var appRoutes = await db.Routes.Where(r => r.AppId == app.Id).ToListAsync(ct);
+        ViewBag.ProtectionAuth = appRoutes.Any(r => r.BasicAuthEnabled && r.BasicAuthUsersEncrypted is not null);
+        ViewBag.ProtectionIps = appRoutes.Select(r => r.IpAllowlist).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? "";
+        ViewBag.HasRoutes = appRoutes.Count > 0;
+
         // Disk, alongside memory and CPU. A tier sells storage now, so the page that shows what a
         // tier gave this app has to show that figure too — and how much of it is gone.
         var disk = await AppDiskUsageAsync(app.Id, ct);
@@ -481,6 +489,78 @@ public sealed class AppsController(
     /// this writes the intent and says so. Silently doing nothing visible, or restarting somebody's
     /// production app because a dropdown moved, are both worse than saying which it is.
     /// </summary>
+    /// <summary>
+    /// Put a password and/or an address restriction in front of every domain this app answers on.
+    ///
+    /// The routing engine has had basic-auth since the designer shipped; what was missing was a way
+    /// to reach it without opening a route designer and understanding Traefik middlewares. A staging
+    /// site nobody should index, a preview a client is reviewing, an internal tool — all of them
+    /// wanted one switch, and all of them shipped to the open internet instead.
+    ///
+    /// Applied to the app's routes rather than to the app: a route is per-domain, and an app with
+    /// three domains must not be protected on one of them.
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/protection")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
+    public async Task<IActionResult> SetProtection(
+        Guid id, bool basicAuthEnabled, string? user, string? password, string? ipAllowlist, CancellationToken ct)
+    {
+        var app = await db.Apps.Include(a => a.Domains).FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        var allowed = Harbora.Infrastructure.Proxy.AccessList.Parse(ipAllowlist, out var rejected);
+        if (rejected.Count > 0)
+        {
+            // Named, because "invalid allowlist" leaves somebody hunting through fifteen addresses.
+            TempData["Error"] = (IsFa ? "این ورودی‌ها آدرس یا رنج معتبر نیستند: " : "These are not valid addresses or ranges: ")
+                                + string.Join(", ", rejected);
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var routes = await db.Routes.Where(r => r.AppId == app.Id).ToListAsync(ct);
+        if (routes.Count == 0)
+        {
+            TempData["Error"] = IsFa
+                ? "این اپ هنوز دامنه‌ای ندارد که محافظت شود."
+                : "This application has no domain to protect yet.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        foreach (var route in routes)
+        {
+            route.BasicAuthEnabled = basicAuthEnabled;
+
+            // A blank password with auth already on means "leave the credentials alone" — the form
+            // never renders the stored one back, so re-typing it to change an IP range would be the
+            // only way to keep it.
+            if (basicAuthEnabled && !string.IsNullOrWhiteSpace(password))
+                route.BasicAuthUsersEncrypted = protector.Protect(
+                    Harbora.Infrastructure.Proxy.Htpasswd.Line(
+                        string.IsNullOrWhiteSpace(user) ? "admin" : user!.Trim(), password!));
+            else if (!basicAuthEnabled)
+                route.BasicAuthUsersEncrypted = null;
+
+            route.IpAllowlist = Harbora.Infrastructure.Proxy.AccessList.Format(allowed);
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        var applied = await proxy.ApplyAsync(
+            await db.Routes.Where(r => r.WorkspaceId == WorkspaceId && r.IsEnabled).ToListAsync(ct), ct);
+
+        await audit.LogAsync("app.protection_changed", "app",
+            $"{app.Name}: auth={basicAuthEnabled}, ips={allowed.Count}", ClientIp, ct: ct);
+
+        // The proxy's own verdict, not an assumption. A rolled-back apply means the rows changed
+        // and the traffic did not — the one outcome nobody must be told is "saved".
+        TempData[applied.Success ? "Message" : "Error"] = applied.Success
+            ? (IsFa ? "محافظت اعمال شد." : "Protection applied.")
+            : (IsFa ? "پیکربندی پروکسی اعمال نشد: " : "The proxy configuration was not applied: ") + applied.Error;
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
     /// <summary>
     /// Gives an application somewhere to keep files.
     ///

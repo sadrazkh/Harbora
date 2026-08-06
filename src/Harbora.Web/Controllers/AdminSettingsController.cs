@@ -1,4 +1,5 @@
-﻿using Harbora.Application.Abstractions;
+﻿using System.Reflection;
+using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Identity;
@@ -138,6 +139,19 @@ public sealed class AdminSettingsController(
         return RedirectToAction(nameof(Index));
     }
 
+    [HttpPost("updates")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SaveUpdateCheck(bool updateCheck, CancellationToken ct)
+    {
+        await WriteAsync(SettingKeys.UpdateCheckEnabled, updateCheck ? "true" : "false", ct);
+        await audit.LogAsync("platform.update_check", "setting", updateCheck ? "on" : "off", ClientIp, ct: ct);
+
+        TempData["Message"] = updateCheck
+            ? (IsFa ? "بررسی روزانهٔ به‌روزرسانی روشن شد." : "The daily update check is on.")
+            : (IsFa ? "بررسی به‌روزرسانی خاموش شد." : "The update check is off.");
+        return RedirectToAction(nameof(Index));
+    }
+
     [HttpPost("smtp/test")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> TestSmtp(CancellationToken ct)
@@ -234,7 +248,13 @@ public sealed class AdminSettingsController(
             SmtpFrom = await ReadAsync(SettingKeys.SmtpFrom, ct),
             SmtpUseSsl = !string.Equals(
                 await ReadAsync(SettingKeys.SmtpUseSsl, ct), "false", StringComparison.OrdinalIgnoreCase),
-            SmtpHasPassword = !string.IsNullOrEmpty(await ReadAsync(SettingKeys.SmtpPassword, ct))
+            SmtpHasPassword = !string.IsNullOrEmpty(await ReadAsync(SettingKeys.SmtpPassword, ct)),
+
+            UpdateCheckEnabled = string.Equals(
+                await ReadAsync(SettingKeys.UpdateCheckEnabled, ct), "true", StringComparison.OrdinalIgnoreCase),
+            LatestReleaseTag = await ReadAsync(SettingKeys.UpdateLatestTag, ct),
+            RunningVersion = System.Reflection.Assembly.GetEntryAssembly()?
+                .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion
         };
     }
 }

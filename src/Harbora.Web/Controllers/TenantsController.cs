@@ -219,6 +219,36 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
         });
     }
 
+    /// <summary>
+    /// The workspace's monthly usage as CSV, every recorded period. The metering already exists and
+    /// is shown a month at a time on the page; this is the same figures in the form an invoice run
+    /// or a spreadsheet needs, rather than transcribed by hand.
+    /// </summary>
+    [HttpGet("{id:guid}/usage.csv")]
+    public async Task<IActionResult> UsageCsv(Guid id, CancellationToken ct)
+    {
+        var ws = await db.Workspaces.IgnoreQueryFilters().FirstOrDefaultAsync(w => w.Id == id, ct);
+        if (ws is null) return NotFound();
+
+        var records = await db.UsageRecords.AsNoTracking()
+            .Where(r => r.WorkspaceId == id)
+            .OrderByDescending(r => r.Period)
+            .ToListAsync(ct);
+
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("period,memoryGbHours,cpuCoreHours,appCountPeak");
+        foreach (var r in records)
+            csv.AppendLine(Harbora.Web.Infrastructure.CsvWriter.Row(
+                r.Period.ToString("yyyy-MM"),
+                r.MemoryGbHours.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
+                r.CpuCoreHours.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
+                r.AppCountPeak.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+        var bytes = System.Text.Encoding.UTF8.GetPreamble()
+            .Concat(System.Text.Encoding.UTF8.GetBytes(csv.ToString())).ToArray();
+        return File(bytes, "text/csv", $"harbora-usage-{ws.Slug}.csv");
+    }
+
     /// <summary>Add a customer user to the workspace (create the account if the email is new).</summary>
     [HttpPost("{id:guid}/members")]
     [ValidateAntiForgeryToken]

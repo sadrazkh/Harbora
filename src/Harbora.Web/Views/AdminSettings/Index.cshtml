@@ -216,6 +216,34 @@
             <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@(isFa ? "ارسال ایمیل آزمایشی" : "Send a test email")</button>
         </form>
         <partial name="Design/_PanelEnd" />
+
+        @{ var updatePanel = new PanelModel(isFa ? "به‌روزرسانی Harbora" : "Harbora updates"); }
+        <partial name="Design/_PanelStart" model="updatePanel" />
+
+        <form asp-action="SaveUpdateCheck" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <label class="flex items-start gap-2 text-sm">
+                <input type="checkbox" name="updateCheck" value="true" @(Model.UpdateCheckEnabled ? "checked" : "") class="mt-1" />
+                <span>
+                    @(isFa ? "روزی یک‌بار بپرس نسخهٔ تازه‌تری منتشر شده یا نه" : "Ask once a day whether a newer release exists")
+                    <span class="mt-1 block text-xs leading-5 text-ink-faint">
+                        @* Off by default and stated plainly: this is a request that leaves the server. *@
+                        @(isFa
+                            ? "یک درخواست خروجی به GitHub. چیزی خودکار نصب نمی‌شود — فقط روی داشبورد خبر می‌دهد."
+                            : "One outbound request to GitHub. Nothing is installed automatically — it only puts a note on the dashboard.")
+                    </span>
+                </span>
+            </label>
+            <div class="text-xs text-ink-faint" dir="ltr">
+                @(isFa ? "نسخهٔ در حال اجرا:" : "Running:") @(Model.RunningVersion ?? "—")
+                @if (Model.LatestReleaseTag is { Length: > 0 } tag)
+                {
+                    <span>· @(isFa ? "آخرین منتشرشده:" : "latest seen:") @tag</span>
+                }
+            </div>
+            <button class="btn-primary">@(isFa ? "ذخیره" : "Save")</button>
+        </form>
+        <partial name="Design/_PanelEnd" />
     </div>
 
     <aside class="space-y-6">

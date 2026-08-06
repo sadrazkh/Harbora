@@ -776,6 +776,42 @@
             </form>
         </section>
 
+        @* ---- Protection ----
+           The routing engine has had basic-auth since the designer shipped; what was missing was a
+           way to reach it without opening the designer and understanding Traefik middlewares. It
+           applies to every domain this app answers on, because protecting one of three is not
+           protection. *@
+        <section class="rounded-xl border border-line bg-surface">
+            <div class="px-4 py-3 border-b border-line font-semibold">@(isFa ? "محافظت از دسترسی" : "Access protection")</div>
+            @if (ViewBag.HasRoutes != true)
+            {
+                <div class="p-4 text-sm text-ink-muted">@(isFa ? "وقتی این اپ دامنه بگیرد، اینجا می‌توانید رمز یا محدودیت IP بگذارید." : "Once this app has a domain, you can put a password or an IP restriction in front of it.")</div>
+            }
+            else
+            {
+                <form asp-controller="Apps" asp-action="SetProtection" asp-route-id="@Model.Id" method="post" class="p-4 space-y-3">
+                    @Html.AntiForgeryToken()
+                    <label class="flex items-center gap-2 text-sm">
+                        <input type="checkbox" name="basicAuthEnabled" value="true" @(ViewBag.ProtectionAuth == true ? "checked" : "") />
+                        <span>@(isFa ? "محافظت با رمز (Basic auth)" : "Password protection (basic auth)")</span>
+                    </label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <input name="user" placeholder="@(isFa ? "نام کاربری (پیش‌فرض admin)" : "username (defaults to admin)")" dir="ltr"
+                               class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
+                        <input name="password" type="password" autocomplete="new-password" dir="ltr"
+                               placeholder="@(ViewBag.ProtectionAuth == true ? (isFa ? "ذخیره شده — برای تغییر بنویسید" : "stored — type to change") : (isFa ? "رمز" : "password"))"
+                               class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "فقط این IP‌ها (خالی = همه)" : "Only these IPs (empty = everyone)")</label>
+                        <input name="ipAllowlist" value="@ViewBag.ProtectionIps" dir="ltr" placeholder="203.0.113.5, 10.0.0.0/8"
+                               class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
+                    </div>
+                    <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@(isFa ? "اعمال" : "Apply")</button>
+                </form>
+            }
+        </section>
+
         @* ---- Danger zone ---- *@
         <section class="rounded-xl border border-danger bg-red-950/10 p-4">
             <div class="font-semibold text-danger mb-1">@(isFa ? "منطقه‌ی خطر" : "Danger zone")</div>

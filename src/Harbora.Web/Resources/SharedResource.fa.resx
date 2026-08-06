@@ -260,4 +260,7 @@
   <data name="Code"><value>کد</value></data>
   <data name="Verify"><value>تأیید</value></data>
   <data name="A code is required."><value>کد لازم است.</value></data>
+  <data name="Harbora {0} has been released"><value>نسخهٔ {0} از Harbora منتشر شده</value></data>
+  <data name="This panel runs an older build. Updating is a step on the server."><value>این پنل نسخهٔ قدیمی‌تری را اجرا می‌کند. به‌روزرسانی روی سرور انجام می‌شود.</value></data>
+  <data name="How to update"><value>چطور به‌روزرسانی کنم</value></data>
 </root>

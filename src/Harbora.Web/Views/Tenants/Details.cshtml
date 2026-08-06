@@ -73,7 +73,10 @@
 </div>
 
 <div class="rounded-xl border border-line bg-surface p-5 mb-6">
-    <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "مصرف متری این ماه" : "Metered usage this month") <span class="text-ink-faint text-sm">· @Model.PeriodLabel</span></h2>
+    <div class="mb-3 flex items-center justify-between">
+        <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "مصرف متری این ماه" : "Metered usage this month") <span class="text-ink-faint text-sm">· @Model.PeriodLabel</span></h2>
+        <a href="/tenants/@Model.WorkspaceId/usage.csv" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-xs">@(isFa ? "خروجی CSV همهٔ ماه‌ها" : "Export all months (CSV)")</a>
+    </div>
     <div class="grid grid-cols-3 gap-4 text-sm">
         <div><div class="text-ink-muted">@(isFa ? "گیگ‌بایت-ساعت (RAM)" : "GB-hours (RAM)")</div><div class="mt-1 text-xl font-bold">@Model.MemoryGbHours.ToString("0.0")</div></div>
         <div><div class="text-ink-muted">@(isFa ? "هسته-ساعت (CPU)" : "vCPU-hours")</div><div class="mt-1 text-xl font-bold">@Model.CpuCoreHours.ToString("0.0")</div></div>

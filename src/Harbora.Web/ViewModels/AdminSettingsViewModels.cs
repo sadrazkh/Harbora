@@ -57,4 +57,10 @@ public sealed class AdminSettingsViewModel
     public string? SmtpFrom { get; init; }
     public bool SmtpUseSsl { get; init; }
     public bool SmtpHasPassword { get; init; }
+
+    /// <summary>The daily release check. Off by default — it is an outbound request to a third party.</summary>
+    public bool UpdateCheckEnabled { get; init; }
+    /// <summary>What the last check saw, whatever it was. Null until one has run.</summary>
+    public string? LatestReleaseTag { get; init; }
+    public string? RunningVersion { get; init; }
 }

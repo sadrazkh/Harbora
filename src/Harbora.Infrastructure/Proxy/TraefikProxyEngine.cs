@@ -177,6 +177,17 @@ public sealed class TraefikProxyEngine(
             foreach (var u in users)
                 sb.AppendLine($"          - \"{u}\"");
         }
+        // Only the entries that parse. A malformed one written through would be rejected by Traefik
+        // on apply — after the operator left the page believing the route was protected.
+        var allowed = AccessList.Parse(r.IpAllowlist, out _);
+        if (allowed.Count > 0)
+        {
+            sb.AppendLine($"    {name}-ips:");
+            sb.AppendLine("      ipAllowList:");
+            sb.AppendLine("        sourceRange:");
+            foreach (var entry in allowed)
+                sb.AppendLine($"          - \"{entry}\"");
+        }
     }
 
     private List<string> MiddlewareNames(Route r)
@@ -189,6 +200,8 @@ public sealed class TraefikProxyEngine(
         // Only reference the auth middleware when credentials actually exist, so the router never
         // points at a middleware we didn't render.
         if (r.BasicAuthEnabled && !string.IsNullOrWhiteSpace(r.BasicAuthUsersEncrypted)) list.Add($"{name}-auth");
+        // Same rule as the renderer, so the router never names a middleware that was not written.
+        if (AccessList.Parse(r.IpAllowlist, out _).Count > 0) list.Add($"{name}-ips");
         return list;
     }
 

@@ -28,6 +28,13 @@ public class Route : BaseEntity
     public bool BasicAuthEnabled { get; set; }
     public string? BasicAuthUsersEncrypted { get; set; }  // htpasswd lines, encrypted
 
+    /// <summary>
+    /// Comma-separated addresses or CIDR ranges allowed to reach this route; empty means everyone.
+    /// Not encrypted — an allowlist is configuration, not a credential, and an operator needs to
+    /// read it back to edit it.
+    /// </summary>
+    public string? IpAllowlist { get; set; }
+
     /// <summary>Custom response/request headers as JSON: { "X-Frame-Options": "DENY" }.</summary>
     public string? CustomHeadersJson { get; set; }
 

@@ -84,6 +84,13 @@ public sealed record AttentionFacts
 
     public bool HasAnyApp { get; init; }
     public bool HasAnyBackupSchedule { get; init; }
+
+    /// <summary>
+    /// The newer release tag, when the update check is on and found one strictly ahead of the
+    /// running build. Null when the check is off, found nothing newer, or the account is not an
+    /// operator — a customer has no install button to reach.
+    /// </summary>
+    public string? UpdateAvailableTag { get; init; }
 }
 
 /// <summary>
@@ -134,6 +141,9 @@ public static class AttentionRules
     public const string NoBackupsTitle = "No scheduled backups";
     public const string NoBackupsDetail = "Nothing here is being backed up automatically.";
     public const string NoBackupsAction = "Set one up";
+    public const string UpdateTitle = "Harbora {0} has been released";
+    public const string UpdateDetail = "This panel runs an older build. Updating is a step on the server.";
+    public const string UpdateAction = "How to update";
 
     /// <summary>Every key the rules can emit. The guard that keeps them translated walks this.</summary>
     public static readonly IReadOnlyList<string> AllKeys =
@@ -146,7 +156,8 @@ public static class AttentionRules
         ChannelTitle, ChannelAlertDetail, ChannelBackupDetail, AlertsAction,
         DiskTitle, DiskDetail, MonitoringAction,
         NeverDeployedTitle, NeverDeployedDetail, NeverDeployedAction,
-        NoBackupsTitle, NoBackupsDetail, NoBackupsAction
+        NoBackupsTitle, NoBackupsDetail, NoBackupsAction,
+        UpdateTitle, UpdateDetail, UpdateAction
     ];
 
     public static IReadOnlyList<AttentionItem> Build(AttentionFacts facts)
@@ -238,6 +249,17 @@ public static class AttentionRules
                 TitleKey = NeverDeployedTitle, TitleArgs = [app],
                 DetailKey = NeverDeployedDetail,
                 ActionKey = NeverDeployedAction, ActionUrl = $"/apps/details/{appId}"
+            });
+
+        // News, not a problem: the panel keeps working perfectly on an older build. Info level, and
+        // only for the operator who can actually do something about it.
+        if (facts.UpdateAvailableTag is { Length: > 0 } tag)
+            items.Add(new()
+            {
+                Level = AttentionLevel.Info,
+                TitleKey = UpdateTitle, TitleArgs = [tag],
+                DetailKey = UpdateDetail,
+                ActionKey = UpdateAction, ActionUrl = "/admin/settings"
             });
 
         // Onboarding, and only while it is true. A workspace with apps and no backup schedule is one

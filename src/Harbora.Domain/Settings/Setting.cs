@@ -28,6 +28,12 @@ public static class SettingKeys
     public const string SmtpPassword = "smtp.password";
     public const string SmtpFrom = "smtp.from";
     public const string SmtpUseSsl = "smtp.use_ssl";
+
+    // Panel self-update check. Off by default: it is an outbound request to a third party (GitHub),
+    // and the same principle as registry discovery — a check nobody asked for is telemetry.
+    public const string UpdateCheckEnabled = "update.check_enabled";
+    /// <summary>The latest release tag the daily check last saw. Read by the dashboard banner.</summary>
+    public const string UpdateLatestTag = "update.latest_tag";
     public const string PlatformRootDomain = "platform.root_domain";
     public const string AcmeEmail = "acme.email";
     public const string DefaultCulture = "ui.default_culture";

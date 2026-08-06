@@ -37,7 +37,8 @@ public sealed class HomeController(
         // The list the page opens with: only findings someone can act on.
         var vm = new DashboardViewModel
         {
-            Attention = await attention.BuildAsync(workspaceId, ct),
+            Attention = await attention.BuildAsync(workspaceId, ct,
+                isOperator: User.IsInRole("Owner") || User.IsInRole("Admin")),
             Projects = await db.Projects
                 .Where(p => p.WorkspaceId == workspaceId)
                 .OrderBy(p => p.Name)

@@ -1,5 +1,6 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using System.Reflection;
 using Harbora.Domain.Common;
 using Microsoft.EntityFrameworkCore;
 
@@ -17,7 +18,12 @@ public sealed class AttentionService(HarboraDbContext db, ISystemClock clock)
     /// <summary>How far back a failure still counts as news.</summary>
     private static readonly TimeSpan RecentWindow = TimeSpan.FromDays(7);
 
-    public async Task<IReadOnlyList<AttentionItem>> BuildAsync(Guid workspaceId, CancellationToken ct)
+    /// <param name="isOperator">
+    /// Whether this account can act on platform-wide news. A customer has no update button to
+    /// reach, and telling them their provider's panel is out of date is not their problem.
+    /// </param>
+    public async Task<IReadOnlyList<AttentionItem>> BuildAsync(
+        Guid workspaceId, CancellationToken ct, bool isOperator = false)
     {
         var since = clock.UtcNow - RecentWindow;
 
@@ -95,6 +101,7 @@ public sealed class AttentionService(HarboraDbContext db, ISystemClock clock)
                     .ToList(),
             CertificateProblems = certificates.Select(c => DescribeCertificate(c.Host, c.Status, c.ExpiresAt, c.LastError)).ToList(),
             DiskUsedRatio = disk,
+            UpdateAvailableTag = isOperator ? await NewerReleaseAsync(ct) : null,
             NeverDeployed = neverDeployed.Select(a => (a.Name, a.Id)).ToList(),
             HasAnyApp = appIds.Count > 0,
             HasAnyBackupSchedule = await db.BackupSchedules.AnyAsync(s => s.WorkspaceId == workspaceId && s.IsEnabled, ct)
@@ -115,6 +122,24 @@ public sealed class AttentionService(HarboraDbContext db, ISystemClock clock)
 
         var days = expiresAt is null ? 0 : (int)(expiresAt.Value - clock.UtcNow).TotalDays;
         return (host, CertificateIssue.ExpiringSoon, days.ToString());
+    }
+
+    /// <summary>
+    /// The tag the daily check last saw, when it is genuinely ahead of this build. The comparison
+    /// lives in <see cref="Maintenance.PanelVersion"/> so "newer" is decided in one tested place
+    /// rather than by whatever string the API happened to return.
+    /// </summary>
+    private async Task<string?> NewerReleaseAsync(CancellationToken ct)
+    {
+        var latest = await db.Settings.IgnoreQueryFilters()
+            .Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.UpdateLatestTag)
+            .Select(s => s.Value).FirstOrDefaultAsync(ct);
+
+        var running = System.Reflection.Assembly.GetEntryAssembly()?
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+
+        return Maintenance.PanelVersion.IsNewer(running, latest) ? latest : null;
     }
 
     /// <summary>Latest disk sample from the collector; 0 when nothing has been sampled yet.</summary>
