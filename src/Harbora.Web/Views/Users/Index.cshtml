@@ -153,6 +153,13 @@
                                            class="w-32 rounded-lg border border-line bg-surface-2 px-2 py-1 text-xs text-ink placeholder:text-ink-faint" />
                                     <button class="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-2">@(isFa ? "تنظیم" : "Set")</button>
                                 </form>
+                                @* The human path back in for somebody who lost their phone and their
+                                   recovery sheet — an administrator's act, audited. *@
+                                <form asp-action="ResetTotp" asp-route-id="@u.Id" method="post"
+                                      onsubmit="return confirm('@(isFa ? "ورود دومرحله‌ای این کاربر برداشته شود؟" : "Remove this user's two-factor sign-in?")');">
+                                    @Html.AntiForgeryToken()
+                                    <button class="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-2">@(isFa ? "بازنشانی ۲مرحله‌ای" : "Reset 2FA")</button>
+                                </form>
                             }
                         </div>
                     </td>
