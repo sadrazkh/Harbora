@@ -24,9 +24,14 @@ public sealed class UsersController(
     HarboraDbContext db,
     IPasswordHasher hasher,
     IAuditLogger audit,
-    ICurrentUser currentUser) : Controller
+    ICurrentUser currentUser,
+    Harbora.Application.Abstractions.ISystemClock clock,
+    Harbora.Infrastructure.Notifications.PlatformMailer mailer) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
+
+    private static bool IsFa =>
+        System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken ct)
@@ -95,6 +100,79 @@ public sealed class UsersController(
 
         await audit.LogAsync("user.created", "user", email, ClientIp, ct: ct);
         return Back($"Created {email}.");
+    }
+
+    /// <summary>
+    /// Create the account and email a set-password link instead of whispering a temporary password
+    /// over chat. The account is born with a random password nobody knows; the link is the only way
+    /// in, and it is the same single-use, hour-long token the forgot-password flow uses.
+    /// </summary>
+    [HttpPost("invite")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Invite(
+        string email, string? displayName, SystemRole role, CancellationToken ct)
+    {
+        if (!await mailer.IsConfiguredAsync(ct))
+            return Back(IsFa ? "اول SMTP را در تنظیمات پلتفرم تنظیم کنید." : "Configure platform SMTP first.", error: true);
+
+        var actorRole = await ActorRoleAsync(ct);
+        if (UserAdministration.RefuseCreation(actorRole, role) is { } refusal)
+            return Back(refusal, error: true);
+
+        email = (email ?? "").Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(email))
+            return Back(IsFa ? "ایمیل لازم است." : "An email address is required.", error: true);
+        if (await db.Users.IgnoreQueryFilters().AnyAsync(u => u.Email == email, ct))
+            return Back(IsFa ? "این ایمیل حساب دارد." : "That email address already has an account.", error: true);
+
+        var created = new User
+        {
+            Email = email,
+            DisplayName = string.IsNullOrWhiteSpace(displayName) ? email : displayName.Trim(),
+            // Random and unrecorded: until the person follows their link, there is nothing to leak.
+            PasswordHash = hasher.Hash(Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24))),
+            Role = role
+        };
+        db.Users.Add(created);
+
+        var workspaceId = await db.Workspaces.IgnoreQueryFilters()
+            .Where(w => w.Id == currentUser.WorkspaceId).Select(w => (Guid?)w.Id).FirstOrDefaultAsync(ct)
+            ?? await db.Workspaces.IgnoreQueryFilters().Select(w => (Guid?)w.Id).FirstOrDefaultAsync(ct);
+        if (workspaceId is null)
+            return Back("This installation has no workspace to add the account to.", error: true);
+        db.WorkspaceMembers.Add(
+            Harbora.Infrastructure.Security.WorkspaceMembership.For(workspaceId.Value, created.Id, role));
+
+        var (token, hash) = Harbora.Infrastructure.Security.PasswordReset.Issue();
+        db.PasswordResetTokens.Add(new Harbora.Domain.Identity.PasswordResetToken
+        {
+            UserId = created.Id,
+            TokenHash = hash,
+            ExpiresAt = clock.UtcNow + Harbora.Infrastructure.Security.PasswordReset.Lifetime,
+            CreatedAt = clock.UtcNow
+        });
+        await db.SaveChangesAsync(ct);
+
+        var link = $"{Request.Scheme}://{Request.Host}/account/reset?token={token}";
+        try
+        {
+            await mailer.SendAsync(email,
+                IsFa ? "دعوت به Harbora" : "You are invited to Harbora",
+                IsFa
+                    ? $"برایتان حسابی ساخته شده. با این لینک رمزتان را بگذارید (تا یک ساعت معتبر است):\n{link}"
+                    : $"An account has been created for you. Set your password with this link (valid for one hour):\n{link}",
+                ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // The account exists either way; a failed email is a fact the administrator standing
+            // at this form can act on right now.
+            await audit.LogAsync("user.invited", "user", email, ClientIp, ct: ct);
+            return Back((IsFa ? $"حساب ساخته شد ولی ایمیل نرفت: " : "The account was created but the email failed: ") + e.Message, error: true);
+        }
+
+        await audit.LogAsync("user.invited", "user", email, ClientIp, ct: ct);
+        return Back(IsFa ? $"دعوت‌نامه به {email} رفت." : $"An invitation went to {email}.");
     }
 
     [HttpPost("{id:guid}/role")]

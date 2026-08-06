@@ -1,0 +1,26 @@
+@{
+    ViewData["Title"] = "Reset password";
+    Layout = "_Auth";
+}
+<h1 class="title">@T["Forgot your password?"]</h1>
+
+@if (ViewBag.Sent == true)
+{
+    @* The same words whatever happened — anything more specific is an account-enumeration oracle. *@
+    <p class="subtitle">@T["If that address has an account, a reset link is on its way."]</p>
+}
+else
+{
+    <p class="subtitle">@T["Enter your email and we will send you a link to set a new one."]</p>
+
+    <form asp-controller="Account" asp-action="Forgot" method="post">
+        @Html.AntiForgeryToken()
+        <div class="field">
+            <label>@T["Email"]</label>
+            <input name="email" type="email" autocomplete="username" required />
+        </div>
+        <button type="submit" class="btn btn-primary">@T["Send the link"]</button>
+    </form>
+}
+
+<p class="subtitle" style="margin-top:.75rem"><a href="/account/login">@T["Back to sign in"]</a></p>

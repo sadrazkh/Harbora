@@ -171,6 +171,51 @@
             <button class="btn-primary">@(isFa ? "ذخیره" : "Save")</button>
         </form>
         <partial name="Design/_PanelEnd" />
+
+        @{ var smtpPanel = new PanelModel(isFa ? "ایمیل خروجی (SMTP)" : "Outgoing email (SMTP)"); }
+        <partial name="Design/_PanelStart" model="smtpPanel" />
+
+        @* The account the panel itself sends from: password resets, invitations, and the fallback
+           for alert channels that name no server of their own. *@
+        <form asp-action="SaveSmtp" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <div class="grid gap-3 sm:grid-cols-2">
+                <div>
+                    <label class="form-label" for="smtp-host">@(isFa ? "میزبان" : "Host")</label>
+                    <input id="smtp-host" name="host" value="@Model.SmtpHost" placeholder="smtp.example.com" class="form-control" dir="ltr" />
+                </div>
+                <div>
+                    <label class="form-label" for="smtp-port">@(isFa ? "پورت" : "Port")</label>
+                    <input id="smtp-port" name="port" type="number" min="1" max="65535" value="@Model.SmtpPort" class="form-control" dir="ltr" />
+                </div>
+                <div>
+                    <label class="form-label" for="smtp-user">@(isFa ? "نام کاربری" : "Username")</label>
+                    <input id="smtp-user" name="user" value="@Model.SmtpUser" autocomplete="off" class="form-control" dir="ltr" />
+                </div>
+                <div>
+                    <label class="form-label" for="smtp-pass">@(isFa ? "رمز" : "Password")</label>
+                    <input id="smtp-pass" name="password" type="password" autocomplete="new-password"
+                           placeholder="@(Model.SmtpHasPassword ? (isFa ? "ذخیره شده — برای تغییر بنویسید" : "stored — type to change") : "")"
+                           class="form-control" dir="ltr" />
+                </div>
+                <div>
+                    <label class="form-label" for="smtp-from">@(isFa ? "فرستنده (From)" : "From address")</label>
+                    <input id="smtp-from" name="from" value="@Model.SmtpFrom" placeholder="harbora@example.com" class="form-control" dir="ltr" />
+                </div>
+                <label class="flex items-center gap-2 self-end pb-2 text-sm">
+                    <input type="checkbox" name="useSsl" value="true" @(Model.SmtpUseSsl ? "checked" : "") />
+                    <span>TLS/SSL</span>
+                </label>
+            </div>
+            <button class="btn-primary">@(isFa ? "ذخیره" : "Save")</button>
+        </form>
+
+        @* Through exactly the path every real email takes — a test that cannot say no is not a test. *@
+        <form asp-action="TestSmtp" method="post" class="mt-2">
+            @Html.AntiForgeryToken()
+            <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@(isFa ? "ارسال ایمیل آزمایشی" : "Send a test email")</button>
+        </form>
+        <partial name="Design/_PanelEnd" />
     </div>
 
     <aside class="space-y-6">

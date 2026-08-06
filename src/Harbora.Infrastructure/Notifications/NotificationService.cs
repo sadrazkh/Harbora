@@ -21,6 +21,7 @@ public sealed class NotificationService(
     HarboraDbContext db,
     ISecretProtector protector,
     IHttpClientFactory httpFactory,
+    PlatformMailer platformMailer,
     Microsoft.Extensions.Options.IOptions<NotificationOptions> options,
     ILogger<NotificationService> logger) : INotificationService
 {
@@ -186,16 +187,26 @@ public sealed class NotificationService(
             throw new InvalidOperationException($"Refusing to call webhook URL: {reason}.");
     }
 
-    private Task SendEmail(string target, string title, string body, CancellationToken ct)
+    private async Task SendEmail(string target, string title, string body, CancellationToken ct)
     {
         var t = JsonSerializer.Deserialize<EmailTarget>(target, TargetJson)!;
+
+        // An alert that names only a recipient uses the platform's own account — one SMTP password
+        // typed once in platform settings, not once per alert. A full per-alert server still wins,
+        // for the installation that routes alerts through somewhere else.
+        if (string.IsNullOrWhiteSpace(t.Host) && !string.IsNullOrWhiteSpace(t.To))
+        {
+            await platformMailer.SendAsync(t.To, title, body, ct);
+            return;
+        }
+
         using var client = new SmtpClient(t.Host, t.Port)
         {
             EnableSsl = t.UseSsl,
             Credentials = new NetworkCredential(t.User, t.Password)
         };
         using var message = new MailMessage(t.From, t.To, title, body);
-        return client.SendMailAsync(message, ct);
+        await client.SendMailAsync(message, ct);
     }
 
     private sealed record TelegramTarget(string BotToken, string ChatId);

@@ -246,4 +246,13 @@
   <data name="The two passwords do not match."><value>دو رمز یکی نیستند.</value></data>
   <data name="A platform name is required."><value>نام پلتفرم لازم است.</value></data>
   <data name="A name is required."><value>نام لازم است.</value></data>
+  <data name="Forgot your password?"><value>رمزتان را فراموش کرده‌اید؟</value></data>
+  <data name="If that address has an account, a reset link is on its way."><value>اگر این آدرس حسابی داشته باشد، لینک بازنشانی در راه است.</value></data>
+  <data name="Enter your email and we will send you a link to set a new one."><value>ایمیلتان را بنویسید تا لینک گذاشتن رمز تازه برایتان بیاید.</value></data>
+  <data name="Send the link"><value>ارسال لینک</value></data>
+  <data name="Back to sign in"><value>برگشت به ورود</value></data>
+  <data name="Set a new password"><value>گذاشتن رمز تازه</value></data>
+  <data name="New password"><value>رمز تازه</value></data>
+  <data name="Repeat it"><value>دوباره بنویسید</value></data>
+  <data name="Save the password"><value>ذخیرهٔ رمز</value></data>
 </root>

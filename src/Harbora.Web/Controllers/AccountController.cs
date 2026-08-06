@@ -18,6 +18,7 @@ public sealed class AccountController(
     IPasswordHasher hasher,
     IAuditLogger audit,
     Harbora.Application.Abstractions.ISystemClock clock,
+    Harbora.Infrastructure.Notifications.PlatformMailer mailer,
     Harbora.Web.Infrastructure.PanelModeProvider panelModes) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -26,7 +27,120 @@ public sealed class AccountController(
         System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
     [HttpGet("/account/login")]
-    public IActionResult Login(string? returnUrl) => View(new LoginViewModel { ReturnUrl = returnUrl });
+    public async Task<IActionResult> Login(string? returnUrl, CancellationToken ct)
+    {
+        // The forgot-password link only exists when the platform can actually send the email.
+        // A link that leads to "ask your administrator" is a support ticket with extra steps.
+        ViewBag.CanResetPassword = await mailer.IsConfiguredAsync(ct);
+        return View(new LoginViewModel { ReturnUrl = returnUrl });
+    }
+
+    // ---- Forgotten password ----
+    //
+    // The same words whatever happened, and the token row is the only variable: whether the email
+    // exists, whether mail went out — the page says "if that address has an account, a link is on
+    // its way". Anything more specific is an account-enumeration oracle on the login screen.
+
+    [HttpGet("/account/forgot")]
+    public async Task<IActionResult> Forgot(CancellationToken ct)
+    {
+        if (!await mailer.IsConfiguredAsync(ct)) return NotFound();
+        return View();
+    }
+
+    [HttpPost("/account/forgot")]
+    [ValidateAntiForgeryToken]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> Forgot(string email, CancellationToken ct)
+    {
+        if (!await mailer.IsConfiguredAsync(ct)) return NotFound();
+
+        var normalised = (email ?? "").Trim().ToLowerInvariant();
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Email == normalised && u.IsActive, ct);
+
+        if (user is not null)
+        {
+            var (token, hash) = Harbora.Infrastructure.Security.PasswordReset.Issue();
+            db.PasswordResetTokens.Add(new Harbora.Domain.Identity.PasswordResetToken
+            {
+                UserId = user.Id,
+                TokenHash = hash,
+                ExpiresAt = clock.UtcNow + Harbora.Infrastructure.Security.PasswordReset.Lifetime,
+                CreatedAt = clock.UtcNow
+            });
+            await db.SaveChangesAsync(ct);
+
+            var link = $"{Request.Scheme}://{Request.Host}/account/reset?token={token}";
+            try
+            {
+                await mailer.SendAsync(user.Email,
+                    IsFa ? "بازنشانی رمز Harbora" : "Reset your Harbora password",
+                    IsFa
+                        ? $"برای گذاشتن رمز تازه این لینک را باز کنید (تا یک ساعت معتبر است):\n{link}\n\nاگر شما درخواست نکرده‌اید، این ایمیل را نادیده بگیرید."
+                        : $"Open this link to set a new password (valid for one hour):\n{link}\n\nIf you did not ask for this, ignore this email.",
+                    ct);
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                // The page still says "a link is on its way" — saying otherwise would leak that the
+                // account exists. The operator finds the real failure where operators look.
+                Response.HttpContext.RequestServices
+                    .GetRequiredService<ILogger<AccountController>>()
+                    .LogWarning(e, "Password-reset email could not be sent.");
+            }
+
+            await audit.LogAsync("user.password_reset_requested", "user", user.Id.ToString(), ClientIp,
+                actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
+        }
+
+        ViewBag.Sent = true;
+        return View();
+    }
+
+    [HttpGet("/account/reset")]
+    public async Task<IActionResult> Reset(string? token, CancellationToken ct)
+    {
+        if (!await mailer.IsConfiguredAsync(ct)) return NotFound();
+        if (string.IsNullOrWhiteSpace(token)) return NotFound();
+        return View(new ResetPasswordViewModel { Token = token });
+    }
+
+    [HttpPost("/account/reset")]
+    [ValidateAntiForgeryToken]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> Reset(ResetPasswordViewModel model, CancellationToken ct)
+    {
+        if (!ModelState.IsValid) return View(model);
+
+        var hash = Harbora.Infrastructure.Security.PasswordReset.HashOf(model.Token);
+        var row = await db.PasswordResetTokens.Include(t => t.User)
+            .FirstOrDefaultAsync(t => t.TokenHash == hash, ct);
+
+        if (Harbora.Infrastructure.Security.PasswordReset.Check(row, clock.UtcNow) is { } refusal)
+        {
+            ModelState.AddModelError(string.Empty, refusal switch
+            {
+                Harbora.Infrastructure.Security.PasswordResetRefusal.Expired =>
+                    IsFa ? "این لینک منقضی شده است. دوباره درخواست کنید." : "This link has expired. Request a new one.",
+                Harbora.Infrastructure.Security.PasswordResetRefusal.AlreadyUsed =>
+                    IsFa ? "این لینک قبلاً استفاده شده است." : "This link has already been used.",
+                _ => IsFa ? "این لینک معتبر نیست." : "This link is not valid."
+            });
+            return View(model);
+        }
+
+        // Consumed before the outcome is known: a link that failed half-way must not stay live in
+        // somebody's inbox.
+        row!.UsedAt = clock.UtcNow;
+        row.User!.PasswordHash = hasher.Hash(model.Password);
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("user.password_reset_completed", "user", row.UserId.ToString(), ClientIp,
+            actorEmailOverride: row.User.Email, userIdOverride: row.UserId, ct: ct);
+
+        TempData["Message"] = IsFa ? "رمز تازه ذخیره شد. وارد شوید." : "Your new password is saved. Sign in.";
+        return Redirect("/account/login");
+    }
 
     [HttpPost("/account/login")]
     [ValidateAntiForgeryToken]

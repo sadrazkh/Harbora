@@ -18,6 +18,16 @@ public static class SettingKeys
 {
     public const string SetupCompleted = "setup.completed";
     public const string PlatformName = "platform.name";
+
+    // Platform SMTP — one account the panel itself sends from: password resets, invitations, and
+    // the fallback for alert channels that name no server of their own. The password is stored
+    // through ISecretProtector like every other credential.
+    public const string SmtpHost = "smtp.host";
+    public const string SmtpPort = "smtp.port";
+    public const string SmtpUser = "smtp.user";
+    public const string SmtpPassword = "smtp.password";
+    public const string SmtpFrom = "smtp.from";
+    public const string SmtpUseSsl = "smtp.use_ssl";
     public const string PlatformRootDomain = "platform.root_domain";
     public const string AcmeEmail = "acme.email";
     public const string DefaultCulture = "ui.default_culture";

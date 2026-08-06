@@ -49,4 +49,12 @@ public sealed class AdminSettingsViewModel
 
     /// <summary>Shown here because it is a platform decision, though it is changed on its own page.</summary>
     public bool RegistryDiscoveryEnabled { get; init; }
+
+    // Outgoing mail. The password itself never travels to the page — only whether one is stored.
+    public string? SmtpHost { get; init; }
+    public string? SmtpPort { get; init; }
+    public string? SmtpUser { get; init; }
+    public string? SmtpFrom { get; init; }
+    public bool SmtpUseSsl { get; init; }
+    public bool SmtpHasPassword { get; init; }
 }

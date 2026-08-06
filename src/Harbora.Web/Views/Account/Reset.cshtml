@@ -1,0 +1,22 @@
+@model ResetPasswordViewModel
+@{
+    ViewData["Title"] = "Set a new password";
+    Layout = "_Auth";
+}
+<h1 class="title">@T["Set a new password"]</h1>
+
+<form asp-controller="Account" asp-action="Reset" method="post">
+    @Html.AntiForgeryToken()
+    <input type="hidden" asp-for="Token" />
+    <div asp-validation-summary="All" class="error"></div>
+
+    <div class="field">
+        <label>@T["New password"]</label>
+        <input asp-for="Password" type="password" autocomplete="new-password" required />
+    </div>
+    <div class="field">
+        <label>@T["Repeat it"]</label>
+        <input asp-for="ConfirmPassword" type="password" autocomplete="new-password" required />
+    </div>
+    <button type="submit" class="btn btn-primary">@T["Save the password"]</button>
+</form>

@@ -25,6 +25,9 @@ namespace Harbora.Web.Controllers;
 public sealed class AdminSettingsController(
     HarboraDbContext db,
     IAuditLogger audit,
+    Harbora.Application.Abstractions.ISecretProtector protector,
+    Harbora.Infrastructure.Notifications.PlatformMailer mailer,
+    Harbora.Application.Abstractions.ICurrentUser currentUser,
     Microsoft.Extensions.Options.IOptions<Harbora.Modules.Sync.Infrastructure.SyncFeatureOptions> syncFeatures,
     Microsoft.Extensions.Options.IOptions<Harbora.Modules.Backup.Infrastructure.BackupFeatureOptions> backupFeatures) : Controller
 {
@@ -112,6 +115,61 @@ public sealed class AdminSettingsController(
         return RedirectToAction(nameof(Index));
     }
 
+    [HttpPost("smtp")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SaveSmtp(
+        string? host, int? port, string? user, string? password, string? from, bool useSsl,
+        CancellationToken ct)
+    {
+        await WriteAsync(SettingKeys.SmtpHost, (host ?? "").Trim(), ct);
+        await WriteAsync(SettingKeys.SmtpPort, port is > 0 and < 65536 ? port.Value.ToString() : "", ct);
+        await WriteAsync(SettingKeys.SmtpUser, (user ?? "").Trim(), ct);
+        await WriteAsync(SettingKeys.SmtpFrom, (from ?? "").Trim(), ct);
+        await WriteAsync(SettingKeys.SmtpUseSsl, useSsl ? "true" : "false", ct);
+
+        // Left blank means "keep the stored one" — a settings form that must be re-fed the secret
+        // to save anything else is a settings form that leaks it into autofill and screen shares.
+        if (!string.IsNullOrWhiteSpace(password))
+            await WriteAsync(SettingKeys.SmtpPassword, protector.Protect(password), ct);
+
+        await audit.LogAsync("platform.smtp", "setting", (host ?? "").Trim(), ClientIp, ct: ct);
+
+        TempData["Message"] = IsFa ? "تنظیمات SMTP ذخیره شد." : "SMTP settings saved.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost("smtp/test")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> TestSmtp(CancellationToken ct)
+    {
+        // To the signed-in administrator, through exactly the path every real email takes. This
+        // codebase has already shipped a Test button that reported success regardless; the lesson
+        // is that the button must be capable of saying no.
+        var to = currentUser.Email;
+        if (string.IsNullOrWhiteSpace(to))
+        {
+            TempData["Error"] = IsFa ? "ایمیل حساب شما معلوم نیست." : "Your account has no email to send to.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        try
+        {
+            await mailer.SendAsync(to,
+                IsFa ? "ایمیل آزمایشی Harbora" : "Harbora test email",
+                IsFa ? "اگر این را می‌خوانید، SMTP پلتفرم کار می‌کند." : "If you can read this, platform SMTP works.",
+                ct);
+            TempData["Message"] = IsFa ? $"ایمیل آزمایشی به {to} رفت." : $"A test email went to {to}.";
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // The server's own words, because "failed" alone sends somebody digging through logs
+            // for what this line already knew.
+            TempData["Error"] = (IsFa ? "ارسال نشد: " : "Could not send: ") + e.Message;
+        }
+
+        return RedirectToAction(nameof(Index));
+    }
+
     private async Task WriteAsync(string key, string value, CancellationToken ct)
     {
         var setting = await db.Settings.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Key == key, ct);
@@ -168,7 +226,15 @@ public sealed class AdminSettingsController(
             // at all because a complete section that is simply invisible reads as a missing
             // feature — there is no way, from inside the panel, to tell the two apart.
             SyncEnabled = syncFeatures.Value.Sync,
-            BackupEnabled = backupFeatures.Value.Backup
+            BackupEnabled = backupFeatures.Value.Backup,
+
+            SmtpHost = await ReadAsync(SettingKeys.SmtpHost, ct),
+            SmtpPort = await ReadAsync(SettingKeys.SmtpPort, ct),
+            SmtpUser = await ReadAsync(SettingKeys.SmtpUser, ct),
+            SmtpFrom = await ReadAsync(SettingKeys.SmtpFrom, ct),
+            SmtpUseSsl = !string.Equals(
+                await ReadAsync(SettingKeys.SmtpUseSsl, ct), "false", StringComparison.OrdinalIgnoreCase),
+            SmtpHasPassword = !string.IsNullOrEmpty(await ReadAsync(SettingKeys.SmtpPassword, ct))
         };
     }
 }

@@ -24,6 +24,15 @@ public sealed class LoginViewModel
     public string? ReturnUrl { get; set; }
 }
 
+public sealed class ResetPasswordViewModel
+{
+    [Required] public string Token { get; set; } = string.Empty;
+    [Required(ErrorMessage = "A password is required."), MinLength(8, ErrorMessage = "The password needs at least 8 characters.")]
+    public string Password { get; set; } = string.Empty;
+    [Required(ErrorMessage = "Repeat the password."), Compare(nameof(Password), ErrorMessage = "The two passwords do not match.")]
+    public string ConfirmPassword { get; set; } = string.Empty;
+}
+
 public sealed class CreateAppViewModel
 {
     [Required(ErrorMessage = "A name is required.")] public string Name { get; set; } = string.Empty;

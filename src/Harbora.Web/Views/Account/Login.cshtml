@@ -20,4 +20,11 @@
         <input asp-for="Password" type="password" autocomplete="current-password" required />
     </div>
     <button type="submit" class="btn btn-primary">@T["Sign in"]</button>
+
+    @if (ViewBag.CanResetPassword == true)
+    {
+        @* Only when the platform can actually send the email — a link that leads to "ask your
+           administrator" is a support ticket with extra steps. *@
+        <p class="subtitle" style="margin-top:.75rem"><a href="/account/forgot">@T["Forgot your password?"]</a></p>
+    }
 </form>

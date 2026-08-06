@@ -37,6 +37,7 @@ public class HarboraDbContext : DbContext
 
 
     public DbSet<User> Users => Set<User>();
+    public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
     public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<WorkspaceMember> WorkspaceMembers => Set<WorkspaceMember>();
@@ -370,6 +371,13 @@ public class HarboraDbContext : DbContext
         b.Entity<Harbora.Domain.Tenancy.Plan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
         b.Entity<Harbora.Domain.Tenancy.UsageRecord>(e => e.HasIndex(x => new { x.WorkspaceId, x.Period }).IsUnique());
         b.Entity<AuditLog>(e => e.HasIndex(x => x.CreatedAt));
+
+        b.Entity<PasswordResetToken>(e =>
+        {
+            // Looked up by the hash of whatever arrived in the URL, on every attempt.
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
 
         b.Entity<Harbora.Domain.Jobs.Job>(e =>
         {

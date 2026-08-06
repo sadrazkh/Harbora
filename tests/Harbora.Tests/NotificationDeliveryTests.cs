@@ -62,6 +62,9 @@ public class NotificationDeliveryTests
 
         var service = new NotificationService(db, new PassthroughProtector(),
             new SingleHandlerFactory(handler),
+            new Harbora.Infrastructure.Notifications.PlatformMailer(
+                db, new PassthroughProtector(),
+                NullLogger<Harbora.Infrastructure.Notifications.PlatformMailer>.Instance),
             Microsoft.Extensions.Options.Options.Create(
                 new NotificationOptions { DeliveryTimeoutSeconds = timeoutSeconds }),
             NullLogger<NotificationService>.Instance);
