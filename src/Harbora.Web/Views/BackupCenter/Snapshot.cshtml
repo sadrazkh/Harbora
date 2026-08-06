@@ -88,7 +88,7 @@
                                 </td>
                                 <td class="py-2 text-ink-faint">@(e.IsDirectory ? "—" : Size(e.SizeBytes))</td>
                                 <td class="py-2 text-ink-faint">
-                                    @(e.ModifiedAt == DateTimeOffset.MinValue ? "—" : e.ModifiedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm"))
+                                    @(e.ModifiedAt == DateTimeOffset.MinValue ? "—" : e.ModifiedAt.LocalDateTime.ToString(Dates.Stamp))
                                 </td>
                             </tr>
                         }

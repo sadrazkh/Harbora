@@ -171,7 +171,7 @@ else
                             @foreach (var row in Model.Recent)
                             {
                                 <tr>
-                                    <td class="py-2 text-ink-muted" dir="ltr">@row.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm")</td>
+                                    <td class="py-2 text-ink-muted" dir="ltr">@row.CreatedAt.LocalDateTime.ToString(Dates.Stamp)</td>
                                     <td class="py-2 text-ink">@row.RequestedModel</td>
                                     <td class="py-2 text-ink-muted" dir="ltr">@((row.InputTokens + row.OutputTokens).ToString("N0"))</td>
                                     <td class="py-2 text-ink-muted" dir="ltr">@Money(row.ChargedCost)</td>

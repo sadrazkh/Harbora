@@ -187,7 +187,7 @@
                            this being lit means renewal has been failing. *@
                         <span class="text-warn">
                             @(isFa ? "اعتبارنامه نزدیک انقضا:" : "credential expires")
-                            @node.CertificateNotAfter!.Value.LocalDateTime.ToString("yyyy-MM-dd")
+                            @node.CertificateNotAfter!.Value.LocalDateTime.ToString(Dates.Day)
                         </span>
                     }
 

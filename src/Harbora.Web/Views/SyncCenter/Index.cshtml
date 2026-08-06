@@ -226,7 +226,7 @@
                         }
                         @if (s.LastSyncAt is { } at)
                         {
-                            <span>@(isFa ? "آخرین" : "Last"): @at.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</span>
+                            <span>@(isFa ? "آخرین" : "Last"): @at.LocalDateTime.ToString(Dates.Stamp)</span>
                         }
                     </div>
 
@@ -285,7 +285,7 @@
                     <div class="min-w-0">
                         <div class="text-sm text-ink truncate" title="@c.RelativePath">@c.OriginalRelativePath</div>
                         <div class="text-[11px] text-ink-faint">
-                            @Size(c.SizeBytes) · @c.DetectedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm")
+                            @Size(c.SizeBytes) · @c.DetectedAt.LocalDateTime.ToString(Dates.Stamp)
                             @if (c.OriginatingDevice is { Length: > 0 })
                             {
                                 <span> · @(isFa ? "از" : "from") @c.OriginatingDevice</span>

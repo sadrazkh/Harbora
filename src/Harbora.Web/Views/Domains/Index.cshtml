@@ -93,7 +93,7 @@ else
                         <td class="px-5 py-3 text-ink-muted">
                             @if (d.CertificateExpiresAt is { } expiry)
                             {
-                                <div dir="ltr">@expiry.LocalDateTime.ToString("yyyy-MM-dd")</div>
+                                <div dir="ltr">@expiry.LocalDateTime.ToString(Dates.Day)</div>
                                 @if (d.DaysLeft(now) is { } days)
                                 {
                                     <div class="text-xs text-ink-faint">

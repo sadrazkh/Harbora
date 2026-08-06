@@ -364,7 +364,7 @@
                             <span class="status-pill bg-danger-soft text-danger">@failure.StatusCode</span>
                         </div>
                         <div class="mt-0.5 text-[11px] text-ink-faint" dir="ltr">
-                            @failure.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm")
+                            @failure.CreatedAt.LocalDateTime.ToString(Dates.Stamp)
                             @if (failure.FailureReason is { } reason) { <span> · @reason</span> }
                         </div>
                     </div>

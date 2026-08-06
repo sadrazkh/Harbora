@@ -118,7 +118,7 @@
                     <td class="px-5 py-3 text-ink-muted">
                         @if (u.LastLoginAt is { } seen)
                         {
-                            <span dir="ltr">@seen.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</span>
+                            <span dir="ltr">@seen.LocalDateTime.ToString(Dates.Stamp)</span>
                         }
                         else
                         {

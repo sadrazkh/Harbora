@@ -48,7 +48,7 @@
                 @foreach (var e in Model.Entries)
                 {
                     <tr>
-                        <td class="px-4 py-2 whitespace-nowrap text-ink-muted">@e.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                        <td class="px-4 py-2 whitespace-nowrap text-ink-muted">@e.CreatedAt.ToString(Dates.Precise)</td>
                         <td class="px-4 py-2">@e.ActorEmail</td>
                         <td class="px-4 py-2"><code class="text-xs">@e.Action</code></td>
                         <td class="px-4 py-2 text-ink-muted text-xs">

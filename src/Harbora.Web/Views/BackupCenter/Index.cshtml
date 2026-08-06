@@ -341,7 +341,7 @@
                             <td class="py-2 text-[11px] @VerifyClass(s.VerificationStatus)">@VerifyLabel(s.VerificationStatus)</td>
                             <td class="py-2">@(s.FilesCount > 0 ? s.FilesCount.ToString("N0") : "—")</td>
                             <td class="py-2">@Size(s.StoredSizeBytes)</td>
-                            <td class="py-2 text-ink-faint">@s.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</td>
+                            <td class="py-2 text-ink-faint">@s.CreatedAt.LocalDateTime.ToString(Dates.Stamp)</td>
                             <td class="py-2 text-end whitespace-nowrap">
                                 @if (s.IsRestorable)
                                 {

@@ -39,19 +39,23 @@
         failedCount == 0 ? (isFa ? "همه سالم" : "all healthy") : (isFa ? "نیاز به بررسی" : "needs attention"));
 
     // Unknown size is not zero bytes: a backup whose size was never recorded is not an empty one.
+    // And a recorded size is never "0 MB": the config backups are a few kilobytes, and forcing them
+    // through a megabyte division rounded a real measurement down to nothing — the exact lie
+    // ByteSize.Measured exists to prevent.
     var sizeCard = new Harbora.Web.ViewModels.StatCardModel("layers",
         isFa ? "حجم ذخیره‌شده" : "Stored",
-        Harbora.Infrastructure.Monitoring.MetricDisplay.For(
-            storedBytes > 0 ? storedBytes / 1048576.0 : null, " MB"),
+        Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(
+            storedBytes > 0 ? Harbora.Infrastructure.Tenancy.ByteSize.Measured(storedBytes) : null),
         isFa ? $"{Model.Destinations.Count} مقصد" : $"{Model.Destinations.Count} destinations");
 
+    // "19 ساعت پیش", not "ساعت 19.2" — raw TotalHours is a number nobody says out loud.
     var lastCard = new Harbora.Web.ViewModels.StatCardModel("activity",
         isFa ? "آخرین پشتیبان" : "Last backup",
         latest is null
             ? Harbora.Infrastructure.Monitoring.MetricDisplay.For(null)
-            : Harbora.Infrastructure.Monitoring.MetricDisplay.For(
-                (DateTimeOffset.UtcNow - latest.CreatedAt).TotalHours, isFa ? " ساعت" : "h"),
-        latest?.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm"));
+            : Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(
+                Dates.Ago(latest.CreatedAt, DateTimeOffset.UtcNow, isFa)),
+        latest?.CreatedAt.LocalDateTime.ToString(Dates.Stamp));
 }
 
 <div class="mb-6">
@@ -270,7 +274,7 @@
                         @if (b.VerifiedRestorable == true)
                         {
                             <span class="rounded-full px-2 py-0.5 text-xs bg-ok/15 text-ok"
-                                  title="@b.VerifiedAt?.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC">
+                                  title="@b.VerifiedAt?.UtcDateTime.ToString(Dates.Stamp) UTC">
                                 @(isFa ? "بازیابی تأیید شد" : "Restore checked")</span>
                         }
                         else if (b.VerifiedRestorable == false)

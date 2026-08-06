@@ -49,7 +49,7 @@ else
                             else { <span class="text-ink-faint">—</span> }
                         </td>
                         <td class="p-3 text-ink-muted">@Dur(d)</td>
-                        <td class="p-3 text-ink-faint text-xs">@d.CreatedAt.LocalDateTime.ToString("MM/dd HH:mm")</td>
+                        <td class="p-3 text-ink-faint text-xs">@d.CreatedAt.LocalDateTime.ToString(Dates.Stamp)</td>
                         <td class="p-3 text-end"><a href="/deployments/details/@d.Id" class="text-xs text-accent-text">@T["Logs"]</a></td>
                     </tr>
                 }

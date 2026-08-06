@@ -74,7 +74,7 @@
                             <button class="text-xs rounded-lg bg-danger-soft hover:bg-danger-soft text-danger px-3 py-1.5">@(isFa ? "حذف" : "Remove")</button>
                         </form>
                     }
-                    @if (s.LastHeartbeatAt is not null){<span class="text-xs text-ink-faint">@(isFa ? "آخرین ضربان:" : "last seen") @s.LastHeartbeatAt.Value.LocalDateTime.ToString("MM/dd HH:mm")</span>}
+                    @if (s.LastHeartbeatAt is not null){<span class="text-xs text-ink-faint">@(isFa ? "آخرین ضربان:" : "last seen") @s.LastHeartbeatAt.Value.LocalDateTime.ToString(Dates.Stamp)</span>}
                 </div>
             </div>
         }

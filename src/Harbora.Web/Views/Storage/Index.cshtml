@@ -72,7 +72,7 @@ else if (Model.Buckets.Count > 0)
                             / @Bytes(bucket.QuotaBytes)
                             @if (bucket.MeasuredAt is { } at)
                             {
-                                <span class="text-ink-faint">· @at.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</span>
+                                <span class="text-ink-faint">· @at.LocalDateTime.ToString(Dates.Stamp)</span>
                             }
                         </p>
                         @if (reading.HasShare)

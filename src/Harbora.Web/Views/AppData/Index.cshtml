@@ -111,7 +111,7 @@ else
                                 <td class="table-secondary" dir="ltr">
                                     @* Unknown rather than 1970: a timestamp the runtime would not
                                        give is a gap, not a date. *@
-                                    @(entry.ModifiedAt?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? "—")
+                                    @(entry.ModifiedAt?.LocalDateTime.ToString(Dates.Stamp) ?? "—")
                                 </td>
                                 <td>
                                     <div class="row-actions">

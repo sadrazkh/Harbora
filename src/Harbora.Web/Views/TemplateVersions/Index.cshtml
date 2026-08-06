@@ -222,7 +222,7 @@
                                         @if (version.DiscoveredAt is { } discovered)
                                         {
                                             <span class="text-[11px] text-ink-faint" dir="ltr">
-                                                @(isFa ? "یافته‌شده" : "found") @discovered.LocalDateTime.ToString("yyyy-MM-dd")
+                                                @(isFa ? "یافته‌شده" : "found") @discovered.LocalDateTime.ToString(Dates.Day)
                                             </span>
                                         }
                                     </div>

@@ -71,7 +71,7 @@
                         <span class="font-mono">@Model.CronExpression</span>
                         @{ var described = Harbora.Infrastructure.Deployments.CronSchedule.Describe(Model.CronExpression ?? ""); }
                         @if (described.Length > 0){<span>· @described</span>}
-                        @if (Model.NextRunAt is { } next){<span>· @T["Next"]: @next.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC</span>}
+                        @if (Model.NextRunAt is { } next){<span>· @T["Next"]: @next.UtcDateTime.ToString(Dates.Stamp) UTC</span>}
                     </span>
                 </div>
                 <div class="divide-y divide-line">
@@ -88,7 +88,7 @@
                         <div class="p-3">
                             <div class="flex items-center justify-between gap-3 text-sm">
                                 <span class="text-ink">
-                                    @r.StartedAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss") UTC
+                                    @r.StartedAt.UtcDateTime.ToString(Dates.Precise) UTC
                                     @if (r.IsManual)
                                     {
                                         @* Otherwise a run at 14:32 on an 03:00 schedule looks like a bug. *@

@@ -75,7 +75,7 @@
                         </a></td>
                         <td><div class="table-primary">@database.Project</div><div class="table-secondary">@database.Environment</div></td>
                         <td><span class="resource-status @Tone(database.Status)"><i></i>@database.Status</span></td>
-                        <td><div class="table-primary">@Gb(database.StorageBytes)</div><div class="table-secondary">@(database.StorageMeasuredAt is null ? (isFa ? "اندازه‌گیری نشده" : "not measured") : database.StorageMeasuredAt.Value.LocalDateTime.ToString("MM/dd HH:mm"))</div></td>
+                        <td><div class="table-primary">@Gb(database.StorageBytes)</div><div class="table-secondary">@(database.StorageMeasuredAt is null ? (isFa ? "اندازه‌گیری نشده" : "not measured") : database.StorageMeasuredAt.Value.LocalDateTime.ToString(Dates.Stamp))</div></td>
                         <td>
                             <div class="metric-reading">@(database.CpuPercent is null ? "—" : $"{database.CpuPercent:0.#}%")</div>
                             @if (database.CpuPercent is not null)
@@ -111,7 +111,7 @@
                         <td><span class="linked-count"><i data-lucide="boxes" class="h-3.5 w-3.5"></i>@database.LinkedApps</span></td>
                         <td>
                             @if (database.LastBackupAt is { } backupAt)
-                            { <div class="table-primary">@database.LastBackupStatus</div><div class="table-secondary">@backupAt.LocalDateTime.ToString("MM/dd HH:mm")</div> }
+                            { <div class="table-primary">@database.LastBackupStatus</div><div class="table-secondary">@backupAt.LocalDateTime.ToString(Dates.Stamp)</div> }
                             else { <span class="table-secondary">@(isFa ? "بدون پشتیبان" : "No backup")</span> }
                         </td>
                         <td><a href="/databases/@database.Id" class="icon-button" aria-label="@(isFa ? "جزئیات" : "Details")"><i data-lucide="chevron-right" class="h-4 w-4 rtl:rotate-180"></i></a></td>
@@ -132,7 +132,7 @@
         <div class="overflow-x-auto"><table class="resource-table min-w-[620px]"><thead><tr><th>@(isFa ? "زمان" : "Date")</th><th>@(isFa ? "نوع" : "Type")</th><th>@(isFa ? "حجم" : "Size")</th><th>@T["Status"]</th><th>@(isFa ? "بررسی بازیابی" : "Restore verification")</th></tr></thead><tbody>
         @foreach (var backup in selected.Backups)
         {
-            <tr><td class="table-primary">@backup.At.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</td><td>@(backup.IsScheduled ? (isFa ? "خودکار" : "Scheduled") : (isFa ? "دستی" : "Manual"))</td><td>@Gb(backup.SizeBytes)</td><td><span class="resource-status @(backup.Status == BackupStatus.Completed ? "is-ok" : backup.Status == BackupStatus.Failed ? "is-danger" : "is-info")"><i></i>@backup.Status</span></td><td>@(backup.VerifiedRestorable switch { true => isFa ? "تأیید شده" : "Verified", false => isFa ? "نامعتبر" : "Failed", _ => isFa ? "بررسی نشده" : "Not verified" })</td></tr>
+            <tr><td class="table-primary">@backup.At.LocalDateTime.ToString(Dates.Stamp)</td><td>@(backup.IsScheduled ? (isFa ? "خودکار" : "Scheduled") : (isFa ? "دستی" : "Manual"))</td><td>@Gb(backup.SizeBytes)</td><td><span class="resource-status @(backup.Status == BackupStatus.Completed ? "is-ok" : backup.Status == BackupStatus.Failed ? "is-danger" : "is-info")"><i></i>@backup.Status</span></td><td>@(backup.VerifiedRestorable switch { true => isFa ? "تأیید شده" : "Verified", false => isFa ? "نامعتبر" : "Failed", _ => isFa ? "بررسی نشده" : "Not verified" })</td></tr>
         }
         </tbody></table></div>
     </section>

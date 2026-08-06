@@ -165,7 +165,7 @@
                             @if (app.LastDeploymentNumber is { } number)
                             {
                                 <div class="table-primary">#@number · @(app.LastDeploymentStatus?.ToString() ?? "—")</div>
-                                <div class="table-secondary">@(app.LastCommit ?? "—") · @app.LastDeploymentAt?.LocalDateTime.ToString("MM/dd HH:mm")</div>
+                                <div class="table-secondary">@(app.LastCommit ?? "—") · @app.LastDeploymentAt?.LocalDateTime.ToString(Dates.Stamp)</div>
                             }
                             else { <span class="table-secondary">@(isFa ? "هنوز استقرار ندارد" : "Never deployed")</span> }
                         </td>

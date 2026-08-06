@@ -89,7 +89,7 @@
                 @if (issued.ExpiresAt is { } expires)
                 {
                     <p class="text-xs text-ok">
-                        @(isFa ? "تا" : "Valid until") <span dir="ltr">@expires.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</span>
+                        @(isFa ? "تا" : "Valid until") <span dir="ltr">@expires.LocalDateTime.ToString(Dates.Stamp)</span>
                     </p>
                 }
             </div>
@@ -183,7 +183,7 @@
                                     }
                                 </div>
                                 <span class="text-[11px] text-ink-faint" dir="ltr">
-                                    @grant.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm")
+                                    @grant.CreatedAt.LocalDateTime.ToString(Dates.Stamp)
                                 </span>
                             </div>
 
@@ -192,7 +192,7 @@
                                 {
                                     <span>
                                         @(usable ? (isFa ? "تا" : "until") : (isFa ? "پایان یافته در" : "ended"))
-                                        <span dir="ltr">@expires.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</span>
+                                        <span dir="ltr">@expires.LocalDateTime.ToString(Dates.Stamp)</span>
                                     </span>
                                 }
                                 @if (grant.ExtensionCount > 0)
@@ -364,7 +364,7 @@
                         <div class="text-[11px]">
                             <div class="flex items-center justify-between gap-2">
                                 <span class="font-medium text-ink">@entry.Action</span>
-                                <span class="text-ink-faint" dir="ltr">@entry.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm")</span>
+                                <span class="text-ink-faint" dir="ltr">@entry.CreatedAt.LocalDateTime.ToString(Dates.Stamp)</span>
                             </div>
                             <div class="text-ink-faint">
                                 @entry.ActorEmail

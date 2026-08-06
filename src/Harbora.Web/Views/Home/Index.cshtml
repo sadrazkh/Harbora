@@ -115,7 +115,7 @@
             @if (Model.RecentDeployments.Count == 0) { <div class="dashboard-empty">@(isFa ? "هنوز استقراری انجام نشده." : "No deployments yet.")</div> }
             @foreach (var deployment in Model.RecentDeployments.Take(4))
             {
-                <a href="/deployments/details/@deployment.Id"><span class="list-number">#@deployment.Number</span><span class="min-w-0 flex-1"><strong>@deployment.App?.Name</strong><small>@(deployment.CommitSha is { Length: > 0 } sha ? sha[..Math.Min(7, sha.Length)] : deployment.Trigger.ToString()) · @deployment.CreatedAt.LocalDateTime.ToString("MM/dd HH:mm")</small></span><partial name="_DeployStatusBadge" model="deployment.Status" /></a>
+                <a href="/deployments/details/@deployment.Id"><span class="list-number">#@deployment.Number</span><span class="min-w-0 flex-1"><strong>@deployment.App?.Name</strong><small>@(deployment.CommitSha is { Length: > 0 } sha ? sha[..Math.Min(7, sha.Length)] : deployment.Trigger.ToString()) · @deployment.CreatedAt.LocalDateTime.ToString(Dates.Stamp)</small></span><partial name="_DeployStatusBadge" model="deployment.Status" /></a>
             }
         </div>
     </div>
@@ -138,7 +138,7 @@
     <div class="dashboard-panel backup-summary">
         <div class="dashboard-panel-heading"><div><h2>@T["Backups"]</h2><p>@(isFa ? "حفاظت و بازیابی داده" : "Data protection and recovery")</p></div><a href="/backups">@(isFa ? "مدیریت" : "Manage")</a></div>
         <div class="backup-main"><strong>@Model.BackupsThisMonth</strong><span>@(isFa ? "پشتیبان این ماه" : "backups this month")</span><i data-lucide="cloud-upload" class="h-8 w-8"></i></div>
-        <dl><div><dt>@(isFa ? "آخرین پشتیبان موفق" : "Latest successful backup")</dt><dd>@(Model.LatestBackupAt?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? "—")</dd></div><div><dt>@(isFa ? "زمان‌بندی فعال" : "Active schedules")</dt><dd>@Model.BackupSchedulesEnabled</dd></div></dl>
+        <dl><div><dt>@(isFa ? "آخرین پشتیبان موفق" : "Latest successful backup")</dt><dd>@(Model.LatestBackupAt?.LocalDateTime.ToString(Dates.Stamp) ?? "—")</dd></div><div><dt>@(isFa ? "زمان‌بندی فعال" : "Active schedules")</dt><dd>@Model.BackupSchedulesEnabled</dd></div></dl>
     </div>
 
     <div class="dashboard-panel monitoring-summary">

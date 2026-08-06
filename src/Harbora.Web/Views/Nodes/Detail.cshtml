@@ -9,7 +9,7 @@
     var err = TempData["Error"] as string;
 
     string Gb(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
-    string When(DateTimeOffset? at) => at?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? (isFa ? "—" : "—");
+    string When(DateTimeOffset? at) => at?.LocalDateTime.ToString(Dates.Stamp) ?? (isFa ? "—" : "—");
 
     string StatusText() =>
         node.Revoked ? (isFa ? "ابطال‌شده" : "Revoked")
@@ -131,7 +131,7 @@
                                         </span>
                                     }
                                     <div class="text-xs text-ink-faint">
-                                        @command.IssuedAt.LocalDateTime.ToString("MM-dd HH:mm:ss")
+                                        @command.IssuedAt.LocalDateTime.ToString(Dates.Precise)
                                         @if (command.Actor is not null)
                                         {
                                             <text> · @command.Actor</text>
@@ -188,7 +188,7 @@
                                 </div>
                             </div>
                             <div class="shrink-0 text-xs text-ink-faint">
-                                @nodeEvent.At.LocalDateTime.ToString("MM-dd HH:mm")
+                                @nodeEvent.At.LocalDateTime.ToString(Dates.Stamp)
                             </div>
                         </li>
                     }
