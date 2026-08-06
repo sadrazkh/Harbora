@@ -40,9 +40,29 @@ public static class CleanupPlan
         return onHost
             .Select(i => i.Tag)
             .Where(t => t.StartsWith(prefix, StringComparison.Ordinal))
+            .Where(IsPipelineBuildTag)
             .Where(t => !BelongsToALivingApp(t, prefix, slugs))
             .Distinct(StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>
+    /// Only the tag shapes the deployment pipeline creates — <c>:build-N</c> and <c>:compose-N</c>.
+    ///
+    /// The prefix alone is not ownership: the panel ships as <c>harbora/panel:latest</c>, under the
+    /// same prefix, and "panel" is no app's slug — so the first version of this rule saw the
+    /// platform's own image as an orphan. Only the running container stood between the cleanup
+    /// button and it. What this rule may delete is what the pipeline built, recognised by the
+    /// naming only the pipeline uses.
+    /// </summary>
+    private static bool IsPipelineBuildTag(string tag)
+    {
+        var colon = tag.LastIndexOf(':');
+        if (colon < 0) return false;
+
+        var version = tag[(colon + 1)..];
+        return version.StartsWith("build-", StringComparison.Ordinal)
+            || version.StartsWith("compose-", StringComparison.Ordinal);
     }
 
     private static bool BelongsToALivingApp(string tag, string prefix, IReadOnlyList<string> slugs)

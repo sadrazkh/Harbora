@@ -15,6 +15,14 @@ RULE = ROOT / "src" / "Harbora.Infrastructure" / "Maintenance" / "CleanupPlan.cs
 FILTER = "FullyQualifiedName~CleanupPlanTests"
 
 MUTANTS = [
+    ("ownership is the prefix alone, so the panel's own image is an orphan",
+     '.Where(IsPipelineBuildTag)\n            .Where(t => !BelongsToALivingApp(t, prefix, slugs))',
+     '.Where(t => !BelongsToALivingApp(t, prefix, slugs))'),
+
+    ("a latest tag counts as a pipeline build",
+     'return version.StartsWith("build-", StringComparison.Ordinal)\n            || version.StartsWith("compose-", StringComparison.Ordinal);',
+     'return true;'),
+
     ("the prefix check is a substring match",
      '.Where(t => t.StartsWith(prefix, StringComparison.Ordinal))',
      '.Where(t => t.Contains(prefix, StringComparison.Ordinal))'),

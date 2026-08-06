@@ -40,7 +40,14 @@ public class CleanupPlanTests
     {
         // nginx:1.27 belongs to the user. So does anything else outside the build prefix,
         // including something that merely mentions it later in the tag.
-        var images = new[] { Img("nginx:1.27"), Img("postgres:16-alpine"), Img("someone/harbora/x:1") };
+        var images = new[]
+        {
+            Img("nginx:1.27"),
+            Img("postgres:16-alpine"),
+            // Mentions our prefix mid-path AND wears a build-shaped tag: only an anchored prefix
+            // check tells this apart from ours.
+            Img("someone/harbora/x:build-1")
+        };
 
         CleanupPlan.OrphanedBuildImages(images, "harbora", []).Should().BeEmpty();
     }
@@ -81,6 +88,31 @@ public class CleanupPlanTests
 
         CleanupPlan.OrphanedBuildImages(images, "harbora", ["Shop"])
             .Should().BeEquivalentTo("harbora/shop:build-1");
+    }
+
+    [Fact]
+    public void The_platforms_own_image_is_not_an_orphan()
+    {
+        // harbora/panel:latest sits under the build prefix and "panel" is no app's slug — the
+        // first version of this rule saw the panel's own image as deletable, and only the running
+        // container stood in the way. Found on the live server, not in review. Ownership is the
+        // tag shape the pipeline creates, not the prefix alone.
+        var images = new[]
+        {
+            Img("harbora/panel:latest"),
+            Img("harbora/panel:build-3"),
+            Img("harbora/old-app:build-1")
+        };
+
+        CleanupPlan.OrphanedBuildImages(images, "harbora", ["blog"])
+            .Should().BeEquivalentTo("harbora/panel:build-3", "harbora/old-app:build-1");
+    }
+
+    [Fact]
+    public void A_compose_build_is_recognised_as_ours()
+    {
+        CleanupPlan.OrphanedBuildImages([Img("harbora/gone-worker:compose-2")], "harbora", [])
+            .Should().ContainSingle();
     }
 
     [Fact]
