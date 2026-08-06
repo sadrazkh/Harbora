@@ -26,15 +26,21 @@ public sealed class GitController(
     private const string OAuthCookie = "harbora_oauth";
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 
+    /// <param name="reveal">
+    /// The one repository whose webhook secret to show. Named as a query parameter deliberately —
+    /// see <see cref="AuditController"/> for what happens to a parameter that shares a name with a
+    /// route value.
+    /// </param>
     [HttpGet("")]
-    public async Task<IActionResult> Index(CancellationToken ct)
+    public async Task<IActionResult> Index([FromQuery] Guid? reveal, CancellationToken ct)
     {
         ViewData["Title"] = "Git";
         var vm = new GitPageViewModel
         {
             Providers = await db.GitProviders.Include(p => p.Repositories)
                 .Where(p => p.WorkspaceId == WorkspaceId).ToListAsync(ct),
-            WebhookBase = $"{Request.Scheme}://{Request.Host}"
+            WebhookBase = $"{Request.Scheme}://{Request.Host}",
+            RevealedRepositoryId = reveal
         };
 
         // Which provider types have an OAuth app configured (so we can show "Connect with …").

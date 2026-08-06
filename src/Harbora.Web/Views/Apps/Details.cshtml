@@ -652,7 +652,19 @@
                 </div>
                 <div class="text-xs text-ink-muted">@(isFa ? "آدرس Webhook (در تنظیمات مخزن قرار دهید):" : "Webhook URL (add it in your repo settings):")</div>
                 <code class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs mt-1">@Context.Request.Scheme://@Context.Request.Host/webhooks/git/@Model.GitRepository.Id</code>
-                <div class="text-xs text-ink-muted mt-2">@(isFa ? "سکرت:" : "Secret:") <code class="text-ink break-all">@Model.GitRepository.WebhookSecret</code></div>
+                <div class="text-xs text-ink-muted mt-2">
+                    @(isFa ? "سکرت:" : "Secret:")
+                    @if (ViewBag.RevealWebhookSecret == true)
+                    {
+                        <code class="text-ink break-all">@Model.GitRepository.WebhookSecret</code>
+                    }
+                    else
+                    {
+                        @* Only on a click, like the Git page and the storage keys. *@
+                        <code class="text-ink-faint">••••••••</code>
+                        <a href="/apps/details/@Model.Id?revealSecret=true" class="text-accent-text hover:underline">@(isFa ? "نمایش" : "Reveal")</a>
+                    }
+                </div>
                 <p class="text-[11px] text-ink-faint mt-2">@(isFa ? "Content-Type را application/json بگذارید. GitHub/Gitea با امضای HMAC و GitLab با هدر توکن تأیید می‌شوند." : "Use Content-Type application/json. GitHub/Gitea verify by HMAC; GitLab by token header.")</p>
             </section>
 

@@ -324,8 +324,15 @@ public sealed class AppsController(
         return Harbora.Infrastructure.Templates.TemplateSetup.Advice(plan);
     }
 
-    public async Task<IActionResult> Details(Guid id, CancellationToken ct)
+    /// <param name="revealSecret">
+    /// Whether to print the repository's webhook secret. Off unless asked for: it is what proves a
+    /// push notification came from the provider, and this page is one an operator has every reason
+    /// to be showing somebody while they set a repository up.
+    /// </param>
+    public async Task<IActionResult> Details(Guid id, [FromQuery] bool revealSecret, CancellationToken ct)
     {
+        ViewBag.RevealWebhookSecret = revealSecret;
+
         // Visibility, not an action capability: a viewer is allowed to read, and gating this on
         // "may you operate it" would lock them out of something the list is still showing them.
         if (!await access.CanSeeAppAsync(id, ct)) return NotFound();

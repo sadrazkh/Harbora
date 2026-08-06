@@ -91,7 +91,24 @@
                             <div class="text-xs text-ink-muted">@(isFa ? "آدرس وبهوک:" : "Webhook URL:")</div>
                             <code class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs">@Model.WebhookBase/webhooks/git/@repo.Id</code>
                             <div class="flex items-center justify-between">
-                                <div class="text-xs text-ink-muted">@(isFa ? "سکرت:" : "Secret:") <code class="text-ink">@repo.WebhookSecret</code></div>
+                                <div class="text-xs text-ink-muted">
+                                    @(isFa ? "سکرت:" : "Secret:")
+                                    @if (Model.RevealedRepositoryId == repo.Id)
+                                    {
+                                        <code class="text-ink" dir="ltr">@repo.WebhookSecret</code>
+                                    }
+                                    else
+                                    {
+                                        @* One at a time, and only on a click — the same rule the
+                                           storage page follows. A webhook secret is what proves a
+                                           push came from the provider, and this is a page an
+                                           operator shows somebody while wiring a repository up. *@
+                                        <code class="text-ink-faint" dir="ltr">••••••••</code>
+                                        <a href="/git?reveal=@repo.Id" class="text-accent-text hover:underline">
+                                            @(isFa ? "نمایش" : "Reveal")
+                                        </a>
+                                    }
+                                </div>
                                 <form asp-controller="Git" asp-action="RotateSecret" asp-route-id="@repo.Id" method="post">
                                     @Html.AntiForgeryToken()
                                     <button class="text-xs text-warn">@(isFa ? "چرخش سکرت" : "rotate")</button>
