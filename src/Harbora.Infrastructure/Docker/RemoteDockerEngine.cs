@@ -1,4 +1,4 @@
-using System.Net.Http.Headers;
+﻿using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
@@ -149,6 +149,15 @@ public sealed class RemoteDockerEngine(
         var doc = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
         return doc.GetProperty("exitCode").GetInt32();
     }
+
+    /// <summary>
+    /// Not offered. The v1 agent contract has no bidirectional stream, and adding a verb for one
+    /// would be a change to the node protocol rather than to the panel. The button is drawn as
+    /// unavailable with that sentence on it, which is the honest form of "we cannot".
+    /// </summary>
+    public Task<IContainerExec> ExecAsync(
+        string containerId, IReadOnlyList<string> command, int columns, int rows, CancellationToken ct) =>
+        throw new NotSupportedException("This node does not offer a terminal.");
 
     public async Task<HostInfo> GetHostInfoAsync(CancellationToken ct) =>
         await Client().GetFromJsonAsync<HostInfo>("agent/host", ct)

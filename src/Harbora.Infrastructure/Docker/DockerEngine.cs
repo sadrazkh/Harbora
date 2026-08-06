@@ -312,6 +312,36 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         }
     }
 
+    public async Task<IContainerExec> ExecAsync(
+        string containerId, IReadOnlyList<string> command, int columns, int rows, CancellationToken ct)
+    {
+        var (cols, lines) = Terminals.TerminalAccess.Size(columns, rows);
+
+        var exec = await client.Exec.ExecCreateContainerAsync(containerId, new ContainerExecCreateParameters
+        {
+            AttachStdin = true,
+            AttachStdout = true,
+            AttachStderr = true,
+            // A real tty, which is what makes this a terminal rather than a pipe: the shell prints a
+            // prompt, line editing works, and -- the part that matters here -- the stream comes back
+            // raw instead of carrying docker's eight-byte frame header on every chunk. Six parsers in
+            // this codebase have been written against that header; none is needed on this path.
+            Tty = true,
+            Cmd = command.ToList()
+        }, ct);
+
+        var stream = await client.Exec.StartAndAttachContainerExecAsync(exec.ID, tty: true, ct);
+
+        // Asked for once at the start as well as on every browser resize: a shell that thinks the
+        // window is 80x24 when it is not draws its full-screen programs over the wrong area, and
+        // that looks like the terminal being broken rather than being mis-sized.
+        try { await client.Exec.ResizeContainerExecTtyAsync(exec.ID, new ContainerResizeParameters
+              { Width = (long)cols, Height = (long)lines }, ct); }
+        catch (DockerApiException) { /* the shell still runs at its default size */ }
+
+        return new DockerContainerExec(client, exec.ID, stream);
+    }
+
     public async Task<HostInfo> GetHostInfoAsync(CancellationToken ct)
     {
         var info = await client.System.GetSystemInfoAsync(ct);

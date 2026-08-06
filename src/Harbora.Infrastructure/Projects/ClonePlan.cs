@@ -1,4 +1,4 @@
-﻿﻿namespace Harbora.Infrastructure.Projects;
+﻿namespace Harbora.Infrastructure.Projects;
 
 /// <summary>A volume as it exists on the source application.</summary>
 public sealed record CloneSourceVolume(string MountPath, bool ReadOnly, long? SizeLimitBytes);

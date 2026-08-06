@@ -1,0 +1,63 @@
+@{
+    var app = (Harbora.Domain.Apps.App)ViewBag.App;
+    var refusal = (Harbora.Infrastructure.Terminals.TerminalRefusal)ViewBag.Refusal;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var minutes = (int)Harbora.Infrastructure.Terminals.TerminalAccess.IdleTimeout.TotalMinutes;
+    var hours = (int)Harbora.Infrastructure.Terminals.TerminalAccess.MaxDuration.TotalHours;
+}
+
+<div class="mb-6">
+    <nav class="text-sm text-ink-muted mb-1">
+        <a href="/apps/@app.Id" class="text-accent-text">@app.Name</a>
+        <span class="mx-1">›</span><span>@(isFa ? "ترمینال" : "Terminal")</span>
+    </nav>
+    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "ترمینال" : "Terminal")</h1>
+    <p class="text-ink-muted text-sm">
+        @(isFa
+            ? "یک پوستهٔ زنده داخل کانتینری که همین حالا در حال اجراست."
+            : "A live shell inside the container that is running right now.")
+    </p>
+</div>
+
+@if (refusal == Harbora.Infrastructure.Terminals.TerminalRefusal.NotLocal)
+{
+    @* Said plainly. A button that opens onto nothing is the failure this codebase keeps finding. *@
+    <div class="rounded-xl border border-line bg-surface p-6 text-sm text-ink-muted">
+        @(isFa
+            ? "این اپ روی یک نود اجرا می‌شود و نودها ترمینال نمی‌دهند. فقط اپ‌هایی که روی سرور خودِ کنترل‌پلین هستند ترمینال دارند."
+            : "This application runs on a node, and nodes do not offer a terminal. Only applications on the control plane's own server have one.")
+    </div>
+}
+else if (refusal == Harbora.Infrastructure.Terminals.TerminalRefusal.NotRunning)
+{
+    <div class="rounded-xl border border-line bg-surface p-6 text-sm text-ink-muted">
+        @(isFa
+            ? "کانتینر در حال اجرایی برای این اپ نیست. اول مستقرش کنید یا استارت بزنید."
+            : "There is no running container for this application. Deploy or start it first.")
+    </div>
+}
+else
+{
+    <div class="mb-4 rounded-xl border border-warn/25 bg-warn-soft px-4 py-3 text-sm text-warn">
+        <p class="font-semibold mb-1">@(isFa ? "پیش از شروع" : "Before you start")</p>
+        <ul class="list-disc ps-5 space-y-1">
+            <li>
+                @(isFa
+                    ? "هرچه اینجا بنویسید داخل همان کانتینری اجرا می‌شود که به کاربران سرویس می‌دهد."
+                    : "Everything typed here runs inside the same container that is serving your users.")
+            </li>
+            <li>
+                @(isFa
+                    ? "تغییری که روی فایل‌سیستم کانتینر بدهید با استقرار بعدی از بین می‌رود — مگر روی والیوم باشد."
+                    : "Changes to the container's filesystem are gone at the next deploy — unless they are on a volume.")
+            </li>
+            <li>
+                @(isFa
+                    ? $"باز شدن و بسته شدن این نشست در گزارش رخدادها ثبت می‌شود. نشست بی‌استفاده بعد از {minutes} دقیقه و در هر حال بعد از {hours} ساعت بسته می‌شود."
+                    : $"Opening and closing this session is written to the audit log. An idle session closes after {minutes} minutes, and any session after {hours} hours.")
+            </li>
+        </ul>
+    </div>
+
+    <div id="app-terminal" data-app-id="@app.Id" data-lang="@(isFa ? "fa" : "en")"></div>
+}

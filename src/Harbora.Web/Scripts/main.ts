@@ -3,6 +3,7 @@ import { createApp } from 'vue';
 import DeploymentLogs from './islands/DeploymentLogs.vue';
 import RouteDesigner from './islands/RouteDesigner.vue';
 import MetricsChart from './islands/MetricsChart.vue';
+import TerminalIsland from './islands/Terminal.vue';
 import { mountDeployProgress } from './deployProgress';
 
 // "Islands" pattern: Razor renders the page; we hydrate only the interactive nodes.
@@ -24,6 +25,12 @@ const islands: Record<string, IslandMounter> = {
       initialRoutes: JSON.parse(el.dataset.routes || '[]'),
       targets: JSON.parse(el.dataset.targets || '[]'),
       csrf: el.dataset.csrf || '',
+      lang: el.dataset.lang || 'en',
+    }).mount(el);
+  },
+  'app-terminal': (el) => {
+    createApp(TerminalIsland, {
+      appId: el.dataset.appId!,
       lang: el.dataset.lang || 'en',
     }).mount(el);
   },

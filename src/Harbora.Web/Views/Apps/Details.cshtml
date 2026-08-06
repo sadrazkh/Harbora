@@ -1,6 +1,7 @@
 ﻿@model App
 @using Harbora.Infrastructure.Projects
 @inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
+@inject Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Terminals.TerminalFeatureOptions> TerminalFeatures
 @{
     ViewData["Title"] = Model.Name;
 
@@ -34,6 +35,12 @@
         @if (Model.Volumes.Count > 0)
         {
             <a href="/apps/@Model.Id/data" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm inline-flex items-center gap-1.5"><i data-lucide="folder-open" class="h-4 w-4"></i>@(isFa ? "داده" : "Data")</a>
+        }
+        @* Only when the operator has turned terminals on, and only for something that is running.
+           A shell is the widest door the panel has; it does not get an always-visible button. *@
+        @if (TerminalFeatures.Value.Terminal && running)
+        {
+            <a href="/apps/@Model.Id/terminal" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm inline-flex items-center gap-1.5"><i data-lucide="square-terminal" class="h-4 w-4"></i>@(isFa ? "ترمینال" : "Terminal")</a>
         }
         @if (running)
         {

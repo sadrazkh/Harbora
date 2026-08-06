@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using Harbora.Application.Abstractions;
 using Harbora.NodeAgent.Contracts;
 using Microsoft.Extensions.Logging;
@@ -395,6 +395,13 @@ public sealed class NodeWorkloadEngine(
             "backups for an app on a v1 node are not supported yet; see docs/node-agent/merge-notes.md.");
 
     // --- host ---
+
+    /// <summary>Not offered — see the note on the remote engine's version of this.</summary>
+    public Task<IContainerExec> ExecAsync(
+        string containerId, IReadOnlyList<string> command, int columns, int rows, CancellationToken ct) =>
+        throw new NodeCapabilityException(nodeId, "open a terminal",
+            "The node agent has no interactive channel. Applications on the control plane's own " +
+            "server have a terminal; applications on a node do not.");
 
     public async Task<HostInfo> GetHostInfoAsync(CancellationToken ct)
     {

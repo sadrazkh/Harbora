@@ -1,4 +1,4 @@
-namespace Harbora.Application.Abstractions;
+﻿namespace Harbora.Application.Abstractions;
 
 /// <summary>
 /// The single seam through which the platform touches the container runtime. Every Docker
@@ -54,6 +54,35 @@ public interface IDockerEngine
     Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct);
 
     Task<HostInfo> GetHostInfoAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Attaches a shell to a running container and returns the two-way stream.
+    ///
+    /// Behind the seam on purpose, and not because the panel might one day speak to something other
+    /// than docker: an engine that cannot offer this must be able to <b>say so</b>. A node engine
+    /// throws <see cref="NotSupportedException"/> rather than returning something that looks like a
+    /// terminal and never carries a byte, which is the failure this codebase keeps finding.
+    /// </summary>
+    Task<IContainerExec> ExecAsync(
+        string containerId, IReadOnlyList<string> command, int columns, int rows, CancellationToken ct);
+}
+
+/// <summary>
+/// A live shell inside a container: bytes in, bytes out, and a size.
+///
+/// Deliberately bytes rather than lines. A terminal is not line-oriented — a keystroke matters
+/// before the newline, and the escape sequences that draw the screen are not lines at all.
+/// </summary>
+public interface IContainerExec : IAsyncDisposable
+{
+    /// <summary>Reads whatever the shell has produced. Zero means it has ended.</summary>
+    Task<int> ReadAsync(Memory<byte> buffer, CancellationToken ct);
+
+    /// <summary>Sends keystrokes.</summary>
+    Task WriteAsync(ReadOnlyMemory<byte> data, CancellationToken ct);
+
+    /// <summary>Tells the shell how big the window is, so anything full-screen draws correctly.</summary>
+    Task ResizeAsync(uint columns, uint rows, CancellationToken ct);
 }
 
 public record DockerOneOffRequest(

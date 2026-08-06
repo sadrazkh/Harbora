@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
@@ -448,6 +448,11 @@ public sealed class NodeSchedulingTests : IDisposable
         public Task EnsureVolumeAsync(string name, CancellationToken ct) => Task.CompletedTask;
         public Task RemoveVolumeAsync(string name, CancellationToken ct) => Task.CompletedTask;
         public Task<int> RunOneOffAsync(DockerOneOffRequest r, IProgress<string>? l, CancellationToken ct) => Task.FromResult(0);
+        /// <summary>A fake offers no shell — a test that reaches here meant something else.</summary>
+        public Task<IContainerExec> ExecAsync(
+            string containerId, IReadOnlyList<string> command, int columns, int rows, CancellationToken ct) =>
+            throw new NotSupportedException();
+
         public Task<HostInfo> GetHostInfoAsync(CancellationToken ct) => Task.FromResult(new HostInfo(1, 0, 0, 0, "", 0));
     }
 }

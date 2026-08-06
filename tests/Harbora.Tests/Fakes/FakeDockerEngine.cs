@@ -283,6 +283,11 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// <summary>What the one-off prints, exactly as the engine hands it over — framing bytes and all.</summary>
     public List<string> OneOffOutput { get; } = [];
 
+    /// <summary>A fake offers no shell — a test that reaches here meant something else.</summary>
+    public Task<IContainerExec> ExecAsync(
+        string containerId, IReadOnlyList<string> command, int columns, int rows, CancellationToken ct) =>
+        throw new NotSupportedException();
+
     public Task<HostInfo> GetHostInfoAsync(CancellationToken ct)
         => Task.FromResult(new HostInfo(4, 8L << 30, 100L << 30, 50L << 30, "fake", _containers.Count));
 
