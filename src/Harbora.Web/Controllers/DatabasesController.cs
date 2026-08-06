@@ -33,11 +33,45 @@ public sealed partial class DatabasesController(
     Harbora.Infrastructure.Services.ServiceUsageService usage,
     Harbora.Infrastructure.Security.ProjectAccessService access,
     Harbora.Infrastructure.Services.DatabaseAccessService databaseAccess,
+    Harbora.Infrastructure.Services.AdminerService adminer,
+    IAuditLogger audit,
     INodeAgentClient node,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
+
     private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    /// <summary>
+    /// Opens a throwaway web admin tool onto this database for an hour.
+    ///
+    /// The tool runs on the database's own private network, is published behind basic-auth with a
+    /// password generated here and shown once, and stops itself. See AdminerService for why each of
+    /// those is not optional.
+    /// </summary>
+    [HttpPost("{id:guid}/admin-tool")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> OpenAdminTool(Guid id, CancellationToken ct)
+    {
+        if (!await access.CanSeeServiceAsync(id, ct)) return NotFound();
+
+        var result = await adminer.OpenAsync(id, ct);
+        if (!result.Ok)
+        {
+            TempData["Error"] = result.Refusal;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await audit.LogAsync("service.admin_tool_opened", "service", id.ToString(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+
+        // Shown once, on the next render, like every other generated credential in this panel.
+        TempData["AdminToolUrl"] = result.Url;
+        TempData["AdminToolUser"] = result.User;
+        TempData["AdminToolPassword"] = result.Password;
+        return RedirectToAction(nameof(Details), new { id });
+    }
 
     [HttpGet("")]
     public async Task<IActionResult> Index(Guid? selected, bool reveal = false, CancellationToken ct = default)

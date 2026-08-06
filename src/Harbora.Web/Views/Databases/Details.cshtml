@@ -65,12 +65,43 @@
             }
             <form asp-action="TestConnection" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary"><i data-lucide="plug-zap" class="h-4 w-4"></i>@(isFa ? "تست اتصال" : "Test")</button></form>
             <a href="/databases/@db.Id/access" class="btn-primary"><i data-lucide="key-round" class="h-4 w-4"></i>@(isFa ? "دسترسی خارجی" : "External access")</a>
+            @* A throwaway web tool onto this database: private network, basic-auth with a password
+               generated per session, gone in an hour. Offered only for the engines it can speak to —
+               a button that opens "unknown driver" is worse than no button. *@
+            @if (Harbora.Infrastructure.Services.AdminerSession.Supports(db.Type))
+            {
+                <form asp-controller="Databases" asp-action="OpenAdminTool" asp-route-id="@db.Id" method="post">
+                    @Html.AntiForgeryToken()
+                    <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm inline-flex items-center gap-1.5">
+                        <i data-lucide="table-2" class="h-4 w-4" aria-hidden="true"></i>@(isFa ? "ابزار مدیریت" : "Admin tool")
+                    </button>
+                </form>
+            }
         </div>
     }
 </div>
 
 @if (msg is not null) { <div class="alert-success mb-4">@msg</div> }
 @if (err is not null) { <div class="alert-danger mb-4">@err</div> }
+
+@if (TempData["AdminToolUrl"] is string toolUrl)
+{
+    @* Shown exactly once. The password is not stored anywhere in readable form, so a refresh loses
+       it — which is the point, and is said plainly rather than discovered. *@
+    <div class="mb-4 rounded-lg border border-warn bg-warn-soft px-4 py-3 text-sm">
+        <div class="mb-2 font-medium">@(isFa ? "ابزار مدیریت باز شد — یک ساعت زنده می‌ماند." : "The admin tool is open — it lives for one hour.")</div>
+        <div class="mb-2" dir="ltr"><a href="@toolUrl" target="_blank" rel="noopener" class="text-accent-text break-all">@toolUrl</a></div>
+        <div dir="ltr" class="font-mono text-xs">
+            @(isFa ? "کاربر" : "user"): @TempData["AdminToolUser"] &nbsp;·&nbsp;
+            @(isFa ? "رمز" : "password"): @TempData["AdminToolPassword"]
+        </div>
+        <p class="mt-2 text-xs text-ink-muted">
+            @(isFa
+                ? "این رمز فقط همین یک‌بار نشان داده می‌شود. رمز خودِ دیتابیس را از بخش «اطلاعات اتصال» بردارید."
+                : "This password is shown only once. Take the database's own password from the connection panel.")
+        </p>
+    </div>
+}
 
 @* A database running a different version from the one chosen will not start on the data directory
    it already has. It is the failure nobody recovers from quickly, so it is said at the top. *@

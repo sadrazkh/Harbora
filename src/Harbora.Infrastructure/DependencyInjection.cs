@@ -198,6 +198,8 @@ public static class DependencyInjection
         services.AddScoped<Maintenance.DiskCleanupService>();
         services.AddScoped<Notifications.PlatformMailer>();
         services.AddHostedService<Maintenance.UpdateCheckService>();
+        services.AddScoped<Services.AdminerService>();
+        services.AddHostedService<Services.AdminerSweeper>();
 
         // Until the real agent ships, the fake stands in — and warns on every call, so a production
         // deployment that never configured an agent cannot quietly report tunnels it never made.

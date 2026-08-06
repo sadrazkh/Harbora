@@ -82,6 +82,10 @@ public class DatabaseAccessPageTests
             new ServiceUsageService(db, protector),
             new Harbora.Infrastructure.Security.ProjectAccessService(db, currentUser),
             new DatabaseAccessService(db, node, new Clock(), NullLogger<DatabaseAccessService>.Instance),
+            // The admin tool is not exercised by these tests; it is here because the controller
+            // takes it. Its own rules are covered by AdminerSessionTests.
+            adminer: null!,
+            audit: new SilentAudit(),
             node,
             currentUser)
         {
@@ -274,5 +278,12 @@ public class DatabaseAccessPageTests
         var result = await f.Controller.Access(theirs.Id, CancellationToken.None);
 
         result.Should().BeOfType<NotFoundResult>();
+    }
+
+    private sealed class SilentAudit : IAuditLogger
+    {
+        public Task LogAsync(string action, string? targetType = null, string? targetId = null,
+            string? ipAddress = null, string? actorEmailOverride = null, Guid? userIdOverride = null,
+            string? metadataJson = null, CancellationToken ct = default) => Task.CompletedTask;
     }
 }
