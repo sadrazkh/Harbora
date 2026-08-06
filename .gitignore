@@ -25,3 +25,9 @@ Thumbs.db
 # Overhaul: local dev artifacts
 tests/**/bin/
 tests/**/obj/
+
+# Tutorial captures: the raw screenshots come straight off the running panel and hold live
+# values (webhook secrets, object-storage keys, account emails). Only the annotated copies, whose
+# annotations.json paints those regions out, belong in the repository.
+docs/tutorial/img/*.png
+!docs/tutorial/img/*.annotated.png
