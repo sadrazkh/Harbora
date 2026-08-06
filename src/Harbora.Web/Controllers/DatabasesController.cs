@@ -745,7 +745,8 @@ public sealed partial class DatabasesController(
         ViewBag.Sizes = (await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct))
             .Where(s => allowed is null || allowed.Contains(s.Key))
             .Select(s => new SelectListItem(
-                $"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key,
+                Harbora.Infrastructure.Tenancy.InstanceSizeLabel.For(
+                    s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes), s.Key,
                 string.Equals(s.Key, defaultSize, StringComparison.OrdinalIgnoreCase)))
             .ToList();
     }

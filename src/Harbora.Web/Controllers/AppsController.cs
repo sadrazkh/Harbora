@@ -1194,7 +1194,8 @@ public sealed class AppsController(
         ViewBag.Sizes = sizes
             .Where(s => allowed is null || allowed.Contains(s.Key))
             .Select(s => new SelectListItem(
-                $"{s.Name} — {s.CpuCores} vCPU / {s.MemoryBytes / 1024 / 1024} MB", s.Key,
+                Harbora.Infrastructure.Tenancy.InstanceSizeLabel.For(
+                    s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes), s.Key,
                 string.Equals(s.Key, defaultSize, StringComparison.OrdinalIgnoreCase)))
             .ToList();
     }

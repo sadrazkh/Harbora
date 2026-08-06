@@ -51,6 +51,31 @@ public class InstanceSizeDiskTests
             .Should().Be("Medium — 2 vCPU / 2 GB / 2 GB");
     }
 
+    [Fact]
+    public void No_picker_writes_the_label_out_itself()
+    {
+        // The helper replaced four copies and two more were written afterwards, in the create forms
+        // for an application and for a database. So the picker where somebody *chooses* a tier said
+        // "Nano — 0.25 vCPU / 256 MB" while the resize picker on the next page said "… / 5 GB" — the
+        // same tier described two ways, with the disk figure absent from exactly the screen the
+        // decision is made on. Their own copies also printed every size in megabytes, so a 2 GB tier
+        // read as "2048 MB".
+        //
+        // Checked against the source because that is the only place the sixth copy can appear, and
+        // it appears at the moment somebody adds a picker rather than at the moment somebody notices
+        // two pages disagreeing.
+        var controllers = Directory.EnumerateFiles(
+            Path.Combine(TestPaths.WebRoot, "Controllers"), "*.cs", SearchOption.AllDirectories).ToList();
+
+        controllers.Should().NotBeEmpty("the check is worthless if it scans nothing");
+
+        foreach (var file in controllers)
+        {
+            File.ReadAllText(file).Should().NotContain("vCPU",
+                $"{Path.GetFileName(file)} spells out a tier — build it with InstanceSizeLabel.For");
+        }
+    }
+
     // --- what fits in it ---
 
     [Fact]
