@@ -73,34 +73,70 @@ public sealed class IngressHarness : IAsyncDisposable
         _services = services.BuildServiceProvider();
         Db = _services.GetRequiredService<HarboraDbContext>();
 
-        GatewayPort = FreePort();
-
-        var options = Options.Create(new NodeAgentControlPlaneOptions
+        // Picking a free port and binding it later is a race, and this suite lost it: with the
+        // other test assemblies running in parallel, another process could take the port in the
+        // gap. The gateway treats a failed bind as non-fatal and only logs it, so the old harness
+        // then probed the port, reached the OTHER process's listener, and every request after that
+        // failed somewhere deep in TLS. The gateway now reports the port it really bound; the
+        // harness retries with a fresh pick until that report matches.
+        for (var attempt = 0; ; attempt++)
         {
-            GatewayListenPort = GatewayPort,
-            // Must match what the node dials, or the certificate's name check fails — which is a
-            // real failure mode and one this harness should not paper over.
-            GatewayPublicHost = "localhost",
-            IngressPortStart = FreePort(),
-            IngressPortEnd = 65000,
-            GatewayPublicPortStart = 40000,
-            GatewayPublicPortEnd = 40099,
-        });
+            GatewayPort = FreePort();
 
-        Ingress = new NodeIngressRegistry(options, NullLogger<NodeIngressRegistry>.Instance);
+            var options = Options.Create(new NodeAgentControlPlaneOptions
+            {
+                GatewayListenPort = GatewayPort,
+                // Must match what the node dials, or the certificate's name check fails — which is a
+                // real failure mode and one this harness should not paper over.
+                GatewayPublicHost = "localhost",
+                // The registry walks upward from here and skips ports it cannot bind, so a
+                // collision on these self-heals; only the gateway's own port needed the loop above.
+                //
+                // A random start below the ephemeral range, not an ephemeral pick: this was the
+                // suite's longest-lived flake. FreePort() hands out whatever the OS's dynamic range
+                // gives — on this machine, ports above 65000 — and a start above the fixed end is
+                // an empty range: "every ingress port between 65469 and 65000 is in use", zero
+                // ports tried. A collision inside the band self-heals via the registry's walk; an
+                // empty band cannot.
+                IngressPortStart = Random.Shared.Next(20000, 45000),
+                IngressPortEnd = 65535,
+                // Randomised per harness for the same reason: two suites sharing a fixed band
+                // would hand out each other's ports.
+                GatewayPublicPortStart = Random.Shared.Next(20000, 45000),
+                GatewayPublicPortEnd = 65535,
+            });
 
-        _gateway = new NodeTunnelGateway(
-            _services.GetRequiredService<IServiceScopeFactory>(),
-            Ingress,
-            options,
-            TimeProvider.System,
-            NullLogger<NodeTunnelGateway>.Instance);
+            Ingress = new NodeIngressRegistry(options, NullLogger<NodeIngressRegistry>.Instance);
 
-        await _gateway.StartAsync(_stopping.Token);
+            _gateway = new NodeTunnelGateway(
+                _services.GetRequiredService<IServiceScopeFactory>(),
+                Ingress,
+                options,
+                TimeProvider.System,
+                NullLogger<NodeTunnelGateway>.Instance);
 
-        // The gateway issues its certificate before it binds, so waiting for the port is waiting for
-        // the whole of its start-up rather than a fixed sleep that would be flaky on a slow runner.
-        await WaitForPortAsync(GatewayPort);
+            await _gateway.StartAsync(_stopping.Token);
+
+            // The gateway issues its certificate before it binds, so waiting for its report is
+            // waiting for the whole of its start-up rather than a fixed sleep that would be flaky
+            // on a slow runner.
+            try
+            {
+                await WaitUntilAsync(() => _gateway.BoundPort is not null,
+                    "the gateway to bind its port", timeoutSeconds: 15);
+            }
+            catch (TimeoutException) when (attempt < 5)
+            {
+                // Lost the race — the port went to somebody else between picking and binding.
+                await _gateway.StopAsync(CancellationToken.None);
+                continue;
+            }
+
+            if (_gateway.BoundPort != GatewayPort)
+                throw new InvalidOperationException(
+                    $"The gateway bound {_gateway.BoundPort} instead of the requested {GatewayPort}.");
+            return;
+        }
     }
 
     /// <summary>
@@ -271,38 +307,17 @@ public sealed class IngressHarness : IAsyncDisposable
         throw new TimeoutException($"Timed out after {timeoutSeconds}s waiting for {what}.");
     }
 
-    private static async Task WaitForPortAsync(int port, int timeoutSeconds = 15)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
-
-        while (DateTime.UtcNow < deadline)
-        {
-            try
-            {
-                using var probe = new TcpClient();
-                await probe.ConnectAsync(IPAddress.Loopback, port);
-                return;
-            }
-            catch (SocketException)
-            {
-                await Task.Delay(25);
-            }
-        }
-
-        throw new TimeoutException($"The gateway never bound port {port}.");
-    }
-
     private static int FreePort()
     {
-        // Port zero, then let go. Racy in principle; in practice the operating system does not
-        // hand the same ephemeral port to two callers this close together, and the alternative —
-        // a fixed port — collides with whatever else is on the developer's machine.
+        // Port zero, then let go. Racy in principle; the gateway loop above turns a lost race into
+        // a retry, and the registry's own candidate walk absorbs the rest.
         var probe = new TcpListener(IPAddress.Loopback, 0);
         probe.Start();
         var port = ((IPEndPoint)probe.LocalEndpoint).Port;
         probe.Stop();
         return port;
     }
+
 
     public async ValueTask DisposeAsync()
     {

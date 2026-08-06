@@ -237,4 +237,13 @@
   <data name="No scheduled backups"><value>پشتیبان زمان‌بندی‌شده‌ای نیست</value></data>
   <data name="Nothing here is being backed up automatically."><value>هیچ‌چیز اینجا خودکار پشتیبان‌گیری نمی‌شود.</value></data>
   <data name="Set one up"><value>تنظیمش کن</value></data>
+  <data name="Email is required."><value>ایمیل لازم است.</value></data>
+  <data name="This is not an email address."><value>این یک آدرس ایمیل نیست.</value></data>
+  <data name="A display name is required."><value>نام نمایشی لازم است.</value></data>
+  <data name="A password is required."><value>رمز لازم است.</value></data>
+  <data name="The password needs at least 8 characters."><value>رمز دست‌کم ۸ کاراکتر می‌خواهد.</value></data>
+  <data name="Repeat the password."><value>رمز را دوباره بنویسید.</value></data>
+  <data name="The two passwords do not match."><value>دو رمز یکی نیستند.</value></data>
+  <data name="A platform name is required."><value>نام پلتفرم لازم است.</value></data>
+  <data name="A name is required."><value>نام لازم است.</value></data>
 </root>

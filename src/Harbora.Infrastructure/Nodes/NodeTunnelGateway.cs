@@ -58,6 +58,16 @@ public sealed class NodeTunnelGateway(
 
     public IReadOnlyList<string> ActiveGrantIds => _tunnels.Keys.ToList();
 
+    /// <summary>
+    /// The port the gateway actually listens on, or null while it does not.
+    ///
+    /// A failed bind is deliberately not fatal to the panel, which means it is also silent: the
+    /// hosted service reports itself started either way. Anything that needs to know the gateway is
+    /// really there — health surfaces, and the test harness whose port was stolen by a concurrent
+    /// process between picking it and binding it — reads this instead of assuming.
+    /// </summary>
+    public int? BoundPort { get; private set; }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (_options.GatewayListenPort <= 0)
@@ -93,6 +103,8 @@ public sealed class NodeTunnelGateway(
             return;
         }
 
+        BoundPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+
         log.LogInformation(
             "Node TCP gateway listening on {Port}; publishing grants on {Start}–{End} as {Host}.",
             _options.GatewayListenPort, _options.GatewayPublicPortStart, _options.GatewayPublicPortEnd, PublicHost);
@@ -120,6 +132,7 @@ public sealed class NodeTunnelGateway(
         }
         finally
         {
+            BoundPort = null;
             certificate.Dispose();
 
             foreach (var tunnel in _tunnels.Values.ToList()) await tunnel.DisposeAsync();

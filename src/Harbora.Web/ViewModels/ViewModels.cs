@@ -7,11 +7,11 @@ namespace Harbora.Web.ViewModels;
 
 public sealed class SetupViewModel
 {
-    [Required, EmailAddress] public string Email { get; set; } = string.Empty;
-    [Required] public string DisplayName { get; set; } = string.Empty;
-    [Required, MinLength(8)] public string Password { get; set; } = string.Empty;
-    [Required, Compare(nameof(Password))] public string ConfirmPassword { get; set; } = string.Empty;
-    [Required] public string PlatformName { get; set; } = "Harbora";
+    [Required(ErrorMessage = "Email is required."), EmailAddress(ErrorMessage = "This is not an email address.")] public string Email { get; set; } = string.Empty;
+    [Required(ErrorMessage = "A display name is required.")] public string DisplayName { get; set; } = string.Empty;
+    [Required(ErrorMessage = "A password is required."), MinLength(8, ErrorMessage = "The password needs at least 8 characters.")] public string Password { get; set; } = string.Empty;
+    [Required(ErrorMessage = "Repeat the password."), Compare(nameof(Password), ErrorMessage = "The two passwords do not match.")] public string ConfirmPassword { get; set; } = string.Empty;
+    [Required(ErrorMessage = "A platform name is required.")] public string PlatformName { get; set; } = "Harbora";
     public string RootDomain { get; set; } = "localhost";
     public string AcmeEmail { get; set; } = string.Empty;
     public string Culture { get; set; } = "fa";
@@ -19,14 +19,14 @@ public sealed class SetupViewModel
 
 public sealed class LoginViewModel
 {
-    [Required, EmailAddress] public string Email { get; set; } = string.Empty;
-    [Required] public string Password { get; set; } = string.Empty;
+    [Required(ErrorMessage = "Email is required."), EmailAddress(ErrorMessage = "This is not an email address.")] public string Email { get; set; } = string.Empty;
+    [Required(ErrorMessage = "A password is required.")] public string Password { get; set; } = string.Empty;
     public string? ReturnUrl { get; set; }
 }
 
 public sealed class CreateAppViewModel
 {
-    [Required] public string Name { get; set; } = string.Empty;
+    [Required(ErrorMessage = "A name is required.")] public string Name { get; set; } = string.Empty;
     /// <summary>Optional; auto-derived from the name when left blank.</summary>
     public string? Slug { get; set; }
     public AppSourceType SourceType { get; set; } = AppSourceType.GitRepository;
@@ -77,7 +77,7 @@ public sealed class CreateServiceViewModel
     /// <summary>Which project environment to create the database in; null uses the default.</summary>
     public Guid? EnvironmentId { get; set; }
 
-    [Required] public string Name { get; set; } = string.Empty;
+    [Required(ErrorMessage = "A name is required.")] public string Name { get; set; } = string.Empty;
     public ManagedServiceType Type { get; set; } = ManagedServiceType.PostgreSql;
     public string Version { get; set; } = string.Empty;
 

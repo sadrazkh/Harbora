@@ -73,7 +73,11 @@ builder.Services.AddSingleton<NodeClientCertificateResolver>();
 builder.Services.AddLocalization(o => o.ResourcesPath = "Resources");
 builder.Services.AddControllersWithViews()
     .AddViewLocalization()
-    .AddDataAnnotationsLocalization();
+    // Pointed at the shared resource, because the default looks for a per-model resx that was
+    // never created — which left every validation message ("The Email field is required.") in
+    // English on a Persian form, the same failure the per-view localiser had.
+    .AddDataAnnotationsLocalization(o =>
+        o.DataAnnotationLocalizerProvider = (_, factory) => factory.Create(typeof(Harbora.Web.SharedResource)));
 builder.Services.AddSignalR();
 
 var supportedCultures = new[] { new CultureInfo("fa"), new CultureInfo("en") };
@@ -96,7 +100,12 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         o.SlidingExpiration = true;
         o.Cookie.HttpOnly = true;
         o.Cookie.SameSite = SameSiteMode.Lax;
-        o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        // Production sits behind Traefik with TLS always on, so the session cookie must never be
+        // offered to a plain-HTTP request — SameAsRequest would happily do so if anything ever
+        // answered on port 80. Development runs on plain localhost and keeps the lenient policy.
+        o.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+            ? CookieSecurePolicy.SameAsRequest
+            : CookieSecurePolicy.Always;
     })
     .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TokenAuthenticationHandler>(
         TokenAuthenticationHandler.SchemeName, _ => { });
@@ -183,6 +192,22 @@ if (!app.Environment.IsDevelopment())
 // code. Re-executing into the themed page keeps the real status code on the response while giving
 // them something they can act on.
 app.UseStatusCodePagesWithReExecute("/error/{0}");
+
+// On every response, including static files and error pages. Deliberately no CSP: the panel's Vue
+// islands and inline scripts would need a nonce pipeline first, and a broken CSP fails open in the
+// worst way — by people turning it off.
+app.Use(async (context, next) =>
+{
+    context.Response.OnStarting(() =>
+    {
+        var headers = context.Response.Headers;
+        headers.XContentTypeOptions = "nosniff";
+        headers.XFrameOptions = "DENY";
+        headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+        return Task.CompletedTask;
+    });
+    await next();
+});
 
 // Must run before anything that reads the client IP (rate limiter, audit logging).
 app.UseForwardedHeaders();

@@ -45,8 +45,8 @@ public sealed class TemplateCatalogPageViewModel
 public sealed class TemplateDeployInput
 {
     public Guid TemplateId { get; set; }
-    [Required, MaxLength(80)] public string ProjectName { get; set; } = string.Empty;
-    [Required, MaxLength(80)] public string ResourceName { get; set; } = string.Empty;
+    [Required(ErrorMessage = "A name is required."), MaxLength(80)] public string ProjectName { get; set; } = string.Empty;
+    [Required(ErrorMessage = "A name is required."), MaxLength(80)] public string ResourceName { get; set; } = string.Empty;
     public string? RepositoryUrl { get; set; }
     public string? GitRef { get; set; } = "main";
     public Dictionary<string, string> Variables { get; set; } = new(StringComparer.OrdinalIgnoreCase);

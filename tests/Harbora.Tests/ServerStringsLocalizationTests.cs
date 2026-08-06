@@ -42,6 +42,35 @@ public class ServerStringsLocalizationTests
     }
 
     [Fact]
+    public void Every_validation_message_has_a_persian_entry()
+    {
+        // DataAnnotations messages resolve through the shared resource too, and they are the words
+        // a person sees at the exact moment a form refuses them. An unkeyed attribute falls back to
+        // the framework's English; a keyed one with no entry falls back to its own English key.
+        // Either way the refusal is in the wrong language, so: every message keyed, every key
+        // translated.
+        var names = ResourceNames();
+        var viewModels = typeof(Harbora.Web.SharedResource).Assembly.GetTypes()
+            .Where(t => t.Namespace == "Harbora.Web.ViewModels" && (t.IsClass || t.IsValueType))
+            .ToList();
+
+        viewModels.Should().NotBeEmpty();
+
+        var missing = new SortedSet<string>();
+
+        foreach (var type in viewModels)
+            foreach (var property in type.GetProperties())
+                foreach (var attribute in property.GetCustomAttributes(true)
+                             .OfType<System.ComponentModel.DataAnnotations.ValidationAttribute>())
+                {
+                    if (attribute.ErrorMessage is { Length: > 0 } message && !names.Contains(message))
+                        missing.Add($"{type.Name}.{property.Name}: {message}");
+                }
+
+        missing.Should().BeEmpty("a keyed validation message with no resx entry refuses in English");
+    }
+
+    [Fact]
     public void Every_deployment_status_reads_in_both_languages()
     {
         foreach (var status in Enum.GetValues<DeploymentStatus>())
