@@ -88,6 +88,9 @@ else if (Model.Buckets.Count > 0)
                     </div>
 
                     <div class="flex flex-wrap items-center gap-2">
+                    <a href="/storage/buckets/@bucket.Id/objects" class="btn-secondary px-3 py-1.5 text-xs">
+                        @(isFa ? "اشیا" : "Objects")
+                    </a>
                     <form asp-action="Measure" asp-route-id="@bucket.Id" method="post">
                         @Html.AntiForgeryToken()
                         <button class="btn-secondary px-3 py-1.5 text-xs">@(isFa ? "اندازه‌گیری" : "Measure")</button>

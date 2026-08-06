@@ -1,0 +1,100 @@
+@{
+    var bucket = (Harbora.Domain.Storage.StorageBucket)ViewBag.Bucket;
+    var items = (IReadOnlyList<Harbora.Infrastructure.Storage.BucketObject>)ViewBag.Objects;
+    var prefix = (string)ViewBag.Prefix;
+    var parent = ViewBag.Parent as string;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+
+    string Size(long b) => Harbora.Infrastructure.Tenancy.ByteSize.Measured(b);
+}
+
+<div class="mb-6">
+    <nav class="text-sm text-ink-muted mb-1">
+        <a href="/storage" class="text-accent-text">@(isFa ? "فضای ذخیره‌سازی" : "Storage")</a>
+        <span class="mx-1">›</span><span>@bucket.Name</span>
+        @if (!string.IsNullOrEmpty(prefix)) { <span class="mx-1">›</span><span dir="ltr">@prefix</span> }
+    </nav>
+    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "اشیای باکت" : "Objects")</h1>
+    <p class="text-ink-muted text-sm">
+        @(isFa
+            ? "همان چیزی که واقعاً در باکت است. با کلید خود باکت خوانده می‌شود، نه با کلید ریشهٔ سرور."
+            : "What is actually in the bucket. Read with the bucket's own key, never the storage root's.")
+    </p>
+</div>
+
+@if (msg is not null) { <div class="alert-success mb-4">@msg</div> }
+@if (err is not null) { <div class="alert-danger mb-4">@err</div> }
+
+<section class="rounded-xl border border-line bg-surface overflow-hidden">
+    <div class="px-4 py-3 border-b border-line flex items-center justify-between">
+        <span class="font-mono text-sm" dir="ltr">@(string.IsNullOrEmpty(prefix) ? "/" : "/" + prefix)</span>
+        @if (parent is not null)
+        {
+            <a href="/storage/buckets/@bucket.Id/objects?prefix=@Uri.EscapeDataString(parent)"
+               class="text-xs text-accent-text">@(isFa ? "↑ یک پوشه بالاتر" : "↑ up one folder")</a>
+        }
+    </div>
+
+    <div class="divide-y divide-line">
+        @if (items.Count == 0)
+        {
+            @* "Empty" and "we could not read it" look identical unless the page says which. *@
+            <div class="p-4 text-sm text-ink-muted">@(isFa ? "اینجا چیزی نیست." : "There is nothing here.")</div>
+        }
+        @foreach (var item in items)
+        {
+            var full = string.IsNullOrEmpty(prefix) ? item.Key : prefix + "/" + item.Key;
+            <div class="flex items-center justify-between gap-3 p-3 text-sm">
+                <div class="min-w-0 flex items-center gap-2">
+                    @if (item.IsFolder)
+                    {
+                        <i data-lucide="folder" class="h-4 w-4 text-accent-text" aria-hidden="true"></i>
+                        <a href="/storage/buckets/@bucket.Id/objects?prefix=@Uri.EscapeDataString(full)"
+                           class="truncate text-accent-text" dir="ltr">@item.Key</a>
+                    }
+                    else
+                    {
+                        <i data-lucide="file" class="h-4 w-4 text-ink-faint" aria-hidden="true"></i>
+                        <span class="truncate" dir="ltr">@item.Key</span>
+                    }
+                </div>
+                <div class="flex shrink-0 items-center gap-3 text-xs text-ink-faint">
+                    @if (!item.IsFolder)
+                    {
+                        <span dir="ltr">@Size(item.SizeBytes)</span>
+                        @if (item.ModifiedAt is { } when)
+                        {
+                            <span dir="ltr">@when.LocalDateTime.ToString(Harbora.Web.Infrastructure.Dates.Stamp)</span>
+                        }
+                        <a href="/storage/buckets/@bucket.Id/objects/download?key=@Uri.EscapeDataString(full)"
+                           class="text-accent-text">@(isFa ? "دانلود" : "download")</a>
+                        <form asp-action="DeleteObject" asp-route-id="@bucket.Id" method="post" class="inline"
+                              onsubmit="return confirm('@(isFa ? "این شیء حذف شود؟" : "Delete this object?")');">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="key" value="@full" />
+                            <input type="hidden" name="prefix" value="@prefix" />
+                            <button class="text-danger" aria-label="@(isFa ? $"حذف {item.Key}" : $"Delete {item.Key}")">@(isFa ? "حذف" : "delete")</button>
+                        </form>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+
+    <form asp-action="UploadObject" asp-route-id="@bucket.Id" method="post" enctype="multipart/form-data"
+          class="border-t border-line p-4 flex flex-wrap items-center gap-3">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="prefix" value="@prefix" />
+        <input type="file" name="file" required class="text-sm" />
+        <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+            @(isFa ? "بارگذاری" : "Upload")
+        </button>
+        <span class="text-xs text-ink-faint">
+            @(isFa
+                ? $"حداکثر {Harbora.Infrastructure.Storage.BucketObjectService.MaxObjectBytes / 1024 / 1024} مگابایت برای هر شیء؛ در همین پوشه گذاشته می‌شود."
+                : $"Up to {Harbora.Infrastructure.Storage.BucketObjectService.MaxObjectBytes / 1024 / 1024} MB per object; it lands in this folder.")
+        </span>
+    </form>
+</section>

@@ -26,6 +26,7 @@ namespace Harbora.Web.Controllers;
 public sealed class StorageController(
     HarboraDbContext db,
     ObjectStorageAdmin storage,
+    Harbora.Infrastructure.Storage.BucketObjectService objects,
     ISecretProtector protector,
     IAuditLogger audit,
     ICurrentUser currentUser) : Controller
@@ -33,6 +34,94 @@ public sealed class StorageController(
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
     private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    // ---- Browsing what is in a bucket ----
+    //
+    // Every action re-checks that the bucket belongs to the caller's workspace. The bucket id is in
+    // the URL, and a page that trusted it would be a page that browses another tenant's objects
+    // through a guessed guid.
+
+    [HttpGet("buckets/{id:guid}/objects")]
+    public async Task<IActionResult> Objects(Guid id, string? prefix, CancellationToken ct)
+    {
+        var bucket = await OwnedAsync(id, ct);
+        if (bucket is null) return NotFound();
+
+        ViewData["Title"] = bucket.Name;
+        ViewBag.Bucket = bucket;
+        ViewBag.Prefix = Harbora.Infrastructure.Storage.ObjectKey.NormalisePrefix(prefix) ?? "";
+        ViewBag.Parent = Harbora.Infrastructure.Storage.ObjectKey.Parent(prefix);
+        ViewBag.Objects = await objects.ListAsync(id, prefix, ct);
+        return View();
+    }
+
+    [HttpGet("buckets/{id:guid}/objects/download")]
+    public async Task<IActionResult> DownloadObject(Guid id, string key, CancellationToken ct)
+    {
+        if (await OwnedAsync(id, ct) is null) return NotFound();
+
+        var bytes = await objects.ReadAsync(id, key, ct);
+        if (bytes is null) return NotFound();
+
+        await audit.LogAsync("storage.object_read", "bucket", $"{id}:{key}", ClientIp, ct: ct);
+
+        // application/octet-stream on purpose: an object is whatever a customer uploaded, and
+        // serving it as its claimed type from the panel's own origin is a stored-XSS delivery.
+        return File(bytes, "application/octet-stream", System.IO.Path.GetFileName(key));
+    }
+
+    [HttpPost("buckets/{id:guid}/objects/upload")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> UploadObject(Guid id, string? prefix, IFormFile? file, CancellationToken ct)
+    {
+        if (await OwnedAsync(id, ct) is null) return NotFound();
+
+        if (file is null || file.Length == 0)
+        {
+            TempData["Error"] = IsFa ? "فایلی انتخاب نشد." : "No file was chosen.";
+            return RedirectToAction(nameof(Objects), new { id, prefix });
+        }
+
+        using var buffer = new MemoryStream();
+        await file.CopyToAsync(buffer, ct);
+
+        var folder = Harbora.Infrastructure.Storage.ObjectKey.NormalisePrefix(prefix) ?? "";
+        var key = string.IsNullOrEmpty(folder)
+            ? System.IO.Path.GetFileName(file.FileName)
+            : folder + "/" + System.IO.Path.GetFileName(file.FileName);
+
+        var outcome = await objects.WriteAsync(id, key, buffer.ToArray(), ct);
+        if (outcome.Ok)
+            await audit.LogAsync("storage.object_write", "bucket", $"{id}:{key}", ClientIp, ct: ct);
+
+        TempData[outcome.Ok ? "Message" : "Error"] = outcome.Ok
+            ? (IsFa ? $"«{key}» بارگذاری شد." : $"{key} was uploaded.")
+            : outcome.Reason;
+
+        return RedirectToAction(nameof(Objects), new { id, prefix });
+    }
+
+    [HttpPost("buckets/{id:guid}/objects/delete")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> DeleteObject(Guid id, string key, string? prefix, CancellationToken ct)
+    {
+        if (await OwnedAsync(id, ct) is null) return NotFound();
+
+        var outcome = await objects.DeleteAsync(id, key, ct);
+        if (outcome.Ok)
+            await audit.LogAsync("storage.object_delete", "bucket", $"{id}:{key}", ClientIp, ct: ct);
+
+        TempData[outcome.Ok ? "Message" : "Error"] = outcome.Ok
+            ? (IsFa ? "حذف شد." : "Deleted.")
+            : outcome.Reason;
+
+        return RedirectToAction(nameof(Objects), new { id, prefix });
+    }
+
+    private async Task<Harbora.Domain.Storage.StorageBucket?> OwnedAsync(Guid id, CancellationToken ct) =>
+        await db.StorageBuckets.FirstOrDefaultAsync(b => b.Id == id && b.WorkspaceId == WorkspaceId, ct);
 
     [HttpGet("")]
     public async Task<IActionResult> Index(Guid? reveal, CancellationToken ct)

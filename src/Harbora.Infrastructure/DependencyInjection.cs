@@ -123,6 +123,7 @@ public static class DependencyInjection
         services.Configure<Storage.ObjectStorageOptions>(
             config.GetSection(Storage.ObjectStorageOptions.SectionName));
         services.AddScoped<Storage.ObjectStorageAdmin>();
+        services.AddScoped<Storage.BucketObjectService>();
         services.AddScoped<IManagedServiceEngine>(sp => sp.GetRequiredService<Services.ManagedServiceEngine>());
 
         // Backups (config + volume/db), storage (local + S3), and the schedule runner.
