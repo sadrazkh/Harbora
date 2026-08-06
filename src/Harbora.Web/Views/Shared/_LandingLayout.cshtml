@@ -1,6 +1,5 @@
 ﻿@using System.Globalization
 @inject ViteManifest Vite
-@inject Microsoft.AspNetCore.Mvc.Localization.IViewLocalizer T
 @{
     var culture = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
     var isRtl = culture == "fa";

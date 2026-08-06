@@ -2,7 +2,6 @@
 @inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @using Harbora.Infrastructure.Navigation
 @using Harbora.Web.Infrastructure
-@inject IViewLocalizer T
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var groups = NavigationMap.VisibleTo(NavigationCapabilities.For(User));

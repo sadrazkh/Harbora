@@ -1,6 +1,5 @@
 ﻿@using Harbora.Web.ViewModels
 @model AuditPageViewModel
-@inject Microsoft.AspNetCore.Mvc.Localization.IViewLocalizer T
 @{
     string Query(int page) =>
         $"/audit?page={page}&action={Uri.EscapeDataString(Model.ActionFilter ?? "")}&actor={Uri.EscapeDataString(Model.ActorFilter ?? "")}";
