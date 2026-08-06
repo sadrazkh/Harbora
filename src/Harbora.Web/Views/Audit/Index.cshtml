@@ -7,7 +7,7 @@
 
 <div class="flex items-center justify-between mb-4">
     <div>
-        <h1 class="text-xl font-semibold">@T["Audit log"]</h1>
+        <h1 class="text-xl font-semibold">@T["Audit Log"]</h1>
         <p class="text-sm text-ink-muted">@T["Privileged actions across the platform, newest first."]</p>
     </div>
     <a href="/audit/export?action=@Uri.EscapeDataString(Model.ActionFilter ?? "")&actor=@Uri.EscapeDataString(Model.ActorFilter ?? "")"

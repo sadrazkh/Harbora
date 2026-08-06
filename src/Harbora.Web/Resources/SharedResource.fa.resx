@@ -40,7 +40,7 @@
   <data name="Logs"><value>لاگ‌ها</value></data>
   <data name="Templates"><value>قالب‌ها</value></data>
   <data name="Settings"><value>تنظیمات</value></data>
-  <data name="Audit Log"><value>گزارش فعالیت</value></data>
+  <data name="Audit Log"><value>گزارش رخدادها</value></data>
   <data name="API Tokens"><value>توکن‌های API</value></data>
   <data name="Login"><value>ورود</value></data>
   <data name="Logout"><value>خروج</value></data>

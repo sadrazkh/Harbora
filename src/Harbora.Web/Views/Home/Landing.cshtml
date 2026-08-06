@@ -171,10 +171,10 @@
                         </li>
                         <li class="flex items-center gap-2">
                             <span class="text-accent-text">✓</span>
-                            @(plan.MaxServices <= 0 ? T["Unlimited databases"].Value : $"{plan.MaxServices} {T["databases"].Value}")
+                            @(plan.MaxServices <= 0 ? T["Unlimited databases"].Value : $"{plan.MaxServices} {T["Databases"].Value}")
                         </li>
-                        <li class="flex items-center gap-2"><span class="text-accent-text">✓</span> @Gb(plan.MaxMemoryBytes) @T["memory"]</li>
-                        <li class="flex items-center gap-2"><span class="text-accent-text">✓</span> @Gb(plan.MaxDiskBytes) @T["disk"]</li>
+                        <li class="flex items-center gap-2"><span class="text-accent-text">✓</span> @Gb(plan.MaxMemoryBytes) @T["Memory"]</li>
+                        <li class="flex items-center gap-2"><span class="text-accent-text">✓</span> @Gb(plan.MaxDiskBytes) @T["Disk"]</li>
                         <li class="flex items-center gap-2"><span class="text-accent-text">✓</span> @T["Automatic SSL & backups"]</li>
                     </ul>
 

@@ -53,9 +53,12 @@ public class PersianResourceTests
     [Fact]
     public void Every_phrase_a_view_asks_for_has_a_persian_translation()
     {
-        // Compared case-insensitively because resource names are: "Disk" and "disk" are one entry,
-        // and adding both is a build warning rather than two translations.
-        var translated = ResourceNames().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Case-sensitive, because that is how the lookup works, and the two halves of this rule pull
+        // in opposite directions: the *build* treats "Disk" and "disk" as one entry and drops the
+        // second with a warning, while the *lookup* treats them as two names and finds neither for
+        // the spelling that was dropped. Comparing case-insensitively here made the first version of
+        // this test green while four keys on the audit and landing pages still rendered in English.
+        var translated = ResourceNames().ToHashSet(StringComparer.Ordinal);
 
         var missing = new SortedSet<string>(StringComparer.Ordinal);
 
