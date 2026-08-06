@@ -162,6 +162,61 @@
         </form>
     </section>
 
+    @* ---- Two-factor sign-in ---- *@
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "ورود دومرحله‌ای" : "Two-factor sign-in")</h2>
+
+        @if (TempData["RecoveryCodes"] is string recovery)
+        {
+            @* The one and only render — only hashes exist from here on. *@
+            <div class="mb-4 rounded-lg bg-warn-soft border border-warn px-4 py-3 text-sm">
+                <div class="mb-2 font-medium">@(isFa ? "کدهای بازیابی — همین حالا جایی امن نگه دارید:" : "Recovery codes — save them somewhere safe now:")</div>
+                <pre dir="ltr" class="rounded bg-code text-code-ink p-3 text-xs leading-6">@recovery</pre>
+            </div>
+        }
+
+        @if (TempData["TotpSecret"] is string draftSecret && TempData["TotpUri"] is string draftUri)
+        {
+            <div class="space-y-3 text-sm">
+                <p>@(isFa ? "این کلید را در اپ احراز هویت (Google Authenticator، Aegis، 1Password و…) وارد کنید:" : "Enter this key in your authenticator app (Google Authenticator, Aegis, 1Password, …):")</p>
+                <code dir="ltr" class="block break-all rounded bg-code text-code-ink px-3 py-2">@draftSecret</code>
+                <p><a href="@draftUri" class="text-accent-text" dir="ltr">@(isFa ? "یا روی موبایل این لینک را باز کنید ←" : "Or open this link on your phone →")</a></p>
+                <form asp-action="TotpConfirm" method="post" class="flex gap-2">
+                    @Html.AntiForgeryToken()
+                    <input name="code" inputmode="numeric" autocomplete="one-time-code" required dir="ltr"
+                           placeholder="123456" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm">@(isFa ? "تأیید و فعال‌سازی" : "Confirm & enable")</button>
+                </form>
+            </div>
+        }
+        else if (ViewBag.TotpEnabled == true)
+        {
+            <p class="mb-3 text-sm text-ok">✓ @(isFa ? "فعال است. ورود، علاوه بر رمز، کد اپ احراز هویت را می‌خواهد." : "On. Signing in asks for your authenticator code as well as your password.")</p>
+            @* Turning it off costs a code — an unlocked laptop must not be enough. *@
+            <form asp-action="TotpDisable" method="post" class="flex gap-2">
+                @Html.AntiForgeryToken()
+                <input name="code" inputmode="numeric" autocomplete="one-time-code" required dir="ltr"
+                       placeholder="@(isFa ? "کد یا کد بازیابی" : "code or recovery code")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm text-danger">@(isFa ? "خاموش کردن" : "Turn off")</button>
+            </form>
+        }
+        else
+        {
+            <p class="mb-3 text-sm text-ink-muted">@(isFa ? "با هر ورود، علاوه بر رمز، یک کد شش‌رقمی از اپ احراز هویت خواسته می‌شود." : "Each sign-in asks for a six-digit code from your authenticator app, on top of your password.")</p>
+            @if (ViewBag.TotpDraft == true)
+            {
+                <form asp-action="TotpDisable" method="post" class="inline">
+                    @Html.AntiForgeryToken()
+                    <button class="me-2 rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@(isFa ? "لغو ثبت نیمه‌کاره" : "Discard the unfinished set-up")</button>
+                </form>
+            }
+            <form asp-action="TotpBegin" method="post" class="inline">
+                @Html.AntiForgeryToken()
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm">@(isFa ? "فعال‌سازی" : "Turn on")</button>
+            </form>
+        }
+    </section>
+
     @* ---- API tokens ---- *@
     <section class="rounded-xl border border-line bg-surface p-5 lg:col-span-2">
         <h2 class="text-[15px] font-semibold text-ink mb-3">@T["API Tokens"]</h2>

@@ -356,6 +356,9 @@ public sealed class SettingsController(
     HarboraDbContext db,
     ITokenService tokens,
     Harbora.Infrastructure.Assistant.AssistantService assistant,
+    Harbora.Application.Abstractions.ISecretProtector protector,
+    Harbora.Application.Abstractions.ISystemClock clock,
+    IAuditLogger audit,
     ICurrentUser currentUser) : Controller
 {
     private bool IsProvider => User.IsInRole("Owner") || User.IsInRole("Admin");
@@ -393,6 +396,15 @@ public sealed class SettingsController(
         var assistantUnavailable = Harbora.Infrastructure.Assistant.AssistantAvailability.Check(assistantConfig);
         ViewBag.AssistantUnavailable = IsFa ? assistantUnavailable?.ReasonFa : assistantUnavailable?.Reason;
 
+        var me = await db.Users.IgnoreQueryFilters()
+            .Where(u => u.Id == currentUser.UserId)
+            .Select(u => new { u.TotpEnabledAt, u.TotpSecretEncrypted })
+            .FirstOrDefaultAsync(ct);
+        ViewBag.TotpEnabled = me?.TotpEnabledAt is not null;
+        // A draft secret exists when enrolment began but was never confirmed; the page offers to
+        // start over rather than showing a code prompt for a secret the person no longer has.
+        ViewBag.TotpDraft = me?.TotpEnabledAt is null && me?.TotpSecretEncrypted is not null;
+
         return View();
     }
 
@@ -414,6 +426,99 @@ public sealed class SettingsController(
     /// Provider-only: configure the AI assistant. Leaving the key box blank keeps the stored one,
     /// so saving a model change does not silently disable the feature.
     /// </summary>
+    // ---- Two-factor enrolment ----
+    //
+    // Begin writes a draft secret; nothing changes about signing in until Confirm proves the
+    // authenticator really holds it. An account whose owner scanned the QR wrong and enabled 2FA
+    // anyway is an account nobody can enter.
+
+    [HttpPost("/settings/totp/begin")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> TotpBegin(CancellationToken ct)
+    {
+        var me = await db.Users.IgnoreQueryFilters().FirstAsync(u => u.Id == currentUser.UserId, ct);
+        if (me.TotpEnabledAt is not null) return RedirectToAction(nameof(Index));
+
+        var secret = Harbora.Infrastructure.Security.Totp.GenerateSecret();
+        me.TotpSecretEncrypted = protector.Protect(secret);
+        await db.SaveChangesAsync(ct);
+
+        // Shown exactly once, on the next render. The page after that only knows a draft exists.
+        TempData["TotpSecret"] = secret;
+        TempData["TotpUri"] = Harbora.Infrastructure.Security.Totp.OtpauthUri("Harbora", me.Email, secret);
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost("/settings/totp/confirm")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> TotpConfirm(string? code, CancellationToken ct)
+    {
+        var me = await db.Users.IgnoreQueryFilters().FirstAsync(u => u.Id == currentUser.UserId, ct);
+        if (me.TotpSecretEncrypted is null || me.TotpEnabledAt is not null) return RedirectToAction(nameof(Index));
+
+        var secret = protector.Unprotect(me.TotpSecretEncrypted);
+        if (!Harbora.Infrastructure.Security.Totp.Verify(secret, code, clock.UtcNow))
+        {
+            TempData["Error"] = IsFa ? "کد درست نیست — دوباره امتحان کنید." : "That code is not right — try again.";
+            // The draft survives: the person mistyped, they did not lose the secret.
+            TempData["TotpUri"] = Harbora.Infrastructure.Security.Totp.OtpauthUri("Harbora", me.Email, secret);
+            TempData["TotpSecret"] = secret;
+            return RedirectToAction(nameof(Index));
+        }
+
+        var recovery = Harbora.Infrastructure.Security.Totp.IssueRecoveryCodes();
+        me.RecoveryCodesHash = Harbora.Infrastructure.Security.Totp.StoreRecoveryCodes(recovery);
+        me.TotpEnabledAt = clock.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("user.totp_enabled", "user", me.Id.ToString(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+
+        // The one and only render of the codes; only hashes exist from here on.
+        TempData["RecoveryCodes"] = string.Join("\n", recovery);
+        TempData["Message"] = IsFa
+            ? "ورود دومرحله‌ای فعال شد. کدهای بازیابی را همین حالا جایی امن نگه دارید — دیگر نشان داده نمی‌شوند."
+            : "Two-factor is on. Save the recovery codes somewhere safe now — they will not be shown again.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost("/settings/totp/disable")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> TotpDisable(string? code, CancellationToken ct)
+    {
+        var me = await db.Users.IgnoreQueryFilters().FirstAsync(u => u.Id == currentUser.UserId, ct);
+        if (me.TotpSecretEncrypted is null) return RedirectToAction(nameof(Index));
+
+        // Turning it off costs a code: a walked-away-from unlocked laptop must not be enough to
+        // strip the account of its second factor. A recovery code counts — that is what they are for.
+        var secret = protector.Unprotect(me.TotpSecretEncrypted);
+        var ok = Harbora.Infrastructure.Security.Totp.Verify(secret, code, clock.UtcNow);
+        if (!ok && me.TotpEnabledAt is not null)
+        {
+            var (consumed, remaining) = Harbora.Infrastructure.Security.Totp.ConsumeRecoveryCode(me.RecoveryCodesHash, code ?? "");
+            if (consumed) { me.RecoveryCodesHash = remaining; ok = true; }
+        }
+        // A never-confirmed draft can be discarded freely — it protects nothing yet.
+        if (me.TotpEnabledAt is null) ok = true;
+
+        if (!ok)
+        {
+            TempData["Error"] = IsFa ? "برای خاموش‌کردن، کد لازم است." : "Turning this off needs a code.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        me.TotpSecretEncrypted = null;
+        me.TotpEnabledAt = null;
+        me.RecoveryCodesHash = null;
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("user.totp_disabled", "user", me.Id.ToString(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+
+        TempData["Message"] = IsFa ? "ورود دومرحله‌ای خاموش شد." : "Two-factor is off.";
+        return RedirectToAction(nameof(Index));
+    }
+
     [HttpPost("/settings/assistant")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.PlatformManage)]

@@ -1,0 +1,21 @@
+@model TotpViewModel
+@{
+    ViewData["Title"] = "Two-factor";
+    Layout = "_Auth";
+}
+<h1 class="title">@T["One more step"]</h1>
+<p class="subtitle">@T["Enter the six-digit code from your authenticator app, or one of your recovery codes."]</p>
+
+<form asp-controller="Account" asp-action="Totp" method="post">
+    @Html.AntiForgeryToken()
+    <input type="hidden" asp-for="ReturnUrl" />
+    <div asp-validation-summary="All" class="error"></div>
+
+    <div class="field">
+        <label>@T["Code"]</label>
+        <input asp-for="Code" inputmode="numeric" autocomplete="one-time-code" required autofocus dir="ltr" />
+    </div>
+    <button type="submit" class="btn btn-primary">@T["Verify"]</button>
+</form>
+
+<p class="subtitle" style="margin-top:.75rem"><a href="/account/login">@T["Back to sign in"]</a></p>

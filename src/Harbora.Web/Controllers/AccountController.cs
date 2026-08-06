@@ -5,6 +5,7 @@ using Harbora.Web.Infrastructure;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,6 +20,8 @@ public sealed class AccountController(
     IAuditLogger audit,
     Harbora.Application.Abstractions.ISystemClock clock,
     Harbora.Infrastructure.Notifications.PlatformMailer mailer,
+    Harbora.Application.Abstractions.ISecretProtector protector,
+    IDataProtectionProvider dataProtection,
     Harbora.Web.Infrastructure.PanelModeProvider panelModes) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -162,6 +165,24 @@ public sealed class AccountController(
             return View(model);
         }
 
+        // The password alone is not the door when two-factor is on. Nothing is signed in here: the
+        // half-way state is a five-minute sealed note naming the user, and the code page is the
+        // only thing that can spend it. A half-authenticated cookie in the real scheme would be a
+        // signed-in session with extra steps.
+        if (user.TotpEnabledAt is not null && user.TotpSecretEncrypted is not null)
+        {
+            Response.Cookies.Append(TwoFactorCookie,
+                TwoFactorProtector().Protect(user.Id.ToString(), TimeSpan.FromMinutes(5)),
+                new CookieOptions { HttpOnly = true, SameSite = SameSiteMode.Lax, Secure = Request.IsHttps });
+            return Redirect("/account/totp" + (model.ReturnUrl is { } r ? $"?returnUrl={Uri.EscapeDataString(r)}" : ""));
+        }
+
+        return await CompleteSignInAsync(user, model.ReturnUrl, model);
+    }
+
+    private async Task<IActionResult> CompleteSignInAsync(
+        Harbora.Domain.Identity.User user, string? returnUrl, object viewModel)
+    {
         user.LastLoginAt = clock.UtcNow;
         // Bootstrap query: this is what DECIDES the caller's workspace, so it must not be filtered by
         // it. At this point the request has no workspace claim, so the global filter would match
@@ -182,7 +203,7 @@ public sealed class AccountController(
             await audit.LogAsync("user.login_no_workspace", "user", user.Id.ToString(), ClientIp,
                 actorEmailOverride: user.Email, userIdOverride: user.Id);
             ModelState.AddModelError(string.Empty, (IsFa ? resolution.ReasonFa : null) ?? resolution.Reason!);
-            return View(model);
+            return View("Login", viewModel is LoginViewModel login ? login : new LoginViewModel());
         }
 
         // Repairs an account that predates the fix, on the way through, so nobody has to be found
@@ -206,7 +227,73 @@ public sealed class AccountController(
 
         await audit.LogAsync("user.login", "user", user.Id.ToString(), ClientIp,
             actorEmailOverride: user.Email, userIdOverride: user.Id);
-        return LocalRedirect(model.ReturnUrl ?? "/");
+        return LocalRedirect(returnUrl ?? "/");
+    }
+
+    // ---- The second step ----
+
+    private const string TwoFactorCookie = "harbora_2fa";
+
+    private ITimeLimitedDataProtector TwoFactorProtector() =>
+        dataProtection.CreateProtector("Harbora.TwoFactor").ToTimeLimitedDataProtector();
+
+    /// <summary>The user the sealed note names, or null when it is absent, forged or stale.</summary>
+    private Guid? PendingTwoFactorUser()
+    {
+        var sealed_ = Request.Cookies[TwoFactorCookie];
+        if (string.IsNullOrEmpty(sealed_)) return null;
+
+        try
+        {
+            return Guid.TryParse(TwoFactorProtector().Unprotect(sealed_), out var id) ? id : null;
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            return null;
+        }
+    }
+
+    [HttpGet("/account/totp")]
+    public IActionResult Totp(string? returnUrl) =>
+        PendingTwoFactorUser() is null ? Redirect("/account/login") : View(new TotpViewModel { ReturnUrl = returnUrl });
+
+    [HttpPost("/account/totp")]
+    [ValidateAntiForgeryToken]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> Totp(TotpViewModel model)
+    {
+        if (PendingTwoFactorUser() is not { } userId) return Redirect("/account/login");
+
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId && u.IsActive);
+        if (user?.TotpSecretEncrypted is null || user.TotpEnabledAt is null) return Redirect("/account/login");
+
+        var secret = protector.Unprotect(user.TotpSecretEncrypted);
+        var ok = Harbora.Infrastructure.Security.Totp.Verify(secret, model.Code, clock.UtcNow);
+
+        if (!ok)
+        {
+            // A recovery code spends itself: the row is rewritten without it before anything else
+            // happens, so the same code read off the same sheet never works twice.
+            var (consumed, remaining) = Harbora.Infrastructure.Security.Totp.ConsumeRecoveryCode(
+                user.RecoveryCodesHash, model.Code ?? "");
+            if (consumed)
+            {
+                user.RecoveryCodesHash = remaining;
+                await db.SaveChangesAsync();
+                ok = true;
+            }
+        }
+
+        if (!ok)
+        {
+            await audit.LogAsync("user.totp_challenge_failed", "user", user.Id.ToString(), ClientIp,
+                actorEmailOverride: user.Email, userIdOverride: user.Id);
+            ModelState.AddModelError(string.Empty, IsFa ? "کد درست نیست." : "That code is not right.");
+            return View(model);
+        }
+
+        Response.Cookies.Delete(TwoFactorCookie);
+        return await CompleteSignInAsync(user, model.ReturnUrl, model);
     }
 
     [HttpPost("/account/logout")]

@@ -255,4 +255,9 @@
   <data name="New password"><value>رمز تازه</value></data>
   <data name="Repeat it"><value>دوباره بنویسید</value></data>
   <data name="Save the password"><value>ذخیرهٔ رمز</value></data>
+  <data name="One more step"><value>یک قدم دیگر</value></data>
+  <data name="Enter the six-digit code from your authenticator app, or one of your recovery codes."><value>کد شش‌رقمی اپ احراز هویت، یا یکی از کدهای بازیابی را وارد کنید.</value></data>
+  <data name="Code"><value>کد</value></data>
+  <data name="Verify"><value>تأیید</value></data>
+  <data name="A code is required."><value>کد لازم است.</value></data>
 </root>

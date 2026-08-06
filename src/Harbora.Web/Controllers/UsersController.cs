@@ -217,6 +217,27 @@ public sealed class UsersController(
         return Back(active ? $"{user.Email} can sign in again." : $"{user.Email} is suspended.");
     }
 
+    /// <summary>
+    /// Strip a locked-out account of its second factor. The person lost their phone and their
+    /// recovery sheet; this is the human path back in, and it is deliberately an administrator's
+    /// act with an audit row rather than anything self-service.
+    /// </summary>
+    [HttpPost("{id:guid}/totp/reset")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ResetTotp(Guid id, CancellationToken ct)
+    {
+        var user = await db.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Id == id, ct);
+        if (user is null) return NotFound();
+
+        user.TotpSecretEncrypted = null;
+        user.TotpEnabledAt = null;
+        user.RecoveryCodesHash = null;
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("user.totp_reset_by_admin", "user", user.Email, ClientIp, ct: ct);
+        return Back(IsFa ? $"ورود دومرحله‌ای {user.Email} برداشته شد." : $"Two-factor was removed from {user.Email}.");
+    }
+
     [HttpPost("{id:guid}/password")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ResetPassword(Guid id, string password, CancellationToken ct)

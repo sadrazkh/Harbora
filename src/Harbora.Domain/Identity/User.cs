@@ -44,6 +44,22 @@ public class User : BaseEntity
 
     public DateTimeOffset? LastLoginAt { get; set; }
 
+    /// <summary>
+    /// The TOTP secret, encrypted at rest — set while enrolment is underway, active only once
+    /// <see cref="TotpEnabledAt"/> is stamped. Null for everyone who has never turned this on,
+    /// which keeps their sign-in byte-identical to what it always was.
+    /// </summary>
+    public string? TotpSecretEncrypted { get; set; }
+
+    /// <summary>When two-factor became active. Null means the secret above is an unconfirmed draft.</summary>
+    public DateTimeOffset? TotpEnabledAt { get; set; }
+
+    /// <summary>
+    /// JSON array of SHA-256 hashes of the unused recovery codes. Each is removed as it is spent;
+    /// the codes themselves were shown once and never stored.
+    /// </summary>
+    public string? RecoveryCodesHash { get; set; }
+
     public ICollection<ApiToken> Tokens { get; set; } = new List<ApiToken>();
     public ICollection<WorkspaceMember> Memberships { get; set; } = new List<WorkspaceMember>();
 }

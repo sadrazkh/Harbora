@@ -24,6 +24,12 @@ public sealed class LoginViewModel
     public string? ReturnUrl { get; set; }
 }
 
+public sealed class TotpViewModel
+{
+    [Required(ErrorMessage = "A code is required.")] public string Code { get; set; } = string.Empty;
+    public string? ReturnUrl { get; set; }
+}
+
 public sealed class ResetPasswordViewModel
 {
     [Required] public string Token { get; set; } = string.Empty;
