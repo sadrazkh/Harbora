@@ -1,4 +1,4 @@
-﻿using Harbora.Application.Abstractions;
+﻿﻿﻿﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
@@ -24,9 +24,13 @@ public sealed class ProjectsController(
     ProjectService projects,
     Harbora.Infrastructure.Services.ServiceUsageService usage,
     Harbora.Infrastructure.Security.ProjectAccessService access,
+    EnvironmentCloner cloner,
+    IAuditLogger audit,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
+    private static bool IsFa =>
+        System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken ct)
@@ -151,6 +155,73 @@ public sealed class ProjectsController(
 
         var environment = await projects.AddEnvironmentAsync(WorkspaceId, id, name, ct);
         return RedirectToAction(nameof(Details), new { id, environmentId = environment.Id });
+    }
+
+    /// <summary>
+    /// Copies an environment: the same applications and databases, with new names, new database
+    /// passwords, empty volumes and none of the original's domains.
+    ///
+    /// The plan is worked out and shown before anything is created — a page that starts making
+    /// eleven containers and stops at the eighth is worse than one that says no.
+    /// </summary>
+    [HttpGet("{id:guid}/environments/{environmentId:guid}/clone")]
+    [Authorize(Policy = Capabilities.AppsCreate)]
+    public async Task<IActionResult> CloneEnvironment(
+        Guid id, Guid environmentId, string? name, CancellationToken ct)
+    {
+        var environment = await db.Environments.Include(e => e.Project)
+            .FirstOrDefaultAsync(e => e.Id == environmentId && e.ProjectId == id
+                                      && e.WorkspaceId == WorkspaceId, ct);
+        if (environment is null) return NotFound();
+
+        if (!await access.AllowsAsync(new ResourcePlacement(id, environmentId), Capabilities.AppsCreate, ct))
+            return NotFound();
+
+        var desired = string.IsNullOrWhiteSpace(name) ? $"{environment.Name} copy" : name.Trim();
+
+        ViewData["Title"] = IsFa ? "کپی محیط" : "Copy environment";
+        ViewBag.Source = environment;
+        ViewBag.DesiredName = desired;
+        ViewBag.Plan = await cloner.PlanAsync(WorkspaceId, environmentId, desired, ct);
+        return View();
+    }
+
+    [HttpPost("{id:guid}/environments/{environmentId:guid}/clone")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsCreate)]
+    public async Task<IActionResult> CreateClone(
+        Guid id, Guid environmentId, string name, CancellationToken ct)
+    {
+        if (!await db.Environments.AnyAsync(e => e.Id == environmentId && e.ProjectId == id
+                                                 && e.WorkspaceId == WorkspaceId, ct))
+            return NotFound();
+
+        if (!await access.AllowsAsync(new ResourcePlacement(id, environmentId), Capabilities.AppsCreate, ct))
+            return NotFound();
+
+        var outcome = await cloner.CloneAsync(WorkspaceId, environmentId, name ?? "", ct);
+
+        if (!outcome.Ok)
+        {
+            TempData["Error"] = outcome.Reason;
+            return RedirectToAction(nameof(CloneEnvironment), new { id, environmentId, name });
+        }
+
+        await audit.LogAsync("environment.cloned", "environment", outcome.EnvironmentId!.Value.ToString(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+            {
+                from = environmentId,
+                apps = outcome.Plan!.Apps.Count,
+                databases = outcome.Plan.Services.Count
+            }),
+            ct: ct);
+
+        TempData["Message"] = IsFa
+            ? $"«{outcome.Plan.EnvironmentName}» ساخته شد. رمز دیتابیس‌ها تازه است و والیوم‌ها خالی‌اند."
+            : $"{outcome.Plan.EnvironmentName} was created. The databases have new passwords and the volumes are empty.";
+
+        return RedirectToAction(nameof(Details), new { id, environmentId = outcome.EnvironmentId });
     }
 
     [HttpPost("{id:guid}/delete")]

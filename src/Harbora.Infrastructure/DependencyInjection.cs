@@ -1,4 +1,4 @@
-﻿using Docker.DotNet;
+﻿﻿using Docker.DotNet;
 using Harbora.Application.Abstractions;
 using Harbora.Infrastructure.Common;
 using Harbora.Infrastructure.Deployments;
@@ -124,6 +124,7 @@ public static class DependencyInjection
             config.GetSection(Storage.ObjectStorageOptions.SectionName));
         services.AddScoped<Storage.ObjectStorageAdmin>();
         services.AddScoped<Storage.BucketObjectService>();
+        services.AddScoped<Projects.EnvironmentCloner>();
         services.AddScoped<IManagedServiceEngine>(sp => sp.GetRequiredService<Services.ManagedServiceEngine>());
 
         // Backups (config + volume/db), storage (local + S3), and the schedule runner.

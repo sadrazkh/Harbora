@@ -1,0 +1,140 @@
+﻿@{
+    var source = (Harbora.Domain.Projects.Environment)ViewBag.Source;
+    var plan = ViewBag.Plan as Harbora.Infrastructure.Projects.ClonePlan;
+    var desired = (string)ViewBag.DesiredName;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+}
+
+<div class="mb-6">
+    <nav class="text-sm text-ink-muted mb-1">
+        <a href="/projects/@source.ProjectId" class="text-accent-text">@(source.Project?.Name ?? "")</a>
+        <span class="mx-1">›</span><span>@source.Name</span>
+    </nav>
+    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "کپی محیط" : "Copy environment")</h1>
+    <p class="text-ink-muted text-sm">
+        @(isFa
+            ? "همان شکل، بدون داده و بدون ترافیک. پیش از ساخت، دقیقاً همین فهرست ساخته می‌شود."
+            : "The same shape, without the data and without the traffic. Exactly this list gets created.")
+    </p>
+</div>
+
+@if (err is not null) { <div class="alert-danger mb-4">@err</div> }
+
+@if (plan is null || plan.ResourceCount == 0)
+{
+    <div class="rounded-xl border border-line bg-surface p-6 text-sm text-ink-muted">
+        @(isFa ? "در این محیط چیزی برای کپی کردن نیست." : "There is nothing in this environment to copy.")
+    </div>
+}
+else
+{
+    <form asp-action="CreateClone" asp-route-id="@source.ProjectId" asp-route-environmentId="@source.Id"
+          method="post" class="space-y-6">
+        @Html.AntiForgeryToken()
+
+        <section class="rounded-xl border border-line bg-surface p-4 space-y-2">
+            <label for="clone-name" class="block text-sm font-medium text-ink">@(isFa ? "نام محیط تازه" : "Name of the copy")</label>
+            <input id="clone-name" name="name" value="@desired" required
+                   class="w-full max-w-sm rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            <p class="text-xs text-ink-faint">
+                @(isFa ? $"شناسه: {plan.EnvironmentSlug} — در نام شبکه و هاست‌نیم‌های داخلی می‌آید."
+                       : $"Slug: {plan.EnvironmentSlug} — it appears in the network name and internal hostnames.")
+            </p>
+        </section>
+
+        <div class="grid lg:grid-cols-2 gap-6">
+            <section class="rounded-xl border border-line bg-surface">
+                <div class="px-4 py-3 border-b border-line font-semibold">
+                    @(isFa ? "سرویس‌ها" : "Services") <span class="text-ink-faint">(@plan.Apps.Count)</span>
+                </div>
+                <div class="divide-y divide-line">
+                    @foreach (var app in plan.Apps)
+                    {
+                        <div class="p-3 text-sm">
+                            <div class="font-medium text-ink">@app.Name</div>
+                            <div class="text-xs text-ink-faint font-mono" dir="ltr">@app.Slug</div>
+                            @foreach (var volume in app.Volumes)
+                            {
+                                <div class="text-xs text-ink-muted mt-1" dir="ltr">
+                                    @volume.MountPath
+                                    <span class="text-ink-faint">— @(isFa ? "خالی" : "empty")</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                    @if (plan.Apps.Count == 0)
+                    {
+                        <div class="p-4 text-sm text-ink-faint">@(isFa ? "هیچ‌کدام." : "None.")</div>
+                    }
+                </div>
+            </section>
+
+            <section class="rounded-xl border border-line bg-surface">
+                <div class="px-4 py-3 border-b border-line font-semibold">
+                    @(isFa ? "دیتابیس‌ها" : "Databases") <span class="text-ink-faint">(@plan.Services.Count)</span>
+                </div>
+                <div class="divide-y divide-line">
+                    @foreach (var service in plan.Services)
+                    {
+                        <div class="p-3 text-sm">
+                            <div class="font-medium text-ink">@service.Name</div>
+                            <div class="text-xs text-ink-faint font-mono" dir="ltr">@service.ContainerName</div>
+                            <div class="text-xs text-ink-muted mt-1">
+                                @(isFa ? "رمز تازه، داده‌ای منتقل نمی‌شود." : "New password, no data carried over.")
+                            </div>
+                        </div>
+                    }
+                    @if (plan.Services.Count == 0)
+                    {
+                        <div class="p-4 text-sm text-ink-faint">@(isFa ? "هیچ‌کدام." : "None.")</div>
+                    }
+                </div>
+            </section>
+        </div>
+
+        @* What is deliberately left behind. A copy screen that only lists what it creates is the
+           one people are surprised by a week later. *@
+        <section class="rounded-xl border border-line bg-surface p-4 text-sm space-y-1">
+            <div class="font-semibold text-ink mb-1">@(isFa ? "منتقل نمی‌شود" : "Not carried over")</div>
+            <p class="text-ink-muted">
+                @(isFa
+                    ? $"دامنه‌ها ({plan.DomainsLeftBehind} عدد) — یک نام دامنه به یک جا اشاره می‌کند و کپی زیردامنهٔ خودکار خودش را می‌گیرد."
+                    : $"Domains ({plan.DomainsLeftBehind}) — a hostname points at one place, and the copy gets its own automatic subdomain.")
+            </p>
+            <p class="text-ink-muted">
+                @(isFa
+                    ? "محتوای والیوم‌ها — والیوم‌ها با همان مسیر ساخته می‌شوند و خالی‌اند."
+                    : "Volume contents — the volumes are created with the same mounts, and empty.")
+            </p>
+            <p class="text-ink-muted">
+                @(isFa
+                    ? "رمز دیتابیس‌ها — هر دیتابیس رمز تازه می‌گیرد و متغیرهای اتصال دوباره برای همین کپی نوشته می‌شوند."
+                    : "Database passwords — each database gets a new one, and the connection variables are rewritten against this copy.")
+            </p>
+            <p class="text-ink-muted">
+                @(isFa
+                    ? "تاریخچهٔ استقرار، preview ها و اندازه‌های سنجیده‌شده — این‌ها دربارهٔ نسخهٔ اصلی‌اند."
+                    : "Deployment history, previews and measured sizes — they describe the original.")
+            </p>
+        </section>
+
+        <section class="rounded-xl border border-line bg-surface p-4 text-sm">
+            <div class="font-semibold text-ink mb-1">@(isFa ? "از سهمیهٔ پلن برداشته می‌شود" : "Taken from the plan quota")</div>
+            <p class="text-ink-muted" dir="ltr">
+                @plan.ResourceCount @(isFa ? "منبع" : "resources") ·
+                @Harbora.Infrastructure.Tenancy.ByteSize.Measured(plan.MemoryBytes) ·
+                @plan.CpuCores.ToString("0.##") @(isFa ? "هسته" : "cores")
+            </p>
+        </section>
+
+        <div class="flex items-center gap-3">
+            <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                @(isFa ? "کپی کن" : "Copy")
+            </button>
+            <a href="/projects/@source.ProjectId?environmentId=@source.Id" class="text-sm text-ink-muted">
+                @(isFa ? "انصراف" : "Cancel")
+            </a>
+        </div>
+    </form>
+}

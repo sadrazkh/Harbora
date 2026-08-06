@@ -63,6 +63,12 @@
             <button class="w-full rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">@(isFa ? "افزودن" : "Add")</button>
         </form>
     </details>
+    @if (selected is not null)
+    {
+        <a href="/projects/@Model.Project.Id/environments/@selected.Id/clone" class="text-sm text-accent-text">
+            @(isFa ? "کپی این محیط" : "Copy this one")
+        </a>
+    }
 </div>
 
 <div class="grid lg:grid-cols-2 gap-6">
