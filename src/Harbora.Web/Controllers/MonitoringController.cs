@@ -19,9 +19,48 @@ public sealed class MonitoringController(
     IDockerEngine docker,
     ICurrentUser currentUser,
     Harbora.Infrastructure.Security.ProjectAccessService access,
+    Harbora.Infrastructure.Maintenance.DiskCleanupService cleanup,
+    IAuditLogger audit,
     ILogger<MonitoringController> logger) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
+
+    private static bool IsFa =>
+        System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    /// <summary>
+    /// Remove Harbora's own leftover images: orphans of deleted apps, and anything past each
+    /// living app's rollback window. The figures reported are the disk's own before/after, because
+    /// summed image sizes overstate shared layers.
+    /// </summary>
+    [HttpPost("cleanup")]
+    [Authorize(Policy = Harbora.Domain.Authorization.Capabilities.ServersManage)]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Cleanup(CancellationToken ct)
+    {
+        var result = await cleanup.RunAsync(ct);
+
+        await audit.LogAsync("maintenance.disk_cleanup", "server", "local",
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+            {
+                orphans = result.OrphanRemoved,
+                superseded = result.RetentionRemoved,
+                refused = result.Failed,
+                freedBytes = result.FreedBytes
+            }), ct: ct);
+
+        var removed = result.OrphanRemoved + result.RetentionRemoved;
+        var freed = result.FreedBytes is { } f
+            ? Harbora.Infrastructure.Tenancy.ByteSize.Measured(f)
+            : (IsFa ? "نامشخص" : "unknown");
+
+        TempData["Message"] = IsFa
+            ? $"پاک‌سازی: {removed} ایمیج حذف شد ({result.OrphanRemoved} یتیم، {result.RetentionRemoved} قدیمی)، {result.Failed} در حال استفاده ماند؛ فضای آزادشده: {freed}."
+            : $"Cleanup removed {removed} image(s) ({result.OrphanRemoved} orphaned, {result.RetentionRemoved} superseded), {result.Failed} in use and kept; freed: {freed}.";
+
+        return RedirectToAction(nameof(Index));
+    }
 
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken ct)
