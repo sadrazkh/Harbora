@@ -1,9 +1,9 @@
 """Draws the tutorial's arrows and Persian labels onto the panel screenshots.
 
-The screenshots themselves are captured from the running panel and saved as static HTML first, so
-nothing here needs credentials — see docs/tutorial/README.md for how they are produced.
+The screenshots are captured from the running panel and saved as static HTML first, so nothing here
+needs credentials — see docs/tutorial/README.md for how they are produced.
 
-Two things make this less trivial than "write some text on an image":
+Three things make this less trivial than "write some text on an image":
 
 * Persian is a joined script read right to left, and neither PIL nor a TrueType font does that on
   its own. The text has to be reshaped into its presentation forms and then reordered, or it comes
@@ -14,9 +14,14 @@ Two things make this less trivial than "write some text on an image":
   plate with a border, so a caption over a dark chart and the same caption over white space are
   equally legible.
 
+* The panel shows real secrets on real pages — a webhook secret, an object-storage access key, the
+  address somebody's certificates are registered to. Documentation is the one place those must not
+  travel, so every screenshot declares the regions to paint over before anything is drawn on it.
+
 Run it after re-capturing:  python scripts/annotate-tutorial.py
 """
 import json
+import math
 import pathlib
 import sys
 
@@ -43,8 +48,8 @@ FONT_CANDIDATES = [
 INK = (17, 24, 39)
 PLATE = (255, 255, 255)
 ACCENT = (109, 40, 217)      # the panel's own accent, so the marks read as part of it
-ACCENT_SOFT = (237, 233, 254)
-SHADOW = (0, 0, 0, 40)
+REDACTED = (203, 213, 225)
+REDACTED_INK = (100, 116, 139)
 
 
 def font(size: int) -> ImageFont.FreeTypeFont:
@@ -59,15 +64,25 @@ def persian(text: str) -> str:
     return get_display(arabic_reshaper.reshape(text))
 
 
+def redact(draw: ImageDraw.ImageDraw, region, f):
+    """Paints over something that must not leave the server.
+
+    Deliberately visible rather than blurred: a reader should be able to tell that a value was
+    removed on purpose, or they will go looking for the key that "should" be there.
+    """
+    x, y, w, h = region
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=4, fill=REDACTED)
+    draw.text((x + 8, y + h / 2 - 8), "• • • • •", font=f, fill=REDACTED_INK)
+
+
 def arrow(draw: ImageDraw.ImageDraw, start, end, colour=ACCENT, width=3):
     """A line with a solid head, pointing at the thing being talked about."""
     draw.line([start, end], fill=colour, width=width)
 
     # The head is drawn from the direction of travel so it points along the line rather than at a
     # fixed angle — an arrow whose head does not match its shaft reads as two marks, not one.
-    import math
     angle = math.atan2(end[1] - start[1], end[0] - start[0])
-    size = 11
+    size = 12
     draw.polygon(
         [
             end,
@@ -78,16 +93,25 @@ def arrow(draw: ImageDraw.ImageDraw, start, end, colour=ACCENT, width=3):
     )
 
 
+PAD = 9
+BADGE = 24
+
+
+def measure(draw: ImageDraw.ImageDraw, text: str, f):
+    """The plate a caption will occupy, so an arrow can be aimed before anything is drawn."""
+    box = draw.textbbox((0, 0), persian(text), font=f)
+    tw, th = box[2] - box[0], box[3] - box[1]
+    return tw + PAD * 3 + BADGE, max(th + PAD * 2, BADGE + PAD)
+
+
 def label(draw: ImageDraw.ImageDraw, xy, number: int, text: str, f, fnum):
     """A numbered plate. The number ties the mark to the same number in the prose beneath."""
     shaped = persian(text)
-    pad = 9
+    pad, badge = PAD, BADGE
     box = draw.textbbox((0, 0), shaped, font=f)
     tw, th = box[2] - box[0], box[3] - box[1]
 
-    badge = 24
-    w = tw + pad * 3 + badge
-    h = max(th + pad * 2, badge + pad)
+    w, h = measure(draw, text, f)
     x, y = xy
 
     draw.rounded_rectangle([x, y, x + w, y + h], radius=8, fill=PLATE, outline=ACCENT, width=2)
@@ -111,35 +135,50 @@ def main():
         return 1
 
     notes = json.loads(NOTES.read_text(encoding="utf-8"))
-    f, fnum = font(15), font(14)
-    written = 0
+    f, fnum, fredact = font(15), font(14), font(13)
+    written, missing = 0, []
 
-    for name, marks in notes.items():
+    for name, page in notes.items():
         source = IMG / f"{name}.png"
         if not source.exists():
-            print(f"  missing screenshot: {name}.png")
+            missing.append(name)
             continue
 
         image = Image.open(source).convert("RGB")
         draw = ImageDraw.Draw(image)
 
-        for i, mark in enumerate(marks, start=1):
-            lx, ly = mark["label"]
-            tx, ty = mark["point"]
-            w, h = label(draw, (lx, ly), i, mark["text"], f, fnum)
+        # Before anything else, so a mark can never be drawn under a value and then painted over.
+        for region in page.get("redact", []):
+            redact(draw, region, fredact)
 
+        # Arrows first, plates second. They are interleaved on a page — one mark's arrow runs
+        # straight across the next mark's caption — and a line drawn over a caption is the one thing
+        # that makes it unreadable.
+        marks = page.get("marks", [])
+        sizes = [measure(draw, m["text"], f) for m in marks]
+
+        for (lx, ly), (w, h), mark in zip((m["label"] for m in marks), sizes, marks):
+            if "point" not in mark:
+                continue
+            tx, ty = mark["point"]
             # From the edge of the plate nearest the target, so the arrow never crosses its own
             # label.
             anchor = (lx + w, ly + h / 2) if tx > lx else (lx, ly + h / 2)
             arrow(draw, anchor, (tx, ty))
 
+        for i, mark in enumerate(marks, start=1):
+            label(draw, mark["label"], i, mark["text"], f, fnum)
+
         out = IMG / f"{name}.annotated.png"
         image.save(out, optimize=True)
         written += 1
-        print(f"  {out.name}  ({len(marks)} marks)")
+        print(f"  {out.name}  ({len(page.get('marks', []))} marks,"
+              f" {len(page.get('redact', []))} redacted)")
 
+    if missing:
+        print("\nno screenshot for: " + ", ".join(missing))
     print(f"\n{written} annotated image(s).")
-    return 0
+    return 1 if missing else 0
 
 
 if __name__ == "__main__":
