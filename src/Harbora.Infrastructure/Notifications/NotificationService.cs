@@ -46,6 +46,20 @@ public sealed class NotificationService(
             await DispatchSafe(alert, severity, title, body, ct);
     }
 
+    /// <summary>
+    /// One rule, by id. IgnoreQueryFilters because the caller is a background evaluator with no
+    /// session — the workspace filter would find nothing and report a clean pass.
+    /// </summary>
+    public async Task<NotificationResult> NotifyRuleAsync(
+        Guid alertId, AlertSeverity severity, string title, string body, CancellationToken ct)
+    {
+        var alert = await db.Alerts.IgnoreQueryFilters().FirstOrDefaultAsync(a => a.Id == alertId, ct);
+        if (alert is null) return NotificationResult.Failed("That alert rule no longer exists.");
+        if (!alert.IsEnabled) return NotificationResult.Failed("That alert rule is disabled.");
+
+        return await DispatchSafe(alert, severity, title, body, ct);
+    }
+
     public async Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct)
     {
         var alert = await db.Alerts.FirstOrDefaultAsync(a => a.Id == alertId, ct);

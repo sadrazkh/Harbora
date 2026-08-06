@@ -205,6 +205,34 @@
                 <label class="flex items-center gap-1"><input type="checkbox" name="onDiskWarning" value="true" checked> disk warning</label>
                 <label class="flex items-center gap-1"><input type="checkbox" name="onBackupFailed" value="true" checked> backup failed</label>
             </div>
+            @* Optional second half. Left empty, this is exactly the event-driven rule it always
+               was; filled in, the same channel also fires when one app holds above a line. *@
+            <details class="sm:col-span-2">
+                <summary class="cursor-pointer text-sm text-accent-text">@(isFa ? "یا: هشدار روی مصرف یک اپ" : "Or: alert on one app's usage")</summary>
+                <div class="mt-3 grid gap-2 sm:grid-cols-4">
+                    <select name="appId" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                        <option value="">@(isFa ? "— بدون اپ —" : "— no app —")</option>
+                        @foreach (var a in Model.Apps)
+                        {
+                            <option value="@a.Id">@a.Name</option>
+                        }
+                    </select>
+                    <select name="metric" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                        <option value="MemoryPercent">@(isFa ? "حافظه" : "Memory")</option>
+                        <option value="CpuPercent">CPU</option>
+                    </select>
+                    <input name="thresholdPercent" type="number" min="1" max="100" placeholder="@(isFa ? "٪ آستانه" : "% threshold")"
+                           class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                    <input name="sustainedMinutes" type="number" min="0" max="1440" value="5" placeholder="@(isFa ? "دقیقه" : "minutes")"
+                           class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                </div>
+                <p class="mt-2 text-xs text-ink-faint">
+                    @(isFa
+                        ? "درصد از سهم خودِ اپ. باید در تمام بازه بالای خط بماند — یک نمونهٔ گذرا هشدار نمی‌دهد."
+                        : "Percentage of the app's own allocation. It must hold above the line for the whole window — a passing spike says nothing.")
+                </p>
+            </details>
+
             <div><button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Save"]</button></div>
         </form>
     </details>

@@ -27,4 +27,8 @@ public sealed class MonitoringDashboardViewModel
     public List<Alert> Alerts { get; set; } = new();
 }
 
-public sealed record AppHealth(string Name, string Slug, string Status, string? LastDeployStatus, string ContainerState);
+public sealed record AppHealth(string Name, string Slug, string Status, string? LastDeployStatus, string ContainerState)
+{
+    /// <summary>Needed by the threshold-alert picker, which has to post an application id.</summary>
+    public Guid Id { get; init; }
+}

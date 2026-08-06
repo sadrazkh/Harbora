@@ -99,7 +99,7 @@ public sealed class MonitoringController(
             var lastDeploy = await db.Deployments.Where(d => d.AppId == app.Id)
                 .OrderByDescending(d => d.Number).Select(d => d.Status.ToString()).FirstOrDefaultAsync(ct);
             vm.Apps.Add(new AppHealth(app.Name, app.Slug, app.Status.ToString(), lastDeploy,
-                containerState.GetValueOrDefault(app.Slug, "unknown")));
+                containerState.GetValueOrDefault(app.Slug, "unknown")) { Id = app.Id });
         }
 
         vm.RecentDeploys = await db.Deployments.Include(d => d.App)

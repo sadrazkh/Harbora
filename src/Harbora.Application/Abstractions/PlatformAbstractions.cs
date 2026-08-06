@@ -79,6 +79,17 @@ public interface INotificationService
     /// </summary>
     Task NotifyAsync(Guid workspaceId, Domain.Common.AlertEvent evt, Domain.Common.AlertSeverity severity, string title, string body, CancellationToken ct);
 
+    /// <summary>
+    /// Deliver through one specific rule, whatever its event opt-ins say.
+    ///
+    /// A per-application threshold belongs to the rule that defines it: broadcasting it to every
+    /// channel in the workspace would tell people who never asked about that app, and matching it
+    /// against the event flags would require a sixth flag nobody set. Used by the threshold
+    /// evaluator, which already holds the row.
+    /// </summary>
+    Task<NotificationResult> NotifyRuleAsync(
+        Guid alertId, Domain.Common.AlertSeverity severity, string title, string body, CancellationToken ct);
+
     /// <summary>Send a one-off test message to a single alert (for the "test" button).</summary>
     /// <summary>
     /// Sends a test notification and reports what actually happened, so the panel can say "that URL

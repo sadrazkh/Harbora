@@ -207,7 +207,20 @@ public enum AlertEvent
     SslExpiring = 2,
     DiskWarning = 3,
     BackupFailed = 4,
-    Test = 5
+    Test = 5,
+    /// <summary>Appended so existing persisted values keep their meaning.</summary>
+    ThresholdBreached = 6
+}
+
+/// <summary>
+/// Which figure a per-application threshold watches. Each is a percentage of that application's own
+/// allocation rather than of the host: an app is over its limit when it is over <em>its</em> limit,
+/// and a host-relative figure would say nothing on a big server and everything on a small one.
+/// </summary>
+public enum AlertMetric
+{
+    CpuPercent = 0,
+    MemoryPercent = 1
 }
 
 public enum ServerStatus

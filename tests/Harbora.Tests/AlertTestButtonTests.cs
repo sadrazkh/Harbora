@@ -38,6 +38,9 @@ public class AlertTestButtonTests
         public Task NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
             => Task.CompletedTask;
 
+        public Task<NotificationResult> NotifyRuleAsync(Guid alertId, AlertSeverity severity, string title, string body, CancellationToken ct)
+            => Task.FromResult(NotificationResult.Ok);
+
         public Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct)
         {
             Sent++;

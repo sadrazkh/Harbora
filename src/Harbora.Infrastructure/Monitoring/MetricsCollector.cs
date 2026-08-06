@@ -37,6 +37,11 @@ public sealed class MetricsCollector(
             await CollectServerAsync(server, docker, now, ct);
         }
 
+        // After sampling and before pruning: the rule reads the very samples just written, and the
+        // window it needs is well inside retention.
+        try { await EvaluateThresholdsAsync(now, ct); }
+        catch (Exception ex) { logger.LogWarning(ex, "Evaluating per-application thresholds failed."); }
+
         // Summarise BEFORE pruning, never the other way round. Getting that order wrong loses the
         // history silently: the charts keep working, on data quietly missing a week.
         try { await rollups.RunAsync(ct); }
@@ -44,6 +49,110 @@ public sealed class MetricsCollector(
 
         var cutoff = now - Retention;
         await db.MonitoringMetrics.Where(m => m.Timestamp < cutoff).ExecuteDeleteAsync(ct);
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Per-application thresholds: "tell me when this app holds above 90% of its memory".
+    ///
+    /// Read with <c>IgnoreQueryFilters</c> throughout. This runs on a timer with no session, and the
+    /// workspace filter would return an empty set and report a clean pass over nothing — the trap
+    /// this codebase has paid for more than once.
+    ///
+    /// Percentages come from <see cref="AllocationReading"/>, the same rule the app page uses, so a
+    /// figure the panel calls "unmeasured" can never become an alert. An app with no limit has no
+    /// percentage to be over, and is skipped rather than treated as 0%.
+    /// </summary>
+    private async Task EvaluateThresholdsAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        var rules = await db.Alerts.IgnoreQueryFilters()
+            .Where(a => a.IsEnabled && a.AppId != null && a.Metric != null && a.ThresholdPercent > 0)
+            .ToListAsync(ct);
+
+        if (rules.Count == 0) return;
+
+        var appIds = rules.Select(a => a.AppId!.Value).Distinct().ToList();
+        var rows = await db.Apps.IgnoreQueryFilters()
+            .Where(a => appIds.Contains(a.Id))
+            .Select(a => new { a.Id, a.Name, a.Slug, a.ActiveDeploymentId, a.MemoryLimitBytes, a.CpuLimit })
+            .ToListAsync(ct);
+
+        // The samples are keyed by container name, which is slug + deployment number — the same
+        // derivation the per-app charts use. An app between deployments has no container and so no
+        // samples, which is silence rather than a breach.
+        var activeIds = rows.Where(r => r.ActiveDeploymentId is not null)
+            .Select(r => r.ActiveDeploymentId!.Value).ToList();
+        var numbers = await db.Deployments.IgnoreQueryFilters()
+            .Where(d => activeIds.Contains(d.Id))
+            .Select(d => new { d.Id, d.Number })
+            .ToDictionaryAsync(d => d.Id, d => d.Number, ct);
+
+        var apps = rows.Select(r => new
+        {
+            r.Id,
+            r.Name,
+            r.MemoryLimitBytes,
+            r.CpuLimit,
+            ContainerName = r.ActiveDeploymentId is { } d && numbers.TryGetValue(d, out var n)
+                ? Deployments.DeploymentPlanning.ContainerName(r.Slug, n)
+                : null
+        }).ToList();
+
+        // One read for the longest window any rule asks for, rather than a query per rule.
+        var widest = TimeSpan.FromMinutes(Math.Max(1, rules.Max(r => r.SustainedMinutes)));
+        var since = now - widest - ThresholdRule.Tolerance;
+
+        var containerNames = apps.Select(a => a.ContainerName).Where(n => !string.IsNullOrEmpty(n)).ToList();
+        var raw = await db.MonitoringMetrics.AsNoTracking()
+            .Where(m => m.Timestamp >= since && m.ResourceRef != null && containerNames.Contains(m.ResourceRef))
+            .Select(m => new { m.Name, m.ResourceRef, m.Value, m.Timestamp })
+            .ToListAsync(ct);
+
+        foreach (var rule in rules)
+        {
+            var app = apps.FirstOrDefault(a => a.Id == rule.AppId);
+            if (app is null || string.IsNullOrEmpty(app.ContainerName)) continue;
+
+            (string Series, double Allocation) watched = rule.Metric == AlertMetric.CpuPercent
+                ? ("cpu.percent", app.CpuLimit * 100)
+                : ("mem.used", app.MemoryLimitBytes);
+            var (series, allocation) = watched;
+
+            // No allocation means no percentage. Alerting on an unlimited app would be inventing a
+            // ceiling nobody set.
+            if (allocation <= 0) continue;
+
+            var samples = raw
+                .Where(m => m.ResourceRef == app.ContainerName && m.Name == series)
+                .Select(m => new MetricSample(
+                    m.Timestamp,
+                    AllocationReading.Of(m.Value, allocation) is { Kind: AllocationKind.Known } r ? r.Percent : null))
+                .ToList();
+
+            var breached = ThresholdRule.Breached(
+                samples, rule.ThresholdPercent!.Value,
+                TimeSpan.FromMinutes(Math.Max(0, rule.SustainedMinutes)), now);
+
+            if (!breached)
+            {
+                // Cleared: the next breach is news again rather than waiting out the repeat window.
+                if (rule.ThresholdFiredAt is not null) rule.ThresholdFiredAt = null;
+                continue;
+            }
+
+            if (!ThresholdRule.MayRepeat(rule.ThresholdFiredAt, now)) continue;
+
+            rule.ThresholdFiredAt = now;
+
+            var unit = rule.Metric == AlertMetric.CpuPercent ? "CPU" : "memory";
+            // Through this rule specifically. Broadcasting a threshold to every channel in the
+            // workspace would tell people who never asked about this app.
+            await notifications.NotifyRuleAsync(rule.Id, ThresholdRule.Severity,
+                $"{app.Name}: {unit} above {rule.ThresholdPercent:0}%",
+                $"{app.Name} has held above {rule.ThresholdPercent:0}% of its {unit} allocation " +
+                $"for {rule.SustainedMinutes} minute(s).", ct);
+        }
+
         await db.SaveChangesAsync(ct);
     }
 

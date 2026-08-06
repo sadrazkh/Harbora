@@ -106,6 +106,13 @@ public sealed class RecordingNotificationService : INotificationService
         return Task.CompletedTask;
     }
 
+    /// <summary>A threshold fires through its own rule, so it is recorded under that event.</summary>
+    public Task<NotificationResult> NotifyRuleAsync(Guid alertId, AlertSeverity severity, string title, string body, CancellationToken ct)
+    {
+        Notifications.Add(new Sent(AlertEvent.ThresholdBreached, severity, title, body));
+        return Task.FromResult(NotificationResult.Ok);
+    }
+
     public Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct) =>
         Task.FromResult(NotificationResult.Ok);
 }

@@ -32,6 +32,7 @@ public sealed class AlertsController(
         string? webhookUrl, string? telegramToken, string? telegramChatId,
         string? smtpHost, int smtpPort, string? smtpUser, string? smtpPassword, string? emailFrom, string? emailTo,
         bool onDeployFailed, bool onAppCrashed, bool onSslExpiring, bool onDiskWarning, bool onBackupFailed,
+        Guid? appId, AlertMetric? metric, double? thresholdPercent, int? sustainedMinutes,
         CancellationToken ct)
     {
         var target = channel switch
@@ -54,6 +55,15 @@ public sealed class AlertsController(
             OnSslExpiring = onSslExpiring,
             OnDiskWarning = onDiskWarning,
             OnBackupFailed = onBackupFailed,
+
+            // The threshold half is optional and only stored when it is complete. A rule with an
+            // app but no metric, or a metric but no line, would sit in the table looking configured
+            // and never fire — the failure mode this project keeps finding.
+            AppId = metric is not null && thresholdPercent > 0 ? appId : null,
+            Metric = appId is not null && thresholdPercent > 0 ? metric : null,
+            ThresholdPercent = appId is not null && metric is not null ? thresholdPercent : null,
+            SustainedMinutes = Math.Clamp(sustainedMinutes ?? 5, 0, 24 * 60),
+
             IsEnabled = true
         });
         await db.SaveChangesAsync(ct);

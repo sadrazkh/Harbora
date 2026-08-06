@@ -22,6 +22,29 @@ public class Alert : BaseEntity
 
     public bool IsEnabled { get; set; } = true;
 
+    // ---- Per-application threshold (optional) ----
+    //
+    // Additive: an alert with no AppId is exactly the event-driven rule it always was. When these
+    // are set, the same channel also fires when one application holds above a line for a while.
+
+    /// <summary>The application this threshold watches, or null for a workspace-wide event rule.</summary>
+    public Guid? AppId { get; set; }
+
+    /// <summary>Which figure to watch. Null when this is not a threshold rule.</summary>
+    public AlertMetric? Metric { get; set; }
+
+    /// <summary>The line, as a percentage of the application's own allocation.</summary>
+    public double? ThresholdPercent { get; set; }
+
+    /// <summary>
+    /// How long it must hold before anyone is told. A container touches 100% CPU on every start;
+    /// alerting on one sample fills a channel with noise, and a muted channel reports nothing.
+    /// </summary>
+    public int SustainedMinutes { get; set; } = 5;
+
+    /// <summary>When this threshold last fired, so a standing breach nags rather than floods.</summary>
+    public DateTimeOffset? ThresholdFiredAt { get; set; }
+
     /// <summary>When this channel was last attempted — blank means it has never been used.</summary>
     public DateTimeOffset? LastAttemptAt { get; set; }
 
