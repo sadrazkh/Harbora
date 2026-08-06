@@ -40,7 +40,7 @@ else
                         <td class="p-3"><a href="/apps/details/@d.AppId" class="hover:text-accent-text">@d.App?.Name</a></td>
                         <td class="p-3 text-ink-muted">#@d.Number</td>
                         <td class="p-3"><partial name="_DeployStatusBadge" model="d.Status" /></td>
-                        <td class="p-3 text-ink-muted">@d.Trigger</td>
+                        <td class="p-3 text-ink-muted">@Harbora.Web.Infrastructure.StatusLabel.For(d.Trigger, isFa)</td>
                         <td class="p-3 font-mono text-xs">
                             @if (d.CommitSha is not null)
                             {

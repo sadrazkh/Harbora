@@ -22,6 +22,9 @@ public sealed class AccountController(
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
+    private static bool IsFa =>
+        System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
     [HttpGet("/account/login")]
     public IActionResult Login(string? returnUrl) => View(new LoginViewModel { ReturnUrl = returnUrl });
 
@@ -40,7 +43,8 @@ public sealed class AccountController(
         {
             await audit.LogAsync("user.login_failed", "user", user?.Id.ToString(), ClientIp,
                 actorEmailOverride: email, userIdOverride: user?.Id);
-            ModelState.AddModelError(string.Empty, "Invalid email or password.");
+            ModelState.AddModelError(string.Empty,
+                IsFa ? "ایمیل یا رمز نادرست است." : "Invalid email or password.");
             return View(model);
         }
 
@@ -63,7 +67,7 @@ public sealed class AccountController(
         {
             await audit.LogAsync("user.login_no_workspace", "user", user.Id.ToString(), ClientIp,
                 actorEmailOverride: user.Email, userIdOverride: user.Id);
-            ModelState.AddModelError(string.Empty, resolution.Reason!);
+            ModelState.AddModelError(string.Empty, (IsFa ? resolution.ReasonFa : null) ?? resolution.Reason!);
             return View(model);
         }
 

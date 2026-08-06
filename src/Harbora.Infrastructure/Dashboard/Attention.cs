@@ -11,9 +11,53 @@ public enum AttentionLevel
     Info = 2
 }
 
-/// <summary>One thing worth a person's attention, and where to go about it.</summary>
-public sealed record AttentionItem(
-    AttentionLevel Level, string Title, string Detail, string? ActionText = null, string? ActionUrl = null);
+/// <summary>What is wrong with a certificate, as a fact rather than a sentence.</summary>
+public enum CertificateIssue
+{
+    /// <summary>Issuance failed; the argument is the summarised error, when there is one.</summary>
+    IssueFailed = 0,
+    /// <summary>Already expired; the argument is the date it did.</summary>
+    Expired = 1,
+    /// <summary>Due within the watch window; the argument is the number of days left.</summary>
+    ExpiringSoon = 2
+}
+
+/// <summary>Which kind of delivery channel stopped working.</summary>
+public enum ChannelKind
+{
+    Alert = 0,
+    BackupDelivery = 1
+}
+
+/// <summary>
+/// One thing worth a person's attention, and where to go about it.
+///
+/// Everything user-facing is a resource key plus arguments, not a finished sentence. The first
+/// version composed English here, which put the most important copy in the panel — deploy failed,
+/// disk filling, certificate expiring — in a language the person never chose. The rule decides
+/// <em>what</em> to say; the view, which knows the culture, decides how it reads.
+/// </summary>
+public sealed record AttentionItem
+{
+    public required AttentionLevel Level { get; init; }
+
+    /// <summary>Resource key for the headline; also its English text.</summary>
+    public required string TitleKey { get; init; }
+    public string[] TitleArgs { get; init; } = [];
+
+    /// <summary>Resource key for the second line, when it is copy.</summary>
+    public string? DetailKey { get; init; }
+    public string[] DetailArgs { get; init; } = [];
+
+    /// <summary>
+    /// Verbatim second line — a summarised error message. Never localised: it is data from the
+    /// failing thing, and rewriting it would sever it from the logs it came from.
+    /// </summary>
+    public string? DetailText { get; init; }
+
+    public string? ActionKey { get; init; }
+    public string? ActionUrl { get; init; }
+}
 
 /// <summary>Everything the rules need, already read from the database.</summary>
 public sealed record AttentionFacts
@@ -23,10 +67,15 @@ public sealed record AttentionFacts
     public IReadOnlyList<(string Target, string? Error)> FailedBackups { get; init; } = [];
 
     /// <summary>Alert rules and backup channels that recorded a failure on their last attempt.</summary>
-    public IReadOnlyList<(string Name, string Kind, string Error)> BrokenChannels { get; init; } = [];
+    public IReadOnlyList<(string Name, ChannelKind Kind, string Error)> BrokenChannels { get; init; } = [];
 
-    /// <summary>Domains whose certificate is missing, expired, or close to it.</summary>
-    public IReadOnlyList<(string Host, string Problem)> CertificateProblems { get; init; } = [];
+    /// <summary>
+    /// Domains whose certificate is missing, expired, or close to it. The argument depends on the
+    /// issue — see <see cref="CertificateIssue"/>. Structured on purpose: the first version carried
+    /// prose here and the rule sniffed it for the word "expired" to pick a severity, which is a
+    /// translation away from always choosing Warning.
+    /// </summary>
+    public IReadOnlyList<(string Host, CertificateIssue Issue, string? Argument)> CertificateProblems { get; init; } = [];
 
     public double DiskUsedRatio { get; init; }
 
@@ -55,63 +104,152 @@ public static class AttentionRules
     /// <summary>Beyond this the list stops being a list and becomes a wall.</summary>
     public const int MaxItems = 8;
 
+    // The vocabulary, named so the localisation guard can walk it. A key added to Build and not
+    // here escapes the guard, which is why Build only ever uses these constants.
+    public const string DeployFailedTitle = "{0}: deploy failed";
+    public const string DeployFailedDetail = "The deployment did not finish.";
+    public const string DeployFailedAction = "Open the deployment";
+    public const string CrashedTitle = "{0} is not running";
+    public const string CrashedDetail = "Its container keeps stopping or restarting.";
+    public const string CrashedAction = "Open the app";
+    public const string CertificateExpiredTitle = "{0}: certificate expired";
+    public const string CertificateAttentionTitle = "{0}: certificate needs attention";
+    public const string CertificateExpiredDetail = "The certificate expired on {0}.";
+    public const string CertificateExpiringDetail = "The certificate expires in {0} days and has not renewed yet.";
+    public const string CertificateFailedDetail = "The certificate could not be issued.";
+    public const string CertificateAction = "Check the domain";
+    public const string BackupFailedTitle = "Backup failed: {0}";
+    public const string BackupFailedDetail = "The backup did not complete.";
+    public const string BackupsAction = "Open backups";
+    public const string ChannelTitle = "{0} is not delivering";
+    public const string ChannelAlertDetail = "Alert channel: {0}";
+    public const string ChannelBackupDetail = "Backup delivery: {0}";
+    public const string AlertsAction = "Open alerts";
+    public const string DiskTitle = "Disk is filling up";
+    public const string DiskDetail = "{0}% used. Builds and backups fail once it is full.";
+    public const string MonitoringAction = "Open monitoring";
+    public const string NeverDeployedTitle = "{0} has never been deployed";
+    public const string NeverDeployedDetail = "It exists but nothing is running yet.";
+    public const string NeverDeployedAction = "Deploy it";
+    public const string NoBackupsTitle = "No scheduled backups";
+    public const string NoBackupsDetail = "Nothing here is being backed up automatically.";
+    public const string NoBackupsAction = "Set one up";
+
+    /// <summary>Every key the rules can emit. The guard that keeps them translated walks this.</summary>
+    public static readonly IReadOnlyList<string> AllKeys =
+    [
+        DeployFailedTitle, DeployFailedDetail, DeployFailedAction,
+        CrashedTitle, CrashedDetail, CrashedAction,
+        CertificateExpiredTitle, CertificateAttentionTitle,
+        CertificateExpiredDetail, CertificateExpiringDetail, CertificateFailedDetail, CertificateAction,
+        BackupFailedTitle, BackupFailedDetail, BackupsAction,
+        ChannelTitle, ChannelAlertDetail, ChannelBackupDetail, AlertsAction,
+        DiskTitle, DiskDetail, MonitoringAction,
+        NeverDeployedTitle, NeverDeployedDetail, NeverDeployedAction,
+        NoBackupsTitle, NoBackupsDetail, NoBackupsAction
+    ];
+
     public static IReadOnlyList<AttentionItem> Build(AttentionFacts facts)
     {
         var items = new List<AttentionItem>();
 
         foreach (var (app, deploymentId, error) in facts.FailedDeployments)
-            items.Add(new(AttentionLevel.Critical,
-                $"{app}: deploy failed",
-                Summarise(error) ?? "The deployment did not finish.",
-                "Open the deployment", $"/deployments/details/{deploymentId}"));
+            items.Add(new()
+            {
+                Level = AttentionLevel.Critical,
+                TitleKey = DeployFailedTitle, TitleArgs = [app],
+                DetailText = Summarise(error),
+                DetailKey = Summarise(error) is null ? DeployFailedDetail : null,
+                ActionKey = DeployFailedAction, ActionUrl = $"/deployments/details/{deploymentId}"
+            });
 
         foreach (var (app, appId) in facts.CrashedApps)
-            items.Add(new(AttentionLevel.Critical,
-                $"{app} is not running",
-                "Its container keeps stopping or restarting.",
-                "Open the app", $"/apps/details/{appId}"));
+            items.Add(new()
+            {
+                Level = AttentionLevel.Critical,
+                TitleKey = CrashedTitle, TitleArgs = [app],
+                DetailKey = CrashedDetail,
+                ActionKey = CrashedAction, ActionUrl = $"/apps/details/{appId}"
+            });
 
-        foreach (var (host, problem) in facts.CertificateProblems)
-            items.Add(new(
+        foreach (var (host, issue, argument) in facts.CertificateProblems)
+            items.Add(issue switch
+            {
                 // An expired certificate is a broken site; one that is merely due is not, yet.
-                problem.Contains("expired", StringComparison.OrdinalIgnoreCase)
-                    ? AttentionLevel.Critical : AttentionLevel.Warning,
-                $"{host}: certificate {(problem.Contains("expired", StringComparison.OrdinalIgnoreCase) ? "expired" : "needs attention")}",
-                problem, "Check the domain", "/domains"));
+                CertificateIssue.Expired => new()
+                {
+                    Level = AttentionLevel.Critical,
+                    TitleKey = CertificateExpiredTitle, TitleArgs = [host],
+                    DetailKey = CertificateExpiredDetail, DetailArgs = [argument ?? "?"],
+                    ActionKey = CertificateAction, ActionUrl = "/domains"
+                },
+                CertificateIssue.ExpiringSoon => new()
+                {
+                    Level = AttentionLevel.Warning,
+                    TitleKey = CertificateAttentionTitle, TitleArgs = [host],
+                    DetailKey = CertificateExpiringDetail, DetailArgs = [argument ?? "?"],
+                    ActionKey = CertificateAction, ActionUrl = "/domains"
+                },
+                _ => new AttentionItem
+                {
+                    Level = AttentionLevel.Warning,
+                    TitleKey = CertificateAttentionTitle, TitleArgs = [host],
+                    DetailText = argument,
+                    DetailKey = argument is null ? CertificateFailedDetail : null,
+                    ActionKey = CertificateAction, ActionUrl = "/domains"
+                }
+            });
 
         foreach (var (target, error) in facts.FailedBackups)
-            items.Add(new(AttentionLevel.Critical,
-                $"Backup failed: {target}",
-                Summarise(error) ?? "The backup did not complete.",
-                "Open backups", "/backups"));
+            items.Add(new()
+            {
+                Level = AttentionLevel.Critical,
+                TitleKey = BackupFailedTitle, TitleArgs = [target],
+                DetailText = Summarise(error),
+                DetailKey = Summarise(error) is null ? BackupFailedDetail : null,
+                ActionKey = BackupsAction, ActionUrl = "/backups"
+            });
 
         foreach (var (name, kind, error) in facts.BrokenChannels)
-            items.Add(new(AttentionLevel.Warning,
-                $"{name} is not delivering",
+            items.Add(new()
+            {
+                Level = AttentionLevel.Warning,
                 // A channel that fails silently is the reason nobody hears about any of the above.
-                $"{kind}: {Summarise(error)}",
-                kind == "Backup delivery" ? "Open backups" : "Open alerts",
-                kind == "Backup delivery" ? "/backups" : "/monitoring"));
+                TitleKey = ChannelTitle, TitleArgs = [name],
+                DetailKey = kind == ChannelKind.BackupDelivery ? ChannelBackupDetail : ChannelAlertDetail,
+                DetailArgs = [Summarise(error) ?? string.Empty],
+                ActionKey = kind == ChannelKind.BackupDelivery ? BackupsAction : AlertsAction,
+                ActionUrl = kind == ChannelKind.BackupDelivery ? "/backups" : "/monitoring"
+            });
 
         if (facts.DiskUsedRatio >= DiskWarnRatio)
-            items.Add(new(AttentionLevel.Warning,
-                "Disk is filling up",
-                $"{facts.DiskUsedRatio * 100:0}% used. Builds and backups fail once it is full.",
-                "Open monitoring", "/monitoring"));
+            items.Add(new()
+            {
+                Level = AttentionLevel.Warning,
+                TitleKey = DiskTitle,
+                DetailKey = DiskDetail, DetailArgs = [$"{facts.DiskUsedRatio * 100:0}"],
+                ActionKey = MonitoringAction, ActionUrl = "/monitoring"
+            });
 
         foreach (var (app, appId) in facts.NeverDeployed)
-            items.Add(new(AttentionLevel.Info,
-                $"{app} has never been deployed",
-                "It exists but nothing is running yet.",
-                "Deploy it", $"/apps/details/{appId}"));
+            items.Add(new()
+            {
+                Level = AttentionLevel.Info,
+                TitleKey = NeverDeployedTitle, TitleArgs = [app],
+                DetailKey = NeverDeployedDetail,
+                ActionKey = NeverDeployedAction, ActionUrl = $"/apps/details/{appId}"
+            });
 
         // Onboarding, and only while it is true. A workspace with apps and no backup schedule is one
         // bad day from having nothing; a workspace with no apps has nothing to protect yet.
         if (facts.HasAnyApp && !facts.HasAnyBackupSchedule)
-            items.Add(new(AttentionLevel.Info,
-                "No scheduled backups",
-                "Nothing here is being backed up automatically.",
-                "Set one up", "/backups"));
+            items.Add(new()
+            {
+                Level = AttentionLevel.Info,
+                TitleKey = NoBackupsTitle,
+                DetailKey = NoBackupsDetail,
+                ActionKey = NoBackupsAction, ActionUrl = "/backups"
+            });
 
         return items
             .OrderBy(i => (int)i.Level)

@@ -40,19 +40,32 @@
             @foreach (var item in Model)
             {
                 var s = Style(item.Level);
+                @* The rule hands over keys and arguments; the sentence is assembled here, where the
+                   culture is known. T[key, args] formats and HTML-encodes the arguments. A missing
+                   entry falls back to the key, which is the English text. *@
                 <div class="rounded-xl border @s.border bg-surface p-3 flex items-start justify-between gap-3">
                     <div class="flex items-start gap-3 min-w-0">
                         <span class="@s.text mt-0.5" title="@s.word" aria-label="@s.word">@s.mark</span>
                         <div class="min-w-0">
-                            <div class="text-sm font-medium text-ink">@item.Title</div>
-                            <div class="text-xs text-ink-muted break-words">@item.Detail</div>
+                            <div class="text-sm font-medium text-ink">@T[item.TitleKey, item.TitleArgs.Cast<object>().ToArray()]</div>
+                            <div class="text-xs text-ink-muted break-words">
+                                @if (item.DetailText is not null)
+                                {
+                                    @* A summarised error message — data, deliberately untranslated. *@
+                                    @item.DetailText
+                                }
+                                else if (item.DetailKey is not null)
+                                {
+                                    @T[item.DetailKey, item.DetailArgs.Cast<object>().ToArray()]
+                                }
+                            </div>
                         </div>
                     </div>
-                    @if (item.ActionUrl is not null)
+                    @if (item.ActionUrl is not null && item.ActionKey is not null)
                     {
                         <a href="@item.ActionUrl"
                            class="shrink-0 rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-xs">
-                            @item.ActionText
+                            @T[item.ActionKey]
                         </a>
                     }
                 </div>

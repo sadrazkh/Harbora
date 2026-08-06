@@ -218,7 +218,12 @@ public sealed class DeploymentsController(
 
         if (Harbora.Infrastructure.Assistant.AssistantAvailability.Check(
                 await assistant.GetConfigAsync(ct)) is { } unavailable)
-            return BadRequest(new { message = unavailable.Reason });
+            return BadRequest(new
+            {
+                message = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa"
+                    ? unavailable.ReasonFa
+                    : unavailable.Reason
+            });
 
         return null;
     }

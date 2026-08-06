@@ -38,8 +38,12 @@ public static class AssistantSettingKeys
     public const string BaseUrl = "assistant.base_url";
 }
 
-/// <summary>Why the assistant is not available, in words a person can act on.</summary>
-public sealed record AssistantUnavailable(string Reason);
+/// <summary>
+/// Why the assistant is not available, in words a person can act on — in both languages, the same
+/// shape as <c>AccessUnavailable</c>. The English-only version put "The assistant is turned off."
+/// in the middle of a Persian settings page.
+/// </summary>
+public sealed record AssistantUnavailable(string Reason, string ReasonFa);
 
 /// <summary>
 /// Whether the assistant may be offered at all.
@@ -55,18 +59,19 @@ public static class AssistantAvailability
     public static AssistantUnavailable? Check(AssistantConfig config)
     {
         if (!config.Enabled)
-            return new AssistantUnavailable("The assistant is turned off.");
+            return new AssistantUnavailable("The assistant is turned off.", "دستیار خاموش است.");
 
         if (!AssistantProviders.IsKnown(config.Provider))
-            return new AssistantUnavailable("No AI provider is configured.");
+            return new AssistantUnavailable("No AI provider is configured.", "ارائه‌دهندهٔ هوش مصنوعی تنظیم نشده است.");
 
         if (string.IsNullOrWhiteSpace(config.Model))
-            return new AssistantUnavailable("No model is configured.");
+            return new AssistantUnavailable("No model is configured.", "مدلی تنظیم نشده است.");
 
         // A self-hosted endpoint on this machine needs no key; anything reached over the internet
         // does, and sending an unauthenticated request there only produces a confusing 401.
         if (string.IsNullOrWhiteSpace(config.ApiKey) && !IsLocal(config.BaseUrl))
-            return new AssistantUnavailable("No API key is configured for the AI provider.");
+            return new AssistantUnavailable("No API key is configured for the AI provider.",
+                "کلید API برای ارائه‌دهندهٔ هوش مصنوعی تنظیم نشده است.");
 
         return null;
     }

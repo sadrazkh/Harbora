@@ -81,8 +81,8 @@
                 <div class="flex items-center justify-between p-3">
                     <a href="/apps" class="text-sm font-medium">@a.Name</a>
                     <div class="flex items-center gap-2">
-                        <span class="text-xs text-ink-faint">@a.LastDeployStatus</span>
-                        <span class="rounded-full px-2 py-0.5 text-xs @HealthClass(a.ContainerState)">@a.ContainerState</span>
+                        <span class="text-xs text-ink-faint">@Harbora.Web.Infrastructure.StatusLabel.Deploy(a.LastDeployStatus, isFa)</span>
+                        <span class="rounded-full px-2 py-0.5 text-xs @HealthClass(a.ContainerState)">@Harbora.Web.Infrastructure.StatusLabel.Container(a.ContainerState, isFa)</span>
                     </div>
                 </div>
             }
@@ -117,7 +117,7 @@
         {
             <div class="flex items-center justify-between p-3 text-sm">
                 <span class="font-mono">@d.Host</span>
-                <span class="text-xs @(d.SslEnabled ? "text-ok" : "text-ink-muted")">@(d.SslEnabled ? "🔒 Let's Encrypt" : "no SSL")</span>
+                <span class="text-xs @(d.SslEnabled ? "text-ok" : "text-ink-muted")">@(d.SslEnabled ? "🔒 Let's Encrypt" : (isFa ? "بدون SSL" : "no SSL"))</span>
             </div>
         }
     </div>

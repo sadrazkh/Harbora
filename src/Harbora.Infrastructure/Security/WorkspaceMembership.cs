@@ -6,7 +6,8 @@ namespace Harbora.Infrastructure.Security;
 /// <summary>Which workspace somebody belongs to, or why that cannot be decided.</summary>
 /// <param name="WorkspaceId">Null when no single answer exists.</param>
 /// <param name="Reason">Set only when it could not be decided, in words somebody can act on.</param>
-public sealed record MembershipResolution(Guid? WorkspaceId, string? Reason)
+/// <param name="ReasonFa">The same words in Persian — the refusal lands on a localised login page.</param>
+public sealed record MembershipResolution(Guid? WorkspaceId, string? Reason, string? ReasonFa = null)
 {
     public bool Resolved => WorkspaceId is not null;
 }
@@ -47,11 +48,13 @@ public static class WorkspaceMembership
         // on rather than signed in to nothing.
         if (allWorkspaces.Count > 1)
             return new MembershipResolution(null,
-                "This account is not a member of any workspace. An administrator needs to add it to one.");
+                "This account is not a member of any workspace. An administrator needs to add it to one.",
+                "این حساب عضو هیچ فضای کاری‌ای نیست. مدیر باید آن را به یکی اضافه کند.");
 
         // No workspaces at all means the installation has not finished its first-run setup.
         return new MembershipResolution(null,
-            "This installation has no workspace yet. Complete the setup wizard first.");
+            "This installation has no workspace yet. Complete the setup wizard first.",
+            "این نصب هنوز فضای کاری ندارد. اول ویزارد راه‌اندازی را کامل کنید.");
     }
 
     /// <summary>

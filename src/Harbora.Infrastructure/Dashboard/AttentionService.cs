@@ -90,10 +90,10 @@ public sealed class AttentionService(HarboraDbContext db, ISystemClock clock)
             FailedBackups = failedBackups.Select(b =>
                 (string.IsNullOrWhiteSpace(b.TargetRef) ? b.Type.ToString() : b.TargetRef, b.ErrorMessage)).ToList(),
             BrokenChannels =
-                brokenAlerts.Select(a => (a.Name, "Alert channel", a.LastError!))
-                    .Concat(brokenDeliveries.Select(d => (d.Name, "Backup delivery", d.LastError!)))
+                brokenAlerts.Select(a => (a.Name, ChannelKind.Alert, a.LastError!))
+                    .Concat(brokenDeliveries.Select(d => (d.Name, ChannelKind.BackupDelivery, d.LastError!)))
                     .ToList(),
-            CertificateProblems = certificates.Select(c => (c.Host, DescribeCertificate(c.Status, c.ExpiresAt, c.LastError))).ToList(),
+            CertificateProblems = certificates.Select(c => DescribeCertificate(c.Host, c.Status, c.ExpiresAt, c.LastError)).ToList(),
             DiskUsedRatio = disk,
             NeverDeployed = neverDeployed.Select(a => (a.Name, a.Id)).ToList(),
             HasAnyApp = appIds.Count > 0,
@@ -101,15 +101,20 @@ public sealed class AttentionService(HarboraDbContext db, ISystemClock clock)
         });
     }
 
-    private string DescribeCertificate(CertificateStatus status, DateTimeOffset? expiresAt, string? error)
+    /// <summary>
+    /// The certificate's problem as a fact. The prose lives in the view's language, not here — the
+    /// only text that travels through is a summarised issuance error, which is data.
+    /// </summary>
+    private (string Host, CertificateIssue Issue, string? Argument) DescribeCertificate(
+        string host, CertificateStatus status, DateTimeOffset? expiresAt, string? error)
     {
         if (status == CertificateStatus.Failed)
-            return AttentionRules.Summarise(error) ?? "The certificate could not be issued.";
+            return (host, CertificateIssue.IssueFailed, AttentionRules.Summarise(error));
         if (status == CertificateStatus.Expired || (expiresAt is not null && expiresAt <= clock.UtcNow))
-            return $"The certificate expired on {expiresAt:yyyy-MM-dd}.";
+            return (host, CertificateIssue.Expired, expiresAt?.ToString("yyyy-MM-dd"));
 
         var days = expiresAt is null ? 0 : (int)(expiresAt.Value - clock.UtcNow).TotalDays;
-        return $"The certificate expires in {days} days and has not renewed yet.";
+        return (host, CertificateIssue.ExpiringSoon, days.ToString());
     }
 
     /// <summary>Latest disk sample from the collector; 0 when nothing has been sampled yet.</summary>

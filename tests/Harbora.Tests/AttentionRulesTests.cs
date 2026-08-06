@@ -11,6 +11,9 @@ namespace Harbora.Tests;
 /// total deployments is decoration; "this deploy failed, here it is" is attention. Every assertion
 /// below is about keeping that line in the right place — including the cases that must stay silent,
 /// because a dashboard that always has something to say trains people to stop reading it.
+///
+/// The rule emits resource keys and arguments, never finished sentences: the first version composed
+/// English here, which put the panel's most important copy in a language the person never chose.
 /// </summary>
 public class AttentionRulesTests
 {
@@ -36,9 +39,24 @@ public class AttentionRulesTests
 
         var item = items.Should().ContainSingle().Subject;
         item.Level.Should().Be(AttentionLevel.Critical);
-        item.Title.Should().Contain("api");
-        item.Detail.Should().Contain("crashing");
+        item.TitleKey.Should().Be(AttentionRules.DeployFailedTitle);
+        item.TitleArgs.Should().Equal("api");
+        item.DetailText.Should().Contain("crashing", "the error itself is data and travels verbatim");
+        item.DetailKey.Should().BeNull("a real error message beats the generic fallback");
         item.ActionUrl.Should().Be($"/deployments/details/{Deployment}");
+    }
+
+    [Fact]
+    public void A_failed_deployment_with_no_error_still_says_something()
+    {
+        var items = AttentionRules.Build(new AttentionFacts
+        {
+            HasAnyApp = true, HasAnyBackupSchedule = true,
+            FailedDeployments = [("api", Deployment, null)]
+        });
+
+        // Otherwise the row renders a headline over an empty line, which reads as a broken page.
+        items.Single().DetailKey.Should().Be(AttentionRules.DeployFailedDetail);
     }
 
     [Fact]
@@ -51,12 +69,12 @@ public class AttentionRulesTests
         {
             HasAnyApp = true,
             NeverDeployed = [("draft", AppId)],
-            CertificateProblems = [("shop.example.com", "The certificate expires in 9 days and has not renewed yet.")],
+            CertificateProblems = [("shop.example.com", CertificateIssue.ExpiringSoon, "9")],
             FailedBackups = [("shop-db", "pg_dump exited 1")]
         });
 
         items[0].Level.Should().Be(AttentionLevel.Critical);
-        items[0].Title.Should().Contain("shop-db", "the outage outranks the certificate that is merely due");
+        items[0].TitleArgs.Should().Contain("shop-db", "the outage outranks the certificate that is merely due");
         items.Select(i => (int)i.Level).Should().BeInAscendingOrder();
     }
 
@@ -64,19 +82,42 @@ public class AttentionRulesTests
     public void An_expired_certificate_outranks_one_that_is_merely_due()
     {
         // An expired certificate is a broken site right now; one expiring in ten days is not, yet.
+        // Decided on the structured issue, not by sniffing prose for the word "expired" — the first
+        // version did that, which was one translation away from always choosing Warning.
         var expired = AttentionRules.Build(new AttentionFacts
         {
             HasAnyApp = true, HasAnyBackupSchedule = true,
-            CertificateProblems = [("shop.example.com", "The certificate expired on 2026-07-20.")]
+            CertificateProblems = [("shop.example.com", CertificateIssue.Expired, "2026-07-20")]
         });
         var soon = AttentionRules.Build(new AttentionFacts
         {
             HasAnyApp = true, HasAnyBackupSchedule = true,
-            CertificateProblems = [("shop.example.com", "The certificate expires in 10 days and has not renewed yet.")]
+            CertificateProblems = [("shop.example.com", CertificateIssue.ExpiringSoon, "10")]
         });
 
         expired.Single().Level.Should().Be(AttentionLevel.Critical);
+        expired.Single().TitleKey.Should().Be(AttentionRules.CertificateExpiredTitle);
+        expired.Single().DetailArgs.Should().Equal("2026-07-20");
+
         soon.Single().Level.Should().Be(AttentionLevel.Warning);
+        // "needs attention", not "expired" — a certificate that is merely due, headlined as already
+        // expired, is the dashboard telling the person their site is down when it is not.
+        soon.Single().TitleKey.Should().Be(AttentionRules.CertificateAttentionTitle);
+        soon.Single().DetailArgs.Should().Equal("10");
+    }
+
+    [Fact]
+    public void A_failed_issuance_shows_the_real_error_when_there_is_one()
+    {
+        var items = AttentionRules.Build(new AttentionFacts
+        {
+            HasAnyApp = true, HasAnyBackupSchedule = true,
+            CertificateProblems = [("shop.example.com", CertificateIssue.IssueFailed, "acme: DNS-01 challenge failed")]
+        });
+
+        var item = items.Single();
+        item.Level.Should().Be(AttentionLevel.Warning);
+        item.DetailText.Should().Contain("DNS-01");
     }
 
     [Fact]
@@ -87,13 +128,27 @@ public class AttentionRulesTests
         var items = AttentionRules.Build(new AttentionFacts
         {
             HasAnyApp = true, HasAnyBackupSchedule = true,
-            BrokenChannels = [("ops chat", "Backup delivery", "Telegram returned 401 Unauthorized")]
+            BrokenChannels = [("ops chat", ChannelKind.BackupDelivery, "Telegram returned 401 Unauthorized")]
         });
 
         var item = items.Should().ContainSingle().Subject;
-        item.Title.Should().Contain("ops chat");
-        item.Detail.Should().Contain("401");
+        item.TitleArgs.Should().Contain("ops chat");
+        item.DetailKey.Should().Be(AttentionRules.ChannelBackupDetail);
+        item.DetailArgs.Single().Should().Contain("401");
         item.ActionUrl.Should().Be("/backups");
+    }
+
+    [Fact]
+    public void An_alert_channel_points_at_alerts_not_backups()
+    {
+        var items = AttentionRules.Build(new AttentionFacts
+        {
+            HasAnyApp = true, HasAnyBackupSchedule = true,
+            BrokenChannels = [("ops chat", ChannelKind.Alert, "410 Gone")]
+        });
+
+        items.Single().DetailKey.Should().Be(AttentionRules.ChannelAlertDetail);
+        items.Single().ActionUrl.Should().Be("/monitoring");
     }
 
     [Fact]
@@ -103,7 +158,7 @@ public class AttentionRulesTests
         var loud = AttentionRules.Build(new AttentionFacts { HasAnyApp = true, HasAnyBackupSchedule = true, DiskUsedRatio = 0.93 });
 
         quiet.Should().BeEmpty();
-        loud.Should().ContainSingle().Which.Detail.Should().Contain("93%");
+        loud.Should().ContainSingle().Which.DetailArgs.Should().Equal("93");
     }
 
     [Fact]
@@ -131,6 +186,37 @@ public class AttentionRulesTests
         var items = AttentionRules.Build(new AttentionFacts { HasAnyApp = true, HasAnyBackupSchedule = true, CrashedApps = many });
 
         items.Should().HaveCount(AttentionRules.MaxItems);
+    }
+
+    [Fact]
+    public void Every_key_the_rules_can_emit_is_declared()
+    {
+        // AllKeys is what the localisation guard walks. A key used in Build but absent from AllKeys
+        // escapes that guard, so this pins the two together: every emitted key must be declared.
+        var facts = new AttentionFacts
+        {
+            HasAnyApp = true, HasAnyBackupSchedule = false,
+            FailedDeployments = [("a", Deployment, null), ("b", Deployment, "x. y")],
+            CrashedApps = [("c", AppId)],
+            FailedBackups = [("d", null), ("e", "x. y")],
+            BrokenChannels = [("f", ChannelKind.Alert, "x"), ("g", ChannelKind.BackupDelivery, "x")],
+            CertificateProblems =
+            [
+                ("h1", CertificateIssue.Expired, "2026-01-01"),
+                ("h2", CertificateIssue.ExpiringSoon, "3"),
+                ("h3", CertificateIssue.IssueFailed, null)
+            ],
+            DiskUsedRatio = 0.99,
+            NeverDeployed = [("i", AppId)]
+        };
+
+        var emitted = AttentionRules.Build(facts)
+            .SelectMany(i => new[] { i.TitleKey, i.DetailKey, i.ActionKey })
+            .Where(k => k is not null)
+            .Cast<string>()
+            .Distinct();
+
+        emitted.Should().BeSubsetOf(AttentionRules.AllKeys);
     }
 
     [Theory]

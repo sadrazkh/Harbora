@@ -360,6 +360,9 @@ public sealed class SettingsController(
 {
     private bool IsProvider => User.IsInRole("Owner") || User.IsInRole("Admin");
 
+    private static bool IsFa =>
+        System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         ViewData["Title"] = "Settings";
@@ -387,8 +390,8 @@ public sealed class SettingsController(
         var assistantConfig = await assistant.GetConfigAsync(ct);
         ViewBag.Assistant = IsProvider ? assistantConfig : null;
         ViewBag.AssistantHasKey = !string.IsNullOrWhiteSpace(assistantConfig.ApiKey);
-        ViewBag.AssistantUnavailable =
-            Harbora.Infrastructure.Assistant.AssistantAvailability.Check(assistantConfig)?.Reason;
+        var assistantUnavailable = Harbora.Infrastructure.Assistant.AssistantAvailability.Check(assistantConfig);
+        ViewBag.AssistantUnavailable = IsFa ? assistantUnavailable?.ReasonFa : assistantUnavailable?.Reason;
 
         return View();
     }
