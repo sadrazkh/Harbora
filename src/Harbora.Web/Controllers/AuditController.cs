@@ -27,13 +27,31 @@ public sealed class AuditController(HarboraDbContext db) : Controller
     /// <summary>Hard cap on an export so a single click can't try to stream millions of rows.</summary>
     public const int MaxExportRows = 50_000;
 
+    /// <param name="actionFilter">
+    /// The action name to filter on, read from the query string as <c>action</c> — and deliberately
+    /// not *called* <c>action</c>.
+    ///
+    /// A parameter of that name binds from the route values before it ever reaches the query string,
+    /// and every MVC route carries <c>action</c>: the name of the method being invoked. So this page
+    /// filtered on <c>Action == "Index"</c> on every request and the export filtered on
+    /// <c>"Export"</c> — both empty, always, since the day the page was written. The dropdown beside
+    /// them is filled by a separate unfiltered query, so the page listed twenty-four kinds of event
+    /// it had records of while insisting it had none.
+    ///
+    /// <see cref="FromQueryAttribute"/> is what actually fixes it: naming a binding source stops
+    /// route values being considered at all. The rename is so nobody restores the collision.
+    /// </param>
     [HttpGet("")]
-    public async Task<IActionResult> Index(string? action, string? actor, int page = 1, CancellationToken ct = default)
+    public async Task<IActionResult> Index(
+        [FromQuery(Name = "action")] string? actionFilter,
+        [FromQuery] string? actor,
+        [FromQuery] int page = 1,
+        CancellationToken ct = default)
     {
         ViewData["Title"] = "Audit log";
         page = Math.Max(1, page);
 
-        var query = Filter(action, actor);
+        var query = Filter(actionFilter, actor);
         var total = await query.CountAsync(ct);
 
         var entries = await query
@@ -47,7 +65,7 @@ public sealed class AuditController(HarboraDbContext db) : Controller
             Page = page,
             PageSize = PageSize,
             TotalCount = total,
-            ActionFilter = action,
+            ActionFilter = actionFilter,
             ActorFilter = actor,
             Actions = await db.AuditLogs.Select(a => a.Action).Distinct().OrderBy(a => a).ToListAsync(ct)
         });
@@ -55,9 +73,12 @@ public sealed class AuditController(HarboraDbContext db) : Controller
 
     /// <summary>CSV export of the current filter, so the trail can leave the box for review.</summary>
     [HttpGet("export")]
-    public async Task<IActionResult> Export(string? action, string? actor, CancellationToken ct)
+    public async Task<IActionResult> Export(
+        [FromQuery(Name = "action")] string? actionFilter,
+        [FromQuery] string? actor,
+        CancellationToken ct)
     {
-        var entries = await Filter(action, actor)
+        var entries = await Filter(actionFilter, actor)
             .OrderByDescending(a => a.CreatedAt)
             .Take(MaxExportRows)
             .AsNoTracking().ToListAsync(ct);
