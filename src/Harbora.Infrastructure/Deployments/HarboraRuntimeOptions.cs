@@ -49,6 +49,18 @@ public sealed class HarboraRuntimeOptions
     public double HealthHttpTimeoutSeconds { get; set; } = 5;
 
     /// <summary>
+    /// After the proxy accepts a new configuration, ask it for the app's primary domain once and
+    /// fail the deployment if nothing answers. The health gate proves the container serves; this
+    /// proves the route to it does.
+    ///
+    /// Off by default, deliberately. Turning it on makes every deployment of an app with a domain
+    /// depend on the panel being able to reach the proxy, and that is only worth asserting once
+    /// there is a live-host CI lane to prove it holds — otherwise the first thing this flag would
+    /// do is fail deployments that worked.
+    /// </summary>
+    public bool VerifyThroughProxy { get; set; }
+
+    /// <summary>
     /// How long a release task may run before the deployment gives up on it. Generous, because a
     /// migration against a large database legitimately takes minutes; bounded, because a command
     /// that waits for input otherwise leaves a deployment "in progress" for ever, with nothing on

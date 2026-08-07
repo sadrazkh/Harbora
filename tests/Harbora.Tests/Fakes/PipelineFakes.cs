@@ -135,8 +135,22 @@ public sealed class StubHttpClientFactory(HttpStatusCode status = HttpStatusCode
 
     /// <summary>Runs on every probe, so a test can make the container die while it is being polled.</summary>
     public Action? OnProbe { get => _handler.OnProbe; set => _handler.OnProbe = value; }
+
+    /// <summary>
+    /// Thrown instead of answering, so "nothing is listening" is reproducible without a socket. A
+    /// status code cannot express it: a refused connection and a 502 are different facts, and the
+    /// proxy verification only fails on the first.
+    /// </summary>
+    public Exception? Failure { get => _handler.Failure; set => _handler.Failure = value; }
+
     public int Attempts => _handler.Attempts;
     public IReadOnlyList<string> RequestedUrls => _handler.Urls;
+
+    /// <summary>
+    /// The Host header of each request. The proxy verification dials the proxy and names the domain
+    /// in the header, so the header is where "which domain was checked" actually lives.
+    /// </summary>
+    public IReadOnlyList<string?> RequestedHosts => _handler.Hosts;
 
     public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
 
@@ -145,13 +159,17 @@ public sealed class StubHttpClientFactory(HttpStatusCode status = HttpStatusCode
         public HttpStatusCode Status { get; set; } = status;
         public int Attempts;
         public Action? OnProbe;
+        public Exception? Failure;
         public readonly List<string> Urls = [];
+        public readonly List<string?> Hosts = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             Attempts++;
             lock (Urls) Urls.Add(request.RequestUri!.ToString());
+            lock (Hosts) Hosts.Add(request.Headers.Host);
             OnProbe?.Invoke();
+            if (Failure is not null) return Task.FromException<HttpResponseMessage>(Failure);
             return Task.FromResult(new HttpResponseMessage(Status));
         }
     }

@@ -18,12 +18,11 @@ public class TraefikProxyEngineTests
 {
     private const string TestKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 
-    private static TraefikProxyEngine Engine()
-    {
-        var opts = Options.Create(new TraefikOptions());
-        return new TraefikProxyEngine(opts, new AesGcmSecretProtector(TestKey),
+    private static TraefikProxyEngine Engine() => Engine(new TraefikOptions());
+
+    private static TraefikProxyEngine Engine(TraefikOptions options) =>
+        new(Options.Create(options), new AesGcmSecretProtector(TestKey),
             NullLogger<TraefikProxyEngine>.Instance);
-    }
 
     private static Route HostRoute(string host = "app.example.com", string svc = "harbora-app", int port = 80)
         => new() { Host = host, TargetService = svc, TargetPort = port, Type = RouteType.HostBased, IsEnabled = true };
@@ -102,5 +101,88 @@ public class TraefikProxyEngineTests
         content.IndexOf("b.example.com", StringComparison.Ordinal)
             .Should().BeLessThan(content.IndexOf("a.example.com", StringComparison.Ordinal),
                 "routes are ordered by descending priority");
+    }
+
+    // ---- ApplyAsync: what a deployment is now allowed to trust ----
+    //
+    // The pipeline fails a deployment on a non-success result from here, so what this returns — and
+    // whether the file it manages survived — is a contract and not an implementation detail. It had
+    // no tests of its own until that became true.
+
+    [Fact]
+    public async Task A_successful_apply_writes_the_rendered_config_to_the_target()
+    {
+        using var cfg = new TempConfig();
+
+        var result = await Engine(cfg.Options).ApplyAsync(new[] { HostRoute() }, default);
+
+        result.Success.Should().BeTrue();
+        result.Error.Should().BeNull();
+        result.RolledBack.Should().BeFalse();
+        File.ReadAllText(cfg.Target).Should().Contain("Host(`app.example.com`)");
+    }
+
+    [Fact]
+    public async Task A_route_that_fails_validation_is_refused_without_touching_the_target_file()
+    {
+        // The atomic-apply gate: a config Traefik would reject must never reach the file it watches,
+        // because a file provider reloads whatever it finds there.
+        using var cfg = new TempConfig();
+
+        var result = await Engine(cfg.Options).ApplyAsync(new[] { HostRoute(port: 70000) }, default);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("port");
+        result.RolledBack.Should().BeFalse("nothing was written, so there was nothing to undo");
+        File.Exists(cfg.Target).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_write_that_fails_restores_the_backup_and_says_it_rolled_back()
+    {
+        // The deployment message tells the operator whether the live routes are intact, so the flag
+        // has to mean what it says: the file is back to the backup's contents, not merely unchanged.
+        using var cfg = new TempConfig();
+        Directory.CreateDirectory(Path.GetDirectoryName(cfg.Target)!);
+        File.WriteAllText(cfg.Target, "half-written config");
+        File.WriteAllText(cfg.Target + ".bak", "the config that was live");
+        // A directory where the temp file goes: the write cannot succeed, and nothing had to be
+        // stubbed to arrange it.
+        Directory.CreateDirectory(cfg.Target + ".tmp");
+
+        var result = await Engine(cfg.Options).ApplyAsync(new[] { HostRoute() }, default);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotBeNullOrWhiteSpace("the deployment quotes this back to the operator");
+        result.RolledBack.Should().BeTrue();
+        File.ReadAllText(cfg.Target).Should().Be("the config that was live");
+    }
+
+    [Fact]
+    public async Task A_write_that_fails_with_no_backup_to_restore_does_not_claim_a_rollback()
+    {
+        using var cfg = new TempConfig();
+        Directory.CreateDirectory(Path.GetDirectoryName(cfg.Target)!);
+        Directory.CreateDirectory(cfg.Target + ".tmp");
+
+        var result = await Engine(cfg.Options).ApplyAsync(new[] { HostRoute() }, default);
+
+        result.Success.Should().BeFalse();
+        result.RolledBack.Should().BeFalse("there was no previous version to put back");
+    }
+
+    /// <summary>A throwaway dynamic-config location, so an apply test writes real files and cleans up.</summary>
+    private sealed class TempConfig : IDisposable
+    {
+        private readonly string _root =
+            Path.Combine(Path.GetTempPath(), "harbora-traefik-tests", Guid.NewGuid().ToString("N"));
+
+        public string Target => Path.Combine(_root, "dynamic", "harbora.yml");
+        public TraefikOptions Options => new() { DynamicConfigPath = Target };
+
+        public void Dispose()
+        {
+            try { Directory.Delete(_root, recursive: true); } catch { /* temp dir — best effort */ }
+        }
     }
 }

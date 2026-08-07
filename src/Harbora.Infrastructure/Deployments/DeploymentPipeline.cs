@@ -1110,9 +1110,61 @@ public sealed class DeploymentPipeline(
 
         var routes = await db.Routes.Where(r => r.WorkspaceId == app.WorkspaceId && r.IsEnabled).ToListAsync(ct);
         var result = await proxy.ApplyAsync(routes, ct);
-        await log(LogStream.System, result.Success
-            ? "Proxy configuration applied."
-            : $"⚠ Proxy apply failed{(result.RolledBack ? " (rolled back)" : "")}: {result.Error}");
+
+        // A deployment whose routing did not apply has not deployed. This used to log a warning and
+        // carry on to "Succeeded", which is the one thing the platform promises never to do: the
+        // container was up, so nothing looked wrong, and traffic was still on the old upstream or on
+        // nothing at all. Throwing hands it to the pipeline's own failure path, which raises
+        // DeployFailed, records the reason, and removes only the container just started — the
+        // previous release is still running, because nothing is retired until after this step.
+        if (!result.Success)
+            throw new InvalidOperationException(ProxyDiagnosis.ExplainApplyFailure(result));
+
+        await log(LogStream.System, "Proxy configuration applied.");
+
+        if (_opt.VerifyThroughProxy)
+            await VerifyThroughProxyAsync(app, log, ct);
+    }
+
+    /// <summary>
+    /// One request to the proxy for this app's primary domain, to prove the route it just accepted
+    /// actually serves. Only a failure to connect fails the deployment: any HTTP status means the
+    /// proxy answered, and judging the app's own response is the health gate's job, not this one's.
+    ///
+    /// Addressed the way <c>install.sh</c> addresses its own panel check — the domain in a Host
+    /// header, the connection made somewhere known — so the probe never depends on public DNS or on
+    /// a CDN sitting in front of the domain. It differs in where "somewhere known" is: install.sh
+    /// runs on the host and dials 127.0.0.1, while the panel runs in its own container, where
+    /// 127.0.0.1 is the panel itself. From here the proxy is the container the panel already shares
+    /// a network with, so that is what is dialled, on the plain HTTP entry point: the redirect it
+    /// answers with proves the proxy is up and reading the Host header, and no certificate has to be
+    /// validated against an address the certificate was never issued for.
+    /// </summary>
+    private async Task VerifyThroughProxyAsync(App app, Func<LogStream, string, Task> log, CancellationToken ct)
+    {
+        var domain = app.Domains.FirstOrDefault(d => d.IsPrimary) ?? app.Domains.First();
+        var url = $"http://{_opt.ProxyContainerName}/";
+
+        await log(LogStream.System, $"Verifying {domain.Host} answers through the proxy …");
+
+        var client = httpFactory.CreateClient();
+        client.Timeout = _opt.HealthHttpTimeout;
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Host = domain.Host;
+            using var res = await client.SendAsync(request, ct);
+            await log(LogStream.System,
+                $"The proxy answered for {domain.Host} with HTTP {(int)res.StatusCode}.");
+        }
+        // A real cancellation is the user stopping the deployment, not the proxy refusing it, and
+        // must not be reported as an unreachable domain.
+        catch (Exception ex) when ((ex is HttpRequestException or TaskCanceledException) &&
+                                   !ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(ProxyDiagnosis.ExplainUnreachable(domain.Host, url, ex.Message));
+        }
     }
 
     private string SafeUnprotect(string value)

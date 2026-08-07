@@ -93,10 +93,13 @@ public sealed class PipelineHarness : IDisposable
         Db.SaveChanges();
     }
 
-    /// <summary>Attaches a domain so the proxy-wiring stage actually runs.</summary>
-    public PipelineHarness WithDomain(string host = "blog.example.com")
+    /// <summary>
+    /// Attaches a domain so the proxy-wiring stage actually runs. An app may carry several, so
+    /// <paramref name="primary"/> is how a test says which one the verification probe should ask for.
+    /// </summary>
+    public PipelineHarness WithDomain(string host = "blog.example.com", bool primary = false)
     {
-        Db.Domains.Add(new DomainName { Id = Guid.NewGuid(), AppId = App.Id, Host = host });
+        Db.Domains.Add(new DomainName { Id = Guid.NewGuid(), AppId = App.Id, Host = host, IsPrimary = primary });
         Db.SaveChanges();
         return this;
     }
