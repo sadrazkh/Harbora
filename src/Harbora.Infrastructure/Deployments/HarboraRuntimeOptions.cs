@@ -49,9 +49,27 @@ public sealed class HarboraRuntimeOptions
     public double HealthHttpTimeoutSeconds { get; set; } = 5;
 
     /// <summary>
-    /// After the proxy accepts a new configuration, ask it for the app's primary domain once and
-    /// fail the deployment if nothing answers. The health gate proves the container serves; this
-    /// proves the route to it does.
+    /// After the proxy accepts a new configuration, make one request through it for the app's
+    /// primary domain and fail the deployment if nothing answers.
+    ///
+    /// What that proves, exactly: the proxy is reachable from the panel and answering on :80. It
+    /// does NOT prove the route matched or that the domain serves. The request is made to the proxy
+    /// container on the plain HTTP entry point with the domain in a Host header, and
+    /// <c>deploy/docker-compose.yml</c> configures the redirect to HTTPS at the ENTRYPOINT
+    /// (<c>--entrypoints.web.http.redirections.entrypoint.to=websecure</c>), which Traefik applies
+    /// to everything arriving on :80 before any router is consulted. The 308 therefore comes back
+    /// identically whether the route applied, never applied, or points at a container that no longer
+    /// exists. The failure it does catch — a proxy that accepted the config and then died, or that
+    /// the panel cannot reach at all — is real and is caught by no other step.
+    ///
+    /// Verifying the route itself is a later-phase decision and needs a different client: a named
+    /// <see cref="System.Net.Http.HttpClient"/> whose <c>SocketsHttpHandler.ConnectCallback</c>
+    /// dials the proxy container while the request URI stays <c>https://{domain}/</c>, so SNI and
+    /// certificate validation remain on the domain and the request reaches the routers on
+    /// <c>websecure</c> instead of being answered by the entrypoint redirect. That is the true
+    /// equivalent of the <c>curl --resolve</c> check in <c>deploy/install.sh</c>. It also wants the
+    /// retry install.sh has (12 attempts over a minute), because Traefik's file-provider watch means
+    /// a single immediate probe reports a false failure on a healthy install.
     ///
     /// Off by default, deliberately. Turning it on makes every deployment of an app with a domain
     /// depend on the panel being able to reach the proxy, and that is only worth asserting once

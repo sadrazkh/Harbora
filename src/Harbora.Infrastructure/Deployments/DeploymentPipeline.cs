@@ -1092,14 +1092,27 @@ public sealed class DeploymentPipeline(
             return;
         }
 
+        // Saved BEFORE the apply, and it has to be: the config below is rendered from a query over
+        // the whole workspace, so a route added for a domain's first deployment would not be in it
+        // otherwise, and the deployment would publish a config missing the very route it exists for.
+        // The cost is that a failure after this point leaves the rows describing a container the
+        // pipeline's failure path is about to remove — and every other caller (RoutesController,
+        // AppsController, AdminerService, AppOperationsService) re-applies this same whole-workspace
+        // query. An unrelated route change anywhere in the workspace would then push that dead
+        // upstream live and take down a domain the rolled-back config was still serving. So: keep
+        // what each row said, and put it back if anything below refuses.
+        var undo = new List<RouteRevert>();
         foreach (var domain in app.Domains)
         {
             var route = await db.Routes.FirstOrDefaultAsync(r => r.AppId == app.Id && r.Host == domain.Host, ct);
+            var isNew = route is null;
             if (route is null)
             {
                 route = new Route { WorkspaceId = app.WorkspaceId, AppId = app.Id, Host = domain.Host };
                 db.Routes.Add(route);
             }
+            undo.Add(new RouteRevert(route, isNew, route.TargetService, route.TargetPort,
+                route.SslEnabled, route.RedirectHttpToHttps, route.IsEnabled));
             route.TargetService = upstreamHost;
             route.TargetPort = upstreamPort;
             route.SslEnabled = domain.SslEnabled;
@@ -1108,44 +1121,107 @@ public sealed class DeploymentPipeline(
         }
         await db.SaveChangesAsync(ct);
 
-        var routes = await db.Routes.Where(r => r.WorkspaceId == app.WorkspaceId && r.IsEnabled).ToListAsync(ct);
-        var result = await proxy.ApplyAsync(routes, ct);
+        try
+        {
+            var routes = await db.Routes.Where(r => r.WorkspaceId == app.WorkspaceId && r.IsEnabled).ToListAsync(ct);
+            var result = await proxy.ApplyAsync(routes, ct);
 
-        // A deployment whose routing did not apply has not deployed. This used to log a warning and
-        // carry on to "Succeeded", which is the one thing the platform promises never to do: the
-        // container was up, so nothing looked wrong, and traffic was still on the old upstream or on
-        // nothing at all. Throwing hands it to the pipeline's own failure path, which raises
-        // DeployFailed, records the reason, and removes only the container just started — the
-        // previous release is still running, because nothing is retired until after this step.
-        if (!result.Success)
-            throw new InvalidOperationException(ProxyDiagnosis.ExplainApplyFailure(result));
+            // A deployment whose routing did not apply has not deployed. This used to log a warning
+            // and carry on to "Succeeded", which is the one thing the platform promises never to do:
+            // the container was up, so nothing looked wrong, and traffic was still on the old
+            // upstream or on nothing at all. Throwing hands it to the pipeline's own failure path,
+            // which raises DeployFailed, records the reason, and removes only the container just
+            // started — the previous release is still running, because nothing is retired until
+            // after this step.
+            if (!result.Success)
+                throw new InvalidOperationException(ProxyDiagnosis.ExplainApplyFailure(result));
 
-        await log(LogStream.System, "Proxy configuration applied.");
+            await log(LogStream.System, "Proxy configuration applied.");
 
-        if (_opt.VerifyThroughProxy)
-            await VerifyThroughProxyAsync(app, log, ct);
+            if (_opt.VerifyThroughProxy)
+                await VerifyThroughProxyAsync(app, log, ct);
+        }
+        catch
+        {
+            // Both paths, for the same reason, though they leave different amounts intact. A refused
+            // apply never changed the live config, so reverting the rows restores the whole truth. A
+            // refused verification did change it — the live config names the container that is about
+            // to be removed and this method cannot put that back without a second apply it has no
+            // reason to trust. Reverting the rows is still what makes the next re-apply from anywhere
+            // else heal that domain rather than nail the dead upstream in place.
+            await RevertRoutesAsync(undo);
+            throw;
+        }
+    }
+
+    /// <summary>What one Route row said before this deployment rewrote it.</summary>
+    private sealed record RouteRevert(
+        Route Route, bool WasAdded, string TargetService, int TargetPort,
+        bool SslEnabled, bool RedirectHttpToHttps, bool IsEnabled);
+
+    /// <summary>
+    /// Put the routes back as this deployment found them: rows it created are removed, rows it
+    /// rewrote get their previous upstream back. A failure here must never replace the failure that
+    /// caused it — the deployment is already going to be reported as failed, and losing that reason
+    /// to a bookkeeping error would be the same lie in a new place.
+    /// </summary>
+    private async Task RevertRoutesAsync(IReadOnlyList<RouteRevert> undo)
+    {
+        try
+        {
+            foreach (var previous in undo)
+            {
+                if (previous.WasAdded)
+                {
+                    // Nothing was routing this host before, so no row is the honest state — a
+                    // disabled or dangling one is still a row someone has to explain.
+                    db.Routes.Remove(previous.Route);
+                    continue;
+                }
+                previous.Route.TargetService = previous.TargetService;
+                previous.Route.TargetPort = previous.TargetPort;
+                previous.Route.SslEnabled = previous.SslEnabled;
+                previous.Route.RedirectHttpToHttps = previous.RedirectHttpToHttps;
+                previous.Route.IsEnabled = previous.IsEnabled;
+            }
+            // CancellationToken.None deliberately: a cancelled deployment is exactly when this has to
+            // run, and passing the cancelled token would skip the cleanup its cancellation created.
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not restore the routes after a failed proxy step.");
+        }
     }
 
     /// <summary>
-    /// One request to the proxy for this app's primary domain, to prove the route it just accepted
-    /// actually serves. Only a failure to connect fails the deployment: any HTTP status means the
-    /// proxy answered, and judging the app's own response is the health gate's job, not this one's.
+    /// One request to the proxy, to prove the proxy this deployment just reconfigured is up and
+    /// answering. Only a failure to connect fails the deployment.
     ///
-    /// Addressed the way <c>install.sh</c> addresses its own panel check — the domain in a Host
-    /// header, the connection made somewhere known — so the probe never depends on public DNS or on
-    /// a CDN sitting in front of the domain. It differs in where "somewhere known" is: install.sh
-    /// runs on the host and dials 127.0.0.1, while the panel runs in its own container, where
-    /// 127.0.0.1 is the panel itself. From here the proxy is the container the panel already shares
-    /// a network with, so that is what is dialled, on the plain HTTP entry point: the redirect it
-    /// answers with proves the proxy is up and reading the Host header, and no certificate has to be
-    /// validated against an address the certificate was never issued for.
+    /// Be precise about what this establishes, because the name invites more. The request goes to
+    /// <c>http://{proxy}/</c> with the domain in a Host header, and <c>deploy/docker-compose.yml</c>
+    /// puts an ENTRYPOINT-level redirect on <c>web</c>
+    /// (<c>--entrypoints.web.http.redirections.entrypoint.to=websecure</c>). Traefik applies that to
+    /// every request arriving on :80 before any router is consulted, so the 308 comes back whatever
+    /// the Host header says and whether or not a route for it exists. What this proves is therefore
+    /// that the proxy container is reachable from the panel and serving :80 — a narrow fact, but a
+    /// real one, and the failure it catches (a proxy that took the config and then died, or was
+    /// never reachable) is a failure no other step here would notice.
+    ///
+    /// It does NOT prove the route matched, that the upstream is reachable, or that the domain
+    /// serves. Proving that means reaching the routers on <c>websecure</c>: a named
+    /// <see cref="HttpClient"/> whose handler carries a <c>ConnectCallback</c> dialling the proxy
+    /// while the request URI stays <c>https://{domain}/</c>, so SNI and certificate validation
+    /// remain on the domain — the true equivalent of install.sh's <c>curl --resolve</c>. That is a
+    /// later-phase decision, recorded on <see cref="HarboraRuntimeOptions.VerifyThroughProxy"/>, and
+    /// deliberately not built here; the flag is off by default and nothing ships behind it.
     /// </summary>
     private async Task VerifyThroughProxyAsync(App app, Func<LogStream, string, Task> log, CancellationToken ct)
     {
         var domain = app.Domains.FirstOrDefault(d => d.IsPrimary) ?? app.Domains.First();
         var url = $"http://{_opt.ProxyContainerName}/";
 
-        await log(LogStream.System, $"Verifying {domain.Host} answers through the proxy …");
+        await log(LogStream.System, $"Checking the proxy is answering for {domain.Host} …");
 
         var client = httpFactory.CreateClient();
         client.Timeout = _opt.HealthHttpTimeout;
@@ -1153,10 +1229,18 @@ public sealed class DeploymentPipeline(
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Host = domain.Host;
+            // A host the panel cannot even put in a header is one Traefik would never match either,
+            // and the FormatException this throws says only "not a valid 'Host' header string" —
+            // no domain, no app, nothing to act on. Not a message this method gets to hand out.
+            try { request.Headers.Host = domain.Host; }
+            catch (FormatException bad)
+            {
+                throw new InvalidOperationException(
+                    ProxyDiagnosis.ExplainUnusableHost(domain.Host, bad.Message), bad);
+            }
             using var res = await client.SendAsync(request, ct);
             await log(LogStream.System,
-                $"The proxy answered for {domain.Host} with HTTP {(int)res.StatusCode}.");
+                $"The proxy answered with HTTP {(int)res.StatusCode}; it is up and serving.");
         }
         // A real cancellation is the user stopping the deployment, not the proxy refusing it, and
         // must not be reported as an unreachable domain.

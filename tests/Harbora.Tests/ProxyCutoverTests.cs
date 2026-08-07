@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Domain.Common;
+using Harbora.Domain.Networking;
 using Harbora.Infrastructure.Deployments;
 using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
@@ -134,6 +135,49 @@ public class ProxyCutoverTests
         app.Status.Should().Be(AppStatus.Running, "the previous release is still up and answering");
     }
 
+    // ---- and leaves the stored routes describing what is actually running ----
+
+    [Fact]
+    public async Task A_failed_apply_leaves_the_stored_route_naming_the_container_that_is_still_serving()
+    {
+        // The rows are written before the apply, because the config is rendered from a query over the
+        // whole workspace and a first deployment's own route has to be in it. That means a failed
+        // apply can leave them naming the container the failure path is about to remove — and every
+        // other caller (RoutesController, AppsController, AdminerService, AppOperationsService)
+        // re-applies the whole workspace. The next unrelated route change anywhere would then publish
+        // a dead upstream and take down a domain the rolled-back config was still serving correctly.
+        using var h = new PipelineHarness().WithDomain();
+        h.WithPreviousDeployment(number: 1);
+        h.Db.Routes.Add(new Route
+        {
+            WorkspaceId = h.Workspace.Id, AppId = h.App.Id, Host = "blog.example.com",
+            TargetService = h.ContainerFor(1), TargetPort = 8080, IsEnabled = true
+        });
+        h.Db.SaveChanges();
+        h.Proxy.Result = new ProxyApplyResult(false, EngineError, RolledBack: true);
+
+        await h.RunAsync(h.QueueDeployment(number: 2));
+
+        var route = await h.Db.Routes.AsNoTracking().SingleAsync(r => r.Host == "blog.example.com");
+        route.TargetService.Should().Be(h.ContainerFor(1),
+            "the stored route must keep describing the release that is still up, or the next re-apply " +
+            "from anywhere in this workspace would publish an upstream that no longer exists");
+        route.TargetPort.Should().Be(8080);
+    }
+
+    [Fact]
+    public async Task A_first_deployment_that_fails_to_apply_leaves_no_route_row_behind()
+    {
+        // Nothing was routing this domain before, so the honest revert is no row at all — a disabled
+        // or dangling one would still be a row an operator has to explain.
+        using var h = new PipelineHarness().WithDomain();
+        h.Proxy.Result = new ProxyApplyResult(false, EngineError, RolledBack: true);
+
+        await h.RunAsync(h.QueueDeployment(number: 1));
+
+        h.Db.Routes.AsNoTracking().Should().BeEmpty("this deployment created the row and this deployment failed");
+    }
+
     // ---- an app with no domains is untouched by any of this ----
 
     [Fact]
@@ -187,9 +231,11 @@ public class ProxyCutoverTests
         var result = await h.RunAsync(h.QueueDeployment(number: 1));
 
         result.Status.Should().Be(DeploymentStatus.Succeeded);
-        h.Http.Attempts.Should().Be(1, "one request is enough to tell a served route from an unserved one");
+        h.Http.Attempts.Should().Be(1, "one request is all this check is: does the proxy answer");
         // Named in the header, dialled at the proxy: the check must not depend on public DNS or on
-        // whatever sits in front of the domain.
+        // whatever sits in front of the domain. The header does not make the answer domain-specific
+        // — see Any_answer_from_the_proxy_is_enough_for_verification_to_pass — but it is what says
+        // which domain the deployment was for when this fails.
         h.Http.RequestedHosts.Should().Equal("blog.example.com");
         h.Http.RequestedUrls.Should().ContainSingle()
             .Which.Should().Contain(h.Options.ProxyContainerName);
@@ -198,9 +244,10 @@ public class ProxyCutoverTests
     [Fact]
     public async Task Any_answer_from_the_proxy_is_enough_for_verification_to_pass()
     {
-        // The proxy redirects plain HTTP to HTTPS, so a healthy install answers 308 here. Judging the
-        // status would fail every verified deployment; judging the app's response is the health
-        // gate's job and it has already run.
+        // The redirect to HTTPS is configured on the ENTRYPOINT, not on a router, so Traefik answers
+        // 308 to everything arriving on :80 before it looks at any route. A healthy install therefore
+        // always answers 308 here, and judging the status would fail every verified deployment.
+        // It is also why this check proves reachability and not routing — see VerifyThroughProxy.
         using var h = new PipelineHarness().WithDomain();
         h.Options.VerifyThroughProxy = true;
         h.Http.Status = System.Net.HttpStatusCode.PermanentRedirect;
@@ -224,8 +271,14 @@ public class ProxyCutoverTests
     }
 
     [Fact]
-    public async Task A_verification_failure_also_leaves_the_previous_release_running()
+    public async Task A_verification_failure_leaves_the_previous_container_running_but_no_longer_routed_to()
     {
+        // Do not read this as "the site is fine". On this path the apply already SUCCEEDED, so the
+        // live proxy config names the new container — which the pipeline's failure path then removes.
+        // The previous release is up and receiving nothing: the domain is dark until something
+        // re-applies. What the deployment owes the operator here is the truth (Failed, with the
+        // reason), not an intact site, and re-applying the previous config is a Phase-2 decision that
+        // has to come with turning this flag on.
         using var h = new PipelineHarness().WithDomain();
         h.WithPreviousDeployment(number: 1);
         h.Options.VerifyThroughProxy = true;
@@ -234,7 +287,53 @@ public class ProxyCutoverTests
         var result = await h.RunAsync(h.QueueDeployment(number: 2));
 
         result.Status.Should().Be(DeploymentStatus.Failed);
-        h.Docker.OperationsOn(h.ContainerFor(1)).Should().NotContain("RemoveContainerAsync");
+        h.Docker.OperationsOn(h.ContainerFor(1)).Should().NotContain("RemoveContainerAsync",
+            "the container is untouched — the cutover retires nothing until after this step");
+        h.Proxy.ApplyCount.Should().Be(1, "the live config is NOT put back on this path");
+        h.Proxy.Applications.Should().ContainSingle()
+            .Which.TargetService.Should().Be(h.ContainerFor(2),
+                "what the proxy is serving names the container this failure is about to remove");
+    }
+
+    [Fact]
+    public async Task A_verification_failure_still_leaves_the_stored_route_naming_the_running_container()
+    {
+        // The live config cannot be restored from here without a second apply, but the stored rows
+        // can — and must, for the same reason as a failed apply: they are what every other caller
+        // re-applies from. Reverted, the next route change anywhere in the workspace heals the domain
+        // instead of nailing the dead upstream in place.
+        using var h = new PipelineHarness().WithDomain();
+        h.WithPreviousDeployment(number: 1);
+        h.Db.Routes.Add(new Route
+        {
+            WorkspaceId = h.Workspace.Id, AppId = h.App.Id, Host = "blog.example.com",
+            TargetService = h.ContainerFor(1), TargetPort = 8080, IsEnabled = true
+        });
+        h.Db.SaveChanges();
+        h.Options.VerifyThroughProxy = true;
+        h.Http.Failure = new HttpRequestException("Connection refused");
+
+        await h.RunAsync(h.QueueDeployment(number: 2));
+
+        var route = await h.Db.Routes.AsNoTracking().SingleAsync(r => r.Host == "blog.example.com");
+        route.TargetService.Should().Be(h.ContainerFor(1));
+    }
+
+    [Fact]
+    public async Task A_domain_that_cannot_be_put_in_a_request_is_refused_in_words()
+    {
+        // Setting the Host header on a malformed domain throws FormatException, which used to escape
+        // to the pipeline's catch and fail the deployment with "The format of value 'not a host' is
+        // invalid" — no domain, no app, no proxy, nothing to act on, from the one method whose entire
+        // job is to say what went wrong.
+        using var h = new PipelineHarness().WithDomain("not a host");
+        h.Options.VerifyThroughProxy = true;
+
+        var result = await h.RunAsync(h.QueueDeployment(number: 1));
+
+        result.Status.Should().Be(DeploymentStatus.Failed);
+        result.ErrorMessage.Should().Contain("not a host").And.Contain("host name");
+        h.Http.Attempts.Should().Be(0, "there was never a request that could have been made");
     }
 }
 
@@ -288,6 +387,27 @@ public class ProxyDiagnosisTests
         text.Should().Contain("blog.example.com")
             .And.Contain("http://harbora-traefik/")
             .And.Contain("Connection refused");
+    }
+
+    [Fact]
+    public void An_unreachable_proxy_is_not_reported_as_a_route_that_did_not_match()
+    {
+        // The check cannot tell those apart — it reaches the entrypoint, which redirects before any
+        // router is consulted — so the message must claim only what failed: the proxy did not answer.
+        var text = ProxyDiagnosis.ExplainUnreachable(
+            "blog.example.com", "http://harbora-traefik/", "Connection refused");
+
+        text.Should().Contain("the proxy itself did not answer")
+            .And.NotContain("route", "nothing here established anything about the route");
+    }
+
+    [Fact]
+    public void An_unusable_domain_names_the_domain_and_what_to_do_about_it()
+    {
+        var text = ProxyDiagnosis.ExplainUnusableHost(
+            "not a host", "The specified value is not a valid 'Host' header string.");
+
+        text.Should().Contain("not a host").And.Contain("host name").And.Contain("Correct the domain");
     }
 
     [Fact]
