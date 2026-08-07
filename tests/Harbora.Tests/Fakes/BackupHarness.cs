@@ -24,7 +24,12 @@ public sealed class BackupHarness : IDisposable
     public FixedClock Clock { get; } = new();
     public LocalOnlyStorage Storage { get; }
     public RecordingNotificationService Notifications { get; } = new();
+
+    /// <summary>This panel's own daemon — the machine a backup must NOT reach for by default.</summary>
     public FakeDockerEngine Docker { get; } = new();
+
+    /// <summary>Which machine holds what. Anything not registered here is the panel's own daemon.</summary>
+    public FakeServerEngineFactory Engines { get; }
 
     public Guid WorkspaceId { get; } = Guid.NewGuid();
     public BackupDestination Destination { get; }
@@ -33,6 +38,8 @@ public sealed class BackupHarness : IDisposable
 
     public BackupHarness()
     {
+        Engines = new FakeServerEngineFactory(Docker);
+
         _dir = Path.Combine(Path.GetTempPath(), "harbora-backup-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
 
@@ -59,13 +66,111 @@ public sealed class BackupHarness : IDisposable
         NullLogger<BackupDeliveryService>.Instance);
 
     public BackupEngine Engine() => new(
-        Db, Docker, Storage, new PassthroughProtector(), new NoopJobQueue(),
+        Db, Engines, Storage, new PassthroughProtector(), new NoopJobQueue(),
         Notifications, Delivery(), Clock, Options.AsOptions(),
         Microsoft.Extensions.Options.Options.Create(Runtime),
         NullLogger<BackupEngine>.Instance);
 
     /// <summary>Networking the database export needs — it runs on the tenant's own network.</summary>
     public Harbora.Infrastructure.Deployments.HarboraRuntimeOptions Runtime { get; } = new();
+
+    // --- who holds the data -------------------------------------------------------------------
+
+    /// <summary>Another machine, with its own daemon, behind a server id of the caller's choosing.</summary>
+    public FakeDockerEngine ServerAt(Guid serverId)
+    {
+        var engine = new FakeDockerEngine();
+        Engines.On(serverId, engine);
+        return engine;
+    }
+
+    /// <summary>A PostgreSQL database scheduled on the given server, with its workspace.</summary>
+    public async Task<Harbora.Domain.Services.ManagedService> SeedDatabaseAsync(
+        Guid serverId, string name = "orders")
+    {
+        await EnsureWorkspaceAsync();
+
+        var service = new Harbora.Domain.Services.ManagedService
+        {
+            Id = Guid.NewGuid(),
+            WorkspaceId = WorkspaceId,
+            ServerId = serverId,
+            Name = name,
+            Type = ManagedServiceType.PostgreSql,
+            Version = "16-alpine",
+            ContainerName = $"harbora-{name}",
+            InternalPort = 5432,
+            Username = "harbora",
+            EncryptedPassword = "s3cret",
+            DatabaseName = name,
+            VolumeName = $"{name}-data"
+        };
+
+        Db.ManagedServices.Add(service);
+        await Db.SaveChangesAsync();
+        return service;
+    }
+
+    /// <summary>An application on the given server, declaring one docker volume by name.</summary>
+    public async Task<Harbora.Domain.Apps.App> SeedAppWithVolumeAsync(
+        Guid serverId, string volumeName, string slug = "blog")
+    {
+        await EnsureWorkspaceAsync();
+
+        var app = new Harbora.Domain.Apps.App
+        {
+            Id = Guid.NewGuid(), WorkspaceId = WorkspaceId, ServerId = serverId,
+            Name = slug, Slug = slug
+        };
+        app.Volumes.Add(new Harbora.Domain.Apps.Volume { Name = volumeName, MountPath = "/data" });
+
+        Db.Apps.Add(app);
+        await Db.SaveChangesAsync();
+        return app;
+    }
+
+    /// <summary>A backup waiting to run, exactly as <c>QueueBackupAsync</c> would have written it.</summary>
+    public async Task<Backup> SeedPendingBackupAsync(BackupType type, string targetRef)
+    {
+        var backup = new Backup
+        {
+            Id = Guid.NewGuid(), WorkspaceId = WorkspaceId, DestinationId = Destination.Id,
+            Type = type, TargetRef = targetRef, Status = BackupStatus.Pending
+        };
+        Db.Backups.Add(backup);
+        await Db.SaveChangesAsync();
+        return backup;
+    }
+
+    /// <summary>A finished logical dump of a database, artifact and all — what verification reads.</summary>
+    public async Task<Backup> SeedCompletedDatabaseDumpAsync(Guid serviceId)
+    {
+        var path = Path.Combine(_dir, $"database-{Guid.NewGuid():N}.sql.gz");
+        await using (var file = File.Create(path))
+        await using (var gz = new GZipStream(file, CompressionLevel.Optimal))
+            await gz.WriteAsync(Encoding.UTF8.GetBytes("-- a dump\n"));
+
+        var backup = new Backup
+        {
+            Id = Guid.NewGuid(), WorkspaceId = WorkspaceId, DestinationId = Destination.Id,
+            Type = BackupType.Database, Status = BackupStatus.Completed,
+            TargetRef = serviceId.ToString(), ArtifactPath = path,
+            Checksum = await Sha256Async(path), SizeBytes = new FileInfo(path).Length,
+            FinishedAt = Clock.UtcNow
+        };
+        Db.Backups.Add(backup);
+        await Db.SaveChangesAsync();
+        return backup;
+    }
+
+    private async Task EnsureWorkspaceAsync()
+    {
+        if (await Db.Workspaces.AnyAsync(w => w.Id == WorkspaceId)) return;
+
+        Db.Workspaces.Add(new Harbora.Domain.Identity.Workspace
+        { Id = WorkspaceId, Name = "Acme", Slug = "acme" });
+        await Db.SaveChangesAsync();
+    }
 
     /// <summary>Writes a real gzipped JSON snapshot artifact and the row that points at it.</summary>
     public async Task<Backup> SeedAppConfigBackupAsync(bool encrypt = true, string kind = "app-config")

@@ -47,7 +47,8 @@ public sealed class MonitoringController(
                 orphans = result.OrphanRemoved,
                 superseded = result.RetentionRemoved,
                 refused = result.Failed,
-                freedBytes = result.FreedBytes
+                freedBytes = result.FreedBytes,
+                servers = result.Servers
             }), ct: ct);
 
         var removed = result.OrphanRemoved + result.RetentionRemoved;
@@ -55,9 +56,18 @@ public sealed class MonitoringController(
             ? Harbora.Infrastructure.Tenancy.ByteSize.Measured(f)
             : (IsFa ? "نامشخص" : "unknown");
 
-        TempData["Message"] = IsFa
+        // A server the sweep could not examine is named. Silence would leave it inside the totals as
+        // a machine that turned out to be clean, which is the reading somebody acts on.
+        var skipped = result.Servers.Where(s => s.Skipped is not null).Select(s => s.ServerName).ToList();
+        var note = skipped.Count == 0
+            ? string.Empty
+            : IsFa
+                ? $" این سرورها بررسی نشدند: {string.Join("، ", skipped)}."
+                : $" Not examined: {string.Join(", ", skipped)}.";
+
+        TempData["Message"] = (IsFa
             ? $"پاک‌سازی: {removed} ایمیج حذف شد ({result.OrphanRemoved} یتیم، {result.RetentionRemoved} قدیمی)، {result.Failed} در حال استفاده ماند؛ فضای آزادشده: {freed}."
-            : $"Cleanup removed {removed} image(s) ({result.OrphanRemoved} orphaned, {result.RetentionRemoved} superseded), {result.Failed} in use and kept; freed: {freed}.";
+            : $"Cleanup removed {removed} image(s) ({result.OrphanRemoved} orphaned, {result.RetentionRemoved} superseded), {result.Failed} in use and kept; freed: {freed}.") + note;
 
         return RedirectToAction(nameof(Index));
     }

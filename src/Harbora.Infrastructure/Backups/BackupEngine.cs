@@ -18,10 +18,18 @@ namespace Harbora.Infrastructure.Backups;
 /// throwaway alpine container that shares the staging volume with the panel; config/platform
 /// backups serialize metadata to gzipped JSON. Secret env values are stored as-is (ciphertext),
 /// so backups never contain plaintext secrets.
+///
+/// <para>
+/// Every helper container runs on the machine that actually holds the data, resolved through
+/// <see cref="IServerEngineFactory"/> — see <see cref="HostForAsync"/>. This class used to hold the
+/// panel's own <see cref="IDockerEngine"/>, so a backup of a service scheduled on another server
+/// archived whichever local volume happened to carry the same name (or an empty one Docker created
+/// on the spot) and recorded a successful backup. Nothing discovered that until a restore.
+/// </para>
 /// </summary>
 public sealed class BackupEngine(
     HarboraDbContext db,
-    IDockerEngine docker,
+    IServerEngineFactory engines,
     IBackupStorage storage,
     ISecretProtector protector,
     IJobQueue jobs,
@@ -179,6 +187,8 @@ public sealed class BackupEngine(
         var image = $"{definition.ImageRepo}:{svc.Version}";
         var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
 
+        var docker = RequireHelperContainers(await HostForServiceAsync(svc, ct), "be exported");
+
         var output = new System.Text.StringBuilder();
         var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
             image,
@@ -206,6 +216,9 @@ public sealed class BackupEngine(
     {
         var (volumeName, label) = await ResolveVolumeAsync(backup.Type, backup.TargetRef, ct);
         var key = $"{backup.Type.ToString().ToLowerInvariant()}-{label}-{stamp}.tgz";
+
+        var docker = RequireHelperContainers(
+            await HostForAsync(backup.Type, backup.TargetRef, ct), "have a volume snapshot taken");
 
         var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
             _opt.HelperImage,
@@ -276,17 +289,24 @@ public sealed class BackupEngine(
 
         // Volume restore: stop the container, wipe + untar the volume, restart.
         var (volumeName, _) = await ResolveVolumeAsync(backup.Type, backup.TargetRef, ct);
+
+        // Asked before anything is stopped, and long before anything is wiped. A host that cannot run
+        // the helper has to end the restore while the current container is still serving — the
+        // refusal is worth nothing if it arrives after the container is down.
+        var docker = RequireHelperContainers(
+            await HostForAsync(backup.Type, backup.TargetRef, ct), "have a volume restored into it");
+
         var fileName = Path.GetFileName(localPath);
         var stagedCopy = Path.Combine(_opt.StagingDir, fileName);
         if (!string.Equals(Path.GetFullPath(localPath), Path.GetFullPath(stagedCopy), StringComparison.OrdinalIgnoreCase))
             File.Copy(localPath, stagedCopy, overwrite: true);
 
         var containerName = await ContainerForTargetAsync(backup.Type, backup.TargetRef, ct);
-        if (containerName is not null) await StopIfRunning(containerName, ct);
+        if (containerName is not null) await StopIfRunning(docker, containerName, ct);
 
         // The swap below can undo a failed restore, but not a successful restore of the WRONG backup.
         // This snapshot is what covers that case.
-        await SnapshotBeforeRestoreAsync(volumeName, ct);
+        await SnapshotBeforeRestoreAsync(docker, volumeName, ct);
 
         var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
             _opt.HelperImage,
@@ -299,7 +319,8 @@ public sealed class BackupEngine(
                 "The restore could not be completed and the volume's original contents were put back. " +
                 "Nothing was lost; check disk space on the server and try again.");
         if (exit != 0) throw new InvalidOperationException($"Restore failed (exit {exit}).");
-        if (containerName is not null) await docker.RestartContainerAsync(await RequireContainerIdAsync(containerName, ct), ct);
+        if (containerName is not null)
+            await docker.RestartContainerAsync(await RequireContainerIdAsync(docker, containerName, ct), ct);
     }
 
     /// <summary>
@@ -321,6 +342,11 @@ public sealed class BackupEngine(
         var image = $"{definition.ImageRepo}:{svc.Version}";
         var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
         var network = _runtime.WorkspaceNetwork(wsSlug);
+
+        // Before the safety dump, so a host that cannot take one also cannot start the restore that
+        // dump exists to protect.
+        var docker = RequireHelperContainers(
+            await HostForServiceAsync(svc, ct), "have a dump loaded back into it");
 
         var stamp = clock.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
         var safetyKey = $"pre-restore-{svc.Name}-{stamp}";
@@ -650,6 +676,26 @@ public sealed class BackupEngine(
 
         if (RestoreRehearsal.WhyUnsupported(svc.Type) is { } unsupported) return (null, unsupported, true);
 
+        // The scratch database is created on the server the real one runs on. A host that cannot run
+        // a one-off container cannot host it, and neither can a server that is unreachable — both are
+        // "not checked", which the caller records as skipped. Reporting either as a bad archive would
+        // condemn a backup that is very likely fine.
+        BackupHost host;
+        try
+        {
+            host = await HostForServiceAsync(svc, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (null, $"the machine holding '{svc.Name}' could not be reached: {ex.Message}", true);
+        }
+
+        if (Nodes.NodeWorkloadEngine.NodeBehind(host.Docker) is { } rehearsalNode)
+            return (null,
+                $"'{svc.Name}' runs on node {rehearsalNode}, which cannot host the throwaway database " +
+                "this check restores into", true);
+
+        var docker = host.Docker;
         var definition = Services.ServiceCatalog.All[svc.Type];
         var creds = new Services.ServiceCreds(
             svc.ContainerName, definition.Port, svc.Username, RevealPassword(svc.EncryptedPassword), svc.DatabaseName);
@@ -727,7 +773,7 @@ public sealed class BackupEngine(
     /// operator explicitly confirmed should not be blocked because the safety copy failed, but the
     /// attempt is logged either way.
     /// </summary>
-    private async Task SnapshotBeforeRestoreAsync(string volumeName, CancellationToken ct)
+    private async Task SnapshotBeforeRestoreAsync(IDockerEngine docker, string volumeName, CancellationToken ct)
     {
         if (!_opt.SnapshotBeforeRestore) return;
 
@@ -752,6 +798,79 @@ public sealed class BackupEngine(
         }
     }
 
+    // --- which machine holds the data ---
+
+    /// <summary>The engine for the machine that holds a target's data, and how to name it to a person.</summary>
+    private sealed record BackupHost(IDockerEngine Docker, string Subject);
+
+    /// <summary>
+    /// The machine a backup has to read from, or write back to.
+    ///
+    /// Everything below runs a helper container beside the data, so getting this wrong does not fail —
+    /// it succeeds against the wrong disk. Resolution goes through <see cref="IServerEngineFactory"/>
+    /// and keeps its refusals: a server with no agent endpoint and no enrolled node throws rather than
+    /// quietly becoming this panel.
+    /// </summary>
+    private async Task<BackupHost> HostForAsync(BackupType type, string targetRef, CancellationToken ct)
+    {
+        if (type is BackupType.Database or BackupType.Service)
+        {
+            var svc = await db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
+                .FirstOrDefaultAsync(s => s.Id == Guid.Parse(targetRef), ct)
+                ?? throw new InvalidOperationException("That database no longer exists.");
+
+            return await HostForServiceAsync(svc, ct);
+        }
+
+        // A volume target is a bare docker volume name, so the machine holding it is whichever
+        // application declares it. Read unfiltered: a backup runs on the background worker, which has
+        // no session, and a filtered read would find no owner for every volume on the platform.
+        var owner = await db.Volumes.IgnoreQueryFilters()
+            .Where(v => v.Name == targetRef)
+            .Select(v => new { v.App!.ServerId, v.App!.Name })
+            .FirstOrDefaultAsync(ct);
+
+        // Nothing claims it. There is no second place to look — a volume name is not a placement —
+        // so this panel's own daemon is the only machine the name can be addressed on. Said out loud
+        // rather than assumed, because assuming it is the defect this method exists to end.
+        if (owner is null)
+        {
+            logger.LogInformation(
+                "No application declares a volume named '{Volume}', so it is read from this panel's own daemon.",
+                targetRef);
+
+            return new BackupHost(engines.Local, $"The volume '{targetRef}'");
+        }
+
+        return new BackupHost(
+            await engines.ResolveAsync(owner.ServerId, ct),
+            $"The volume '{targetRef}' of {owner.Name}");
+    }
+
+    private async Task<BackupHost> HostForServiceAsync(Domain.Services.ManagedService svc, CancellationToken ct) =>
+        new(await engines.ResolveAsync(svc.ServerId, ct), $"The database '{svc.Name}'");
+
+    /// <summary>
+    /// Refuses, in words an operator can act on, when the machine holding the data will not run the
+    /// helper container the work needs.
+    ///
+    /// A v1 node has no verb for running a container to completion — that is a shell with extra
+    /// steps, and the contract withholds it deliberately. The alternative to saying so is what this
+    /// platform used to do: run the helper here instead, archive a same-named local volume, and
+    /// record a successful backup of data it never read. Dispatching the node's own SnapshotVolume
+    /// and RestoreVolume verbs is a later phase (HARBORA-0034).
+    /// </summary>
+    private static IDockerEngine RequireHelperContainers(BackupHost host, string work)
+    {
+        if (Nodes.NodeWorkloadEngine.NodeBehind(host.Docker) is not { } nodeId) return host.Docker;
+
+        throw new InvalidOperationException(
+            $"{host.Subject} runs on node {nodeId}, which cannot {work} yet: a v1 node offers no way " +
+            "to run the helper container this needs, and Harbora will not read this panel's own disk " +
+            "instead. Nothing was read and nothing was written. The panel will dispatch the node's " +
+            "own volume snapshots in a later phase.");
+    }
+
     // --- helpers ---
 
     private async Task<(string VolumeName, string Label)> ResolveVolumeAsync(BackupType type, string targetRef, CancellationToken ct)
@@ -772,7 +891,7 @@ public sealed class BackupEngine(
         return null;
     }
 
-    private async Task StopIfRunning(string containerName, CancellationToken ct)
+    private static async Task StopIfRunning(IDockerEngine docker, string containerName, CancellationToken ct)
     {
         var containers = await docker.ListContainersAsync("harbora.service", ct);
         var c = containers.FirstOrDefault(x => x.Name == containerName);
@@ -780,7 +899,8 @@ public sealed class BackupEngine(
             await docker.StopContainerAsync(c.Id, ct);
     }
 
-    private async Task<string> RequireContainerIdAsync(string containerName, CancellationToken ct)
+    private static async Task<string> RequireContainerIdAsync(
+        IDockerEngine docker, string containerName, CancellationToken ct)
     {
         var containers = await docker.ListContainersAsync("harbora.service", ct);
         return containers.First(x => x.Name == containerName).Id;

@@ -60,6 +60,28 @@ public sealed class NodeWorkloadEngine(
     public const string PlatformTenant = "harbora-platform";
 
     /// <summary>
+    /// The v1 node behind an engine, or null when the engine is not one.
+    ///
+    /// <para>
+    /// Asked before the work rather than discovered in the middle of it. Two of the things this class
+    /// deliberately withholds are silent in their refusal — image listing returns nothing and image
+    /// removal does nothing, because a node manages its own images — so a caller that only tries and
+    /// catches reports "0 images reclaimed" for a machine it never looked at. The one-off refusal is
+    /// loud, but a volume restore has already stopped the container by the time it is heard.
+    /// </para>
+    ///
+    /// <para>
+    /// Kept here rather than spread as a type test across the callers, so the answer to "what will
+    /// this host not do" stays next to the class that decides it.
+    /// </para>
+    /// </summary>
+    public static string? NodeBehind(IDockerEngine engine) =>
+        engine is NodeWorkloadEngine workload ? workload.NodeId : null;
+
+    /// <summary>The node this engine speaks to, for <see cref="NodeBehind"/> to hand back.</summary>
+    private string NodeId => nodeId;
+
+    /// <summary>
     /// Digests resolved during this deployment, so the run does not re-resolve what the pull already
     /// looked up — and, more importantly, cannot resolve a moving tag to something different between
     /// the two calls.
