@@ -20,7 +20,7 @@ public sealed class JobHarness : IDisposable
     private readonly string _dbName = "jobs-" + Guid.NewGuid();
 
     public FixedClock Clock { get; } = new();
-    public JobSignal Signal { get; } = new();
+    public ObservableJobSignal Signal { get; } = new();
     public JobCancellationRegistry Cancellations { get; } = new();
     public StubJobHandler Handler { get; } = new();
 
@@ -138,6 +138,40 @@ public sealed class ObservableJobStartupGate : JobStartupGate
         _waitStarted.TrySetResult();
         return base.WaitAsync(ct);
     }
+}
+
+/// <summary>
+/// A <see cref="JobSignal"/> that reports when the worker is asleep on it, so a test about what
+/// shutdown does to a parked loop can put the loop there first instead of hoping it got there.
+///
+/// <para>
+/// <see cref="Parked"/> is the current wait, re-armed each time the last waiter comes back out: read
+/// it while a waiter is inside and it is already complete; read it between waits and it completes on
+/// the next entry. Once inside, only a <c>Notify</c>, the five-second backstop poll or cancellation
+/// can get the loop out again — and a test that has just enqueued nothing causes none of the first
+/// two.
+/// </para>
+/// </summary>
+public sealed class ObservableJobSignal : JobSignal
+{
+    private readonly object _gate = new();
+    private TaskCompletionSource _parked = Fresh();
+    private int _inside;
+
+    /// <summary>Completes while a waiter is inside <see cref="WaitAsync"/>.</summary>
+    public Task Parked { get { lock (_gate) return _parked.Task; } }
+
+    public override async Task WaitAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        TaskCompletionSource parked;
+        lock (_gate) { _inside++; parked = _parked; }
+        parked.TrySetResult();
+
+        try { await base.WaitAsync(timeout, ct); }
+        finally { lock (_gate) if (--_inside == 0) _parked = Fresh(); }
+    }
+
+    private static TaskCompletionSource Fresh() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
 /// <summary>

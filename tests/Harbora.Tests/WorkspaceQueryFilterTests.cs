@@ -177,6 +177,9 @@ public class WorkspaceQueryFilterTests
     {
         public Task<Guid> EnqueueAsync(Harbora.Domain.Jobs.JobKind kind, Guid targetId, CancellationToken ct = default)
             => Task.FromResult(Guid.NewGuid());
+        public Task<Guid> EnqueueExclusiveAsync(
+            Harbora.Domain.Jobs.JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default)
+            => Task.FromResult(Guid.NewGuid());
         public Task<bool> RequestCancellationAsync(Harbora.Domain.Jobs.JobKind kind, Guid targetId, CancellationToken ct = default)
             => Task.FromResult(false);
     }

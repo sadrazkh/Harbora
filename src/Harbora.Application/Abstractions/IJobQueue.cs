@@ -8,8 +8,30 @@ namespace Harbora.Application.Abstractions;
 /// </summary>
 public interface IJobQueue
 {
-    /// <summary>Persist a job and wake the worker. Returns the job id.</summary>
+    /// <summary>
+    /// Persist a job and wake the worker. Returns the job id. The job excludes on its own target: no
+    /// other job of this kind for this target runs beside it.
+    /// </summary>
     Task<Guid> EnqueueAsync(JobKind kind, Guid targetId, CancellationToken ct = default);
+
+    /// <summary>
+    /// The same, for work whose target is not the thing that must not double up.
+    ///
+    /// <para>
+    /// A deployment is the case this exists for: its target is the immutable <c>Deployment</c> row
+    /// and every redeploy makes a new one, so two deployments of one app are two different targets
+    /// and nothing in the queue would keep them apart. Passing the app id as
+    /// <paramref name="exclusiveWith"/> is what makes a deploy and the redeploy behind it serial
+    /// again — a promise the platform relied on when the worker ran one job at a time, and which
+    /// must now be said out loud.
+    /// </para>
+    /// </summary>
+    /// <param name="targetId">The aggregate the work acts on — still what the handler is given.</param>
+    /// <param name="exclusiveWith">
+    /// What no two concurrently running jobs of this kind may share.
+    /// </param>
+    Task<Guid> EnqueueExclusiveAsync(
+        JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default);
 
     /// <summary>
     /// Ask the live job for a target to stop: a Pending job is cancelled before it ever starts, and

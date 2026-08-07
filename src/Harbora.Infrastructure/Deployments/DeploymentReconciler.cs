@@ -77,6 +77,10 @@ public sealed class DeploymentReconciler(
                     db.Jobs.Add(new Job
                     {
                         Kind = JobKind.Deployment, TargetId = d.Id,
+                        // Same rule as the engine's own enqueue: a deployment queues behind its app,
+                        // not behind its own row. Left unset, a deployment healed here could run
+                        // beside another of the same app that survived the restart.
+                        ExclusiveWith = d.AppId,
                         Status = JobStatus.Pending, CreatedAt = clock.UtcNow
                     });
                     requeued++;

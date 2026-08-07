@@ -17,10 +17,12 @@ namespace Harbora.Infrastructure.Jobs;
 /// instance — and a job serving a retry backoff, for which nothing signals at all.
 ///
 /// <para>
-/// Up to <see cref="JobQueueOptions.MaxConcurrency"/> of those run at once, and never two for one
-/// target. The loop claims and hands off; it does not wait for the work. What it waits for is a free
-/// slot, which is the only thing that bounds the platform now — before this, the bound was one, and
-/// a single tenant's build was the whole install's background capacity for as long as it took.
+/// Up to <see cref="JobQueueOptions.MaxConcurrency"/> of those run at once, and never two that
+/// exclude on the same thing — usually one target, and for a deployment one app (see
+/// <see cref="Job.ExcludesOn"/>). The loop claims and hands off; it does not wait for the work. What
+/// it waits for is a free slot, which is the only thing that bounds the platform now — before this,
+/// the bound was one, and a single tenant's build was the whole install's background capacity for as
+/// long as it took.
 /// </para>
 /// </summary>
 public class JobWorker(
@@ -54,10 +56,10 @@ public class JobWorker(
     private readonly int _maxConcurrency = options.Value.EffectiveMaxConcurrency;
 
     /// <summary>
-    /// The targets this worker is running right now. Instance state rather than a shared service
-    /// because exactly one worker is registered per process, and "in flight in this process" is
-    /// precisely what it means: a second instance is kept off the same row by the ClaimStamp
-    /// concurrency token in the claim, not by this.
+    /// What this worker is running right now, by what each job excludes on. Instance state rather
+    /// than a shared service because exactly one worker is registered per process, and "in flight in
+    /// this process" is precisely what it means: a second instance is kept off the same row by the
+    /// ClaimStamp concurrency token in the claim, not by this.
     /// </summary>
     private readonly InFlightTargets _inFlight = new();
 
@@ -111,10 +113,19 @@ public class JobWorker(
             if (job is null)
             {
                 // Nothing claimable: the queue is empty, or everything left is backing off or
-                // belongs to a target already in flight here. Give the slot back and idle until
+                // belongs to something already in flight here. Give the slot back and idle until
                 // something is enqueued, something finishes, or the poll comes round.
                 slots.Release();
-                await signal.WaitAsync(PollInterval, stoppingToken);
+
+                // Caught here rather than left to the signal, because this is where a worker with
+                // one long deployment running and nothing else queued spends nearly all of its
+                // life — it is the ordinary shutdown state, not an edge case. An exception leaving
+                // this line would carry the loop past the drain below and out of ExecuteAsync: the
+                // host would finish stopping while jobs were still settling, the slots would be
+                // disposed underneath them, and their rows would be left reading Running with
+                // nothing running them.
+                try { await signal.WaitAsync(PollInterval, stoppingToken); }
+                catch (OperationCanceledException) { break; }
                 continue;
             }
 
@@ -198,9 +209,10 @@ public class JobWorker(
         }
         finally
         {
-            // Whatever happened, this target is this process's again. A reservation left behind
-            // would read as a target that quietly stopped being served until the panel restarted.
-            _inFlight.Release(job.Kind, job.TargetId);
+            // Whatever happened, what this job was holding is free again. A reservation left behind
+            // would read as an app or a backup target that quietly stopped being served until the
+            // panel restarted.
+            _inFlight.Release(job.Kind, job.ExcludesOn);
         }
     }
 
@@ -322,68 +334,84 @@ public class JobWorker(
     /// </summary>
     private async Task<Job?> ClaimNextAsync(CancellationToken ct)
     {
-        using var scope = scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
-
-        // A job serving a backoff is Pending but not yet due; claiming it anyway would turn the
-        // backoff into a retry loop. Oldest-first still decides among everything that is due.
-        var now = clock.UtcNow;
-        var claimable = db.Jobs
-            .Where(j => j.Status == JobStatus.Pending &&
-                        (j.NextAttemptAt == null || j.NextAttemptAt <= now));
-
-        // Rows for a target this process is already running are not skipped over silently — they are
-        // excluded from the search, so oldest-first picks the next thing that CAN run instead of the
-        // loop idling behind work it is not allowed to start. Written as a term per held target
-        // rather than a set membership test because the pair is what excludes, not the id: a backup
-        // of one thing and a deployment of another are different work whatever their guids are. The
-        // list is bounded by MaxConcurrency, so this stays a handful of terms.
-        foreach (var (kind, targetId) in _inFlight.Snapshot())
-            claimable = claimable.Where(j => j.Kind != kind || j.TargetId != targetId);
-
-        var candidate = await claimable.OrderBy(j => j.CreatedAt).FirstOrDefaultAsync(ct);
-
-        if (candidate is null) return null;
-
-        // Cancel was requested but the job is Pending again — either it was never claimed, or a
-        // shutdown released the claim after the request. Settle it without running the work.
-        if (candidate.CancelRequested)
-        {
-            candidate.Status = JobStatus.Cancelled;
-            candidate.FinishedAt = clock.UtcNow;
-            candidate.ClaimStamp++;
-            try { await db.SaveChangesAsync(ct); } catch (DbUpdateConcurrencyException) { }
-            return null;
-        }
-
-        // Taken before the row is written, so that even two claims running at once cannot both come
-        // away holding one target. Everything from here to the return either hands the reservation
-        // to the caller or gives it back.
-        if (!_inFlight.TryReserve(candidate.Kind, candidate.TargetId)) return null;
-
-        candidate.Status = JobStatus.Running;
-        candidate.StartedAt = clock.UtcNow;
-        candidate.ClaimedBy = _workerId;
-        candidate.Attempts++;
-        candidate.ClaimStamp++;
-
+        // Held outside the try so the catch can give the reservation back from anywhere below it —
+        // including the scope's own disposal, which happens on the way out of this try and not
+        // before it. A claim that succeeded and then failed to dispose its scope would otherwise
+        // leave the pair held for the life of the process AND the row reading Running: the app would
+        // simply stop deploying, with nothing anywhere saying why.
+        (JobKind Kind, Guid ExcludesOn)? reserved = null;
         try
         {
-            await db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            // Another worker claimed it first; let the loop pick up the next one.
-            _inFlight.Release(candidate.Kind, candidate.TargetId);
-            return null;
+            using var scope = scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+
+            // A job serving a backoff is Pending but not yet due; claiming it anyway would turn the
+            // backoff into a retry loop. Oldest-first still decides among everything that is due.
+            var now = clock.UtcNow;
+            var claimable = db.Jobs
+                .Where(j => j.Status == JobStatus.Pending &&
+                            (j.NextAttemptAt == null || j.NextAttemptAt <= now));
+
+            // Rows this process is already running the equivalent of are not skipped over silently —
+            // they are excluded from the search, so oldest-first picks the next thing that CAN run
+            // instead of the loop idling behind work it is not allowed to start. Written as a term
+            // per held pair rather than a set membership test because the pair is what excludes, not
+            // the id: a backup of one thing and a deployment of another are different work whatever
+            // their guids are. The list is bounded by MaxConcurrency, so this stays a handful of
+            // terms.
+            //
+            // The coalesce is Job.ExcludesOn spelled out, because this runs as SQL: a job that named
+            // nothing to exclude on excludes on its own target, and a deployment names its app.
+            foreach (var (kind, excludesOn) in _inFlight.Snapshot())
+                claimable = claimable.Where(
+                    j => j.Kind != kind || (j.ExclusiveWith ?? j.TargetId) != excludesOn);
+
+            var candidate = await claimable.OrderBy(j => j.CreatedAt).FirstOrDefaultAsync(ct);
+
+            if (candidate is null) return null;
+
+            // Cancel was requested but the job is Pending again — either it was never claimed, or a
+            // shutdown released the claim after the request. Settle it without running the work.
+            if (candidate.CancelRequested)
+            {
+                candidate.Status = JobStatus.Cancelled;
+                candidate.FinishedAt = clock.UtcNow;
+                candidate.ClaimStamp++;
+                try { await db.SaveChangesAsync(ct); } catch (DbUpdateConcurrencyException) { }
+                return null;
+            }
+
+            // Taken before the row is written, so that even two claims running at once cannot both
+            // come away holding one key. Everything from here to the return either hands the
+            // reservation to the caller or gives it back.
+            if (!_inFlight.TryReserve(candidate.Kind, candidate.ExcludesOn)) return null;
+            reserved = (candidate.Kind, candidate.ExcludesOn);
+
+            candidate.Status = JobStatus.Running;
+            candidate.StartedAt = clock.UtcNow;
+            candidate.ClaimedBy = _workerId;
+            candidate.Attempts++;
+            candidate.ClaimStamp++;
+
+            try
+            {
+                await db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                // Another worker claimed it first; let the loop pick up the next one.
+                _inFlight.Release(candidate.Kind, candidate.ExcludesOn);
+                reserved = null;
+                return null;
+            }
+
+            return candidate;
         }
         catch
         {
-            _inFlight.Release(candidate.Kind, candidate.TargetId);
+            if (reserved is { } held) _inFlight.Release(held.Kind, held.ExcludesOn);
             throw;
         }
-
-        return candidate;
     }
 
     private async Task SettleAsync(

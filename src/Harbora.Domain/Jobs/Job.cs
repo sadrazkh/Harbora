@@ -45,6 +45,32 @@ public class Job : BaseEntity
     /// <summary>The aggregate this job acts on: deployment id, backup id or managed-service id.</summary>
     public Guid TargetId { get; set; }
 
+    /// <summary>
+    /// What this job must not share with another job of the same kind running at the same time.
+    /// Null — the ordinary case — means its own <see cref="TargetId"/>.
+    ///
+    /// <para>
+    /// It exists because for one kind the target is not the thing that must not double up. A
+    /// deployment's target is the <c>Deployment</c> row, and every redeploy is a new row, so two
+    /// deployments of one app are two different targets: without this they would be free to run
+    /// beside each other, and one app would get two <c>docker build</c>s, two containers under one
+    /// name, two host-port reservations and two proxy applies. What must not double up there is the
+    /// <b>app</b>, which the caller queuing the deployment already knows.
+    /// </para>
+    ///
+    /// <para>
+    /// Stamped at enqueue rather than worked out at claim time on purpose: the worker's claim runs as
+    /// SQL, and a key it had to join to <c>Deployments</c> for could not stay a term in that query.
+    /// </para>
+    /// </summary>
+    public Guid? ExclusiveWith { get; set; }
+
+    /// <summary>
+    /// The value the queue actually excludes on, with the fallback applied. Every job has one; most
+    /// jobs' is their own target. Not stored — see <see cref="ExclusiveWith"/>.
+    /// </summary>
+    public Guid ExcludesOn => ExclusiveWith ?? TargetId;
+
     public JobStatus Status { get; set; } = JobStatus.Pending;
 
     /// <summary>How many times execution has been started (a claim that later crashed still counts).</summary>

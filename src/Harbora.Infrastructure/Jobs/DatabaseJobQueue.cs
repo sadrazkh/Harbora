@@ -16,12 +16,20 @@ public sealed class DatabaseJobQueue(
     IJobCancellationRegistry cancellations,
     JobSignal signal) : IJobQueue
 {
-    public async Task<Guid> EnqueueAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
+    public Task<Guid> EnqueueAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
+        => AddAsync(kind, targetId, exclusiveWith: null, ct);
+
+    public Task<Guid> EnqueueExclusiveAsync(
+        JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default)
+        => AddAsync(kind, targetId, exclusiveWith, ct);
+
+    private async Task<Guid> AddAsync(JobKind kind, Guid targetId, Guid? exclusiveWith, CancellationToken ct)
     {
         var job = new Job
         {
             Kind = kind,
             TargetId = targetId,
+            ExclusiveWith = exclusiveWith,
             Status = JobStatus.Pending,
             CreatedAt = clock.UtcNow
         };
@@ -83,7 +91,7 @@ public sealed class DatabaseJobQueue(
 /// Wakes the job worker the moment something is enqueued in this process, instead of leaving it to
 /// the next poll. Purely a latency optimisation — correctness rests on polling the table.
 /// </summary>
-public sealed class JobSignal
+public class JobSignal
 {
     private readonly SemaphoreSlim _semaphore = new(0);
 
@@ -93,9 +101,18 @@ public sealed class JobSignal
         if (_semaphore.CurrentCount == 0) _semaphore.Release();
     }
 
-    public async Task WaitAsync(TimeSpan timeout, CancellationToken ct)
-    {
-        try { await _semaphore.WaitAsync(timeout, ct); }
-        catch (OperationCanceledException) { /* shutting down */ }
-    }
+    /// <summary>
+    /// Waits for a nudge, the timeout, or cancellation — and lets the cancellation out.
+    ///
+    /// <para>
+    /// This used to swallow the OperationCanceledException, which quietly made it the only reason
+    /// the worker's shutdown drain ever ran: the loop's wait on this signal is where a worker with
+    /// one long job in flight and an otherwise empty queue spends nearly all of its life, and the
+    /// caller was relying on never being thrown at from here. Tidying the swallow away would have
+    /// been an obviously safe two-line change that abandoned every in-flight job on shutdown. A
+    /// method handed a token honours it; the worker states what it does about that itself.
+    /// </para>
+    /// </summary>
+    public virtual Task WaitAsync(TimeSpan timeout, CancellationToken ct) =>
+        _semaphore.WaitAsync(timeout, ct);
 }

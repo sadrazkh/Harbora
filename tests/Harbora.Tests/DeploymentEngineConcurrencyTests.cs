@@ -24,8 +24,15 @@ public class DeploymentEngineConcurrencyTests
         public int Enqueued;
         public readonly List<Guid> CancelledTargets = [];
 
+        /// <summary>What each enqueue said the job's target is, and what it must not share.</summary>
+        public readonly List<(JobKind Kind, Guid TargetId, Guid? ExclusiveWith)> Jobs = [];
+
         public Task<Guid> EnqueueAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
-        { Enqueued++; return Task.FromResult(Guid.NewGuid()); }
+        { Enqueued++; Jobs.Add((kind, targetId, null)); return Task.FromResult(Guid.NewGuid()); }
+
+        public Task<Guid> EnqueueExclusiveAsync(
+            JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default)
+        { Enqueued++; Jobs.Add((kind, targetId, exclusiveWith)); return Task.FromResult(Guid.NewGuid()); }
 
         public Task<bool> RequestCancellationAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
         { CancelledTargets.Add(targetId); return Task.FromResult(true); }
@@ -57,6 +64,30 @@ public class DeploymentEngineConcurrencyTests
 
         second.Should().Be(first, "a second trigger while one is in flight must coalesce");
         db.Deployments.Count(d => d.AppId == appId).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task The_queued_job_says_it_must_not_run_beside_another_of_the_same_app()
+    {
+        // Coalescing above is a read of the in-flight deployment followed by an insert, with no
+        // transaction, no unique index and no lock between them — two overlapping callers (a
+        // double-click, a CLI call racing a webhook, a redelivered push) can both see nothing in
+        // flight and both create a row. That was benign while the worker ran one job at a time. It
+        // is not now, so the second layer has to be stated where the app id is known: the job's
+        // target is still its own deployment, but what it queues behind is the app.
+        using var db = NewDb();
+        var appId = Guid.NewGuid();
+        db.Apps.Add(new App { Id = appId, Name = "a", Slug = "a" });
+        await db.SaveChangesAsync();
+
+        var queue = new NoopQueue();
+        var engine = new DeploymentEngine(db, queue, new Clock());
+
+        var deploymentId = await engine.QueueDeploymentAsync(
+            new DeploymentRequest(appId, DeploymentTrigger.Manual, Guid.NewGuid()), default);
+
+        queue.Jobs.Should().ContainSingle().Which
+            .Should().Be((JobKind.Deployment, deploymentId, (Guid?)appId));
     }
 
     [Fact]

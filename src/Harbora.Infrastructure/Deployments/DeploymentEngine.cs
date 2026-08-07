@@ -80,7 +80,14 @@ public sealed class DeploymentEngine(
         var deploymentId = deployment.Id;
         // The job row is persisted alongside the deployment, so a restart resumes it from the
         // database instead of relying on anything held in memory.
-        await jobs.EnqueueAsync(JobKind.Deployment, deploymentId, ct);
+        //
+        // Queued against the APP, not the deployment. The work is this deployment and the pipeline
+        // is handed its id, but what must never have two of these running at once is the app: two
+        // deployment rows are two different targets, and the coalescing above is a read followed by
+        // an insert with nothing between them, so a double-click, a CLI call racing a webhook or a
+        // redelivered push can still produce two rows. Serialising them here is what stops that
+        // becoming two docker builds, two containers under one name and two proxy applies.
+        await jobs.EnqueueExclusiveAsync(JobKind.Deployment, deploymentId, exclusiveWith: app.Id, ct);
 
         return deploymentId;
     }

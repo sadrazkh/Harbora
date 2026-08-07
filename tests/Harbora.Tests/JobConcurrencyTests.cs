@@ -44,7 +44,7 @@ public class JobConcurrencyTests
         h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
         var otherApp = await h.Queue().EnqueueAsync(JobKind.Deployment, b);
 
-        var worker = h.Worker(maxConcurrency: 2);
+        using var worker = h.Worker(maxConcurrency: 2);
         await worker.StartAsync(default);
         h.Gate.Open();
 
@@ -75,7 +75,7 @@ public class JobConcurrencyTests
         h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
         var eligible = await h.Queue().EnqueueAsync(JobKind.Deployment, free);
 
-        var worker = h.Worker(maxConcurrency: 2);
+        using var worker = h.Worker(maxConcurrency: 2);
         await worker.StartAsync(default);
         h.Gate.Open();
 
@@ -112,7 +112,7 @@ public class JobConcurrencyTests
         h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
         var second = await h.Queue().EnqueueAsync(JobKind.Backup, target);
 
-        var worker = h.Worker(maxConcurrency: 4);
+        using var worker = h.Worker();
         var inFlight = worker.RunNextAsync(default);
         await h.Handler.StartedFor(target).WaitAsync(Patience);
 
@@ -135,6 +135,126 @@ public class JobConcurrencyTests
     }
 
     [Fact]
+    public async Task Two_deployments_of_one_app_never_run_at_the_same_time()
+    {
+        // The acceptance sentence of the whole task: "two deployments of app A do not [overlap]".
+        // A deployment job's target is the Deployment ROW, and a redeploy is always a new row, so
+        // per-target exclusion alone says nothing about them — the two would be free to run beside
+        // each other, giving one app two docker builds, two containers under one name, two host-port
+        // reservations and two proxy applies. What must not double up is the app, and the caller that
+        // queues the deployment is the one that knows it.
+        using var h = new JobHarness();
+        var app = Guid.NewGuid();
+        var deployment = Guid.NewGuid();
+        var redeploy = Guid.NewGuid();
+        h.Handler.Hold(deployment);
+
+        var first = await h.Queue().EnqueueExclusiveAsync(JobKind.Deployment, deployment, app);
+        h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
+        var second = await h.Queue().EnqueueExclusiveAsync(JobKind.Deployment, redeploy, app);
+
+        // Driven by hand rather than by the loop, so the refusal is observed as a returned value at a
+        // moment when the first job is provably inside its handler — not inferred from having waited.
+        using var worker = h.Worker();
+        var inFlight = worker.RunNextAsync(default);
+        await h.Handler.StartedFor(deployment).WaitAsync(Patience);
+
+        (await worker.RunNextAsync(default)).Should().BeFalse(
+            "this process is already deploying that app, whatever row the second deployment is");
+        h.Handler.Executed.Should().HaveCount(1);
+        h.JobById(second)!.Status.Should().Be(JobStatus.Pending);
+
+        h.Handler.Release(deployment);
+        (await inFlight.WaitAsync(Patience)).Should().BeTrue();
+
+        // Serial, not dropped: the redeploy runs the moment the deploy before it is done.
+        (await worker.RunNextAsync(default)).Should().BeTrue();
+        h.Handler.Executed.Should().HaveCount(2);
+        h.JobById(first)!.Status.Should().Be(JobStatus.Succeeded);
+        h.JobById(second)!.Status.Should().Be(JobStatus.Succeeded);
+    }
+
+    [Fact]
+    public async Task Two_deployments_of_different_apps_still_run_at_the_same_time()
+    {
+        // The other half of the acceptance sentence, and the thing the whole phase was for. Excluding
+        // deployments on their app must not quietly become "one deployment at a time, platform-wide".
+        using var h = new JobHarness();
+        var appA = Guid.NewGuid();
+        var appB = Guid.NewGuid();
+        var buildA = Guid.NewGuid();
+        var buildB = Guid.NewGuid();
+        h.Handler.Hold(buildA);
+        h.Handler.Hold(buildB);
+
+        var slowBuild = await h.Queue().EnqueueExclusiveAsync(JobKind.Deployment, buildA, appA);
+        h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
+        var otherApp = await h.Queue().EnqueueExclusiveAsync(JobKind.Deployment, buildB, appB);
+
+        using var worker = h.Worker(maxConcurrency: 2);
+        await worker.StartAsync(default);
+        h.Gate.Open();
+
+        await h.Handler.StartedFor(buildA).WaitAsync(Patience);
+        await h.Handler.StartedFor(buildB).WaitAsync(Patience);
+        h.Handler.MaxConcurrent.Should().Be(2);
+
+        h.Handler.Release(buildA);
+        h.Handler.Release(buildB);
+        (await h.SettledAsync(slowBuild)).Status.Should().Be(JobStatus.Succeeded);
+        (await h.SettledAsync(otherApp)).Status.Should().Be(JobStatus.Succeeded);
+        await worker.StopAsync(default).WaitAsync(Patience);
+    }
+
+    [Fact]
+    public async Task A_blocked_deployment_is_stepped_over_rather_than_stalling_the_queue()
+    {
+        // The exclusion has to be expressed in the claim's Where clause, not merely refused after the
+        // row is picked, or an app's own redeploy would hold up every other tenant's work behind it.
+        using var h = new JobHarness();
+        var app = Guid.NewGuid();
+        var deployment = Guid.NewGuid();
+        var redeploy = Guid.NewGuid();
+        var somebodyElse = Guid.NewGuid();
+        h.Handler.Hold(deployment);
+
+        var running = await h.Queue().EnqueueExclusiveAsync(JobKind.Deployment, deployment, app);
+        h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
+        var blocked = await h.Queue().EnqueueExclusiveAsync(JobKind.Deployment, redeploy, app);
+        h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
+        var eligible = await h.Queue().EnqueueExclusiveAsync(
+            JobKind.Deployment, somebodyElse, Guid.NewGuid());
+
+        using var worker = h.Worker(maxConcurrency: 2);
+        await worker.StartAsync(default);
+        h.Gate.Open();
+
+        await h.Handler.StartedFor(deployment).WaitAsync(Patience);
+        await h.Handler.StartedFor(somebodyElse).WaitAsync(Patience);
+        h.JobById(blocked)!.Status.Should().Be(JobStatus.Pending,
+            "it is the oldest due row and is waiting only because its app is busy");
+
+        h.Handler.Release(deployment);
+        (await h.SettledAsync(running)).Status.Should().Be(JobStatus.Succeeded);
+        (await h.SettledAsync(blocked)).Status.Should().Be(JobStatus.Succeeded);
+        (await h.SettledAsync(eligible)).Status.Should().Be(JobStatus.Succeeded);
+        await worker.StopAsync(default).WaitAsync(Patience);
+    }
+
+    [Fact]
+    public void A_job_that_names_nothing_to_exclude_on_excludes_on_its_own_target()
+    {
+        // The fallback every other kind lives on: a backup's, a provision's and a cron run's target
+        // already IS the thing that must not double up, and none of them says so.
+        var target = Guid.NewGuid();
+        new Job { Kind = JobKind.Backup, TargetId = target }.ExcludesOn.Should().Be(target);
+
+        var app = Guid.NewGuid();
+        new Job { Kind = JobKind.Deployment, TargetId = Guid.NewGuid(), ExclusiveWith = app }
+            .ExcludesOn.Should().Be(app);
+    }
+
+    [Fact]
     public async Task A_target_is_free_for_the_next_job_the_moment_the_last_one_settles()
     {
         // The exclusion must be released by finishing, not by anything else. A leaked reservation
@@ -145,7 +265,7 @@ public class JobConcurrencyTests
         h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
         var second = await h.Queue().EnqueueAsync(JobKind.ServiceProvision, target);
 
-        var worker = h.Worker(maxConcurrency: 4);
+        using var worker = h.Worker();
         (await worker.RunNextAsync(default)).Should().BeTrue();
         (await worker.RunNextAsync(default)).Should().BeTrue();
 
@@ -163,7 +283,7 @@ public class JobConcurrencyTests
         h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
         var second = await h.Queue().EnqueueAsync(JobKind.Backup, target);
 
-        var worker = h.Worker(maxConcurrency: 4);
+        using var worker = h.Worker();
         await worker.RunNextAsync(default);
 
         // A failure is a finish. If it did not release the target, one bad backup would end that
@@ -195,7 +315,7 @@ public class JobConcurrencyTests
         // Four slots and three targets, all three held. The fourth slot is free and there are
         // fifteen due rows left, every one of them for a target that is busy: the only thing that
         // may happen next is nothing.
-        var worker = h.Worker(maxConcurrency: 4);
+        using var worker = h.Worker(maxConcurrency: 4);
         await worker.StartAsync(default);
         h.Gate.Open();
 
@@ -232,7 +352,7 @@ public class JobConcurrencyTests
         h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
         var secondJob = await h.Queue().EnqueueAsync(JobKind.Deployment, b);
 
-        var worker = h.Worker(maxConcurrency: 1);
+        using var worker = h.Worker(maxConcurrency: 1);
         await worker.StartAsync(default);
         h.Gate.Open();
 
@@ -268,7 +388,7 @@ public class JobConcurrencyTests
         h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
         var doomedJob = await h.Queue().EnqueueAsync(JobKind.Deployment, doomed);
 
-        var worker = h.Worker(maxConcurrency: 2);
+        using var worker = h.Worker();
         var running = worker.RunNextAsync(default);
         await h.Handler.StartedFor(slow).WaitAsync(Patience);
 
@@ -299,7 +419,7 @@ public class JobConcurrencyTests
         h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
         var secondJob = await h.Queue().EnqueueAsync(JobKind.Backup, b);
 
-        var worker = h.Worker(maxConcurrency: 2);
+        using var worker = h.Worker(maxConcurrency: 2);
         await worker.StartAsync(default);
         h.Gate.Open();
         await h.Handler.StartedFor(a).WaitAsync(Patience);
@@ -317,6 +437,43 @@ public class JobConcurrencyTests
             job.FinishedAt.Should().BeNull();
             job.ClaimedBy.Should().BeNull("a released claim must not look like it is still owned");
         }
+    }
+
+    [Fact]
+    public async Task Shutdown_returns_the_job_in_flight_even_when_the_loop_is_asleep_on_the_signal()
+    {
+        // The shutdown state a real install is nearly always in: one long deployment running, the
+        // queue otherwise empty, and the loop parked on the signal waiting for something to do.
+        //
+        // Shutdown_returns_every_job_in_flight_to_pending never reaches it — it fills every slot, so
+        // the loop is stopped while waiting for capacity, which is a different await with a
+        // different catch. This one stops the loop where it actually spends its life.
+        using var h = new JobHarness();
+        var app = Guid.NewGuid();
+        var deployment = Guid.NewGuid();
+        h.Handler.BlockUntilCancelled = true;
+
+        using var worker = h.Worker(maxConcurrency: 2);
+        await worker.StartAsync(default);
+        h.Gate.Open();
+
+        // Asleep on an empty queue, exactly as it would be at 3am.
+        await h.Signal.Parked.WaitAsync(Patience);
+        var job = await h.Queue().EnqueueExclusiveAsync(JobKind.Deployment, deployment, app);
+
+        // Running, and the loop is back asleep beside it with a slot to spare and nothing to put in
+        // it. Nothing can wake it now except the backstop poll or the shutdown this test is about.
+        await h.Handler.StartedFor(deployment).WaitAsync(Patience);
+        await h.Signal.Parked.WaitAsync(Patience);
+
+        await worker.StopAsync(default).WaitAsync(Patience);
+
+        // Read with no further waiting: a host that has finished stopping has left nothing behind it
+        // half-recorded, whichever await the loop happened to be sitting on.
+        var row = h.JobById(job)!;
+        row.Status.Should().Be(JobStatus.Pending, "the work was owed, not failed");
+        row.FinishedAt.Should().BeNull();
+        row.ClaimedBy.Should().BeNull("a released claim must not look like it is still owned");
     }
 
     // ---- how much at once ----
