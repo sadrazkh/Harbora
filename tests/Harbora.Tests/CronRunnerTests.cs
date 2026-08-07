@@ -282,6 +282,72 @@ public class CronRunnerTests : IDisposable
             .Which.NetworkMode.Should().Be("harbora-ws-acme");
     }
 
+    [Fact]
+    public async Task A_cron_job_in_a_non_default_environment_runs_on_that_environments_network()
+    {
+        // The database this job talks to was deployed onto its environment's network, not the
+        // workspace's. Before this fix the runner always built the workspace network, so a cron
+        // app in staging could not resolve its own database — a failure that looks exactly like
+        // wrong credentials and is not.
+        var project = new Harbora.Domain.Projects.Project
+        {
+            WorkspaceId = _workspaceId, Name = "Acme API", Slug = "acme-api"
+        };
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            WorkspaceId = _workspaceId, ProjectId = project.Id, Name = "Staging", Slug = "staging",
+            IsDefault = false
+        };
+        var app = Given("0 3 * * *", nextRunAt: _clock.UtcNow.AddMinutes(-1));
+        using (var scope = _sp.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+            db.Workspaces.Add(new Harbora.Domain.Identity.Workspace { Id = _workspaceId, Name = "Acme", Slug = "acme" });
+            db.Projects.Add(project);
+            db.Environments.Add(environment);
+            db.Apps.Single(a => a.Id == app.Id).EnvironmentId = environment.Id;
+            db.SaveChanges();
+        }
+
+        await Runner().TickAsync(default);
+
+        var expectedNetwork = Harbora.Infrastructure.Networking.EnvironmentNetwork.For(
+            project.Slug, environment.Slug, environment.Id);
+        _docker.OneOffRequests.Should().ContainSingle()
+            .Which.NetworkMode.Should().Be(expectedNetwork);
+    }
+
+    [Fact]
+    public async Task A_cron_job_with_no_environment_still_runs_on_the_workspace_network()
+    {
+        // The environment column is still nullable during the workspace-to-environment transition.
+        // An app that was never assigned one must keep getting the workspace network — not null, and
+        // not some other environment's network just because one exists in the same workspace.
+        var project = new Harbora.Domain.Projects.Project
+        {
+            WorkspaceId = _workspaceId, Name = "Acme API", Slug = "acme-api"
+        };
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            WorkspaceId = _workspaceId, ProjectId = project.Id, Name = "Production", Slug = "production",
+            IsDefault = true
+        };
+        var app = Given("0 3 * * *", nextRunAt: _clock.UtcNow.AddMinutes(-1));
+        using (var scope = _sp.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+            db.Workspaces.Add(new Harbora.Domain.Identity.Workspace { Id = _workspaceId, Name = "Acme", Slug = "acme" });
+            db.Projects.Add(project);
+            db.Environments.Add(environment);
+            // app.EnvironmentId is deliberately left null.
+            db.SaveChanges();
+        }
+
+        await Runner().TickAsync(default);
+
+        _docker.OneOffRequests.Should().ContainSingle()
+            .Which.NetworkMode.Should().Be("harbora-ws-acme");
+    }
 
     [Fact]
     public async Task Running_a_job_by_hand_does_not_move_its_schedule()

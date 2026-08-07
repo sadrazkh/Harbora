@@ -88,14 +88,21 @@ public sealed class CronJobRunner(
 
             var docker = await engines.ResolveAsync(job.ServerId, ct);
 
-            // On its own tenant network, like every other service in the project. Without it a job
-            // gets the environment variables naming its database and no route to reach it — which
-            // fails in the one way that looks like a credentials problem and is not.
+            // On the same network the deployment pipeline placed this app's database — its own
+            // environment's, once it has one, falling back to the workspace network otherwise (see
+            // NetworkPlan). Building only the workspace network here, as this used to, means a job in
+            // a non-default environment is handed the environment variables naming its database and
+            // no route to reach it — which fails in the one way that looks like a credentials problem
+            // and is not.
             var workspaceSlug = await db.Workspaces
                 .Where(w => w.Id == job.WorkspaceId)
                 .Select(w => w.Slug)
                 .FirstOrDefaultAsync(ct);
-            var network = workspaceSlug is null ? null : options.Value.WorkspaceNetwork(workspaceSlug);
+            var workspaceNetwork = workspaceSlug is null ? null : options.Value.WorkspaceNetwork(workspaceSlug);
+            var environmentNetwork = await ResolveEnvironmentNetworkAsync(job, ct);
+            var network = workspaceNetwork is null
+                ? null
+                : Networking.NetworkPlan.Primary(environmentNetwork, workspaceNetwork);
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(MaxRunTime);
@@ -133,6 +140,26 @@ public sealed class CronJobRunner(
         run.Output = text.Length <= MaxOutputChars ? text : "…" + text[^MaxOutputChars..];
         run.FinishedAt = clock.UtcNow;
         await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// The private network for this app's environment, or null while it has none — an app created
+    /// before projects existed and never reassigned. Mirrors
+    /// <c>DeploymentPipeline.ResolveEnvironmentNetworkAsync</c> so a cron run lands on the same
+    /// network a deployment of the same app would.
+    /// </summary>
+    private async Task<string?> ResolveEnvironmentNetworkAsync(App job, CancellationToken ct)
+    {
+        if (job.EnvironmentId is not { } environmentId) return null;
+
+        var placement = await db.Environments
+            .Where(e => e.Id == environmentId)
+            .Select(e => new { e.Slug, ProjectSlug = e.Project!.Slug })
+            .FirstOrDefaultAsync(ct);
+
+        return placement is null
+            ? null
+            : Networking.EnvironmentNetwork.For(placement.ProjectSlug, placement.Slug, environmentId);
     }
 
     /// <summary>
