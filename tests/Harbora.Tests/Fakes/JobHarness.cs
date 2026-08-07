@@ -27,7 +27,7 @@ public sealed class JobHarness : IDisposable
     /// Closed, exactly as it is when the host starts. A test that drives the worker's loop has to
     /// open it; one that drives <c>RunNextAsync</c> directly is past the gate already.
     /// </summary>
-    public JobStartupGate Gate { get; } = new();
+    public ObservableJobStartupGate Gate { get; } = new();
 
     private readonly CountingScopeFactory _scopes;
 
@@ -84,6 +84,27 @@ public sealed class JobHarness : IDisposable
     }
 
     public void Dispose() => _provider.Dispose();
+}
+
+/// <summary>
+/// A <see cref="JobStartupGate"/> that reports the instant a waiter parks on it, so a test can await
+/// a positive fact ("the worker is now waiting at the gate") instead of racing a timer against "the
+/// worker did not reach the queue yet". <see cref="WaitStarted"/> completes as soon as
+/// <see cref="WaitAsync"/> is entered — before it can possibly have returned — so a caller that has
+/// observed it knows the worker's claim loop has not run, because in <c>JobWorker.ExecuteAsync</c>
+/// the gate wait strictly precedes the loop on the same, single, un-forked call stack.
+/// </summary>
+public sealed class ObservableJobStartupGate : JobStartupGate
+{
+    private readonly TaskCompletionSource _waitStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task WaitStarted => _waitStarted.Task;
+
+    public override Task WaitAsync(CancellationToken ct)
+    {
+        _waitStarted.TrySetResult();
+        return base.WaitAsync(ct);
+    }
 }
 
 /// <summary>

@@ -15,7 +15,7 @@ namespace Harbora.Infrastructure.Jobs;
 ///
 /// Opened by <see cref="JobStartupGateOpener"/>, registered after every startup reconciler.
 /// </summary>
-public sealed class JobStartupGate
+public class JobStartupGate
 {
     private readonly TaskCompletionSource _opened = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -30,8 +30,12 @@ public sealed class JobStartupGate
     /// is what stops this deadlocking a host that gives up before startup finished: the worker is
     /// released by its own stopping token and leaves, rather than waiting for an opener that is
     /// never going to run.
+    ///
+    /// Virtual only so a test double can observe the moment a waiter parks here — see
+    /// <c>ObservableJobStartupGate</c> in the test project's <c>JobHarness</c> — without that
+    /// observation ever being reachable from production wiring.
     /// </summary>
-    public Task WaitAsync(CancellationToken ct) => _opened.Task.WaitAsync(ct);
+    public virtual Task WaitAsync(CancellationToken ct) => _opened.Task.WaitAsync(ct);
 }
 
 /// <summary>

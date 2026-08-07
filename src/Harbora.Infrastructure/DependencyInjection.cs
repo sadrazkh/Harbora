@@ -117,8 +117,9 @@ public static class DependencyInjection
         services.AddHostedService<Deployments.CronRunner>();
         // Crash recovery: reconcile in-flight deployments on startup (ADR-005).
         services.AddHostedService<Deployments.DeploymentReconciler>();
-        // Lets the job worker start claiming. Hosted services start in registration order, so this
-        // line MUST stay below every startup reconciler above it — that is the whole guarantee.
+        // Lets the job worker start claiming. Hosted services start in registration order, so every
+        // startup reconciler — including any added later — must be registered ABOVE this line; that
+        // is the whole guarantee, and it is on the reconciler's registration, not on this one.
         services.AddHostedService<JobStartupGateOpener>();
 
         // Managed services (databases/caches). Concrete type is registered too so background

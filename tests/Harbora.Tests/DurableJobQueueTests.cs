@@ -503,12 +503,14 @@ public class DurableJobQueueTests
         var worker = h.Worker();
         await worker.StartAsync(default);
 
-        // Wait for the worker to reach the queue rather than sleeping and hoping it did not: taking
-        // a database scope is the first step of a claim, so this task completes the instant the loop
-        // gets there. It must not, and the bound is only so a regression fails this test instead of
-        // hanging it — an ungated loop reaches the queue in microseconds.
-        var wentToTheQueue = await Task.WhenAny(h.ClaimAttempted, Task.Delay(TimeSpan.FromMilliseconds(500)));
-        wentToTheQueue.Should().NotBeSameAs(h.ClaimAttempted,
+        // Wait for the positive fact that the worker is parked at the gate, rather than racing a
+        // timer against "it did not reach the queue yet" — a bound long enough to be safe on a loaded
+        // machine would also be long enough to hide a regression on one that is fast. WaitStarted
+        // completes the instant JobStartupGate.WaitAsync is entered, which in ExecuteAsync's single,
+        // un-forked call stack strictly precedes the claim loop — so once it is observed, the loop
+        // provably has not run yet.
+        await h.Gate.WaitStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        h.ClaimAttempted.IsCompleted.Should().BeFalse(
             "the reconcilers have not finished deciding what this work means");
         h.Handler.Executed.Should().BeEmpty();
         h.JobFor(target)!.Status.Should().Be(JobStatus.Pending);

@@ -51,7 +51,7 @@ public class JobWorker(
         // moment DeploymentReconciler was deciding that work is over. The token is what keeps a host
         // that never finishes starting from waiting on a worker that is waiting on it.
         try { await startupGate.WaitAsync(stoppingToken); }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             logger.LogInformation("Harbora job worker {Worker} stopped before startup finished.", _workerId);
             return;
