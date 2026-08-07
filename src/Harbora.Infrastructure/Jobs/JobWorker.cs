@@ -94,29 +94,27 @@ public class JobWorker(
         try
         {
             await DispatchAsync(job, scope.ServiceProvider, limit.Token);
-            outcome = JobStatus.Succeeded;
+
+            // A clean return is not proof the work finished. Every dispatch target catches
+            // Exception at its top level and writes the failure into its own domain row —
+            // DeploymentPipeline into the deployment, CronJobRunner into the run,
+            // ManagedServiceEngine into the service, the backup module into its snapshot — so a job
+            // this worker just killed can come back looking exactly like a finished one. Whether
+            // the deadline fired is the worker's own fact, and it decides.
+            (outcome, error) = Stopped(stoppingToken, linked, limit)
+                ? OutcomeOfStopping(job, stoppingToken, linked, deadline)
+                : (JobStatus.Succeeded, null);
         }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        catch (Exception ex) when (Stopped(stoppingToken, linked, limit))
         {
-            // The host is shutting down. This job did not fail on its own merits, and must not be
-            // recorded as if it had — it is owed, and the next start resumes it.
-            outcome = JobStatus.Pending;
-        }
-        catch (OperationCanceledException) when (linked.IsCancellationRequested)
-        {
-            // Someone asked for it to stop.
-            outcome = JobStatus.Cancelled;
-            error = "Cancelled by request.";
-        }
-        catch (OperationCanceledException) when (limit.IsCancellationRequested)
-        {
-            // Its own deadline. Failed rather than Pending: the work really did not finish, and an
-            // operator only learns that a job hangs if the row says so.
-            logger.LogError("Job {JobId} ({Kind}) was still running after {Limit} and was given up on.",
-                job.Id, job.Kind, deadline);
-            outcome = JobStatus.Failed;
-            error = $"Still running after {Describe(deadline)} and was given up on, " +
-                    "so the rest of the queue could carry on.";
+            // The same judgement, for a run that ended by throwing. Deliberately not restricted to
+            // OperationCanceledException: a cancelled token usually reaches us wearing another
+            // exception's clothes — a socket torn down mid-transfer surfaces as IOException, a cut
+            // stream as TimeoutException — and both of those are types the policy calls retryable.
+            // Judged on the exception alone, a snapshot killed at its seven-hour deadline would be
+            // queued to spend another seven hours.
+            logger.LogDebug(ex, "Job {JobId} ({Kind}) ended while it was being stopped.", job.Id, job.Kind);
+            (outcome, error) = OutcomeOfStopping(job, stoppingToken, linked, deadline);
         }
         catch (Exception ex)
         {
@@ -141,10 +139,43 @@ public class JobWorker(
         return true;
     }
 
+    /// <summary>Whether anything asked this run to stop, by any of the three routes.</summary>
+    private static bool Stopped(
+        CancellationToken stoppingToken, CancellationTokenSource linked, CancellationTokenSource limit) =>
+        stoppingToken.IsCancellationRequested ||
+        linked.IsCancellationRequested ||
+        limit.IsCancellationRequested;
+
+    /// <summary>
+    /// What a stopped run means for the row. Three causes, and the precedence between them matters:
+    /// all three tokens are cancelled during a shutdown, so "the host is stopping" has to be asked
+    /// first, or a graceful restart would start recording Failed for work it fully intends to resume.
+    /// </summary>
+    private (JobStatus Outcome, string? Error) OutcomeOfStopping(
+        Job job, CancellationToken stoppingToken, CancellationTokenSource linked, TimeSpan deadline)
+    {
+        // The host is shutting down. This job did not fail on its own merits and must not be
+        // recorded as if it had — it is owed, and the next start resumes it.
+        if (stoppingToken.IsCancellationRequested) return (JobStatus.Pending, null);
+
+        // Someone asked for it to stop.
+        if (linked.IsCancellationRequested) return (JobStatus.Cancelled, "Cancelled by request.");
+
+        // Its own deadline. Failed rather than Pending: the work really did not finish, and an
+        // operator only learns that a job hangs if the row says so.
+        logger.LogError("Job {JobId} ({Kind}) was still running after {Limit} and was given up on.",
+            job.Id, job.Kind, deadline);
+        return (JobStatus.Failed,
+            $"Still running after {Describe(deadline)} and was given up on, " +
+            "so the rest of the queue could carry on.");
+    }
+
     /// <summary>The deadline in the units an operator thinks in, for the message on the row.</summary>
     private static string Describe(TimeSpan limit) => limit switch
     {
-        { TotalHours: >= 1 } => $"{limit.TotalHours:0.#} hour(s)",
+        // Hours only once there are enough of them to read as a round number. The cron deadline is
+        // 75 minutes, and "1.3 hour(s)" is a worse sentence than "75 minute(s)" by every measure.
+        { TotalHours: >= 2 } => $"{limit.TotalHours:0.#} hour(s)",
         { TotalMinutes: >= 1 } => $"{limit.TotalMinutes:0} minute(s)",
         _ => $"{limit.TotalSeconds:0.###} second(s)"
     };
@@ -210,7 +241,7 @@ public class JobWorker(
             if (job is null) return;
 
             job.Status = outcome;
-            job.Error = error;
+            job.Error = WithinTheColumn(error);
             // Always assigned, so a shutdown that releases a job which had been backing off does
             // not leave it waiting out a wait that no longer means anything.
             job.NextAttemptAt = nextAttemptAt;
@@ -226,4 +257,19 @@ public class JobWorker(
             logger.LogError(ex, "Could not record the outcome of job {JobId}.", jobId);
         }
     }
+
+    /// <summary>Matches the cap on Job.Error in <c>HarboraDbContext</c>.</summary>
+    private const int MaxErrorChars = 2048;
+
+    /// <summary>
+    /// The column is bounded and an exception message is not — a build failure quotes the failing
+    /// command's own output. Postgres rejects the over-long value, the catch above swallows the
+    /// rejection, and the row is left Running with nothing recorded on it at all: the one outcome
+    /// worse than a truncated message. Head kept, because the first line is the one that says what
+    /// happened.
+    /// </summary>
+    private static string? WithinTheColumn(string? error) =>
+        error is null || error.Length <= MaxErrorChars
+            ? error
+            : error[..(MaxErrorChars - 1)] + "…";
 }

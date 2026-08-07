@@ -1,7 +1,9 @@
 using System.Net.Sockets;
 using FluentAssertions;
 using Harbora.Domain.Jobs;
+using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Jobs;
+using Harbora.Modules.Backup.Infrastructure;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -31,12 +33,29 @@ public class JobExecutionPolicyTests
         // Where the work already limits itself, the queue's deadline is the backstop behind that
         // limit, never a competing one: the inner timeout says something specific ("the job was
         // still running after 1 hour"), and it can only say it if it fires first.
-        JobExecutionPolicy.TimeoutFor(JobKind.CronRun).Should().BeGreaterThan(
-            Harbora.Infrastructure.Deployments.CronJobRunner.MaxRunTime);
+        //
+        // Every bound below is read from the code that owns it, not copied. That is the whole point
+        // of the invariant — if someone raises the Kopia command timeout or the cron runner's
+        // MaxRunTime and leaves these deadlines where they are, this test is what says so.
+        JobExecutionPolicy.TimeoutFor(JobKind.CronRun).Should().BeGreaterThan(CronJobRunner.MaxRunTime);
 
-        JobExecutionPolicy.TimeoutFor(JobKind.BackupSnapshot).Should().BeGreaterThan(TimeSpan.FromHours(6),
-            "the backup module allows a single Kopia command six hours");
-        JobExecutionPolicy.TimeoutFor(JobKind.BackupRestore).Should().BeGreaterThan(TimeSpan.FromHours(6));
+        var kopiaCommand = new KopiaOptions().CommandTimeout;
+        JobExecutionPolicy.TimeoutFor(JobKind.BackupSnapshot).Should().BeGreaterThan(kopiaCommand,
+            "the backup module allows a single Kopia snapshot command this long on its own");
+        JobExecutionPolicy.TimeoutFor(JobKind.BackupRestore).Should().BeGreaterThan(kopiaCommand);
+    }
+
+    [Fact]
+    public void A_deployment_outlives_the_release_task_an_unconfigured_install_allows()
+    {
+        // Weaker than the three above, and deliberately stated as what it is. The release task runs
+        // last in a sequential pipeline, after a clone and a build that have no bound of their own,
+        // so this deadline bounds the whole pipeline rather than sitting behind that one step — and
+        // ReleaseTaskTimeoutMinutes is an operator setting, so anyone who raises it past this makes
+        // the queue's deadline the one that fires. What must hold is that a default install has room
+        // for the release task the pipeline is willing to wait for, plus everything before it.
+        JobExecutionPolicy.TimeoutFor(JobKind.Deployment).Should().BeGreaterThan(
+            TimeSpan.FromMinutes(new HarboraRuntimeOptions().ReleaseTaskTimeoutMinutes));
     }
 
     [Theory]

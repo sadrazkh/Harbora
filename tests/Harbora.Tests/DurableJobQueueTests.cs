@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Harbora.Domain.Jobs;
 using Harbora.Tests.Fakes;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -125,6 +126,30 @@ public class DurableJobQueueTests
     }
 
     [Fact]
+    public async Task An_enormous_error_message_is_cut_down_to_what_the_row_can_hold()
+    {
+        // Job.Error is a bounded column. A message longer than it throws on save in Postgres, inside
+        // a SettleAsync whose catch swallows the failure — so the row would stay Running until the
+        // next restart reconciled it, and the message it was trying to record would be lost
+        // entirely. A build that echoes a whole log into its exception is not a rare shape.
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        h.Handler.Failure = new InvalidOperationException(new string('x', 5000));
+        await h.Queue().EnqueueAsync(JobKind.Deployment, target);
+
+        await h.Worker().RunNextAsync(default);
+
+        // Read the cap from the model rather than repeating it: this must follow the schema.
+        using var db = h.NewDb();
+        var cap = db.Model.FindEntityType(typeof(Job))!.FindProperty(nameof(Job.Error))!.GetMaxLength()!.Value;
+
+        var job = h.JobFor(target)!;
+        job.Status.Should().Be(JobStatus.Failed);
+        job.Error!.Length.Should().BeLessThanOrEqualTo(cap,
+            "the in-memory provider does not enforce the length, and Postgres does");
+    }
+
+    [Fact]
     public async Task A_failing_job_does_not_stop_the_next_one()
     {
         using var h = new JobHarness();
@@ -183,6 +208,50 @@ public class DurableJobQueueTests
         h.JobFor(first)!.Status.Should().Be(JobStatus.Failed);
         h.JobFor(second)!.Status.Should().Be(JobStatus.Succeeded,
             "one hung job must cost the platform that job, not the queue");
+    }
+
+    [Fact]
+    public async Task A_job_whose_work_swallows_the_deadline_is_still_failed()
+    {
+        // The worker may not take the callee's word for it. Every real dispatch target catches
+        // Exception at its top level and writes the failure into its own domain row —
+        // DeploymentPipeline into the deployment, CronJobRunner into the run, ManagedServiceEngine
+        // into the service — so a killed job can return to the worker looking exactly like a
+        // finished one. Recording Succeeded there would be the platform lying about work it just
+        // killed, which is the one thing this phase exists to stop.
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        h.Handler.BlockUntilCancelled = true;
+        h.Handler.OnCancellation = StubCancellation.Swallow;
+        await h.Queue().EnqueueAsync(JobKind.Deployment, target);
+
+        await h.Worker(TimeSpan.FromMilliseconds(200)).RunNextAsync(default);
+
+        var job = h.JobFor(target)!;
+        job.Status.Should().Be(JobStatus.Failed, "the deadline fired, whatever the work said afterwards");
+        job.Error.Should().Contain("given up on");
+        job.FinishedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task A_deadline_that_arrives_as_a_broken_connection_is_still_a_deadline()
+    {
+        // A cancelled token usually reaches the worker wearing another exception's clothes: a socket
+        // torn down mid-transfer surfaces as IOException, which the policy calls retryable. Judged on
+        // the exception alone, a snapshot killed at its seven-hour deadline would be queued to spend
+        // another seven hours. The token is the worker's own fact and outranks the account of it.
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        h.Handler.BlockUntilCancelled = true;
+        h.Handler.OnCancellation = StubCancellation.SurfaceAsBrokenConnection;
+        await h.Queue().EnqueueAsync(JobKind.ServiceProvision, target);
+
+        await h.Worker(TimeSpan.FromMilliseconds(200)).RunNextAsync(default);
+
+        var job = h.JobFor(target)!;
+        job.Status.Should().Be(JobStatus.Failed, "a job that spent its whole allowance is not a transient fault");
+        job.NextAttemptAt.Should().BeNull();
+        job.Error.Should().Contain("given up on");
     }
 
     [Fact]

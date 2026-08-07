@@ -18,11 +18,12 @@ namespace Harbora.Infrastructure.Jobs;
 ///
 /// <para>
 /// The deadlines below are deliberately generous. This is a backstop against a hang, not a service
-/// level: where the work already bounds itself — <c>CronJobRunner.MaxRunTime</c>, the backup
-/// module's Kopia command timeout, the pipeline's release-task timeout — the deadline here sits
-/// above that bound so the inner, more specific message is the one the operator reads. Cutting a
-/// legitimately slow deployment short is the worse mistake of the two, because a deployment is
-/// never retried.
+/// level: where a single bounded operation is the whole job — <c>CronJobRunner.MaxRunTime</c>, the
+/// backup module's Kopia command timeout — the deadline here sits above that bound so the inner,
+/// more specific message is the one the operator reads. Where the job is a sequence of steps, only
+/// some of them bounded, no such ordering can be promised: this is then the only limit the job as a
+/// whole has, and it may well pre-empt an inner one. Cutting a legitimately slow deployment short is
+/// the worse mistake of the two, because a deployment is never retried.
 /// </para>
 /// </summary>
 public static class JobExecutionPolicy
@@ -30,9 +31,13 @@ public static class JobExecutionPolicy
     /// <summary>How long this kind of work may run before the worker gives up on it.</summary>
     public static TimeSpan TimeoutFor(JobKind kind) => kind switch
     {
-        // Clone, build, push, start, health-gate, then the release task — which has its own bound
-        // (HarboraRuntimeOptions.ReleaseTaskTimeoutMinutes, 30 by default) and runs last. An hour
-        // leaves a first build of a large image the other half.
+        // Clone, build, push, start, health-gate, then the release task, in that order. Only the
+        // last of those is bounded (HarboraRuntimeOptions.ReleaseTaskTimeoutMinutes, 30 by default),
+        // so this is the only limit the pipeline as a whole has — and because it is the outer bound
+        // of a sequence, not a backstop behind an inner one, a 35-minute build followed by a stuck
+        // release task hits this rather than the release task's own timeout. An operator who raises
+        // ReleaseTaskTimeoutMinutes past 60 makes that the ordinary case. An hour is chosen to leave
+        // a first build of a large image the half that a default release task does not need.
         JobKind.Deployment => TimeSpan.FromMinutes(60),
 
         // Pull an image, start it, wait for it to accept connections. Nothing here is slow unless
@@ -48,8 +53,8 @@ public static class JobExecutionPolicy
         JobKind.Backup => TimeSpan.FromHours(6),
 
         // The backup module allows a single Kopia snapshot or restore six hours
-        // (BackupModuleOptions.CommandTimeout), around which it also stages and measures files.
-        // Seven keeps that command's own timeout the one that fires.
+        // (KopiaOptions.CommandTimeout), around which it also stages and measures files. Seven keeps
+        // that command's own timeout the one that fires.
         JobKind.BackupSnapshot => TimeSpan.FromHours(7),
         JobKind.BackupRestore => TimeSpan.FromHours(7),
 

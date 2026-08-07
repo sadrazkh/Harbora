@@ -78,6 +78,12 @@ public sealed class StubJobHandler
     public bool BlockUntilCancelled { get; set; }
 
     /// <summary>
+    /// What the handler does when that block is cancelled. Defaults to rethrowing, which is what a
+    /// bare <c>await Task.Delay(ct)</c> does and what no real dispatch target does.
+    /// </summary>
+    public StubCancellation OnCancellation { get; set; } = StubCancellation.Rethrow;
+
+    /// <summary>
     /// Upper bound on that block. Deliberately finite: if cancellation never arrives the test should
     /// fail on its assertion within seconds, not hang the suite forever.
     /// </summary>
@@ -92,8 +98,39 @@ public sealed class StubJobHandler
         Started.TrySetResult();
 
         if (Failure is not null) throw Failure;
-        if (BlockUntilCancelled) await Task.Delay(MaxBlock, ct);
+        if (!BlockUntilCancelled) return;
+
+        try
+        {
+            await Task.Delay(MaxBlock, ct);
+        }
+        catch (OperationCanceledException) when (OnCancellation != StubCancellation.Rethrow)
+        {
+            if (OnCancellation == StubCancellation.SurfaceAsBrokenConnection)
+                throw new IOException("the connection was reset while the stream was being read");
+
+            // Swallowed: the handler returns as if the work had finished.
+        }
     }
+}
+
+/// <summary>
+/// How a dispatch target reports a cancellation the worker caused. Only the first of these is a
+/// clean rethrow, and it is the one no production target does: <c>DeploymentPipeline</c>,
+/// <c>CronJobRunner</c> and <c>ManagedServiceEngine</c> all catch <c>Exception</c> at the top level
+/// and write the failure into their own domain row, and a killed transfer usually reports itself as
+/// a torn-down socket rather than as a cancellation at all.
+/// </summary>
+public enum StubCancellation
+{
+    /// <summary>A bare <c>await Task.Delay(ct)</c>: the OperationCanceledException propagates.</summary>
+    Rethrow,
+
+    /// <summary>Caught, recorded elsewhere, and the handler returns normally.</summary>
+    Swallow,
+
+    /// <summary>Caught and re-reported as an IOException, which the policy calls retryable.</summary>
+    SurfaceAsBrokenConnection
 }
 
 /// <summary><see cref="JobWorker"/> with only the dispatch target swapped for the stub.</summary>
