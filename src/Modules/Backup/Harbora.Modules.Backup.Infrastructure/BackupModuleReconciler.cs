@@ -17,6 +17,36 @@ public sealed record BackupReconciliation(int Snapshots, int Restores, int Stagi
     public static readonly BackupReconciliation None = new(0, 0, 0);
 }
 
+/// <summary>
+/// The disk half of one pass, held over until after the host has finished starting.
+///
+/// <para>
+/// Only paths, and only paths belonging to rows the settling half has already made terminal. That is
+/// what makes deferring it safe: nothing else is going to write these, so the delay costs nothing
+/// but the delay.
+/// </para>
+/// </summary>
+public sealed record BackupSweepPlan(
+    IReadOnlyList<SnapshotStagingPaths> Snapshots,
+    IReadOnlyList<string> RestorePaths)
+{
+    public static readonly BackupSweepPlan Nothing = new([], []);
+
+    public bool IsEmpty => Snapshots.Count == 0 && RestorePaths.Count == 0;
+}
+
+/// <summary>Every staged copy one snapshot could have left behind, against the row that named them.</summary>
+public sealed record SnapshotStagingPaths(Guid SnapshotId, IReadOnlyList<string> Paths);
+
+/// <summary>
+/// What the settling half did, and what it left for the sweep. Separate from
+/// <see cref="BackupReconciliation"/> because the two halves no longer finish at the same moment.
+/// </summary>
+public sealed record BackupSettlement(int Snapshots, int Restores, BackupSweepPlan Sweep)
+{
+    public static readonly BackupSettlement None = new(0, 0, BackupSweepPlan.Nothing);
+}
+
 /// <summary>What one attempt to remove a staged copy proved about it.</summary>
 public enum SweepResult
 {
@@ -96,61 +126,48 @@ public sealed record SweepAttempt(string Path, SweepResult Result);
 /// could not tidy up is a worse outcome than rows that are tidied on the next restart.
 /// </para>
 /// <para>
-/// <b>Boot does, however, wait on this — deliberately.</b> Kestrel's <c>GenericWebHostService</c> is
-/// a plain <c>IHostedService</c>, so running the pass in <c>StartingAsync</c> puts all of it,
-/// including a recursive delete over a partly-staged directory, ahead of the port opening. Nothing
-/// configures <c>HostOptions.StartupTimeout</c>, whose default is
-/// <c>Timeout.InfiniteTimeSpan</c>, so a slow pass delays the listener rather than aborting the
-/// host; a health check polling the panel sees nothing until it finishes. That is the right trade
-/// here for three reasons:
-/// </para>
-/// <list type="number">
-/// <item>A clean shutdown costs nothing at all. With no stranded row and no row claiming a staged
-/// copy, the pass returns <see cref="BackupReconciliation.None"/> before it touches the disk.</item>
-/// <item>What it deletes is <b>plaintext application data</b>. Answering requests while an
-/// unencrypted copy of somebody's database sits in staging is the worse state to be in, and every
-/// minute this is deferred is exposure that has already been paid for once by the crash.</item>
-/// <item>A timeout would not bound the work anyway. <c>Directory.Delete(recursive)</c> takes no
-/// <c>CancellationToken</c>, so the single large tree — the only delete that could run for minutes —
-/// cannot be interrupted once it has begun. A budget could skip only paths it had not started, which
-/// does not remove the wait; it moves the leaked copy to a later restart and leaves it on disk in
-/// the meantime.</item>
-/// </list>
-/// <para>
-/// <b>And here is the case those three do not cover, which is the one worth knowing about.</b> A
-/// pass used to be bounded by what was in flight: the partial unique index allows at most one active
-/// snapshot per target, so a crash strands roughly one row per backup that was running, each naming
-/// at most four paths. <see cref="RemainingStagingPath"/> ended that. A path that comes back
-/// <see cref="SweepResult.Failed"/> keeps its pointer, and the query at the top of
-/// <see cref="ReconcileAsync"/> loads those rows again on the next boot — so the swept set is now
-/// bounded by <i>unresolved leaks</i>, not by what was in flight, and it does not shrink until
-/// either the copy goes away or a person intervenes. A <c>Failed</c> path re-runs
-/// <c>Directory.Delete(recursive: true)</c> at <b>every</b> start, and a <c>Refused</c> one re-runs
-/// an existence check at every start.
+/// <b>Only the row-settling half runs there, and that is the whole of the split.</b> Kestrel's
+/// <c>GenericWebHostService</c> is a plain <c>IHostedService</c>, so anything done in
+/// <c>StartingAsync</c> happens before the port opens. Settling belongs there anyway: it is a
+/// bounded query and one save, it takes the token it is given, and it is the half that races the
+/// worker. The disk sweep is none of those things, and it used to sit beside it.
 /// </para>
 /// <para>
-/// That matters for exactly one failure, and it is not the slow one: a delete that <b>blocks</b>
-/// rather than throws. A wedged NFS or SMB mount does not return an error, it hangs — and
-/// <c>Directory.Exists</c> hangs on it too. With <c>StartupTimeout</c> infinite and no
-/// <c>CancellationToken</c> to hand, that is a panel that never finishes starting, on every restart,
-/// self-healing on none of them. The retained pointer is what leads it back there: a path that
-/// errored on one boot and wedged before the next is a path this pass would not have looked at at
-/// all before the retry existed.
+/// <b>Why the sweep cannot.</b> <see cref="Sweep"/> is synchronous file I/O with no
+/// <c>CancellationToken</c> anywhere in it — <c>Directory.Exists</c>, <c>Directory.Delete</c>,
+/// <c>File.Exists</c>, <c>File.Delete</c>. On a wedged NFS or SMB mount those do not return an
+/// error, they hang; and a staging directory on a network mount is an ordinary choice for backups,
+/// not an exotic one. Nothing in this repository sets <c>HostOptions.StartupTimeout</c>, whose
+/// default is <c>Timeout.InfiniteTimeSpan</c> — and a timeout would not help, because a blocked
+/// syscall is not abortable however short the budget is. The result is a panel that never finishes
+/// starting, with no listener to serve a diagnostic and nothing in the log to say why.
 /// </para>
 /// <para>
-/// Named rather than bounded, deliberately. A retry cap over <c>Failed</c> is the obvious bound and
-/// does not bound this one: an attempt that never returns is never counted, so the count would have
-/// to be persisted <i>before</i> the delete is attempted — a new column, a migration, and an extra
-/// write on the boot path — and even then it would hang boot N times before giving up. The bound
-/// that works is structural, and it is the next paragraph.
+/// <b>And the set it sweeps grows.</b> A pass used to be bounded by what was in flight: the partial
+/// unique index allows at most one active snapshot per target, so a crash stranded roughly one row
+/// per backup that was running, each naming at most four paths.
+/// <see cref="RemainingStagingPath"/> ended that. A path that comes back
+/// <see cref="SweepResult.Failed"/> or <see cref="SweepResult.Refused"/> keeps its pointer, and the
+/// <c>StagingPath != null</c> term in <see cref="SettleAsync"/>'s query loads those rows again on
+/// every subsequent boot — so the swept set is bounded by <i>unresolved leaks</i>, and it does not
+/// shrink until either the copy goes away or a person intervenes. That behaviour is kept: the
+/// pointer at a leaked plaintext copy is the only thing that can lead anyone back to it. What
+/// changed is where the retry runs.
 /// </para>
 /// <para>
-/// What would change the answer — and one half of it already has. The set this sweeps no longer
-/// scales only with what was in flight; it scales with leaks nobody has cleared. If that set is ever
-/// observed to be non-trivial, or a staging directory is ever put on a network mount, the disk half
-/// belongs after the listener binds and the row-settling half must stay here — settling is what
-/// races the job worker; sweeping does not. That is a change to the ordering guarantee this class
-/// exists to make, so it belongs to whoever makes it deliberately rather than to a sweep retry.
+/// <b>So the sweep runs in <see cref="StartedAsync"/>, on its own task, behind the listener.</b>
+/// It re-races nothing, and that is a property of the plan rather than of the timing: the paths it
+/// is given belong to rows the settling half has already made terminal, and every derived path is
+/// named from a snapshot or restore id, so no later run can be staging into one of them.
+/// <see cref="StagingSwept"/> is the task, exposed so a test can wait for the fact instead of the
+/// clock. It is never awaited by the host — a sweep that hangs must cost the copy on disk and a
+/// warning, not the panel — and <see cref="StoppingAsync"/> asks it to stop between paths, which is
+/// the only granularity a blocking delete allows.
+/// </para>
+/// <para>
+/// What this costs, said plainly: the panel answers requests for a moment while an unencrypted copy
+/// of somebody's data is still in staging. That exposure was already paid for by the crash and is
+/// measured in the seconds the sweep takes; the alternative was a panel that does not come back.
 /// </para>
 /// <para>
 /// <b>What this assumes about topology.</b> One panel process per database and per staging
@@ -169,7 +186,7 @@ public sealed class BackupModuleReconciler(
     IOptions<BackupFeatureOptions> features,
     IOptions<BackupModuleOptions> options,
     ISystemClock clock,
-    ILogger<BackupModuleReconciler> logger) : IHostedLifecycleService
+    ILogger<BackupModuleReconciler> logger) : IHostedLifecycleService, IDisposable
 {
     /// <summary>
     /// Written onto the row and shown in the Backup Center. It says what happened, and what it
@@ -189,37 +206,103 @@ public sealed class BackupModuleReconciler(
 
     private readonly BackupModuleOptions _options = options.Value;
 
+    /// <summary>Asks the deferred sweep to stop between paths; nothing finer is available to it.</summary>
+    private readonly CancellationTokenSource _stopping = new();
+
+    /// <summary>What the settling half left on disk for the half that runs behind the listener.</summary>
+    private BackupSweepPlan _deferred = BackupSweepPlan.Nothing;
+
     /// <summary>
-    /// The whole pass, before the host starts anything. See the class remark: this is what keeps
-    /// the reconciler ahead of the job worker's gate regardless of registration order.
+    /// The deferred sweep, once it has been started — <see cref="Task.CompletedTask"/> until then and
+    /// when there was nothing to sweep.
+    ///
+    /// <para>
+    /// Exposed so a test can wait for the sweep to have happened rather than for a length of time.
+    /// The host never awaits it: a sweep that hangs must cost the copy on disk and a warning in the
+    /// log, not the process.
+    /// </para>
+    /// </summary>
+    public Task StagingSwept { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// The half that races the job worker, and therefore the half that runs before anything starts.
+    /// See the class remark: the host runs this on every hosted service before any
+    /// <c>StartAsync</c>, so it is ahead of the worker's gate regardless of registration order.
     /// </summary>
     public async Task StartingAsync(CancellationToken ct)
     {
         // The module's other hosted services gate on the same flag. A module that is off owns no
-        // rows and must not settle any.
+        // rows and must not settle any — nor delete any of their staged copies, which is why the
+        // deferred plan is left empty rather than merely unstarted.
         if (!features.Value.Backup)
         {
             logger.LogInformation("Backup module is off; its rows are not being reconciled.");
             return;
         }
 
-        try { await ReconcileAsync(ct); }
+        try { _deferred = (await SettleAsync(ct)).Sweep; }
         catch (Exception ex)
         {
             // Never FAIL startup on reconciliation — a panel that will not boot because it could
-            // not tidy up is worse than rows tidied on the next restart. Startup does wait on this
-            // pass, on purpose; the class remark is where that trade is argued and where the case
-            // it does not cover is named.
+            // not tidy up is worse than rows tidied on the next restart.
             logger.LogError(ex, "Backup reconciliation failed on startup.");
         }
     }
 
-    // Everything is done by the time the host starts services; these exist to satisfy the interface.
     public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
-    public Task StartedAsync(CancellationToken ct) => Task.CompletedTask;
-    public Task StoppingAsync(CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>
+    /// Starts the disk sweep, once the host has finished starting everything — which includes
+    /// Kestrel, so the listener is bound by now.
+    ///
+    /// <para>
+    /// Started rather than awaited, and on <see cref="CancellationToken.None"/>: the host waits for
+    /// this method, so awaiting the sweep here would move the hang from "the port never opens" to
+    /// "the application-started signal never fires", which is barely better. What it must not do is
+    /// hold either.
+    /// </para>
+    /// </summary>
+    public Task StartedAsync(CancellationToken ct)
+    {
+        if (_deferred.IsEmpty) return Task.CompletedTask;
+
+        var plan = _deferred;
+        var stopping = _stopping.Token;
+
+        StagingSwept = Task.Run(async () =>
+        {
+            try
+            {
+                var swept = await SweepAsync(plan, stopping);
+                if (swept > 0)
+                    logger.LogInformation(
+                        "Removed {Count} staged copy/copies a restart left behind.", swept);
+            }
+            catch (Exception ex)
+            {
+                // Same bargain as the settling half, for the same reason: what is left behind is
+                // plaintext application data, which is worth someone noticing and not worth taking
+                // the panel down over. The rows keep their pointers, so the next restart retries.
+                logger.LogError(ex, "The deferred staging sweep did not finish.");
+            }
+        }, CancellationToken.None);
+
+        return Task.CompletedTask;
+    }
+
+    public Task StoppingAsync(CancellationToken ct)
+    {
+        // Between paths is the only place it can be stopped: every delete in Sweep is a blocking
+        // syscall with no token to give it. A path not reached keeps its pointer and is swept on the
+        // next start, which is exactly what a failed delete already does.
+        _stopping.Cancel();
+        return Task.CompletedTask;
+    }
+
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
     public Task StoppedAsync(CancellationToken ct) => Task.CompletedTask;
+
+    public void Dispose() => _stopping.Dispose();
 
     /// <summary>
     /// <c>StagingPath</c> is the row's standing claim that a plaintext copy still exists at that
@@ -247,7 +330,28 @@ public sealed class BackupModuleReconciler(
             or BackupSnapshotStatus.Preparing
             or BackupSnapshotStatus.Running;
 
+    /// <summary>
+    /// Both halves, in order. What the hosted-service path splits across the listener, so a caller
+    /// that just wants "reconcile now" — a test, a future admin action — still gets one call and one
+    /// answer.
+    /// </summary>
     public async Task<BackupReconciliation> ReconcileAsync(CancellationToken ct)
+    {
+        var settled = await SettleAsync(ct);
+        var swept = await SweepAsync(settled.Sweep, ct);
+        return new BackupReconciliation(settled.Snapshots, settled.Restores, swept);
+    }
+
+    /// <summary>
+    /// Settles the rows a restart stranded, and names the copies they may have left on disk without
+    /// touching any of them.
+    ///
+    /// <para>
+    /// Every write here is one this pass must make before anything is released — see the class
+    /// remark — and everything it defers is work no released thing is going to contend for.
+    /// </para>
+    /// </summary>
+    public async Task<BackupSettlement> SettleAsync(CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
@@ -283,7 +387,7 @@ public sealed class BackupModuleReconciler(
             .Where(r => r.Status == RestoreJobStatus.Pending || r.Status == RestoreJobStatus.Running)
             .ToListAsync(ct);
 
-        if (snapshots.Count == 0 && restores.Count == 0) return BackupReconciliation.None;
+        if (snapshots.Count == 0 && restores.Count == 0) return BackupSettlement.None;
 
         var stranded = snapshots.Count(s => IsStranded(s.Status));
 
@@ -293,7 +397,7 @@ public sealed class BackupModuleReconciler(
                 stranded, restores.Count);
 
         var now = clock.UtcNow;
-        var swept = 0;
+        var staged = new List<SnapshotStagingPaths>();
 
         foreach (var snapshot in snapshots)
         {
@@ -306,11 +410,12 @@ public sealed class BackupModuleReconciler(
                 snapshot.CompletedAt = now;
             }
 
-            var attempts = SweepAll(StagingArtifactsOf(snapshot));
-            swept += attempts.Count(a => a.Result is SweepResult.Removed);
-            snapshot.StagingPath = RemainingStagingPath(attempts);
+            // Named now, deleted later. StagingPath is deliberately NOT cleared here: it is the
+            // row's claim that a copy exists at that path, and until something has looked, it does.
+            staged.Add(new SnapshotStagingPaths(snapshot.Id, StagingArtifactsOf(snapshot)));
         }
 
+        var restorePaths = new List<string>();
         foreach (var job in restores)
         {
             job.Status = RestoreJobStatus.Failed;
@@ -321,15 +426,84 @@ public sealed class BackupModuleReconciler(
             // derived from this row's id. A file restore writes straight to its destination, and
             // what a half-finished restore already put there is the operator's to inspect — not
             // this method's to delete.
-            if (job.RestoreType is RestoreType.Database
-                && Sweep(Path.Combine(
-                    _options.StagingDirectory,
-                    BackupStagingLayout.DatabaseRestoreDirectory(job.Id))) is SweepResult.Removed)
-                swept++;
+            if (job.RestoreType is RestoreType.Database)
+                restorePaths.Add(Path.Combine(
+                    _options.StagingDirectory, BackupStagingLayout.DatabaseRestoreDirectory(job.Id)));
         }
 
         await db.SaveChangesAsync(ct);
-        return new BackupReconciliation(stranded, restores.Count, swept);
+        return new BackupSettlement(
+            stranded, restores.Count, new BackupSweepPlan(staged, restorePaths));
+    }
+
+    /// <summary>
+    /// Removes the copies a settled row left in staging, and updates each row to say what is still
+    /// there.
+    ///
+    /// <para>
+    /// Every path here belongs to a row that is already terminal, and every derived one is named
+    /// from a snapshot or restore id — so nothing being run now can be staging into one of them.
+    /// That is what lets this run beside the job worker instead of ahead of it.
+    /// </para>
+    /// <para>
+    /// <paramref name="ct"/> is checked between paths and nowhere inside one: the deletes are
+    /// blocking syscalls with no token to give them. A path this stops short of is simply not
+    /// attempted, and its row keeps a pointer — the same state a delete that threw leaves, and it is
+    /// retried on the next start for the same reason.
+    /// </para>
+    /// </summary>
+    public async Task<int> SweepAsync(BackupSweepPlan plan, CancellationToken ct)
+    {
+        if (plan.IsEmpty) return 0;
+
+        var swept = 0;
+        var remaining = new Dictionary<Guid, string?>();
+
+        foreach (var item in plan.Snapshots)
+        {
+            if (ct.IsCancellationRequested) break;
+
+            var attempts = SweepAll(item.Paths);
+            swept += attempts.Count(a => a.Result is SweepResult.Removed);
+            remaining[item.SnapshotId] = RemainingStagingPath(attempts);
+        }
+
+        foreach (var path in plan.RestorePaths)
+        {
+            if (ct.IsCancellationRequested) break;
+            if (Sweep(path) is SweepResult.Removed) swept++;
+        }
+
+        if (remaining.Count > 0) await RecordWhatIsStillThereAsync(remaining, ct);
+
+        return swept;
+    }
+
+    /// <summary>
+    /// Writes back the one column this half owns.
+    ///
+    /// <para>
+    /// A fresh scope, because the settling half's context is long gone by the time this runs, and
+    /// only <c>StagingPath</c> is touched — on rows that are already terminal, so there is nothing
+    /// for a running snapshot to lose. Saved on <see cref="CancellationToken.None"/> for the same
+    /// reason the job worker settles on it: this is the record of what was deleted, and a shutdown
+    /// arriving mid-sweep is exactly when losing it would matter.
+    /// </para>
+    /// </summary>
+    private async Task RecordWhatIsStillThereAsync(
+        IReadOnlyDictionary<Guid, string?> remaining, CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+
+        var ids = remaining.Keys.ToList();
+        var rows = await db.BackupSnapshots.IgnoreQueryFilters()
+            .Where(s => ids.Contains(s.Id))
+            .ToListAsync(ct);
+
+        foreach (var row in rows) row.StagingPath = remaining[row.Id];
+
+        await db.SaveChangesAsync(CancellationToken.None);
     }
 
     /// <summary>

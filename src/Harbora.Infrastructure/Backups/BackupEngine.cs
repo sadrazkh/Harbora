@@ -64,7 +64,28 @@ public sealed class BackupEngine(
         await db.SaveChangesAsync(ct);
 
         var id = backup.Id;
-        await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.Backup, id, ct);
+
+        // Queued against the TARGET, not against this row. The work is this backup and the runner is
+        // handed its id, but what must never have two of these running at once is the thing being
+        // backed up: a Backup row is created per run, so two backups of one target are two different
+        // TargetIds and the queue would let them run side by side.
+        //
+        // Two schedules of one target falling due on the same tick, or a manual run racing the
+        // scheduler, is ordinary — and the staged filename is derived from the second, so both
+        // helper containers write into the same path in the shared staging volume, and both then
+        // checksum, upload and record Completed. The archive is two moments of the data interleaved
+        // and nothing about it says so. BackupRunIdentity.StampFor is the other half of that fix;
+        // this is the half that keeps the two runs from overlapping in the first place.
+        //
+        // Serialised rather than coalesced, unlike DeploymentEngine. Two deploys of one app want the
+        // same thing, so handing the second the first one's id is right. Two backups do not: they are
+        // copies of the data at two moments, and the later one is the point. Coalescing would report
+        // a manual "back up now" as finished using an archive taken before the operator asked for it,
+        // and would fail it along with the run it was folded into.
+        await jobs.EnqueueExclusiveAsync(
+            Harbora.Domain.Jobs.JobKind.Backup, id,
+            exclusiveWith: BackupRunIdentity.ExclusionKeyFor(type, targetRef), ct);
+
         return id;
     }
 
@@ -80,10 +101,9 @@ public sealed class BackupEngine(
             await db.SaveChangesAsync(ct);
 
             Directory.CreateDirectory(_opt.StagingDir);
-            // InvariantCulture: this stamp goes into a FILENAME. The panel's default culture is
-            // Persian, so the ambient calendar would write Jalali years (14050507) into artifact
-            // names — inconsistent with backups taken from a background job, and unsortable.
-            var stamp = clock.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+            // The time, then this run's own identity — see BackupRunIdentity.StampFor for why the
+            // second half exists and why the calendar is pinned.
+            var stamp = BackupRunIdentity.StampFor(clock.UtcNow, backup.Id);
             var (key, stagedPath) = backup.Type switch
             {
                 BackupType.AppConfig => await BackupAppConfigAsync(backup, stamp, ct),
@@ -125,7 +145,12 @@ public sealed class BackupEngine(
             backup.Status = BackupStatus.Failed;
             backup.ErrorMessage = ex.Message;
             backup.FinishedAt = clock.UtcNow;
-            await db.SaveChangesAsync(ct);
+            // Not `ct`: the job's deadline is the commonest way a backup reaches this catch — a
+            // helper container that never exits is exactly what it exists for — and saving under the
+            // token that just fired throws before the row is written. The backup would then read
+            // Running for ever, which the Backup Center shows as a target still being protected.
+            // Same idiom as JobWorker.SettleAsync and BackupSnapshotService's cancelled path.
+            await db.SaveChangesAsync(CancellationToken.None);
             await notifications.NotifyAsync(backup.WorkspaceId, AlertEvent.BackupFailed, AlertSeverity.Warning,
                 $"Backup failed: {backup.Type}", ex.Message, ct);
         }

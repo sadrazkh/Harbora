@@ -688,6 +688,75 @@ public sealed class BackupCrashRecoveryTests : IDisposable
             "pass overwrite the result");
     }
 
+    /// <summary>
+    /// …and none of it holds the port shut.
+    ///
+    /// <para>
+    /// <c>StartingAsync</c> runs on every hosted service before <b>any</b> <c>StartAsync</c>,
+    /// including Kestrel's — so whatever it does happens before the listener binds. Nothing sets
+    /// <c>HostOptions.StartupTimeout</c>, whose default is infinite, and a blocking syscall would
+    /// not be abortable if it did: <c>Directory.Exists</c> and <c>Directory.Delete</c> on a wedged
+    /// NFS or SMB mount do not return an error, they hang. A staging directory on a network mount is
+    /// an ordinary choice for backups.
+    /// </para>
+    /// <para>
+    /// So the pass is in two halves. Settling the rows is fast, cancellable, and it is the half that
+    /// races the job worker — it stays ahead of the gate. Sweeping the disk only touches directories
+    /// of rows this pass has already settled, so moving it behind the listener re-races nothing.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Startup_settles_the_rows_and_leaves_the_disk_to_a_pass_behind_the_listener()
+    {
+        var staged = Path.Combine(_staging, "volume-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staged);
+        File.WriteAllText(Path.Combine(staged, "customers.db"), "plaintext application data");
+
+        var snapshot = SeedSnapshot(BackupSnapshotStatus.Running, BackupTargetType.DockerVolume, "app-data");
+        snapshot.StagingPath = staged;
+        Save(snapshot);
+
+        var reconciler = Reconciler();
+
+        await reconciler.StartingAsync(default);
+
+        Read().BackupSnapshots.Single(s => s.Id == snapshot.Id).Status
+            .Should().Be(BackupSnapshotStatus.Failed,
+                "settling is what races the worker, so it is the half that has to be finished " +
+                "before anything is released");
+        Directory.Exists(staged).Should().BeTrue(
+            "the listener does not bind until this returns, and a recursive delete over a wedged " +
+            "mount does not return at all");
+
+        await reconciler.StartedAsync(default);
+        await reconciler.StagingSwept;
+
+        Directory.Exists(staged).Should().BeFalse(
+            "the copy is still plaintext application data and still has to go — a moment later, " +
+            "with the panel answering requests while it does");
+        Read().BackupSnapshots.Single(s => s.Id == snapshot.Id).StagingPath
+            .Should().BeNull("the copy is gone, so the claim that one exists goes too");
+    }
+
+    [Fact]
+    public async Task A_module_that_is_off_starts_no_background_sweep_either()
+    {
+        var staged = Path.Combine(_staging, "volume-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staged);
+
+        var snapshot = SeedSnapshot(BackupSnapshotStatus.Running);
+        snapshot.StagingPath = staged;
+        Save(snapshot);
+
+        var reconciler = Reconciler(backupEnabled: false);
+        await reconciler.StartingAsync(default);
+        await reconciler.StartedAsync(default);
+        await reconciler.StagingSwept;
+
+        Directory.Exists(staged).Should().BeTrue(
+            "a module that is off owns nothing, and that has to hold for the half that deletes too");
+    }
+
     // --- the windows the sweep used to miss -----------------------------------------------------
 
     /// <summary>

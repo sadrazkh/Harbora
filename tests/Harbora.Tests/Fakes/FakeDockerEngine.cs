@@ -60,6 +60,24 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// <summary>Container names whose removal fails — a retired container that resists cleanup.</summary>
     public HashSet<string> UnremovableContainers { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// A pull that never returns — a registry that accepted the connection and then stopped talking.
+    /// The counterpart of <see cref="OneOffNeverFinishes"/> for the two engines that hang here
+    /// rather than in a one-off container.
+    /// </summary>
+    public bool PullNeverFinishes { get; set; }
+
+    /// <summary>
+    /// Cancelled the instant one of those hanging operations is entered.
+    ///
+    /// <para>
+    /// This is a job's deadline firing, expressed as a fact rather than as a wait: the work is
+    /// provably underway when the token goes, so a test about what a killed dispatch target records
+    /// never races a timer against the setup around it.
+    /// </para>
+    /// </summary>
+    public CancellationTokenSource? DeadlineFiresWhenTheWorkBegins { get; set; }
+
     // ---- assertions helpers ----
 
     public IReadOnlyList<string> OperationsOn(string target) =>
@@ -129,12 +147,18 @@ public sealed class FakeDockerEngine : IDockerEngine
         return Task.FromResult(request.ImageTag);
     }
 
-    public Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct)
+    public async Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct)
     {
         Record(nameof(PullImageAsync), image);
+
+        if (PullNeverFinishes)
+        {
+            DeadlineFiresWhenTheWorkBegins?.Cancel();
+            await Task.Delay(Timeout.Infinite, ct);
+        }
+
         SeedImage(image);
         log.Report($"pulled {image}");
-        return Task.CompletedTask;
     }
 
     public Task<IReadOnlyList<ImageInfo>> ListImagesAsync(string? tagPrefix, CancellationToken ct)
@@ -260,7 +284,11 @@ public sealed class FakeDockerEngine : IDockerEngine
 
         if (OneOffThrows is not null) throw OneOffThrows;
         // A container that never exits — the caller is expected to bound its own wait.
-        if (OneOffNeverFinishes) await Task.Delay(Timeout.Infinite, ct);
+        if (OneOffNeverFinishes)
+        {
+            DeadlineFiresWhenTheWorkBegins?.Cancel();
+            await Task.Delay(Timeout.Infinite, ct);
+        }
 
         return OneOffExitCode;
     }

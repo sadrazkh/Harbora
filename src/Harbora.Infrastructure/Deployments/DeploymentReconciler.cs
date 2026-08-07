@@ -139,11 +139,32 @@ public sealed class DeploymentReconciler(
     ///
     /// <para>
     /// The migration that added the column backfills exactly this, so on an ordinary upgrade there
-    /// is nothing here to do. This is the second half of the same guarantee, for the rows the
-    /// backfill cannot have seen: ones an older instance inserted after the schema had already been
-    /// migrated — which is every deployment queued during a rolling restart — and any future enqueue
-    /// path that forgets. Startup is the one moment nothing is claiming, so it is the one moment
-    /// this is safe to write.
+    /// is nothing here to do. Two things still bring it work. <b>The migration may not have run
+    /// here:</b> an operator who applies migrations out of band (<c>dotnet ef database update</c>)
+    /// and then starts a build that predates the column leaves rows the backfill never saw, and this
+    /// is what covers them — "the column is populated" has to hold for the process reading it, not
+    /// only for the process that added it. <b>And it is safe to repeat:</b> the query selects only
+    /// rows that carry null, so a second run finds nothing and a restart during it loses nothing.
+    /// Startup is the one moment nothing is claiming, so it is the one moment this is safe to write.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What this does NOT cover, so that nobody reads it as if it did.</b> A startup sweep sees
+    /// only the rows that exist when it runs. It cannot cover a row an older instance inserts
+    /// afterwards — that is the multi-instance rolling restart, which is out of scope for the
+    /// supported topology (<c>docs/product-audit/13-target-architecture.md</c> §4) — and it cannot
+    /// cover a future enqueue path that forgets to stamp, because such a path would insert its row
+    /// long after this has finished. The stamp at the enqueue site is what makes those correct, and
+    /// removing it on the strength of this pass would be removing the only guarantee there is.
+    /// </para>
+    ///
+    /// <para>
+    /// The mechanism that would cover both is a partial unique index over the live deployment jobs
+    /// of one app — the same answer the audit already records for the identical read-then-insert
+    /// race on the backup side (<c>docs/product-audit/03-reliability-and-production-problems.md</c>
+    /// R-28, shipped for <c>BackupSnapshot</c> in this phase) applied one aggregate across, and the
+    /// only thing that would also close <c>DeploymentEngine.QueueDeploymentAsync</c>'s own
+    /// coalescing check. It is backlog, not this pass; nothing here is a substitute for it.
     /// </para>
     /// </summary>
     private static async Task<int> StampDeploymentJobsWithTheirAppAsync(

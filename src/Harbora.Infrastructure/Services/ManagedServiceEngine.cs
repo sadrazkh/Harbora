@@ -134,7 +134,12 @@ public sealed class ManagedServiceEngine(
         {
             logger.LogError(ex, "Failed to provision service {Name}.", svc.Name);
             svc.Status = ServiceStatus.Failed;
-            await db.SaveChangesAsync(ct);
+            // Not `ct`: a provision that hits the job's deadline arrives here with that token
+            // already cancelled, and saving under it throws before the row is written — leaving the
+            // service reading Provisioning with nothing provisioning it. The write that records the
+            // failure is owed after the work stops, so it is made unconditionally, as
+            // JobWorker.SettleAsync does for the job row itself.
+            await db.SaveChangesAsync(CancellationToken.None);
         }
     }
 

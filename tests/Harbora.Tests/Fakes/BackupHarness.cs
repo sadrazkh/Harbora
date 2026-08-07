@@ -65,8 +65,15 @@ public sealed class BackupHarness : IDisposable
         Db, new PassthroughProtector(), DeliveryHttp, Clock,
         NullLogger<BackupDeliveryService>.Instance);
 
+    /// <summary>
+    /// Shared by every engine this harness builds, so what one queued is still readable after the
+    /// call that queued it — the exclusion key a backup is enqueued under is the whole of Task 5's
+    /// guarantee for this engine, and it is only visible here.
+    /// </summary>
+    public NoopJobQueue Jobs { get; } = new();
+
     public BackupEngine Engine() => new(
-        Db, Engines, Storage, new PassthroughProtector(), new NoopJobQueue(),
+        Db, Engines, Storage, new PassthroughProtector(), Jobs,
         Notifications, Delivery(), Clock, Options.AsOptions(),
         Microsoft.Extensions.Options.Options.Create(Runtime),
         NullLogger<BackupEngine>.Instance);
@@ -298,14 +305,27 @@ public sealed class LocalOnlyStorage(string dir) : IBackupStorage
     }
 }
 
+/// <summary>
+/// Runs nothing, but remembers what it was asked to run — including what each job excludes on,
+/// which is the only place a caller's serialisation decision is observable.
+/// </summary>
 public sealed class NoopJobQueue : IJobQueue
 {
+    /// <summary>Every enqueue, with <c>Job.ExcludesOn</c> already resolved the way the queue does it.</summary>
+    public List<(Harbora.Domain.Jobs.JobKind Kind, Guid TargetId, Guid ExcludesOn)> Enqueued { get; } = [];
+
     public Task<Guid> EnqueueAsync(Harbora.Domain.Jobs.JobKind kind, Guid targetId, CancellationToken ct = default)
-        => Task.FromResult(Guid.NewGuid());
+    {
+        Enqueued.Add((kind, targetId, targetId));
+        return Task.FromResult(Guid.NewGuid());
+    }
 
     public Task<Guid> EnqueueExclusiveAsync(
         Harbora.Domain.Jobs.JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default)
-        => Task.FromResult(Guid.NewGuid());
+    {
+        Enqueued.Add((kind, targetId, exclusiveWith));
+        return Task.FromResult(Guid.NewGuid());
+    }
 
     public Task<bool> RequestCancellationAsync(Harbora.Domain.Jobs.JobKind kind, Guid targetId, CancellationToken ct = default)
         => Task.FromResult(false);

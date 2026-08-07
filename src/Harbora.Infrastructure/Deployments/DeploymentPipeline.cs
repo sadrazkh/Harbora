@@ -396,7 +396,15 @@ public sealed class DeploymentPipeline(
             deployment.ErrorMessage = reason;
             app.Status = app.ActiveDeploymentId is null ? AppStatus.Failed : AppStatus.Running;
             DrainEngineLogs();
-            await db.SaveChangesAsync(ct);
+            // Not the token the work ran under: the commonest reason to be in this catch at all is
+            // that token being cancelled — the job's own deadline, which fires while the pipeline is
+            // still inside a build or a pull. Saving under it throws before the row is written, the
+            // transition above is dropped with the scope, and the deployment stays in flight for
+            // ever. QueueDeploymentAsync coalesces onto an in-flight deployment, so every later
+            // deploy of this app then returns the abandoned id and runs nothing. Recording the
+            // failure is not part of the cancelled work; it is what is owed once the work has
+            // stopped — the same reason JobWorker.SettleAsync settles on None.
+            await db.SaveChangesAsync(CancellationToken.None);
             await stream.PublishStatusAsync(deploymentId, DeploymentStatus.Failed, ct);
             await Log(LogStream.System, $"❌ Deployment failed: {reason}");
             await notifications.NotifyAsync(app.WorkspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical,

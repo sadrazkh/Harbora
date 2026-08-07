@@ -139,7 +139,12 @@ public sealed class CronJobRunner(
         var text = LogText.Clean(output.ToString()).Trim();
         run.Output = text.Length <= MaxOutputChars ? text : "…" + text[^MaxOutputChars..];
         run.FinishedAt = clock.UtcNow;
-        await db.SaveChangesAsync(ct);
+        // Not `ct`: this is the only write that finishes the run, and the run's own MaxRunTime is
+        // no longer the only deadline over it — the job queue gives every kind one too, and that one
+        // cancels `ct` itself. Saving under a cancelled token throws here, so the row keeps a null
+        // FinishedAt: shown as still running, and refused by the guard at the top of this method, so
+        // one abandoned run would end this job's schedule until the next restart reconciled it.
+        await db.SaveChangesAsync(CancellationToken.None);
     }
 
     /// <summary>
