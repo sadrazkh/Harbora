@@ -100,8 +100,11 @@ public sealed class DeploymentPipeline(
 
         // The same line, written once there is nothing left to cancel.
         //
-        // Only the failure path uses this, and only after it has stopped the work — see the catch
-        // below. The distinction is the one JobWorker.SettleAsync and BackupSnapshotService already
+        // Two callers, both of them past the point where the work has stopped: the catch below, and
+        // RepublishRoutingAsync, which runs while a proxy failure is already on its way up and says
+        // in the log that the routing has been put back — a claim the failure message makes and
+        // which used to go unsubstantiated exactly when it mattered most.
+        // The distinction is the one JobWorker.SettleAsync and BackupSnapshotService already
         // draw: doing more WORK under a cancelled token is wrong, and recording what has ALREADY
         // happened under one is the whole reason the record exists. Deliberately not applied to
         // Log itself: on every other path the token is live, so the two are the same call, and a
@@ -111,6 +114,15 @@ public sealed class DeploymentPipeline(
 
         async Task Append(LogStream s, string message, CancellationToken publishOn)
         {
+            var clean = Stage(s, message);
+            await stream.PublishLogAsync(deploymentId, s, clean, publishOn);
+        }
+
+        // The durable half of a log line on its own: redact, clean, queue the row, hand the text
+        // back. Split out so the failure path can put the row in front of the SaveChangesAsync it
+        // already makes, instead of behind a hub call that may be the thing that is broken.
+        string Stage(LogStream s, string message)
+        {
             var clean = LogText.Clean(redactor.Redact(message, secrets));
             DrainEngineLogs();
             db.DeploymentLogs.Add(new DeploymentLog
@@ -118,7 +130,46 @@ public sealed class DeploymentPipeline(
                 DeploymentId = deploymentId, Stream = s, Sequence = seq++,
                 Message = clean, Timestamp = clock.UtcNow
             });
-            await stream.PublishLogAsync(deploymentId, s, clean, publishOn);
+            return clean;
+        }
+
+        // Everything logged after the LAST status change, made durable.
+        //
+        // Append only ADDS its row; the flush has always come from whatever saved next, and on the
+        // success path nothing does. SetStatus(Succeeded) is the last save, and the "✅ Deployment
+        // #N succeeded." line comes after it, as do image retention's two lines. JobWorker creates
+        // this pipeline's scope (RunAndSettleAsync) and SettleAsync builds its own, so the change
+        // tracker holding those rows was disposed unread: reload a successful deployment's page and
+        // its log stopped mid-cutover, with no terminal line and no word of what retention did.
+        // The status row kept the page header honest, which is what made it the quieter version of
+        // the failure-path lie rather than a different one.
+        //
+        // On CancellationToken.None for the reason the catch below states at length: the deployment
+        // is over by the time this runs, so there is nothing here left to cancel — only the account
+        // of it, which is exactly what a cancelled job still owes the person who asked for it.
+        async Task FlushLog()
+        {
+            DrainEngineLogs();
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
+
+        // One surface of the failure report, attempted on its own.
+        //
+        // The three below share nothing but being downstream of one failure, and they used to run
+        // as a single unguarded sequence — so a fault in the first took the other two with it. The
+        // realistic fault is not cancellation (they already run on None): it is a host shutting
+        // down and disposing the SignalR hub context out from under an in-flight deploy, which
+        // throws ObjectDisposedException. That is the "one catch block failing five different ways
+        // from a single cause" this method's own comment names, and a hub that is going away is not
+        // a reason for nobody to be alerted.
+        async Task TellSomebody(Func<Task> surface, string what)
+        {
+            try { await surface(); }
+            catch (Exception surfaceError)
+            {
+                logger.LogWarning(surfaceError,
+                    "Deployment {Id} failed, and the {Surface} could not be told.", deploymentId, what);
+            }
         }
 
         // All status changes go through the state machine (ADR-004): illegal transitions throw,
@@ -233,6 +284,7 @@ public sealed class DeploymentPipeline(
                         ? $"Nothing is started now — this job runs on its schedule ({app.CronExpression})."
                         : "Nothing is started now — this service runs on demand."));
                 await PruneOldImagesAsync(docker, app, Log, ct);
+                await FlushLog();
                 return;
             }
 
@@ -313,7 +365,7 @@ public sealed class DeploymentPipeline(
                         $"The '{web.ServiceName}' service did not become healthy. " +
                         HealthDiagnosis.Explain(stackHealth, web.ContainerName));
 
-                await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
+                await WireProxyAsync(app, upstreamHost, upstreamPort, Log, Record, ct);
                 await RetireOldContainersAsync(docker, app.Slug, keepContainers, Log, ct);
 
                 if (deployment.RolledBackFromId is not null)
@@ -325,6 +377,7 @@ public sealed class DeploymentPipeline(
                 await Log(LogStream.System,
                     $"✅ Deployment #{deployment.Number} succeeded ({composeStack.Services.Count} services).");
                 await PruneOldImagesAsync(docker, app, Log, ct);
+                await FlushLog();
                 return;
             }
 
@@ -359,7 +412,7 @@ public sealed class DeploymentPipeline(
 
             // New container is healthy → switch traffic to it, THEN retire the old container(s).
             if (ServicePlan.HasPublicTraffic(app.Kind))
-                await WireProxyAsync(app, upstreamHost, upstreamPort, Log, ct);
+                await WireProxyAsync(app, upstreamHost, upstreamPort, Log, Record, ct);
             else
                 await Log(LogStream.System,
                     $"{app.Kind} service — no public route. " +
@@ -388,6 +441,7 @@ public sealed class DeploymentPipeline(
             // Only after the deployment is recorded as succeeded — pruning is housekeeping and must
             // never be able to turn a live, working deployment into a failure.
             await PruneOldImagesAsync(docker, app, Log, ct);
+            await FlushLog();
         }
         catch (Exception ex)
         {
@@ -432,7 +486,13 @@ public sealed class DeploymentPipeline(
             var reason = LogText.Clean(redactor.Redact(ex.Message, secrets));
             deployment.ErrorMessage = reason;
             app.Status = app.ActiveDeploymentId is null ? AppStatus.Failed : AppStatus.Running;
-            DrainEngineLogs();
+            // The ❌ line is queued HERE, ahead of the save and ahead of every publish. It only ever
+            // reached the database as a side effect of NotificationService writing a delivery
+            // attempt back on this same scoped context — so a workspace with no rule matching
+            // DeployFailed lost the one line that says why the deployment stopped, on every failure.
+            // Putting it in front of the save that was already being made costs nothing and means
+            // the row no longer depends on anything after this point working at all.
+            var failureLine = Stage(LogStream.System, $"❌ Deployment failed: {reason}");
             // The durable half. Saving under the cancelled token threw before the row was written,
             // the transition above was dropped with the scope, and the deployment stayed in flight
             // for ever — and QueueDeploymentAsync coalesces onto an in-flight deployment, so every
@@ -441,22 +501,20 @@ public sealed class DeploymentPipeline(
 
             // And the three surfaces a person actually watches, none of which that row reaches on
             // its own. The status the deployment page is bound to; the last line of the deploy log;
-            // the alert that finds somebody who is not looking at the panel at all. On a fired
-            // deadline the first of these threw, which skipped the other two — so the log stopped
-            // mid-build, which reads as a build still running, and nobody was told anything. A job
-            // the clock killed recording the truth in the database and telling nobody is precisely
-            // the failure the deadline work exists to make visible.
-            await stream.PublishStatusAsync(deploymentId, DeploymentStatus.Failed, CancellationToken.None);
-            await Record(LogStream.System, $"❌ Deployment failed: {reason}");
-            // Record only ADDS the row; this is what makes it durable. Left to whatever ran next, it
-            // reached the database as a side effect of NotificationService writing a delivery
-            // attempt back on this same scoped context — so a workspace with no alert rule matching
-            // DeployFailed lost the one line that says why the deployment stopped, on every failure
-            // and not only on this one.
-            await db.SaveChangesAsync(CancellationToken.None);
-
-            await notifications.NotifyAsync(app.WorkspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical,
-                $"Deploy failed: {app.Name} #{deployment.Number}", reason, CancellationToken.None);
+            // the alert that finds somebody who is not looking at the panel at all. They ran as one
+            // unguarded sequence, so the first to fault skipped the rest — and a fault here is not
+            // hypothetical: the host going down disposes the hub context under an in-flight deploy.
+            // Each is now attempted on its own, so what can still be said, is.
+            await TellSomebody(
+                () => stream.PublishStatusAsync(deploymentId, DeploymentStatus.Failed, CancellationToken.None),
+                "deployment page");
+            await TellSomebody(
+                () => stream.PublishLogAsync(deploymentId, LogStream.System, failureLine, CancellationToken.None),
+                "deploy log");
+            await TellSomebody(
+                () => notifications.NotifyAsync(app.WorkspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical,
+                    $"Deploy failed: {app.Name} #{deployment.Number}", reason, CancellationToken.None),
+                "alert rules");
         }
     }
 
@@ -1154,8 +1212,19 @@ public sealed class DeploymentPipeline(
         return new HealthReport(failure, container?.Status, tail, probeUrl);
     }
 
-    /// <summary>Materialise a Route per domain then re-apply the whole platform's proxy config.</summary>
-    private async Task WireProxyAsync(App app, string upstreamHost, int upstreamPort, Func<LogStream, string, Task> log, CancellationToken ct)
+    /// <summary>
+    /// Materialise a Route per domain then re-apply the whole platform's proxy config.
+    ///
+    /// <para>
+    /// Takes two loggers. <paramref name="log"/> is the work's, on the deployment's own token, and
+    /// describes wiring that is still being attempted. <paramref name="record"/> is the same line
+    /// written once the work has stopped, and only the revert path below uses it — see
+    /// <see cref="RepublishRoutingAsync"/>.
+    /// </para>
+    /// </summary>
+    private async Task WireProxyAsync(
+        App app, string upstreamHost, int upstreamPort,
+        Func<LogStream, string, Task> log, Func<LogStream, string, Task> record, CancellationToken ct)
     {
         if (app.Domains.Count == 0)
         {
@@ -1246,7 +1315,7 @@ public sealed class DeploymentPipeline(
             // tenant's bad row, so re-publishing the routing this deployment found is a thing that
             // reliably happens rather than a thing that might be turned away.
             await RevertRoutesAsync(undo);
-            await RepublishRoutingAsync(app, log);
+            await RepublishRoutingAsync(app, record);
             throw;
         }
     }
@@ -1257,22 +1326,30 @@ public sealed class DeploymentPipeline(
     /// failure is on its way up, and a failure here must never replace the one that caused it. It
     /// says what it did in the deploy log, because "the previous release is still serving" is a
     /// claim the failure message makes and this is the step that makes it true.
+    ///
+    /// <para>
+    /// Which is why <paramref name="record"/> is the pipeline's cancellation-free logger and not the
+    /// work's. This is the one <c>Log</c> call site reachable after the work has stopped: the apply
+    /// above already runs on <c>None</c>, so on a fired deadline the routing genuinely was put back
+    /// and the line saying so was the only thing lost — leaving the failure message asserting that
+    /// the previous release still serves with nothing in the log to substantiate it.
+    /// </para>
     /// </summary>
-    private async Task RepublishRoutingAsync(App app, Func<LogStream, string, Task> log)
+    private async Task RepublishRoutingAsync(App app, Func<LogStream, string, Task> record)
     {
         try
         {
             // CancellationToken.None for the same reason as the revert: a cancelled deployment is
             // precisely when the routing has to be put back.
             var result = await proxy.ApplyAllAsync(app.WorkspaceId, CancellationToken.None);
-            await log(LogStream.System, result.Success
+            await record(LogStream.System, result.Success
                 ? "Proxy configuration put back to the routing this deployment found."
                 : $"Could not put the proxy configuration back: {result.Error}");
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not re-apply the proxy config after a failed proxy step.");
-            try { await log(LogStream.System, "Could not put the proxy configuration back; see the server log."); }
+            try { await record(LogStream.System, "Could not put the proxy configuration back; see the server log."); }
             catch { /* the deployment already has a reason to report; this is not it */ }
         }
     }

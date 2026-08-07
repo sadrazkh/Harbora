@@ -148,15 +148,30 @@ public sealed class RecordingNotificationService : INotificationService
         return Task.CompletedTask;
     }
 
-    /// <summary>A threshold fires through its own rule, so it is recorded under that event.</summary>
+    /// <summary>
+    /// A threshold fires through its own rule, so it is recorded under that event.
+    ///
+    /// <para>
+    /// Refuses a cancelled token for the same reason as its sibling above, and stated separately
+    /// because the reason is the component's, not any current test's: the real method loads the
+    /// rule, posts to its channel and writes the delivery attempt back, all on this token. A fake
+    /// hardened only where the tests happen to walk lets the next fix go green against code that
+    /// records a notification nobody received.
+    /// </para>
+    /// </summary>
     public Task<NotificationResult> NotifyRuleAsync(Guid alertId, AlertSeverity severity, string title, string body, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Notifications.Add(new Sent(AlertEvent.ThresholdBreached, severity, title, body));
         return Task.FromResult(NotificationResult.Ok);
     }
 
-    public Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct) =>
-        Task.FromResult(NotificationResult.Ok);
+    /// <summary>A test delivery is a real delivery, made on the caller's token.</summary>
+    public Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NotificationResult.Ok);
+    }
 }
 
 public sealed class FixedClock(DateTimeOffset now) : ISystemClock

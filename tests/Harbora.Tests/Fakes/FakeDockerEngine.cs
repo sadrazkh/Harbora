@@ -11,6 +11,16 @@ namespace Harbora.Tests.Fakes;
 /// and healthy before the old one is touched — so a fake that only returns canned values cannot
 /// verify it. This one records an ordered <see cref="Calls"/> log, which lets tests assert on the
 /// sequence of operations rather than just their results.
+///
+/// <para>
+/// <b>Every operation here refuses a cancelled token.</b> Not because a particular test needs it:
+/// because the real engine is an HTTP client over the daemon's socket, and a request made with a
+/// dead token is a request that never lands. This used to be true of exactly the two methods a
+/// cleanup path had been caught getting wrong, which meant the guarantee held only along the routes
+/// those tests walked — and the next fix touching a different method could go green against code
+/// that reported work the daemon never heard about. The rule belongs to the component, so it is
+/// stated once, here, and applied to all of it.
+/// </para>
 /// </summary>
 public sealed class FakeDockerEngine : IDockerEngine
 {
@@ -38,7 +48,10 @@ public sealed class FakeDockerEngine : IDockerEngine
     public List<int> ImagePorts { get; } = [];
 
     public Task<IReadOnlyList<int>> GetImagePortsAsync(string imageRef, CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<int>>(ImagePorts.ToList());
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<int>>(ImagePorts.ToList());
+    }
 
     /// <summary>When set, a started container is never listed — as if something removed it.</summary>
     public bool DropStartedContainers { get; set; }
@@ -152,6 +165,7 @@ public sealed class FakeDockerEngine : IDockerEngine
 
     public Task<string> BuildImageAsync(DockerBuildRequest request, IProgress<string> log, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Record(nameof(BuildImageAsync), request.ImageTag);
         if (BuildFailure is not null) throw BuildFailure;
         SeedImage(request.ImageTag);
@@ -161,6 +175,7 @@ public sealed class FakeDockerEngine : IDockerEngine
 
     public async Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Record(nameof(PullImageAsync), image);
 
         if (PullNeverFinishes)
@@ -175,6 +190,8 @@ public sealed class FakeDockerEngine : IDockerEngine
 
     public Task<IReadOnlyList<ImageInfo>> ListImagesAsync(string? tagPrefix, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+
         // Not recorded: like ListContainersAsync this is a query, and recording it would bury the
         // ordering assertions in noise.
         IReadOnlyList<ImageInfo> snapshot = _images.Values
@@ -184,10 +201,14 @@ public sealed class FakeDockerEngine : IDockerEngine
     }
 
     public Task<bool> ImageExistsAsync(string imageRef, CancellationToken ct)
-        => Task.FromResult(_images.ContainsKey(imageRef));
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(_images.ContainsKey(imageRef));
+    }
 
     public Task RemoveImageAsync(string imageRef, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Record(nameof(RemoveImageAsync), imageRef);
         if (UndeletableImages.Contains(imageRef))
             throw new InvalidOperationException($"image {imageRef} is in use by a container");
@@ -197,6 +218,7 @@ public sealed class FakeDockerEngine : IDockerEngine
 
     public Task<string> RunContainerAsync(DockerRunRequest request, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Record(nameof(RunContainerAsync), request.ContainerName);
         if (RunFailure is not null) throw RunFailure;
 
@@ -219,15 +241,16 @@ public sealed class FakeDockerEngine : IDockerEngine
 
     public Task StopContainerAsync(string containerId, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Record(nameof(StopContainerAsync), NameOf(containerId));
         return Task.CompletedTask;
     }
 
     public Task RemoveContainerAsync(string containerId, bool force, CancellationToken ct)
     {
-        // A real daemon is reached over a socket, so a cancelled token means the call never lands.
-        // This fake used to answer anyway, and that is what let a cleanup path pass its dead token
-        // to the engine and still look like it had cleaned up.
+        // The class rule. This is the method where it was first missing, and where the cost of
+        // missing it was a cleanup path passing its dead token to the engine and still looking like
+        // it had cleaned up.
         ct.ThrowIfCancellationRequested();
 
         var name = NameOf(containerId);
@@ -240,20 +263,26 @@ public sealed class FakeDockerEngine : IDockerEngine
 
     public Task RestartContainerAsync(string containerId, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Record(nameof(RestartContainerAsync), NameOf(containerId));
         return Task.CompletedTask;
     }
 
     public Task StreamLogsAsync(string containerId, IProgress<string> sink, CancellationToken ct)
-        => Task.CompletedTask;
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
 
     public Task<string> GetLogsAsync(string containerId, int tailLines, CancellationToken ct)
-        => Task.FromResult(ContainerLogs);
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(ContainerLogs);
+    }
 
     public Task<IReadOnlyList<ContainerInfo>> ListContainersAsync(string? labelFilter, CancellationToken ct)
     {
-        // Same as RemoveContainerAsync: an HTTP round-trip to the daemon, and a cancelled token
-        // means it never happened. Cleanup that lists before it removes has to be watched failing.
+        // The class rule again — cleanup that lists before it removes has to be watched failing.
         ct.ThrowIfCancellationRequested();
 
         // Deliberately NOT recorded: listing is a query the pipeline makes repeatedly while polling
@@ -265,16 +294,21 @@ public sealed class FakeDockerEngine : IDockerEngine
     }
 
     public Task<ContainerStats?> GetStatsAsync(string containerId, CancellationToken ct)
-        => Task.FromResult<ContainerStats?>(null);
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<ContainerStats?>(null);
+    }
 
     public Task EnsureNetworkAsync(string name, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Record(nameof(EnsureNetworkAsync), name);
         return Task.CompletedTask;
     }
 
     public Task ConnectNetworkAsync(string containerNameOrId, string network, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Record(nameof(ConnectNetworkAsync), containerNameOrId);
         lock (_gate) _attachments.Add((containerNameOrId, network));
         return Task.CompletedTask;
@@ -290,18 +324,21 @@ public sealed class FakeDockerEngine : IDockerEngine
 
     public Task EnsureVolumeAsync(string name, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Record(nameof(EnsureVolumeAsync), name);
         return Task.CompletedTask;
     }
 
     public Task RemoveVolumeAsync(string name, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Record(nameof(RemoveVolumeAsync), name);
         return Task.CompletedTask;
     }
 
     public async Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Record(nameof(RunOneOffAsync), request.Image);
         OneOffCommands.Add(string.Join(' ', request.Command));
         OneOffRequests.Add(request);
@@ -343,7 +380,10 @@ public sealed class FakeDockerEngine : IDockerEngine
         throw new NotSupportedException();
 
     public Task<HostInfo> GetHostInfoAsync(CancellationToken ct)
-        => Task.FromResult(new HostInfo(4, 8L << 30, 100L << 30, 50L << 30, "fake", _containers.Count));
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new HostInfo(4, 8L << 30, 100L << 30, 50L << 30, "fake", _containers.Count));
+    }
 
     private string NameOf(string containerId) =>
         _containers.TryGetValue(containerId, out var c) ? c.Name : containerId;

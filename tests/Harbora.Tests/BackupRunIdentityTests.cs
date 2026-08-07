@@ -102,4 +102,32 @@ public class BackupRunIdentityTests
         BackupRunIdentity.StampFor(at, run).Should().Be(BackupRunIdentity.StampFor(at, run),
             "the staged path is rebuilt from it after the helper has written the file");
     }
+
+    /// <summary>
+    /// The numbers themselves, pinned one line per member.
+    ///
+    /// <para>
+    /// <c>ExclusionKeyFor</c> hashes <c>(int)type</c>, and the resulting <c>Guid</c> is persisted in
+    /// <c>Job.ExclusiveWith</c> — so these values are not merely a column's wire format, they are
+    /// half of the key the queue compares to decide two backups of one target must not overlap.
+    /// Renumber one and the guard does not fail loudly: a <c>Pending</c> row keeps the key computed
+    /// from the old number, the process that dequeues it computes the new one, the two stop
+    /// colliding, and two snapshots of one target run beside each other. Silent, and exactly the
+    /// failure the key exists to prevent. The enum carries the reasoning; this carries the numbers,
+    /// because a doc comment cannot fail a build and a reordering is a one-keystroke mistake.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void The_backup_type_numbers_are_frozen()
+    {
+        ((int)BackupType.Database).Should().Be(0);
+        ((int)BackupType.Volume).Should().Be(1);
+        ((int)BackupType.AppConfig).Should().Be(2);
+        ((int)BackupType.FullPlatform).Should().Be(3);
+        ((int)BackupType.Service).Should().Be(4);
+
+        Enum.GetValues<BackupType>().Length.Should().Be(5,
+            "a new member is welcome — appended, with its own line above, so the next person to " +
+            "reorder them has to delete an assertion rather than merely not read a comment");
+    }
 }

@@ -75,6 +75,38 @@ public class DeploymentPipelineCutoverTests
         app.Status.Should().Be(AppStatus.Running);
     }
 
+    /// <summary>
+    /// The deploy log of a deployment that worked has to say so, and has to still say so tomorrow.
+    ///
+    /// <para>
+    /// Read back with <c>AsNoTracking</c> on purpose. The pipeline's logging only ADDS rows to the
+    /// change tracker; the flush comes from whatever saves next, and on the success path nothing
+    /// did — the last save is <c>SetStatus(Succeeded)</c>, and the ✅ line plus everything image
+    /// retention had to say are added after it. <c>JobWorker</c> disposes the pipeline's scope the
+    /// moment it returns, so those rows went with it. An assertion over tracked entities would have
+    /// been green against exactly that.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_deploy_log_of_a_successful_deployment_ends_by_saying_it_succeeded()
+    {
+        using var h = new PipelineHarness();
+        h.WithPreviousDeployment(number: 1);
+        var deployment = h.QueueDeployment(number: 2);
+
+        var result = await h.RunAsync(deployment);
+        result.Status.Should().Be(DeploymentStatus.Succeeded);
+
+        var stored = await h.Db.DeploymentLogs.AsNoTracking()
+            .Where(l => l.DeploymentId == deployment.Id)
+            .OrderBy(l => l.Sequence).ToListAsync();
+
+        stored.Should().NotBeEmpty();
+        stored[^1].Message.Should().Contain("✅ Deployment",
+            "a stored log that stops mid-cutover reads as a deployment still going, on the path " +
+            "every deployment takes");
+    }
+
     [Fact]
     public async Task Status_progresses_through_the_health_check_state()
     {
