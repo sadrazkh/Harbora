@@ -9,10 +9,11 @@ using Microsoft.Extensions.Logging;
 namespace Harbora.Infrastructure.Jobs;
 
 /// <summary>
-/// Drains the durable job table: claim the oldest Pending job, run it in its own DI scope, record
-/// the outcome. Waits on <see cref="JobSignal"/> so an enqueue in this process is picked up
-/// immediately, with a poll interval as the backstop that also catches rows written by the
-/// reconciler or another instance.
+/// Drains the durable job table: claim the oldest Pending job that is due, run it in its own DI
+/// scope under the deadline <see cref="JobExecutionPolicy"/> gives its kind, record the outcome.
+/// Waits on <see cref="JobSignal"/> so an enqueue in this process is picked up immediately, with a
+/// poll interval as the backstop that also catches rows written by the reconciler or another
+/// instance — and a job serving a retry backoff, for which nothing signals at all.
 /// </summary>
 public class JobWorker(
     IServiceScopeFactory scopeFactory,
@@ -27,6 +28,12 @@ public class JobWorker(
     /// </summary>
     protected virtual Task DispatchAsync(Job job, IServiceProvider scope, CancellationToken ct)
         => JobDispatcher.ExecuteAsync(job, scope, ct);
+
+    /// <summary>
+    /// How long this job may run. A seam for the same reason as <see cref="DispatchAsync"/>: the
+    /// real deadlines are quarter-hours and upwards, and a test has to be able to reach one.
+    /// </summary>
+    protected virtual TimeSpan TimeoutFor(Job job) => JobExecutionPolicy.TimeoutFor(job.Kind);
 
     /// <summary>Backstop poll — the signal handles the common case.</summary>
     public static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
@@ -74,30 +81,73 @@ public class JobWorker(
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         using var _ = cancellations.Register(job.Id, linked);
 
+        // The job's own deadline, inside the two above. Nothing bounded a dispatched job before, so
+        // a build hanging against a live daemon ran until the process was killed — and the worker
+        // runs one job at a time, so it held the whole platform's background work behind it.
+        var deadline = TimeoutFor(job);
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(linked.Token);
+        limit.CancelAfter(deadline);
+
         string? error = null;
+        DateTimeOffset? nextAttemptAt = null;
         JobStatus outcome;
         try
         {
-            await DispatchAsync(job, scope.ServiceProvider, linked.Token);
+            await DispatchAsync(job, scope.ServiceProvider, limit.Token);
             outcome = JobStatus.Succeeded;
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // The host is shutting down. This job did not fail on its own merits, and must not be
+            // recorded as if it had — it is owed, and the next start resumes it.
+            outcome = JobStatus.Pending;
         }
         catch (OperationCanceledException) when (linked.IsCancellationRequested)
         {
-            // Cancelled on request, or the host is shutting down. Either way this job did not fail
-            // on its own merits, and must not be recorded as if it had.
-            outcome = stoppingToken.IsCancellationRequested ? JobStatus.Pending : JobStatus.Cancelled;
-            error = stoppingToken.IsCancellationRequested ? null : "Cancelled by request.";
+            // Someone asked for it to stop.
+            outcome = JobStatus.Cancelled;
+            error = "Cancelled by request.";
+        }
+        catch (OperationCanceledException) when (limit.IsCancellationRequested)
+        {
+            // Its own deadline. Failed rather than Pending: the work really did not finish, and an
+            // operator only learns that a job hangs if the row says so.
+            logger.LogError("Job {JobId} ({Kind}) was still running after {Limit} and was given up on.",
+                job.Id, job.Kind, deadline);
+            outcome = JobStatus.Failed;
+            error = $"Still running after {Describe(deadline)} and was given up on, " +
+                    "so the rest of the queue could carry on.";
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Job {JobId} ({Kind}) failed.", job.Id, job.Kind);
-            outcome = JobStatus.Failed;
             error = ex.Message;
+
+            // A transient transport fault on work that can safely be repeated goes back into the
+            // queue behind a growing wait. Everything else is final, as it has always been.
+            if (job.Attempts < JobExecutionPolicy.MaxAttemptsFor(job.Kind) &&
+                JobExecutionPolicy.IsRetryable(ex))
+            {
+                outcome = JobStatus.Pending;
+                nextAttemptAt = clock.UtcNow + JobExecutionPolicy.BackoffFor(job.Attempts);
+                logger.LogInformation(
+                    "Job {JobId} ({Kind}) will be attempted again after {NextAttemptAt:u}.",
+                    job.Id, job.Kind, nextAttemptAt);
+            }
+            else outcome = JobStatus.Failed;
         }
 
-        await SettleAsync(job.Id, outcome, error, CancellationToken.None);
+        await SettleAsync(job.Id, outcome, error, nextAttemptAt, CancellationToken.None);
         return true;
     }
+
+    /// <summary>The deadline in the units an operator thinks in, for the message on the row.</summary>
+    private static string Describe(TimeSpan limit) => limit switch
+    {
+        { TotalHours: >= 1 } => $"{limit.TotalHours:0.#} hour(s)",
+        { TotalMinutes: >= 1 } => $"{limit.TotalMinutes:0} minute(s)",
+        _ => $"{limit.TotalSeconds:0.###} second(s)"
+    };
 
     /// <summary>
     /// Takes the oldest Pending job. The ClaimStamp concurrency token turns a race between two
@@ -108,8 +158,12 @@ public class JobWorker(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
 
+        // A job serving a backoff is Pending but not yet due; claiming it anyway would turn the
+        // backoff into a retry loop. Oldest-first still decides among everything that is due.
+        var now = clock.UtcNow;
         var candidate = await db.Jobs
-            .Where(j => j.Status == JobStatus.Pending)
+            .Where(j => j.Status == JobStatus.Pending &&
+                        (j.NextAttemptAt == null || j.NextAttemptAt <= now))
             .OrderBy(j => j.CreatedAt)
             .FirstOrDefaultAsync(ct);
 
@@ -145,7 +199,8 @@ public class JobWorker(
         return candidate;
     }
 
-    private async Task SettleAsync(Guid jobId, JobStatus outcome, string? error, CancellationToken ct)
+    private async Task SettleAsync(
+        Guid jobId, JobStatus outcome, string? error, DateTimeOffset? nextAttemptAt, CancellationToken ct)
     {
         try
         {
@@ -156,6 +211,9 @@ public class JobWorker(
 
             job.Status = outcome;
             job.Error = error;
+            // Always assigned, so a shutdown that releases a job which had been backing off does
+            // not leave it waiting out a wait that no longer means anything.
+            job.NextAttemptAt = nextAttemptAt;
             // Returning to Pending means "resume after restart", so it must not look finished.
             job.FinishedAt = outcome == JobStatus.Pending ? null : clock.UtcNow;
             if (outcome == JobStatus.Pending) job.ClaimedBy = null;

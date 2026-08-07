@@ -142,6 +142,172 @@ public class DurableJobQueueTests
         h.JobFor(second)!.Status.Should().Be(JobStatus.Succeeded);
     }
 
+    // ---- deadlines ----
+
+    [Fact]
+    public async Task A_job_that_never_finishes_is_failed_at_its_deadline()
+    {
+        // The defect this replaces: nothing bounded a dispatched job. A docker build hanging against
+        // a live daemon ran until someone killed the process, and the worker runs one job at a time,
+        // so it held every other tenant's work behind it.
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        h.Handler.BlockUntilCancelled = true;
+        await h.Queue().EnqueueAsync(JobKind.Deployment, target);
+
+        await h.Worker(TimeSpan.FromMilliseconds(200)).RunNextAsync(default);
+
+        var job = h.JobFor(target)!;
+        job.Status.Should().Be(JobStatus.Failed, "the work genuinely did not finish, and saying so is the point");
+        job.Error.Should().Contain("given up on");
+        job.Error.Should().Contain("second", "the message has to name the limit that was spent");
+        job.FinishedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task The_queue_carries_on_after_a_job_hits_its_deadline()
+    {
+        using var h = new JobHarness();
+        var first = Guid.NewGuid();
+        h.Handler.BlockUntilCancelled = true;
+        await h.Queue().EnqueueAsync(JobKind.Deployment, first);
+        h.Clock.UtcNow = h.Clock.UtcNow.AddSeconds(1);
+        var second = Guid.NewGuid();
+        await h.Queue().EnqueueAsync(JobKind.Backup, second);
+
+        var worker = h.Worker(TimeSpan.FromMilliseconds(200));
+        await worker.RunNextAsync(default);
+        h.Handler.BlockUntilCancelled = false;
+        await worker.RunNextAsync(default);
+
+        h.JobFor(first)!.Status.Should().Be(JobStatus.Failed);
+        h.JobFor(second)!.Status.Should().Be(JobStatus.Succeeded,
+            "one hung job must cost the platform that job, not the queue");
+    }
+
+    [Fact]
+    public async Task A_job_killed_at_its_deadline_is_not_tried_again()
+    {
+        // Provisioning is retryable work, but a deadline is not a transient fault: the job spent its
+        // whole allowance and finished nothing, and a second run would spend it again.
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        h.Handler.BlockUntilCancelled = true;
+        await h.Queue().EnqueueAsync(JobKind.ServiceProvision, target);
+
+        await h.Worker(TimeSpan.FromMilliseconds(200)).RunNextAsync(default);
+
+        var job = h.JobFor(target)!;
+        job.Status.Should().Be(JobStatus.Failed);
+        job.NextAttemptAt.Should().BeNull();
+    }
+
+    // ---- retry ----
+
+    [Fact]
+    public async Task A_transient_failure_on_repeatable_work_is_scheduled_to_run_again()
+    {
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        h.Handler.Failure = new HttpRequestException("the daemon refused the connection");
+        await h.Queue().EnqueueAsync(JobKind.ServiceProvision, target);
+
+        await h.Worker().RunNextAsync(default);
+
+        var job = h.JobFor(target)!;
+        job.Status.Should().Be(JobStatus.Pending, "the work never happened, so it is still owed");
+        job.NextAttemptAt.Should().Be(h.Clock.UtcNow.AddMinutes(1));
+        job.Error.Should().Contain("refused", "the row still has to explain the attempt that failed");
+        job.FinishedAt.Should().BeNull();
+        job.ClaimedBy.Should().BeNull("a released claim must not look like it is still owned");
+    }
+
+    [Fact]
+    public async Task Work_waiting_for_its_backoff_is_not_claimed_until_the_wait_has_passed()
+    {
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        h.Handler.Failure = new HttpRequestException("the daemon refused the connection");
+        await h.Queue().EnqueueAsync(JobKind.ServiceProvision, target);
+
+        var worker = h.Worker();
+        await worker.RunNextAsync(default);
+
+        (await worker.RunNextAsync(default)).Should().BeFalse(
+            "claiming it straight back would be a retry loop, not a backoff");
+        h.Handler.Executed.Should().HaveCount(1);
+
+        // The worker polls every few seconds whatever happens, so nothing has to wake it for this.
+        h.Clock.UtcNow = h.Clock.UtcNow.AddMinutes(1);
+        h.Handler.Failure = null;
+
+        (await worker.RunNextAsync(default)).Should().BeTrue();
+        var job = h.JobFor(target)!;
+        job.Status.Should().Be(JobStatus.Succeeded);
+        job.Attempts.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task A_failure_that_would_happen_again_is_not_retried()
+    {
+        // A bad image reference fails identically the second time. Retrying it wastes the queue and
+        // buries the message the operator needs under three copies of itself.
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        h.Handler.Failure = new InvalidOperationException("no such image");
+        await h.Queue().EnqueueAsync(JobKind.ServiceProvision, target);
+
+        await h.Worker().RunNextAsync(default);
+
+        var job = h.JobFor(target)!;
+        job.Status.Should().Be(JobStatus.Failed);
+        job.NextAttemptAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Work_that_has_used_its_attempts_is_failed_rather_than_queued_again()
+    {
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        using (var db = h.NewDb())
+        {
+            // Two attempts already spent; provisioning is allowed three.
+            db.Jobs.Add(new Job
+            {
+                Kind = JobKind.ServiceProvision, TargetId = target,
+                Status = JobStatus.Pending, Attempts = 2
+            });
+            await db.SaveChangesAsync();
+        }
+        h.Handler.Failure = new HttpRequestException("still refused");
+
+        await h.Worker().RunNextAsync(default);
+
+        var job = h.JobFor(target)!;
+        job.Status.Should().Be(JobStatus.Failed, "a budget that never runs out is not a budget");
+        job.Attempts.Should().Be(3);
+        job.NextAttemptAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_deployment_is_never_queued_again_however_it_failed()
+    {
+        // Even a textbook transient fault. Half a deployment may already have happened — an image
+        // pushed, a container started, the proxy repointed — and an unattended repeat compounds it.
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        h.Handler.Failure = new HttpRequestException("the daemon refused the connection");
+        await h.Queue().EnqueueAsync(JobKind.Deployment, target);
+
+        var worker = h.Worker();
+        await worker.RunNextAsync(default);
+
+        var job = h.JobFor(target)!;
+        job.Status.Should().Be(JobStatus.Failed);
+        job.NextAttemptAt.Should().BeNull();
+        (await worker.RunNextAsync(default)).Should().BeFalse();
+    }
+
     // ---- cancellation ----
 
     [Fact]

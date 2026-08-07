@@ -60,6 +60,13 @@ public class Job : BaseEntity
     /// </summary>
     public bool CancelRequested { get; set; }
 
+    /// <summary>
+    /// Earliest moment this job may be claimed again; null means "as soon as a worker is free".
+    /// Set when a transient failure sends the job back to Pending with a backoff, so the worker
+    /// waits instead of claiming the same doomed work in a tight loop.
+    /// </summary>
+    public DateTimeOffset? NextAttemptAt { get; set; }
+
     /// <summary>Worker instance that claimed the job — diagnostics, and identifies orphans after a crash.</summary>
     public string? ClaimedBy { get; set; }
 

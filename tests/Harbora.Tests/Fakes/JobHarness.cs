@@ -38,7 +38,12 @@ public sealed class JobHarness : IDisposable
 
     public DatabaseJobQueue Queue() => new(NewDb(), Clock, Cancellations, Signal);
 
-    public TestableJobWorker Worker() => new(Scopes, Cancellations, Signal, Clock, Handler);
+    /// <summary>
+    /// A worker over this harness. Pass <paramref name="timeout"/> to give dispatched jobs a
+    /// deadline a test can actually reach — the real ones are quarter-hours and upwards.
+    /// </summary>
+    public TestableJobWorker Worker(TimeSpan? timeout = null) =>
+        new(Scopes, Cancellations, Signal, Clock, Handler, timeout);
 
     public JobReconciler Reconciler() => new(Scopes, Clock, NullLogger<JobReconciler>.Instance);
 
@@ -97,9 +102,16 @@ public sealed class TestableJobWorker(
     IJobCancellationRegistry cancellations,
     JobSignal signal,
     ISystemClock clock,
-    StubJobHandler handler)
+    StubJobHandler handler,
+    TimeSpan? timeout = null)
     : JobWorker(scopes, cancellations, signal, clock, NullLogger<JobWorker>.Instance)
 {
     protected override Task DispatchAsync(Job job, IServiceProvider scope, CancellationToken ct)
         => handler.ExecuteAsync(job, ct);
+
+    /// <summary>
+    /// The real deadlines run from five minutes to seven hours, which no test can wait out. Only the
+    /// length is replaced — the worker's own enforcement of it is the thing under test.
+    /// </summary>
+    protected override TimeSpan TimeoutFor(Job job) => timeout ?? base.TimeoutFor(job);
 }

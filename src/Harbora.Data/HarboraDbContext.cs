@@ -381,7 +381,9 @@ public class HarboraDbContext : DbContext
 
         b.Entity<Harbora.Domain.Jobs.Job>(e =>
         {
-            // The worker's hot path: oldest Pending job first.
+            // The worker's hot path: oldest Pending job first. NextAttemptAt is filtered on top of
+            // this and gets no index of its own — it only ever excludes the handful of rows serving
+            // a retry backoff, which this index has already narrowed to Pending.
             e.HasIndex(x => new { x.Status, x.CreatedAt });
             // Finding the live job for a deployment/backup when cancelling or reconciling.
             e.HasIndex(x => new { x.TargetId, x.Status });
