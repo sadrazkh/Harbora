@@ -63,8 +63,19 @@ public interface IBackupTargetResolver
     /// </summary>
     ResolvedTarget Validate(BackupTargetType targetType, string targetRef);
 
-    /// <summary>Run-time acquisition. May stage data; always dispose the lease.</summary>
-    Task<TargetLease> AcquireAsync(BackupTargetType targetType, string targetRef, CancellationToken ct);
+    /// <summary>
+    /// Run-time acquisition. May stage data; always dispose the lease.
+    ///
+    /// <para>
+    /// <paramref name="snapshotId"/> names the staged copy (see <see cref="BackupStagingLayout"/>).
+    /// It is a parameter rather than a private Guid because a copy that nothing can name is a copy
+    /// nothing can clean up: the row is not written until this method returns, so a kill during the
+    /// copy used to leave plaintext application data on disk under a name that appeared in no row
+    /// anywhere. Deriving it from the snapshot makes the leftovers findable before the copy starts.
+    /// </para>
+    /// </summary>
+    Task<TargetLease> AcquireAsync(
+        BackupTargetType targetType, string targetRef, Guid snapshotId, CancellationToken ct);
 }
 
 /// <inheritdoc />
@@ -94,7 +105,7 @@ public sealed class BackupTargetResolver(
     }
 
     public async Task<TargetLease> AcquireAsync(
-        BackupTargetType targetType, string targetRef, CancellationToken ct)
+        BackupTargetType targetType, string targetRef, Guid snapshotId, CancellationToken ct)
     {
         var validation = Validate(targetType, targetRef);
         if (!validation.Succeeded) return TargetLease.Fail(validation.Error!);
@@ -102,9 +113,9 @@ public sealed class BackupTargetResolver(
         return targetType switch
         {
             BackupTargetType.Directory => TargetLease.Ok(validation.SourcePath!),
-            BackupTargetType.DockerVolume => await StageVolumeAsync(targetRef, ct),
-            BackupTargetType.Database => await databases.StageAsync(Guid.Parse(targetRef), ct),
-            BackupTargetType.Application => await applications.StageAsync(Guid.Parse(targetRef), ct),
+            BackupTargetType.DockerVolume => await StageVolumeAsync(targetRef, snapshotId, ct),
+            BackupTargetType.Database => await databases.StageAsync(Guid.Parse(targetRef), snapshotId, ct),
+            BackupTargetType.Application => await applications.StageAsync(Guid.Parse(targetRef), snapshotId, ct),
             _ => TargetLease.Fail($"{targetType} is not a target this module can read.")
         };
     }
@@ -193,14 +204,21 @@ public sealed class BackupTargetResolver(
     /// position to be read as syntax (THREAT_MODEL T1).
     /// </para>
     /// </summary>
-    private async Task<TargetLease> StageVolumeAsync(string volumeName, CancellationToken ct)
+    private async Task<TargetLease> StageVolumeAsync(
+        string volumeName, Guid snapshotId, CancellationToken ct)
     {
-        // Named by a Guid, so nothing user-supplied reaches the path or the container argument.
-        var stageName = $"volume-{Guid.CreateVersion7():N}";
+        // Named by the SNAPSHOT's Guid, so nothing user-supplied reaches the path or the container
+        // argument AND the reconciler can find this directory from the row before the copy that
+        // fills it has returned. See BackupStagingLayout for why that second property matters.
+        var stageName = BackupStagingLayout.VolumeDirectory(snapshotId);
         var stagePath = Path.Combine(_options.StagingDirectory, stageName);
 
         try
         {
+            // A deterministic name means a retry of the same snapshot lands where the attempt that
+            // crashed was writing. Clear it first: half a copy folded into the new archive would be
+            // a backup that restores a mixture of two moments, and nothing would say so.
+            Cleanup(stagePath);
             Directory.CreateDirectory(stagePath);
 
             var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using FluentAssertions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
@@ -30,6 +30,13 @@ public sealed class ApplicationBackupTests : IDisposable
     private readonly BackupModuleOptions _options;
     private readonly ApplicationTargetStager _stager;
     private readonly Guid _workspace = Guid.CreateVersion7();
+
+    /// <summary>
+    /// The snapshot the staging is for. The staged directory is named from it (see
+    /// <see cref="BackupStagingLayout"/>) so a crash mid-assembly leaves something the row can
+    /// still point at.
+    /// </summary>
+    private readonly Guid _snapshot = Guid.CreateVersion7();
 
     public ApplicationBackupTests()
     {
@@ -92,6 +99,23 @@ public sealed class ApplicationBackupTests : IDisposable
         return doc.RootElement.Clone();
     }
 
+    /// <summary>
+    /// Named from the snapshot rather than from a Guid the stager invents, so the reconciler can
+    /// find this directory from the row while the assembly is still running — the window in which
+    /// the row's own <c>StagingPath</c> is still null.
+    /// </summary>
+    [Fact]
+    public async Task The_assembled_copy_is_named_from_the_snapshot_so_a_crash_leaves_a_trail()
+    {
+        AddApp(Vol("storefront_data"));
+        var app = await _db.Apps.FirstAsync();
+
+        await using var lease = await _stager.StageAsync(app.Id, _snapshot, default);
+
+        lease.SourcePath.Should().Be(Path.Combine(
+            _options.StagingDirectory, BackupStagingLayout.ApplicationDirectory(_snapshot)));
+    }
+
     // --- the thing that must never be in a backup -------------------------------------------------
 
     /// <summary>
@@ -106,7 +130,7 @@ public sealed class ApplicationBackupTests : IDisposable
         AddApp(Vol("storefront_data"));
         var app = await _db.Apps.FirstAsync();
 
-        await using var lease = await _stager.StageAsync(app.Id, default);
+        await using var lease = await _stager.StageAsync(app.Id, _snapshot, default);
         lease.Succeeded.Should().BeTrue(lease.Error);
 
         var raw = await File.ReadAllTextAsync(
@@ -126,7 +150,7 @@ public sealed class ApplicationBackupTests : IDisposable
         AddApp(Vol("storefront_data"));
         var app = await _db.Apps.FirstAsync();
 
-        await using var lease = await _stager.StageAsync(app.Id, default);
+        await using var lease = await _stager.StageAsync(app.Id, _snapshot, default);
         var metadata = await MetadataOfAsync(lease.SourcePath!);
 
         var secret = metadata.GetProperty("environment").EnumerateArray()
@@ -145,7 +169,7 @@ public sealed class ApplicationBackupTests : IDisposable
         AddApp(Vol("storefront_data", "/var/lib/data"));
         var app = await _db.Apps.FirstAsync();
 
-        await using var lease = await _stager.StageAsync(app.Id, default);
+        await using var lease = await _stager.StageAsync(app.Id, _snapshot, default);
         var metadata = await MetadataOfAsync(lease.SourcePath!);
 
         metadata.GetProperty("kind").GetString().Should().Be("harbora-application");
@@ -170,7 +194,7 @@ public sealed class ApplicationBackupTests : IDisposable
         AddApp(Vol("storefront_data"), Vol("storefront_uploads", "/uploads"));
         var app = await _db.Apps.FirstAsync();
 
-        await using var lease = await _stager.StageAsync(app.Id, default);
+        await using var lease = await _stager.StageAsync(app.Id, _snapshot, default);
         lease.Succeeded.Should().BeTrue(lease.Error);
 
         _docker.OneOffRequests.Should().HaveCount(2);
@@ -198,7 +222,7 @@ public sealed class ApplicationBackupTests : IDisposable
 
         var before = Directory.GetDirectories(_options.StagingDirectory).Length;
 
-        await using var lease = await _stager.StageAsync(app.Id, default);
+        await using var lease = await _stager.StageAsync(app.Id, _snapshot, default);
 
         lease.Succeeded.Should().BeFalse();
         lease.Error.Should().Contain("Nothing was backed up");
@@ -212,7 +236,7 @@ public sealed class ApplicationBackupTests : IDisposable
         var app = await _db.Apps.FirstAsync();
 
         string staged;
-        await using (var lease = await _stager.StageAsync(app.Id, default))
+        await using (var lease = await _stager.StageAsync(app.Id, _snapshot, default))
         {
             staged = lease.SourcePath!;
             Directory.Exists(staged).Should().BeTrue();
@@ -227,7 +251,7 @@ public sealed class ApplicationBackupTests : IDisposable
         AddApp();
         var app = await _db.Apps.FirstAsync();
 
-        await using var lease = await _stager.StageAsync(app.Id, default);
+        await using var lease = await _stager.StageAsync(app.Id, _snapshot, default);
 
         lease.Succeeded.Should().BeTrue(lease.Error);
         _docker.OneOffRequests.Should().BeEmpty();

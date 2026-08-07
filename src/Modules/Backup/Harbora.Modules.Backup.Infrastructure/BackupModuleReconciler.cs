@@ -17,6 +17,31 @@ public sealed record BackupReconciliation(int Snapshots, int Restores, int Stagi
     public static readonly BackupReconciliation None = new(0, 0, 0);
 }
 
+/// <summary>What one attempt to remove a staged copy proved about it.</summary>
+public enum SweepResult
+{
+    /// <summary>Nothing was there — no path recorded, or the path had already gone.</summary>
+    Gone,
+
+    /// <summary>It was there and it is not any more.</summary>
+    Removed,
+
+    /// <summary>
+    /// Not ours to delete — outside the staging root, or the root itself. A permanent verdict: it
+    /// will not become sweepable later, so retrying it every restart would only repeat the warning.
+    /// </summary>
+    Refused,
+
+    /// <summary>
+    /// The delete was attempted and threw. Transient — a busy mount at 03:00 is exactly the case a
+    /// retry fixes — so the row keeps pointing at it.
+    /// </summary>
+    Failed
+}
+
+/// <summary>One path the sweep looked at, and what it found.</summary>
+public sealed record SweepAttempt(string Path, SweepResult Result);
+
 /// <summary>
 /// Settles the module's own rows that a crash or restart left mid-flight.
 ///
@@ -37,6 +62,19 @@ public sealed record BackupReconciliation(int Snapshots, int Restores, int Stagi
 /// invisible outage into something an operator can see.
 /// </para>
 /// <para>
+/// <b>Why <see cref="IHostedLifecycleService"/> and not plain <c>IHostedService</c>.</b> Hosted
+/// services run their <c>StartAsync</c> in registration order, and this module is registered after
+/// <c>AddHarboraInfrastructure</c> — which is where <c>JobStartupGateOpener</c> releases the job
+/// worker. Reconciling in <c>StartAsync</c> would therefore race a worker that was already claiming:
+/// <c>BackupSnapshot</c> carries no concurrency token, so EF writes every changed column, and a
+/// worker that completed a snapshot between this pass's read and its save would have that result
+/// overwritten back to <c>Failed</c> — a backup that exists, with data in the repository, recorded
+/// as not taken. The host runs <c>StartingAsync</c> on <b>every</b> hosted service before
+/// <b>any</b> <c>StartAsync</c>, so doing the work there puts this pass ahead of the gate whatever
+/// the registration order is, and the guarantee lives in this file rather than in a comment
+/// somewhere else.
+/// </para>
+/// <para>
 /// Never blocks startup, like <c>JobReconciler</c>: a panel that will not boot because it could not
 /// tidy up is a worse outcome than rows that are tidied on the next restart.
 /// </para>
@@ -46,7 +84,7 @@ public sealed class BackupModuleReconciler(
     IOptions<BackupFeatureOptions> features,
     IOptions<BackupModuleOptions> options,
     ISystemClock clock,
-    ILogger<BackupModuleReconciler> logger) : IHostedService
+    ILogger<BackupModuleReconciler> logger) : IHostedLifecycleService
 {
     /// <summary>
     /// Written onto the row and shown in the Backup Center. It says what happened, and what it
@@ -66,7 +104,11 @@ public sealed class BackupModuleReconciler(
 
     private readonly BackupModuleOptions _options = options.Value;
 
-    public async Task StartAsync(CancellationToken ct)
+    /// <summary>
+    /// The whole pass, before the host starts anything. See the class remark: this is what keeps
+    /// the reconciler ahead of the job worker's gate regardless of registration order.
+    /// </summary>
+    public async Task StartingAsync(CancellationToken ct)
     {
         // The module's other hosted services gate on the same flag. A module that is off owns no
         // rows and must not settle any.
@@ -84,7 +126,33 @@ public sealed class BackupModuleReconciler(
         }
     }
 
+    // Everything is done by the time the host starts services; these exist to satisfy the interface.
+    public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
+    public Task StartedAsync(CancellationToken ct) => Task.CompletedTask;
+    public Task StoppingAsync(CancellationToken ct) => Task.CompletedTask;
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
+    public Task StoppedAsync(CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>
+    /// <c>StagingPath</c> is the row's standing claim that a plaintext copy still exists at that
+    /// path. It is cleared when the sweep proves otherwise, and rewritten to the path that would
+    /// <b>not</b> delete when one would not — so a delete that failed on a busy mount is retried by
+    /// the next restart instead of being forgotten. Clearing it unconditionally would throw away the
+    /// only pointer to a leaked copy of somebody's application data.
+    /// </summary>
+    public static string? RemainingStagingPath(IReadOnlyList<SweepAttempt> attempts) =>
+        attempts.FirstOrDefault(a => a.Result is SweepResult.Failed)?.Path;
+
+    /// <summary>
+    /// The statuses a restart can strand. Named here rather than inlined because the queue guard,
+    /// the partial unique index and this pass must agree on exactly one set — <c>Verifying</c> is
+    /// deliberately outside it: it does not block the next backup, and settling it here would
+    /// overwrite a verification that is legitimately in flight.
+    /// </summary>
+    private static bool IsStranded(BackupSnapshotStatus status) =>
+        status is BackupSnapshotStatus.Pending
+            or BackupSnapshotStatus.Preparing
+            or BackupSnapshotStatus.Running;
 
     public async Task<BackupReconciliation> ReconcileAsync(CancellationToken ct)
     {
@@ -95,10 +163,15 @@ public sealed class BackupModuleReconciler(
         // unscoped and the filters fall away anyway — but a version of this that somehow ran inside
         // a request scope would read an EMPTY set, settle nothing, and log a successful pass. That
         // is the exact shape of the failure it exists to fix.
+        //
+        // The StagingPath term picks up rows that are ALREADY terminal and still claim a staged
+        // copy: that is a delete this reconciler tried and could not do, and the next restart is
+        // exactly when to try again.
         var snapshots = await db.BackupSnapshots.IgnoreQueryFilters()
             .Where(s => s.Status == BackupSnapshotStatus.Pending
                         || s.Status == BackupSnapshotStatus.Preparing
-                        || s.Status == BackupSnapshotStatus.Running)
+                        || s.Status == BackupSnapshotStatus.Running
+                        || s.StagingPath != null)
             .ToListAsync(ct);
 
         var restores = await db.RestoreJobs.IgnoreQueryFilters()
@@ -107,23 +180,30 @@ public sealed class BackupModuleReconciler(
 
         if (snapshots.Count == 0 && restores.Count == 0) return BackupReconciliation.None;
 
-        logger.LogWarning(
-            "Settling {Snapshots} backup(s) and {Restores} restore(s) left mid-flight by a restart.",
-            snapshots.Count, restores.Count);
+        var stranded = snapshots.Count(s => IsStranded(s.Status));
+
+        if (stranded > 0 || restores.Count > 0)
+            logger.LogWarning(
+                "Settling {Snapshots} backup(s) and {Restores} restore(s) left mid-flight by a restart.",
+                stranded, restores.Count);
 
         var now = clock.UtcNow;
         var swept = 0;
 
         foreach (var snapshot in snapshots)
         {
-            // Through the lifecycle rather than by assignment, so an unexpected source state is a
-            // named exception instead of a silently rewritten history.
-            SnapshotLifecycle.Transition(snapshot, BackupSnapshotStatus.Failed);
-            snapshot.FailureReason = SnapshotInterrupted;
-            snapshot.CompletedAt = now;
+            if (IsStranded(snapshot.Status))
+            {
+                // Through the lifecycle rather than by assignment, so an unexpected source state is
+                // a named exception instead of a silently rewritten history.
+                SnapshotLifecycle.Transition(snapshot, BackupSnapshotStatus.Failed);
+                snapshot.FailureReason = SnapshotInterrupted;
+                snapshot.CompletedAt = now;
+            }
 
-            if (Sweep(snapshot.StagingPath)) swept++;
-            snapshot.StagingPath = null;
+            var attempts = SweepAll(StagingArtifactsOf(snapshot));
+            swept += attempts.Count(a => a.Result is SweepResult.Removed);
+            snapshot.StagingPath = RemainingStagingPath(attempts);
         }
 
         foreach (var job in restores)
@@ -137,13 +217,50 @@ public sealed class BackupModuleReconciler(
             // what a half-finished restore already put there is the operator's to inspect — not
             // this method's to delete.
             if (job.RestoreType is RestoreType.Database
-                && Sweep(Path.Combine(_options.StagingDirectory, $"dbrestore-{job.Id:N}")))
+                && Sweep(Path.Combine(
+                    _options.StagingDirectory,
+                    BackupStagingLayout.DatabaseRestoreDirectory(job.Id))) is SweepResult.Removed)
                 swept++;
         }
 
         await db.SaveChangesAsync(ct);
-        return new BackupReconciliation(snapshots.Count, restores.Count, swept);
+        return new BackupReconciliation(stranded, restores.Count, swept);
     }
+
+    /// <summary>
+    /// Every temporary copy this snapshot could have left on disk.
+    ///
+    /// <para>
+    /// Three sources, and each covers a window the others do not:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><c>StagingPath</c> — what the row actually recorded, once the copy had finished.</item>
+    /// <item>The staged directory <see cref="BackupStagingLayout"/> names from the snapshot id —
+    /// present from the moment the copy STARTS, which is the window <c>StagingPath</c> cannot cover
+    /// because the row is not written until the copy returns.</item>
+    /// <item>The engine's own <c>{id}.tar.gz</c> and its encrypted twin. Those are removed in a
+    /// <c>finally</c>, which is precisely what a kill skips, and the unencrypted one is a plaintext
+    /// archive of the entire target.</item>
+    /// </list>
+    /// </summary>
+    private List<string> StagingArtifactsOf(BackupSnapshot snapshot)
+    {
+        var paths = new List<string>();
+        if (!string.IsNullOrWhiteSpace(snapshot.StagingPath)) paths.Add(snapshot.StagingPath);
+
+        if (BackupStagingLayout.StagedDirectoryFor(snapshot.TargetType, snapshot.Id) is { } staged)
+            paths.Add(Path.Combine(_options.StagingDirectory, staged));
+
+        paths.Add(Path.Combine(_options.StagingDirectory, BackupStagingLayout.ArchiveFile(snapshot.Id)));
+        paths.Add(Path.Combine(_options.StagingDirectory, BackupStagingLayout.EncryptedArchiveFile(snapshot.Id)));
+
+        // A row whose StagingPath already IS the derived directory must not be swept twice, or a
+        // successful delete would be counted once and then reported as "still there".
+        return paths.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private List<SweepAttempt> SweepAll(IEnumerable<string> paths) =>
+        paths.Select(p => new SweepAttempt(p, Sweep(p))).ToList();
 
     /// <summary>
     /// Removes one abandoned staging copy.
@@ -156,9 +273,9 @@ public sealed class BackupModuleReconciler(
     /// as a destination and deleting it would take every other target's staged copy along.
     /// </para>
     /// </summary>
-    private bool Sweep(string? path)
+    private SweepResult Sweep(string? path)
     {
-        if (string.IsNullOrWhiteSpace(path)) return false;
+        if (string.IsNullOrWhiteSpace(path)) return SweepResult.Gone;
 
         var check = PathGuard.ResolveWithin(_options.StagingDirectory, path);
         if (!check.Allowed)
@@ -166,7 +283,8 @@ public sealed class BackupModuleReconciler(
             logger.LogWarning(
                 "Left {Path} alone: it is not inside {Root} ({Rejection}).",
                 path, _options.StagingDirectory, check.Rejection);
-            return false;
+
+            return SweepResult.Refused;
         }
 
         var resolved = check.ResolvedPath!;
@@ -176,7 +294,7 @@ public sealed class BackupModuleReconciler(
         {
             logger.LogWarning("Left the staging root {Root} alone; only its contents are sweepable.",
                 _options.StagingDirectory);
-            return false;
+            return SweepResult.Refused;
         }
 
         try
@@ -185,23 +303,26 @@ public sealed class BackupModuleReconciler(
             {
                 Directory.Delete(resolved, recursive: true);
                 logger.LogInformation("Removed the staged copy a restart left at {Path}.", resolved);
-                return true;
+                return SweepResult.Removed;
             }
 
             if (File.Exists(resolved))
             {
                 File.Delete(resolved);
                 logger.LogInformation("Removed the staged archive a restart left at {Path}.", resolved);
-                return true;
+                return SweepResult.Removed;
             }
         }
         catch (Exception ex)
         {
             // Logged loudly rather than thrown: what is left behind is plaintext application data,
             // which is worth someone noticing — but not worth failing the rest of the pass over.
+            // The row keeps the path so the next restart tries again; a mount that was busy at
+            // 03:00 is exactly the case a retry fixes.
             logger.LogWarning(ex, "A staged copy could not be removed from {Path}.", resolved);
+            return SweepResult.Failed;
         }
 
-        return false;
+        return SweepResult.Gone;
     }
 }

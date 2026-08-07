@@ -148,16 +148,21 @@ public sealed class BackupSnapshotService(
             // A Docker volume is staged to disk here, so the lease is held for exactly as long as
             // the engine needs it and released whatever happens — a staged copy is plaintext
             // application data and must not outlive the backup that needed it.
-            await using var lease = await targets.AcquireAsync(snapshot.TargetType, snapshot.TargetRef, ct);
+            // The snapshot's own id names the staged copy. That is what makes the copy findable
+            // from this row DURING the staging — the longest window there is, and the one this
+            // assignment cannot cover, because the row is not written until AcquireAsync returns.
+            await using var lease = await targets.AcquireAsync(
+                snapshot.TargetType, snapshot.TargetRef, snapshot.Id, ct);
+
             if (!lease.Succeeded)
             {
                 await FailAsync(snapshot, lease.Error!, ct);
                 return;
             }
 
-            // Written down so a kill -9 — which skips the lease's finally — still leaves a trail to
-            // the staged copy. A directory target is excluded: its "source path" is the operator's
-            // own live data, and the reconciler must never be handed a path to it.
+            // Written down as well, so the exact path is on the row even if the layout above ever
+            // changes. A directory target is excluded: its "source path" is the operator's own live
+            // data, and the reconciler must never be handed a path to it.
             snapshot.StagingPath = snapshot.TargetType is BackupTargetType.Directory
                 ? null
                 : lease.SourcePath;

@@ -92,6 +92,13 @@ public static class BackupModuleServiceCollectionExtensions
         // Before the scheduler, and it runs to completion: a policy tick that fired while a target
         // still had a snapshot stranded by the last restart would be refused, log a warning, and
         // advance NextRunAt as though it had been handled.
+        //
+        // It does its work in IHostedLifecycleService.StartingAsync, NOT StartAsync, and that is
+        // load-bearing rather than stylistic. AddHarboraInfrastructure opens the job worker's
+        // startup gate from a hosted service registered before this module is registered at all, so
+        // a reconciler that worked in StartAsync would run after the worker was already claiming.
+        // The host runs StartingAsync on every hosted service before any StartAsync, so this pass
+        // finishes first whatever order the registrations end up in.
         services.AddHostedService<BackupModuleReconciler>();
 
         // Checks the flag itself and returns immediately when the module is off, so a disabled

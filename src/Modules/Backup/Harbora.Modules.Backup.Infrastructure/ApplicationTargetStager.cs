@@ -23,8 +23,12 @@ public interface IApplicationTargetStager
     /// <summary>Confirm the app exists and can be assembled, without doing any work.</summary>
     Task<(bool Ok, string? Error)> ValidateAsync(Guid appId, CancellationToken ct);
 
-    /// <summary>Assemble the app into a fresh directory. Dispose the lease to remove it.</summary>
-    Task<TargetLease> StageAsync(Guid appId, CancellationToken ct);
+    /// <summary>
+    /// Assemble the app into a directory named from <paramref name="snapshotId"/>. Dispose the
+    /// lease to remove it; see <see cref="BackupStagingLayout"/> for why the name is not a fresh
+    /// Guid — a copy nothing can name from the row is a copy nothing can clean up after a crash.
+    /// </summary>
+    Task<TargetLease> StageAsync(Guid appId, Guid snapshotId, CancellationToken ct);
 }
 
 /// <inheritdoc />
@@ -61,7 +65,7 @@ public sealed class ApplicationTargetStager(
         return (true, null);
     }
 
-    public async Task<TargetLease> StageAsync(Guid appId, CancellationToken ct)
+    public async Task<TargetLease> StageAsync(Guid appId, Guid snapshotId, CancellationToken ct)
     {
         var (ok, error) = await ValidateAsync(appId, ct);
         if (!ok) return TargetLease.Fail(error!);
@@ -72,11 +76,14 @@ public sealed class ApplicationTargetStager(
             .Include(a => a.Volumes)
             .FirstAsync(a => a.Id == appId, ct);
 
-        var stageName = $"app{Guid.CreateVersion7():N}";
+        var stageName = BackupStagingLayout.ApplicationDirectory(snapshotId);
         var stagePath = Path.Combine(_options.StagingDirectory, stageName);
 
         try
         {
+            // A retry of the same snapshot lands here again. Clear it first: a half-assembled
+            // application from the attempt that crashed must not be folded into the new archive.
+            Cleanup(stagePath);
             Directory.CreateDirectory(stagePath);
 
             await WriteMetadataAsync(app, stagePath, ct);

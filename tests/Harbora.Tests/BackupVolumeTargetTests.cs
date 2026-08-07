@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Modules.Backup.Contracts;
 using Harbora.Modules.Backup.Infrastructure;
 using Harbora.Tests.Fakes;
@@ -24,6 +24,13 @@ public sealed class BackupVolumeTargetTests : IDisposable
     private readonly FakeDockerEngine _docker = new();
     private readonly BackupModuleOptions _options;
     private readonly BackupTargetResolver _resolver;
+
+    /// <summary>
+    /// The snapshot the staging is for. Staging directories are named from it (see
+    /// <see cref="BackupStagingLayout"/>), so a crash mid-copy still leaves something the row can
+    /// point at — which is why it is a parameter here rather than a Guid the stager invents.
+    /// </summary>
+    private readonly Guid _snapshot = Guid.CreateVersion7();
 
     public BackupVolumeTargetTests()
     {
@@ -69,7 +76,7 @@ public sealed class BackupVolumeTargetTests : IDisposable
     public async Task Stages_the_volume_through_a_helper_that_mounts_it_read_only()
     {
         await using var lease = await _resolver.AcquireAsync(
-            BackupTargetType.DockerVolume, "harbora_app_data", default);
+            BackupTargetType.DockerVolume, "harbora_app_data", _snapshot, default);
 
         lease.Succeeded.Should().BeTrue(lease.Error);
         lease.SourcePath.Should().StartWith(_options.StagingDirectory);
@@ -94,7 +101,7 @@ public sealed class BackupVolumeTargetTests : IDisposable
     public async Task Invokes_the_copy_directly_rather_than_through_a_shell()
     {
         await using var lease = await _resolver.AcquireAsync(
-            BackupTargetType.DockerVolume, "harbora_app_data", default);
+            BackupTargetType.DockerVolume, "harbora_app_data", _snapshot, default);
 
         var command = _docker.OneOffRequests.Single().Command;
 
@@ -113,7 +120,7 @@ public sealed class BackupVolumeTargetTests : IDisposable
         string stagedPath;
 
         await using (var lease = await _resolver.AcquireAsync(
-            BackupTargetType.DockerVolume, "harbora_app_data", default))
+            BackupTargetType.DockerVolume, "harbora_app_data", _snapshot, default))
         {
             stagedPath = lease.SourcePath!;
             await File.WriteAllTextAsync(Path.Combine(stagedPath, "data.txt"), "application data");
@@ -131,7 +138,7 @@ public sealed class BackupVolumeTargetTests : IDisposable
         var before = Directory.GetDirectories(_options.StagingDirectory).Length;
 
         await using var lease = await _resolver.AcquireAsync(
-            BackupTargetType.DockerVolume, "harbora_app_data", default);
+            BackupTargetType.DockerVolume, "harbora_app_data", _snapshot, default);
 
         lease.Succeeded.Should().BeFalse();
         lease.Error.Should().Contain("could not be read");
@@ -140,15 +147,52 @@ public sealed class BackupVolumeTargetTests : IDisposable
     }
 
     [Fact]
-    public async Task Each_staging_run_gets_its_own_directory()
+    public async Task Each_snapshot_gets_its_own_directory()
     {
         await using var first = await _resolver.AcquireAsync(
-            BackupTargetType.DockerVolume, "harbora_app_data", default);
+            BackupTargetType.DockerVolume, "harbora_app_data", _snapshot, default);
         await using var second = await _resolver.AcquireAsync(
-            BackupTargetType.DockerVolume, "harbora_app_data", default);
+            BackupTargetType.DockerVolume, "harbora_app_data", Guid.CreateVersion7(), default);
 
         first.SourcePath.Should().NotBe(second.SourcePath,
-            "two concurrent backups of one volume must not write into the same staging directory");
+            "two backups of one volume must not write into the same staging directory");
+    }
+
+    /// <summary>
+    /// The name is derived from the snapshot, not invented. That is what lets
+    /// <c>BackupModuleReconciler</c> find this directory from the row while the copy is still
+    /// running — the window in which the row's own <c>StagingPath</c> is still null, because it is
+    /// not written until <c>AcquireAsync</c> returns, and the window in which a kill is most likely
+    /// because copying is the part that takes the time.
+    /// </summary>
+    [Fact]
+    public async Task The_staged_copy_is_named_from_the_snapshot_so_a_crash_leaves_a_trail()
+    {
+        await using var lease = await _resolver.AcquireAsync(
+            BackupTargetType.DockerVolume, "harbora_app_data", _snapshot, default);
+
+        lease.SourcePath.Should().Be(Path.Combine(
+            _options.StagingDirectory, BackupStagingLayout.VolumeDirectory(_snapshot)));
+    }
+
+    /// <summary>
+    /// A deterministic name means a retried snapshot stages where the crashed attempt was writing.
+    /// Half a copy folded into the new archive would be a backup of two different moments, and
+    /// nothing anywhere would say so.
+    /// </summary>
+    [Fact]
+    public async Task A_retry_of_the_same_snapshot_does_not_inherit_the_crashed_attempts_files()
+    {
+        var leftover = Path.Combine(
+            _options.StagingDirectory, BackupStagingLayout.VolumeDirectory(_snapshot));
+        Directory.CreateDirectory(leftover);
+        await File.WriteAllTextAsync(Path.Combine(leftover, "half-copied.db"), "from the crash");
+
+        await using var lease = await _resolver.AcquireAsync(
+            BackupTargetType.DockerVolume, "harbora_app_data", _snapshot, default);
+
+        lease.Succeeded.Should().BeTrue(lease.Error);
+        File.Exists(Path.Combine(lease.SourcePath!, "half-copied.db")).Should().BeFalse();
     }
 
     [Fact]
@@ -156,7 +200,7 @@ public sealed class BackupVolumeTargetTests : IDisposable
     {
         var path = _options.AllowedSourceRoots[0];
 
-        await using var lease = await _resolver.AcquireAsync(BackupTargetType.Directory, path, default);
+        await using var lease = await _resolver.AcquireAsync(BackupTargetType.Directory, path, _snapshot, default);
 
         lease.Succeeded.Should().BeTrue(lease.Error);
         lease.SourcePath.Should().Be(Path.GetFullPath(path));
@@ -220,7 +264,7 @@ internal sealed class StubDatabaseStager : IDatabaseTargetStager
     public Task<(DatabasePlan? Plan, string? Error)> PlanAsync(Guid serviceId, CancellationToken ct)
         => Task.FromResult<(DatabasePlan?, string?)>((null, "not used in this test"));
 
-    public Task<TargetLease> StageAsync(Guid serviceId, CancellationToken ct)
+    public Task<TargetLease> StageAsync(Guid serviceId, Guid snapshotId, CancellationToken ct)
         => Task.FromResult(TargetLease.Fail("not used in this test"));
 }
 
@@ -230,7 +274,7 @@ internal sealed class StubApplicationStager : IApplicationTargetStager
     public Task<(bool Ok, string? Error)> ValidateAsync(Guid appId, CancellationToken ct)
         => Task.FromResult((false, (string?)"not used in this test"));
 
-    public Task<TargetLease> StageAsync(Guid appId, CancellationToken ct)
+    public Task<TargetLease> StageAsync(Guid appId, Guid snapshotId, CancellationToken ct)
         => Task.FromResult(TargetLease.Fail("not used in this test"));
 }
 

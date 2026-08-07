@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Modules.Backup.Contracts;
@@ -8,6 +8,8 @@ using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -42,6 +44,7 @@ public sealed class BackupCrashRecoveryTests : IDisposable
     private readonly RecordingJobQueue _jobs = new();
     private readonly RecordingBackupNotifications _notifications = new();
 
+    private readonly string _database;
     private readonly Guid _workspace = Guid.CreateVersion7();
     private readonly Guid _repositoryId = Guid.CreateVersion7();
     private readonly string _source;
@@ -64,9 +67,9 @@ public sealed class BackupCrashRecoveryTests : IDisposable
 
         // Named once, outside the lambda: the lambda runs per context, so a name built inside it
         // would give every scope a database of its own and nothing would ever be read back.
-        var database = "backup-recovery-" + Guid.NewGuid();
+        _database = "backup-recovery-" + Guid.NewGuid();
         var services = new ServiceCollection();
-        services.AddDbContext<HarboraDbContext>(o => o.UseInMemoryDatabase(database));
+        services.AddDbContext<HarboraDbContext>(o => o.UseInMemoryDatabase(_database));
         _sp = services.BuildServiceProvider();
 
         using var scope = _sp.CreateScope();
@@ -103,7 +106,7 @@ public sealed class BackupCrashRecoveryTests : IDisposable
         beforeRestart.Succeeded.Should().BeFalse("this is the state the restart left behind");
         beforeRestart.Error.Should().Contain("already running");
 
-        await Reconciler().StartAsync(default);
+        await Reconciler().StartingAsync(default);
 
         var afterRestart = await Snapshots().QueueAsync(
             _workspace, _repositoryId, BackupTargetType.Directory, _source,
@@ -164,7 +167,7 @@ public sealed class BackupCrashRecoveryTests : IDisposable
     {
         var id = SeedSnapshot(BackupSnapshotStatus.Running).Id;
 
-        await Reconciler(backupEnabled: false).StartAsync(default);
+        await Reconciler(backupEnabled: false).StartingAsync(default);
 
         Read().BackupSnapshots.Single(s => s.Id == id).Status
             .Should().Be(BackupSnapshotStatus.Running,
@@ -187,7 +190,7 @@ public sealed class BackupCrashRecoveryTests : IDisposable
             new FixedClock(DateTimeOffset.UtcNow),
             NullLogger<BackupModuleReconciler>.Instance);
 
-        var start = async () => await reconciler.StartAsync(default);
+        var start = async () => await reconciler.StartingAsync(default);
 
         await start.Should().NotThrowAsync();
     }
@@ -312,7 +315,7 @@ public sealed class BackupCrashRecoveryTests : IDisposable
         var job = SeedRestore(RestoreJobStatus.Running,
             Guid.CreateVersion7().ToString(), snapshot.Id, RestoreType.Database);
 
-        var dump = Path.Combine(_staging, $"dbrestore-{job.Id:N}");
+        var dump = Path.Combine(_staging, BackupStagingLayout.DatabaseRestoreDirectory(job.Id));
         Directory.CreateDirectory(dump);
         File.WriteAllText(Path.Combine(dump, "dump.sql"), "every row, in the clear");
 
@@ -366,10 +369,11 @@ public sealed class BackupCrashRecoveryTests : IDisposable
         filter.Should().NotBeNullOrWhiteSpace(
             "unfiltered, the index would allow a target exactly one backup ever");
 
-        // The wire values of Pending, Preparing and Running — the three the queue guard treats as
-        // active. Written as numbers because that is what the column holds.
-        filter.Should().Contain("Status").And.Contain("0").And.Contain("1").And.Contain("2");
-        filter.Should().NotContain("4", "a completed snapshot must never block the next backup");
+        // The WHOLE filter, not a bag of substrings. "contains 0 and 1 and 2" is also true of
+        // IN (10, 12) and of IN (0, 1, 2, 4) — the second of which would turn this index from "one
+        // active backup" into "one backup, ever", which is the very failure being fixed.
+        // 0 Pending, 1 Preparing, 2 Running: exactly the set QueueAsync treats as active.
+        Normalise(filter).Should().Be("\"Status\" IN (0, 1, 2)");
     }
 
     [Fact]
@@ -382,9 +386,45 @@ public sealed class BackupCrashRecoveryTests : IDisposable
 
         index.Properties.Select(p => p.Name).Should().Equal(nameof(RestoreJob.Destination));
 
-        var filter = index.GetFilter();
-        filter.Should().NotBeNullOrWhiteSpace();
-        filter.Should().Contain("Status").And.Contain("0").And.Contain("1");
+        // Whole filter again: 0 Pending, 1 Running, and nothing else.
+        Normalise(index.GetFilter()).Should().Be("\"Status\" IN (0, 1)");
+    }
+
+    /// <summary>
+    /// The indexed column has to fit in a btree index row (~2704 bytes). At 1024 characters a
+    /// multi-byte destination could exceed that, and the error would arrive as a
+    /// <c>DbUpdateException</c> — which <c>RestoreService</c> reports as "already running", a
+    /// sentence that would not be true.
+    /// </summary>
+    [Fact]
+    public void The_indexed_destination_is_short_enough_that_the_index_can_hold_it()
+    {
+        using var db = PostgresModel();
+
+        var maxLength = db.Model.FindEntityType(typeof(RestoreJob))!
+            .FindProperty(nameof(RestoreJob.Destination))!.GetMaxLength();
+
+        maxLength.Should().Be(RestoreJob.MaxDestinationLength);
+        (maxLength!.Value * 4).Should().BeLessThan(2704,
+            "the worst case is four bytes per character, and a btree index row cannot exceed ~2704");
+    }
+
+    [Fact]
+    public async Task A_destination_too_long_to_store_is_refused_in_words_not_as_a_false_conflict()
+    {
+        var snapshot = SeedSnapshot(BackupSnapshotStatus.Completed);
+
+        // Comfortably inside RestoreRoot, and comfortably past what the column can hold.
+        var tooLong = Path.Combine(_options.RestoreRoot, new string('a', 600));
+
+        var result = await Restores().QueueAsync(_workspace, new RestoreRequest(
+            snapshot.Id, RestoreType.Folder, tooLong, RestoreConflictStrategy.Fail), default);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Contain("characters long")
+            .And.NotContain("already running",
+                "nothing is running there; reporting a conflict would send an operator looking for " +
+                "a restore that does not exist");
     }
 
     /// <summary>
@@ -473,7 +513,180 @@ public sealed class BackupCrashRecoveryTests : IDisposable
             && s.Contains("filter:", StringComparison.Ordinal));
     }
 
+    // --- ahead of the worker --------------------------------------------------------------------
+
+    /// <summary>
+    /// The reconciler has to finish before anything that could touch these rows is started.
+    ///
+    /// <para>
+    /// Hosted services run their <c>StartAsync</c> in registration order, and this module is
+    /// registered <b>after</b> <c>AddHarboraInfrastructure</c> — which is where the job worker's
+    /// startup gate is opened. So the registration order below is the real one, deliberately: the
+    /// worker is released first. <c>BackupSnapshot</c> carries no concurrency token, so EF writes
+    /// every changed column; a worker that finished a snapshot between this pass's read and its
+    /// save would have <c>Completed</c> overwritten back to <c>Failed</c> — a backup that exists,
+    /// with data sitting in the repository, recorded as never taken. That is the inverse of the
+    /// honest-failure rule this whole task serves.
+    /// </para>
+    /// <para>
+    /// <c>IHostedLifecycleService.StartingAsync</c> is what closes it: the host runs it on every
+    /// hosted service before any <c>StartAsync</c>, so the order below stops mattering.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Nothing_the_host_releases_can_see_a_row_this_pass_has_not_settled()
+    {
+        SeedSnapshot(BackupSnapshotStatus.Running);
+        var worker = new ReleaseObservation();
+
+        using var host = new HostBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddLogging();
+                services.AddDbContext<HarboraDbContext>(o => o.UseInMemoryDatabase(_database));
+                services.AddSingleton(Options.Create(new BackupFeatureOptions { Backup = true }));
+                services.AddSingleton(Options.Create(_options));
+                services.AddSingleton<ISystemClock>(new FixedClock(DateTimeOffset.UtcNow));
+
+                // Registered FIRST, exactly as the real composition does it.
+                services.AddSingleton<IHostedService>(sp =>
+                    new WorkerReleaseSpy(sp.GetRequiredService<IServiceScopeFactory>(), worker));
+                services.AddHostedService<BackupModuleReconciler>();
+            })
+            .Build();
+
+        await host.StartAsync();
+        await host.StopAsync();
+
+        worker.StatusWhenReleased.Should().Be(BackupSnapshotStatus.Failed,
+            "a worker released while the row still said Running could complete it and have this " +
+            "pass overwrite the result");
+    }
+
+    // --- the windows the sweep used to miss -----------------------------------------------------
+
+    /// <summary>
+    /// The staged copy is named from the snapshot, so it is findable from the row from the moment
+    /// the copy STARTS — not from when it finishes. That distinction is the whole fix: the row's
+    /// own <c>StagingPath</c> is not written until <c>AcquireAsync</c> returns, and copying is both
+    /// the longest phase and the one that moves the data.
+    /// </summary>
+    [Theory]
+    [InlineData(BackupTargetType.DockerVolume)]
+    [InlineData(BackupTargetType.Database)]
+    [InlineData(BackupTargetType.Application)]
+    public async Task A_copy_still_being_staged_when_the_process_died_is_found_from_the_row(
+        BackupTargetType targetType)
+    {
+        var snapshot = SeedSnapshot(
+            BackupSnapshotStatus.Preparing, targetType, targetType.ToString());
+
+        snapshot.StagingPath.Should().BeNull(
+            "this is the row as a kill mid-copy leaves it — nothing has been written to it yet");
+
+        var leaked = Path.Combine(
+            _staging, BackupStagingLayout.StagedDirectoryFor(targetType, snapshot.Id)!);
+        Directory.CreateDirectory(leaked);
+        File.WriteAllText(Path.Combine(leaked, "half-copied.db"), "plaintext application data");
+
+        var result = await Reconciler().ReconcileAsync(default);
+
+        Directory.Exists(leaked).Should().BeFalse(
+            "a directory named from a fresh Guid could never be found again by anything");
+        result.StagingPathsSwept.Should().Be(1);
+    }
+
+    [Fact]
+    public void A_directory_target_never_yields_a_path_for_the_sweep_to_delete()
+    {
+        BackupStagingLayout.StagedDirectoryFor(BackupTargetType.Directory, Guid.CreateVersion7())
+            .Should().BeNull(
+                "a directory target's source is the operator's own live data, and the sweep must " +
+                "never be handed a path to it");
+    }
+
+    /// <summary>
+    /// The engine tars the target into staging and encrypts it beside itself, removing both in a
+    /// <c>finally</c> — which is exactly what a process kill skips. The unencrypted one is a
+    /// plaintext archive of the entire target.
+    /// </summary>
+    [Fact]
+    public async Task The_archive_the_engine_was_writing_when_the_process_died_is_removed()
+    {
+        var snapshot = SeedSnapshot(BackupSnapshotStatus.Running);
+
+        var plain = Path.Combine(_staging, BackupStagingLayout.ArchiveFile(snapshot.Id));
+        var encrypted = Path.Combine(_staging, BackupStagingLayout.EncryptedArchiveFile(snapshot.Id));
+        File.WriteAllText(plain, "a tar.gz of the whole target, in the clear");
+        File.WriteAllText(encrypted, "the same bytes, encrypted");
+
+        var result = await Reconciler().ReconcileAsync(default);
+
+        File.Exists(plain).Should().BeFalse(
+            "an unencrypted archive of everything the target held must not survive the crash");
+        File.Exists(encrypted).Should().BeFalse();
+        result.StagingPathsSwept.Should().Be(2);
+    }
+
+    // --- a delete that failed is retried, not forgotten ------------------------------------------
+
+    /// <summary>
+    /// A previous pass settled this row and could not remove the copy — a busy mount, a held
+    /// handle. It kept the pointer, which is the only thing that can lead anyone back to a leaked
+    /// plaintext copy of somebody's data. This pass is the retry.
+    /// </summary>
+    [Fact]
+    public async Task A_settled_row_that_still_points_at_a_staged_copy_is_swept_on_the_next_restart()
+    {
+        var staged = Path.Combine(_staging, "volume-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staged);
+        File.WriteAllText(Path.Combine(staged, "customers.db"), "plaintext application data");
+
+        var snapshot = SeedSnapshot(BackupSnapshotStatus.Failed);
+        snapshot.FailureReason = "the original reason";
+        snapshot.StagingPath = staged;
+        Save(snapshot);
+
+        var result = await Reconciler().ReconcileAsync(default);
+
+        Directory.Exists(staged).Should().BeFalse();
+        result.StagingPathsSwept.Should().Be(1);
+        result.Snapshots.Should().Be(0, "the row was already settled; only the leak was outstanding");
+
+        var after = Read().BackupSnapshots.Single(s => s.Id == snapshot.Id);
+        after.StagingPath.Should().BeNull("the copy is gone, so the claim that one exists goes too");
+        after.FailureReason.Should().Be("the original reason");
+    }
+
+    [Fact]
+    public void A_delete_that_failed_keeps_its_pointer_so_the_next_restart_can_try_again()
+    {
+        BackupModuleReconciler.RemainingStagingPath([
+                new SweepAttempt("/staging/volume-a", SweepResult.Removed),
+                new SweepAttempt("/staging/volume-b", SweepResult.Failed)
+            ])
+            .Should().Be("/staging/volume-b",
+                "clearing it would throw away the only pointer to a plaintext copy still on disk");
+    }
+
+    [Fact]
+    public void A_sweep_that_left_nothing_behind_clears_the_pointer()
+    {
+        BackupModuleReconciler.RemainingStagingPath([
+                new SweepAttempt("/staging/volume-a", SweepResult.Removed),
+                new SweepAttempt("/staging/volume-b", SweepResult.Gone),
+                // Refused is a permanent verdict, not a transient one: it will never become
+                // sweepable, so retrying it every restart would only repeat the same warning.
+                new SweepAttempt("/somewhere/else", SweepResult.Refused)
+            ])
+            .Should().BeNull();
+    }
+
     // --- fixtures -----------------------------------------------------------------------------
+
+    /// <summary>Whitespace-insensitive, so reformatting a filter is not a test failure.</summary>
+    private static string Normalise(string? filter) =>
+        string.Join(' ', (filter ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private BackupModuleReconciler Reconciler(bool backupEnabled = true) => new(
         _sp.GetRequiredService<IServiceScopeFactory>(),
@@ -599,6 +812,34 @@ public sealed class BackupCrashRecoveryTests : IDisposable
     private sealed class ThrowingScopeFactory : IServiceScopeFactory
     {
         public IServiceScope CreateScope() => throw new InvalidOperationException("no database");
+    }
+
+    /// <summary>What the snapshot looked like at the moment the worker was let go.</summary>
+    private sealed class ReleaseObservation
+    {
+        public BackupSnapshotStatus? StatusWhenReleased { get; set; }
+    }
+
+    /// <summary>
+    /// Stands in for <c>JobStartupGateOpener</c>: a plain <c>IHostedService</c> whose
+    /// <c>StartAsync</c> is the instant the job worker may start claiming. What it reads is what a
+    /// worker could act on.
+    /// </summary>
+    private sealed class WorkerReleaseSpy(IServiceScopeFactory scopes, ReleaseObservation observed)
+        : IHostedService
+    {
+        public Task StartAsync(CancellationToken ct)
+        {
+            using var scope = scopes.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+
+            observed.StatusWhenReleased = db.BackupSnapshots.IgnoreQueryFilters()
+                .Select(s => (BackupSnapshotStatus?)s.Status).FirstOrDefault();
+
+            return Task.CompletedTask;
+        }
+
+        public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed class StubCaller(Guid workspaceId) : ICurrentUser

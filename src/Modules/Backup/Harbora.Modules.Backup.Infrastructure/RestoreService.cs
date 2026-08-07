@@ -140,6 +140,16 @@ public sealed class RestoreService(
             }
         }
 
+        // Bounded before the insert, and refused in words. The catch below turns EVERY
+        // DbUpdateException on this insert into "already running", so any other store-level refusal
+        // of this row would be reported as something that is not true. A destination too long for
+        // the column is the one such refusal a caller can actually cause, so it is answered here
+        // instead of being left to the store.
+        if (destination.Length > RestoreJob.MaxDestinationLength)
+            return new RestoreOutcome(false, Error:
+                $"That destination is {destination.Length} characters long; the longest this panel " +
+                $"can record is {RestoreJob.MaxDestinationLength}. Restore into a shorter path.");
+
         // Two restores into one destination produce a result neither of them describes. Like the
         // snapshot guard, this check is here for its message: it is a read followed by an insert,
         // and the partial unique index behind the insert below is what holds under concurrency.
@@ -249,7 +259,8 @@ public sealed class RestoreService(
             // the database's client container can also see. It is deleted afterwards: a dump on disk
             // is the whole database in the clear.
             var filesDestination = isDatabase
-                ? Path.Combine(_options.StagingDirectory, $"dbrestore-{job.Id:N}")
+                ? Path.Combine(
+                    _options.StagingDirectory, BackupStagingLayout.DatabaseRestoreDirectory(job.Id))
                 : job.Destination;
 
             var engine = engines.Resolve(repository.Engine);

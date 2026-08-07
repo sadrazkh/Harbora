@@ -31,8 +31,13 @@ public interface IDatabaseTargetStager
     /// <summary>Resolve the service and how to reach it, without contacting it.</summary>
     Task<(DatabasePlan? Plan, string? Error)> PlanAsync(Guid serviceId, CancellationToken ct);
 
-    /// <summary>Export the database into a fresh directory. Dispose the lease to remove it.</summary>
-    Task<TargetLease> StageAsync(Guid serviceId, CancellationToken ct);
+    /// <summary>
+    /// Export the database into a directory named from <paramref name="snapshotId"/>. Dispose the
+    /// lease to remove it; see <see cref="BackupStagingLayout"/> for why the name is not a fresh
+    /// Guid — a dump nothing can name from the row is a dump nothing can clean up after a crash,
+    /// and a dump is an entire database in the clear.
+    /// </summary>
+    Task<TargetLease> StageAsync(Guid serviceId, Guid snapshotId, CancellationToken ct);
 }
 
 /// <inheritdoc />
@@ -97,7 +102,7 @@ public sealed class DatabaseTargetStager(
         return (new DatabasePlan(engine.Value, connection, execution, service.Name), null);
     }
 
-    public async Task<TargetLease> StageAsync(Guid serviceId, CancellationToken ct)
+    public async Task<TargetLease> StageAsync(Guid serviceId, Guid snapshotId, CancellationToken ct)
     {
         var (plan, error) = await PlanAsync(serviceId, ct);
         if (plan is null) return TargetLease.Fail(error!);
@@ -106,12 +111,16 @@ public sealed class DatabaseTargetStager(
             return TargetLease.Fail($"No backup provider is registered for {plan.Engine}.");
 
         // A directory of its own per dump: it becomes the snapshot's source, and two concurrent
-        // exports must never write into the same place.
-        var stageName = $"db{Guid.CreateVersion7():N}";
+        // exports must never write into the same place. Named from the snapshot rather than a fresh
+        // Guid so a crash mid-export leaves something the row can still point at.
+        var stageName = BackupStagingLayout.DatabaseDirectory(snapshotId);
         var stagePath = Path.Combine(_options.StagingDirectory, stageName);
 
         try
         {
+            // A retry of the same snapshot lands here again. Clear it first: a truncated dump from
+            // the attempt that crashed must not be archived as though it were a whole database.
+            Cleanup(stagePath);
             Directory.CreateDirectory(stagePath);
             RestrictPermissions(stagePath);
 

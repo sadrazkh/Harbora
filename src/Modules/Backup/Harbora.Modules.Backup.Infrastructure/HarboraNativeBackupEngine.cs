@@ -102,9 +102,15 @@ public sealed class HarboraNativeBackupEngine(
 
         // Named by snapshot id: a Guid, so the key can never carry anything hostile into a path or
         // an object name, and two snapshots can never collide.
-        var key = $"{request.RepositoryId:N}/{request.SnapshotId:N}.tar.gz";
-        var stagedPath = Path.Combine(_options.StagingDirectory, $"{request.SnapshotId:N}.tar.gz");
-        var encryptedPath = stagedPath + ArchiveCipher.Extension;
+        var key = $"{request.RepositoryId:N}/{BackupStagingLayout.ArchiveFile(request.SnapshotId)}";
+
+        // Through BackupStagingLayout so BackupModuleReconciler sweeps exactly these two names. The
+        // finally below removes them, and a finally is precisely what a kill skips — leaving an
+        // unencrypted tar.gz of the entire target sitting in staging.
+        var stagedPath = Path.Combine(
+            _options.StagingDirectory, BackupStagingLayout.ArchiveFile(request.SnapshotId));
+        var encryptedPath = Path.Combine(
+            _options.StagingDirectory, BackupStagingLayout.EncryptedArchiveFile(request.SnapshotId));
 
         try
         {

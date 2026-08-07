@@ -22,6 +22,24 @@ public class RestoreJob : BaseEntity
 
     public RestoreType RestoreType { get; set; }
 
+    /// <summary>
+    /// How long a <see cref="Destination"/> may be.
+    ///
+    /// <para>
+    /// 512 rather than the 1024 this column used to allow, because the column now carries a btree
+    /// unique index and a btree index row cannot exceed roughly 2704 bytes. 512 characters is at
+    /// most 2048 bytes in UTF-8, so the value can never be the reason an insert is refused — which
+    /// matters here more than usual: the insert's only <c>DbUpdateException</c> handler reads a
+    /// refusal as "a restore into this destination is already running", and that sentence would be
+    /// a lie about a value that was simply too long.
+    /// </para>
+    /// <para>
+    /// Real destinations are a resolved path under the restore root or a 36-character service id,
+    /// so nothing legitimate comes close.
+    /// </para>
+    /// </summary>
+    public const int MaxDestinationLength = 512;
+
     /// <summary>Where it goes: a volume name, a directory, a database name, an app id.</summary>
     public string Destination { get; set; } = string.Empty;
 
