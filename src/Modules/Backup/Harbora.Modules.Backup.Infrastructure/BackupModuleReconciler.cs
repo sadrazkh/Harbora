@@ -27,13 +27,24 @@ public enum SweepResult
     Removed,
 
     /// <summary>
-    /// Not ours to delete — outside the staging root, or the root itself.
+    /// Not ours to delete — outside the staging root, or the root itself — <b>and something is
+    /// still there</b>.
     ///
     /// <para>
-    /// A permanent verdict about <i>sweepability</i>, and none at all about <i>existence</i>: the
-    /// copy is still there. It is in fact the least discoverable copy there is, because it is the
-    /// one that listing the staging root will not show — so the row keeps pointing at it, and the
-    /// warning repeats every restart until a person deals with it. That repetition is the feature.
+    /// Both halves are checked, because they are different questions. The first is a permanent
+    /// verdict about <i>sweepability</i>. The second is <i>existence</i>, and it is asked separately
+    /// rather than assumed: a pointer whose copy has already gone comes back
+    /// <see cref="Gone"/> and clears itself. Without that, changing
+    /// <c>BackupModuleOptions.StagingDirectory</c> — the realistic way a stored path ends up outside
+    /// the root, and an ordinary operational act — would strand every pointer written under the old
+    /// root and warn about them on every boot forever, including about copies some housekeeping job
+    /// removed years ago. A warning nobody can act on is a warning everybody learns to ignore.
+    /// </para>
+    /// <para>
+    /// When it <i>is</i> still there, the row keeps pointing at it and the warning does repeat every
+    /// restart until a person deals with it. That copy is the least discoverable one there is,
+    /// because it is the one listing the staging root will never show, so the repetition is the
+    /// feature.
     /// </para>
     /// </summary>
     Refused,
@@ -91,7 +102,7 @@ public sealed record SweepAttempt(string Path, SweepResult Result);
 /// configures <c>HostOptions.StartupTimeout</c>, whose default is
 /// <c>Timeout.InfiniteTimeSpan</c>, so a slow pass delays the listener rather than aborting the
 /// host; a health check polling the panel sees nothing until it finishes. That is the right trade
-/// here for four reasons, and the fourth is the one that decides it:
+/// here for three reasons:
 /// </para>
 /// <list type="number">
 /// <item>A clean shutdown costs nothing at all. With no stranded row and no row claiming a staged
@@ -99,19 +110,47 @@ public sealed record SweepAttempt(string Path, SweepResult Result);
 /// <item>What it deletes is <b>plaintext application data</b>. Answering requests while an
 /// unencrypted copy of somebody's database sits in staging is the worse state to be in, and every
 /// minute this is deferred is exposure that has already been paid for once by the crash.</item>
-/// <item>A pass is small. The partial unique index allows at most one active snapshot per target, so
-/// a crash strands roughly one row per backup that was in flight, each naming at most four paths —
-/// not a set that grows with history.</item>
-/// <item>A timeout would not bound the case that prompts the worry. <c>Directory.Delete(recursive)</c>
-/// takes no <c>CancellationToken</c>, so the single large tree — the only delete that could run for
-/// minutes — cannot be interrupted once it has begun. A budget could skip only paths it had not
-/// started, which does not remove the wait; it moves the leaked copy to a later restart and leaves
-/// it on disk in the meantime.</item>
+/// <item>A timeout would not bound the work anyway. <c>Directory.Delete(recursive)</c> takes no
+/// <c>CancellationToken</c>, so the single large tree — the only delete that could run for minutes —
+/// cannot be interrupted once it has begun. A budget could skip only paths it had not started, which
+/// does not remove the wait; it moves the leaked copy to a later restart and leaves it on disk in
+/// the meantime.</item>
 /// </list>
 /// <para>
-/// What would change the answer: if this pass ever grew to sweep a set that scales with backup
-/// history rather than with what was in flight, the disk half belongs after the listener binds, and
-/// the row-settling half must stay here — settling is what races the job worker; sweeping does not.
+/// <b>And here is the case those three do not cover, which is the one worth knowing about.</b> A
+/// pass used to be bounded by what was in flight: the partial unique index allows at most one active
+/// snapshot per target, so a crash strands roughly one row per backup that was running, each naming
+/// at most four paths. <see cref="RemainingStagingPath"/> ended that. A path that comes back
+/// <see cref="SweepResult.Failed"/> keeps its pointer, and the query at the top of
+/// <see cref="ReconcileAsync"/> loads those rows again on the next boot — so the swept set is now
+/// bounded by <i>unresolved leaks</i>, not by what was in flight, and it does not shrink until
+/// either the copy goes away or a person intervenes. A <c>Failed</c> path re-runs
+/// <c>Directory.Delete(recursive: true)</c> at <b>every</b> start, and a <c>Refused</c> one re-runs
+/// an existence check at every start.
+/// </para>
+/// <para>
+/// That matters for exactly one failure, and it is not the slow one: a delete that <b>blocks</b>
+/// rather than throws. A wedged NFS or SMB mount does not return an error, it hangs — and
+/// <c>Directory.Exists</c> hangs on it too. With <c>StartupTimeout</c> infinite and no
+/// <c>CancellationToken</c> to hand, that is a panel that never finishes starting, on every restart,
+/// self-healing on none of them. The retained pointer is what leads it back there: a path that
+/// errored on one boot and wedged before the next is a path this pass would not have looked at at
+/// all before the retry existed.
+/// </para>
+/// <para>
+/// Named rather than bounded, deliberately. A retry cap over <c>Failed</c> is the obvious bound and
+/// does not bound this one: an attempt that never returns is never counted, so the count would have
+/// to be persisted <i>before</i> the delete is attempted — a new column, a migration, and an extra
+/// write on the boot path — and even then it would hang boot N times before giving up. The bound
+/// that works is structural, and it is the next paragraph.
+/// </para>
+/// <para>
+/// What would change the answer — and one half of it already has. The set this sweeps no longer
+/// scales only with what was in flight; it scales with leaks nobody has cleared. If that set is ever
+/// observed to be non-trivial, or a staging directory is ever put on a network mount, the disk half
+/// belongs after the listener binds and the row-settling half must stay here — settling is what
+/// races the job worker; sweeping does not. That is a change to the ordering guarantee this class
+/// exists to make, so it belongs to whoever makes it deliberately rather than to a sweep retry.
 /// </para>
 /// <para>
 /// <b>What this assumes about topology.</b> One panel process per database and per staging
@@ -167,7 +206,10 @@ public sealed class BackupModuleReconciler(
         try { await ReconcileAsync(ct); }
         catch (Exception ex)
         {
-            // Never block startup on reconciliation.
+            // Never FAIL startup on reconciliation — a panel that will not boot because it could
+            // not tidy up is worse than rows tidied on the next restart. Startup does wait on this
+            // pass, on purpose; the class remark is where that trade is argued and where the case
+            // it does not cover is named.
             logger.LogError(ex, "Backup reconciliation failed on startup.");
         }
     }
@@ -181,12 +223,15 @@ public sealed class BackupModuleReconciler(
 
     /// <summary>
     /// <c>StagingPath</c> is the row's standing claim that a plaintext copy still exists at that
-    /// path. It is cleared only when the sweep proved the copy is gone, and kept otherwise —
+    /// path. It is cleared whenever the sweep established the copy is gone, and kept otherwise —
     /// whether the delete was attempted and threw (<see cref="SweepResult.Failed"/>, retried next
     /// restart) or was never ours to attempt (<see cref="SweepResult.Refused"/>, which needs a
     /// person). The question the column answers is "is there still a copy at this path", and both
-    /// of those answer yes. Clearing it unconditionally would throw away the only pointer to a
-    /// leaked copy of somebody's application data.
+    /// of those answer yes <i>having checked</i>: <c>Refused</c> is only returned once the path has
+    /// been confirmed to still hold something, so a stale pointer comes back
+    /// <see cref="SweepResult.Gone"/> and clears itself. Clearing unconditionally would throw away
+    /// the only pointer to a leaked copy of somebody's application data; never clearing would warn
+    /// forever about copies that are not there.
     /// </summary>
     public static string? RemainingStagingPath(IReadOnlyList<SweepAttempt> attempts) =>
         attempts.FirstOrDefault(a => a.Result is SweepResult.Failed or SweepResult.Refused)?.Path;
@@ -217,11 +262,16 @@ public sealed class BackupModuleReconciler(
         // next restart is exactly when to look at it again.
         //
         // The OR makes this a sequential scan — no index serves both branches — and that is
-        // accepted rather than overlooked. It runs once per process start, over a table that holds
-        // one row per snapshot ever taken and is pruned by retention, so at a realistic size the
-        // scan is a few milliseconds. The index that would remove it would be paid for on every
-        // snapshot insert and update instead, forever, to save that. Revisit if BackupSnapshots
-        // ever stops being pruned.
+        // accepted rather than overlooked. It runs ONCE PER PROCESS START, which is the whole
+        // justification: a few milliseconds against a table of tens of thousands of rows, paid at
+        // boot, versus an index maintained on every snapshot insert and update forever.
+        //
+        // Not "a table pruned by retention": BackupRetentionService.PruneAsync filters on
+        // PolicyId == policyId, so only policy-driven snapshots are ever pruned. A manual or
+        // API-triggered snapshot has no policy and is kept until somebody deletes it, so this table
+        // does grow without bound in the general case. That does not change the conclusion at any
+        // realistic size, and it does change when to revisit it: if BackupSnapshots ever reaches a
+        // size where one sequential scan at boot is measurable, not if pruning changes.
         var snapshots = await db.BackupSnapshots.IgnoreQueryFilters()
             .Where(s => s.Status == BackupSnapshotStatus.Pending
                         || s.Status == BackupSnapshotStatus.Preparing
@@ -335,8 +385,17 @@ public sealed class BackupModuleReconciler(
         var check = PathGuard.ResolveWithin(_options.StagingDirectory, path);
         if (!check.Allowed)
         {
+            // Two questions, asked separately. "May this sweep delete it" is answered above and the
+            // answer is no, permanently. "Is a copy still there" is a different question and one
+            // stat answers it — and it has to be asked, because the realistic way a stored path ends
+            // up outside the root is an operator changing StagingDirectory, not an attack. Every
+            // pointer under the old root would otherwise warn on every boot forever, about copies
+            // that may have been cleaned up years ago.
+            if (!StillThere(path)) return SweepResult.Gone;
+
             logger.LogWarning(
-                "Left {Path} alone: it is not inside {Root} ({Rejection}).",
+                "Left {Path} alone: it is not inside {Root} ({Rejection}). A copy of application " +
+                "data is still there and nothing here can remove it.",
                 path, _options.StagingDirectory, check.Rejection);
 
             return SweepResult.Refused;
@@ -347,6 +406,10 @@ public sealed class BackupModuleReconciler(
                 Path.GetFullPath(_options.StagingDirectory).TrimEnd(Path.DirectorySeparatorChar),
                 StringComparison.Ordinal))
         {
+            // Same two questions. A staging root that is not there at all is a root nothing can be
+            // leaking into, so the pointer to it is stale rather than dangerous.
+            if (!StillThere(resolved)) return SweepResult.Gone;
+
             logger.LogWarning("Left the staging root {Root} alone; only its contents are sweepable.",
                 _options.StagingDirectory);
             return SweepResult.Refused;
@@ -379,5 +442,38 @@ public sealed class BackupModuleReconciler(
         }
 
         return SweepResult.Gone;
+    }
+
+    /// <summary>
+    /// Whether anything is actually at a path the sweep may not delete.
+    ///
+    /// <para>
+    /// Resolved the way <see cref="PathGuard"/> resolves it, so a relative pointer means "under the
+    /// staging root" and not "under whatever directory this process happens to have been started
+    /// in". A path that cannot be resolved at all is reported as still there: clearing the row's
+    /// pointer is a claim that nothing is at the other end of it, and that claim must not be made
+    /// off a check that could not be performed.
+    /// </para>
+    /// <para>
+    /// <c>Directory.Exists</c> and <c>File.Exists</c> answer false for a path that exists but cannot
+    /// be read, so an unreadable copy clears its pointer. That is the same answer the in-root branch
+    /// already gives — it is one stat, not a permission audit — and it is the only reading available
+    /// without opening something the sweep has already decided it may not touch.
+    /// </para>
+    /// </summary>
+    private bool StillThere(string path)
+    {
+        string resolved;
+        try
+        {
+            var root = Path.GetFullPath(_options.StagingDirectory);
+            resolved = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(root, path));
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return true;
+        }
+
+        return Directory.Exists(resolved) || File.Exists(resolved);
     }
 }

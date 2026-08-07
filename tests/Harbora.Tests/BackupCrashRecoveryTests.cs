@@ -579,14 +579,7 @@ public sealed class BackupCrashRecoveryTests : IDisposable
     [Fact]
     public void The_filtered_indexes_reach_a_migration()
     {
-        var directory = Path.Combine(
-            new DirectoryInfo(TestPaths.WebRoot).Parent!.Parent!.FullName,
-            "src", "Harbora.Data", "Migrations");
-
-        var sources = Directory.GetFiles(directory, "*.cs")
-            .Where(f => !f.EndsWith(".Designer.cs", StringComparison.Ordinal))
-            .Select(File.ReadAllText)
-            .ToList();
+        var sources = MigrationSources();
 
         sources.Should().Contain(s =>
                 s.Contains("IX_BackupSnapshots_ActiveTarget", StringComparison.Ordinal)
@@ -597,6 +590,52 @@ public sealed class BackupCrashRecoveryTests : IDisposable
         sources.Should().Contain(s =>
             s.Contains("IX_RestoreJobs_ActiveDestination", StringComparison.Ordinal)
             && s.Contains("filter:", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The upgrade must not be able to refuse to boot on a row the old schema permitted.
+    ///
+    /// <para>
+    /// <c>IX_RestoreJobs_ActiveDestination</c> is a btree over <c>Destination</c>, and a btree index
+    /// row cannot exceed roughly 2704 bytes. The column has always held 1024 characters, which in
+    /// UTF-8 can be 4096 — so an install carrying an <b>active</b> restore with a long multi-byte
+    /// destination meets <c>index row size … exceeds btree version 4 maximum 2704</c> during
+    /// <c>CREATE UNIQUE INDEX</c>, and a migration that throws is a panel that will not start. That
+    /// is the same shape — "a row the previous schema permitted breaks the migration" — that a
+    /// narrowing <c>ALTER COLUMN</c> was deleted from this branch for having.
+    /// </para>
+    /// <para>
+    /// <c>RestoreService</c>'s 512-character bound is on the insert, so it does nothing for rows
+    /// written before the upgrade. The migration settles those first, exactly as it settles the
+    /// duplicates the old read-then-insert guard let through: additive, deletes nothing, writes a
+    /// reason on the row, and the row it settles is an active one the new bound could not re-create
+    /// anyway.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void An_active_destination_too_long_for_the_index_is_settled_before_the_index_is_built()
+    {
+        var source = MigrationSources()
+            .Single(s => s.Contains("IX_RestoreJobs_ActiveDestination", StringComparison.Ordinal));
+
+        var settles = source.IndexOf("length(\"Destination\")", StringComparison.Ordinal);
+        settles.Should().BeGreaterThan(-1,
+            "nothing else stops an install holding a 1024-character active destination from " +
+            "meeting CREATE UNIQUE INDEX as a failed boot");
+
+        source.Should().Contain($"> {RestoreJob.MaxDestinationLength}",
+            "the migration must settle exactly the rows the service bound would refuse, so an " +
+            "upgraded install cannot hold a row it can no longer create");
+
+        // The CreateIndex call itself, not the name wherever it is discussed in a comment.
+        var buildsIndex = source.IndexOf(
+            "name: \"IX_RestoreJobs_ActiveDestination\"", StringComparison.Ordinal);
+
+        settles.Should().BeLessThan(buildsIndex,
+            "settling after the index is created is settling after the boot already failed");
+
+        source.Should().NotContain("RAISE",
+            "a guard that stops the migration is the failure being fixed, not a fix for it");
     }
 
     // --- ahead of the worker --------------------------------------------------------------------
@@ -824,7 +863,63 @@ public sealed class BackupCrashRecoveryTests : IDisposable
                 "records where it is");
     }
 
+    /// <summary>
+    /// A pointer at a copy that is not there any more must be able to clear itself.
+    ///
+    /// <para>
+    /// The realistic way a pointer ends up outside the staging root is not an attack: it is an
+    /// operator changing <c>BackupModuleOptions.StagingDirectory</c>. Every path written under the
+    /// old root is then outside the new one, so the sweep refuses all of them — permanently, warning
+    /// on every boot about copies a housekeeping job may have removed years ago. That is a warning
+    /// nobody can act on and everybody learns to ignore.
+    /// </para>
+    /// <para>
+    /// A refusal answers "may this sweep delete it", which is a different question from "is it still
+    /// there" — and the second one is a single cheap stat. Asking it is what makes
+    /// <c>SweepResult.Refused</c>'s promise ("the copy is still there") true rather than assumed.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_pointer_at_a_copy_that_is_gone_clears_itself_even_where_the_sweep_may_not_touch_it()
+    {
+        // The shape a changed StagingDirectory leaves: a path under a root this module no longer
+        // uses, and nothing at the other end of it.
+        var vanished = Path.Combine(_root, "staging-as-it-was", "volume-" + Guid.NewGuid().ToString("N"));
+
+        var snapshot = SeedSnapshot(BackupSnapshotStatus.Failed);
+        snapshot.FailureReason = "the original reason";
+        snapshot.StagingPath = vanished;
+        Save(snapshot);
+
+        var result = await Reconciler().ReconcileAsync(default);
+
+        result.StagingPathsSwept.Should().Be(0, "there was nothing there to remove");
+
+        var after = Read().BackupSnapshots.Single(s => s.Id == snapshot.Id);
+        after.StagingPath.Should().BeNull(
+            "no copy is at that path, so the row must stop claiming one is — a refusal that " +
+            "repeats forever about data that is already gone teaches operators to ignore it");
+        after.FailureReason.Should().Be("the original reason");
+    }
+
     // --- fixtures -----------------------------------------------------------------------------
+
+    /// <summary>
+    /// Every migration's source. The generated designer files and the model snapshot are excluded:
+    /// they describe the model the migrations arrive at, not anything that runs against a database,
+    /// and the snapshot names every index — so leaving it in would let a model-only index satisfy a
+    /// test whose whole point is that the index reaches a migration.
+    /// </summary>
+    private static List<string> MigrationSources() =>
+        Directory.GetFiles(
+                Path.Combine(
+                    new DirectoryInfo(TestPaths.WebRoot).Parent!.Parent!.FullName,
+                    "src", "Harbora.Data", "Migrations"),
+                "*.cs")
+            .Where(f => !f.EndsWith(".Designer.cs", StringComparison.Ordinal)
+                        && !f.EndsWith("ModelSnapshot.cs", StringComparison.Ordinal))
+            .Select(File.ReadAllText)
+            .ToList();
 
     /// <summary>Whitespace-insensitive, so reformatting a filter is not a test failure.</summary>
     private static string Normalise(string? filter) =>

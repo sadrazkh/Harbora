@@ -219,9 +219,16 @@ public sealed class BackupTargetResolver(
             // crashed was writing. Clear it first: half a copy folded into the new archive would be
             // a backup that restores a mixture of two moments, and nothing would say so.
             //
-            // What makes deleting it safe is that only one execution per snapshot ever reaches
-            // here: BackupSnapshotService.RunAsync refuses a snapshot already Preparing or Running,
-            // so this directory is never one a live run is filling.
+            // What makes deleting it safe is that one execution per snapshot gets this far:
+            // BackupSnapshotService.RunAsync refuses a snapshot already Preparing or Running, so
+            // this directory is not one a live run is filling.
+            //
+            // That is an ORDERING argument, not a lock. RunAsync reads the row, tests its status,
+            // and only then writes Preparing, with no concurrency token across the gap — two
+            // executions interleaved inside it would both pass. Nothing produces them today: there
+            // is one job row per snapshot id, and the worker reserves the target in process before
+            // it stamps its claim. Named rather than left implied, because this comment is what
+            // licenses a recursive delete.
             Cleanup(stagePath);
             Directory.CreateDirectory(stagePath);
 

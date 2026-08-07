@@ -153,11 +153,23 @@ public sealed class BackupSnapshotService(
         // another execution owns right now. Refusing costs this snapshot nothing it was not already
         // losing — the same active row is what QueueAsync refuses on — and the next restart settles
         // it if that other execution never does.
+        //
+        // What this return leaves behind, said plainly: the row stays Preparing with FailureReason
+        // null, and the JOB is recorded as having succeeded, because returning is not throwing. So
+        // the Backup Center shows a target whose backups are being refused with nothing on screen
+        // saying why, until the next restart's reconciler settles it with a reason. Only the warning
+        // below records it in the meantime.
+        //
+        // Writing a reason onto the row instead is what must not happen: the row belongs to the
+        // execution that is still running it, and this method's whole purpose here is to touch
+        // nothing that execution owns. Throwing is no better — the job would be retried, and a
+        // retry is exactly the duplicate being refused.
         if (snapshot.Status is BackupSnapshotStatus.Preparing or BackupSnapshotStatus.Running)
         {
             logger.LogWarning(
                 "Snapshot {SnapshotId} is already {Status}, so another execution owns it and the " +
-                "staged copy named after it. Leaving both alone. [{Correlation}]",
+                "staged copy named after it. Leaving both alone; the row keeps its status and " +
+                "carries no reason until a restart settles it. [{Correlation}]",
                 snapshotId, snapshot.Status, snapshot.CorrelationId);
             return;
         }
