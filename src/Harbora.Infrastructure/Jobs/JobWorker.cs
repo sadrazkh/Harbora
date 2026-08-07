@@ -345,28 +345,12 @@ public class JobWorker(
             using var scope = scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
 
-            // A job serving a backoff is Pending but not yet due; claiming it anyway would turn the
-            // backoff into a retry loop. Oldest-first still decides among everything that is due.
-            var now = clock.UtcNow;
-            var claimable = db.Jobs
-                .Where(j => j.Status == JobStatus.Pending &&
-                            (j.NextAttemptAt == null || j.NextAttemptAt <= now));
-
-            // Rows this process is already running the equivalent of are not skipped over silently —
-            // they are excluded from the search, so oldest-first picks the next thing that CAN run
-            // instead of the loop idling behind work it is not allowed to start. Written as a term
-            // per held pair rather than a set membership test because the pair is what excludes, not
-            // the id: a backup of one thing and a deployment of another are different work whatever
-            // their guids are. The list is bounded by MaxConcurrency, so this stays a handful of
-            // terms.
-            //
-            // The coalesce is Job.ExcludesOn spelled out, because this runs as SQL: a job that named
-            // nothing to exclude on excludes on its own target, and a deployment names its app.
-            foreach (var (kind, excludesOn) in _inFlight.Snapshot())
-                claimable = claimable.Where(
-                    j => j.Kind != kind || (j.ExclusiveWith ?? j.TargetId) != excludesOn);
-
-            var candidate = await claimable.OrderBy(j => j.CreatedAt).FirstOrDefaultAsync(ct);
+            // Which rows are eligible is JobClaimQuery's to say — it is written to be checkable
+            // against a real Postgres provider, which is the only thing that proves the exclusion
+            // reaches the database rather than throwing there.
+            var candidate = await JobClaimQuery
+                .Claimable(db.Jobs, clock.UtcNow, _inFlight.Snapshot())
+                .FirstOrDefaultAsync(ct);
 
             if (candidate is null) return null;
 

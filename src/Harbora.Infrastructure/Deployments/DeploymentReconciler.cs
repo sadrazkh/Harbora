@@ -22,7 +22,11 @@ namespace Harbora.Infrastructure.Deployments;
 ///     running container (if any) keeps serving, so the app stays Running when it had one.
 ///   • …and the queued job of anything failed above is settled Cancelled, because a shutdown that
 ///     returned a job to Pending meant "resume this", and there is no longer anything to resume.
-/// Idempotent: terminal deployments are untouched, so running it again is a no-op.
+/// It also stamps every live deployment job that does not yet name the app it must not double up on
+/// — see <see cref="StampDeploymentJobsWithTheirAppAsync"/>. Startup is the only moment that is safe
+/// to write, because it is the only moment nothing is claiming.
+/// Idempotent: terminal deployments are untouched, and a job that already names its app is left
+/// alone, so running it again is a no-op.
 /// </summary>
 public sealed class DeploymentReconciler(
     IServiceScopeFactory scopeFactory,
@@ -49,13 +53,26 @@ public sealed class DeploymentReconciler(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
 
+        var stamped = await StampDeploymentJobsWithTheirAppAsync(db, ct);
+
         var inFlightStatuses = DeploymentStateMachine.InFlight.ToArray();
         var stranded = await db.Deployments
             .Include(d => d.App)
             .Where(d => inFlightStatuses.Contains(d.Status))
             .ToListAsync(ct);
 
-        if (stranded.Count == 0) return;
+        if (stranded.Count == 0)
+        {
+            // There can still be a write to make: the stamping above is not about anything in flight.
+            if (stamped > 0)
+            {
+                await db.SaveChangesAsync(ct);
+                logger.LogInformation(
+                    "Stamped {Stamped} queued deployment job(s) with the app they must not double up on.",
+                    stamped);
+            }
+            return;
+        }
 
         logger.LogWarning("Reconciling {Count} in-flight deployment(s) after restart.", stranded.Count);
 
@@ -101,8 +118,63 @@ public sealed class DeploymentReconciler(
 
         await db.SaveChangesAsync(ct);
         logger.LogInformation(
-            "Reconciliation complete: {Requeued} re-queued, {Failed} marked failed, {Dropped} queued job(s) dropped.",
-            requeued, failed, dropped);
+            "Reconciliation complete: {Requeued} re-queued, {Failed} marked failed, {Dropped} queued job(s) dropped, " +
+            "{Stamped} job(s) stamped with their app.",
+            requeued, failed, dropped, stamped);
+    }
+
+    /// <summary>
+    /// Gives every live deployment job the app it must not run beside another of, if it does not
+    /// already name one.
+    ///
+    /// <para>
+    /// A deployment job's target is the <c>Deployment</c> row and every redeploy is a new row, so
+    /// two deployments of one app are two different targets: what keeps them apart is
+    /// <see cref="Job.ExclusiveWith"/>, stamped by whoever queued the work. Rows written before that
+    /// column existed carry null, which means "exclude on my own target" — correct for every other
+    /// kind of job, and for a deployment it means nothing at all. Beside the parallel worker this
+    /// phase ships, two such rows for one app are free to run at the same time: two <c>docker
+    /// build</c>s, two containers under one name, two host-port reservations, two proxy applies.
+    /// </para>
+    ///
+    /// <para>
+    /// The migration that added the column backfills exactly this, so on an ordinary upgrade there
+    /// is nothing here to do. This is the second half of the same guarantee, for the rows the
+    /// backfill cannot have seen: ones an older instance inserted after the schema had already been
+    /// migrated — which is every deployment queued during a rolling restart — and any future enqueue
+    /// path that forgets. Startup is the one moment nothing is claiming, so it is the one moment
+    /// this is safe to write.
+    /// </para>
+    /// </summary>
+    private static async Task<int> StampDeploymentJobsWithTheirAppAsync(
+        HarboraDbContext db, CancellationToken ct)
+    {
+        var unstamped = await db.Jobs
+            .Where(j => j.Kind == JobKind.Deployment && j.ExclusiveWith == null &&
+                        (j.Status == JobStatus.Pending || j.Status == JobStatus.Running))
+            .ToListAsync(ct);
+        if (unstamped.Count == 0) return 0;
+
+        var targets = unstamped.Select(j => j.TargetId).Distinct().ToList();
+        // IgnoreQueryFilters because this runs with no session: the workspace filter is off at
+        // startup today, but a sweeper that silently reads an empty table and reports success is the
+        // exact failure this whole phase exists to stop, and here it would leave the rows unstamped.
+        var appOf = await db.Deployments.IgnoreQueryFilters()
+            .Where(d => targets.Contains(d.Id))
+            .Select(d => new { d.Id, d.AppId })
+            .ToDictionaryAsync(x => x.Id, x => x.AppId, ct);
+
+        var stamped = 0;
+        foreach (var job in unstamped)
+        {
+            // A job whose deployment row has gone is left alone rather than given a guess. It cannot
+            // deploy anything, and the pipeline will end it the moment it is claimed.
+            if (!appOf.TryGetValue(job.TargetId, out var appId)) continue;
+            job.ExclusiveWith = appId;
+            stamped++;
+        }
+
+        return stamped;
     }
 
     /// <summary>

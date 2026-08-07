@@ -20,6 +20,9 @@ namespace Harbora.Tests;
 /// </summary>
 public class DeploymentReconcilerTests
 {
+    /// <summary>Ceiling on waiting for something that must happen, never a way of asserting it did not.</summary>
+    private static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+
     private sealed class FixedClock : ISystemClock
     {
         public DateTimeOffset UtcNow { get; } = DateTimeOffset.UtcNow;
@@ -212,6 +215,67 @@ public class DeploymentReconcilerTests
         deployment.Status.Should().Be(DeploymentStatus.Failed);
         deployment.ErrorMessage.Should().Contain("restart",
             "one terminal transition, with the reason the restart gave — not a second, confusing one");
+    }
+
+    [Fact]
+    public async Task A_deployment_job_the_previous_build_queued_is_stamped_with_its_app()
+    {
+        // The upgrade that ships per-app exclusion arrives at a queue the OLD build filled, and those
+        // rows carry no ExclusiveWith at all — so each one excludes on its own deployment id, which
+        // is a fresh guid per redeploy. Two of them for one app therefore exclude on nothing in
+        // common, and the parallel worker this phase ships is free to run both: two docker builds,
+        // two containers under one name, two host-port reservations, two proxy applies. Under the
+        // serial worker they merely queued behind each other, which is why the column alone was not
+        // enough. Two rows for one app is the read-then-insert race in DeploymentEngine, which is
+        // still open by design — and every row it left behind before the upgrade is one of these.
+        using var h = new JobHarness();
+        var app = Guid.NewGuid();
+        var legacy = Guid.NewGuid();  // queued by the old build: no key on its job
+        var fresh = Guid.NewGuid();   // queued by this one: the app is on the row
+
+        using (var db = h.NewDb())
+        {
+            db.Apps.Add(new App { Id = app, Name = "x", Slug = "x", Status = AppStatus.Created });
+            db.Deployments.AddRange(
+                new Deployment { Id = legacy, AppId = app, Number = 1, Status = DeploymentStatus.Queued },
+                new Deployment { Id = fresh, AppId = app, Number = 2, Status = DeploymentStatus.Queued });
+            db.Jobs.AddRange(
+                new Job
+                {
+                    Kind = JobKind.Deployment, TargetId = legacy, Status = JobStatus.Pending,
+                    ExclusiveWith = null, CreatedAt = h.Clock.UtcNow
+                },
+                new Job
+                {
+                    Kind = JobKind.Deployment, TargetId = fresh, Status = JobStatus.Pending,
+                    ExclusiveWith = app, CreatedAt = h.Clock.UtcNow.AddSeconds(1)
+                });
+            await db.SaveChangesAsync();
+        }
+
+        await new DeploymentReconciler(h.Scopes, h.Clock, NullLogger<DeploymentReconciler>.Instance)
+            .ReconcileAsync(default);
+
+        using var verify = h.NewDb();
+        verify.Jobs.Single(j => j.TargetId == legacy).ExclusiveWith.Should().Be(app,
+            "the reconciler knows the app of every deployment it is looking at");
+
+        // And what that is for: the two must not run together. Driven by hand so the refusal is a
+        // returned value observed while the first job is provably inside its handler.
+        h.Handler.Hold(legacy);
+        using var worker = h.Worker();
+        var inFlight = worker.RunNextAsync(default);
+        await h.Handler.StartedFor(legacy).WaitAsync(Patience);
+
+        (await worker.RunNextAsync(default)).Should().BeFalse(
+            "the row the old build left behind names the same app as the one queued since");
+        h.Handler.Executed.Should().HaveCount(1);
+
+        // Held back, not dropped: it runs the moment the one before it is done.
+        h.Handler.Release(legacy);
+        (await inFlight.WaitAsync(Patience)).Should().BeTrue();
+        (await worker.RunNextAsync(default)).Should().BeTrue();
+        h.Handler.MaxConcurrent.Should().Be(1, "one app, one deployment at a time, over the whole run");
     }
 
     [Fact]
