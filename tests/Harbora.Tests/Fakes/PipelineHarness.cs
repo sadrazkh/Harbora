@@ -22,7 +22,7 @@ public sealed class PipelineHarness : IDisposable
 {
     public HarboraDbContext Db { get; }
     public FakeDockerEngine Docker { get; } = new();
-    public RecordingProxyEngine Proxy { get; } = new();
+    public RecordingProxyEngine Proxy { get; }
     public RecordingLogStream Stream { get; } = new();
     public RecordingNotificationService Notifications { get; } = new();
     public StubHttpClientFactory Http { get; } = new();
@@ -58,6 +58,9 @@ public sealed class PipelineHarness : IDisposable
 
         Db = new HarboraDbContext(new DbContextOptionsBuilder<HarboraDbContext>()
             .UseInMemoryDatabase("pipeline-" + Guid.NewGuid()).Options);
+        // Reads the platform's stored routes, unfiltered, exactly as the real engine does — a test
+        // asserting on Applications is then looking at the config that would have been published.
+        Proxy = new RecordingProxyEngine(() => Db.Routes.IgnoreQueryFilters().AsNoTracking().ToList());
 
         Workspace = new Workspace { Id = Guid.NewGuid(), Name = "Acme", Slug = "acme" };
         Server = new Server

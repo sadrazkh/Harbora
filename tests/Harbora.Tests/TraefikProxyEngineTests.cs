@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Harbora.Application.Abstractions;
 using Harbora.Domain.Common;
 using Harbora.Domain.Networking;
 using Harbora.Infrastructure.Proxy;
@@ -20,9 +21,16 @@ public class TraefikProxyEngineTests
 
     private static TraefikProxyEngine Engine() => Engine(new TraefikOptions());
 
-    private static TraefikProxyEngine Engine(TraefikOptions options) =>
+    private static TraefikProxyEngine Engine(TraefikOptions options, params Route[] platformRoutes) =>
         new(Options.Create(options), new AesGcmSecretProtector(TestKey),
-            NullLogger<TraefikProxyEngine>.Instance);
+            new StubRouteCatalog(platformRoutes), NullLogger<TraefikProxyEngine>.Instance);
+
+    /// <summary>The routes the platform is routing, without a database in the way.</summary>
+    private sealed class StubRouteCatalog(IReadOnlyList<Route> routes) : IRouteCatalog
+    {
+        public Task<IReadOnlyList<Route>> AllEnabledAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Route>>(routes.Where(r => r.IsEnabled).ToList());
+    }
 
     private static Route HostRoute(string host = "app.example.com", string svc = "harbora-app", int port = 80)
         => new() { Host = host, TargetService = svc, TargetPort = port, Type = RouteType.HostBased, IsEnabled = true };
@@ -103,7 +111,7 @@ public class TraefikProxyEngineTests
                 "routes are ordered by descending priority");
     }
 
-    // ---- ApplyAsync: what a deployment is now allowed to trust ----
+    // ---- ApplyAllAsync: what a deployment is now allowed to trust ----
     //
     // The pipeline fails a deployment on a non-success result from here, so what this returns — and
     // whether the file it manages survived — is a contract and not an implementation detail. It had
@@ -114,7 +122,7 @@ public class TraefikProxyEngineTests
     {
         using var cfg = new TempConfig();
 
-        var result = await Engine(cfg.Options).ApplyAsync(new[] { HostRoute() }, default);
+        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(default);
 
         result.Success.Should().BeTrue();
         result.Error.Should().BeNull();
@@ -129,7 +137,7 @@ public class TraefikProxyEngineTests
         // because a file provider reloads whatever it finds there.
         using var cfg = new TempConfig();
 
-        var result = await Engine(cfg.Options).ApplyAsync(new[] { HostRoute(port: 70000) }, default);
+        var result = await Engine(cfg.Options, HostRoute(port: 70000)).ApplyAllAsync(default);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("port");
@@ -146,11 +154,9 @@ public class TraefikProxyEngineTests
         Directory.CreateDirectory(Path.GetDirectoryName(cfg.Target)!);
         File.WriteAllText(cfg.Target, "half-written config");
         File.WriteAllText(cfg.Target + ".bak", "the config that was live");
-        // A directory where the temp file goes: the write cannot succeed, and nothing had to be
-        // stubbed to arrange it.
-        Directory.CreateDirectory(cfg.Target + ".tmp");
+        cfg.BlockStaging();
 
-        var result = await Engine(cfg.Options).ApplyAsync(new[] { HostRoute() }, default);
+        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(default);
 
         result.Success.Should().BeFalse();
         result.Error.Should().NotBeNullOrWhiteSpace("the deployment quotes this back to the operator");
@@ -163,12 +169,39 @@ public class TraefikProxyEngineTests
     {
         using var cfg = new TempConfig();
         Directory.CreateDirectory(Path.GetDirectoryName(cfg.Target)!);
-        Directory.CreateDirectory(cfg.Target + ".tmp");
+        cfg.BlockStaging();
 
-        var result = await Engine(cfg.Options).ApplyAsync(new[] { HostRoute() }, default);
+        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(default);
 
         result.Success.Should().BeFalse();
         result.RolledBack.Should().BeFalse("there was no previous version to put back");
+    }
+
+    [Fact]
+    public async Task A_successful_apply_leaves_no_half_written_render_behind()
+    {
+        // Traefik reloads whatever appears in the directory it watches, and an operator reading it
+        // has to be able to tell the config from the litter.
+        using var cfg = new TempConfig();
+
+        await Engine(cfg.Options, HostRoute()).ApplyAllAsync(default);
+
+        cfg.LeftoverRenders().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_failed_apply_leaves_no_half_written_render_behind()
+    {
+        using var cfg = new TempConfig();
+        Directory.CreateDirectory(Path.GetDirectoryName(cfg.Target)!);
+        // A directory where the config belongs: the render is written, and the swap into place is
+        // what refuses — so this is the case where litter would survive if nothing removed it.
+        Directory.CreateDirectory(cfg.Target);
+
+        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(default);
+
+        result.Success.Should().BeFalse("the target path is not a file this engine can swap");
+        cfg.LeftoverRenders().Should().BeEmpty("the attempt cleans up after itself");
     }
 
     /// <summary>A throwaway dynamic-config location, so an apply test writes real files and cleans up.</summary>
@@ -179,6 +212,20 @@ public class TraefikProxyEngineTests
 
         public string Target => Path.Combine(_root, "dynamic", "harbora.yml");
         public TraefikOptions Options => new() { DynamicConfigPath = Target };
+
+        public string Staging => Path.Combine(
+            Path.GetDirectoryName(Target)!, TraefikProxyEngine.StagingDirectoryName);
+
+        /// <summary>
+        /// Puts a file where the engine stages its render, so the staging directory cannot be
+        /// created and the write fails. A real I/O failure on a real filesystem — nothing stubbed —
+        /// and it works the same as any user on any platform, which a permission bit does not.
+        /// </summary>
+        public void BlockStaging() => File.WriteAllText(Staging, "not a directory");
+
+        /// <summary>Renders that were started and never became the config.</summary>
+        public IReadOnlyList<string> LeftoverRenders() =>
+            Directory.Exists(Staging) ? Directory.GetFiles(Staging) : [];
 
         public void Dispose()
         {

@@ -52,8 +52,7 @@ public sealed class AppOperationsService(
         if (removeVolumes)
             foreach (var v in app.Volumes) await docker.RemoveVolumeAsync(v.Name, ct);
 
-        // Drop this app's routes, then re-apply the workspace's remaining routes.
-        var workspaceId = app.WorkspaceId;
+        // Drop this app's routes, then re-apply what the platform is left routing.
         await db.Routes.IgnoreQueryFilters().Where(r => r.AppId == appId).ExecuteDeleteAsync(ct);
         // Host-port reservations hang off the server, not the app, so nothing cascades them away.
         // Left behind they would retire a port from the node permanently, once per deleted app.
@@ -69,12 +68,11 @@ public sealed class AppOperationsService(
 
         try
         {
-            // Unfiltered on purpose, and the dangerous one: filtered, a sessionless caller reads an
-            // empty set and hands the proxy "this workspace has no routes", withdrawing every route
-            // the tenant has. The workspace is pinned explicitly in the predicate instead.
-            var routes = await db.Routes.IgnoreQueryFilters()
-                .Where(r => r.WorkspaceId == workspaceId && r.IsEnabled).ToListAsync(ct);
-            await proxy.ApplyAsync(routes, ct);
+            // No workspace is named here, and that is the fix: this used to re-apply the deleted
+            // app's workspace alone, which published a config with nobody else's routes in it. The
+            // engine reads the platform's own, unfiltered, so the sessionless callers above cannot
+            // narrow it to a tenant — or to nothing.
+            await proxy.ApplyAllAsync(ct);
         }
         catch (Exception ex) { logger.LogWarning(ex, "Proxy re-apply after delete failed."); }
     }

@@ -1098,7 +1098,7 @@ public sealed class DeploymentPipeline(
         return new HealthReport(failure, container?.Status, tail, probeUrl);
     }
 
-    /// <summary>Materialise a Route per domain then re-apply the whole workspace's proxy config.</summary>
+    /// <summary>Materialise a Route per domain then re-apply the whole platform's proxy config.</summary>
     private async Task WireProxyAsync(App app, string upstreamHost, int upstreamPort, Func<LogStream, string, Task> log, CancellationToken ct)
     {
         if (app.Domains.Count == 0)
@@ -1107,15 +1107,15 @@ public sealed class DeploymentPipeline(
             return;
         }
 
-        // Saved BEFORE the apply, and it has to be: the config below is rendered from a query over
-        // the whole workspace, so a route added for a domain's first deployment would not be in it
-        // otherwise, and the deployment would publish a config missing the very route it exists for.
-        // The cost is that a failure after this point leaves the rows describing a container the
-        // pipeline's failure path is about to remove — and every other caller (RoutesController,
-        // AppsController, AdminerService, AppOperationsService) re-applies this same whole-workspace
-        // query. An unrelated route change anywhere in the workspace would then push that dead
-        // upstream live and take down a domain the rolled-back config was still serving. So: keep
-        // what each row said, and put it back if anything below refuses.
+        // Saved BEFORE the apply, and it has to be: the config below is rendered from the stored
+        // routes of the whole platform, so a route added for a domain's first deployment would not
+        // be in it otherwise, and the deployment would publish a config missing the very route it
+        // exists for. The cost is that a failure after this point leaves the rows describing a
+        // container the pipeline's failure path is about to remove — and every other caller
+        // (RoutesController, AppsController, AdminerService, AppOperationsService) re-applies from
+        // those same rows. An unrelated route change anywhere on the install would then push that
+        // dead upstream live and take down a domain the rolled-back config was still serving. So:
+        // keep what each row said, and put it back if anything below refuses.
         var undo = new List<RouteRevert>();
         foreach (var domain in app.Domains)
         {
@@ -1138,8 +1138,7 @@ public sealed class DeploymentPipeline(
 
         try
         {
-            var routes = await db.Routes.Where(r => r.WorkspaceId == app.WorkspaceId && r.IsEnabled).ToListAsync(ct);
-            var result = await proxy.ApplyAsync(routes, ct);
+            var result = await proxy.ApplyAllAsync(ct);
 
             // A deployment whose routing did not apply has not deployed. This used to log a warning
             // and carry on to "Succeeded", which is the one thing the platform promises never to do:

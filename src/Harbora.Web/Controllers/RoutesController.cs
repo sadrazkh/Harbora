@@ -126,8 +126,7 @@ public sealed class RoutesController(
         }
         await db.SaveChangesAsync(ct);
 
-        var applyResult = await proxy.ApplyAsync(
-            await db.Routes.Where(r => r.WorkspaceId == WorkspaceId && r.IsEnabled).ToListAsync(ct), ct);
+        var applyResult = await proxy.ApplyAllAsync(ct);
 
         return Json(new
         {

@@ -28,8 +28,17 @@ public sealed class RecordingLogStream : IDeploymentLogStream
     }
 }
 
-/// <summary>Records what the proxy was asked to route to, so cutover can be asserted.</summary>
-public sealed class RecordingProxyEngine : IProxyEngine
+/// <summary>
+/// Records what the proxy was asked to route to, so cutover can be asserted.
+///
+/// <para>
+/// An apply takes no routes — the real engine reads the platform's own — so this reads them the same
+/// way, from the stored rows at the moment of the call. That is what lets a test see the config a
+/// deployment published rather than the argument it passed, which is where the multi-tenant outage
+/// hid: the argument looked right to the caller that wrote it.
+/// </para>
+/// </summary>
+public sealed class RecordingProxyEngine(Func<IReadOnlyList<Route>> storedRoutes) : IProxyEngine
 {
     public sealed record Applied(string Host, string TargetService, int TargetPort);
 
@@ -40,10 +49,12 @@ public sealed class RecordingProxyEngine : IProxyEngine
     public ProxyConfigPreview Preview(IReadOnlyList<Route> routes) => new("yaml", string.Empty);
     public ProxyValidationResult Validate(IReadOnlyList<Route> routes) => new(true, [], []);
 
-    public Task<ProxyApplyResult> ApplyAsync(IReadOnlyList<Route> routes, CancellationToken ct)
+    public Task<ProxyApplyResult> ApplyAllAsync(CancellationToken ct)
     {
         ApplyCount++;
-        Applications.AddRange(routes.Select(r => new Applied(r.Host, r.TargetService ?? "", r.TargetPort)));
+        Applications.AddRange(storedRoutes()
+            .Where(r => r.IsEnabled)
+            .Select(r => new Applied(r.Host, r.TargetService ?? "", r.TargetPort)));
         return Task.FromResult(Result);
     }
 }

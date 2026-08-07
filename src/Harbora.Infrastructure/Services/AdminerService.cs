@@ -119,8 +119,7 @@ public sealed class AdminerService(
         db.Routes.Add(route);
         await db.SaveChangesAsync(ct);
 
-        var applied = await proxy.ApplyAsync(
-            await db.Routes.Where(r => r.WorkspaceId == service.WorkspaceId && r.IsEnabled).ToListAsync(ct), ct);
+        var applied = await proxy.ApplyAllAsync(ct);
 
         if (!applied.Success)
         {
@@ -171,12 +170,11 @@ public sealed class AdminerService(
 
             if (routes.Count > 0)
             {
-                var workspace = routes[0].WorkspaceId;
                 db.Routes.RemoveRange(routes);
                 await db.SaveChangesAsync(ct);
-                await proxy.ApplyAsync(
-                    await db.Routes.IgnoreQueryFilters()
-                        .Where(r => r.WorkspaceId == workspace && r.IsEnabled).ToListAsync(ct), ct);
+                // The sweeper has no session; the engine's own read is unfiltered, which is what
+                // keeps an expiring admin session from withdrawing the platform's routing with it.
+                await proxy.ApplyAllAsync(ct);
             }
 
             closed++;

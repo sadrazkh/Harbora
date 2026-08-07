@@ -140,11 +140,11 @@ public class ProxyCutoverTests
     [Fact]
     public async Task A_failed_apply_leaves_the_stored_route_naming_the_container_that_is_still_serving()
     {
-        // The rows are written before the apply, because the config is rendered from a query over the
-        // whole workspace and a first deployment's own route has to be in it. That means a failed
+        // The rows are written before the apply, because the config is rendered from the platform's
+        // stored routes and a first deployment's own route has to be in it. That means a failed
         // apply can leave them naming the container the failure path is about to remove — and every
         // other caller (RoutesController, AppsController, AdminerService, AppOperationsService)
-        // re-applies the whole workspace. The next unrelated route change anywhere would then publish
+        // re-applies from those same rows. The next unrelated route change anywhere would then publish
         // a dead upstream and take down a domain the rolled-back config was still serving correctly.
         using var h = new PipelineHarness().WithDomain();
         h.WithPreviousDeployment(number: 1);
@@ -161,7 +161,7 @@ public class ProxyCutoverTests
         var route = await h.Db.Routes.AsNoTracking().SingleAsync(r => r.Host == "blog.example.com");
         route.TargetService.Should().Be(h.ContainerFor(1),
             "the stored route must keep describing the release that is still up, or the next re-apply " +
-            "from anywhere in this workspace would publish an upstream that no longer exists");
+            "from anywhere on this platform would publish an upstream that no longer exists");
         route.TargetPort.Should().Be(8080);
     }
 
@@ -300,7 +300,7 @@ public class ProxyCutoverTests
     {
         // The live config cannot be restored from here without a second apply, but the stored rows
         // can — and must, for the same reason as a failed apply: they are what every other caller
-        // re-applies from. Reverted, the next route change anywhere in the workspace heals the domain
+        // re-applies from. Reverted, the next route change anywhere on the platform heals the domain
         // instead of nailing the dead upstream in place.
         using var h = new PipelineHarness().WithDomain();
         h.WithPreviousDeployment(number: 1);

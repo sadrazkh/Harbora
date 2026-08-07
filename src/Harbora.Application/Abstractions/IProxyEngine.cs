@@ -16,10 +16,18 @@ public interface IProxyEngine
     ProxyValidationResult Validate(IReadOnlyList<Route> routes);
 
     /// <summary>
-    /// Atomically apply routes. Writes the new config, keeps a backup, and rolls the file
-    /// back if the proxy fails to pick it up. Traefik hot-reloads — no restart required.
+    /// Atomically publish the routing for the <b>whole platform</b>. Writes the new config, keeps a
+    /// backup, and rolls the file back if anything refuses. Traefik hot-reloads — no restart required.
+    ///
+    /// <para>
+    /// It takes no routes, and that is the guarantee. The dynamic-config file is one file per
+    /// install, so whatever is handed in <i>replaces</i> everything Harbora routes — and every caller
+    /// used to hand in its own workspace's routes, which withdrew every other tenant's routing until
+    /// somebody else re-applied and withdrew the first one's. Reading the set here is what makes
+    /// "apply a subset" unsayable.
+    /// </para>
     /// </summary>
-    Task<ProxyApplyResult> ApplyAsync(IReadOnlyList<Route> routes, CancellationToken ct);
+    Task<ProxyApplyResult> ApplyAllAsync(CancellationToken ct);
 }
 
 public record ProxyConfigPreview(string Format, string Content);

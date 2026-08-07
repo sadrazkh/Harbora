@@ -60,6 +60,9 @@ public static class DependencyInjection
 
         // Source + proxy engines
         services.AddSingleton<IGitService, LibGit2GitService>();
+        // The proxy engine renders one file for the whole install, so it reads the platform's routes
+        // itself through the catalog rather than being handed a caller's slice of them.
+        services.AddSingleton<IRouteCatalog, Proxy.RouteCatalog>();
         services.AddSingleton<IProxyEngine, TraefikProxyEngine>();
 
         // Git providers (repo import) + webhook processing (deploy on push/tag).

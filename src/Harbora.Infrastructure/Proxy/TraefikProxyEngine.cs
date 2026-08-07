@@ -12,13 +12,36 @@ namespace Harbora.Infrastructure.Proxy;
 /// Renders <see cref="Route"/>s into a Traefik dynamic-config YAML document and applies it
 /// atomically: write to a temp file, back up the current one, swap in place, and roll back the
 /// file if anything throws. Traefik picks up the change via its file-provider watcher.
+///
+/// <para>
+/// One file, one install: <see cref="TraefikOptions.DynamicConfigPath"/> is not per-tenant, so an
+/// apply is always a statement about the whole platform's routing. That is why the routes come from
+/// <see cref="IRouteCatalog"/> rather than from the caller, and why applies are serialised — two
+/// writers sharing one file is two writers sharing one truth.
+/// </para>
 /// </summary>
 public sealed class TraefikProxyEngine(
     IOptions<TraefikOptions> options,
     ISecretProtector protector,
+    IRouteCatalog catalog,
     ILogger<TraefikProxyEngine> logger) : IProxyEngine
 {
+    /// <summary>
+    /// Where a render waits while it is being written, next to the file it is going to become so the
+    /// swap is a rename on one filesystem. A directory of its own, rather than a sibling
+    /// <c>.tmp</c>, because the name now carries a per-attempt id and debris from a killed process
+    /// should not accumulate in the directory Traefik reads.
+    /// </summary>
+    public const string StagingDirectoryName = ".harbora-apply";
+
     private readonly TraefikOptions _opt = options.Value;
+
+    /// <summary>
+    /// One writer at a time. The engine is a singleton, and since jobs began running several at a
+    /// time two applies overlapping is ordinary rather than rare: interleaved, one attempt's backup
+    /// is taken after the other's swap, so a rollback restores a config that was never live.
+    /// </summary>
+    private readonly SemaphoreSlim _applyGate = new(1, 1);
 
     public ProxyConfigPreview Preview(IReadOnlyList<Route> routes)
         => new("yaml", Render(routes.Where(r => r.IsEnabled).ToList()));
@@ -52,9 +75,30 @@ public sealed class TraefikProxyEngine(
         return new ProxyValidationResult(errors.Count == 0, errors, warnings);
     }
 
-    public async Task<ProxyApplyResult> ApplyAsync(IReadOnlyList<Route> routes, CancellationToken ct)
+    public async Task<ProxyApplyResult> ApplyAllAsync(CancellationToken ct)
     {
-        var enabled = routes.Where(r => r.IsEnabled).ToList();
+        // Held across the read as well as the write. Rendering from routes read before waiting for
+        // the gate would let a slow attempt publish a picture of the platform that a faster one has
+        // already superseded — the file would be valid and out of date, which is the harder failure
+        // to see.
+        await _applyGate.WaitAsync(ct);
+        try
+        {
+            var enabled = (await catalog.AllEnabledAsync(ct)).Where(r => r.IsEnabled).ToList();
+            return await WriteAsync(enabled, ct);
+        }
+        finally
+        {
+            _applyGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Validate → write temp → back up what is live → swap. Every failure after the validation gate
+    /// puts the backup back, and says whether it managed to.
+    /// </summary>
+    private async Task<ProxyApplyResult> WriteAsync(IReadOnlyList<Route> enabled, CancellationToken ct)
+    {
         var validation = Validate(enabled);
         if (!validation.IsValid)
             return new ProxyApplyResult(false, string.Join("; ", validation.Errors), false);
@@ -64,14 +108,20 @@ public sealed class TraefikProxyEngine(
         Directory.CreateDirectory(dir);
 
         var backup = target + ".bak";
-        var tmp = target + ".tmp";
+        var staging = Path.Combine(dir, StagingDirectoryName);
+        // Unique per attempt: a fixed name is a file two attempts — or two panel processes — both
+        // believe they own, so one moves the other's half-written render into place. The .tmp
+        // suffix stays because Traefik's file provider ignores extensions it does not know.
+        var tmp = Path.Combine(staging, $"{Guid.NewGuid():N}.tmp");
 
         try
         {
+            Directory.CreateDirectory(staging);
             await File.WriteAllTextAsync(tmp, Render(enabled), ct);
             if (File.Exists(target)) File.Copy(target, backup, overwrite: true);
             File.Move(tmp, target, overwrite: true);
-            logger.LogInformation("Applied Traefik dynamic config with {Count} route(s).", enabled.Count);
+            logger.LogInformation(
+                "Applied Traefik dynamic config with {Count} route(s) across the platform.", enabled.Count);
             return new ProxyApplyResult(true, null, false);
         }
         catch (Exception ex)
