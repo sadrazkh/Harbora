@@ -78,6 +78,18 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// </summary>
     public CancellationTokenSource? DeadlineFiresWhenTheWorkBegins { get; set; }
 
+    /// <summary>
+    /// Cancelled the instant a container has been started.
+    ///
+    /// <para>
+    /// The other one fires while the deploy still owns nothing on the node. This one fires in the
+    /// window that comes after — the build and the pull have eaten the budget, a container is
+    /// running, and the clock runs out during the health check. That window is the only one in which
+    /// giving up can LEAVE something behind, so it is the one the cleanup guarantees are about.
+    /// </para>
+    /// </summary>
+    public CancellationTokenSource? DeadlineFiresOnceTheContainerIsUp { get; set; }
+
     // ---- assertions helpers ----
 
     public IReadOnlyList<string> OperationsOn(string target) =>
@@ -194,6 +206,11 @@ public sealed class FakeDockerEngine : IDockerEngine
                 id, request.ContainerName, request.Image, StartedContainerState, StartedContainerStatus,
                 request.Labels.ToDictionary(kv => kv.Key, kv => kv.Value));
         RunRequests.Add(request);
+
+        // After the container exists, not before: a deadline that fires here leaves something on the
+        // node, which is the whole point of firing it here.
+        DeadlineFiresOnceTheContainerIsUp?.Cancel();
+
         return Task.FromResult(id);
     }
 
@@ -208,6 +225,11 @@ public sealed class FakeDockerEngine : IDockerEngine
 
     public Task RemoveContainerAsync(string containerId, bool force, CancellationToken ct)
     {
+        // A real daemon is reached over a socket, so a cancelled token means the call never lands.
+        // This fake used to answer anyway, and that is what let a cleanup path pass its dead token
+        // to the engine and still look like it had cleaned up.
+        ct.ThrowIfCancellationRequested();
+
         var name = NameOf(containerId);
         Record(nameof(RemoveContainerAsync), name);
         if (UnremovableContainers.Contains(name))
@@ -230,6 +252,10 @@ public sealed class FakeDockerEngine : IDockerEngine
 
     public Task<IReadOnlyList<ContainerInfo>> ListContainersAsync(string? labelFilter, CancellationToken ct)
     {
+        // Same as RemoveContainerAsync: an HTTP round-trip to the daemon, and a cancelled token
+        // means it never happened. Cleanup that lists before it removes has to be watched failing.
+        ct.ThrowIfCancellationRequested();
+
         // Deliberately NOT recorded: listing is a query the pipeline makes repeatedly while polling
         // for health, and it would drown the ordering assertions in noise.
         IReadOnlyList<ContainerInfo> snapshot = _containers.Values

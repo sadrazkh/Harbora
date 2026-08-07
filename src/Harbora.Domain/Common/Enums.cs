@@ -158,6 +158,24 @@ public enum ServiceStatus
     Failed = 3
 }
 
+/// <summary>
+/// <b>These numbers are hashed and stored, not just stored.</b>
+///
+/// <para>
+/// Enum wire values are frozen platform-wide, and this one has a second reason on top of the usual
+/// column round-trip: <c>BackupRunIdentity.ExclusionKeyFor</c> hashes <c>(int)type</c> together with
+/// the target reference, and the resulting <c>Guid</c> is persisted in <c>Job.ExclusiveWith</c> — the
+/// value the queue compares to decide that two backups of one target must not run at the same time.
+/// </para>
+/// <para>
+/// So inserting a member in the middle, or reordering these, does not merely mislabel existing rows.
+/// It changes what every <c>Pending</c> backup job in the database is exclusive WITH: a queued row
+/// keeps the key computed from the old number, the process that dequeues it computes the new one,
+/// and the two no longer collide. The guard does not fail loudly — it stops matching, and two
+/// snapshots of one target run beside each other, which is the failure the key exists to prevent.
+/// Append only.
+/// </para>
+/// </summary>
 public enum BackupType
 {
     Database = 0,

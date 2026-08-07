@@ -317,6 +317,15 @@ public class ProxyCutoverTests
         h.Docker.OperationsOn(h.ContainerFor(1)).Should().NotContain("RemoveContainerAsync",
             "the container is untouched — the cutover retires nothing until after this step");
         h.Proxy.ApplyCount.Should().Be(2, "the routing this deployment published is published back");
+        // Applications is cumulative, and it is asked FIRST because the assertion below cannot
+        // reach this fact. The premise of this whole test — of this whole path — is that the apply
+        // SUCCEEDED and verification then failed, so the live config named the new container before
+        // anything put it back. An empty live config is equally what a deployment that never
+        // applied at all would leave, and the old assertion (ApplyCount == 1) ruled that out for
+        // free. It does not any more, so the ordering is pinned here in its own right: reverse the
+        // two steps and the revert would be undoing something that was never done.
+        h.Proxy.Applications.Should().Contain(a => a.TargetService == h.ContainerFor(2),
+            "verification runs against routing this deployment had already published");
         h.Proxy.Live.Should().BeEmpty(
             "nothing may still name the container this failure is about to remove");
     }

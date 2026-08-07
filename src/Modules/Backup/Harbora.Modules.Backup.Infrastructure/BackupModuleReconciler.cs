@@ -302,7 +302,36 @@ public sealed class BackupModuleReconciler(
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
     public Task StoppedAsync(CancellationToken ct) => Task.CompletedTask;
 
-    public void Dispose() => _stopping.Dispose();
+    /// <summary>
+    /// Disposes the source only once the sweep that holds its token is over.
+    ///
+    /// <para>
+    /// The sweep is detached (see <see cref="StartedAsync"/>) and the host does not wait for it, so
+    /// by the time the container disposes this singleton — after <c>StoppedAsync</c> — the sweep may
+    /// still be running with <c>_stopping.Token</c> in hand. Disposing underneath it used to be safe
+    /// by accident: <see cref="SweepAsync"/> only ever reads
+    /// <see cref="CancellationToken.IsCancellationRequested"/>, which is one of the few members that
+    /// keeps working on a disposed source.
+    /// </para>
+    /// <para>
+    /// That is not a property worth resting on, because the token does not stop there. It is handed
+    /// to <see cref="RecordWhatIsStillThereAsync"/>, whose query already passes it to EF — and any
+    /// token consumer that REGISTERS a callback (<c>CancellationToken.Register</c>,
+    /// <c>WaitHandle</c>, and therefore <c>Task.Delay</c>, <c>SemaphoreSlim.WaitAsync</c> and the
+    /// database drivers that use them) throws <c>ObjectDisposedException</c> instead. The write-back
+    /// that records which staged copies were removed would then be lost on every shutdown that
+    /// caught a sweep in progress, quietly, in a task nobody awaits.
+    /// </para>
+    /// <para>
+    /// So the dependency is removed rather than documented. A source that is skipped here is
+    /// ordinary garbage — no timer, no wait handle has ever been taken from it, nothing linked to
+    /// it — and this runs as the process is going down in any case.
+    /// </para>
+    /// </summary>
+    public void Dispose()
+    {
+        if (StagingSwept.IsCompleted) _stopping.Dispose();
+    }
 
     /// <summary>
     /// <c>StagingPath</c> is the row's standing claim that a plaintext copy still exists at that

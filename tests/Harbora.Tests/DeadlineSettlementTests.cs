@@ -88,6 +88,108 @@ public class DeadlineSettlementTests
             "into a no-op that reports the abandoned id as if it were live");
     }
 
+    /// <summary>
+    /// The deadline fires while the container is up and the health check is running — the only
+    /// window in which giving up leaves something behind. The cleanup in the pipeline's catch is
+    /// what removes it, and it used to be handed the very token that had just been cancelled.
+    /// </summary>
+    [Fact]
+    public async Task A_deployment_the_deadline_kills_does_not_leave_its_container_running()
+    {
+        using var h = new PipelineHarness();
+        using var deadline = new CancellationTokenSource();
+        h.Docker.DeadlineFiresOnceTheContainerIsUp = deadline;
+
+        var deployment = h.QueueDeployment(number: 2);
+
+        await RunUntilTheDeadlineEndsIt(() =>
+            h.BuildPipeline().ExecuteAsync(deployment.Id, deadline.Token));
+
+        h.Docker.OperationsOn(h.ContainerFor(2)).Should().Contain("RemoveContainerAsync",
+            "the deployment is recorded Failed, so the container it started is a container nothing " +
+            "owns — still holding the app's memory, its volumes and its port on the node");
+        h.Docker.LiveContainerNames.Should().NotContain(h.ContainerFor(2));
+    }
+
+    /// <summary>
+    /// The half of the same leak that outlives the node's memory. The host-port range is per-node
+    /// and shared by every app on it, so one tenant's slow builds draining it stops every other
+    /// tenant deploying — one tenant's work freezing another's, which is what this phase exists to
+    /// stop.
+    /// </summary>
+    [Fact]
+    public async Task A_deployment_the_deadline_kills_gives_its_host_port_back()
+    {
+        using var h = new PipelineHarness(localServer: false);
+        using var deadline = new CancellationTokenSource();
+        h.Docker.DeadlineFiresOnceTheContainerIsUp = deadline;
+
+        var deployment = h.QueueDeployment(number: 2);
+
+        await RunUntilTheDeadlineEndsIt(() =>
+            h.BuildPipeline().ExecuteAsync(deployment.Id, deadline.Token));
+
+        h.Db.HostPortAllocations.Should().BeEmpty(
+            "a reservation held by a deployment that is over is a port this node never gets back " +
+            "until it is restarted, and the range is shared with every other app on it");
+    }
+
+    // --- what a person watching is told ------------------------------------------------------------
+
+    /// <summary>
+    /// The durable row is truthful after the last wave, so the deployment page is right on reload.
+    /// The deploy log is not reloaded — it is streamed, and it simply stopped mid-build, which reads
+    /// as "still going". A job the clock killed recording the truth in the database and telling
+    /// nobody is the exact failure the deadline work exists to make visible.
+    /// </summary>
+    [Fact]
+    public async Task The_deploy_log_of_a_deployment_the_deadline_killed_ends_by_saying_it_failed()
+    {
+        using var h = new PipelineHarness();
+        using var deadline = new CancellationTokenSource();
+        h.Docker.PullNeverFinishes = true;
+        h.Docker.DeadlineFiresWhenTheWorkBegins = deadline;
+
+        var deployment = h.QueueDeployment();
+
+        await RunUntilTheDeadlineEndsIt(() =>
+            h.BuildPipeline().ExecuteAsync(deployment.Id, deadline.Token));
+
+        // Persisted, not merely streamed: nobody is watching a build at the moment its deadline
+        // fires, so the line that matters is the one still there when they open the page.
+        var stored = await h.Db.DeploymentLogs.AsNoTracking()
+            .Where(l => l.DeploymentId == deployment.Id)
+            .OrderBy(l => l.Sequence).ToListAsync();
+
+        stored.Should().NotBeEmpty();
+        stored[^1].Message.Should().Contain("❌ Deployment failed",
+            "a log that stops mid-build reads as a build still running");
+
+        h.Stream.Lines.Should().Contain(l => l.Contains("❌ Deployment failed"),
+            "and anyone who did have the page open is told without refreshing it");
+        h.Stream.Statuses.Should().EndWith([DeploymentStatus.Failed],
+            "the status the page is bound to has to move too, or the spinner never stops");
+    }
+
+    [Fact]
+    public async Task A_deployment_the_deadline_killed_still_raises_the_deploy_failed_alert()
+    {
+        // The one surface that reaches somebody who is not looking at the panel at all.
+        using var h = new PipelineHarness();
+        using var deadline = new CancellationTokenSource();
+        h.Docker.PullNeverFinishes = true;
+        h.Docker.DeadlineFiresWhenTheWorkBegins = deadline;
+
+        var deployment = h.QueueDeployment();
+
+        await RunUntilTheDeadlineEndsIt(() =>
+            h.BuildPipeline().ExecuteAsync(deployment.Id, deadline.Token));
+
+        var alert = h.Notifications.Notifications.Should().ContainSingle().Subject;
+        alert.Event.Should().Be(AlertEvent.DeployFailed);
+        alert.Severity.Should().Be(AlertSeverity.Critical);
+    }
+
     // --- backups ----------------------------------------------------------------------------------
 
     [Fact]

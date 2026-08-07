@@ -129,11 +129,28 @@ public sealed class AdminerService(
             // find out with, and then to publish again: the config may well have been written with
             // this route in it, and a router naming a container that is being removed here is a
             // 502 waiting for whoever else applies next.
+            //
+            // None of the withdrawal takes `ct`, for the reason DeploymentPipeline's failure path
+            // gives at length: this is not more of the work, it is the undoing of work that has
+            // already stopped, and `ct` here is a WEB REQUEST's token — cancelled by the operator
+            // navigating away, which is an entirely ordinary thing to do while a proxy apply is
+            // being waited on. Under it the save threw first and everything after it was skipped,
+            // so what survived was the worst possible state: an ENABLED route row publishing a
+            // basic-auth host that names a throwaway container nobody started, or one this block
+            // was about to remove. Every other caller on the platform re-applies from those rows —
+            // RoutesController, AppsController, AppOperationsService, the deployment pipeline — so
+            // the next unrelated route change anywhere publishes it, and the hourly sweep never
+            // clears it either, because the sweep is driven by the containers it finds and there is
+            // no container.
             db.Routes.Remove(route);
-            await db.SaveChangesAsync(ct);
-            try { await docker.RemoveContainerAsync(container, force: true, ct); } catch { }
-            try { await proxy.ApplyAllAsync(service.WorkspaceId, ct); }
-            catch (Exception e) when (e is not OperationCanceledException)
+            await db.SaveChangesAsync(CancellationToken.None);
+            try { await docker.RemoveContainerAsync(container, force: true, CancellationToken.None); } catch { }
+            try { await proxy.ApplyAllAsync(service.WorkspaceId, CancellationToken.None); }
+            // Unqualified: a cancellation escaping here would replace a refusal this method has
+            // already established and can state in words with an exception the caller has to guess
+            // at — after the container has been removed and the route withdrawn, so the refusal is
+            // the only accurate description of what happened.
+            catch (Exception e)
             {
                 logger.LogWarning(e, "Could not withdraw the admin tool's route after a failed apply.");
             }

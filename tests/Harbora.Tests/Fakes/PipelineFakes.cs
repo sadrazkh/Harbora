@@ -5,7 +5,17 @@ using Harbora.Domain.Networking;
 
 namespace Harbora.Tests.Fakes;
 
-/// <summary>Records the status transitions the pipeline published, in order.</summary>
+/// <summary>
+/// Records the status transitions the pipeline published, in order.
+///
+/// <para>
+/// Both methods refuse a cancelled token, because the real one does:
+/// <c>SignalRDeploymentLogStream</c> hands it straight to <c>IHubClients.SendAsync</c>, which
+/// throws. A fake that published anyway could not show the guarantee this stream exists for — that
+/// what a person is watching keeps being told the truth after the clock has killed the job — and
+/// for a while it did not, which is how a deadline came to end a deployment in silence.
+/// </para>
+/// </summary>
 public sealed class RecordingLogStream : IDeploymentLogStream
 {
     private readonly List<string> _lines = [];
@@ -17,12 +27,14 @@ public sealed class RecordingLogStream : IDeploymentLogStream
 
     public Task PublishLogAsync(Guid deploymentId, LogStream stream, string line, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         lock (_gate) _lines.Add(line);
         return Task.CompletedTask;
     }
 
     public Task PublishStatusAsync(Guid deploymentId, DeploymentStatus status, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         lock (_gate) _statuses.Add(status);
         return Task.CompletedTask;
     }
@@ -123,8 +135,15 @@ public sealed class RecordingNotificationService : INotificationService
 
     public List<Sent> Notifications { get; } = [];
 
+    /// <summary>
+    /// Refuses a cancelled token, like the real <c>NotificationService</c>: it queries the
+    /// workspace's alert rules and posts to Discord/Telegram/a webhook with the token it was given,
+    /// so a dead one delivers nothing. A fake that recorded the alert anyway would report a
+    /// notification nobody received.
+    /// </summary>
     public Task NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Notifications.Add(new Sent(evt, severity, title, body));
         return Task.CompletedTask;
     }

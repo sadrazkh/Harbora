@@ -93,8 +93,23 @@ public sealed class DeploymentPipeline(
             await stream.PublishLogAsync(deploymentId, s, clean, ct);
         }
 
-        // Pipeline-thread logging only.
-        async Task Log(LogStream s, string message)
+        // Pipeline-thread logging only. Part of the work, so it takes the work's token: a line
+        // written while the deployment is still running is one more thing a cancelled deployment
+        // has no reason to be doing.
+        Task Log(LogStream s, string message) => Append(s, message, ct);
+
+        // The same line, written once there is nothing left to cancel.
+        //
+        // Only the failure path uses this, and only after it has stopped the work — see the catch
+        // below. The distinction is the one JobWorker.SettleAsync and BackupSnapshotService already
+        // draw: doing more WORK under a cancelled token is wrong, and recording what has ALREADY
+        // happened under one is the whole reason the record exists. Deliberately not applied to
+        // Log itself: on every other path the token is live, so the two are the same call, and a
+        // pipeline whose logging silently outlived its own cancellation would be a different and
+        // worse thing than the bug this fixes.
+        Task Record(LogStream s, string message) => Append(s, message, CancellationToken.None);
+
+        async Task Append(LogStream s, string message, CancellationToken publishOn)
         {
             var clean = LogText.Clean(redactor.Redact(message, secrets));
             DrainEngineLogs();
@@ -103,7 +118,7 @@ public sealed class DeploymentPipeline(
                 DeploymentId = deploymentId, Stream = s, Sequence = seq++,
                 Message = clean, Timestamp = clock.UtcNow
             });
-            await stream.PublishLogAsync(deploymentId, s, clean, ct);
+            await stream.PublishLogAsync(deploymentId, s, clean, publishOn);
         }
 
         // All status changes go through the state machine (ADR-004): illegal transitions throw,
@@ -377,12 +392,34 @@ public sealed class DeploymentPipeline(
         catch (Exception ex)
         {
             logger.LogError(ex, "Deployment {Id} failed.", deploymentId);
+
+            // NOTHING BELOW THIS LINE TAKES `ct`, and the reason is the same one for all of it.
+            //
+            // The commonest way to arrive here is that `ct` was cancelled: the job's own per-kind
+            // deadline, which fires while the pipeline is inside a build, a pull or a health check.
+            // Everything from here on is cleanup and record-keeping for work that has already
+            // stopped — not more of the work — and passing it the token that stopped the work makes
+            // each step throw on its first await, which also skips every step after it. That is one
+            // `catch` block failing five different ways from a single cause.
+            //
+            // The line between the two is the one JobWorker.SettleAsync (:281) and
+            // BackupSnapshotService (:279) already draw, and it is drawn at the `catch` rather than
+            // inside any of the helpers: above it, a cancelled token must stop the deployment
+            // dead — and still does, at every await in the `try`. Below it there is no deployment
+            // left to stop, only what it left behind and what it owes the person who asked for it.
+
             // Zero-downtime guarantee: remove only the just-started (failed) container; the previous
-            // version — if any — keeps serving untouched.
-            await TryRemoveContainerByNameAsync(docker, DeploymentPlanning.ContainerName(app.Slug, deployment.Number), ct);
+            // version — if any — keeps serving untouched. TryRemoveContainerByNameAsync swallows
+            // everything ("never mask the original failure"), so on the cancelled token this looked
+            // exactly like a successful cleanup and left the container running.
+            await TryRemoveContainerByNameAsync(
+                docker, DeploymentPlanning.ContainerName(app.Slug, deployment.Number), CancellationToken.None);
             // The container is gone, so the port it reserved must go too — otherwise a node loses a
-            // port to every failed deploy until the range runs out.
-            try { await hostPorts.ReleaseAsync(app.ServerId, app.Id, deployment.Number, ct); }
+            // port to every failed deploy until the range runs out. The range is per-node and shared
+            // by every app on it, so one app's repeatedly-timing-out builds drain it for everybody
+            // else: one tenant's work freezing another's, which is the thing this phase exists to
+            // stop rather than to introduce.
+            try { await hostPorts.ReleaseAsync(app.ServerId, app.Id, deployment.Number, CancellationToken.None); }
             catch (Exception releaseError) { logger.LogWarning(releaseError, "Could not release the host port."); }
             // Failed is reachable from any in-flight state; guard against a double-terminal write.
             if (DeploymentStateMachine.IsInFlight(deployment.Status))
@@ -396,19 +433,30 @@ public sealed class DeploymentPipeline(
             deployment.ErrorMessage = reason;
             app.Status = app.ActiveDeploymentId is null ? AppStatus.Failed : AppStatus.Running;
             DrainEngineLogs();
-            // Not the token the work ran under: the commonest reason to be in this catch at all is
-            // that token being cancelled — the job's own deadline, which fires while the pipeline is
-            // still inside a build or a pull. Saving under it throws before the row is written, the
-            // transition above is dropped with the scope, and the deployment stays in flight for
-            // ever. QueueDeploymentAsync coalesces onto an in-flight deployment, so every later
-            // deploy of this app then returns the abandoned id and runs nothing. Recording the
-            // failure is not part of the cancelled work; it is what is owed once the work has
-            // stopped — the same reason JobWorker.SettleAsync settles on None.
+            // The durable half. Saving under the cancelled token threw before the row was written,
+            // the transition above was dropped with the scope, and the deployment stayed in flight
+            // for ever — and QueueDeploymentAsync coalesces onto an in-flight deployment, so every
+            // later deploy of this app returned the abandoned id and ran nothing.
             await db.SaveChangesAsync(CancellationToken.None);
-            await stream.PublishStatusAsync(deploymentId, DeploymentStatus.Failed, ct);
-            await Log(LogStream.System, $"❌ Deployment failed: {reason}");
+
+            // And the three surfaces a person actually watches, none of which that row reaches on
+            // its own. The status the deployment page is bound to; the last line of the deploy log;
+            // the alert that finds somebody who is not looking at the panel at all. On a fired
+            // deadline the first of these threw, which skipped the other two — so the log stopped
+            // mid-build, which reads as a build still running, and nobody was told anything. A job
+            // the clock killed recording the truth in the database and telling nobody is precisely
+            // the failure the deadline work exists to make visible.
+            await stream.PublishStatusAsync(deploymentId, DeploymentStatus.Failed, CancellationToken.None);
+            await Record(LogStream.System, $"❌ Deployment failed: {reason}");
+            // Record only ADDS the row; this is what makes it durable. Left to whatever ran next, it
+            // reached the database as a side effect of NotificationService writing a delivery
+            // attempt back on this same scoped context — so a workspace with no alert rule matching
+            // DeployFailed lost the one line that says why the deployment stopped, on every failure
+            // and not only on this one.
+            await db.SaveChangesAsync(CancellationToken.None);
+
             await notifications.NotifyAsync(app.WorkspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical,
-                $"Deploy failed: {app.Name} #{deployment.Number}", reason, ct);
+                $"Deploy failed: {app.Name} #{deployment.Number}", reason, CancellationToken.None);
         }
     }
 
