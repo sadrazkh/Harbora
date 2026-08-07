@@ -13,7 +13,9 @@ namespace Harbora.Infrastructure.Jobs;
 /// executing them any more, so they would sit Running forever and block the target's own recovery.
 ///
 /// Runs BEFORE <c>DeploymentReconciler</c> (registration order) so that by the time deployments are
-/// reconciled, no job claims to be running one.
+/// reconciled, no job claims to be running one. Both of them run before <c>JobStartupGateOpener</c>,
+/// which is what lets <see cref="JobWorker"/> start claiming — the worker is a
+/// <c>BackgroundService</c>, so registration order alone would not have held it back.
 /// </summary>
 public sealed class JobReconciler(
     IServiceScopeFactory scopeFactory,

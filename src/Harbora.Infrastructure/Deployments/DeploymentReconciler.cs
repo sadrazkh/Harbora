@@ -20,6 +20,8 @@ namespace Harbora.Infrastructure.Deployments;
 ///   • Building/Pushing/Deploying/HealthChecking → marked Failed ("interrupted by a restart"),
 ///     because a partially-built/started deployment cannot be safely resumed; the previously
 ///     running container (if any) keeps serving, so the app stays Running when it had one.
+///   • …and the queued job of anything failed above is settled Cancelled, because a shutdown that
+///     returned a job to Pending meant "resume this", and there is no longer anything to resume.
 /// Idempotent: terminal deployments are untouched, so running it again is a no-op.
 /// </summary>
 public sealed class DeploymentReconciler(
@@ -59,6 +61,7 @@ public sealed class DeploymentReconciler(
 
         var requeued = 0;
         var failed = 0;
+        var justFailed = new List<Guid>();
         foreach (var d in stranded)
         {
             if (d.Status == DeploymentStatus.Queued)
@@ -86,11 +89,47 @@ public sealed class DeploymentReconciler(
             d.ErrorMessage = "Interrupted by a platform restart before completion. Please redeploy.";
             if (d.App is not null)
                 d.App.Status = d.App.ActiveDeploymentId is null ? AppStatus.Failed : AppStatus.Running;
+            justFailed.Add(d.Id);
             failed++;
         }
 
+        var dropped = await SettleJobsOfAsync(db, justFailed, ct);
+
         await db.SaveChangesAsync(ct);
         logger.LogInformation(
-            "Reconciliation complete: {Requeued} re-queued, {Failed} marked failed.", requeued, failed);
+            "Reconciliation complete: {Requeued} re-queued, {Failed} marked failed, {Dropped} queued job(s) dropped.",
+            requeued, failed, dropped);
+    }
+
+    /// <summary>
+    /// Ends the queued work of deployments this pass has just failed. A graceful shutdown returns a
+    /// running job to Pending so the next start resumes it, which is right for work whose target
+    /// still has a future — and wrong for a deployment that has, a moment ago and in this same pass,
+    /// been declared over. Left alone the job would be claimed later and hand the pipeline a
+    /// terminal deployment; the deployment would then be recorded failed a second time, with a
+    /// message about an illegal transition rather than about the restart.
+    /// </summary>
+    private async Task<int> SettleJobsOfAsync(
+        HarboraDbContext db, List<Guid> deploymentIds, CancellationToken ct)
+    {
+        if (deploymentIds.Count == 0) return 0;
+
+        // Pending only. A Running row belongs to JobReconciler, which runs before this one; a
+        // terminal row is already settled and must never be rewritten.
+        var queued = await db.Jobs
+            .Where(j => j.Kind == JobKind.Deployment &&
+                        j.Status == JobStatus.Pending &&
+                        deploymentIds.Contains(j.TargetId))
+            .ToListAsync(ct);
+
+        foreach (var job in queued)
+        {
+            job.Status = JobStatus.Cancelled;
+            job.Error = "The deployment this job would have run was already settled by the restart.";
+            job.FinishedAt = clock.UtcNow;
+            job.ClaimStamp++;
+        }
+
+        return queued.Count;
     }
 }

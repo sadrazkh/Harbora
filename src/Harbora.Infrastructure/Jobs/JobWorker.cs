@@ -19,6 +19,7 @@ public class JobWorker(
     IServiceScopeFactory scopeFactory,
     IJobCancellationRegistry cancellations,
     JobSignal signal,
+    JobStartupGate startupGate,
     ISystemClock clock,
     ILogger<JobWorker> logger) : BackgroundService
 {
@@ -43,6 +44,18 @@ public class JobWorker(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("Harbora job worker {Worker} started.", _workerId);
+
+        // Nothing is claimed until the startup reconcilers have finished. This is a BackgroundService
+        // and they are not: their StartAsync runs to completion, while the host does not wait for
+        // this method at all — so without the gate the loop below would be claiming work at the same
+        // moment DeploymentReconciler was deciding that work is over. The token is what keeps a host
+        // that never finishes starting from waiting on a worker that is waiting on it.
+        try { await startupGate.WaitAsync(stoppingToken); }
+        catch (OperationCanceledException)
+        {
+            logger.LogInformation("Harbora job worker {Worker} stopped before startup finished.", _workerId);
+            return;
+        }
 
         while (!stoppingToken.IsCancellationRequested)
         {

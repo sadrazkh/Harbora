@@ -39,6 +39,21 @@ public sealed class DeploymentPipeline(
             .FirstOrDefaultAsync(d => d.Id == deploymentId, ct);
         if (deployment?.App is null) return;
 
+        // This deployment is already over — failed by a restart, or cancelled. Nothing here can add
+        // to it, and the first thing below would move it back to Building, which the state machine
+        // rightly refuses. That refusal used to be caught by this method's own failure path, which
+        // overwrote the real reason with "Illegal deployment transition Failed → Building" and
+        // alerted the operator a second time about a deployment that had already finished failing.
+        // JobStartupGate is what should stop a settled deployment ever arriving here; this is the
+        // second answer to the same question, for a duplicate dispatch from anywhere else.
+        if (DeploymentStateMachine.IsTerminal(deployment.Status))
+        {
+            logger.LogInformation(
+                "Deployment {Id} (#{Number}) is already {Status}; there is nothing left to run.",
+                deploymentId, deployment.Number, deployment.Status);
+            return;
+        }
+
         var app = await db.Apps
             .Include(a => a.EnvironmentVariables)
             .Include(a => a.Volumes)

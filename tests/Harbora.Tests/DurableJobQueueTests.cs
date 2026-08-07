@@ -1,7 +1,9 @@
 using FluentAssertions;
 using Harbora.Domain.Jobs;
+using Harbora.Infrastructure.Jobs;
 using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -483,6 +485,107 @@ public class DurableJobQueueTests
         job.Status.Should().Be(JobStatus.Pending, "the work was never done, so it must be resumed after restart");
         job.FinishedAt.Should().BeNull();
         job.ClaimedBy.Should().BeNull("a released claim must not look like it is still owned");
+    }
+
+    // ---- the startup gate ----
+
+    [Fact]
+    public async Task The_worker_claims_nothing_until_startup_reconciliation_has_finished()
+    {
+        // The race this closes: the reconcilers are hosted services whose StartAsync runs to
+        // completion, but the worker is a BackgroundService whose StartAsync returns at its first
+        // await — so its claim loop used to run alongside DeploymentReconciler, and could re-dispatch
+        // a deployment the reconciler was in the middle of marking Failed.
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        await h.Queue().EnqueueAsync(JobKind.Deployment, target);
+
+        var worker = h.Worker();
+        await worker.StartAsync(default);
+
+        // Wait for the worker to reach the queue rather than sleeping and hoping it did not: taking
+        // a database scope is the first step of a claim, so this task completes the instant the loop
+        // gets there. It must not, and the bound is only so a regression fails this test instead of
+        // hanging it — an ungated loop reaches the queue in microseconds.
+        var wentToTheQueue = await Task.WhenAny(h.ClaimAttempted, Task.Delay(TimeSpan.FromMilliseconds(500)));
+        wentToTheQueue.Should().NotBeSameAs(h.ClaimAttempted,
+            "the reconcilers have not finished deciding what this work means");
+        h.Handler.Executed.Should().BeEmpty();
+        h.JobFor(target)!.Status.Should().Be(JobStatus.Pending);
+
+        h.Gate.Open();
+
+        await h.Handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await worker.StopAsync(default);
+
+        h.Handler.Executed.Should().ContainSingle().Which.TargetId.Should().Be(target,
+            "once startup is over the queue drains exactly as before");
+        // The ordering itself, recorded as it happened rather than sampled: whatever the scheduler
+        // did with the two threads, no claim may have started before the gate opened.
+        h.ScopesTakenBeforeTheGateOpened.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Waiting_at_the_gate_ends_when_the_host_stops_even_if_it_never_opens()
+    {
+        // The property the whole design turns on. A gate that could only be released by Open() would
+        // turn a startup that fails part-way — or a host stopped while it was still starting — into a
+        // shutdown that never finishes, because stopping a BackgroundService means waiting for
+        // ExecuteAsync to return.
+        var gate = new JobStartupGate();
+        using var stopping = new CancellationTokenSource();
+        var waiting = gate.WaitAsync(stopping.Token);
+
+        await stopping.CancelAsync();
+
+        var ended = await Record.ExceptionAsync(() => waiting.WaitAsync(TimeSpan.FromSeconds(5)));
+        ended.Should().BeAssignableTo<OperationCanceledException>(
+            "the wait has to end when the host stops, not only when the gate opens");
+        gate.IsOpen.Should().BeFalse("nothing opened it — the waiter left of its own accord");
+    }
+
+    [Fact]
+    public async Task A_worker_stopped_before_the_gate_opens_leaves_instead_of_waiting()
+    {
+        using var h = new JobHarness();
+        var worker = h.Worker();
+        await worker.StartAsync(default);
+        await worker.LoopEntered.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await worker.StopAsync(default).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Not just "StopAsync returned": the loop itself must be finished, or the host is holding a
+        // thread at a gate nobody is ever going to open. This is what makes the worker pass its own
+        // stopping token to the gate rather than waiting unconditionally.
+        worker.ExecuteTask!.IsCompleted.Should().BeTrue("the worker has to leave when it is told to");
+        h.Gate.IsOpen.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Nothing_is_left_waiting_at_a_gate_the_host_will_never_open()
+    {
+        // The opener is a hosted service registered after the reconcilers. A host that fails part-way
+        // through startup never reaches its StartAsync — but every hosted service is still stopped,
+        // so opening here is what guarantees no waiter outlives the host.
+        var gate = new JobStartupGate();
+        var opener = new JobStartupGateOpener(gate, NullLogger<JobStartupGateOpener>.Instance);
+
+        await opener.StopAsync(default);
+
+        gate.IsOpen.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task The_gate_opens_when_the_startup_services_before_it_have_run()
+    {
+        var gate = new JobStartupGate();
+        var opener = new JobStartupGateOpener(gate, NullLogger<JobStartupGateOpener>.Instance);
+        gate.IsOpen.Should().BeFalse("a gate that starts open is not a gate");
+
+        await opener.StartAsync(default);
+
+        gate.IsOpen.Should().BeTrue();
+        await gate.WaitAsync(default);
     }
 
     // ---- reconciliation ----

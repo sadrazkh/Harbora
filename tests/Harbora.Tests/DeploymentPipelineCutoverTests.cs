@@ -516,4 +516,49 @@ public class DeploymentPipelineCutoverTests
         result.Status.Should().Be(DeploymentStatus.Succeeded);
         h.Proxy.ApplyCount.Should().Be(0, "there is nothing to route yet");
     }
+
+    // ---- work that is already over ----
+
+    [Fact]
+    public async Task A_deployment_a_restart_already_failed_is_not_run_a_second_time()
+    {
+        // Defence in depth behind JobStartupGate. If a settled deployment ever reaches the pipeline
+        // — a duplicate dispatch, a job another instance claimed — the first thing it did was move
+        // the row to Building, which the state machine rightly refuses. The refusal was then caught
+        // by the pipeline's own failure path, which overwrote the restart's message with "Illegal
+        // deployment transition Failed → Building" and alerted the operator a second time about a
+        // deployment that had already finished failing.
+        using var h = new PipelineHarness();
+        var deployment = h.QueueDeployment(number: 1);
+        const string reason = "Interrupted by a platform restart before completion. Please redeploy.";
+        deployment.Status = DeploymentStatus.Failed;
+        deployment.ErrorMessage = reason;
+        deployment.FinishedAt = h.Clock.UtcNow;
+        h.Db.SaveChanges();
+
+        var result = await h.RunAsync(deployment);
+
+        result.Status.Should().Be(DeploymentStatus.Failed);
+        result.ErrorMessage.Should().Be(reason, "the account of why it failed is the restart's, and stands");
+        h.Docker.Calls.Should().BeEmpty("a settled deployment has no work left to do");
+        h.Notifications.Notifications.Should().BeEmpty("the operator was already told, once");
+        h.Db.DeploymentLogs.Count(l => l.DeploymentId == deployment.Id).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_deployment_someone_cancelled_is_not_run_either()
+    {
+        using var h = new PipelineHarness();
+        var deployment = h.QueueDeployment(number: 1);
+        deployment.Status = DeploymentStatus.Cancelled;
+        deployment.FinishedAt = h.Clock.UtcNow;
+        h.Db.SaveChanges();
+
+        var result = await h.RunAsync(deployment);
+
+        result.Status.Should().Be(DeploymentStatus.Cancelled, "a cancelled deploy that then runs is a lie");
+        result.ErrorMessage.Should().BeNull("nothing failed here — it was called off");
+        h.Docker.Calls.Should().BeEmpty();
+        h.Notifications.Notifications.Should().BeEmpty();
+    }
 }

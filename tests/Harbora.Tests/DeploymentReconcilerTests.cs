@@ -6,6 +6,7 @@ using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Jobs;
 using Harbora.Infrastructure.Deployments;
+using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -138,5 +139,95 @@ public class DeploymentReconcilerTests
         using var verify = sp.CreateScope();
         verify.ServiceProvider.GetRequiredService<HarboraDbContext>()
             .Jobs.Count(j => j.TargetId == deploymentId).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task The_queued_job_of_a_deployment_the_restart_failed_is_settled_too()
+    {
+        // A graceful shutdown returns a running job to Pending so the next start resumes it. When
+        // the deployment it points at has meanwhile been failed by this reconciler, resuming it
+        // means dispatching work whose target is already over — so the job has to be settled here,
+        // where the decision to end the deployment is made.
+        var sp = BuildProvider("recon-jobs-" + Guid.NewGuid());
+        var appId = Guid.NewGuid();
+        var failedId = Guid.NewGuid();
+        var otherId = Guid.NewGuid();
+        using (var scope = sp.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+            db.Apps.Add(new App { Id = appId, Name = "x", Slug = "x", Status = AppStatus.Deploying });
+            db.Deployments.Add(new Deployment { Id = failedId, AppId = appId, Number = 1, Status = DeploymentStatus.Building });
+            db.Jobs.AddRange(
+                new Job { Kind = JobKind.Deployment, TargetId = failedId, Status = JobStatus.Pending, Attempts = 1 },
+                // Someone else's work, and a finished attempt at this one: neither may be rewritten.
+                new Job { Kind = JobKind.Deployment, TargetId = otherId, Status = JobStatus.Pending },
+                new Job { Kind = JobKind.Backup, TargetId = failedId, Status = JobStatus.Pending });
+            await db.SaveChangesAsync();
+        }
+
+        var reconciler = new DeploymentReconciler(
+            sp.GetRequiredService<IServiceScopeFactory>(), new FixedClock(),
+            NullLogger<DeploymentReconciler>.Instance);
+        await reconciler.ReconcileAsync(default);
+
+        using var verify = sp.CreateScope();
+        var verifyDb = verify.ServiceProvider.GetRequiredService<HarboraDbContext>();
+
+        var settled = verifyDb.Jobs.Single(j => j.Kind == JobKind.Deployment && j.TargetId == failedId);
+        settled.Status.Should().Be(JobStatus.Cancelled, "there is nothing left for it to deploy");
+        settled.Error.Should().Contain("restart");
+        settled.FinishedAt.Should().NotBeNull();
+
+        verifyDb.Jobs.Single(j => j.TargetId == otherId).Status.Should().Be(JobStatus.Pending,
+            "another deployment's job is none of this deployment's business");
+        verifyDb.Jobs.Single(j => j.Kind == JobKind.Backup).Status.Should().Be(JobStatus.Pending,
+            "a backup of the same id is a different kind of work entirely");
+    }
+
+    [Fact]
+    public async Task A_deployment_the_restart_failed_is_never_dispatched_again()
+    {
+        // The whole incident in one test: the panel is restarted mid-deployment, the reconcilers
+        // run, and the worker then finds nothing left to claim — so the deployment is failed once,
+        // by the restart, with the message the restart wrote.
+        using var h = new JobHarness();
+        var appId = Guid.NewGuid();
+        var deploymentId = Guid.NewGuid();
+        using (var db = h.NewDb())
+        {
+            db.Apps.Add(new App { Id = appId, Name = "x", Slug = "x", Status = AppStatus.Deploying });
+            db.Deployments.Add(new Deployment { Id = deploymentId, AppId = appId, Number = 3, Status = DeploymentStatus.Building });
+            db.Jobs.Add(new Job { Kind = JobKind.Deployment, TargetId = deploymentId, Status = JobStatus.Pending, Attempts = 1 });
+            await db.SaveChangesAsync();
+        }
+
+        await new DeploymentReconciler(h.Scopes, h.Clock, NullLogger<DeploymentReconciler>.Instance)
+            .ReconcileAsync(default);
+
+        (await h.Worker().RunNextAsync(default)).Should().BeFalse("the queue has nothing claimable left");
+        h.Handler.Executed.Should().BeEmpty();
+
+        using var verify = h.NewDb();
+        var deployment = verify.Deployments.Single(d => d.Id == deploymentId);
+        deployment.Status.Should().Be(DeploymentStatus.Failed);
+        deployment.ErrorMessage.Should().Contain("restart",
+            "one terminal transition, with the reason the restart gave — not a second, confusing one");
+    }
+
+    [Fact]
+    public async Task Reconciliation_that_fails_still_lets_startup_carry_on()
+    {
+        // JobStartupGate is opened by a hosted service registered after this one, so the worker only
+        // ever starts if StartAsync returns. A reconciler that let an exception escape would leave
+        // the platform running and deploying nothing at all — worse than the race the gate closes.
+        var sp = BuildProvider("recon-throws-" + Guid.NewGuid());
+        var reconciler = new DeploymentReconciler(
+            sp.GetRequiredService<IServiceScopeFactory>(), new FixedClock(),
+            NullLogger<DeploymentReconciler>.Instance);
+        await sp.DisposeAsync();
+
+        var start = () => reconciler.StartAsync(default);
+
+        await start.Should().NotThrowAsync("startup must survive a reconciler that cannot read the database");
     }
 }

@@ -94,6 +94,10 @@ public static class DependencyInjection
         // database rather than losing whatever was in memory.
         services.AddSingleton<IJobCancellationRegistry, JobCancellationRegistry>();
         services.AddSingleton<JobSignal>();
+        // Holds the worker's claim loop until every startup reconciler below has finished. The
+        // worker is a BackgroundService, so its StartAsync returns immediately and it would
+        // otherwise be claiming work while the reconcilers are still deciding what that work means.
+        services.AddSingleton<JobStartupGate>();
         services.AddScoped<IJobQueue, DatabaseJobQueue>();
         // Settles jobs orphaned by a crash BEFORE deployments are reconciled — order matters.
         services.AddHostedService<JobReconciler>();
@@ -113,6 +117,9 @@ public static class DependencyInjection
         services.AddHostedService<Deployments.CronRunner>();
         // Crash recovery: reconcile in-flight deployments on startup (ADR-005).
         services.AddHostedService<Deployments.DeploymentReconciler>();
+        // Lets the job worker start claiming. Hosted services start in registration order, so this
+        // line MUST stay below every startup reconciler above it — that is the whole guarantee.
+        services.AddHostedService<JobStartupGateOpener>();
 
         // Managed services (databases/caches). Concrete type is registered too so background
         // jobs can resolve ProvisionAsync directly.

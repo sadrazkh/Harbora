@@ -23,14 +23,37 @@ public sealed class JobHarness : IDisposable
     public JobCancellationRegistry Cancellations { get; } = new();
     public StubJobHandler Handler { get; } = new();
 
+    /// <summary>
+    /// Closed, exactly as it is when the host starts. A test that drives the worker's loop has to
+    /// open it; one that drives <c>RunNextAsync</c> directly is past the gate already.
+    /// </summary>
+    public JobStartupGate Gate { get; } = new();
+
+    private readonly CountingScopeFactory _scopes;
+
     public JobHarness()
     {
         var services = new ServiceCollection();
         services.AddDbContext<HarboraDbContext>(o => o.UseInMemoryDatabase(_dbName));
         _provider = services.BuildServiceProvider();
+        _scopes = new CountingScopeFactory(
+            _provider.GetRequiredService<IServiceScopeFactory>(), () => Gate.IsOpen);
     }
 
-    public IServiceScopeFactory Scopes => _provider.GetRequiredService<IServiceScopeFactory>();
+    public IServiceScopeFactory Scopes => _scopes;
+
+    /// <summary>
+    /// Completes the first time anything reaches for a database scope. Claiming takes one as its
+    /// very first act, so a test can wait for the worker's attempt to reach the queue instead of
+    /// guessing how long to give it.
+    /// </summary>
+    public Task ClaimAttempted => _scopes.FirstScope;
+
+    /// <summary>
+    /// How many scopes were taken while <see cref="Gate"/> was still closed. Zero is the guarantee:
+    /// nothing may go near the queue until startup reconciliation has finished.
+    /// </summary>
+    public int ScopesTakenBeforeTheGateOpened => _scopes.CreatedBeforeTheGateOpened;
 
     /// <summary>A fresh context — the worker writes through its own scopes, so never share one.</summary>
     public HarboraDbContext NewDb() => new(
@@ -43,7 +66,7 @@ public sealed class JobHarness : IDisposable
     /// deadline a test can actually reach — the real ones are quarter-hours and upwards.
     /// </summary>
     public TestableJobWorker Worker(TimeSpan? timeout = null) =>
-        new(Scopes, Cancellations, Signal, Clock, Handler, timeout);
+        new(Scopes, Cancellations, Signal, Gate, Clock, Handler, timeout);
 
     public JobReconciler Reconciler() => new(Scopes, Clock, NullLogger<JobReconciler>.Instance);
 
@@ -61,6 +84,29 @@ public sealed class JobHarness : IDisposable
     }
 
     public void Dispose() => _provider.Dispose();
+}
+
+/// <summary>
+/// Watches for scopes being taken; otherwise the real factory, unchanged. Taking a scope is the
+/// first observable step of a claim, which makes "the worker went to the queue" — and, crucially,
+/// *when* it went — something a test can assert on rather than infer from timing.
+/// </summary>
+internal sealed class CountingScopeFactory(IServiceScopeFactory inner, Func<bool> gateIsOpen)
+    : IServiceScopeFactory
+{
+    private int _beforeTheGateOpened;
+    private readonly TaskCompletionSource _first = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public int CreatedBeforeTheGateOpened => Volatile.Read(ref _beforeTheGateOpened);
+
+    public Task FirstScope => _first.Task;
+
+    public IServiceScope CreateScope()
+    {
+        if (!gateIsOpen()) Interlocked.Increment(ref _beforeTheGateOpened);
+        _first.TrySetResult();
+        return inner.CreateScope();
+    }
 }
 
 /// <summary>Stands in for the real engines so the queue can be exercised on its own.</summary>
@@ -138,11 +184,28 @@ public sealed class TestableJobWorker(
     IServiceScopeFactory scopes,
     IJobCancellationRegistry cancellations,
     JobSignal signal,
+    JobStartupGate startupGate,
     ISystemClock clock,
     StubJobHandler handler,
     TimeSpan? timeout = null)
-    : JobWorker(scopes, cancellations, signal, clock, NullLogger<JobWorker>.Instance)
+    : JobWorker(scopes, cancellations, signal, startupGate, clock, NullLogger<JobWorker>.Instance)
 {
+    private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// Completes once the loop has actually begun. The host starts a <c>BackgroundService</c>'s
+    /// <c>ExecuteAsync</c> on the thread pool under the stopping token, so a worker stopped straight
+    /// after <c>StartAsync</c> frequently never enters it at all — and a test about what the loop
+    /// does when it is stopped has to know that it is running first.
+    /// </summary>
+    public Task LoopEntered => _entered.Task;
+
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _entered.TrySetResult();
+        return base.ExecuteAsync(stoppingToken);
+    }
+
     protected override Task DispatchAsync(Job job, IServiceProvider scope, CancellationToken ct)
         => handler.ExecuteAsync(job, ct);
 
