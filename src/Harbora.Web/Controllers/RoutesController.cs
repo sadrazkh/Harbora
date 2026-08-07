@@ -93,7 +93,12 @@ public sealed class RoutesController(
             });
         }
 
-        // Validate before touching the DB so a bad config never persists.
+        // Validate before touching the DB so a bad config never persists — every row in the list,
+        // including the ones whose Enabled box is cleared. A disabled route was exempt here, on the
+        // reasoning that it serves nothing; what it does instead is wait. The deployment that owns
+        // its host switches it on, setting the upstream and IsEnabled and never looking at the
+        // fields it did not write, and the row is then live and unservable, having been checked by
+        // nobody at any point. This is the only gate it passes through.
         var validation = proxy.Validate(routes.Select(d => d.ToTransientEntity()).ToList());
         if (!validation.IsValid)
             return Json(new { saved = false, validation = new { validation.IsValid, validation.Errors, validation.Warnings } });

@@ -123,12 +123,23 @@ public sealed class AdminerService(
 
         if (!applied.Success)
         {
-            // The route did not take, so the tool is unreachable — say so and clean up rather than
-            // hand somebody a URL that will not answer.
+            // Something in this workspace's routing did not take — this row, or another one the
+            // engine left out of the render, which is a refusal this workspace still owns. Either
+            // way the honest answer is to take the session back rather than hand somebody a URL to
+            // find out with, and then to publish again: the config may well have been written with
+            // this route in it, and a router naming a container that is being removed here is a
+            // 502 waiting for whoever else applies next.
             db.Routes.Remove(route);
             await db.SaveChangesAsync(ct);
             try { await docker.RemoveContainerAsync(container, force: true, ct); } catch { }
-            return new(null, null, null, "The proxy did not accept the temporary route: " + applied.Error);
+            try { await proxy.ApplyAllAsync(service.WorkspaceId, ct); }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                logger.LogWarning(e, "Could not withdraw the admin tool's route after a failed apply.");
+            }
+            return new(null, null, null,
+                "The proxy configuration for this workspace was not applied, so the tool was not " +
+                "published: " + applied.Error);
         }
 
         return new($"https://{host}/?{driver}=", user, password, null);

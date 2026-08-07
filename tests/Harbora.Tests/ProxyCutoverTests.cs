@@ -237,8 +237,35 @@ public class ProxyCutoverTests
         // — see Any_answer_from_the_proxy_is_enough_for_verification_to_pass — but it is what says
         // which domain the deployment was for when this fails.
         h.Http.RequestedHosts.Should().Equal("blog.example.com");
+        // No port in what comes back: the request is built with one, and Uri drops :80 from an http
+        // URL because it is the scheme's default. A port that is NOT the default survives — see
+        // The_probe_dials_the_port_the_proxy_was_configured_to_answer_on, which is where that is held.
         h.Http.RequestedUrls.Should().ContainSingle()
-            .Which.Should().Contain(h.Options.ProxyContainerName);
+            .Which.Should().Be($"http://{h.Options.ProxyContainerName}/");
+    }
+
+    [Fact]
+    public async Task The_probe_dials_the_port_the_proxy_was_configured_to_answer_on()
+    {
+        // The container name was a setting and the port was a literal 80, so an install that moved
+        // its proxy's plain-HTTP entry point had this check dial a closed port — and, with the flag
+        // on, fail every deployment of every app that has a domain. A knob with no companion is how
+        // a configurable thing stays half-configurable.
+        using var h = new PipelineHarness().WithDomain();
+        h.Options.VerifyThroughProxy = true;
+        h.Options.ProxyHttpPort = 8081;
+
+        await h.RunAsync(h.QueueDeployment(number: 1));
+
+        h.Http.RequestedUrls.Should().ContainSingle().Which.Should().Contain(":8081");
+    }
+
+    [Fact]
+    public void The_probe_port_defaults_to_the_one_the_shipped_proxy_listens_on()
+    {
+        // deploy/docker-compose.yml gives Traefik its `web` entrypoint on 80, and the default has to
+        // keep matching it: this option exists to let an install differ, not to make it declare.
+        new HarboraRuntimeOptions().ProxyHttpPort.Should().Be(80);
     }
 
     [Fact]
@@ -271,14 +298,14 @@ public class ProxyCutoverTests
     }
 
     [Fact]
-    public async Task A_verification_failure_leaves_the_previous_container_running_but_no_longer_routed_to()
+    public async Task A_verification_failure_takes_the_new_container_back_out_of_the_live_config()
     {
-        // Do not read this as "the site is fine". On this path the apply already SUCCEEDED, so the
-        // live proxy config names the new container — which the pipeline's failure path then removes.
-        // The previous release is up and receiving nothing: the domain is dark until something
-        // re-applies. What the deployment owes the operator here is the truth (Failed, with the
-        // reason), not an intact site, and re-applying the previous config is a Phase-2 decision that
-        // has to come with turning this flag on.
+        // On this path the apply already SUCCEEDED, so the live config named the new container —
+        // which the pipeline's failure path then removes. Leaving it there made the domain dark
+        // until something, anything, re-applied; it was left there because a second apply could be
+        // refused outright by an unrelated tenant's invalid row and was not worth trusting. It is
+        // now, so the routing goes back to what this deployment found: no row at all here, because
+        // nothing was routing this host before it.
         using var h = new PipelineHarness().WithDomain();
         h.WithPreviousDeployment(number: 1);
         h.Options.VerifyThroughProxy = true;
@@ -289,10 +316,64 @@ public class ProxyCutoverTests
         result.Status.Should().Be(DeploymentStatus.Failed);
         h.Docker.OperationsOn(h.ContainerFor(1)).Should().NotContain("RemoveContainerAsync",
             "the container is untouched — the cutover retires nothing until after this step");
-        h.Proxy.ApplyCount.Should().Be(1, "the live config is NOT put back on this path");
-        h.Proxy.Applications.Should().ContainSingle()
-            .Which.TargetService.Should().Be(h.ContainerFor(2),
-                "what the proxy is serving names the container this failure is about to remove");
+        h.Proxy.ApplyCount.Should().Be(2, "the routing this deployment published is published back");
+        h.Proxy.Live.Should().BeEmpty(
+            "nothing may still name the container this failure is about to remove");
+    }
+
+    [Fact]
+    public async Task A_failed_apply_publishes_the_routing_it_put_back()
+    {
+        // The gap the rows alone cannot close. They are saved before the apply — they have to be,
+        // the config is rendered from them — so between the save and the failure, any other caller's
+        // apply publishes this deployment's new upstream on its behalf. Reverting the rows makes the
+        // NEXT apply correct; it does not make the live config correct, and nobody is obliged to
+        // apply again. So this deployment does, with what it put back.
+        using var h = new PipelineHarness().WithDomain();
+        h.WithPreviousDeployment(number: 1);
+        h.Db.Routes.Add(new Route
+        {
+            WorkspaceId = h.Workspace.Id, AppId = h.App.Id, Host = "blog.example.com",
+            TargetService = h.ContainerFor(1), TargetPort = 8080, IsEnabled = true
+        });
+        h.Db.SaveChanges();
+        h.Proxy.Result = new ProxyApplyResult(false, EngineError, RolledBack: false);
+
+        await h.RunAsync(h.QueueDeployment(number: 2));
+
+        h.Proxy.Live.Should().ContainSingle()
+            .Which.TargetService.Should().Be(h.ContainerFor(1),
+                "the release that is still running is the one the live config must name");
+    }
+
+    [Fact]
+    public async Task The_revert_restores_what_was_there_when_two_domains_carry_one_host()
+    {
+        // Two domains on one host resolve to one Route row, so the second pass through the loop gets
+        // back the instance the first has already rewritten. Capturing it again would record this
+        // deployment's own new upstream as the thing to restore, and the revert would then "restore"
+        // the container it is about to remove — the exact failure it exists to prevent, arriving
+        // through its own bookkeeping.
+        //
+        // Domains.Host is unique in the schema, so this pair cannot be created through the panel
+        // today; the guard is here anyway, because what the revert restores is now published to the
+        // live config immediately, and that is not a thing to leave resting on an index in another
+        // table.
+        using var h = new PipelineHarness().WithDomain().WithDomain();
+        h.WithPreviousDeployment(number: 1);
+        h.Db.Routes.Add(new Route
+        {
+            WorkspaceId = h.Workspace.Id, AppId = h.App.Id, Host = "blog.example.com",
+            TargetService = h.ContainerFor(1), TargetPort = 8080, IsEnabled = true
+        });
+        h.Db.SaveChanges();
+        h.Proxy.Result = new ProxyApplyResult(false, EngineError, RolledBack: true);
+
+        await h.RunAsync(h.QueueDeployment(number: 2));
+
+        var route = await h.Db.Routes.AsNoTracking().SingleAsync(r => r.Host == "blog.example.com");
+        route.TargetService.Should().Be(h.ContainerFor(1),
+            "the row said this before the deployment touched it, however many domains pointed at it");
     }
 
     [Fact]

@@ -19,6 +19,12 @@ namespace Harbora.Infrastructure.Proxy;
 /// <see cref="IRouteCatalog"/> rather than from the caller, and why applies are serialised — two
 /// writers sharing one file is two writers sharing one truth.
 /// </para>
+///
+/// <para>
+/// It is also why a route that fails validation is left out of the render rather than refusing it:
+/// one file means one refusal stops everybody, and a route that cannot serve is not made to serve by
+/// withholding everyone else's. What it does not mean is silence — see <c>WriteAsync</c>.
+/// </para>
 /// </summary>
 public sealed class TraefikProxyEngine(
     IOptions<TraefikOptions> options,
@@ -64,6 +70,17 @@ public sealed class TraefikProxyEngine(
     /// designer's own preview/validate endpoints — they only ever see one workspace's routes anyway —
     /// but <see cref="WriteAsync"/> validates the whole platform and needs to know, per error, whose
     /// route it was before it can decide what a caller is allowed to be told about it.
+    ///
+    /// <para>
+    /// Every route is checked, switched on or not. A disabled route serves nothing today, which is
+    /// why this used to skip them — but the designer's save gate asks this same question, and a row
+    /// nobody checked is a row that gets switched on later by the deployment that owns its host,
+    /// which sets the upstream and <c>IsEnabled</c> and never looks at the fields it did not write.
+    /// That is how a redirect with no target, saved with the Enabled box cleared, became an enabled
+    /// route no apply would accept. The duplicate host+path <b>warning</b> stays on the enabled ones
+    /// alone: it is a statement about which of two live routes wins, and a route that is off wins
+    /// nothing.
+    /// </para>
     /// </summary>
     private static (ProxyValidationResult Result, List<(Guid WorkspaceId, Guid RouteId, string Message)> Tagged)
         ValidateWithOwnership(IReadOnlyList<Route> routes)
@@ -72,7 +89,7 @@ public sealed class TraefikProxyEngine(
         var warnings = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var r in routes.Where(r => r.IsEnabled))
+        foreach (var r in routes)
         {
             if (string.IsNullOrWhiteSpace(r.Host))
                 tagged.Add((r.WorkspaceId, r.Id, $"Route {r.Id}: host is required."));
@@ -84,7 +101,7 @@ public sealed class TraefikProxyEngine(
                 tagged.Add((r.WorkspaceId, r.Id, $"Route {r.Host}: redirect target is required."));
 
             var key = $"{r.Host}{r.PathPrefix}";
-            if (!seen.Add(key))
+            if (r.IsEnabled && !seen.Add(key))
                 warnings.Add($"Duplicate host+path '{key}'; the higher-priority route wins.");
 
             if (r.CustomHeadersJson is { Length: > 0 } &&
@@ -101,33 +118,30 @@ public sealed class TraefikProxyEngine(
     /// own invalid routes are named in full — they can act on those — everything else is reduced to a
     /// count, because naming another workspace's hostname, and saying it is misconfigured, is not this
     /// caller's to know. See <see cref="IProxyEngine.ApplyAllAsync"/> for why.
+    ///
+    /// <para>
+    /// Only ever called when the caller owns at least one of the failing routes: an apply is no
+    /// longer refused for anybody else's row, so there is no longer a caller who has to be told
+    /// about a failure with nothing in it for them. The count of the others stays, because "your
+    /// route is broken, and it is not the only one" is a different thing to walk into.
+    /// </para>
     /// </summary>
     private static string CallerSafeValidationError(
-        IReadOnlyList<(Guid WorkspaceId, Guid RouteId, string Message)> errors, Guid? callerWorkspaceId)
+        IReadOnlyList<(Guid WorkspaceId, Guid RouteId, string Message)> errors, Guid callerWorkspaceId)
     {
-        var own = callerWorkspaceId is { } id
-            ? errors.Where(e => e.WorkspaceId == id).Select(e => e.Message).Distinct().ToList()
-            : [];
+        var own = errors.Where(e => e.WorkspaceId == callerWorkspaceId)
+            .Select(e => e.Message).Distinct().ToList();
         var elsewhereCount = errors
-            .Where(e => callerWorkspaceId is null || e.WorkspaceId != callerWorkspaceId)
+            .Where(e => e.WorkspaceId != callerWorkspaceId)
             .Select(e => e.RouteId)
             .Distinct()
             .Count();
 
-        if (own.Count > 0)
-        {
-            var ownText = string.Join("; ", own);
-            return elsewhereCount == 0
-                ? ownText
-                : $"{ownText} ({elsewhereCount} other route(s) elsewhere on the platform also failed " +
-                  "validation; see the server log.)";
-        }
-
-        // None of the failing routes belong to this caller — there is nothing here for them to fix,
-        // only a count and a place to look.
-        return elsewhereCount == 1
-            ? "1 route on the platform failed validation; see the server log for which one."
-            : $"{elsewhereCount} routes on the platform failed validation; see the server log for which ones.";
+        var ownText = string.Join("; ", own);
+        return elsewhereCount == 0
+            ? ownText
+            : $"{ownText} ({elsewhereCount} other route(s) elsewhere on the platform also failed " +
+              "validation and were left out of the configuration; see the server log.)";
     }
 
     public async Task<ProxyApplyResult> ApplyAllAsync(Guid? callerWorkspaceId, CancellationToken ct)
@@ -149,26 +163,45 @@ public sealed class TraefikProxyEngine(
     }
 
     /// <summary>
-    /// Validate → write temp → back up what is live → swap. Every failure after the validation gate
-    /// puts the backup back, and says whether it managed to.
+    /// Validate → drop what cannot serve → write temp → back up what is live → swap. Every failure
+    /// after the render puts the backup back, and says whether it managed to.
     /// </summary>
     private async Task<ProxyApplyResult> WriteAsync(
         IReadOnlyList<Route> enabled, Guid? callerWorkspaceId, CancellationToken ct)
     {
         if (TestOnlyBeforeWrite is not null) await TestOnlyBeforeWrite();
 
-        var (validation, tagged) = ValidateWithOwnership(enabled);
-        if (!validation.IsValid)
-        {
-            // Every route on the platform was just checked, so this can name a tenant that has
-            // nothing to do with whoever triggered the apply. The full picture — every host, every
-            // reason — belongs in the server log, which only an operator reads; what goes back to
-            // the caller is limited to routes they actually own (HARBORA-0055 review).
+        // Validation is platform-wide, because the file is. What is done about a failure is not.
+        //
+        // Refusing the whole apply was right while the alternative was silently dropping a row from
+        // a file the caller believed described their own workspace. It stopped being right once the
+        // file described everybody: one route anywhere — and a disabled row nobody validated, turned
+        // on by its own deployment, is how one got there — refused every apply on the install, and
+        // since a failed apply now fails the deployment, that is every tenant's deploys, route
+        // saves, protection changes and Adminer sessions, until an operator found the row.
+        //
+        // So the route is left out instead. A route that fails validation was never going to serve
+        // whatever we do with it, and dropping it keeps the rest of the platform routed. What is
+        // NOT dropped is the knowledge: every one of them is named in the log at Error, and named
+        // again in the file itself, and the workspace that owns one is told its apply did not do
+        // everything it was asked (below).
+        var (_, invalid) = ValidateWithOwnership(enabled);
+        var excluded = invalid.Select(e => e.RouteId).ToHashSet();
+        var renderable = excluded.Count == 0 ? enabled : enabled.Where(r => !excluded.Contains(r.Id)).ToList();
+        var notes = ExclusionNotes(invalid);
+
+        if (excluded.Count > 0)
             logger.LogError(
-                "Refused to apply the platform proxy config; {Count} route(s) failed validation: {Errors}",
-                validation.Errors.Count, string.Join("; ", validation.Errors));
-            return new ProxyApplyResult(false, CallerSafeValidationError(tagged, callerWorkspaceId), false);
-        }
+                "Left {Count} route(s) out of the platform proxy config because they failed " +
+                "validation and would not have served: {Errors}",
+                excluded.Count, string.Join("; ", notes));
+
+        // Whose failure this is. A caller can act on their own row, so they are owed the refusal —
+        // a deployment that switched its own route on and had it dropped has not deployed that
+        // domain, and reporting success would be the lie this phase exists to remove. A caller who
+        // owns none of them can act on nothing, and failing their deployment for a stranger's row
+        // is the outage above.
+        var ownFailed = callerWorkspaceId is { } caller && invalid.Any(e => e.WorkspaceId == caller);
 
         var target = _opt.DynamicConfigPath;
         var dir = Path.GetDirectoryName(target)!;
@@ -184,12 +217,15 @@ public sealed class TraefikProxyEngine(
         try
         {
             Directory.CreateDirectory(staging);
-            await File.WriteAllTextAsync(tmp, Render(enabled), ct);
+            await File.WriteAllTextAsync(tmp, Render(renderable, notes), ct);
             if (File.Exists(target)) File.Copy(target, backup, overwrite: true);
             File.Move(tmp, target, overwrite: true);
             logger.LogInformation(
-                "Applied Traefik dynamic config with {Count} route(s) across the platform.", enabled.Count);
-            return new ProxyApplyResult(true, null, false);
+                "Applied Traefik dynamic config with {Count} route(s) across the platform.", renderable.Count);
+            return ownFailed
+                ? new ProxyApplyResult(
+                    false, CallerSafeValidationError(invalid, callerWorkspaceId!.Value), false)
+                : new ProxyApplyResult(true, null, false);
         }
         catch (Exception ex)
         {
@@ -207,10 +243,31 @@ public sealed class TraefikProxyEngine(
 
     // --- rendering ---
 
-    private string Render(IReadOnlyList<Route> routes)
+    /// <summary>
+    /// One line per route this render refuses to carry, naming the route, its workspace and the
+    /// reason. Derived from the validation result, so the same route set always produces the same
+    /// lines — the file is watched and compared, and notes that shuffled would be a change where
+    /// there was none.
+    /// </summary>
+    private static IReadOnlyList<string> ExclusionNotes(
+        IReadOnlyList<(Guid WorkspaceId, Guid RouteId, string Message)> errors) =>
+        errors.Select(e => $"route {e.RouteId} (workspace {e.WorkspaceId}): {e.Message}")
+            .Distinct()
+            .ToList();
+
+    private string Render(IReadOnlyList<Route> routes, IReadOnlyList<string>? excluded = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("# Managed by Harbora — do not edit by hand.");
+        // Said here as well as in the log because this file is the first thing anyone opens when a
+        // domain stops answering, and "it is simply not in here" is the question a comment answers
+        // and an absence does not. Traefik ignores comments; an operator cannot.
+        if (excluded is { Count: > 0 })
+        {
+            sb.AppendLine($"# {excluded.Count} route(s) left out of this render — each one failed " +
+                          "validation and would not have served:");
+            foreach (var note in excluded) sb.AppendLine($"#   {note}");
+        }
         sb.AppendLine("http:");
         sb.AppendLine("  routers:");
         foreach (var r in routes.OrderByDescending(r => r.Priority))

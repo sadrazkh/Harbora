@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Common;
 using Harbora.Domain.Networking;
 using Harbora.Infrastructure.Proxy;
 using Harbora.Infrastructure.Security;
@@ -268,7 +269,7 @@ public class PlatformProxyConfigTests
     }
 
     [Fact]
-    public async Task Another_tenants_invalid_route_is_not_named_in_the_callers_error()
+    public async Task Another_tenants_invalid_route_neither_fails_nor_is_named_in_the_callers_apply()
     {
         using var platform = new Platform();
         platform.Route(platform.TenantA, "fine.example.com");
@@ -276,25 +277,28 @@ public class PlatformProxyConfigTests
 
         var result = await platform.Engine.ApplyAllAsync(platform.TenantA, default);
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().NotContain("broken-elsewhere.example.com",
-            "workspace A did not create this route and cannot fix it; naming it would tell A that " +
-            "workspace B exists, has a route, and that the route is misconfigured");
-        result.Error.Should().Contain("1 route",
-            "the caller is still owed a count of what failed, just not whose it was");
+        result.Success.Should().BeTrue(
+            "workspace A did not create this route and cannot fix it, and every apply is somebody's " +
+            "deployment — refusing A's would make one tenant's bad row the whole platform's outage");
+        result.Error.Should().BeNull(
+            "naming it would tell A that workspace B exists, has a route, and that the route is " +
+            "misconfigured; and there is nothing here for A to act on anyway");
+        File.ReadAllText(platform.Target).Should()
+            .Contain("fine.example.com").And.NotContain("Host(`broken-elsewhere.example.com`)");
     }
 
     [Fact]
-    public async Task A_sessionless_callers_error_names_no_host_at_all()
+    public async Task A_sessionless_caller_is_never_failed_by_a_route_it_does_not_own()
     {
+        // A webhook, the Adminer sweeper: no workspace, so no row on the platform is theirs. There
+        // is no answer they could act on, which is exactly why they must not be handed a failure.
         using var platform = new Platform();
         platform.InvalidRoute(platform.TenantA, "broken.example.com");
 
         var result = await platform.Engine.ApplyAllAsync(null, default);
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().NotContain("broken.example.com",
-            "a caller with no workspace of its own owns nothing on the platform");
+        result.Success.Should().BeTrue();
+        result.Error.Should().BeNull("a caller with no workspace of its own owns nothing on the platform");
     }
 
     [Fact]
@@ -313,7 +317,142 @@ public class PlatformProxyConfigTests
             "the detail a caller cannot be shown still has to reach an operator somewhere");
     }
 
+    // ---- one tenant's invalid route must not stop another tenant deploying ----
+    //
+    // Validating platform-wide (above) and failing a deployment on a refused apply (Task 2) meet
+    // here. A route saved while DISABLED was never validated — the designer's save gate only looked
+    // at enabled rows — and the deployment that owns its host switches it on without re-checking the
+    // fields it does not write. One such row anywhere then refused every apply on the install, and
+    // every apply is somebody's deployment. These tests hold the boundary: a route that would not
+    // have served is left out of the render, and only the workspace that owns it is told its apply
+    // did not do everything it asked for.
+
+    [Fact]
+    public async Task A_deployment_is_not_failed_by_another_tenants_invalid_route()
+    {
+        // The reachable path, all through the shipped UI: workspace B saves a route with the Enabled
+        // box cleared and a redirect with no target — nothing validates a disabled row — and B's own
+        // deployment for that host turns it on, setting the upstream and IsEnabled and leaving Type
+        // and RedirectTo exactly as they were. That row is what this test puts on the platform.
+        using var h = new PipelineHarness().WithDomain();
+        using var config = new TempTarget();
+        h.Db.Routes.Add(new Route
+        {
+            WorkspaceId = Guid.NewGuid(), Host = "promoted.example.com",
+            Type = RouteType.Redirect, RedirectTo = "",
+            TargetService = "harbora-other", TargetPort = 8080, IsEnabled = true
+        });
+        h.Db.SaveChanges();
+        h.ProxyOverride = RealEngine(h, config.Target);
+
+        var result = await h.RunAsync(h.QueueDeployment(number: 1));
+
+        result.Status.Should().Be(DeploymentStatus.Succeeded,
+            "a stranger's misconfigured row is not this deployment's to fix, and refusing every " +
+            "apply on the install until an operator finds it is the outage this phase exists to end");
+        File.ReadAllText(config.Target).Should().Contain("blog.example.com",
+            "the deployment that succeeded has to be the one that is routed");
+    }
+
+    [Fact]
+    public async Task The_invalid_route_is_left_out_of_the_config_rather_than_published()
+    {
+        using var h = new PipelineHarness().WithDomain();
+        using var config = new TempTarget();
+        h.Db.Routes.Add(new Route
+        {
+            WorkspaceId = Guid.NewGuid(), Host = "promoted.example.com",
+            Type = RouteType.Redirect, RedirectTo = "",
+            TargetService = "harbora-other", TargetPort = 8080, IsEnabled = true
+        });
+        h.Db.SaveChanges();
+        h.ProxyOverride = RealEngine(h, config.Target);
+
+        await h.RunAsync(h.QueueDeployment(number: 1));
+
+        File.ReadAllText(config.Target).Should().NotContain("Host(`promoted.example.com`)",
+            "a route that fails validation was never going to serve; rendering it anyway would hand " +
+            "Traefik the document it would have rejected, which is the whole file");
+    }
+
+    [Fact]
+    public async Task A_deployment_whose_own_route_is_invalid_still_fails_and_puts_the_row_back()
+    {
+        // The other side of the boundary, and why dropping is not the same as silence: the workspace
+        // that owns the row is told, in the only way a deployment can be told — it failed — and the
+        // row goes back to the disabled state the deployment found it in.
+        using var h = new PipelineHarness().WithDomain();
+        using var config = new TempTarget();
+        h.Db.Routes.Add(new Route
+        {
+            WorkspaceId = h.Workspace.Id, AppId = h.App.Id, Host = "blog.example.com",
+            Type = RouteType.Redirect, RedirectTo = "", IsEnabled = false
+        });
+        h.Db.SaveChanges();
+        h.ProxyOverride = RealEngine(h, config.Target);
+
+        var result = await h.RunAsync(h.QueueDeployment(number: 1));
+
+        result.Status.Should().Be(DeploymentStatus.Failed);
+        result.ErrorMessage.Should().Contain("blog.example.com",
+            "this workspace owns the row and is the one that can fix it");
+        var route = await h.Db.Routes.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        route.IsEnabled.Should().BeFalse("the deployment that switched it on did not survive");
+    }
+
+    [Fact]
+    public async Task A_dropped_route_is_named_in_the_file_an_operator_reads()
+    {
+        // The log is where the detail goes, and the log is not the first place anyone looks when a
+        // domain stops answering — the config file Traefik is serving from is. So the render says
+        // what it left out and why, in comments Traefik ignores and an operator cannot miss.
+        using var platform = new Platform();
+        platform.Route(platform.TenantA, "live.example.com");
+        platform.InvalidRoute(platform.TenantB, "dropped.example.com");
+
+        await platform.Engine.ApplyAllAsync(platform.TenantA, default);
+
+        var config = File.ReadAllText(platform.Target);
+        config.Should().Contain("# ").And.Contain("dropped.example.com",
+            "the row that is missing from the routers has to be accounted for in the same file");
+        config.Should().Contain("Host(`live.example.com`)");
+    }
+
     // ---- helpers ----
+
+    /// <summary>The real engine, reading the harness's own rows the way <c>RouteCatalog</c> does.</summary>
+    private static TraefikProxyEngine RealEngine(PipelineHarness h, string target) => new(
+        Options.Create(new TraefikOptions { DynamicConfigPath = target }),
+        new AesGcmSecretProtector(TestKey),
+        new HarnessCatalog(h.Db),
+        NullLogger<TraefikProxyEngine>.Instance);
+
+    /// <summary>
+    /// Reads every enabled route on the platform out of the harness's context — unfiltered and
+    /// untracked, exactly as <see cref="RouteCatalog"/> does from its own scope. A scope factory is
+    /// not worth building here: what these tests watch is the engine's decision, and the catalog's
+    /// own tenancy behaviour is held by the tests above.
+    /// </summary>
+    private sealed class HarnessCatalog(HarboraDbContext db) : IRouteCatalog
+    {
+        public async Task<IReadOnlyList<Route>> AllEnabledAsync(CancellationToken ct) =>
+            await db.Routes.IgnoreQueryFilters().Where(r => r.IsEnabled)
+                .OrderBy(r => r.Id).AsNoTracking().ToListAsync(ct);
+    }
+
+    /// <summary>A throwaway dynamic-config path for a test that drives a real deployment.</summary>
+    private sealed class TempTarget : IDisposable
+    {
+        private readonly string _root =
+            Path.Combine(Path.GetTempPath(), "harbora-platform-deploy", Guid.NewGuid().ToString("N"));
+
+        public string Target => Path.Combine(_root, "dynamic", "harbora.yml");
+
+        public void Dispose()
+        {
+            try { Directory.Delete(_root, recursive: true); } catch { /* temp dir — best effort */ }
+        }
+    }
 
     /// <summary>
     /// A platform: two tenants, one database, one dynamic-config file, and the real engine over the

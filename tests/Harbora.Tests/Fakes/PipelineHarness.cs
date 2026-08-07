@@ -209,11 +209,19 @@ public sealed class PipelineHarness : IDisposable
         return this;
     }
 
+    /// <summary>
+    /// Runs the pipeline over a different proxy engine — in practice the real
+    /// <c>TraefikProxyEngine</c> over a temporary config file, when what a test is watching is the
+    /// engine's own decision (what it renders, what it refuses) reached through a real deployment.
+    /// Null, and the recording fake above is used, which is what nearly every test wants.
+    /// </summary>
+    public Harbora.Application.Abstractions.IProxyEngine? ProxyOverride { get; set; }
+
     public DeploymentPipeline BuildPipeline() => new(
         Db,
         new SingleEngineFactory(Docker),
         Git,
-        Proxy,
+        ProxyOverride ?? Proxy,
         Stream,
         Protector,
         // The real redactor, not a passthrough: what reaches a stored field or a notification is a

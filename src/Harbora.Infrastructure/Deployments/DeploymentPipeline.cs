@@ -1110,12 +1110,12 @@ public sealed class DeploymentPipeline(
         // Saved BEFORE the apply, and it has to be: the config below is rendered from the stored
         // routes of the whole platform, so a route added for a domain's first deployment would not
         // be in it otherwise, and the deployment would publish a config missing the very route it
-        // exists for. The cost is that a failure after this point leaves the rows describing a
-        // container the pipeline's failure path is about to remove — and every other caller
-        // (RoutesController, AppsController, AdminerService, AppOperationsService) re-applies from
-        // those same rows. An unrelated route change anywhere on the install would then push that
-        // dead upstream live and take down a domain the rolled-back config was still serving. So:
-        // keep what each row said, and put it back if anything below refuses.
+        // exists for. The cost is that from here until this method returns, the rows describe a
+        // container that may not survive — and every other caller (RoutesController, AppsController,
+        // AdminerService, AppOperationsService) renders from those same rows, so anyone else's apply
+        // in that window publishes this deployment's upstream on its behalf. So: keep what each row
+        // said, put it back if anything below refuses, and re-publish from them once it has been put
+        // back, rather than leaving a dead upstream live until somebody happens to apply again.
         var undo = new List<RouteRevert>();
         foreach (var domain in app.Domains)
         {
@@ -1126,8 +1126,18 @@ public sealed class DeploymentPipeline(
                 route = new Route { WorkspaceId = app.WorkspaceId, AppId = app.Id, Host = domain.Host };
                 db.Routes.Add(route);
             }
-            undo.Add(new RouteRevert(route, isNew, route.TargetService, route.TargetPort,
-                route.SslEnabled, route.RedirectHttpToHttps, route.IsEnabled));
+            // Only the first sight of a row is what that row said. Two domains resolving to one
+            // route send the second pass through here back the instance the first has already
+            // rewritten, and capturing it again would record this deployment's own new upstream as
+            // the thing to go back to — the revert would then "restore" the container it is about
+            // to remove, which is the failure it exists to prevent, arriving through its own
+            // bookkeeping. Domains.Host is unique in the schema, so that pair cannot be made through
+            // the panel today; what the revert holds is now re-published to the live config the
+            // moment a cutover fails, and that is not a thing to leave resting on an index in
+            // another table.
+            if (undo.All(u => !ReferenceEquals(u.Route, route)))
+                undo.Add(new RouteRevert(route, isNew, route.TargetService, route.TargetPort,
+                    route.SslEnabled, route.RedirectHttpToHttps, route.IsEnabled));
             route.TargetService = upstreamHost;
             route.TargetPort = upstreamPort;
             route.SslEnabled = domain.SslEnabled;
@@ -1157,14 +1167,57 @@ public sealed class DeploymentPipeline(
         }
         catch
         {
-            // Both paths, for the same reason, though they leave different amounts intact. A refused
-            // apply never changed the live config, so reverting the rows restores the whole truth. A
-            // refused verification did change it — the live config names the container that is about
-            // to be removed and this method cannot put that back without a second apply it has no
-            // reason to trust. Reverting the rows is still what makes the next re-apply from anywhere
-            // else heal that domain rather than nail the dead upstream in place.
+            // Put the rows back, then put the file back from them. Both steps, on every failure path
+            // here, because on none of them can the live config be assumed to still describe what is
+            // running:
+            //
+            //  - A refused apply may well have changed it. The engine leaves an invalid route out of
+            //    the render rather than refusing the whole platform's file, so a refusal means our
+            //    own row was dropped from a config that was published — with this app's other
+            //    domains in it, naming the container the failure path is about to remove.
+            //  - An apply that reported RolledBack: false did not put it back either, which
+            //    ProxyDiagnosis.ExplainApplyFailure says correctly in the message thrown just above
+            //    ("it may no longer match what is running") and this comment used to deny outright.
+            //  - A refused verification applied cleanly first, so the live config names the new
+            //    container outright.
+            //  - And between the save above and the apply, any other caller's apply — a route edit,
+            //    an Adminer session, another tenant's deployment — publishes these rows as it finds
+            //    them, which is this deployment's new upstream. Reverting the rows alone leaves that
+            //    published and waits for somebody else to happen to re-apply.
+            //
+            // So the revert is followed by an apply of its own. That second apply is now worth
+            // making, which it was not before: an apply can no longer be refused by an unrelated
+            // tenant's bad row, so re-publishing the routing this deployment found is a thing that
+            // reliably happens rather than a thing that might be turned away.
             await RevertRoutesAsync(undo);
+            await RepublishRoutingAsync(app, log);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Publish the platform's routing again from the rows as this deployment left them — which,
+    /// having just reverted, is the routing it found. Best effort by design: this runs while a
+    /// failure is on its way up, and a failure here must never replace the one that caused it. It
+    /// says what it did in the deploy log, because "the previous release is still serving" is a
+    /// claim the failure message makes and this is the step that makes it true.
+    /// </summary>
+    private async Task RepublishRoutingAsync(App app, Func<LogStream, string, Task> log)
+    {
+        try
+        {
+            // CancellationToken.None for the same reason as the revert: a cancelled deployment is
+            // precisely when the routing has to be put back.
+            var result = await proxy.ApplyAllAsync(app.WorkspaceId, CancellationToken.None);
+            await log(LogStream.System, result.Success
+                ? "Proxy configuration put back to the routing this deployment found."
+                : $"Could not put the proxy configuration back: {result.Error}");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not re-apply the proxy config after a failed proxy step.");
+            try { await log(LogStream.System, "Could not put the proxy configuration back; see the server log."); }
+            catch { /* the deployment already has a reason to report; this is not it */ }
         }
     }
 
@@ -1213,7 +1266,10 @@ public sealed class DeploymentPipeline(
     /// answering. Only a failure to connect fails the deployment.
     ///
     /// Be precise about what this establishes, because the name invites more. The request goes to
-    /// <c>http://{proxy}/</c> with the domain in a Host header, and <c>deploy/docker-compose.yml</c>
+    /// <c>http://{proxy}:{port}/</c> — both halves from
+    /// <see cref="HarboraRuntimeOptions.ProxyContainerName"/> and
+    /// <see cref="HarboraRuntimeOptions.ProxyHttpPort"/> — with the domain in a Host header, and
+    /// <c>deploy/docker-compose.yml</c>
     /// puts an ENTRYPOINT-level redirect on <c>web</c>
     /// (<c>--entrypoints.web.http.redirections.entrypoint.to=websecure</c>). Traefik applies that to
     /// every request arriving on :80 before any router is consulted, so the 308 comes back whatever
@@ -1233,7 +1289,10 @@ public sealed class DeploymentPipeline(
     private async Task VerifyThroughProxyAsync(App app, Func<LogStream, string, Task> log, CancellationToken ct)
     {
         var domain = app.Domains.FirstOrDefault(d => d.IsPrimary) ?? app.Domains.First();
-        var url = $"http://{_opt.ProxyContainerName}/";
+        // Both halves configured, or neither is: the container name was a setting and the port it
+        // answers on was a literal, so an install that moved its proxy's plain-HTTP entry point off
+        // 80 would have had this probe dial a closed port and call every deployment failed.
+        var url = $"http://{_opt.ProxyContainerName}:{_opt.ProxyHttpPort}/";
 
         await log(LogStream.System, $"Checking the proxy is answering for {domain.Host} …");
 

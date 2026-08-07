@@ -43,6 +43,15 @@ public sealed class RecordingProxyEngine(Func<IReadOnlyList<Route>> storedRoutes
     public sealed record Applied(string Host, string TargetService, int TargetPort);
 
     public List<Applied> Applications { get; } = [];
+
+    /// <summary>
+    /// What the <i>last</i> apply published, rather than everything every apply ever published. The
+    /// real engine rewrites one file, so the latest apply is what is serving; a cumulative list
+    /// cannot answer "what is live now" once a deployment applies more than once — which the failure
+    /// path does, to put the routing back where it found it.
+    /// </summary>
+    public IReadOnlyList<Applied> Live { get; private set; } = [];
+
     public int ApplyCount { get; private set; }
     public ProxyApplyResult Result { get; set; } = new(true, null, false);
 
@@ -52,9 +61,12 @@ public sealed class RecordingProxyEngine(Func<IReadOnlyList<Route>> storedRoutes
     public Task<ProxyApplyResult> ApplyAllAsync(Guid? callerWorkspaceId, CancellationToken ct)
     {
         ApplyCount++;
-        Applications.AddRange(storedRoutes()
+        var applied = storedRoutes()
             .Where(r => r.IsEnabled)
-            .Select(r => new Applied(r.Host, r.TargetService ?? "", r.TargetPort)));
+            .Select(r => new Applied(r.Host, r.TargetService ?? "", r.TargetPort))
+            .ToList();
+        Live = applied;
+        Applications.AddRange(applied);
         return Task.FromResult(Result);
     }
 }

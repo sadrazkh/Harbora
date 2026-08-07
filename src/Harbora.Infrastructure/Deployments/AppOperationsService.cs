@@ -70,8 +70,10 @@ public sealed class AppOperationsService(
         {
             // What is rendered is not scoped by this: the engine reads the platform's own routes,
             // unfiltered, so the sessionless callers above cannot narrow it to a tenant — or to
-            // nothing. The workspace named here only decides what a validation failure is allowed to
-            // say back, and it is the app just deleted, since that is whose action this apply is.
+            // nothing. The workspace named here decides only what happens about a route that fails
+            // validation and is therefore left out: whether this caller is told the apply failed,
+            // and whether the route may be named when it is. It is the app just deleted, since that
+            // is whose action this apply is.
             await proxy.ApplyAllAsync(app.WorkspaceId, ct);
         }
         catch (Exception ex) { logger.LogWarning(ex, "Proxy re-apply after delete failed."); }

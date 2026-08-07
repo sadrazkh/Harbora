@@ -12,6 +12,21 @@ public sealed class HarboraRuntimeOptions
     /// <summary>Traefik container name; joined to each tenant network so it can route ingress in.</summary>
     public string ProxyContainerName { get; set; } = "harbora-traefik";
 
+    /// <summary>
+    /// The port the proxy's plain-HTTP entry point listens on, as the panel reaches it over the
+    /// container network — the <c>web</c> entrypoint in <c>deploy/docker-compose.yml</c>, which is
+    /// 80 there and is what the default matches.
+    ///
+    /// <para>
+    /// Configurable because <see cref="ProxyContainerName"/> is: an install that renamed its proxy
+    /// is an install that changed its proxy, and one that fronts Traefik differently — or runs the
+    /// entry point on another port — would have had <see cref="VerifyThroughProxy"/> dial a port
+    /// nothing was listening on and report every deployment as failed. A knob with no companion is
+    /// how a configurable thing stays half-configurable.
+    /// </para>
+    /// </summary>
+    public int ProxyHttpPort { get; set; } = 80;
+
     /// <summary>Panel container name; joined to each tenant network so it can HTTP health-probe apps by name.</summary>
     public string PanelContainerName { get; set; } = "harbora-panel";
 

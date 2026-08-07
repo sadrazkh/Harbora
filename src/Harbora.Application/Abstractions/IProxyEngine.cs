@@ -29,13 +29,23 @@ public interface IProxyEngine
     /// </summary>
     /// <param name="callerWorkspaceId">
     /// The workspace whose action triggered this apply, or <see langword="null"/> for a caller with
-    /// no workspace of its own (a sessionless sweep). Validation still runs over every route on the
-    /// platform, exactly as before — this has no bearing on what is rendered or written. It decides
-    /// only what a validation failure is allowed to say back: a route this workspace owns can be
-    /// named in <see cref="ProxyApplyResult.Error"/>, because the caller can act on it; a route
-    /// belonging to any other workspace cannot, because naming another tenant's hostname — and that
-    /// it is misconfigured — to a caller who does not own it is a leak, not a diagnostic. The full
-    /// detail, every route named, always reaches the server log regardless of who called.
+    /// no workspace of its own (a sessionless sweep). Validation runs over every route on the
+    /// platform, and a route that fails it is left out of the render — it was never going to serve,
+    /// and refusing the whole file for it means one tenant's bad row stops every tenant deploying.
+    /// This parameter decides two things about that, both of them about the caller and neither about
+    /// what is written:
+    /// <list type="bullet">
+    /// <item>Whether the apply is reported as a <b>failure</b>. Yes if one of the dropped routes
+    /// belongs to this workspace — the caller can act on their own row, and a deployment whose own
+    /// domain was left out has not deployed it. No if every dropped route belongs to somebody else:
+    /// there is nothing here this caller can fix, and failing them for it is the outage.</item>
+    /// <item>What <see cref="ProxyApplyResult.Error"/> may say. A route this workspace owns is named
+    /// in full; a route belonging to any other workspace is not, because naming another tenant's
+    /// hostname — and that it is misconfigured — to a caller who does not own it is a leak, not a
+    /// diagnostic.</item>
+    /// </list>
+    /// The full detail, every route named, always reaches the server log and the rendered file's own
+    /// comments regardless of who called.
     /// </param>
     Task<ProxyApplyResult> ApplyAllAsync(Guid? callerWorkspaceId, CancellationToken ct);
 }

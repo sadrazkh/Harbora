@@ -101,6 +101,41 @@ public class TraefikProxyEngineTests
     }
 
     [Fact]
+    public void Validate_flags_a_disabled_route_that_could_not_serve_if_it_were_switched_on()
+    {
+        // This is the designer's save gate, and it used to look only at enabled rows — so a route
+        // saved with the Enabled box cleared could carry anything: a redirect with no target, a port
+        // of 0, headers that are not JSON. Nothing was wrong until the deployment that owns the host
+        // switched the row on, which it does without re-reading the fields it did not write. The row
+        // is checked when it is written, or it is checked by nobody.
+        var route = new Route
+        {
+            Host = "later.example.com", Type = RouteType.Redirect, RedirectTo = "", IsEnabled = false
+        };
+
+        var result = Engine().Validate(new[] { route });
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("redirect target", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_does_not_warn_about_a_disabled_route_sharing_a_live_routes_host()
+    {
+        // The duplicate warning is a statement about which of two LIVE routes wins. A route that is
+        // switched off wins nothing, and warning about it would teach people that the way to park a
+        // route is to delete it.
+        var live = HostRoute();
+        var parked = HostRoute();
+        parked.IsEnabled = false;
+
+        var result = Engine().Validate(new[] { live, parked });
+
+        result.IsValid.Should().BeTrue();
+        result.Warnings.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Higher_priority_router_is_rendered_first()
     {
         var low = HostRoute(host: "a.example.com"); low.Priority = 1;
@@ -131,22 +166,28 @@ public class TraefikProxyEngineTests
     }
 
     [Fact]
-    public async Task A_route_that_fails_validation_is_refused_without_touching_the_target_file()
+    public async Task A_route_that_fails_validation_is_refused_to_its_owner_and_left_out_of_the_file()
     {
         // The atomic-apply gate: a config Traefik would reject must never reach the file it watches,
-        // because a file provider reloads whatever it finds there.
+        // because a file provider reloads whatever it finds there. What changed is where the gate
+        // falls — on the route rather than on the file. The offending route is not rendered, so the
+        // document Traefik gets is still one it accepts; the rest of the platform keeps its routing
+        // instead of losing it to somebody else's row.
         using var cfg = new TempConfig();
         var route = HostRoute(port: 70000);
+        var live = HostRoute(host: "unaffected.example.com");
 
-        // The caller here owns the one route on the platform, so the engine's answer names it in
-        // full — see PlatformProxyConfigTests for what a caller who does NOT own the failing route
-        // is (and is not) told.
-        var result = await Engine(cfg.Options, route).ApplyAllAsync(route.WorkspaceId, default);
+        // The caller here owns the failing route, so the engine's answer names it in full and the
+        // apply is a failure for them — see PlatformProxyConfigTests for what a caller who does NOT
+        // own it is (and is not) told, and why their apply succeeds.
+        var result = await Engine(cfg.Options, route, live).ApplyAllAsync(route.WorkspaceId, default);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("port");
-        result.RolledBack.Should().BeFalse("nothing was written, so there was nothing to undo");
-        File.Exists(cfg.Target).Should().BeFalse();
+        result.RolledBack.Should().BeFalse("the file was written, not restored");
+        var config = File.ReadAllText(cfg.Target);
+        config.Should().NotContain("Host(`app.example.com`)", "the route that could not serve is not in it");
+        config.Should().Contain("Host(`unaffected.example.com`)", "everything that can serve still does");
     }
 
     [Fact]
