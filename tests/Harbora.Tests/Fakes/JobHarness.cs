@@ -5,6 +5,7 @@ using Harbora.Infrastructure.Jobs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Harbora.Tests.Fakes;
 
@@ -63,10 +64,13 @@ public sealed class JobHarness : IDisposable
 
     /// <summary>
     /// A worker over this harness. Pass <paramref name="timeout"/> to give dispatched jobs a
-    /// deadline a test can actually reach — the real ones are quarter-hours and upwards.
+    /// deadline a test can actually reach — the real ones are quarter-hours and upwards — and
+    /// <paramref name="maxConcurrency"/> to say how much of the queue it may run at once. The
+    /// default is one, which is the worker the platform had before jobs ran in parallel, so every
+    /// test written against that behaviour still describes it.
     /// </summary>
-    public TestableJobWorker Worker(TimeSpan? timeout = null) =>
-        new(Scopes, Cancellations, Signal, Gate, Clock, Handler, timeout);
+    public TestableJobWorker Worker(TimeSpan? timeout = null, int maxConcurrency = 1) =>
+        new(Scopes, Cancellations, Signal, Gate, Clock, Handler, timeout, maxConcurrency);
 
     public JobReconciler Reconciler() => new(Scopes, Clock, NullLogger<JobReconciler>.Instance);
 
@@ -77,10 +81,39 @@ public sealed class JobHarness : IDisposable
         return db.Jobs.AsNoTracking().FirstOrDefault(j => j.TargetId == targetId);
     }
 
+    /// <summary>By id, because two jobs may legitimately share a target.</summary>
+    public Job? JobById(Guid jobId)
+    {
+        using var db = NewDb();
+        return db.Jobs.AsNoTracking().FirstOrDefault(j => j.Id == jobId);
+    }
+
     public IReadOnlyList<Job> AllJobs()
     {
         using var db = NewDb();
         return db.Jobs.AsNoTracking().OrderBy(j => j.CreatedAt).ToList();
+    }
+
+    /// <summary>
+    /// Waits for a job row to reach a terminal status and returns it.
+    ///
+    /// Used for outcomes only — never to decide whether two jobs overlapped, which the handler's own
+    /// gates and peak counters answer without reference to time. Settling is a write made on another
+    /// thread after the work returns and there is no in-process signal for it, so this waits for the
+    /// durable fact itself: a worker that never settles a row cannot pass, however long it is given.
+    /// </summary>
+    public async Task<Job> SettledAsync(Guid jobId, TimeSpan? within = null)
+    {
+        var deadline = DateTime.UtcNow + (within ?? TimeSpan.FromSeconds(10));
+        while (true)
+        {
+            var job = JobById(jobId);
+            if (job is { IsTerminal: true }) return job;
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException(
+                    $"Job {jobId} was still {job?.Status.ToString() ?? "missing"} when the wait ran out.");
+            await Task.Delay(5);
+        }
     }
 
     public void Dispose() => _provider.Dispose();
@@ -136,10 +169,60 @@ public sealed class StubJobHandler
     private readonly List<(JobKind Kind, Guid TargetId)> _executed = [];
     private readonly object _gate = new();
 
+    // Concurrency bookkeeping, all under _gate. Peaks rather than instantaneous counts, because a
+    // test that samples "how many are running now" can only ever assert about the moment it looked;
+    // a peak recorded by the handler itself is a fact about the whole run.
+    private int _running;
+    private int _peak;
+    private readonly Dictionary<Guid, int> _runningPerTarget = [];
+    private readonly Dictionary<Guid, int> _peakPerTarget = [];
+
+    private readonly Dictionary<Guid, TaskCompletionSource> _startedPerTarget = [];
+    private readonly Dictionary<Guid, TaskCompletionSource> _heldPerTarget = [];
+    private readonly Dictionary<Guid, Exception> _failurePerTarget = [];
+
     public IReadOnlyList<(JobKind Kind, Guid TargetId)> Executed { get { lock (_gate) return _executed.ToList(); } }
 
     /// <summary>Thrown from the handler to simulate a job that fails.</summary>
     public Exception? Failure { get; set; }
+
+    /// <summary>
+    /// Makes this target's handler block until <see cref="Release"/> is called for it. This is what
+    /// turns "were two jobs running at once?" into something a test can decide rather than time: a
+    /// held handler cannot return, so anything else that starts is provably overlapping it.
+    /// </summary>
+    public void Hold(Guid targetId) { lock (_gate) Gate(_heldPerTarget, targetId); }
+
+    /// <summary>Lets a held target's handler return. Safe to call before it has started.</summary>
+    public void Release(Guid targetId)
+    {
+        TaskCompletionSource hold;
+        lock (_gate) hold = Gate(_heldPerTarget, targetId);
+        hold.TrySetResult();
+    }
+
+    /// <summary>Completes the moment this target's handler is entered.</summary>
+    public Task StartedFor(Guid targetId) { lock (_gate) return Gate(_startedPerTarget, targetId).Task; }
+
+    /// <summary>Fails only this target, so one job's failure can be watched next to another's success.</summary>
+    public void FailWith(Guid targetId, Exception failure) { lock (_gate) _failurePerTarget[targetId] = failure; }
+
+    /// <summary>The most handlers that were ever inside their bodies at the same time.</summary>
+    public int MaxConcurrent { get { lock (_gate) return _peak; } }
+
+    /// <summary>The same, for one target. Anything above one is two jobs on one target overlapping.</summary>
+    public int MaxConcurrentFor(Guid targetId) { lock (_gate) return _peakPerTarget.GetValueOrDefault(targetId); }
+
+    /// <summary>How many handlers are inside their bodies right now.</summary>
+    public int Running { get { lock (_gate) return _running; } }
+
+    /// <summary>Call under <see cref="_gate"/>.</summary>
+    private static TaskCompletionSource Gate(Dictionary<Guid, TaskCompletionSource> gates, Guid targetId)
+    {
+        if (!gates.TryGetValue(targetId, out var gate))
+            gates[targetId] = gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return gate;
+    }
 
     /// <summary>When set, the handler blocks until its token is cancelled — simulates long work.</summary>
     public bool BlockUntilCancelled { get; set; }
@@ -161,22 +244,57 @@ public sealed class StubJobHandler
 
     public async Task ExecuteAsync(Job job, CancellationToken ct)
     {
-        lock (_gate) _executed.Add((job.Kind, job.TargetId));
-        Started.TrySetResult();
+        var target = job.TargetId;
+        TaskCompletionSource started;
+        TaskCompletionSource? hold;
+        Exception? failure;
+        lock (_gate)
+        {
+            _executed.Add((job.Kind, target));
 
-        if (Failure is not null) throw Failure;
-        if (!BlockUntilCancelled) return;
+            _peak = Math.Max(_peak, ++_running);
+            var here = _runningPerTarget.GetValueOrDefault(target) + 1;
+            _runningPerTarget[target] = here;
+            _peakPerTarget[target] = Math.Max(_peakPerTarget.GetValueOrDefault(target), here);
+
+            started = Gate(_startedPerTarget, target);
+            // Looked up, never created: a target nobody held must not gain a gate that nobody will
+            // ever open.
+            _heldPerTarget.TryGetValue(target, out hold);
+            failure = _failurePerTarget.GetValueOrDefault(target) ?? Failure;
+        }
+
+        Started.TrySetResult();
+        started.TrySetResult();
 
         try
         {
-            await Task.Delay(MaxBlock, ct);
-        }
-        catch (OperationCanceledException) when (OnCancellation != StubCancellation.Rethrow)
-        {
-            if (OnCancellation == StubCancellation.SurfaceAsBrokenConnection)
-                throw new IOException("the connection was reset while the stream was being read");
+            if (failure is not null) throw failure;
 
-            // Swallowed: the handler returns as if the work had finished.
+            // A target nobody held has no gate to wait on: the handler returns immediately, exactly
+            // as it did before any of this existed.
+            if (hold is not null) await hold.Task.WaitAsync(MaxBlock, ct);
+            if (!BlockUntilCancelled) return;
+
+            try
+            {
+                await Task.Delay(MaxBlock, ct);
+            }
+            catch (OperationCanceledException) when (OnCancellation != StubCancellation.Rethrow)
+            {
+                if (OnCancellation == StubCancellation.SurfaceAsBrokenConnection)
+                    throw new IOException("the connection was reset while the stream was being read");
+
+                // Swallowed: the handler returns as if the work had finished.
+            }
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _running--;
+                _runningPerTarget[target] = _runningPerTarget.GetValueOrDefault(target) - 1;
+            }
         }
     }
 }
@@ -208,8 +326,11 @@ public sealed class TestableJobWorker(
     JobStartupGate startupGate,
     ISystemClock clock,
     StubJobHandler handler,
-    TimeSpan? timeout = null)
-    : JobWorker(scopes, cancellations, signal, startupGate, clock, NullLogger<JobWorker>.Instance)
+    TimeSpan? timeout = null,
+    int maxConcurrency = 1)
+    : JobWorker(scopes, cancellations, signal, startupGate, clock,
+        Options.Create(new JobQueueOptions { MaxConcurrency = maxConcurrency }),
+        NullLogger<JobWorker>.Instance)
 {
     private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

@@ -5,6 +5,7 @@ using Harbora.Infrastructure.Jobs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -19,16 +20,17 @@ namespace Harbora.Tests;
 /// </summary>
 public class DependencyInjectionTests
 {
-    private static ServiceCollection BuildServices()
+    private static ServiceCollection BuildServices(params (string Key, string Value)[] settings)
     {
         // Registration refuses to run without a master key; the value itself is not what this test
         // is about, so any well-formed throwaway will do.
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Harbora:MasterKey"] = Convert.ToBase64String(SHA256.HashData("tests"u8.ToArray()))
-            })
-            .Build();
+        var values = new Dictionary<string, string?>
+        {
+            ["Harbora:MasterKey"] = Convert.ToBase64String(SHA256.HashData("tests"u8.ToArray()))
+        };
+        foreach (var (key, value) in settings) values[key] = value;
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
 
         var services = new ServiceCollection();
         Harbora.Infrastructure.DependencyInjection.AddHarboraInfrastructure(services, config);
@@ -62,5 +64,27 @@ public class DependencyInjectionTests
         openerIndex.Should().BeGreaterThan(deploymentReconcilerIndex,
             "DeploymentReconciler must finish failing stranded deployments — and settling their jobs — " +
             "before the worker may claim work again");
+    }
+
+    [Fact]
+    public void How_many_jobs_run_at_once_is_read_from_configuration()
+    {
+        // The rollback path has to be reachable from a config file and a restart. An option that is
+        // registered but bound to the wrong section is a knob that turns and does nothing.
+        var configured = BuildServices(("Jobs:MaxConcurrency", "7"))
+            .BuildServiceProvider()
+            .GetRequiredService<IOptions<JobQueueOptions>>().Value;
+
+        configured.MaxConcurrency.Should().Be(7);
+    }
+
+    [Fact]
+    public void An_install_that_says_nothing_about_the_queue_gets_the_default()
+    {
+        var unconfigured = BuildServices()
+            .BuildServiceProvider()
+            .GetRequiredService<IOptions<JobQueueOptions>>().Value;
+
+        unconfigured.MaxConcurrency.Should().Be(JobQueueOptions.DefaultMaxConcurrency);
     }
 }

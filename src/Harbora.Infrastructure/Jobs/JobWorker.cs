@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Harbora.Infrastructure.Jobs;
 
@@ -14,6 +15,13 @@ namespace Harbora.Infrastructure.Jobs;
 /// Waits on <see cref="JobSignal"/> so an enqueue in this process is picked up immediately, with a
 /// poll interval as the backstop that also catches rows written by the reconciler or another
 /// instance — and a job serving a retry backoff, for which nothing signals at all.
+///
+/// <para>
+/// Up to <see cref="JobQueueOptions.MaxConcurrency"/> of those run at once, and never two for one
+/// target. The loop claims and hands off; it does not wait for the work. What it waits for is a free
+/// slot, which is the only thing that bounds the platform now — before this, the bound was one, and
+/// a single tenant's build was the whole install's background capacity for as long as it took.
+/// </para>
 /// </summary>
 public class JobWorker(
     IServiceScopeFactory scopeFactory,
@@ -21,6 +29,7 @@ public class JobWorker(
     JobSignal signal,
     JobStartupGate startupGate,
     ISystemClock clock,
+    IOptions<JobQueueOptions> options,
     ILogger<JobWorker> logger) : BackgroundService
 {
     /// <summary>
@@ -41,9 +50,21 @@ public class JobWorker(
 
     private readonly string _workerId = $"{Environment.MachineName}:{Environment.ProcessId}";
 
+    /// <summary>How many jobs this process may have in flight at once. Read once, at start.</summary>
+    private readonly int _maxConcurrency = options.Value.EffectiveMaxConcurrency;
+
+    /// <summary>
+    /// The targets this worker is running right now. Instance state rather than a shared service
+    /// because exactly one worker is registered per process, and "in flight in this process" is
+    /// precisely what it means: a second instance is kept off the same row by the ClaimStamp
+    /// concurrency token in the claim, not by this.
+    /// </summary>
+    private readonly InFlightTargets _inFlight = new();
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        logger.LogInformation("Harbora job worker {Worker} started.", _workerId);
+        logger.LogInformation("Harbora job worker {Worker} started, running up to {Limit} job(s) at once.",
+            _workerId, _maxConcurrency);
 
         // Nothing is claimed until the startup reconcilers have finished. This is a BackgroundService
         // and they are not: their StartAsync runs to completion, while the host does not wait for
@@ -57,15 +78,26 @@ public class JobWorker(
             return;
         }
 
+        // Not disposed until every job below has finished with it — each one releases its slot on
+        // the way out, and the drain at the end of this method is what guarantees they all have.
+        using var slots = new SemaphoreSlim(_maxConcurrency, _maxConcurrency);
+        var running = new List<Task>();
+
         while (!stoppingToken.IsCancellationRequested)
         {
-            bool ranSomething;
+            // Wait for capacity before looking at the queue, not after: claiming a row this process
+            // has no room to run would mark it Running and then sit on it.
+            try { await slots.WaitAsync(stoppingToken); }
+            catch (OperationCanceledException) { break; }
+
+            Job? job;
             try
             {
-                ranSomething = await RunNextAsync(stoppingToken);
+                job = await ClaimNextAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
+                slots.Release();
                 break;
             }
             catch (Exception ex)
@@ -73,30 +105,114 @@ public class JobWorker(
                 // A failure to read/claim must not kill the worker — the platform would silently
                 // stop deploying.
                 logger.LogError(ex, "Job worker loop failed; retrying after the poll interval.");
-                ranSomething = false;
+                job = null;
             }
 
-            // Only idle when there was nothing to do, so a backlog drains without pausing.
-            if (!ranSomething) await signal.WaitAsync(PollInterval, stoppingToken);
+            if (job is null)
+            {
+                // Nothing claimable: the queue is empty, or everything left is backing off or
+                // belongs to a target already in flight here. Give the slot back and idle until
+                // something is enqueued, something finishes, or the poll comes round.
+                slots.Release();
+                await signal.WaitAsync(PollInterval, stoppingToken);
+                continue;
+            }
+
+            // Started rather than awaited — this is the change the whole phase is named for. Only
+            // the completed entries are pruned, so the list stays short over a long backlog while
+            // still holding everything that is genuinely in flight.
+            running.RemoveAll(t => t.IsCompleted);
+            running.Add(StartInBackground(job, slots, stoppingToken));
         }
+
+        // The host is stopping. Every claimed job is being cancelled by the same token and is on its
+        // way to being settled Pending; leaving now would abandon those writes half-made and leave
+        // rows reading Running with nothing running them until the next restart reconciled them.
+        var inFlight = running.Where(t => !t.IsCompleted).ToArray();
+        if (inFlight.Length > 0)
+            logger.LogInformation(
+                "Harbora job worker {Worker} is waiting for {Count} job(s) to be recorded before it stops.",
+                _workerId, inFlight.Length);
+
+        // Nothing above lets a job task fault — each one catches its own — but a background service
+        // that throws on the way out stops the host with the wrong reason on the last line of the
+        // log, which is a bad thing to be wrong about during a restart.
+        try { await Task.WhenAll(inFlight); }
+        catch (Exception ex) { logger.LogError(ex, "A job did not finish cleanly while the worker was stopping."); }
     }
 
     /// <summary>
-    /// Claims and executes at most one job. Returns false when the queue was empty. Public so tests
-    /// can drive the worker deterministically instead of racing a background loop.
+    /// Runs one claimed job away from the loop, and gives back what it was holding afterwards. The
+    /// order matters: the target is released by <see cref="ExecuteClaimedAsync"/> before the slot is,
+    /// so the loop woken by the slot already sees the target as free.
+    /// </summary>
+    private Task StartInBackground(Job job, SemaphoreSlim slots, CancellationToken stoppingToken) =>
+        // Task.Run rather than a bare call: a dispatch target that blocks before its first await
+        // would otherwise hold the claim loop itself, and the loop is what every other tenant's work
+        // is waiting on. Deliberately not given the stopping token — a job claimed a moment before
+        // shutdown must still be executed far enough to be settled, and a Task.Run that refuses to
+        // start would leave the row Running for ever.
+        Task.Run(async () =>
+        {
+            try
+            {
+                await ExecuteClaimedAsync(job, stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                // ExecuteClaimedAsync records its own failures; this is the last resort for one
+                // raised around them, and its only job is to keep the worker alive.
+                logger.LogError(ex, "Job {JobId} ({Kind}) ended outside its own error handling.",
+                    job.Id, job.Kind);
+            }
+            finally
+            {
+                slots.Release();
+                // A row this process was holding back may have just become claimable, and nothing
+                // else will signal that: no enqueue happened. Without this the loop would sit out
+                // the poll interval with a free slot and eligible work in the table.
+                signal.Notify();
+            }
+        });
+
+    /// <summary>
+    /// Claims and executes at most one job, in full. Returns false when nothing was claimable.
+    /// Public so tests can drive the worker deterministically instead of racing a background loop —
+    /// the concurrency limit belongs to the loop, so this always runs the job it claims.
     /// </summary>
     public async Task<bool> RunNextAsync(CancellationToken stoppingToken)
     {
         var claim = await ClaimNextAsync(stoppingToken);
         if (claim is not { } job) return false;
 
+        await ExecuteClaimedAsync(job, stoppingToken);
+        return true;
+    }
+
+    /// <summary>Executes a job this worker has already claimed, and settles the row.</summary>
+    private async Task ExecuteClaimedAsync(Job job, CancellationToken stoppingToken)
+    {
+        try
+        {
+            await RunAndSettleAsync(job, stoppingToken);
+        }
+        finally
+        {
+            // Whatever happened, this target is this process's again. A reservation left behind
+            // would read as a target that quietly stopped being served until the panel restarted.
+            _inFlight.Release(job.Kind, job.TargetId);
+        }
+    }
+
+    private async Task RunAndSettleAsync(Job job, CancellationToken stoppingToken)
+    {
         using var scope = scopeFactory.CreateScope();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         using var _ = cancellations.Register(job.Id, linked);
 
         // The job's own deadline, inside the two above. Nothing bounded a dispatched job before, so
-        // a build hanging against a live daemon ran until the process was killed — and the worker
-        // runs one job at a time, so it held the whole platform's background work behind it.
+        // a build hanging against a live daemon ran until the process was killed. It no longer takes
+        // the rest of the queue with it, but it does still hold one of the slots the queue has.
         var deadline = TimeoutFor(job);
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(linked.Token);
         limit.CancelAfter(deadline);
@@ -148,8 +264,9 @@ public class JobWorker(
             else outcome = JobStatus.Failed;
         }
 
+        // Not given the stopping token: this is the write that records what happened, and a host
+        // that is on its way out is exactly when it matters most that it is made.
         await SettleAsync(job.Id, outcome, error, nextAttemptAt, CancellationToken.None);
-        return true;
     }
 
     /// <summary>Whether anything asked this run to stop, by any of the three routes.</summary>
@@ -194,8 +311,14 @@ public class JobWorker(
     };
 
     /// <summary>
-    /// Takes the oldest Pending job. The ClaimStamp concurrency token turns a race between two
-    /// workers into a lost update for one of them, so a job is never executed twice.
+    /// Takes the oldest Pending job this worker is allowed to run. The ClaimStamp concurrency token
+    /// turns a race between two workers into a lost update for one of them, so a job is never
+    /// executed twice — that is what makes a second *process* safe, and it is untouched here.
+    ///
+    /// <para>
+    /// The claim is short on purpose: read a row, write the claim, return. Execution happens outside
+    /// it, so a job that runs for an hour is not an hour in which nothing else can be claimed.
+    /// </para>
     /// </summary>
     private async Task<Job?> ClaimNextAsync(CancellationToken ct)
     {
@@ -205,11 +328,20 @@ public class JobWorker(
         // A job serving a backoff is Pending but not yet due; claiming it anyway would turn the
         // backoff into a retry loop. Oldest-first still decides among everything that is due.
         var now = clock.UtcNow;
-        var candidate = await db.Jobs
+        var claimable = db.Jobs
             .Where(j => j.Status == JobStatus.Pending &&
-                        (j.NextAttemptAt == null || j.NextAttemptAt <= now))
-            .OrderBy(j => j.CreatedAt)
-            .FirstOrDefaultAsync(ct);
+                        (j.NextAttemptAt == null || j.NextAttemptAt <= now));
+
+        // Rows for a target this process is already running are not skipped over silently — they are
+        // excluded from the search, so oldest-first picks the next thing that CAN run instead of the
+        // loop idling behind work it is not allowed to start. Written as a term per held target
+        // rather than a set membership test because the pair is what excludes, not the id: a backup
+        // of one thing and a deployment of another are different work whatever their guids are. The
+        // list is bounded by MaxConcurrency, so this stays a handful of terms.
+        foreach (var (kind, targetId) in _inFlight.Snapshot())
+            claimable = claimable.Where(j => j.Kind != kind || j.TargetId != targetId);
+
+        var candidate = await claimable.OrderBy(j => j.CreatedAt).FirstOrDefaultAsync(ct);
 
         if (candidate is null) return null;
 
@@ -224,6 +356,11 @@ public class JobWorker(
             return null;
         }
 
+        // Taken before the row is written, so that even two claims running at once cannot both come
+        // away holding one target. Everything from here to the return either hands the reservation
+        // to the caller or gives it back.
+        if (!_inFlight.TryReserve(candidate.Kind, candidate.TargetId)) return null;
+
         candidate.Status = JobStatus.Running;
         candidate.StartedAt = clock.UtcNow;
         candidate.ClaimedBy = _workerId;
@@ -237,7 +374,13 @@ public class JobWorker(
         catch (DbUpdateConcurrencyException)
         {
             // Another worker claimed it first; let the loop pick up the next one.
+            _inFlight.Release(candidate.Kind, candidate.TargetId);
             return null;
+        }
+        catch
+        {
+            _inFlight.Release(candidate.Kind, candidate.TargetId);
+            throw;
         }
 
         return candidate;

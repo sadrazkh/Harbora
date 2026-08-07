@@ -98,6 +98,9 @@ public static class DependencyInjection
         // worker is a BackgroundService, so its StartAsync returns immediately and it would
         // otherwise be claiming work while the reconcilers are still deciding what that work means.
         services.AddSingleton<JobStartupGate>();
+        // How much of the platform's background work may happen at once. One reproduces the worker
+        // the platform ran before jobs went parallel, and is the rollback path.
+        services.Configure<JobQueueOptions>(config.GetSection(JobQueueOptions.SectionName));
         services.AddScoped<IJobQueue, DatabaseJobQueue>();
         // Settles jobs orphaned by a crash BEFORE deployments are reconciled — order matters.
         services.AddHostedService<JobReconciler>();
