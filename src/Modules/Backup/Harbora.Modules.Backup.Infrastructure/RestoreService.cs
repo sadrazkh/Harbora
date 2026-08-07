@@ -55,6 +55,12 @@ public sealed class RestoreService(
     private readonly BackupModuleOptions _options = options.Value;
 
     /// <summary>
+    /// One sentence for both halves of the guard — the query that gives it early and the index that
+    /// enforces it late — so a caller cannot tell which one refused.
+    /// </summary>
+    internal const string AlreadyRunning = "A restore into this destination is already running.";
+
+    /// <summary>
     /// Removes the intermediate copy a database restore lands in. Best-effort, logged loudly: a dump
     /// left behind is a plaintext copy of an entire database on disk.
     /// </summary>
@@ -134,13 +140,14 @@ public sealed class RestoreService(
             }
         }
 
-        // Two restores into one destination produce a result neither of them describes.
+        // Two restores into one destination produce a result neither of them describes. Like the
+        // snapshot guard, this check is here for its message: it is a read followed by an insert,
+        // and the partial unique index behind the insert below is what holds under concurrency.
         var contested = await db.RestoreJobs.AnyAsync(r =>
             r.Destination == destination
             && (r.Status == RestoreJobStatus.Pending || r.Status == RestoreJobStatus.Running), ct);
 
-        if (contested)
-            return new RestoreOutcome(false, Error: "A restore into this destination is already running.");
+        if (contested) return new RestoreOutcome(false, Error: AlreadyRunning);
 
         var job = new RestoreJob
         {
@@ -157,7 +164,18 @@ public sealed class RestoreService(
         };
 
         db.RestoreJobs.Add(job);
-        await db.SaveChangesAsync(ct);
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            // Lost the race to another restore into the same destination. Nothing was written, and
+            // nothing is audited: no restore was requested as far as this caller is concerned.
+            db.ChangeTracker.Clear();
+            return new RestoreOutcome(false, Error: AlreadyRunning);
+        }
 
         // Audited at REQUEST time, not on completion. A restore that hangs or crashes is exactly the
         // one an incident review needs to see was asked for.

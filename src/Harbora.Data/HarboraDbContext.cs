@@ -456,6 +456,7 @@ public class HarboraDbContext : DbContext
             e.Property(x => x.VerificationNote).HasMaxLength(1024);
             e.Property(x => x.Warnings).HasMaxLength(4096);
             e.Property(x => x.CorrelationId).HasMaxLength(64);
+            e.Property(x => x.StagingPath).HasMaxLength(1024);
 
             // Computed from StartedAt/CompletedAt; there is nothing to store.
             e.Ignore(x => x.Duration);
@@ -473,6 +474,21 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => new { x.RepositoryId, x.Status });
             // Retention groups by target, newest first.
             e.HasIndex(x => new { x.WorkspaceId, x.TargetType, x.TargetRef, x.CreatedAt });
+
+            // One active backup per target, enforced by the database rather than by a query.
+            //
+            // BackupSnapshotService checks first and gives a sentence a person can act on, but that
+            // check is a read followed by an insert: two requests — a manual one and the scheduler's
+            // — can both pass it and both write a row. Then two runs stage the same 200 GB volume
+            // and disagree about what the data looked like. The filter is what keeps this to
+            // "active": without it a target could be backed up exactly once, ever.
+            //
+            // Numeric literals because that is what the column holds, and BackupSnapshotStatus's
+            // wire values are frozen: 0 Pending, 1 Preparing, 2 Running.
+            e.HasIndex(x => new { x.WorkspaceId, x.TargetType, x.TargetRef })
+                .IsUnique()
+                .HasFilter("\"Status\" IN (0, 1, 2)")
+                .HasDatabaseName("IX_BackupSnapshots_ActiveTarget");
         });
 
         b.Entity<Harbora.Modules.Backup.Domain.RestoreJob>(e =>
@@ -492,6 +508,16 @@ public class HarboraDbContext : DbContext
 
             e.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
             e.HasIndex(x => x.Status);
+
+            // One active restore per destination, for the same reason and with the same race.
+            // Deliberately NOT scoped by workspace: a destination is a resolved absolute path or a
+            // managed database's id, both of which name one thing on the machine. Two tenants
+            // racing for the same directory is precisely the case a workspace-scoped index would
+            // wave through. 0 Pending, 1 Running.
+            e.HasIndex(x => x.Destination)
+                .IsUnique()
+                .HasFilter("\"Status\" IN (0, 1)")
+                .HasDatabaseName("IX_RestoreJobs_ActiveDestination");
         });
 
         b.Entity<IdempotencyRecord>(e =>

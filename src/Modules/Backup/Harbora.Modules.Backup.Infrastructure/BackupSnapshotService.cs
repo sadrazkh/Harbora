@@ -32,6 +32,12 @@ public sealed class BackupSnapshotService(
     IAuditLogger audit,
     ILogger<BackupSnapshotService> logger)
 {
+    /// <summary>
+    /// One sentence for both halves of the guard: the query that gives it early, and the index that
+    /// enforces it late. A caller must not be able to tell which one refused.
+    /// </summary>
+    internal const string AlreadyRunning = "A backup of this target is already running.";
+
     /// <summary>Create the row and hand the work to the durable queue.</summary>
     public async Task<SnapshotOutcome> QueueAsync(
         Guid workspaceId,
@@ -57,6 +63,10 @@ public sealed class BackupSnapshotService(
 
         // One backup at a time per target. Two concurrent snapshots of the same directory waste the
         // work at best, and at worst disagree about what the data looked like.
+        //
+        // This check exists for its MESSAGE, not for its safety: it is a read followed by an
+        // insert, so two callers can both pass it. The partial unique index behind the insert below
+        // is what actually holds under concurrency.
         var alreadyRunning = await db.BackupSnapshots.AnyAsync(s =>
             s.WorkspaceId == workspaceId
             && s.TargetType == targetType
@@ -65,8 +75,7 @@ public sealed class BackupSnapshotService(
                 || s.Status == BackupSnapshotStatus.Preparing
                 || s.Status == BackupSnapshotStatus.Running), ct);
 
-        if (alreadyRunning)
-            return new SnapshotOutcome(false, Error: "A backup of this target is already running.");
+        if (alreadyRunning) return new SnapshotOutcome(false, Error: AlreadyRunning);
 
         var snapshot = new BackupSnapshot
         {
@@ -82,7 +91,19 @@ public sealed class BackupSnapshotService(
         };
 
         db.BackupSnapshots.Add(snapshot);
-        await db.SaveChangesAsync(ct);
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            // Lost the race the pre-check above cannot win. The partial unique index over the
+            // active statuses is the authority, and losing it means exactly what the pre-check
+            // describes — so say the same thing rather than surfacing a constraint name.
+            db.ChangeTracker.Clear();
+            return new SnapshotOutcome(false, Error: AlreadyRunning);
+        }
 
         await jobs.EnqueueAsync(JobKind.BackupSnapshot, snapshot.Id, ct);
         return new SnapshotOutcome(true, snapshot.Id);
@@ -134,6 +155,13 @@ public sealed class BackupSnapshotService(
                 return;
             }
 
+            // Written down so a kill -9 — which skips the lease's finally — still leaves a trail to
+            // the staged copy. A directory target is excluded: its "source path" is the operator's
+            // own live data, and the reconciler must never be handed a path to it.
+            snapshot.StagingPath = snapshot.TargetType is BackupTargetType.Directory
+                ? null
+                : lease.SourcePath;
+
             var password = await credentials.GetPasswordAsync(repository.Id, ct);
             if (password is null)
             {
@@ -174,6 +202,10 @@ public sealed class BackupSnapshotService(
                 ? BackupSnapshotStatus.CompletedWithWarnings
                 : BackupSnapshotStatus.Completed);
 
+            // The lease removes the staged copy on the way out of this method, so the row must stop
+            // claiming there is one to remove.
+            snapshot.StagingPath = null;
+
             if (snapshot.PolicyId is { } policyId)
             {
                 var policy = await db.BackupPolicies.IgnoreQueryFilters()
@@ -194,6 +226,7 @@ public sealed class BackupSnapshotService(
         {
             SnapshotLifecycle.Transition(snapshot, BackupSnapshotStatus.Cancelled);
             snapshot.CompletedAt = DateTimeOffset.UtcNow;
+            snapshot.StagingPath = null;
             await db.SaveChangesAsync(CancellationToken.None);
             throw;
         }
@@ -300,6 +333,8 @@ public sealed class BackupSnapshotService(
         SnapshotLifecycle.Transition(snapshot, BackupSnapshotStatus.Failed);
         snapshot.FailureReason = reason;
         snapshot.CompletedAt = DateTimeOffset.UtcNow;
+        // The lease cleans up behind this method, so nothing is left for a reconciler to sweep.
+        snapshot.StagingPath = null;
         await db.SaveChangesAsync(ct);
 
         await notifications.SendAsync(new BackupNotification(

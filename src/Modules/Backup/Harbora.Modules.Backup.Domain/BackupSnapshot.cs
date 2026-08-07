@@ -65,6 +65,19 @@ public class BackupSnapshot : BaseEntity
     /// <summary>Ties every log line and job for this snapshot together.</summary>
     public string? CorrelationId { get; set; }
 
+    /// <summary>
+    /// Where this run's data was staged, while it is being staged.
+    ///
+    /// <para>
+    /// A volume, database or application target is materialised into the module's staging directory
+    /// first, and that copy is plaintext application data. The lease removes it in a <c>finally</c>,
+    /// which a process kill skips — so the path is written down here, and the startup reconciler
+    /// removes what a crash left. Null once the run is over, and null throughout for a directory
+    /// target, whose "source" is the operator's own live data and never the module's to delete.
+    /// </para>
+    /// </summary>
+    public string? StagingPath { get; set; }
+
     public bool IsTerminal => Status is BackupSnapshotStatus.Completed
         or BackupSnapshotStatus.CompletedWithWarnings
         or BackupSnapshotStatus.Failed

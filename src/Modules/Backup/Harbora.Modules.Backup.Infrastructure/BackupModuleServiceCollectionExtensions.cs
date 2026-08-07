@@ -89,6 +89,11 @@ public static class BackupModuleServiceCollectionExtensions
         services.AddScoped<IJobHandler, BackupPruneJobHandler>();
         services.AddScoped<IJobHandler, RepositoryHealthCheckJobHandler>();
 
+        // Before the scheduler, and it runs to completion: a policy tick that fired while a target
+        // still had a snapshot stranded by the last restart would be refused, log a warning, and
+        // advance NextRunAt as though it had been handled.
+        services.AddHostedService<BackupModuleReconciler>();
+
         // Checks the flag itself and returns immediately when the module is off, so a disabled
         // module costs one log line rather than a timer ticking for the process's lifetime.
         services.AddHostedService<BackupPolicyScheduler>();
