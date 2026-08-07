@@ -546,7 +546,7 @@ public sealed class AppsController(
 
         await db.SaveChangesAsync(ct);
 
-        var applied = await proxy.ApplyAllAsync(ct);
+        var applied = await proxy.ApplyAllAsync(app.WorkspaceId, ct);
 
         await audit.LogAsync("app.protection_changed", "app",
             $"{app.Name}: auth={basicAuthEnabled}, ips={allowed.Count}", ClientIp, ct: ct);

@@ -1138,7 +1138,7 @@ public sealed class DeploymentPipeline(
 
         try
         {
-            var result = await proxy.ApplyAllAsync(ct);
+            var result = await proxy.ApplyAllAsync(app.WorkspaceId, ct);
 
             // A deployment whose routing did not apply has not deployed. This used to log a warning
             // and carry on to "Succeeded", which is the one thing the platform promises never to do:

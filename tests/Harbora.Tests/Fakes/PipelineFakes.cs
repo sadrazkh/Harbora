@@ -49,7 +49,7 @@ public sealed class RecordingProxyEngine(Func<IReadOnlyList<Route>> storedRoutes
     public ProxyConfigPreview Preview(IReadOnlyList<Route> routes) => new("yaml", string.Empty);
     public ProxyValidationResult Validate(IReadOnlyList<Route> routes) => new(true, [], []);
 
-    public Task<ProxyApplyResult> ApplyAllAsync(CancellationToken ct)
+    public Task<ProxyApplyResult> ApplyAllAsync(Guid? callerWorkspaceId, CancellationToken ct)
     {
         ApplyCount++;
         Applications.AddRange(storedRoutes()

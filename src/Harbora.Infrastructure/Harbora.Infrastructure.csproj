@@ -26,4 +26,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Test project reaches into internals rather than widening the public surface for tests. -->
+    <InternalsVisibleTo Include="Harbora.Tests" />
+  </ItemGroup>
+
 </Project>

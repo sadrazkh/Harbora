@@ -27,7 +27,17 @@ public interface IProxyEngine
     /// "apply a subset" unsayable.
     /// </para>
     /// </summary>
-    Task<ProxyApplyResult> ApplyAllAsync(CancellationToken ct);
+    /// <param name="callerWorkspaceId">
+    /// The workspace whose action triggered this apply, or <see langword="null"/> for a caller with
+    /// no workspace of its own (a sessionless sweep). Validation still runs over every route on the
+    /// platform, exactly as before — this has no bearing on what is rendered or written. It decides
+    /// only what a validation failure is allowed to say back: a route this workspace owns can be
+    /// named in <see cref="ProxyApplyResult.Error"/>, because the caller can act on it; a route
+    /// belonging to any other workspace cannot, because naming another tenant's hostname — and that
+    /// it is misconfigured — to a caller who does not own it is a leak, not a diagnostic. The full
+    /// detail, every route named, always reaches the server log regardless of who called.
+    /// </param>
+    Task<ProxyApplyResult> ApplyAllAsync(Guid? callerWorkspaceId, CancellationToken ct);
 }
 
 public record ProxyConfigPreview(string Format, string Content);

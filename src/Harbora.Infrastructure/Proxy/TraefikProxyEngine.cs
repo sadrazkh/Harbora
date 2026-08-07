@@ -43,25 +43,45 @@ public sealed class TraefikProxyEngine(
     /// </summary>
     private readonly SemaphoreSlim _applyGate = new(1, 1);
 
+    /// <summary>
+    /// Test seam only — never set outside <c>Harbora.Tests</c>, a no-op in production. Awaited as the
+    /// first step of <see cref="WriteAsync"/>, on the far side of <see cref="ApplyAllAsync"/>'s own
+    /// read. A test built on <see cref="IRouteCatalog"/> alone can only watch the read: the read sits
+    /// inside the apply gate whether or not the gate also covers the write, so a mutation that
+    /// narrows the gate to the read alone is invisible to it. This hook sits exactly where that
+    /// narrowing would show up.
+    /// </summary>
+    internal Func<Task>? TestOnlyBeforeWrite { get; set; }
+
     public ProxyConfigPreview Preview(IReadOnlyList<Route> routes)
         => new("yaml", Render(routes.Where(r => r.IsEnabled).ToList()));
 
-    public ProxyValidationResult Validate(IReadOnlyList<Route> routes)
+    public ProxyValidationResult Validate(IReadOnlyList<Route> routes) => ValidateWithOwnership(routes).Result;
+
+    /// <summary>
+    /// Same checks as <see cref="Validate"/>, but each error keeps the id of the route and the
+    /// workspace that produced it. <see cref="Validate"/> throws that away, which is fine for the
+    /// designer's own preview/validate endpoints — they only ever see one workspace's routes anyway —
+    /// but <see cref="WriteAsync"/> validates the whole platform and needs to know, per error, whose
+    /// route it was before it can decide what a caller is allowed to be told about it.
+    /// </summary>
+    private static (ProxyValidationResult Result, List<(Guid WorkspaceId, Guid RouteId, string Message)> Tagged)
+        ValidateWithOwnership(IReadOnlyList<Route> routes)
     {
-        var errors = new List<string>();
+        var tagged = new List<(Guid WorkspaceId, Guid RouteId, string Message)>();
         var warnings = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var r in routes.Where(r => r.IsEnabled))
         {
             if (string.IsNullOrWhiteSpace(r.Host))
-                errors.Add($"Route {r.Id}: host is required.");
+                tagged.Add((r.WorkspaceId, r.Id, $"Route {r.Id}: host is required."));
             if (r.Type != RouteType.Redirect && string.IsNullOrWhiteSpace(r.TargetService))
-                errors.Add($"Route {r.Host}: an upstream service is required.");
+                tagged.Add((r.WorkspaceId, r.Id, $"Route {r.Host}: an upstream service is required."));
             if (r.TargetPort is <= 0 or > 65535)
-                errors.Add($"Route {r.Host}: target port {r.TargetPort} is out of range.");
+                tagged.Add((r.WorkspaceId, r.Id, $"Route {r.Host}: target port {r.TargetPort} is out of range."));
             if (r.Type == RouteType.Redirect && string.IsNullOrWhiteSpace(r.RedirectTo))
-                errors.Add($"Route {r.Host}: redirect target is required.");
+                tagged.Add((r.WorkspaceId, r.Id, $"Route {r.Host}: redirect target is required."));
 
             var key = $"{r.Host}{r.PathPrefix}";
             if (!seen.Add(key))
@@ -69,13 +89,48 @@ public sealed class TraefikProxyEngine(
 
             if (r.CustomHeadersJson is { Length: > 0 } &&
                 !TryParseHeaders(r.CustomHeadersJson, out _))
-                errors.Add($"Route {r.Host}: custom headers are not valid JSON.");
+                tagged.Add((r.WorkspaceId, r.Id, $"Route {r.Host}: custom headers are not valid JSON."));
         }
 
-        return new ProxyValidationResult(errors.Count == 0, errors, warnings);
+        var errors = tagged.Select(t => t.Message).ToList();
+        return (new ProxyValidationResult(errors.Count == 0, errors, warnings), tagged);
     }
 
-    public async Task<ProxyApplyResult> ApplyAllAsync(CancellationToken ct)
+    /// <summary>
+    /// What a validation failure is allowed to say back to whoever triggered the apply. The caller's
+    /// own invalid routes are named in full — they can act on those — everything else is reduced to a
+    /// count, because naming another workspace's hostname, and saying it is misconfigured, is not this
+    /// caller's to know. See <see cref="IProxyEngine.ApplyAllAsync"/> for why.
+    /// </summary>
+    private static string CallerSafeValidationError(
+        IReadOnlyList<(Guid WorkspaceId, Guid RouteId, string Message)> errors, Guid? callerWorkspaceId)
+    {
+        var own = callerWorkspaceId is { } id
+            ? errors.Where(e => e.WorkspaceId == id).Select(e => e.Message).Distinct().ToList()
+            : [];
+        var elsewhereCount = errors
+            .Where(e => callerWorkspaceId is null || e.WorkspaceId != callerWorkspaceId)
+            .Select(e => e.RouteId)
+            .Distinct()
+            .Count();
+
+        if (own.Count > 0)
+        {
+            var ownText = string.Join("; ", own);
+            return elsewhereCount == 0
+                ? ownText
+                : $"{ownText} ({elsewhereCount} other route(s) elsewhere on the platform also failed " +
+                  "validation; see the server log.)";
+        }
+
+        // None of the failing routes belong to this caller — there is nothing here for them to fix,
+        // only a count and a place to look.
+        return elsewhereCount == 1
+            ? "1 route on the platform failed validation; see the server log for which one."
+            : $"{elsewhereCount} routes on the platform failed validation; see the server log for which ones.";
+    }
+
+    public async Task<ProxyApplyResult> ApplyAllAsync(Guid? callerWorkspaceId, CancellationToken ct)
     {
         // Held across the read as well as the write. Rendering from routes read before waiting for
         // the gate would let a slow attempt publish a picture of the platform that a faster one has
@@ -85,7 +140,7 @@ public sealed class TraefikProxyEngine(
         try
         {
             var enabled = (await catalog.AllEnabledAsync(ct)).Where(r => r.IsEnabled).ToList();
-            return await WriteAsync(enabled, ct);
+            return await WriteAsync(enabled, callerWorkspaceId, ct);
         }
         finally
         {
@@ -97,11 +152,23 @@ public sealed class TraefikProxyEngine(
     /// Validate → write temp → back up what is live → swap. Every failure after the validation gate
     /// puts the backup back, and says whether it managed to.
     /// </summary>
-    private async Task<ProxyApplyResult> WriteAsync(IReadOnlyList<Route> enabled, CancellationToken ct)
+    private async Task<ProxyApplyResult> WriteAsync(
+        IReadOnlyList<Route> enabled, Guid? callerWorkspaceId, CancellationToken ct)
     {
-        var validation = Validate(enabled);
+        if (TestOnlyBeforeWrite is not null) await TestOnlyBeforeWrite();
+
+        var (validation, tagged) = ValidateWithOwnership(enabled);
         if (!validation.IsValid)
-            return new ProxyApplyResult(false, string.Join("; ", validation.Errors), false);
+        {
+            // Every route on the platform was just checked, so this can name a tenant that has
+            // nothing to do with whoever triggered the apply. The full picture — every host, every
+            // reason — belongs in the server log, which only an operator reads; what goes back to
+            // the caller is limited to routes they actually own (HARBORA-0055 review).
+            logger.LogError(
+                "Refused to apply the platform proxy config; {Count} route(s) failed validation: {Errors}",
+                validation.Errors.Count, string.Join("; ", validation.Errors));
+            return new ProxyApplyResult(false, CallerSafeValidationError(tagged, callerWorkspaceId), false);
+        }
 
         var target = _opt.DynamicConfigPath;
         var dir = Path.GetDirectoryName(target)!;

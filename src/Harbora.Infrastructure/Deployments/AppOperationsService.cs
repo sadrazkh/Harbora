@@ -68,11 +68,11 @@ public sealed class AppOperationsService(
 
         try
         {
-            // No workspace is named here, and that is the fix: this used to re-apply the deleted
-            // app's workspace alone, which published a config with nobody else's routes in it. The
-            // engine reads the platform's own, unfiltered, so the sessionless callers above cannot
-            // narrow it to a tenant — or to nothing.
-            await proxy.ApplyAllAsync(ct);
+            // What is rendered is not scoped by this: the engine reads the platform's own routes,
+            // unfiltered, so the sessionless callers above cannot narrow it to a tenant — or to
+            // nothing. The workspace named here only decides what a validation failure is allowed to
+            // say back, and it is the app just deleted, since that is whose action this apply is.
+            await proxy.ApplyAllAsync(app.WorkspaceId, ct);
         }
         catch (Exception ex) { logger.LogWarning(ex, "Proxy re-apply after delete failed."); }
     }

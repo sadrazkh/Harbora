@@ -119,7 +119,7 @@ public sealed class AdminerService(
         db.Routes.Add(route);
         await db.SaveChangesAsync(ct);
 
-        var applied = await proxy.ApplyAllAsync(ct);
+        var applied = await proxy.ApplyAllAsync(service.WorkspaceId, ct);
 
         if (!applied.Success)
         {
@@ -174,7 +174,9 @@ public sealed class AdminerService(
                 await db.SaveChangesAsync(ct);
                 // The sweeper has no session; the engine's own read is unfiltered, which is what
                 // keeps an expiring admin session from withdrawing the platform's routing with it.
-                await proxy.ApplyAllAsync(ct);
+                // No caller workspace either: nobody is waiting on this apply's answer, and the
+                // routes it just removed could span several tenants.
+                await proxy.ApplyAllAsync(null, ct);
             }
 
             closed++;

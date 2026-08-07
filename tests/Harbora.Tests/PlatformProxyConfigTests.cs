@@ -39,7 +39,7 @@ public class PlatformProxyConfigTests
         platform.Route(platform.TenantA, "acme.example.com");
         platform.Route(platform.TenantB, "globex.example.com");
 
-        await platform.Engine.ApplyAllAsync(default);
+        await platform.Engine.ApplyAllAsync(platform.TenantA, default);
 
         var config = File.ReadAllText(platform.Target);
         config.Should().Contain("Host(`acme.example.com`)").And.Contain("Host(`globex.example.com`)",
@@ -74,7 +74,7 @@ public class PlatformProxyConfigTests
         platform.Route(platform.TenantA, "live.example.com");
         platform.Route(platform.TenantB, "paused.example.com", enabled: false);
 
-        await platform.Engine.ApplyAllAsync(default);
+        await platform.Engine.ApplyAllAsync(platform.TenantA, default);
 
         var config = File.ReadAllText(platform.Target);
         config.Should().Contain("live.example.com").And.NotContain("paused.example.com");
@@ -93,7 +93,7 @@ public class PlatformProxyConfigTests
         platform.Route(platform.TenantA, "acme.example.com");
         platform.Route(platform.TenantB, "globex.example.com");
 
-        await scoped.ApplyAllAsync(default);
+        await scoped.ApplyAllAsync(platform.TenantA, default);
 
         File.ReadAllText(platform.Target).Should().Contain("globex.example.com",
             "the tenant whose request this is has no bearing on what the platform routes");
@@ -110,7 +110,7 @@ public class PlatformProxyConfigTests
         platform.Route(platform.TenantA, "acme.example.com");
         platform.Route(platform.TenantB, "globex.example.com");
 
-        var result = await sessionless.ApplyAllAsync(default);
+        var result = await sessionless.ApplyAllAsync(null, default);
 
         result.Success.Should().BeTrue();
         var config = File.ReadAllText(platform.Target);
@@ -135,7 +135,7 @@ public class PlatformProxyConfigTests
         var engine = platform.EngineOver(watcher);
 
         var results = await Task.WhenAll(Enumerable.Range(0, 5)
-            .Select(_ => Task.Run(() => engine.ApplyAllAsync(default))));
+            .Select(_ => Task.Run(() => engine.ApplyAllAsync(null, default))));
 
         watcher.MostAtOnce.Should().Be(1, "one file has room for one writer");
         results.Should().OnlyContain(r => r.Success, "every caller is owed an answer, not a corrupted file");
@@ -150,13 +150,74 @@ public class PlatformProxyConfigTests
         var engine = platform.EngineOver(new RendezvousCatalog(platform.Catalog, expected: 5));
 
         await Task.WhenAll(Enumerable.Range(0, 5)
-            .Select(_ => Task.Run(() => engine.ApplyAllAsync(default))));
+            .Select(_ => Task.Run(() => engine.ApplyAllAsync(null, default))));
 
         var config = File.ReadAllText(platform.Target);
         config.Should().StartWith("# Managed by Harbora");
         config.Should().Contain("Host(`acme.example.com`)").And.Contain("Host(`globex.example.com`)");
         platform.LeftoverRenders().Should().BeEmpty(
             "a temp file per attempt is only safe if each attempt takes its own away again");
+    }
+
+    [Fact]
+    public async Task A_slower_attempts_own_failure_does_not_erase_a_faster_attempts_success()
+    {
+        // RendezvousCatalog above proves two applies are never both inside the read. It cannot prove
+        // the gate also spans the write: the read sits inside the apply gate whether or not the gate
+        // covers the write too, so a mutation that narrows the gate to "wait; read; release; write"
+        // is invisible to it (both concurrency tests above stay green under that mutation — each
+        // attempt still has its own tmp file, and File.Move is atomic, so the survivor is always a
+        // complete render).
+        //
+        // This test watches the write instead, by forcing an order rather than counting arrivals:
+        // attempt A is held — deterministically, not by timing — until attempt B has completed its
+        // own apply. Gated correctly, B cannot even acquire the semaphore while A holds it, so B
+        // cannot finish during A's wait at all; A's wait always exhausts, A fails alone having seen
+        // nothing of B, and B applies cleanly afterwards. Narrowed to the read alone, B runs to
+        // completion while A waits, and when A's own write is then forced to fail, A's rollback
+        // restores whatever backup happens to be on disk at that moment — B's — silently undoing a
+        // config B already reported as applied.
+        //
+        // A ".bak" only exists once there is something to back up, so the race needs a config
+        // already live before it starts (an apply against an empty target never takes a backup at
+        // all, which would make this pass for the wrong reason). The seed apply runs before the hook
+        // is attached, so it is not itself part of the race.
+        using var platform = new Platform();
+        platform.Route(platform.TenantA, "predecessor.example.com");
+        await platform.Engine.ApplyAllAsync(platform.TenantA, default);
+
+        var arrivedFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var claimed = 0;
+        using var ctsA = new CancellationTokenSource();
+
+        var engine = platform.Engine;
+        engine.TestOnlyBeforeWrite = async () =>
+        {
+            if (Interlocked.Exchange(ref claimed, 1) != 0) return; // attempt B: run straight through
+
+            arrivedFirst.TrySetResult();
+            // Bounded, not decisive: gated correctly, B cannot reach "finished" during this window
+            // at all, so the wait always runs out and A proceeds having observed nothing of B. The
+            // assertions below turn on that structural fact, not on how long this wait lasts.
+            await Task.WhenAny(bFinished.Task, Task.Delay(TimeSpan.FromMilliseconds(500)));
+            await ctsA.CancelAsync(); // force this attempt's own write to fail, deterministically
+        };
+
+        var taskA = engine.ApplyAllAsync(platform.TenantA, ctsA.Token);
+        await arrivedFirst.Task;
+        platform.Route(platform.TenantB, "bravo.example.com");
+        var taskB = engine.ApplyAllAsync(platform.TenantB, default);
+        _ = taskB.ContinueWith(_ => bFinished.TrySetResult());
+
+        var resultA = await taskA;
+        var resultB = await taskB;
+
+        resultA.Success.Should().BeFalse("its own write was cancelled after being held");
+        resultB.Success.Should().BeTrue("workspace B was told its apply succeeded");
+        File.ReadAllText(platform.Target).Should().Contain("bravo.example.com",
+            "a slower attempt's own failure must not silently erase a faster attempt's " +
+            "already-reported success");
     }
 
     // ---- what platform-wide rendering makes reachable for the first time ----
@@ -181,6 +242,75 @@ public class PlatformProxyConfigTests
         engine.Validate([a, b]).Warnings.Should()
             .Contain(w => w.Contains("Duplicate", StringComparison.OrdinalIgnoreCase));
         engine.Validate([a, b]).IsValid.Should().BeTrue("a contested hostname is a warning, not a refusal");
+    }
+
+    // ---- a validation failure must not leak another tenant's routes ----
+    //
+    // Validating platform-wide (above) means a route that fails validation can belong to a
+    // workspace that has nothing to do with whoever triggered the apply. Before this, the engine
+    // joined every error — including the offending host — into ProxyApplyResult.Error, which every
+    // caller hands straight back to the caller (RoutesController's JSON, AppsController's TempData,
+    // AdminerService's refusal message) or into the deployment log (ProxyDiagnosis). These tests hold
+    // the fix: a caller can still act on their own invalid route, and cannot learn anything about
+    // anyone else's.
+
+    [Fact]
+    public async Task A_callers_own_invalid_route_is_named_so_they_can_fix_it()
+    {
+        using var platform = new Platform();
+        platform.InvalidRoute(platform.TenantA, "broken.example.com");
+
+        var result = await platform.Engine.ApplyAllAsync(platform.TenantA, default);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("broken.example.com",
+            "workspace A owns this route and has to be able to act on it");
+    }
+
+    [Fact]
+    public async Task Another_tenants_invalid_route_is_not_named_in_the_callers_error()
+    {
+        using var platform = new Platform();
+        platform.Route(platform.TenantA, "fine.example.com");
+        platform.InvalidRoute(platform.TenantB, "broken-elsewhere.example.com");
+
+        var result = await platform.Engine.ApplyAllAsync(platform.TenantA, default);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotContain("broken-elsewhere.example.com",
+            "workspace A did not create this route and cannot fix it; naming it would tell A that " +
+            "workspace B exists, has a route, and that the route is misconfigured");
+        result.Error.Should().Contain("1 route",
+            "the caller is still owed a count of what failed, just not whose it was");
+    }
+
+    [Fact]
+    public async Task A_sessionless_callers_error_names_no_host_at_all()
+    {
+        using var platform = new Platform();
+        platform.InvalidRoute(platform.TenantA, "broken.example.com");
+
+        var result = await platform.Engine.ApplyAllAsync(null, default);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotContain("broken.example.com",
+            "a caller with no workspace of its own owns nothing on the platform");
+    }
+
+    [Fact]
+    public async Task A_validation_failure_still_logs_every_hosts_own_detail_for_an_operator()
+    {
+        using var platform = new Platform();
+        var logs = new RecordingLogger<TraefikProxyEngine>();
+        var engine = new TraefikProxyEngine(
+            Options.Create(new TraefikOptions { DynamicConfigPath = platform.Target }),
+            new AesGcmSecretProtector(TestKey), platform.Catalog, logs);
+        platform.InvalidRoute(platform.TenantB, "only-in-the-log.example.com");
+
+        await engine.ApplyAllAsync(platform.TenantA, default);
+
+        logs.Messages.Should().Contain(m => m.Contains("only-in-the-log.example.com"),
+            "the detail a caller cannot be shown still has to reach an operator somewhere");
     }
 
     // ---- helpers ----
@@ -222,6 +352,22 @@ public class PlatformProxyConfigTests
             {
                 WorkspaceId = workspaceId, Host = host, TargetService = "harbora-" + host.Split('.')[0],
                 TargetPort = 8080, IsEnabled = enabled
+            };
+            Db.Routes.Add(route);
+            Db.SaveChanges();
+            return route;
+        }
+
+        /// <summary>
+        /// A route that fails validation (port out of range), tied to a tenant, so a test can prove
+        /// what a caller who does — or does not — own it is told about the failure.
+        /// </summary>
+        public Route InvalidRoute(Guid workspaceId, string host)
+        {
+            var route = new Route
+            {
+                WorkspaceId = workspaceId, Host = host, TargetService = "harbora-" + host.Split('.')[0],
+                TargetPort = 99999, IsEnabled = true
             };
             Db.Routes.Add(route);
             Db.SaveChanges();
@@ -290,6 +436,26 @@ public class PlatformProxyConfigTests
             var routes = await inner.AllEnabledAsync(ct);
             Interlocked.Decrement(ref _inside);
             return routes;
+        }
+    }
+
+    /// <summary>Captures every formatted log line, so a test can assert on what an operator would see.</summary>
+    private sealed class RecordingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
         }
     }
 }

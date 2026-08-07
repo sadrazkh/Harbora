@@ -122,7 +122,7 @@ public class TraefikProxyEngineTests
     {
         using var cfg = new TempConfig();
 
-        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(default);
+        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(null, default);
 
         result.Success.Should().BeTrue();
         result.Error.Should().BeNull();
@@ -136,8 +136,12 @@ public class TraefikProxyEngineTests
         // The atomic-apply gate: a config Traefik would reject must never reach the file it watches,
         // because a file provider reloads whatever it finds there.
         using var cfg = new TempConfig();
+        var route = HostRoute(port: 70000);
 
-        var result = await Engine(cfg.Options, HostRoute(port: 70000)).ApplyAllAsync(default);
+        // The caller here owns the one route on the platform, so the engine's answer names it in
+        // full — see PlatformProxyConfigTests for what a caller who does NOT own the failing route
+        // is (and is not) told.
+        var result = await Engine(cfg.Options, route).ApplyAllAsync(route.WorkspaceId, default);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("port");
@@ -156,7 +160,7 @@ public class TraefikProxyEngineTests
         File.WriteAllText(cfg.Target + ".bak", "the config that was live");
         cfg.BlockStaging();
 
-        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(default);
+        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(null, default);
 
         result.Success.Should().BeFalse();
         result.Error.Should().NotBeNullOrWhiteSpace("the deployment quotes this back to the operator");
@@ -171,7 +175,7 @@ public class TraefikProxyEngineTests
         Directory.CreateDirectory(Path.GetDirectoryName(cfg.Target)!);
         cfg.BlockStaging();
 
-        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(default);
+        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(null, default);
 
         result.Success.Should().BeFalse();
         result.RolledBack.Should().BeFalse("there was no previous version to put back");
@@ -184,7 +188,7 @@ public class TraefikProxyEngineTests
         // has to be able to tell the config from the litter.
         using var cfg = new TempConfig();
 
-        await Engine(cfg.Options, HostRoute()).ApplyAllAsync(default);
+        await Engine(cfg.Options, HostRoute()).ApplyAllAsync(null, default);
 
         cfg.LeftoverRenders().Should().BeEmpty();
     }
@@ -198,7 +202,7 @@ public class TraefikProxyEngineTests
         // what refuses — so this is the case where litter would survive if nothing removed it.
         Directory.CreateDirectory(cfg.Target);
 
-        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(default);
+        var result = await Engine(cfg.Options, HostRoute()).ApplyAllAsync(null, default);
 
         result.Success.Should().BeFalse("the target path is not a file this engine can swap");
         cfg.LeftoverRenders().Should().BeEmpty("the attempt cleans up after itself");
