@@ -26,6 +26,15 @@ namespace Harbora.Infrastructure.Backups;
 /// archived whichever local volume happened to carry the same name (or an empty one Docker created
 /// on the spot) and recorded a successful backup. Nothing discovered that until a restore.
 /// </para>
+///
+/// <para>
+/// Resolving the host is only half of it, because the helper and the panel have to share the staging
+/// volume: the helper writes into <see cref="BackupOptions.StagingVolume"/> by name on its own host
+/// and the panel reads <see cref="BackupOptions.StagingDir"/> here. Those are the same disk on one
+/// machine and never on two, so an archive taken anywhere else cannot be brought back — and until a
+/// transport exists (HARBORA-0034), <see cref="RequireCapableHost"/> refuses in front of the work
+/// rather than letting it half-happen on a machine nothing here can see.
+/// </para>
 /// </summary>
 public sealed class BackupEngine(
     HarboraDbContext db,
@@ -187,7 +196,7 @@ public sealed class BackupEngine(
         var image = $"{definition.ImageRepo}:{svc.Version}";
         var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
 
-        var docker = RequireHelperContainers(await HostForServiceAsync(svc, ct), "be exported");
+        var docker = RequireCapableHost(await HostForServiceAsync(svc, ct), "be exported");
 
         var output = new System.Text.StringBuilder();
         var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
@@ -217,7 +226,7 @@ public sealed class BackupEngine(
         var (volumeName, label) = await ResolveVolumeAsync(backup.Type, backup.TargetRef, ct);
         var key = $"{backup.Type.ToString().ToLowerInvariant()}-{label}-{stamp}.tgz";
 
-        var docker = RequireHelperContainers(
+        var docker = RequireCapableHost(
             await HostForAsync(backup.Type, backup.TargetRef, ct), "have a volume snapshot taken");
 
         var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
@@ -293,7 +302,7 @@ public sealed class BackupEngine(
         // Asked before anything is stopped, and long before anything is wiped. A host that cannot run
         // the helper has to end the restore while the current container is still serving — the
         // refusal is worth nothing if it arrives after the container is down.
-        var docker = RequireHelperContainers(
+        var docker = RequireCapableHost(
             await HostForAsync(backup.Type, backup.TargetRef, ct), "have a volume restored into it");
 
         var fileName = Path.GetFileName(localPath);
@@ -345,7 +354,7 @@ public sealed class BackupEngine(
 
         // Before the safety dump, so a host that cannot take one also cannot start the restore that
         // dump exists to protect.
-        var docker = RequireHelperContainers(
+        var docker = RequireCapableHost(
             await HostForServiceAsync(svc, ct), "have a dump loaded back into it");
 
         var stamp = clock.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
@@ -677,9 +686,11 @@ public sealed class BackupEngine(
         if (RestoreRehearsal.WhyUnsupported(svc.Type) is { } unsupported) return (null, unsupported, true);
 
         // The scratch database is created on the server the real one runs on. A host that cannot run
-        // a one-off container cannot host it, and neither can a server that is unreachable — both are
-        // "not checked", which the caller records as skipped. Reporting either as a bad archive would
-        // condemn a backup that is very likely fine.
+        // a one-off container cannot host it, a server that is unreachable cannot either, and neither
+        // can a machine that is simply not this one — the dump the rehearsal loads sits in this
+        // panel's staging directory, and a scratch database over there has no way to read it. All
+        // three are "not checked", which the caller records as skipped. Reporting any of them as a
+        // bad archive would condemn a backup that is very likely fine.
         BackupHost host;
         try
         {
@@ -694,6 +705,11 @@ public sealed class BackupEngine(
             return (null,
                 $"'{svc.Name}' runs on node {rehearsalNode}, which cannot host the throwaway database " +
                 "this check restores into", true);
+
+        if (host.Machine is { } elsewhere)
+            return (null,
+                $"'{svc.Name}' runs on {elsewhere}, and the dump this check loads is in this panel's " +
+                "own staging directory — a scratch database over there could not read it", true);
 
         var docker = host.Docker;
         var definition = Services.ServiceCatalog.All[svc.Type];
@@ -800,8 +816,12 @@ public sealed class BackupEngine(
 
     // --- which machine holds the data ---
 
-    /// <summary>The engine for the machine that holds a target's data, and how to name it to a person.</summary>
-    private sealed record BackupHost(IDockerEngine Docker, string Subject);
+    /// <summary>
+    /// The engine for the machine that holds a target's data, how to name the target to a person,
+    /// and — when it is not this panel — how to name the machine. <see cref="Machine"/> is null
+    /// exactly when the work would run on the panel's own daemon.
+    /// </summary>
+    private sealed record BackupHost(IDockerEngine Docker, string Subject, string? Machine);
 
     /// <summary>
     /// The machine a backup has to read from, or write back to.
@@ -839,36 +859,85 @@ public sealed class BackupEngine(
                 "No application declares a volume named '{Volume}', so it is read from this panel's own daemon.",
                 targetRef);
 
-            return new BackupHost(engines.Local, $"The volume '{targetRef}'");
+            return new BackupHost(engines.Local, $"The volume '{targetRef}'", null);
         }
 
-        return new BackupHost(
-            await engines.ResolveAsync(owner.ServerId, ct),
-            $"The volume '{targetRef}' of {owner.Name}");
+        return await ResolveHostAsync(owner.ServerId, $"The volume '{targetRef}' of {owner.Name}", ct);
     }
 
-    private async Task<BackupHost> HostForServiceAsync(Domain.Services.ManagedService svc, CancellationToken ct) =>
-        new(await engines.ResolveAsync(svc.ServerId, ct), $"The database '{svc.Name}'");
+    private Task<BackupHost> HostForServiceAsync(Domain.Services.ManagedService svc, CancellationToken ct) =>
+        ResolveHostAsync(svc.ServerId, $"The database '{svc.Name}'", ct);
 
     /// <summary>
-    /// Refuses, in words an operator can act on, when the machine holding the data will not run the
-    /// helper container the work needs.
+    /// Resolves a server's engine and works out whether it is this panel's own.
     ///
-    /// A v1 node has no verb for running a container to completion — that is a shell with extra
-    /// steps, and the contract withholds it deliberately. The alternative to saying so is what this
-    /// platform used to do: run the helper here instead, archive a same-named local volume, and
-    /// record a successful backup of data it never read. Dispatching the node's own SnapshotVolume
-    /// and RestoreVolume verbs is a later phase (HARBORA-0034).
+    /// <para>
+    /// "Is this machine this one" is decided by reference against <see cref="IServerEngineFactory.Local"/>,
+    /// which the interface documents as the very instance <c>ResolveAsync</c> hands back for the local
+    /// server. Deciding it again from the <c>Server</c> row here would be a second copy of the
+    /// factory's own rule — including its "no row at all means this machine" case — and two copies of
+    /// a placement rule drift apart in silence, which is the failure mode this whole task exists to
+    /// end. The server's name is looked up only when it is somewhere else, and only so a refusal can
+    /// name the machine the way its operator does.
+    /// </para>
     /// </summary>
-    private static IDockerEngine RequireHelperContainers(BackupHost host, string work)
+    private async Task<BackupHost> ResolveHostAsync(Guid serverId, string subject, CancellationToken ct)
     {
-        if (Nodes.NodeWorkloadEngine.NodeBehind(host.Docker) is not { } nodeId) return host.Docker;
+        var docker = await engines.ResolveAsync(serverId, ct);
+        if (ReferenceEquals(docker, engines.Local)) return new BackupHost(docker, subject, null);
 
-        throw new InvalidOperationException(
-            $"{host.Subject} runs on node {nodeId}, which cannot {work} yet: a v1 node offers no way " +
-            "to run the helper container this needs, and Harbora will not read this panel's own disk " +
-            "instead. Nothing was read and nothing was written. The panel will dispatch the node's " +
-            "own volume snapshots in a later phase.");
+        var name = await db.Servers.AsNoTracking()
+            .Where(s => s.Id == serverId).Select(s => s.Name).FirstOrDefaultAsync(ct);
+
+        return new BackupHost(docker, subject, string.IsNullOrWhiteSpace(name) ? serverId.ToString() : name);
+    }
+
+    /// <summary>
+    /// Refuses, in words an operator can act on, when the machine holding the data cannot see this
+    /// job through — for either of the two quite different reasons it cannot.
+    ///
+    /// <para>
+    /// <b>A v1 node</b> has no verb for running a container to completion — that is a shell with
+    /// extra steps, and the contract withholds it deliberately. Dispatching the node's own
+    /// SnapshotVolume and RestoreVolume verbs is a later phase (HARBORA-0034).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Any other machine that is not this one</b> — the older inbound HTTP agent — is the more
+    /// dangerous case precisely because it refuses nothing. It runs the helper exactly as asked, and
+    /// the helper reads and writes through <see cref="BackupOptions.StagingVolume"/> <em>by name on
+    /// its own host</em>, while the panel reads <see cref="BackupOptions.StagingDir"/> here. So a
+    /// backup produced a correct archive on a disk nothing here can read, every scheduled tick left
+    /// another one there for nobody to collect, and the panel then failed with the staging-volume
+    /// message — which sends an operator to <c>docker volume ls</c> on a machine where everything is
+    /// exactly as it should be. Refusing in front of that check is what makes its message true again:
+    /// it now only ever describes two volumes on one host, which is what it was written about.
+    /// </para>
+    ///
+    /// <para>
+    /// Both refusals are raised before any helper starts, so both can promise the same thing about
+    /// the state of the world — and mean it.
+    /// </para>
+    /// </summary>
+    private static IDockerEngine RequireCapableHost(BackupHost host, string work)
+    {
+        if (Nodes.NodeWorkloadEngine.NodeBehind(host.Docker) is { } nodeId)
+            throw new InvalidOperationException(
+                $"{host.Subject} runs on node {nodeId}, which cannot {work} yet: a v1 node offers no way " +
+                "to run the helper container this needs, and Harbora will not read this panel's own disk " +
+                "instead. Nothing was read and nothing was written. The panel will dispatch the node's " +
+                "own volume snapshots in a later phase.");
+
+        if (host.Machine is { } elsewhere)
+            throw new InvalidOperationException(
+                $"{host.Subject} runs on {elsewhere}, which cannot {work} yet: the helper container " +
+                $"would use the staging volume on {elsewhere} while this panel uses its own, so the " +
+                "archive could never be passed between the two. Nothing was read, nothing was written, " +
+                $"and nothing was left behind on {elsewhere} — this was refused before the helper " +
+                "started. Carrying an archive to or from another server needs a transport Harbora " +
+                "does not have yet.");
+
+        return host.Docker;
     }
 
     // --- helpers ---

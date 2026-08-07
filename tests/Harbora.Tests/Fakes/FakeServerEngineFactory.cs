@@ -14,7 +14,11 @@ namespace Harbora.Tests.Fakes;
 ///
 /// <para>
 /// A server that was never registered resolves to the local engine, because that is what the real
-/// factory does for the local server and for a target whose server row has gone away.
+/// factory does for the local server and for a target whose server row has gone away — and it hands
+/// back <see cref="Local"/> itself, honouring the reference-identity contract on
+/// <see cref="IServerEngineFactory.Local"/> that callers use to decide "is this machine this one".
+/// <c>ServerEngineIdentityTests</c> pins that contract against the real factory, so this fake is
+/// conforming to it rather than quietly defining it.
 /// </para>
 /// </summary>
 public sealed class FakeServerEngineFactory(IDockerEngine local) : IServerEngineFactory

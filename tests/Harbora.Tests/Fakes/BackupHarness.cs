@@ -76,9 +76,21 @@ public sealed class BackupHarness : IDisposable
 
     // --- who holds the data -------------------------------------------------------------------
 
-    /// <summary>Another machine, with its own daemon, behind a server id of the caller's choosing.</summary>
-    public FakeDockerEngine ServerAt(Guid serverId)
+    /// <summary>
+    /// Another machine, with its own daemon, behind a server id of the caller's choosing — the older
+    /// inbound HTTP agent, which unlike a v1 node will happily run any helper container it is asked
+    /// to. The <see cref="Harbora.Domain.Servers.Server"/> row goes in too, so a refusal can name the
+    /// machine the way an operator knows it rather than by its id.
+    /// </summary>
+    public FakeDockerEngine ServerAt(Guid serverId, string name = "web-02")
     {
+        Db.Servers.Add(new Harbora.Domain.Servers.Server
+        {
+            Id = serverId, Name = name, Hostname = name, IsLocal = false,
+            AgentEndpoint = $"https://{name}:9443"
+        });
+        Db.SaveChanges();
+
         var engine = new FakeDockerEngine();
         Engines.On(serverId, engine);
         return engine;

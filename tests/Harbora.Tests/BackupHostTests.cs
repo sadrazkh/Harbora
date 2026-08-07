@@ -32,36 +32,40 @@ public sealed class BackupHostTests
 
     // --- taking a backup ---------------------------------------------------------------------
 
+    /// <summary>
+    /// The database's own server is the one asked about, and it is asked before anything runs.
+    /// Whether that machine can then be used is a separate question with its own tests below; what is
+    /// pinned here is that the panel's daemon is never the answer by default.
+    /// </summary>
     [Fact]
-    public async Task A_database_backup_is_exported_on_the_machine_that_holds_the_database()
+    public async Task A_database_backup_is_addressed_to_the_machine_that_holds_the_database()
     {
         using var h = new BackupHarness();
         var serverId = Guid.NewGuid();
-        var remote = h.ServerAt(serverId);
+        h.ServerAt(serverId);
         var service = await h.SeedDatabaseAsync(serverId);
         var backup = await h.SeedPendingBackupAsync(BackupType.Database, service.Id.ToString());
 
         await h.Engine().RunAsync(backup.Id, default);
 
-        remote.OneOffRequests.Should().ContainSingle(
-            "the export has to run where the database is; nowhere else has its data");
+        h.Engines.Resolved.Should().Contain(serverId,
+            "the export belongs where the database is; nowhere else has its data");
         h.Docker.OneOffRequests.Should().BeEmpty(
             "the panel's own daemon holds no copy of a database scheduled elsewhere");
-        h.Engines.Resolved.Should().Contain(serverId);
     }
 
     [Fact]
-    public async Task A_volume_backup_is_archived_on_the_machine_that_runs_the_application()
+    public async Task A_volume_backup_is_addressed_to_the_machine_that_runs_the_application()
     {
         using var h = new BackupHarness();
         var serverId = Guid.NewGuid();
-        var remote = h.ServerAt(serverId);
+        h.ServerAt(serverId);
         await h.SeedAppWithVolumeAsync(serverId, "blog-data");
         var backup = await h.SeedPendingBackupAsync(BackupType.Volume, "blog-data");
 
         await h.Engine().RunAsync(backup.Id, default);
 
-        remote.OneOffRequests.Should().ContainSingle();
+        h.Engines.Resolved.Should().Contain(serverId);
         h.Docker.OneOffRequests.Should().BeEmpty(
             "a same-named volume on the panel is a different volume, and archiving it is the defect");
     }
@@ -144,6 +148,64 @@ public sealed class BackupHostTests
         h.Docker.OneOffRequests.Should().ContainSingle();
     }
 
+    // --- another machine that WILL run the helper ----------------------------------------------
+
+    /// <summary>
+    /// The older inbound HTTP agent is the dangerous case, because nothing refuses it. It runs the
+    /// helper exactly as asked — and the helper writes the archive into the staging volume on
+    /// <em>that</em> machine, while the panel reads its own. So the tar is created correctly
+    /// somewhere nothing here can ever read, and the failure the panel then reports is the
+    /// staging-volume message, which sends an operator to run `docker volume ls` on a machine where
+    /// everything looks perfectly fine.
+    /// </summary>
+    [Fact]
+    public async Task A_volume_backup_on_another_server_is_refused_before_a_helper_writes_anything()
+    {
+        using var h = new BackupHarness();
+        var serverId = Guid.NewGuid();
+        var remote = h.ServerAt(serverId, "web-02");
+        await h.SeedAppWithVolumeAsync(serverId, "blog-data");
+        var backup = await h.SeedPendingBackupAsync(BackupType.Volume, "blog-data");
+
+        await h.Engine().RunAsync(backup.Id, default);
+
+        var stored = await h.Db.Backups.AsNoTracking().FirstAsync(b => b.Id == backup.Id);
+        stored.Status.Should().Be(BackupStatus.Failed);
+        stored.ErrorMessage.Should().Contain("web-02", "the machine is the whole reason this cannot be done");
+        stored.ErrorMessage.Should().NotContain("docker volume ls",
+            "that check describes two volumes on one machine; here there are two machines, and the " +
+            "operator it sends to the panel's volume list will find nothing wrong there");
+        remote.OneOffRequests.Should().BeEmpty(
+            "a tar left in that machine's staging volume is an artifact nothing on either side collects");
+        h.Docker.OneOffRequests.Should().BeEmpty();
+        stored.ArtifactPath.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Same host, worse consequence: a scheduled database backup would run a real <c>pg_dump</c> on
+    /// the remote machine every tick and leave the dump in its staging volume, on a disk the panel
+    /// does not measure and nothing prunes.
+    /// </summary>
+    [Fact]
+    public async Task A_database_backup_on_another_server_leaves_no_dump_behind_on_that_machine()
+    {
+        using var h = new BackupHarness();
+        var serverId = Guid.NewGuid();
+        var remote = h.ServerAt(serverId, "db-host");
+        var service = await h.SeedDatabaseAsync(serverId);
+        var backup = await h.SeedPendingBackupAsync(BackupType.Database, service.Id.ToString());
+
+        await h.Engine().RunAsync(backup.Id, default);
+
+        var stored = await h.Db.Backups.AsNoTracking().FirstAsync(b => b.Id == backup.Id);
+        stored.Status.Should().Be(BackupStatus.Failed);
+        stored.ErrorMessage.Should().Contain("db-host");
+        stored.ErrorMessage.Should().NotContain("docker volume ls");
+        remote.OneOffRequests.Should().BeEmpty(
+            "every scheduled run would otherwise add another dump to a disk nothing here can see or clear");
+        h.Docker.OneOffRequests.Should().BeEmpty();
+    }
+
     // --- restoring ---------------------------------------------------------------------------
 
     [Fact]
@@ -161,6 +223,51 @@ public sealed class BackupHostTests
             .WithMessage("*web-01*");
         h.Docker.Calls.Should().BeEmpty(
             "restoring onto the panel's own volume would destroy data that was never backed up here");
+    }
+
+    /// <summary>
+    /// A restore onto the legacy agent's machine is the mirror of the backup: the panel copies the
+    /// artifact into its own staging directory and the helper over there looks in a staging volume
+    /// that has never heard of it. The refusal has to arrive before the container is stopped and
+    /// before the pre-restore snapshot, or the machine is left down for a restore that cannot run.
+    /// </summary>
+    [Fact]
+    public async Task A_volume_restore_onto_another_server_stops_nothing_and_snapshots_nothing()
+    {
+        using var h = new BackupHarness();
+        h.Options.SnapshotBeforeRestore = true;
+        var serverId = Guid.NewGuid();
+        var remote = h.ServerAt(serverId, "web-02");
+        await h.SeedAppWithVolumeAsync(serverId, "blog-data");
+        var backup = await h.SeedVolumeBackupAsync();
+
+        var restore = async () => await h.Engine().RestoreAsync(backup.Id, default);
+
+        (await restore.Should().ThrowAsync<InvalidOperationException>()).WithMessage("*web-02*");
+        remote.Calls.Should().BeEmpty(
+            "nothing may be stopped or snapshotted for a restore that was never going to happen");
+        h.Docker.Calls.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// The pre-restore snapshot is the only thing standing between a successful restore of the WRONG
+    /// backup and permanent loss, and it now runs on a resolved engine rather than an injected field.
+    /// Every other test in the suite turns it off, so this is the one that watches it happen —
+    /// on the host the restore resolved, and before the restore itself.
+    /// </summary>
+    [Fact]
+    public async Task The_pre_restore_snapshot_runs_on_the_resolved_host_before_the_restore()
+    {
+        using var h = new BackupHarness();
+        h.Options.SnapshotBeforeRestore = true;
+        var backup = await h.SeedVolumeBackupAsync();
+
+        await h.Engine().RestoreAsync(backup.Id, default);
+
+        h.Docker.OneOffCommands.Should().HaveCount(2);
+        h.Docker.OneOffCommands[0].Should().Contain("pre-restore-blog-data").And.Contain("tar czf",
+            "the safety copy is taken first, or there is nothing to go back to");
+        h.Docker.OneOffCommands[1].Should().NotContain("pre-restore-");
     }
 
     // --- verifying --------------------------------------------------------------------------
@@ -183,6 +290,33 @@ public sealed class BackupHostTests
 
         result.Checks.Should().Contain(c => c.Name == "Archive readable" && c.Passed);
         result.Checks.Should().Contain(c => c.Skipped && c.Detail!.Contains("web-01"));
+        h.Docker.OneOffRequests.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// The legacy agent's machine would run the rehearsal's scratch database happily and then fail to
+    /// find the dump — because the panel copied it into the panel's own staging directory. The
+    /// verdict that came back was "This backup does not restore", a hard statement of an unreadable
+    /// archive about an archive nothing has found anything wrong with. Not checked is not the same as
+    /// checked and broken.
+    /// </summary>
+    [Fact]
+    public async Task A_rehearsal_on_another_server_is_skipped_rather_than_called_a_bad_backup()
+    {
+        using var h = new BackupHarness();
+        var serverId = Guid.NewGuid();
+        var remote = h.ServerAt(serverId, "web-02");
+        var service = await h.SeedDatabaseAsync(serverId);
+        var backup = await h.SeedCompletedDatabaseDumpAsync(service.Id);
+
+        var result = await h.Engine().VerifyAsync(backup.Id, default);
+
+        result.Checks.Should().Contain(c => c.Name == "Archive readable" && c.Passed);
+        result.Checks.Should().Contain(c => c.Skipped && c.Detail!.Contains("web-02"));
+        result.IsRestorable.Should().BeTrue(
+            "nothing has been found wrong with this archive; only that it could not be rehearsed");
+        result.Reason.Should().BeNull();
+        remote.OneOffRequests.Should().BeEmpty();
         h.Docker.OneOffRequests.Should().BeEmpty();
     }
 }

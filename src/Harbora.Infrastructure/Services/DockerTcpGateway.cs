@@ -57,6 +57,11 @@ public sealed class DockerTcpGateway(
                 $"The server holding '{service.Name}' could not be reached, so nothing was opened. {ex.Message}");
         }
 
+        // By reference, and that is a contract rather than a coincidence: IServerEngineFactory.Local
+        // is documented as the very instance ResolveAsync returns for the local server, and
+        // ServerEngineIdentityTests pins it against the real factory. Without that, a factory handing
+        // back a fresh engine for the local server would quietly refuse external access on every
+        // single-server install — the only kind this feature currently works on.
         if (!ReferenceEquals(docker, engines.Local))
             return (null,
                 $"'{service.Name}' does not run on this panel's own machine. External access publishes " +
