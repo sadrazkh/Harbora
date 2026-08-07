@@ -135,10 +135,14 @@
 </section>
 
 <!-- Alerts -->
-<section class="rounded-xl border border-line bg-surface mt-6 p-5">
+<section id="alerts" class="rounded-xl border border-line bg-surface mt-6 p-5">
     <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "هشدارها و اعلان‌ها" : "Alerts & Notifications")</h2>
     <div class="space-y-2 mb-4">
-        @if (Model.Alerts.Count == 0){<p class="text-ink-muted text-sm">—</p>}
+        @if (Model.Alerts.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("bell",
+                isFa ? "هنوز هشداری تعریف نشده است." : "No alert rules yet."))" />
+        }
         @foreach (var a in Model.Alerts)
         {
             @* A channel that is failing says so here, rather than only in the panel logs — the person

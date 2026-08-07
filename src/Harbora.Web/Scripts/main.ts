@@ -71,26 +71,31 @@ mountDeployProgress();
 // 138 kB to 821 kB — six times the weight of the entire panel, for a set of glyphs, on every page
 // load. Adding an icon to a view means adding it here too, which is the point.
 import {
-    createIcons, Activity, Archive, ArrowRight, ArrowUpLeft, Bell, BookOpen, Box, Boxes, Building2,
-    Check, CheckCircle2, ChevronDown, ChevronRight, CircleCheck, CloudUpload, Container, Copy,
-    CreditCard, Cuboid, Database, DatabaseZap, ExternalLink, FileCode2, FileJson2, FolderLock,
-    GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound, Languages, Layers, Layers3,
-    LayoutDashboard, LockKeyhole, LogOut, Menu, Monitor, Moon, Network, PanelLeftClose, Pause, Play,
-    PlugZap, Plus, Rocket, RotateCw, Route, Ruler, ScrollText, Search, SearchX, Server, Settings,
-    Settings2, Shapes, ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles,
-    SquareArrowOutUpRight, Star, Sun, ServerCog, Terminal, TerminalSquare, TriangleAlert, UploadCloud,
-    UserPlus, Users,
+    createIcons, Activity, AlertTriangle, Archive, ArrowRight, ArrowUpLeft, ArrowUpRight, Bell,
+    BookOpen, Box, Boxes, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp,
+    CircleCheck, CircleCheckBig, CloudUpload, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard,
+    Cuboid, Database, DatabaseZap, Download, ExternalLink, File, FileCode2, FileJson2, Folder,
+    FolderLock, FolderOpen, Gauge, GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound,
+    Languages, Layers, Layers3, LayoutDashboard, LockKeyhole, LogOut, Menu, Monitor, Moon, Network,
+    PanelLeftClose, Pause, Pencil, Play, Plug, PlugZap, Plus, RefreshCw, Rocket, RotateCw, Route,
+    Ruler, ScrollText, Search, SearchX, Server, Settings, Settings2, Shapes, ShieldAlert,
+    ShieldCheck, SlidersHorizontal, Sparkles, SquareArrowOutUpRight, SquareTerminal, Star, Sun,
+    ServerCog, Table2, Terminal, TerminalSquare, Trash2, TrendingUp, TriangleAlert, UploadCloud,
+    UserPlus, Users, Wallet,
 } from 'lucide';
 
 const usedIcons = {
-    Activity, Archive, ArrowRight, ArrowUpLeft, Bell, BookOpen, Box, Boxes, Building2, Check,
-    CheckCircle2, ChevronDown, ChevronRight, CircleCheck, CloudUpload, Container, Copy, CreditCard,
-    Cuboid, Database, DatabaseZap, ExternalLink, FileCode2, FileJson2, FolderLock, GitBranch, Globe,
-    Globe2, HardDrive, History, Info, KeyRound, Languages, Layers, Layers3, LayoutDashboard,
-    LockKeyhole, LogOut, Menu, Monitor, Moon, Network, PanelLeftClose, Pause, Play, PlugZap, Plus,
-    Rocket, RotateCw, Route, Ruler, ScrollText, Search, SearchX, Server, Settings, Settings2, Shapes,
-    ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles, SquareArrowOutUpRight, Star, Sun, ServerCog,
-    Terminal, TerminalSquare, TriangleAlert, UploadCloud, UserPlus, Users,
+    Activity, AlertTriangle, Archive, ArrowRight, ArrowUpLeft, ArrowUpRight, Bell, BookOpen, Box,
+    Boxes, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleCheck,
+    CircleCheckBig, CloudUpload, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard, Cuboid,
+    Database, DatabaseZap, Download, ExternalLink, File, FileCode2, FileJson2, Folder, FolderLock,
+    FolderOpen, Gauge, GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound, Languages,
+    Layers, Layers3, LayoutDashboard, LockKeyhole, LogOut, Menu, Monitor, Moon, Network,
+    PanelLeftClose, Pause, Pencil, Play, Plug, PlugZap, Plus, RefreshCw, Rocket, RotateCw, Route,
+    Ruler, ScrollText, Search, SearchX, Server, Settings, Settings2, Shapes, ShieldAlert,
+    ShieldCheck, SlidersHorizontal, Sparkles, SquareArrowOutUpRight, SquareTerminal, Star, Sun,
+    ServerCog, Table2, Terminal, TerminalSquare, Trash2, TrendingUp, TriangleAlert, UploadCloud,
+    UserPlus, Users, Wallet,
 };
 
 function renderIcons() {

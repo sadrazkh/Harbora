@@ -53,6 +53,13 @@
 }
 
 <partial name="Design/_PanelStart" model="listPanel" />
+@if (Model.Count == 0)
+{
+    <partial name="Design/_EmptyState" model="@(new EmptyStateModel("users",
+        isFa ? "هنوز کاربری غیر از شما ساخته نشده است." : "No users besides you have been created yet."))" />
+}
+else
+{
 <div class="-mx-5 -my-5 overflow-x-auto">
     <table class="w-full text-sm">
         <thead>
@@ -168,6 +175,7 @@
         </tbody>
     </table>
 </div>
+}
 <partial name="Design/_PanelEnd" />
 
 @section RightRail {

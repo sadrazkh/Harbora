@@ -113,21 +113,6 @@
                     <input name="accessKey" placeholder="access key" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                     <input name="secretKey" type="password" placeholder="secret key" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                 </div>
-                <button class="w-full rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@T["Save"]</button>
-            </form>
-        </details>
-    </section>
-
-    <!-- Schedules -->
-    <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="text-[15px] font-semibold text-ink mb-3">@T["Schedules"]</h2>
-        <div class="space-y-1 mb-3 text-sm">
-            @foreach (var s in Model.Schedules)
-            {
-                <div class="flex items-center justify-between">
-                    <span>@s.Type · every @s.IntervalHours h · keep @s.RetentionCount</span>
-                    <form asp-controller="Backups" asp-action="DeleteSchedule" asp-route-id="@s.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? "حذف زمان‌بندی" : "Delete schedule")">✕</button></form>
-                </div>
                 <div data-when-sftp class="space-y-2" style="display:none">
                     <input name="sftpHost" placeholder="backup.example.com" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                     <input name="sftpPort" type="number" value="22" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
@@ -142,6 +127,21 @@
                             ? "کلید میزبان لازم است. با «ssh-keyscan your-host» بگیرید — بدون آن نمی‌توان مطمئن شد بکاپ به سرور درست می‌رود."
                             : "The host key is required. Get it with `ssh-keyscan your-host` — without it there is no way to know the backup is going to the right server.")
                     </p>
+                </div>
+                <button class="w-full rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@T["Save"]</button>
+            </form>
+        </details>
+    </section>
+
+    <!-- Schedules -->
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@T["Schedules"]</h2>
+        <div class="space-y-1 mb-3 text-sm">
+            @foreach (var s in Model.Schedules)
+            {
+                <div class="flex items-center justify-between">
+                    <span>@s.Type · every @s.IntervalHours h · keep @s.RetentionCount</span>
+                    <form asp-controller="Backups" asp-action="DeleteSchedule" asp-route-id="@s.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? "حذف زمان‌بندی" : "Delete schedule")">✕</button></form>
                 </div>
             }
         </div>

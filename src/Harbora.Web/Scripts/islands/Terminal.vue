@@ -99,7 +99,7 @@ onBeforeUnmount(() => {
   <div>
     <div class="mb-2 flex items-center gap-3 text-xs">
       <span v-if="state === 'connecting'" class="text-ink-faint">{{ say('Connecting…', 'در حال اتصال…') }}</span>
-      <span v-else-if="state === 'open'" class="text-success">{{ say('Connected', 'وصل') }}</span>
+      <span v-else-if="state === 'open'" class="text-ok">{{ say('Connected', 'وصل') }}</span>
       <template v-else>
         <span class="text-ink-faint">{{ say('Disconnected', 'قطع شد') }}</span>
         <button type="button" class="text-accent-text" @click="reconnect">

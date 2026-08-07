@@ -22,6 +22,13 @@
 
 <div class="grid lg:grid-cols-3 gap-6">
     <section class="lg:col-span-2 space-y-4">
+        @if (Model.Count == 0)
+        {
+            <div class="rounded-xl border border-line bg-surface">
+                <partial name="Design/_EmptyState" model="@(new EmptyStateModel("server",
+                    isFa ? "هنوز سروری ثبت نشده. از فرم کنار همین صفحه یک سرور اضافه کنید." : "No servers registered yet. Add one from the form beside this page."))" />
+            </div>
+        }
         @foreach (var s in Model)
         {
             <div class="rounded-xl border border-line bg-surface p-5">

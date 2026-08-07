@@ -14,6 +14,13 @@
 
 <div class="grid lg:grid-cols-3 gap-6">
     <section class="lg:col-span-2 rounded-xl border border-line bg-surface overflow-hidden">
+        @if (Model.Tenants.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("building-2",
+                isFa ? "هنوز مستأجری ساخته نشده است." : "No tenants have been created yet."))" />
+        }
+        else
+        {
         <table class="w-full text-sm">
             <thead class="text-ink-muted border-b border-line">
                 <tr>
@@ -65,6 +72,7 @@
                 }
             </tbody>
         </table>
+        }
     </section>
 
     <section class="rounded-xl border border-line bg-surface p-5 h-fit">
@@ -82,6 +90,6 @@
             </select>
             <button class="w-full rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@(isFa ? "ساخت" : "Create")</button>
         </form>
-        <p class="mt-2 text-xs text-ink-faint">@(isFa ? "بعد از ساخت، در فاز بعد کاربر مشتری را دعوت می‌کنی." : "You'll invite the customer's user in the next phase.")</p>
+        <p class="mt-2 text-xs text-ink-faint">@(isFa ? "بعد از ساخت، از صفحهٔ جزئیات مستأجر کاربر مشتری را دعوت می‌کنی." : "After creating it, invite the customer's user from the tenant's details page.")</p>
     </section>
 </div>

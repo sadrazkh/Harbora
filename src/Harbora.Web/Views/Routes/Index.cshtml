@@ -14,6 +14,6 @@
      data-csrf="@ViewBag.Csrf"
      data-lang="@(isFa ? "fa" : "en")">
     <div class="rounded-xl border border-dashed border-line-strong p-8 text-center text-ink-muted">
-        Loading designer… (run <code>npm run build</code> if this doesn't disappear)
+        @(isFa ? "در حال بارگذاری طراح مسیر…" : "Loading route designer…")
     </div>
 </div>
