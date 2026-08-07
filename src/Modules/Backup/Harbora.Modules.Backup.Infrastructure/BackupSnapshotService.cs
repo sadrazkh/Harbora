@@ -6,6 +6,7 @@ using Harbora.Modules.Backup.Contracts;
 using Harbora.Modules.Backup.Domain;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 
 namespace Harbora.Modules.Backup.Infrastructure;
 
@@ -96,11 +97,18 @@ public sealed class BackupSnapshotService(
         {
             await db.SaveChangesAsync(ct);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException e)
+            when (e.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
         {
             // Lost the race the pre-check above cannot win. The partial unique index over the
             // active statuses is the authority, and losing it means exactly what the pre-check
             // describes — so say the same thing rather than surfacing a constraint name.
+            //
+            // Qualified on the unique violation, and only that. Every other refusal this insert can
+            // meet — a repository deleted between the read and the write, a check constraint, a
+            // serialisation failure, a dropped connection — is NOT "already running", and reporting
+            // it as such would send an operator looking for a backup that does not exist while the
+            // real fault went unrecorded. Those surface as themselves.
             db.ChangeTracker.Clear();
             return new SnapshotOutcome(false, Error: AlreadyRunning);
         }
@@ -127,6 +135,30 @@ public sealed class BackupSnapshotService(
         {
             logger.LogInformation("Snapshot {SnapshotId} is already {Status}; nothing to do.",
                 snapshotId, snapshot.Status);
+            return;
+        }
+
+        // Already in flight, so this execution is a duplicate and must touch nothing.
+        //
+        // SnapshotLifecycle.CanTransition allows Preparing -> Preparing and Running -> Running on
+        // purpose: re-applying the state a row already holds is how an idempotent retry behaves.
+        // That was harmless while staging directories were named from a fresh Guid — a second
+        // execution simply staged somewhere else. It is not harmless now that the name comes from
+        // the snapshot's id: every stager clears the directory before creating it, so going on from
+        // here would delete the copy the live execution is part-way through writing, and the archive
+        // that survived would be two moments of the data mixed together with nothing saying so.
+        //
+        // Nothing legitimate arrives here. BackupModuleReconciler settles every stranded row before
+        // the host releases the job worker, so a row still Preparing or Running at this point is one
+        // another execution owns right now. Refusing costs this snapshot nothing it was not already
+        // losing — the same active row is what QueueAsync refuses on — and the next restart settles
+        // it if that other execution never does.
+        if (snapshot.Status is BackupSnapshotStatus.Preparing or BackupSnapshotStatus.Running)
+        {
+            logger.LogWarning(
+                "Snapshot {SnapshotId} is already {Status}, so another execution owns it and the " +
+                "staged copy named after it. Leaving both alone. [{Correlation}]",
+                snapshotId, snapshot.Status, snapshot.CorrelationId);
             return;
         }
 

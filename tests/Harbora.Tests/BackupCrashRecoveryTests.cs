@@ -1,4 +1,4 @@
-﻿using FluentAssertions;
+using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Modules.Backup.Contracts;
@@ -12,6 +12,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using Xunit;
 
 // Both namespaces declare an IBackupEngine — the platform's target-oriented service and this
@@ -230,9 +231,10 @@ public sealed class BackupCrashRecoveryTests : IDisposable
         File.WriteAllText(Path.Combine(outside, "orders.db"), "the customer's actual data");
 
         var snapshot = SeedSnapshot(BackupSnapshotStatus.Running);
-        snapshot.StagingPath = escape == ".."
+        var pointer = escape == ".."
             ? Path.Combine(_staging, "..", "live-data")
             : outside;
+        snapshot.StagingPath = pointer;
         Save(snapshot);
 
         var result = await Reconciler().ReconcileAsync(default);
@@ -241,6 +243,11 @@ public sealed class BackupCrashRecoveryTests : IDisposable
             "the sweep may only remove what is inside the module's own staging directory");
         result.StagingPathsSwept.Should().Be(0);
         result.Snapshots.Should().Be(1, "the row is still settled; only the deletion is refused");
+
+        Read().BackupSnapshots.Single(s => s.Id == snapshot.Id).StagingPath
+            .Should().Be(pointer,
+                "refusing to delete it does not make it go away — and a copy outside the staging " +
+                "root is the one nobody will find by listing the staging root");
     }
 
     [Fact]
@@ -391,22 +398,31 @@ public sealed class BackupCrashRecoveryTests : IDisposable
     }
 
     /// <summary>
-    /// The indexed column has to fit in a btree index row (~2704 bytes). At 1024 characters a
-    /// multi-byte destination could exceed that, and the error would arrive as a
-    /// <c>DbUpdateException</c> — which <c>RestoreService</c> reports as "already running", a
-    /// sentence that would not be true.
+    /// The indexed value has to fit in a btree index row (~2704 bytes), which 1024 multi-byte
+    /// characters would not.
+    ///
+    /// <para>
+    /// The column is deliberately NOT narrowed to make that true. An <c>ALTER COLUMN</c> to a
+    /// shorter varchar is not an additive migration: an install that already recorded a longer
+    /// destination — a length this column has always permitted — would meet it during boot, and the
+    /// rows in question are the audit trail of a destructive operation. So the bound lives in
+    /// <c>RestoreService</c>, ahead of the insert, where it costs no migration and cannot invalidate
+    /// anything already stored.
+    /// </para>
     /// </summary>
     [Fact]
-    public void The_indexed_destination_is_short_enough_that_the_index_can_hold_it()
+    public void The_destination_this_panel_accepts_is_short_enough_for_the_index_to_hold_it()
     {
+        (RestoreJob.MaxDestinationLength * 4).Should().BeLessThan(2704,
+            "the worst case is four bytes per character, and a btree index row cannot exceed ~2704");
+
         using var db = PostgresModel();
 
-        var maxLength = db.Model.FindEntityType(typeof(RestoreJob))!
-            .FindProperty(nameof(RestoreJob.Destination))!.GetMaxLength();
-
-        maxLength.Should().Be(RestoreJob.MaxDestinationLength);
-        (maxLength!.Value * 4).Should().BeLessThan(2704,
-            "the worst case is four bytes per character, and a btree index row cannot exceed ~2704");
+        db.Model.FindEntityType(typeof(RestoreJob))!
+            .FindProperty(nameof(RestoreJob.Destination))!.GetMaxLength()
+            .Should().Be(RestoreJob.StoredDestinationLength,
+                "the column keeps the width it shipped with; narrowing it would be a migration that " +
+                "can refuse to boot, which is a worse failure than the one being prevented");
     }
 
     [Fact]
@@ -448,7 +464,7 @@ public sealed class BackupCrashRecoveryTests : IDisposable
         });
         await db.SaveChangesAsync();
 
-        db.RejectTheNextInsert = true;
+        db.RejectTheNextInsertWith = UniqueViolation("IX_BackupSnapshots_ActiveTarget");
 
         var result = await Snapshots(db).QueueAsync(
             _workspace, _repositoryId, BackupTargetType.Directory, _source,
@@ -457,6 +473,44 @@ public sealed class BackupCrashRecoveryTests : IDisposable
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Contain("already running",
             "the loser of the race is in exactly the situation the pre-check describes");
+    }
+
+    /// <summary>
+    /// The other direction, and the reason the catch is qualified at all.
+    ///
+    /// <para>
+    /// "A backup of this target is already running" is a statement about the world, and it has to be
+    /// true. An unqualified <c>catch (DbUpdateException)</c> says it about every refusal this insert
+    /// can meet — a pruned repository, a check constraint, a serialisation failure, a connection
+    /// that dropped — and sends an operator looking for a backup that does not exist while the real
+    /// fault goes unreported. That is silent degradation with a friendly face.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_store_failure_that_is_not_a_conflict_is_not_reported_as_one()
+    {
+        using var db = new RejectingContext(
+            new DbContextOptionsBuilder<HarboraDbContext>()
+                .UseInMemoryDatabase("backup-recovery-race-" + Guid.NewGuid()).Options);
+
+        db.BackupRepositories.Add(new BackupRepository
+        {
+            Id = _repositoryId, WorkspaceId = _workspace, Name = "Local",
+            Type = BackupRepositoryType.Local, Engine = BackupEngineKind.Native,
+            BasePath = Path.Combine(_root, "repo"), Status = BackupRepositoryStatus.Ready,
+            IsEnabled = true
+        });
+        await db.SaveChangesAsync();
+
+        db.RejectTheNextInsertWith = ForeignKeyViolation();
+
+        var queue = async () => await Snapshots(db).QueueAsync(
+            _workspace, _repositoryId, BackupTargetType.Directory, _source,
+            null, BackupTrigger.Manual, default);
+
+        await queue.Should().ThrowAsync<DbUpdateException>(
+            "a failure the module cannot explain must surface as itself, not be dressed up as a " +
+            "conflict that is not happening");
     }
 
     [Fact]
@@ -476,7 +530,7 @@ public sealed class BackupCrashRecoveryTests : IDisposable
         db.BackupSnapshots.Add(snapshot);
         await db.SaveChangesAsync();
 
-        db.RejectTheNextInsert = true;
+        db.RejectTheNextInsertWith = UniqueViolation("IX_RestoreJobs_ActiveDestination");
 
         var result = await Restores(db).QueueAsync(_workspace, new RestoreRequest(
             snapshot.Id, RestoreType.Folder, Path.Combine(_options.RestoreRoot, "x"),
@@ -484,6 +538,38 @@ public sealed class BackupCrashRecoveryTests : IDisposable
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Contain("already running");
+    }
+
+    /// <summary>
+    /// The restore half of the same rule. This one matters more, not less: a restore is the
+    /// destructive direction, and "a restore into this destination is already running" told about a
+    /// snapshot that was pruned between the read and the write would have an operator hunting for a
+    /// concurrent restore instead of reading the fault they actually hit.
+    /// </summary>
+    [Fact]
+    public async Task A_restore_refused_for_some_other_reason_is_not_reported_as_a_conflict()
+    {
+        using var db = new RejectingContext(
+            new DbContextOptionsBuilder<HarboraDbContext>()
+                .UseInMemoryDatabase("backup-recovery-race-" + Guid.NewGuid()).Options);
+
+        var snapshot = new BackupSnapshot
+        {
+            WorkspaceId = _workspace, RepositoryId = _repositoryId,
+            TargetType = BackupTargetType.Directory, TargetRef = _source,
+            EngineSnapshotId = Guid.CreateVersion7().ToString("N"),
+            Status = BackupSnapshotStatus.Completed
+        };
+        db.BackupSnapshots.Add(snapshot);
+        await db.SaveChangesAsync();
+
+        db.RejectTheNextInsertWith = ForeignKeyViolation();
+
+        var queue = async () => await Restores(db).QueueAsync(_workspace, new RestoreRequest(
+            snapshot.Id, RestoreType.Folder, Path.Combine(_options.RestoreRoot, "x"),
+            RestoreConflictStrategy.Fail), default);
+
+        await queue.Should().ThrowAsync<DbUpdateException>();
     }
 
     /// <summary>
@@ -596,6 +682,43 @@ public sealed class BackupCrashRecoveryTests : IDisposable
         result.StagingPathsSwept.Should().Be(1);
     }
 
+    /// <summary>
+    /// A second execution of a snapshot that is still in flight must not touch its staged copy.
+    ///
+    /// <para>
+    /// <c>SnapshotLifecycle.CanTransition</c> returns true when <c>from == to</c>, deliberately:
+    /// re-applying the state a snapshot already holds is how an idempotent retry behaves, and
+    /// treating it as illegal would make every crash-and-resume look like a bug. Naming the staging
+    /// directory from the snapshot id gave that permissiveness a consequence it did not have before
+    /// — the stagers clear the directory before creating it, so a duplicate dispatch against a row
+    /// still <c>Preparing</c> would delete exactly what the live execution is filling. The archive
+    /// that survived would be a mixture of two moments with nothing saying so, which is the same
+    /// failure the "clear it first" rule exists to prevent.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_second_run_of_a_snapshot_already_in_flight_leaves_its_staged_copy_alone()
+    {
+        var snapshot = SeedSnapshot(
+            BackupSnapshotStatus.Preparing, BackupTargetType.DockerVolume, "app-data");
+
+        // The directory the execution that is already running is filling right now.
+        var staged = Path.Combine(_staging, BackupStagingLayout.VolumeDirectory(snapshot.Id));
+        Directory.CreateDirectory(staged);
+        var partial = Path.Combine(staged, "half-copied.db");
+        File.WriteAllText(partial, "the first execution is still writing this");
+
+        await Snapshots().RunAsync(snapshot.Id, default);
+
+        File.Exists(partial).Should().BeTrue(
+            "the execution already staging into this directory owns it; clearing it would fold half " +
+            "of one backup into another");
+
+        Read().BackupSnapshots.Single(s => s.Id == snapshot.Id).Status
+            .Should().Be(BackupSnapshotStatus.Preparing,
+                "the row belongs to the run that is still going, not to this one");
+    }
+
     [Fact]
     public void A_directory_target_never_yields_a_path_for_the_sweep_to_delete()
     {
@@ -674,12 +797,31 @@ public sealed class BackupCrashRecoveryTests : IDisposable
     {
         BackupModuleReconciler.RemainingStagingPath([
                 new SweepAttempt("/staging/volume-a", SweepResult.Removed),
-                new SweepAttempt("/staging/volume-b", SweepResult.Gone),
-                // Refused is a permanent verdict, not a transient one: it will never become
-                // sweepable, so retrying it every restart would only repeat the same warning.
-                new SweepAttempt("/somewhere/else", SweepResult.Refused)
+                new SweepAttempt("/staging/volume-b", SweepResult.Gone)
             ])
             .Should().BeNull();
+    }
+
+    /// <summary>
+    /// A refused path is the one the pointer matters MOST for.
+    ///
+    /// <para>
+    /// "Permanent verdict" is true about sweepability and says nothing about existence. A copy the
+    /// sweep will not touch is a copy that is still there — and because it is outside the staging
+    /// root, it is also the one nobody will find by listing that root. Clearing the column would
+    /// delete the only record of where a plaintext copy of somebody's application data is sitting.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void A_path_the_sweep_refuses_keeps_its_pointer_because_the_copy_is_still_there()
+    {
+        BackupModuleReconciler.RemainingStagingPath([
+                new SweepAttempt("/staging/volume-a", SweepResult.Removed),
+                new SweepAttempt("/somewhere/else", SweepResult.Refused)
+            ])
+            .Should().Be("/somewhere/else",
+                "the sweep refusing to delete it does not make it stop existing, and nothing else " +
+                "records where it is");
     }
 
     // --- fixtures -----------------------------------------------------------------------------
@@ -793,21 +935,50 @@ public sealed class BackupCrashRecoveryTests : IDisposable
 
     // --- stubs --------------------------------------------------------------------------------
 
-    /// <summary>Stands in for the partial unique index, which the in-memory provider ignores.</summary>
+    /// <summary>
+    /// Stands in for the store, which the in-memory provider cannot make refuse anything.
+    ///
+    /// <para>
+    /// Takes the exception to throw rather than a bool, because the thing under test is precisely
+    /// the services' ability to tell ONE refusal from every other: a unique violation means "already
+    /// running" and nothing else does.
+    /// </para>
+    /// </summary>
     private sealed class RejectingContext(DbContextOptions<HarboraDbContext> options)
         : HarboraDbContext(options)
     {
-        public bool RejectTheNextInsert { get; set; }
+        public DbUpdateException? RejectTheNextInsertWith { get; set; }
 
         public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
-            if (!RejectTheNextInsert) return base.SaveChangesAsync(cancellationToken);
+            if (RejectTheNextInsertWith is not { } refusal)
+                return base.SaveChangesAsync(cancellationToken);
 
-            RejectTheNextInsert = false;
-            throw new DbUpdateException(
-                "23505: duplicate key value violates unique constraint \"IX_BackupSnapshots_ActiveTarget\"");
+            RejectTheNextInsertWith = null;
+            throw refusal;
         }
     }
+
+    /// <summary>
+    /// What PostgreSQL raises when the partial unique index rejects the second active row — the
+    /// shape EF wraps it in, an outer <c>DbUpdateException</c> over a <c>PostgresException</c>.
+    /// </summary>
+    private static DbUpdateException UniqueViolation(string constraint) =>
+        new("An error occurred while saving the entity changes.",
+            new PostgresException(
+                $"duplicate key value violates unique constraint \"{constraint}\"",
+                "ERROR", "ERROR", PostgresErrorCodes.UniqueViolation));
+
+    /// <summary>
+    /// A different store-level refusal of the same insert. The snapshot was pruned between the
+    /// pre-check's read and this write, so the foreign key has nothing to point at — nothing
+    /// whatever to do with something already running.
+    /// </summary>
+    private static DbUpdateException ForeignKeyViolation() =>
+        new("An error occurred while saving the entity changes.",
+            new PostgresException(
+                "insert or update on table violates foreign key constraint",
+                "ERROR", "ERROR", PostgresErrorCodes.ForeignKeyViolation));
 
     private sealed class ThrowingScopeFactory : IServiceScopeFactory
     {

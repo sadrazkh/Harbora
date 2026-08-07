@@ -493,13 +493,13 @@ public class HarboraDbContext : DbContext
 
         b.Entity<Harbora.Modules.Backup.Domain.RestoreJob>(e =>
         {
-            // 512, not 1024: this column carries a btree unique index below, and a btree index row
-            // is capped near 2704 bytes. 1024 multi-byte characters could exceed that, and the
-            // resulting error would surface through RestoreService's DbUpdateException handler as
-            // "a restore into this destination is already running" — a sentence that would not be
-            // true. The bound removes the case. See RestoreJob.MaxDestinationLength.
+            // 1024, unchanged. This column carries a btree unique index below and a btree index row
+            // is capped near 2704 bytes, which 1024 multi-byte characters could exceed — but the
+            // answer to that is RestoreService refusing anything over
+            // RestoreJob.MaxDestinationLength before the insert, not an ALTER COLUMN that an
+            // install with a longer row already stored would meet as a failed boot.
             e.Property(x => x.Destination)
-                .HasMaxLength(Harbora.Modules.Backup.Domain.RestoreJob.MaxDestinationLength)
+                .HasMaxLength(Harbora.Modules.Backup.Domain.RestoreJob.StoredDestinationLength)
                 .IsRequired();
             e.Property(x => x.Entries).HasMaxLength(8192);
             e.Property(x => x.FailureReason).HasMaxLength(2048);

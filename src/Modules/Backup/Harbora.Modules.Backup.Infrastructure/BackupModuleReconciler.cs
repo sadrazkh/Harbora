@@ -27,8 +27,14 @@ public enum SweepResult
     Removed,
 
     /// <summary>
-    /// Not ours to delete — outside the staging root, or the root itself. A permanent verdict: it
-    /// will not become sweepable later, so retrying it every restart would only repeat the warning.
+    /// Not ours to delete — outside the staging root, or the root itself.
+    ///
+    /// <para>
+    /// A permanent verdict about <i>sweepability</i>, and none at all about <i>existence</i>: the
+    /// copy is still there. It is in fact the least discoverable copy there is, because it is the
+    /// one that listing the staging root will not show — so the row keeps pointing at it, and the
+    /// warning repeats every restart until a person deals with it. That repetition is the feature.
+    /// </para>
     /// </summary>
     Refused,
 
@@ -75,8 +81,48 @@ public sealed record SweepAttempt(string Path, SweepResult Result);
 /// somewhere else.
 /// </para>
 /// <para>
-/// Never blocks startup, like <c>JobReconciler</c>: a panel that will not boot because it could not
-/// tidy up is a worse outcome than rows that are tidied on the next restart.
+/// Never <i>fails</i> startup, like <c>JobReconciler</c>: a panel that will not boot because it
+/// could not tidy up is a worse outcome than rows that are tidied on the next restart.
+/// </para>
+/// <para>
+/// <b>Boot does, however, wait on this — deliberately.</b> Kestrel's <c>GenericWebHostService</c> is
+/// a plain <c>IHostedService</c>, so running the pass in <c>StartingAsync</c> puts all of it,
+/// including a recursive delete over a partly-staged directory, ahead of the port opening. Nothing
+/// configures <c>HostOptions.StartupTimeout</c>, whose default is
+/// <c>Timeout.InfiniteTimeSpan</c>, so a slow pass delays the listener rather than aborting the
+/// host; a health check polling the panel sees nothing until it finishes. That is the right trade
+/// here for four reasons, and the fourth is the one that decides it:
+/// </para>
+/// <list type="number">
+/// <item>A clean shutdown costs nothing at all. With no stranded row and no row claiming a staged
+/// copy, the pass returns <see cref="BackupReconciliation.None"/> before it touches the disk.</item>
+/// <item>What it deletes is <b>plaintext application data</b>. Answering requests while an
+/// unencrypted copy of somebody's database sits in staging is the worse state to be in, and every
+/// minute this is deferred is exposure that has already been paid for once by the crash.</item>
+/// <item>A pass is small. The partial unique index allows at most one active snapshot per target, so
+/// a crash strands roughly one row per backup that was in flight, each naming at most four paths —
+/// not a set that grows with history.</item>
+/// <item>A timeout would not bound the case that prompts the worry. <c>Directory.Delete(recursive)</c>
+/// takes no <c>CancellationToken</c>, so the single large tree — the only delete that could run for
+/// minutes — cannot be interrupted once it has begun. A budget could skip only paths it had not
+/// started, which does not remove the wait; it moves the leaked copy to a later restart and leaves
+/// it on disk in the meantime.</item>
+/// </list>
+/// <para>
+/// What would change the answer: if this pass ever grew to sweep a set that scales with backup
+/// history rather than with what was in flight, the disk half belongs after the listener binds, and
+/// the row-settling half must stay here — settling is what races the job worker; sweeping does not.
+/// </para>
+/// <para>
+/// <b>What this assumes about topology.</b> One panel process per database and per staging
+/// directory. The paths it deletes are derived from the row (see <see cref="BackupStagingLayout"/>),
+/// so two processes sharing a database and a staging directory would let the second settle rows the
+/// first is actively running and delete the copy underneath it. Single-instance is the supported
+/// topology — <c>docs/product-audit/13-target-architecture.md</c> §4 records the per-instance
+/// constraints the platform already relies on (<c>JobCancellationRegistry</c>, <c>AlertThrottle</c>,
+/// the AI rate-limit windows, <c>NodeIngressRegistry</c>), and HA is P3 — so no defence against it
+/// is built here. When HA does arrive this pass needs a lease or an instance-scoped staging root,
+/// and this paragraph is where to start reading.
 /// </para>
 /// </summary>
 public sealed class BackupModuleReconciler(
@@ -135,13 +181,15 @@ public sealed class BackupModuleReconciler(
 
     /// <summary>
     /// <c>StagingPath</c> is the row's standing claim that a plaintext copy still exists at that
-    /// path. It is cleared when the sweep proves otherwise, and rewritten to the path that would
-    /// <b>not</b> delete when one would not — so a delete that failed on a busy mount is retried by
-    /// the next restart instead of being forgotten. Clearing it unconditionally would throw away the
-    /// only pointer to a leaked copy of somebody's application data.
+    /// path. It is cleared only when the sweep proved the copy is gone, and kept otherwise —
+    /// whether the delete was attempted and threw (<see cref="SweepResult.Failed"/>, retried next
+    /// restart) or was never ours to attempt (<see cref="SweepResult.Refused"/>, which needs a
+    /// person). The question the column answers is "is there still a copy at this path", and both
+    /// of those answer yes. Clearing it unconditionally would throw away the only pointer to a
+    /// leaked copy of somebody's application data.
     /// </summary>
     public static string? RemainingStagingPath(IReadOnlyList<SweepAttempt> attempts) =>
-        attempts.FirstOrDefault(a => a.Result is SweepResult.Failed)?.Path;
+        attempts.FirstOrDefault(a => a.Result is SweepResult.Failed or SweepResult.Refused)?.Path;
 
     /// <summary>
     /// The statuses a restart can strand. Named here rather than inlined because the queue guard,
@@ -165,8 +213,15 @@ public sealed class BackupModuleReconciler(
         // is the exact shape of the failure it exists to fix.
         //
         // The StagingPath term picks up rows that are ALREADY terminal and still claim a staged
-        // copy: that is a delete this reconciler tried and could not do, and the next restart is
-        // exactly when to try again.
+        // copy: that is a delete this reconciler tried and could not do, or would not do, and the
+        // next restart is exactly when to look at it again.
+        //
+        // The OR makes this a sequential scan — no index serves both branches — and that is
+        // accepted rather than overlooked. It runs once per process start, over a table that holds
+        // one row per snapshot ever taken and is pruned by retention, so at a realistic size the
+        // scan is a few milliseconds. The index that would remove it would be paid for on every
+        // snapshot insert and update instead, forever, to save that. Revisit if BackupSnapshots
+        // ever stops being pruned.
         var snapshots = await db.BackupSnapshots.IgnoreQueryFilters()
             .Where(s => s.Status == BackupSnapshotStatus.Pending
                         || s.Status == BackupSnapshotStatus.Preparing

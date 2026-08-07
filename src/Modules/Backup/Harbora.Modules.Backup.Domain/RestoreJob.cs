@@ -23,15 +23,28 @@ public class RestoreJob : BaseEntity
     public RestoreType RestoreType { get; set; }
 
     /// <summary>
-    /// How long a <see cref="Destination"/> may be.
+    /// The width of the <see cref="Destination"/> column, unchanged since the module shipped.
     ///
     /// <para>
-    /// 512 rather than the 1024 this column used to allow, because the column now carries a btree
-    /// unique index and a btree index row cannot exceed roughly 2704 bytes. 512 characters is at
-    /// most 2048 bytes in UTF-8, so the value can never be the reason an insert is refused — which
-    /// matters here more than usual: the insert's only <c>DbUpdateException</c> handler reads a
-    /// refusal as "a restore into this destination is already running", and that sentence would be
-    /// a lie about a value that was simply too long.
+    /// Deliberately not narrowed. A narrowing is not an additive migration: an install that already
+    /// recorded a longer destination — a length this column has always permitted — would meet the
+    /// <c>ALTER COLUMN</c> at boot, and a panel that will not start is a worse failure than any this
+    /// bound would prevent. The rows in question are the audit trail of a destructive operation, so
+    /// "delete them and try again" is not a recovery an operator should be asked to perform.
+    /// </para>
+    /// </summary>
+    public const int StoredDestinationLength = 1024;
+
+    /// <summary>
+    /// The longest destination this panel will <b>accept</b>, which is shorter than what the column
+    /// can <see cref="StoredDestinationLength">hold</see>.
+    ///
+    /// <para>
+    /// The column carries a btree unique index, and a btree index row cannot exceed roughly 2704
+    /// bytes; 1024 multi-byte characters can. Refusing at 512 (at most 2048 bytes in UTF-8) in
+    /// <c>RestoreService.QueueAsync</c> makes that limit unreachable through the only code path that
+    /// writes this column, and does so without touching the schema — so nothing already stored is
+    /// invalidated by the rule, and no existing install has to be migrated to satisfy it.
     /// </para>
     /// <para>
     /// Real destinations are a resolved path under the restore root or a 36-character service id,

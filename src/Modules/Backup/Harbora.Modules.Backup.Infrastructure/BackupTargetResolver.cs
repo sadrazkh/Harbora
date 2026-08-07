@@ -218,6 +218,10 @@ public sealed class BackupTargetResolver(
             // A deterministic name means a retry of the same snapshot lands where the attempt that
             // crashed was writing. Clear it first: half a copy folded into the new archive would be
             // a backup that restores a mixture of two moments, and nothing would say so.
+            //
+            // What makes deleting it safe is that only one execution per snapshot ever reaches
+            // here: BackupSnapshotService.RunAsync refuses a snapshot already Preparing or Running,
+            // so this directory is never one a live run is filling.
             Cleanup(stagePath);
             Directory.CreateDirectory(stagePath);
 

@@ -8,6 +8,7 @@ using Harbora.Modules.Backup.Domain;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace Harbora.Modules.Backup.Infrastructure;
 
@@ -140,11 +141,12 @@ public sealed class RestoreService(
             }
         }
 
-        // Bounded before the insert, and refused in words. The catch below turns EVERY
-        // DbUpdateException on this insert into "already running", so any other store-level refusal
-        // of this row would be reported as something that is not true. A destination too long for
-        // the column is the one such refusal a caller can actually cause, so it is answered here
-        // instead of being left to the store.
+        // Bounded before the insert, and refused in words. Destination carries a btree unique index
+        // and a btree index row is capped near 2704 bytes, which 1024 multi-byte characters — a
+        // length the COLUMN still permits — would exceed. Refusing here keeps that limit
+        // unreachable through the only path that writes the column, without an ALTER COLUMN that an
+        // install holding a longer row would meet as a failed boot. See
+        // RestoreJob.MaxDestinationLength.
         if (destination.Length > RestoreJob.MaxDestinationLength)
             return new RestoreOutcome(false, Error:
                 $"That destination is {destination.Length} characters long; the longest this panel " +
@@ -179,10 +181,17 @@ public sealed class RestoreService(
         {
             await db.SaveChangesAsync(ct);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException e)
+            when (e.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
         {
             // Lost the race to another restore into the same destination. Nothing was written, and
             // nothing is audited: no restore was requested as far as this caller is concerned.
+            //
+            // Qualified on the unique violation, and only that. This is the destructive direction,
+            // so a wrong explanation costs more here than anywhere: an operator told "a restore into
+            // this destination is already running" when the snapshot was actually pruned between the
+            // read and the write would go hunting for a concurrent restore instead of reading the
+            // fault they hit. Anything that is not the index refusing surfaces as itself.
             db.ChangeTracker.Clear();
             return new RestoreOutcome(false, Error: AlreadyRunning);
         }

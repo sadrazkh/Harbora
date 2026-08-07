@@ -83,6 +83,8 @@ public sealed class ApplicationTargetStager(
         {
             // A retry of the same snapshot lands here again. Clear it first: a half-assembled
             // application from the attempt that crashed must not be folded into the new archive.
+            // Safe because only one execution per snapshot gets this far —
+            // BackupSnapshotService.RunAsync refuses one already Preparing or Running.
             Cleanup(stagePath);
             Directory.CreateDirectory(stagePath);
 

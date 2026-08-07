@@ -1,4 +1,4 @@
-﻿using FluentAssertions;
+using FluentAssertions;
 using Harbora.Modules.Backup.Contracts;
 using Harbora.Modules.Backup.Infrastructure;
 using Harbora.Tests.Fakes;
