@@ -217,6 +217,49 @@ public sealed class ApiV1Controller(
         return d is null ? NotFound() : Ok(d);
     }
 
+    /// <summary>
+    /// Stops a deployment that is queued or in flight — the CLI half of the panel's cancel button.
+    ///
+    /// <para>
+    /// Its most important answer is the unglamorous one. A deployment can reach a terminal state
+    /// between the caller reading its status and calling this, and <c>DeploymentStateMachine</c>
+    /// treats Succeeded → Cancelled as illegal. So the status is checked before, and read back after,
+    /// and a deployment that ended on its own is a <c>409</c> naming the state it ended in rather
+    /// than a <c>500</c> or — far worse — a <c>200</c> for a cancellation that never happened.
+    /// </para>
+    /// </summary>
+    [HttpPost("deployments/{id:guid}/cancel")]
+    [Authorize(Policy = Capabilities.AppsDeploy, AuthenticationSchemes = TokenAuthenticationHandler.SchemeName)]
+    public async Task<IActionResult> CancelDeployment(Guid id, CancellationToken ct)
+    {
+        var deployment = await db.Deployments
+            .Where(d => d.Id == id && d.App!.WorkspaceId == WorkspaceId)
+            .Select(d => new { d.Id, d.Number, d.Status })
+            .FirstOrDefaultAsync(ct);
+
+        // Same answer for "not yours" as for "not there", like every other endpoint here.
+        if (deployment is null) return NotFound(new { error = "Deployment not found." });
+
+        if (Harbora.Domain.Deployments.DeploymentStateMachine.IsTerminal(deployment.Status))
+            return Conflict(new { error = Ended(deployment.Number, deployment.Status) });
+
+        await deployEngine.CancelAsync(id, ct);
+
+        var settled = await db.Deployments.Where(d => d.Id == id)
+            .Select(d => d.Status).FirstOrDefaultAsync(ct);
+
+        if (settled != DeploymentStatus.Cancelled)
+            return Conflict(new { error = Ended(deployment.Number, settled) });
+
+        await audit.LogAsync("deployment.cancelled", "deployment", id.ToString(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+
+        return Ok(new { deploymentId = id, status = settled.ToString() });
+    }
+
+    private static string Ended(int number, DeploymentStatus status) =>
+        $"Deployment #{number} had already ended ({status}), so there was nothing to cancel.";
+
     [HttpGet("deployments/{id:guid}/logs")]
     public async Task<IActionResult> Logs(Guid id, long after = -1, CancellationToken ct = default)
     {

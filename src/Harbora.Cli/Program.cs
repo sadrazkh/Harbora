@@ -23,6 +23,7 @@ app.Configure(config =>
     config.AddCommand<AppsCommand>("apps").WithDescription("List applications.");
     config.AddCommand<DeployCommand>("deploy").WithDescription("Deploy an app and follow the logs.");
     config.AddCommand<LogsCommand>("logs").WithDescription("Stream logs for a deployment.");
+    config.AddCommand<CancelCommand>("cancel").WithDescription("Stop a queued or running deployment.");
     config.AddCommand<UpdateCommand>("update").WithDescription("Update this CLI to the latest release.");
 
 #if DEBUG

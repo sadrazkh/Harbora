@@ -18,6 +18,49 @@
     var deployIsFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var appUrl = $"/apps/details/{Model.AppId}";
     var appLabel = Model.App?.Name ?? (deployIsFa ? "برنامه" : "the application");
+    var queueExplanation = ViewBag.QueueExplanation as string;
+    var canCancel = ViewBag.CanCancel is true;
+    var queued = Model.Status == Harbora.Domain.Common.DeploymentStatus.Queued;
+    var deployMsg = TempData["Message"] as string;
+    var deployErr = TempData["Error"] as string;
+
+    // Two tiers, as everywhere else in the panel. Cancelling a deployment that has not started costs
+    // nothing and asks nothing; cancelling one mid-flight stops a build that is part-way through and
+    // is worth a moment's pause. A null attribute is not rendered, which is what makes that one form.
+    string? cancelConfirm = queued
+        ? null
+        : "return confirm('" + (deployIsFa
+            ? "این استقرار همین حالا متوقف شود؟ نسخه فعلی روی همان چیزی می‌ماند که هست."
+            : "Stop this deployment now? The release currently serving traffic stays as it is.") + "')";
+}
+
+@if (deployMsg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@deployMsg</div>}
+@if (deployErr is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@deployErr</div>}
+
+@* ---- why it is waiting, and the way out ----
+   A queued deployment used to say nothing at all about what it was behind, and there was no way to
+   stop it from anywhere in the product. The sentence comes from QueuePosition, which reads the same
+   rules the worker's claim does — so what is shown here is what the queue will actually do. *@
+@if (queueExplanation is not null || canCancel)
+{
+    <section class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-surface p-4">
+        @* Empty rather than invented. A queued deployment whose job row a reconciler has already
+           settled is in no queue, and "it is running" would be the friendly kind of wrong. *@
+        <p class="text-sm text-ink-muted">
+            @(queueExplanation
+              ?? (queued ? "" : deployIsFa ? "این استقرار در حال اجراست." : "This deployment is running."))
+        </p>
+        @if (canCancel)
+        {
+            <form asp-controller="Deployments" asp-action="Cancel" asp-route-id="@Model.Id" method="post"
+                  onsubmit="@cancelConfirm">
+                @Html.AntiForgeryToken()
+                <button class="rounded-lg border border-line-strong px-3 py-1.5 text-sm font-medium hover:border-danger hover:text-danger">
+                    @(deployIsFa ? "لغو استقرار" : "Cancel deployment")
+                </button>
+            </form>
+        }
+    </section>
 }
 
 @* The two endings. Both rendered here and revealed by the script, so somebody who watched the

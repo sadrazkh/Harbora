@@ -9,10 +9,20 @@ public sealed class ApiClient
 {
     private readonly HttpClient _http;
 
-    public ApiClient(string server, string? token)
+    public ApiClient(string server, string? token) : this(server, token, new HttpClientHandler()) { }
+
+    /// <summary>
+    /// The same client over a transport the caller supplies. A command is thin, and what is worth
+    /// checking about one is which endpoint it calls and what it does with the answer — which needs a
+    /// stand-in for the server rather than a server.
+    /// </summary>
+    public ApiClient(string server, string? token, HttpMessageHandler handler)
     {
         // Generous timeout: a push uploads the project and waits for the server to accept it.
-        _http = new HttpClient { BaseAddress = new Uri(server.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(10) };
+        _http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri(server.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(10)
+        };
         if (!string.IsNullOrWhiteSpace(token))
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
@@ -28,9 +38,9 @@ public sealed class ApiClient
         return await ReadAsync(res);
     }
 
-    public async Task<JsonElement> PostAsync(string path, object? body = null)
+    public async Task<JsonElement> PostAsync(string path, object? body = null, CancellationToken ct = default)
     {
-        var res = await _http.PostAsJsonAsync("api/v1/" + path, body ?? new { });
+        var res = await _http.PostAsJsonAsync("api/v1/" + path, body ?? new { }, ct);
         return await ReadAsync(res);
     }
 

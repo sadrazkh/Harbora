@@ -1,10 +1,16 @@
 ﻿using Harbora.Domain.Authorization;
 ﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Common;
+using Harbora.Domain.Deployments;
+using Harbora.Domain.Jobs;
+using Harbora.Infrastructure.Deployments;
+using Harbora.Infrastructure.Jobs;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Harbora.Web.Controllers;
 
@@ -15,7 +21,9 @@ public sealed class DeploymentsController(
     Harbora.Infrastructure.Assistant.AssistantService assistant,
     IDeploymentEngine deployEngine,
     IAuditLogger audit,
-    ICurrentUser currentUser) : Controller
+    ICurrentUser currentUser,
+    IOptions<JobQueueOptions> jobQueue,
+    ISystemClock clock) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -65,8 +73,119 @@ public sealed class DeploymentsController(
             && Harbora.Infrastructure.Assistant.AssistantAvailability.IsAvailable(
                 await assistant.GetConfigAsync(ct));
 
+        // Why it has not started. Asked only of a Queued deployment: anything else is either running
+        // or over, and a queue position for it would be describing something that is not happening.
+        if (deployment.Status == DeploymentStatus.Queued && await QueuePlaceAsync(deployment.Id, ct) is { } place)
+        {
+            ViewBag.QueuePlace = place;
+            ViewBag.QueueExplanation = QueuePosition.Describe(
+                place, System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa");
+        }
+
+        // The button is drawn from the same answer the endpoint gives, so the two cannot disagree —
+        // offering a control that always refuses teaches people to ignore it.
+        ViewBag.CanCancel = DeploymentStateMachine.IsInFlight(deployment.Status)
+                            && await access.CanTouchAppAsync(deployment.AppId, Capabilities.AppsDeploy, ct);
+
         return View(deployment);
     }
+
+    /// <summary>
+    /// Where this deployment's job stands in the platform's queue, or null when it has none — a
+    /// reconciler can settle the job while the deployment row is still Queued, and inventing a
+    /// position for a deployment that is in no queue would be the same lie in a friendlier voice.
+    ///
+    /// <para>
+    /// Read platform-wide on purpose. The queue is one queue; counting only this workspace's rows
+    /// would produce a smaller, more comfortable, wrong number. Nothing but each row's <i>kind</i>
+    /// leaves this method, so another tenant's work is counted without being named.
+    /// </para>
+    /// </summary>
+    private async Task<QueuePlace?> QueuePlaceAsync(Guid deploymentId, CancellationToken ct)
+    {
+        // The newest job for this deployment — the same row DatabaseJobQueue picks when it is asked
+        // to cancel one, so the position and the cancel are talking about the same work.
+        var jobId = await db.Jobs.AsNoTracking()
+            .Where(j => j.Kind == JobKind.Deployment && j.TargetId == deploymentId)
+            .OrderByDescending(j => j.CreatedAt)
+            .Select(j => (Guid?)j.Id)
+            .FirstOrDefaultAsync(ct);
+
+        if (jobId is not { } id) return null;
+
+        var rows = await db.Jobs.AsNoTracking()
+            .Where(j => j.Status == JobStatus.Pending || j.Status == JobStatus.Running)
+            .Select(j => new
+            {
+                j.Id, j.Kind, j.TargetId, j.ExclusiveWith, j.Status, j.CreatedAt, j.NextAttemptAt
+            })
+            .ToListAsync(ct);
+
+        // ExcludesOn is not a mapped property — the same reason JobClaimQuery spells the coalesce
+        // out — so the fallback is applied here, once, on the way into the rule.
+        var place = QueuePosition.For(
+            rows.Select(r => new QueuedJob(
+                r.Id, r.Kind, r.ExclusiveWith ?? r.TargetId, r.Status, r.CreatedAt, r.NextAttemptAt)),
+            id, clock.UtcNow, jobQueue.Value.EffectiveMaxConcurrency);
+
+        return place.Wait == QueueWait.NotQueued ? null : place;
+    }
+
+    /// <summary>
+    /// Stops a deployment that is queued or in flight.
+    ///
+    /// <para>
+    /// The engine has been able to do this since it was written; nothing could ask it to. The
+    /// interesting case is the one this method exists to get right: a deployment that reached a
+    /// terminal state between the page being drawn and the button being pressed. The state machine
+    /// would throw on that transition, so the status is read first — and read <i>again</i>
+    /// afterwards, because the deployment can finish during the call as easily as before it. What is
+    /// reported is what the row actually says, never what was asked for.
+    /// </para>
+    /// </summary>
+    [HttpPost("/deployments/{id:guid}/cancel")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
+    public async Task<IActionResult> Cancel(Guid id, CancellationToken ct)
+    {
+        var row = await db.Deployments.AsNoTracking()
+            .Where(d => d.Id == id && d.App!.WorkspaceId == WorkspaceId)
+            .Select(d => new { d.AppId, d.Status, d.Number })
+            .FirstOrDefaultAsync(ct);
+
+        if (row is null) return NotFound();
+        if (!await access.CanTouchAppAsync(row.AppId, Capabilities.AppsDeploy, ct)) return Forbid();
+
+        var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+        if (DeploymentStateMachine.IsTerminal(row.Status))
+        {
+            TempData["Error"] = Ended(row.Number, row.Status, isFa);
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await deployEngine.CancelAsync(id, ct);
+
+        var settled = await db.Deployments.AsNoTracking()
+            .Where(d => d.Id == id).Select(d => d.Status).FirstOrDefaultAsync(ct);
+
+        if (settled == DeploymentStatus.Cancelled)
+        {
+            await audit.LogAsync("deployment.cancelled", "deployment", id.ToString(), ClientIp, ct: ct);
+            TempData["Message"] = isFa
+                ? $"استقرار #{row.Number} لغو شد."
+                : $"Deployment #{row.Number} was cancelled.";
+        }
+        else TempData["Error"] = Ended(row.Number, settled, isFa);
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>What to say about a deployment that was already over. Names the status it ended in,
+    /// because "could not cancel" without it reads as a failure of the panel.</summary>
+    private static string Ended(int number, DeploymentStatus status, bool isFa) => isFa
+        ? $"استقرار #{number} پیش از لغو شدن به پایان رسیده بود ({status})."
+        : $"Deployment #{number} had already ended ({status}), so there was nothing to cancel.";
 
     /// <summary>
     /// Releases this exact image into another service in the same project, without rebuilding.

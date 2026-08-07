@@ -110,6 +110,19 @@ Flags always beat the config file, and the CLI prints the mode and the reason it
 > `--branch` uploads committed content only. Uncommitted edits are deliberately excluded — deploying
 > them is how "works on my machine" reaches production.
 
+### Stopping one
+
+```bash
+harbora cancel 0199aa11-2233-4455-6677-889900aabbcc   # the id `harbora deploy` printed
+```
+
+Works while the deployment is queued **or** already building; exits `0` when it stopped and `1` with
+the server's own explanation when it did not — most often because it had already finished. Honours
+`--account`, and never asks a question, so it is safe in a pipeline.
+
+Ctrl+C while the log is streaming stops *following*, not the deployment. The CLI says so and prints
+the `harbora cancel` line for it; the panel's deployment page has the same button.
+
 ### CI, with no interactive login
 
 ```bash
@@ -278,6 +291,21 @@ archive root — entries containing `..` or absolute paths are rejected — and 
 
 Poll with the highest `seq` you have seen to follow a build. `stream` is `System` or `Build`.
 
+### `POST /deployments/{id}/cancel`
+
+Stops a deployment that is queued or in flight. Needs `apps.deploy`, the same capability as starting
+one. No body.
+
+→ `200 { "deploymentId": "0199…", "status": "Cancelled" }`
+
+A deployment that reached a terminal state first — including between your last status read and this
+call — is a `409` naming the state it ended in, never a `200` for a cancellation that did not happen:
+
+→ `409 { "error": "Deployment #42 had already ended (Succeeded), so there was nothing to cancel." }`
+
+Cancelling settles the deployment **and** stops the work: a queued build is settled before it starts,
+and one already running is interrupted through its cancellation token.
+
 ### Status codes
 
 | Code | Meaning |
@@ -286,8 +314,8 @@ Poll with the highest `seq` you have seen to follow a build. `stream` is `System
 | `400` | Empty or malformed body |
 | `401` | Missing or invalid token |
 | `403` | The token's role lacks `apps.deploy` |
-| `404` | No such app **in your workspace** |
-| `409` | A conflicting deployment is in flight (e.g. a rollback is running) |
+| `404` | No such app or deployment **in your workspace** |
+| `409` | A conflicting deployment is in flight (e.g. a rollback is running), or the deployment has already ended |
 | `413` | Archive above the size limit |
 
 ---

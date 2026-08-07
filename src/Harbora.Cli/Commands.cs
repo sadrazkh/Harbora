@@ -23,6 +23,25 @@ internal static class Session
     public static ApiClient Require(string? account = null) => new(RequireProfile(account));
 }
 
+/// <summary>
+/// The sentence the server meant to say, dug out of the raw HTTP failure.
+///
+/// <c>HttpRequestException</c> carries the status line and the whole body, which reads as noise to
+/// somebody who only wants to know why their command was refused — and the body already contains a
+/// written explanation, put there for exactly this moment.
+/// </summary>
+internal static class ServerError
+{
+    public static string Message(string raw)
+    {
+        var marker = raw.IndexOf("{\"error\":\"", StringComparison.Ordinal);
+        if (marker < 0) return raw;
+        var start = marker + 10;
+        var end = raw.IndexOf('"', start);
+        return end > start ? raw[start..end] : raw;
+    }
+}
+
 public sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
 {
     public sealed class Settings : CommandSettings
@@ -108,14 +127,7 @@ public sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
         Interactive.IsAvailable ? AnsiConsole.Prompt(new TextPrompt<string>(prompt).Secret()) : "";
 
     /// <summary>Turns the raw HTTP error into the sentence the server meant to say.</summary>
-    private static string Clean(string message)
-    {
-        var marker = message.IndexOf("{\"error\":\"", StringComparison.Ordinal);
-        if (marker < 0) return message;
-        var start = marker + 10;
-        var end = message.IndexOf('"', start);
-        return end > start ? message[start..end] : message;
-    }
+    private static string Clean(string message) => ServerError.Message(message);
 }
 
 public sealed class WhoAmICommand : AsyncCommand
@@ -305,7 +317,7 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         AnsiConsole.MarkupLine($"[green]✓[/] Queued deployment [bold]{deploymentId}[/] for [bold]{slug}[/].");
         await VersionNotice.MaybeWarnAsync(api);
 
-        return settings.Follow && !settings.NoFollow ? await StreamLogs(api, deploymentId) : 0;
+        return settings.Follow && !settings.NoFollow ? await StreamLogs(api, deploymentId, ct) : 0;
     }
 
     private static async Task<string?> TriggerAsync(ApiClient api, string slug, string? gitRef)
@@ -384,27 +396,97 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         return process.ExitCode;
     }
 
-    internal static async Task<int> StreamLogs(ApiClient api, string deploymentId)
+    /// <summary>
+    /// Follows a deployment to its end, or until the person following it stops.
+    ///
+    /// <para>
+    /// The poll used to be a bare <c>Task.Delay(1500)</c>, which is where this loop spends nearly all
+    /// of its time — so Ctrl+C was not observed until the process was killed hard enough to skip
+    /// every cleanup the CLI has. The token reaches both the requests and the wait now, and stopping
+    /// says what it did and did not do: following a deployment and running one are different things,
+    /// and only one of them ends here.
+    /// </para>
+    ///
+    /// <para>Public so the follow loop can be driven against a stand-in for the panel.</para>
+    /// </summary>
+    public static async Task<int> StreamLogs(ApiClient api, string deploymentId, CancellationToken ct)
     {
         long after = -1;
         var terminal = new[] { "Succeeded", "Failed", "Cancelled", "RolledBack" };
-        while (true)
+        try
         {
-            var lines = await api.GetAsync($"deployments/{deploymentId}/logs?after={after}");
-            foreach (var l in lines.EnumerateArray())
+            while (true)
             {
-                Console.WriteLine(l.GetProperty("message").GetString());
-                after = l.GetProperty("seq").GetInt64();
+                var lines = await api.GetAsync($"deployments/{deploymentId}/logs?after={after}", ct);
+                foreach (var l in lines.EnumerateArray())
+                {
+                    Console.WriteLine(l.GetProperty("message").GetString());
+                    after = l.GetProperty("seq").GetInt64();
+                }
+                var d = await api.GetAsync($"deployments/{deploymentId}", ct);
+                var status = d.GetProperty("status").GetString() ?? "";
+                if (terminal.Contains(status))
+                {
+                    var color = status == "Succeeded" ? "green" : "red";
+                    AnsiConsole.MarkupLine($"[{color}]● {Markup.Escape(status)}[/]");
+                    return status == "Succeeded" ? 0 : 1;
+                }
+                await Task.Delay(1500, ct);
             }
-            var d = await api.GetAsync($"deployments/{deploymentId}");
-            var status = d.GetProperty("status").GetString() ?? "";
-            if (terminal.Contains(status))
-            {
-                var color = status == "Succeeded" ? "green" : "red";
-                AnsiConsole.MarkupLine($"[{color}]● {Markup.Escape(status)}[/]");
-                return status == "Succeeded" ? 0 : 1;
-            }
-            await Task.Delay(1500);
+        }
+        catch (OperationCanceledException)
+        {
+            // Said out loud, because it is the one thing somebody pressing Ctrl+C here is likely to
+            // have wrong: the build carries on without them.
+            AnsiConsole.MarkupLine(
+                "[grey]Stopped following. The deployment is still running — " +
+                $"stop it with[/] harbora cancel {Markup.Escape(deploymentId)}");
+            return 1;
+        }
+    }
+}
+
+/// <summary>
+/// Stops a deployment that is queued or already building.
+///
+/// The panel could do neither until now, and the CLI could not either: a deploy pushed at the wrong
+/// commit, or one queued behind a twenty-minute build that nobody wants any more, could only be
+/// waited out. The engine has always been able to stop one — the row goes to Cancelled through the
+/// state machine and the job is interrupted — so this is a way to ask, not a new capability.
+/// </summary>
+public sealed class CancelCommand : AsyncCommand<CancelCommand.Settings>
+{
+    public sealed class Settings : CommandSettings
+    {
+        [CommandArgument(0, "<deploymentId>"), Description("The deployment to stop, as `harbora deploy` printed it")]
+        public string DeploymentId { get; init; } = string.Empty;
+
+        [CommandOption("--account <EMAIL>"), Description("Which signed-in account to use, when several are")]
+        public string? Account { get; init; }
+    }
+
+    protected override Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct) =>
+        RunAsync(Session.Require(settings.Account), settings.DeploymentId, ct);
+
+    /// <summary>
+    /// The command over a client the caller supplies. Public for the same reason
+    /// <see cref="DeployCommand.StreamLogs"/> is: this is the part with behaviour in it.
+    /// </summary>
+    public static async Task<int> RunAsync(ApiClient api, string deploymentId, CancellationToken ct)
+    {
+        try
+        {
+            await api.PostAsync($"deployments/{deploymentId}/cancel", null, ct);
+            AnsiConsole.MarkupLine(
+                $"[green]✓[/] Cancelled deployment [bold]{Markup.Escape(deploymentId)}[/].");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            // The server's own sentence. It already knows whether the deployment had finished, was
+            // never there, or belongs to somebody else — repeating it beats guessing at it.
+            AnsiConsole.MarkupLine($"[red]Could not cancel:[/] {Markup.Escape(ServerError.Message(ex.Message))}");
+            return 1;
         }
     }
 }
@@ -418,7 +500,7 @@ public sealed class LogsCommand : AsyncCommand<LogsCommand.Settings>
     }
 
     protected override Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct) =>
-        DeployCommand.StreamLogs(Session.Require(), settings.DeploymentId);
+        DeployCommand.StreamLogs(Session.Require(), settings.DeploymentId, ct);
 }
 
 public sealed class StatusCommand : AsyncCommand
