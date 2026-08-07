@@ -298,6 +298,27 @@ public class DeploymentQueueAndCancelTests
     }
 
     [Fact]
+    public async Task The_queue_position_is_read_from_the_row_the_cancel_endpoint_would_act_on()
+    {
+        // QueuePlaceAsync used to take the newest job row for the deployment regardless of status;
+        // DatabaseJobQueue.RequestCancellationAsync has only ever taken the newest Pending-or-Running
+        // one. A stray settled row newer than the live one used to make the two disagree about which
+        // job the page and the cancel button were even talking about — here, hiding the real queue
+        // position behind "this deployment has no queue at all".
+        var f = Build(maxConcurrency: 1);
+        Enqueue(f.Db, JobKind.Deployment, f.Deployment.Id, exclusiveWith: f.AppId,
+            jobStatus: JobStatus.Pending, minutesOld: 5);
+        Enqueue(f.Db, JobKind.Deployment, f.Deployment.Id, exclusiveWith: f.AppId,
+            jobStatus: JobStatus.Cancelled, minutesOld: 1);
+
+        var view = (await f.Panel.Details(f.Deployment.Id, default)).Should().BeOfType<ViewResult>().Subject;
+
+        view.ViewData["QueuePlace"].Should().BeOfType<QueuePlace>()
+            .Which.Wait.Should().Be(QueueWait.Next,
+                "the live Pending row is still queued even though a newer, settled row also exists");
+    }
+
+    [Fact]
     public async Task A_finished_deployments_page_explains_no_queue_at_all()
     {
         var f = Build(DeploymentStatus.Succeeded);

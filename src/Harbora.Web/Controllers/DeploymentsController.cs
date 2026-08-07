@@ -103,10 +103,13 @@ public sealed class DeploymentsController(
     /// </summary>
     private async Task<QueuePlace?> QueuePlaceAsync(Guid deploymentId, CancellationToken ct)
     {
-        // The newest job for this deployment — the same row DatabaseJobQueue picks when it is asked
-        // to cancel one, so the position and the cancel are talking about the same work.
+        // The newest Pending-or-Running job for this deployment — the same predicate
+        // DatabaseJobQueue.RequestCancellationAsync uses to pick the row it would cancel, so the
+        // position and the cancel are answers about the same row rather than merely the newest one
+        // regardless of status (a settled row newer than the live one would otherwise hide it).
         var jobId = await db.Jobs.AsNoTracking()
-            .Where(j => j.Kind == JobKind.Deployment && j.TargetId == deploymentId)
+            .Where(j => j.Kind == JobKind.Deployment && j.TargetId == deploymentId &&
+                        (j.Status == JobStatus.Pending || j.Status == JobStatus.Running))
             .OrderByDescending(j => j.CreatedAt)
             .Select(j => (Guid?)j.Id)
             .FirstOrDefaultAsync(ct);
@@ -117,7 +120,8 @@ public sealed class DeploymentsController(
             .Where(j => j.Status == JobStatus.Pending || j.Status == JobStatus.Running)
             .Select(j => new
             {
-                j.Id, j.Kind, j.TargetId, j.ExclusiveWith, j.Status, j.CreatedAt, j.NextAttemptAt
+                j.Id, j.Kind, j.TargetId, j.ExclusiveWith, j.Status, j.CreatedAt, j.NextAttemptAt,
+                j.CancelRequested
             })
             .ToListAsync(ct);
 
@@ -125,7 +129,8 @@ public sealed class DeploymentsController(
         // out — so the fallback is applied here, once, on the way into the rule.
         var place = QueuePosition.For(
             rows.Select(r => new QueuedJob(
-                r.Id, r.Kind, r.ExclusiveWith ?? r.TargetId, r.Status, r.CreatedAt, r.NextAttemptAt)),
+                r.Id, r.Kind, r.ExclusiveWith ?? r.TargetId, r.Status, r.CreatedAt, r.NextAttemptAt,
+                r.CancelRequested)),
             id, clock.UtcNow, jobQueue.Value.EffectiveMaxConcurrency);
 
         return place.Wait == QueueWait.NotQueued ? null : place;

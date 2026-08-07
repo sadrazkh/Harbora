@@ -23,9 +23,10 @@ public class QueuePositionTests
     /// <summary>A Jobs row, with the fields this rule reads and sensible defaults for the rest.</summary>
     private static QueuedJob Job(
         int id, JobKind kind = JobKind.Deployment, int excludesOn = 1,
-        JobStatus status = JobStatus.Pending, int minutesOld = 0, DateTimeOffset? nextAttemptAt = null) =>
+        JobStatus status = JobStatus.Pending, int minutesOld = 0, DateTimeOffset? nextAttemptAt = null,
+        bool cancelRequested = false) =>
         new(Id(id), kind, Id(excludesOn + 1000), status,
-            Now.AddMinutes(-minutesOld), nextAttemptAt);
+            Now.AddMinutes(-minutesOld), nextAttemptAt, cancelRequested);
 
     // ---- position ----
 
@@ -112,6 +113,34 @@ public class QueuePositionTests
         place.Running.Should().Be(1);
     }
 
+    [Fact]
+    public void A_row_marked_for_cancellation_is_not_in_front_of_anything()
+    {
+        // JobWorker.ClaimNextAsync settles a CancelRequested Pending row to Cancelled the instant it
+        // is claimed, without running it — reachable after a shutdown released a claim on a job that
+        // had already been asked to stop. Counting it as ahead would count work that never happens.
+        var place = QueuePosition.For(
+        [
+            Job(1, JobKind.Backup, excludesOn: 7, minutesOld: 10, cancelRequested: true),
+            Job(2, JobKind.Deployment, excludesOn: 1, minutesOld: 1)
+        ], Id(2), Now, maxConcurrency: 1);
+
+        place.Position.Should().Be(1);
+        place.Ahead.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_same_key_row_marked_for_cancellation_does_not_hold_the_key_either()
+    {
+        var place = QueuePosition.For(
+        [
+            Job(1, JobKind.Deployment, excludesOn: 1, minutesOld: 4, cancelRequested: true),
+            Job(2, JobKind.Deployment, excludesOn: 1, minutesOld: 1)
+        ], Id(2), Now, maxConcurrency: 4);
+
+        place.Wait.Should().Be(QueueWait.Next);
+    }
+
     // ---- the exclusion, which is the truthful answer ----
 
     [Fact]
@@ -134,7 +163,8 @@ public class QueuePositionTests
     {
         // Nothing holds the app yet, but oldest-first means the older row is claimed first and this
         // one is excluded the moment it is. Saying "second in the queue" would be true for one pass
-        // of the loop and wrong from then on.
+        // of the loop and wrong from then on. The sentence must also not say "to finish" here — the
+        // blocker has not even started.
         var place = QueuePosition.For(
         [
             Job(1, JobKind.Deployment, excludesOn: 1, minutesOld: 4),
@@ -142,6 +172,8 @@ public class QueuePositionTests
         ], Id(2), Now, maxConcurrency: 4);
 
         place.Wait.Should().Be(QueueWait.BlockedBySameTarget);
+        QueuePosition.Describe(place, persian: false)
+            .Should().Be("Blocked by another deployment of this app; only one may run at a time.");
     }
 
     [Fact]
@@ -271,7 +303,46 @@ public class QueuePositionTests
         ], Id(2), Now, maxConcurrency: 4);
 
         QueuePosition.Describe(place, persian: false)
-            .Should().Be("Waiting for another deployment of this app to finish.");
+            .Should().Be("Blocked by another deployment of this app; only one may run at a time.");
+    }
+
+    [Fact]
+    public void The_sentence_for_a_full_queue_names_the_running_jobs_rather_than_an_empty_list()
+    {
+        // The ordinary reason a deployment waits: DeploymentEngine.QueueDeploymentAsync coalesces a
+        // redeploy onto the in-flight deployment rather than creating a second row, so
+        // BlockedBySameTarget is reachable only through the narrow double-submit race. What an
+        // ordinary busy install produces is this — nothing claimable ahead of it, but every slot
+        // taken by running work that is not ahead of it at all. Ahead.Count == 0 must never render as
+        // "waiting behind 0 jobs: nothing".
+        var place = QueuePosition.For(
+        [
+            Job(1, JobKind.Backup, excludesOn: 7, status: JobStatus.Running, minutesOld: 10),
+            Job(2, JobKind.CronRun, excludesOn: 8, status: JobStatus.Running, minutesOld: 9),
+            Job(3, JobKind.Deployment, excludesOn: 1, minutesOld: 1)
+        ], Id(3), Now, maxConcurrency: 2);
+
+        place.Wait.Should().Be(QueueWait.Behind);
+        place.Ahead.Should().BeEmpty();
+
+        QueuePosition.Describe(place, persian: false)
+            .Should().Be("1st in the queue — waiting for a worker to free up: 2 jobs running now.");
+        QueuePosition.Describe(place, persian: true)
+            .Should().Be("در صف، جایگاه 1 — منتظر آزاد شدن یک کارگر: 2 کار در حال اجراست.");
+    }
+
+    [Fact]
+    public void The_sentence_for_a_full_queue_uses_the_singular_for_one_running_job()
+    {
+        var place = QueuePosition.For(
+        [
+            Job(1, JobKind.Backup, excludesOn: 7, status: JobStatus.Running, minutesOld: 10),
+            Job(2, JobKind.Deployment, excludesOn: 1, minutesOld: 1)
+        ], Id(2), Now, maxConcurrency: 1);
+
+        place.Wait.Should().Be(QueueWait.Behind);
+        QueuePosition.Describe(place, persian: false)
+            .Should().Be("1st in the queue — waiting for a worker to free up: 1 job running now.");
     }
 
     [Fact]

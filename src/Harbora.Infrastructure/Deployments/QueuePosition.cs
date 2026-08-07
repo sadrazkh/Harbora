@@ -12,13 +12,20 @@ namespace Harbora.Infrastructure.Deployments;
 /// What the row must not share with another job of the same kind running at the same time —
 /// <see cref="Job.ExcludesOn"/>, which for a deployment is its <b>app</b> rather than its own target.
 /// </param>
+/// <param name="CancelRequested">
+/// <see cref="Job.CancelRequested"/>. Not a <c>JobClaimQuery</c> term — the SQL claim does not look at
+/// it — but a term of the claim <b>path</b> all the same: <c>JobWorker.ClaimNextAsync</c> settles a
+/// Pending row carrying it to <c>Cancelled</c> the instant it is claimed, without running it. A row
+/// like that is not really ahead of anything, and it does not hold its key either.
+/// </param>
 public readonly record struct QueuedJob(
     Guid Id,
     JobKind Kind,
     Guid ExcludesOn,
     JobStatus Status,
     DateTimeOffset CreatedAt,
-    DateTimeOffset? NextAttemptAt = null);
+    DateTimeOffset? NextAttemptAt = null,
+    bool CancelRequested = false);
 
 /// <summary>Why a job has not started. One member per reason the claim would pass it over.</summary>
 public enum QueueWait
@@ -26,7 +33,12 @@ public enum QueueWait
     /// <summary>Not in the queue: already running, already settled, or no row at all.</summary>
     NotQueued,
 
-    /// <summary>Nothing claimable in front of it and a free slot — the next claim takes it.</summary>
+    /// <summary>
+    /// A free slot for everything claimable ahead of it, and one left over for it too — so it is not
+    /// necessarily first, only certain to be claimed in this same pass rather than made to wait for
+    /// one of them to finish. (Position can still be greater than 1: three claimable jobs ahead with
+    /// four free slots is <c>Next</c> at position 4, not first.)
+    /// </summary>
     Next,
 
     /// <summary>Claimable, but older claimable work fills every slot the worker has.</summary>
@@ -62,16 +74,20 @@ public sealed record QueuePlace(
 /// <para>
 /// A deployment used to sit in <c>Queued</c> saying nothing, and the honest reason it was waiting was
 /// never a mystery — it was a row in a table nobody showed. The hard part is not counting rows, it is
-/// counting the <b>right</b> ones: every term of <c>JobClaimQuery.Claimable</c> is repeated here, so
-/// the number a person is shown is the number the worker would arrive at. A position that counted
-/// rows the claim will skip over — a snapshot whose target is busy, a job serving a retry backoff —
-/// would be a confident, precise, wrong answer, which is worse than none.
+/// counting the <b>right</b> ones: every term of <c>JobClaimQuery.Claimable</c> is repeated here, plus
+/// <c>CancelRequested</c> from <c>JobWorker.ClaimNextAsync</c>'s own check just after it, so the number
+/// a person is shown is the number the worker would arrive at. A position that counted rows the claim
+/// will skip over — a snapshot whose target is busy, a job serving a retry backoff, a row about to be
+/// cancelled without running — would be a confident, precise, wrong answer, which is worse than none.
+/// One thing is <i>not</i> a mirror: the id tiebreak in <see cref="IsBefore"/> stabilises an
+/// exact-timestamp collision that the claim's own <c>OrderBy(CreatedAt)</c> leaves Postgres to resolve
+/// arbitrarily, so on that one, rare collision this rule's order and the claim's order can disagree.
 /// </para>
 ///
 /// <para>
-/// And where the exclusion is the reason, it says the exclusion. "Waiting for another deployment of
-/// this app to finish" is both truer and more useful than a queue position, because it names
-/// something the person can look at; a number tells them to wait for work they cannot see.
+/// And where the exclusion is the reason, it says the exclusion. "Blocked by another deployment of
+/// this app" is both truer and more useful than a queue position, because it names something the
+/// person can look at; a number tells them to wait for work they cannot see.
 /// </para>
 ///
 /// <para>
@@ -128,11 +144,24 @@ public static class QueuePosition
             mine.Kind, ahead.Count + 1, ahead, running);
     }
 
-    /// <summary>Pending and due — the two terms the claim's WHERE clause has.</summary>
+    /// <summary>
+    /// Pending and due — the two terms the claim's WHERE clause has — plus <c>CancelRequested</c>,
+    /// which is not a term of that WHERE clause but is a term of what gets run: a Pending row carrying
+    /// it is claimed, then settled straight to <c>Cancelled</c> by <c>JobWorker.ClaimNextAsync</c>
+    /// without ever running, so it is not really claimable in the sense this rule cares about — it
+    /// neither counts as work ahead of anything nor holds the key it excludes on.
+    /// </summary>
     private static bool IsClaimable(QueuedJob job, DateTimeOffset now) =>
-        job.Status == JobStatus.Pending && (job.NextAttemptAt is null || job.NextAttemptAt <= now);
+        job.Status == JobStatus.Pending && !job.CancelRequested &&
+        (job.NextAttemptAt is null || job.NextAttemptAt <= now);
 
-    /// <summary>Oldest first, with the id breaking a tie so the order is total and stable.</summary>
+    /// <summary>
+    /// Oldest first, with the id breaking a tie so the order is total and stable. This tiebreak has no
+    /// counterpart in <c>JobClaimQuery.Claimable</c>, which orders by <c>CreatedAt</c> alone — so on an
+    /// exact-timestamp collision, Postgres resolves the tie arbitrarily while this always resolves it
+    /// the same way. Kept anyway for a rule that gives the same answer twice given the same rows,
+    /// which is worth more here than matching an arbitrary database tiebreak nobody could predict either.
+    /// </summary>
     private static bool IsBefore(QueuedJob job, QueuedJob other) =>
         job.CreatedAt < other.CreatedAt ||
         (job.CreatedAt == other.CreatedAt && job.Id.CompareTo(other.Id) < 0);
@@ -161,6 +190,16 @@ public static class QueuePosition
         QueueWait.Next => persian
             ? "بعدی در صف — به‌محض آزاد شدن یک کارگر شروع می‌شود."
             : "Next in the queue — it starts as soon as a worker picks it up.",
+
+        // Ahead can be empty here: running >= EffectiveMaxConcurrency is what makes this Behind rather
+        // than Next, and that is the ordinary way a deployment waits — every worker busy with running
+        // jobs that are not ahead of this one in the queue at all. Formatting "waiting behind 0 jobs:
+        // nothing" there would be a sentence that contradicts its own numbers.
+        QueueWait.Behind when place.Ahead.Count == 0 => persian
+            ? $"در صف، جایگاه {place.Position} — منتظر آزاد شدن یک کارگر: " +
+              $"{place.Running} کار در حال اجراست."
+            : $"{Ordinal(place.Position)} in the queue — waiting for a worker to free up: " +
+              $"{place.Running} job{(place.Running == 1 ? "" : "s")} running now.",
 
         QueueWait.Behind => persian
             ? $"در صف، جایگاه {place.Position} — پشت {place.Ahead.Count} کار: {List(place, persian: true)}."
@@ -240,14 +279,22 @@ public static class QueuePosition
     /// <summary>
     /// The exclusion, named. A deployment excludes on its app; everything else on its own target, so
     /// the two say different things about what to go and look at.
+    ///
+    /// <para>
+    /// Deliberately silent on whether the blocker is running or merely queued ahead of this one —
+    /// <see cref="IsHeldBySomethingElse"/> treats an older Pending row on the same key as holding it
+    /// too, because oldest-first will hand it the key before this row is ever looked at. "…to finish"
+    /// would be true of a running blocker and false of a pending one that has not started; the wording
+    /// below is true of both instead of picking one and being wrong half the time.
+    /// </para>
     /// </summary>
     private static string BlockedEn(JobKind kind) => kind == JobKind.Deployment
-        ? "Waiting for another deployment of this app to finish."
-        : $"Waiting for another {Noun(kind, persian: false)} of the same target to finish.";
+        ? "Blocked by another deployment of this app; only one may run at a time."
+        : $"Blocked by another {Noun(kind, persian: false)} of the same target; only one may run at a time.";
 
     private static string BlockedFa(JobKind kind) => kind == JobKind.Deployment
-        ? "منتظر پایان یافتن استقرار دیگری از همین برنامه."
-        : $"منتظر پایان یافتن {Noun(kind, persian: true)} دیگری روی همین هدف.";
+        ? "مسدود شده به‌دلیل استقرار دیگری از همین برنامه؛ در هر لحظه فقط یکی اجرا می‌شود."
+        : $"مسدود شده به‌دلیل {Noun(kind, persian: true)} دیگری روی همین هدف؛ در هر لحظه فقط یکی اجرا می‌شود.";
 
     /// <summary>"1st", "2nd", "3rd", "11th" — the teens are the reason this is not one line.</summary>
     private static string Ordinal(int n)
