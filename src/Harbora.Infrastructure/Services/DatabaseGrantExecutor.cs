@@ -35,6 +35,29 @@ public sealed class DatabaseGrantExecutor(
         return await RunAsync(service, networkName, command, "create the login", ct);
     }
 
+    /// <summary>
+    /// Replaces the password on a login that is already there.
+    ///
+    /// Unsupported engines are refused rather than silently accepted, unlike <see cref="DropAsync"/>:
+    /// a drop that has nothing to drop has already achieved what it was for, but a rotation that
+    /// changed nothing must not come back as success — the caller hands the returned password to a
+    /// person on the strength of that answer.
+    /// </summary>
+    public async Task<(bool Ok, string? Error)> RotateAsync(
+        ManagedService service, string networkName, string username, string password, CancellationToken ct)
+    {
+        if (!DatabaseGrantSql.Supports(service.Type))
+            return (false, DatabaseGrantSql.UnsupportedReason(service.Type));
+
+        var command = DatabaseGrantSql.Rotate(
+            service.Type, service.ContainerName, service.InternalPort,
+            service.Username, service.DatabaseName, username, password);
+
+        if (command is null) return (false, "That login's details cannot be used in a statement.");
+
+        return await RunAsync(service, networkName, command, "change the login's password", ct);
+    }
+
     public async Task<(bool Ok, string? Error)> DropAsync(
         ManagedService service, string networkName, string username, CancellationToken ct)
     {

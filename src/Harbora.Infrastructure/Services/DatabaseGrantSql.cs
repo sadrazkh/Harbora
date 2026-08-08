@@ -8,7 +8,7 @@ namespace Harbora.Infrastructure.Services;
 public sealed record GrantCommand(string Image, IReadOnlyList<string> Command);
 
 /// <summary>
-/// The statements that create and remove an external login on a managed database.
+/// The statements that create, re-password and remove an external login on a managed database.
 ///
 /// **Every value here ends up inside SQL**, so the rule is: nothing is interpolated that has not
 /// first been proved to be from the generated alphabet. `DatabaseCredentialManager` produces
@@ -75,6 +75,40 @@ public static class DatabaseGrantSql
                 "-e", $"CREATE USER '{username}'@'%' IDENTIFIED BY '{password}'; " +
                       $"GRANT ALL PRIVILEGES ON `{database}`.* TO '{username}'@'%'; " +
                       "FLUSH PRIVILEGES;"
+            ])
+        };
+    }
+
+    /// <summary>
+    /// Changes the password on a login that already exists, leaving its privileges alone.
+    ///
+    /// The opposite of <see cref="Drop"/> on repetition: <c>ON_ERROR_STOP</c> is set and neither
+    /// statement carries an <c>IF EXISTS</c>, so rotating a login the database does not have fails
+    /// loudly. Reporting success there would hand somebody a password nothing will ever accept,
+    /// while the old one — the one they wanted retired — kept working.
+    /// </summary>
+    public static GrantCommand? Rotate(
+        ManagedServiceType type, string host, int port, string adminUser,
+        string database, string username, string password)
+    {
+        if (!Supports(type)) return null;
+        if (!IsSafe(username) || !IsSafe(password) || !IsSafe(database) || !IsSafe(adminUser)) return null;
+
+        return type switch
+        {
+            ManagedServiceType.PostgreSql => new GrantCommand("postgres:16-alpine",
+            [
+                "psql", "-v", "ON_ERROR_STOP=1",
+                "-h", host, "-p", port.ToString(), "-U", adminUser, "-d", database,
+                "-c", $"ALTER USER \"{username}\" WITH PASSWORD '{password}';"
+            ]),
+
+            // ALTER USER rather than SET PASSWORD: the latter needs the hash function whose name
+            // changed between MySQL and MariaDB, and this one client image talks to both.
+            _ => new GrantCommand("mariadb:11",
+            [
+                "mariadb", "-h", host, "-P", port.ToString(), "-u", adminUser,
+                "-e", $"ALTER USER '{username}'@'%' IDENTIFIED BY '{password}'; FLUSH PRIVILEGES;"
             ])
         };
     }

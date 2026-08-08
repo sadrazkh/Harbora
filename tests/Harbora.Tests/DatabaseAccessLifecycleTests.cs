@@ -1,11 +1,15 @@
 using FluentAssertions;
 using Harbora.Data;
 using Harbora.Domain.Common;
+using Harbora.Domain.Identity;
 using Harbora.Domain.Services;
+using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Nodes;
 using Harbora.Infrastructure.Services;
+using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -52,6 +56,67 @@ public class DatabaseAccessLifecycleTests
         var service = new DatabaseAccessService(db, node, clock, NullLogger<DatabaseAccessService>.Instance);
 
         return (db, service, node, clock, database);
+    }
+
+    /// <summary>The single-server install, with everything <see cref="DatabaseAccessService.CanOpenLocally"/> needs.</summary>
+    private sealed record LocalStack(
+        HarboraDbContext Db,
+        DatabaseAccessService Service,
+        FakeDockerEngine Docker,
+        FakeNodeAgentClient Node,
+        Clock Clock,
+        ManagedService Database);
+
+    /// <summary>
+    /// The install this feature actually ships on: the panel talks to the same Docker daemon the
+    /// database runs on, so every step goes through the local executor and the node contract is
+    /// never asked. <c>Build()</c> above is the other half — an install with no local reach at all.
+    /// </summary>
+    private static LocalStack BuildLocal()
+    {
+        var db = new HarboraDbContext(new DbContextOptionsBuilder<HarboraDbContext>()
+            .UseInMemoryDatabase("dbaccess-local-" + Guid.NewGuid()).Options);
+
+        var workspace = new Workspace { Id = Guid.CreateVersion7(), Name = "Acme", Slug = "acme" };
+        db.Add(workspace);
+
+        var protector = new PassthroughProtector();
+        var database = new ManagedService
+        {
+            Id = Guid.CreateVersion7(),
+            WorkspaceId = workspace.Id,
+
+            // Guid.Empty resolves to the panel's own engine through the fake factory, which is what
+            // the gateway insists on before it will publish a port.
+            ServerId = Guid.Empty,
+            Name = "Shop DB",
+            ContainerName = "harbora-svc-shop",
+            DatabaseName = "shop",
+            Username = "postgres",
+            EncryptedPassword = protector.Protect("admin_secret"),
+            InternalPort = 5432,
+            Status = ServiceStatus.Running,
+            Type = ManagedServiceType.PostgreSql
+        };
+        db.Add(database);
+        db.SaveChanges();
+
+        var docker = new FakeDockerEngine();
+        var engines = new FakeServerEngineFactory(docker);
+        var clock = new Clock(Start);
+        var node = new FakeNodeAgentClient(NullLogger<FakeNodeAgentClient>.Instance);
+
+        var service = new DatabaseAccessService(
+            db, node, clock, NullLogger<DatabaseAccessService>.Instance,
+            new DockerTcpGateway(db, engines, NullLogger<DockerTcpGateway>.Instance),
+            new DatabaseGrantExecutor(docker, protector, NullLogger<DatabaseGrantExecutor>.Instance),
+            new ManagedServiceEngine(
+                db, engines, protector, new NoopJobQueue(),
+                Options.Create(new HarboraRuntimeOptions()), clock,
+                NullLogger<ManagedServiceEngine>.Instance),
+            protector);
+
+        return new LocalStack(db, service, docker, node, clock, database);
     }
 
     [Fact]
@@ -158,16 +223,28 @@ public class DatabaseAccessLifecycleTests
         node.OpenGrants.Should().Be(0);
     }
 
+    /// <summary>
+    /// Rotation on the install this feature ships on.
+    ///
+    /// <para>
+    /// It went to the node unconditionally while its siblings branched on
+    /// <see cref="DatabaseAccessService.CanOpenLocally"/>, so on a single-server install — where the
+    /// login was created locally and the node's book of logins is therefore empty — every rotation
+    /// came back "No such login to rotate." The feature had never worked once, and the message
+    /// blamed a lookup rather than the branch.
+    /// </para>
+    /// </summary>
     [Fact]
     public async Task Rotating_replaces_the_password_and_invalidates_the_old_one()
     {
-        var (db, service, _, _, database) = Build();
+        var stack = BuildLocal();
 
-        var issued = await service.IssueAsync(
-            database.Id, DatabaseAccessKind.Persistent, null, null, null, null, default);
+        var issued = await stack.Service.IssueAsync(
+            stack.Database.Id, DatabaseAccessKind.Persistent, null, null, null, null, default);
+        issued.Ok.Should().BeTrue();
 
-        var grant = await db.DatabaseAccessGrants.SingleAsync();
-        var (rotated, error) = await service.RotateAsync(grant, "me@example.com", default);
+        var grant = await stack.Db.DatabaseAccessGrants.SingleAsync();
+        var (rotated, error) = await stack.Service.RotateAsync(grant, "me@example.com", default);
 
         error.Should().BeNull();
         rotated.Should().NotBeNullOrWhiteSpace();
@@ -176,6 +253,107 @@ public class DatabaseAccessLifecycleTests
         DatabaseCredentialManager.Verify(rotated!, grant.PasswordHash).Should().BeTrue();
         DatabaseCredentialManager.Verify(issued.Issued.Password, grant.PasswordHash)
             .Should().BeFalse("the old password must stop working");
+    }
+
+    /// <summary>
+    /// The password the operator is shown is the one the database was actually given. Anything else
+    /// is a screen that hands out a credential nothing will accept.
+    /// </summary>
+    [Fact]
+    public async Task The_new_password_is_the_one_the_database_was_told_about()
+    {
+        var stack = BuildLocal();
+
+        await stack.Service.IssueAsync(
+            stack.Database.Id, DatabaseAccessKind.Persistent, null, null, null, null, default);
+
+        var grant = await stack.Db.DatabaseAccessGrants.SingleAsync();
+        var (rotated, _) = await stack.Service.RotateAsync(grant, "me@example.com", default);
+
+        var statement = stack.Docker.OneOffCommands
+            .Should().ContainSingle(c => c.Contains("ALTER USER", StringComparison.Ordinal)).Subject;
+
+        statement.Should().Contain(grant.Username, "the existing login is what is being altered");
+        statement.Should().Contain(rotated!, "the operator must be shown what the database now holds");
+    }
+
+    /// <summary>
+    /// The rotation runs against the database over its own private network, with the admin password
+    /// in the environment rather than in argv — the same contract creating the login has.
+    /// </summary>
+    [Fact]
+    public async Task The_rotation_reaches_the_database_on_its_own_network_and_keeps_the_admin_password_out_of_argv()
+    {
+        var stack = BuildLocal();
+
+        await stack.Service.IssueAsync(
+            stack.Database.Id, DatabaseAccessKind.Persistent, null, null, null, null, default);
+
+        var grant = await stack.Db.DatabaseAccessGrants.SingleAsync();
+        await stack.Service.RotateAsync(grant, null, default);
+
+        var request = stack.Docker.OneOffRequests
+            .Should().ContainSingle(r => string.Join(' ', r.Command).Contains("ALTER USER", StringComparison.Ordinal))
+            .Subject;
+
+        request.NetworkMode.Should().Be("harbora-ws-acme");
+        request.Env.Should().ContainKey("PGPASSWORD");
+        string.Join(' ', request.Command).Should().NotContain("admin_secret");
+    }
+
+    /// <summary>
+    /// A database that refuses the change must leave the credential the customer already has
+    /// working. The alternative is the worst outcome available here: the old password is dead, the
+    /// new one was never issued, and the grant cannot be used or recovered.
+    /// </summary>
+    [Fact]
+    public async Task A_database_that_refuses_the_change_leaves_the_old_password_working()
+    {
+        var stack = BuildLocal();
+
+        var issued = await stack.Service.IssueAsync(
+            stack.Database.Id, DatabaseAccessKind.Persistent, null, null, null, null, default);
+
+        var grant = await stack.Db.DatabaseAccessGrants.SingleAsync();
+        stack.Docker.OneOffExitCode = 1;
+
+        var (rotated, error) = await stack.Service.RotateAsync(grant, "me@example.com", default);
+
+        rotated.Should().BeNull();
+        error.Should().NotBeNullOrWhiteSpace();
+        DatabaseCredentialManager.Verify(issued.Issued!.Password, grant.PasswordHash)
+            .Should().BeTrue("nothing changed on the database, so nothing may change here either");
+    }
+
+    /// <summary>
+    /// The install with no local reach. The node-hosted path for external database access is not
+    /// built — it is HARBORA-0034, Phase 5 — and saying "no such login" instead sends the operator
+    /// hunting for a login that was never the problem.
+    /// </summary>
+    [Fact]
+    public async Task Rotating_a_node_hosted_database_names_the_real_constraint_and_changes_nothing()
+    {
+        var (db, service, node, _, database) = Build();
+
+        var issued = await service.IssueAsync(
+            database.Id, DatabaseAccessKind.Persistent, null, null, null, null, default);
+
+        var grant = await db.DatabaseAccessGrants.SingleAsync();
+        var hashBefore = grant.PasswordHash;
+        var auditsBefore = await db.DatabaseAccessAudits.CountAsync();
+
+        var (rotated, error) = await service.RotateAsync(grant, "me@example.com", default);
+
+        rotated.Should().BeNull();
+        error.Should().NotContain("No such login",
+            "the login is not what is missing — the node path for this is");
+        error.Should().Contain("HARBORA-0034",
+            "an operator reading this has to be able to find out when it will work");
+
+        grant.PasswordHash.Should().Be(hashBefore);
+        DatabaseCredentialManager.Verify(issued.Issued!.Password, grant.PasswordHash).Should().BeTrue();
+        (await db.DatabaseAccessAudits.CountAsync()).Should().Be(auditsBefore, "nothing happened to record");
+        node.Calls.Should().NotContain(c => c.StartsWith("rotate:", StringComparison.Ordinal));
     }
 
     [Fact]

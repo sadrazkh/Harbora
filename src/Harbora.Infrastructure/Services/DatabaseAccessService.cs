@@ -229,6 +229,20 @@ public sealed class DatabaseAccessService(
 
     /// <summary>
     /// Replaces the password on a live grant. Returns the new one once, like issuing does.
+    ///
+    /// <para>
+    /// Branches on <see cref="CanOpenLocally"/> the way <see cref="IssueAsync"/> and
+    /// <see cref="CloseAsync"/> do. It did not, and went to the node contract on every install: on a
+    /// single-server one the login was made locally, so the node had never heard of it and answered
+    /// "No such login to rotate." Every rotation this feature ever attempted failed, and the message
+    /// sent the operator looking for a missing login rather than a missing branch.
+    /// </para>
+    ///
+    /// <para>
+    /// The database is changed first and the row second. If the statement fails nothing here moves,
+    /// so the credential the customer already holds keeps working — which is the only safe way round.
+    /// The reverse would record a password the database never took.
+    /// </para>
     /// </summary>
     public async Task<(string? Password, string? Error)> RotateAsync(
         DatabaseAccessGrant grant, string? actor, CancellationToken ct)
@@ -239,9 +253,22 @@ public sealed class DatabaseAccessService(
         var service = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == grant.ManagedServiceId, ct);
         if (service is null) return (null, "That database no longer exists.");
 
+        // Refused before a replacement is even generated. The node contract has a method for this,
+        // but no node implements it — the whole node-hosted path for external database access is
+        // unbuilt work, so calling it would return a simulation's answer about a login it never
+        // made. Naming the backlog item is the difference between "wait for it" and "hunt for a
+        // login that was never missing".
+        if (!CanOpenLocally)
+            return (null,
+                "This installation cannot reach that database itself, and rotating a password through " +
+                "a node agent is not built yet (HARBORA-0034). Nothing was changed, and the current " +
+                "password still works.");
+
+        var network = await services!.NetworkForAsync(service, ct);
         var replacement = DatabaseCredentialManager.Create(service.Name);
-        var rotated = await node.RotateDatabaseCredentialAsync(
-            service.ServerId, service.ContainerName, grant.Username, replacement.Password, ct);
+
+        var rotated = await grants!.RotateAsync(
+            service, network, grant.Username, replacement.Password, ct);
 
         if (!rotated.Ok) return (null, rotated.Error ?? "The database refused to change the password.");
 

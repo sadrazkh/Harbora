@@ -287,6 +287,66 @@ public class TcpGatewayPlanTests
         command.Should().NotContain("ON_ERROR_STOP");
     }
 
+    [Theory]
+    [InlineData(ManagedServiceType.PostgreSql)]
+    [InlineData(ManagedServiceType.MySql)]
+    [InlineData(ManagedServiceType.MariaDb)]
+    public void A_supported_engine_can_have_its_login_rotated(ManagedServiceType type)
+    {
+        DatabaseGrantSql.Rotate(type, "host", 5432, "harbora", "shop", "hb_reader", "secret123")
+            .Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData(ManagedServiceType.Redis)]
+    [InlineData(ManagedServiceType.MongoDb)]
+    public void An_engine_with_no_login_to_rotate_produces_no_statement(ManagedServiceType type)
+    {
+        DatabaseGrantSql.Rotate(type, "host", 6379, "harbora", "shop", "hb_reader", "secret123")
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void A_rotation_outside_the_alphabet_produces_no_statement_at_all()
+    {
+        // The new password goes into the statement as a literal, exactly like the first one did.
+        DatabaseGrantSql.Rotate(ManagedServiceType.PostgreSql, "host", 5432, "harbora", "shop",
+            "hb_reader", "secret'; DROP ROLE admin; --").Should().BeNull();
+
+        DatabaseGrantSql.Rotate(ManagedServiceType.PostgreSql, "host", 5432, "harbora", "shop",
+            "bob\"; DROP TABLE users; --", "secret123").Should().BeNull();
+    }
+
+    [Fact]
+    public void Rotating_a_login_that_is_not_there_has_to_fail_rather_than_pass_quietly()
+    {
+        // The opposite of Drop. A rotation that silently did nothing would hand somebody a password
+        // no database will accept, while the one they wanted retired kept working.
+        var command = string.Join(" ", DatabaseGrantSql
+            .Rotate(ManagedServiceType.PostgreSql, "host", 5432, "harbora", "shop", "hb_reader", "secret123")!
+            .Command);
+
+        command.Should().Contain("ON_ERROR_STOP");
+        command.Should().NotContain("IF EXISTS");
+    }
+
+    [Fact]
+    public void A_rotation_changes_the_password_and_nothing_else()
+    {
+        // Privileges are not re-granted and nothing is dropped: this login is live, and a rotation
+        // that recreated it would cut every open session and lose whatever it owned.
+        foreach (var type in new[] { ManagedServiceType.PostgreSql, ManagedServiceType.MariaDb })
+        {
+            var command = string.Join(" ", DatabaseGrantSql
+                .Rotate(type, "host", 5432, "harbora", "shop", "hb_reader", "secret123")!.Command);
+
+            command.Should().Contain("hb_reader");
+            command.Should().Contain("secret123");
+            command.Should().NotContain("CREATE USER");
+            command.Should().NotContain("DROP");
+        }
+    }
+
     [Fact]
     public void No_admin_password_is_ever_put_on_a_command_line()
     {
@@ -296,6 +356,9 @@ public class TcpGatewayPlanTests
         {
             var create = DatabaseGrantSql.Create(type, "host", 5432, "harbora", "shop", "hb_reader", "secret123")!;
             string.Join(" ", create.Command).Should().NotContain("adminsecret");
+
+            var rotate = DatabaseGrantSql.Rotate(type, "host", 5432, "harbora", "shop", "hb_reader", "secret123")!;
+            string.Join(" ", rotate.Command).Should().NotContain("adminsecret");
 
             DatabaseGrantSql.Environment(type, "adminsecret").Values.Should().Contain("adminsecret");
         }

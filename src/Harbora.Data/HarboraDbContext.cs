@@ -266,6 +266,19 @@ public class HarboraDbContext : DbContext
         b.Entity<Certificate>(e => e.HasIndex(x => x.Host));
         b.Entity<ManagedService>(e => e.HasIndex(x => x.ContainerName).IsUnique());
         b.Entity<MonitoringMetric>(e => e.HasIndex(x => new { x.ServerId, x.Name, x.Timestamp }));
+
+        // The same question one level up, and until now the summaries had nothing but their primary
+        // key — a random Guid, which answers nothing anybody asks. Every chart load scanned every
+        // summary of every metric of every resource, on a table built to hold a year.
+        //
+        // The four columns MonitoringController fixes come first and PeriodStart last, because it is
+        // the only one ranged over: equality columns ahead of the range column keep the match to one
+        // contiguous stretch of the index, and having PeriodStart at the end also returns the rows in
+        // the ORDER BY the chart asks for, so nothing is sorted afterwards. Turning that around —
+        // PeriodStart first — would make every read scan the whole window and filter.
+        b.Entity<MetricRollup>(e =>
+            e.HasIndex(x => new { x.ServerId, x.Name, x.ResourceRef, x.Period, x.PeriodStart }));
+
         b.Entity<AppTemplate>(e => e.HasIndex(x => x.Key).IsUnique());
 
         // Providers, credentials, models and plans are platform configuration, not tenant data —

@@ -1,6 +1,8 @@
 ﻿using FluentAssertions;
+using Harbora.Data;
 using Harbora.Domain.Monitoring;
 using Harbora.Infrastructure.Monitoring;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -175,5 +177,60 @@ public class MetricRollupTests
     {
         MetricRollups.ToHourly([], Now).Should().BeEmpty();
         MetricRollups.ToDaily([], Now).Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// The table every chart reads had nothing but its primary key on it, and the primary key is a
+    /// random Guid — useless for any question anybody asks of it. Every chart load was a sequential
+    /// scan of every summary of every metric of every resource, and the table exists precisely so it
+    /// can grow to a year deep.
+    ///
+    /// <para>
+    /// The order is the whole point of the index and so is asserted, not just its existence. The
+    /// four columns the query fixes come first, in the order <c>MonitoringMetric</c>'s own index
+    /// already uses, and <c>PeriodStart</c> comes last because it is the only one the query ranges
+    /// over — and, being last, it also hands back the <c>ORDER BY</c> already sorted.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void The_chart_query_has_an_index_shaped_like_it()
+    {
+        using var db = new HarboraDbContext(
+            new DbContextOptionsBuilder<HarboraDbContext>()
+                .UseNpgsql("Host=unused;Database=unused;Username=unused;Password=unused")
+                .Options);
+
+        var indexes = db.Model.FindEntityType(typeof(MetricRollup))!.GetIndexes()
+            .Select(i => i.Properties.Select(p => p.Name).ToArray())
+            .ToList();
+
+        indexes.Should().ContainEquivalentOf(
+            new[] { "ServerId", "Name", "ResourceRef", "Period", "PeriodStart" },
+            "MonitoringController fixes the first four and ranges over the last, in that order");
+    }
+
+    /// <summary>
+    /// An index that exists only in the model is a comment: no deployed database ever gets it, and
+    /// <c>MigrationConsistencyTests</c> would then fail on every boot instead. Read the migration
+    /// sources the way this repo's other structural tests do — designer files and the snapshot
+    /// excluded, because they describe the model rather than anything that runs.
+    /// </summary>
+    [Fact]
+    public void The_index_reaches_a_migration()
+    {
+        var sources = Directory
+            .GetFiles(
+                Path.Combine(
+                    new DirectoryInfo(TestPaths.WebRoot).Parent!.Parent!.FullName,
+                    "src", "Harbora.Data", "Migrations"),
+                "*.cs")
+            .Where(f => !f.EndsWith(".Designer.cs", StringComparison.Ordinal)
+                        && !f.EndsWith("ModelSnapshot.cs", StringComparison.Ordinal))
+            .Select(File.ReadAllText)
+            .ToList();
+
+        sources.Should().Contain(s => s.Contains(
+                "IX_MetricRollups_ServerId_Name_ResourceRef_Period_PeriodStart", StringComparison.Ordinal),
+            "the chart's index has to reach a real database, not just the model");
     }
 }
