@@ -1,36 +1,158 @@
 name: CI
 
-# Build + test gate for the whole solution (backend + frontend bundle).
-# Added by the overhaul (docs/overhaul/12 P0, docs/overhaul/13). Blocks merges on failure.
+# One workflow, one check to require.
+#
+# Before this file was consolidated a pull request could go green with half the repository never
+# tested: ci.yml ran tests/Harbora.Tests and nothing else, while the node-agent, ingress and
+# Postgres suites lived in workflows of their own. Branch protection had to be told about each one
+# separately, and a suite that was never required was a suite that could quietly stop running.
+# "Green" meant "the part somebody remembered to look at passed".
+#
+# Everything a runner can prove now runs here. Require the `complete` job at the bottom and nothing
+# else: it fails if any job failed, was skipped, or was cancelled, so a job that does not run is
+# indistinguishable from a job that failed. That is the property that makes one tick mean
+# something.
+#
+# The three things this workflow refuses, each of which has happened to somebody:
+#   * A suite that reports success because it discovered no tests.
+#   * A suite whose every test reported an environmental skip on a runner that has the environment.
+#   * A shell script nobody syntax-checked because the glob that was supposed to find it did not.
+#
+# ci-node-agent.yml and ci-postgres.yml were folded into this file and deleted. Leaving them beside
+# it would have run the Postgres lane and the agent publish twice on every push, and — worse — would
+# have left the thing this change is about, a suite that can stop being required without anyone
+# noticing, exactly where it was.
+#
+# On the triggers, because it has been asked: `pull_request: branches: [master]` filters on the
+# pull request's BASE branch, so a PR from a phase branch into master does fire this workflow, and
+# that is the merge that matters. Work on a phase branch with no PR open is not gated, which is
+# intended — the gate belongs at the merge, not at every intermediate commit. The one real gap is
+# that this repository's history contains merges pushed straight to master rather than made through
+# a pull request ("Merge the node agent into master"); those are caught by the push trigger, but
+# only after the fact. That is a process property, not something more branch patterns would fix.
 
 on:
   push:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build-test:
+  # ---------------------------------------------------------------------------------------------
+  # The three .NET suites that do not need a database. Built once, tested three times, and each
+  # result read back out of its own TRX rather than trusted to an exit code.
+  #
+  # tests/Harbora.NodeAgent.Tests is in here rather than in a workflow of its own because that
+  # separation is what let it stop being required. It needs a Docker daemon for
+  # DockerIntegrationTests; ubuntu-latest has one, which is asked about first so "no daemon" is one
+  # line rather than seventeen skips somebody has to open a TRX to understand.
+  # ---------------------------------------------------------------------------------------------
+  dotnet:
+    name: .NET suites
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      - name: Docker is available
+        run: docker version --format '{{.Server.Version}}'
 
       - name: Restore
         run: dotnet restore Harbora.slnx
 
-      - name: Build (Release, warnings as errors for changed code)
+      - name: Build the whole solution (Release)
         run: dotnet build Harbora.slnx -c Release --no-restore
 
-      - name: Test
-        run: dotnet test tests/Harbora.Tests/Harbora.Tests.csproj -c Release --no-build --verbosity normal
+      # --no-build throughout: the solution build above already produced every test assembly, and
+      # rebuilding per project is how a suite ends up running against something other than what was
+      # built.
+      - name: Panel, application and HTTP-pipeline suite
+        run: |
+          dotnet test tests/Harbora.Tests/Harbora.Tests.csproj -c Release --no-build \
+            --logger "trx;LogFileName=panel.trx" --results-directory ./trx
 
-  frontend:
+      - name: Node agent suite (includes the Docker integration tests)
+        run: |
+          dotnet test tests/Harbora.NodeAgent.Tests/Harbora.NodeAgent.Tests.csproj -c Release --no-build \
+            --logger "trx;LogFileName=node-agent.trx" --results-directory ./trx
+
+      # The gateway and the agent run against each other here: real sockets, real mTLS, real HTTP.
+      # Every way ingress breaks is a disagreement between the two codebases, and this is the only
+      # suite with both of them in the room.
+      - name: End-to-end ingress tunnel suite
+        run: |
+          dotnet test tests/Harbora.NodeIngress.Tests/Harbora.NodeIngress.Tests.csproj -c Release --no-build \
+            --logger "trx;LogFileName=ingress.trx" --results-directory ./trx
+
+      # The floors are floors — well under the real counts, so ordinary churn never touches this
+      # file. They exist to catch a filter typo that narrows a 3,000-test suite to three, which
+      # leaves a TRX with no skips, no failures and nothing in it.
+      - name: Every suite must have actually run
+        if: always()
+        run: |
+          bash .github/scripts/assert-suite-ran.sh ./trx/panel.trx      3000 'Harbora.Tests'
+          bash .github/scripts/assert-suite-ran.sh ./trx/node-agent.trx  450 'Harbora.NodeAgent.Tests'
+          bash .github/scripts/assert-suite-ran.sh ./trx/ingress.trx      12 'Harbora.NodeIngress.Tests'
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-suites-trx
+          path: ./trx
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------------------------
+  # The only suite that opens a connection to a real PostgreSQL, and the only thing that has ever
+  # executed the hand-written SQL in this branch's migrations. Its own job because it is measured
+  # in minutes rather than seconds and can run beside the rest rather than after it.
+  # ---------------------------------------------------------------------------------------------
+  postgres:
+    name: Postgres lane
     runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Docker is available
+        run: docker version --format '{{.Server.Version}}'
+
+      - name: Test
+        run: |
+          dotnet test tests/Harbora.Postgres.Tests/Harbora.Postgres.Tests.csproj -c Release \
+            --logger "trx;LogFileName=postgres.trx" --results-directory ./trx
+
+      # A lane that quietly skips forever is worse than no lane: it is a green tick over an
+      # unexercised upgrade path.
+      - name: The Postgres lane must have actually run
+        if: always()
+        run: bash .github/scripts/assert-suite-ran.sh ./trx/postgres.trx 40 'Harbora.Postgres.Tests'
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-lane-trx
+          path: ./trx
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------------------------
+  frontend:
+    name: Vue islands bundle
+    runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +167,147 @@ jobs:
         working-directory: src/Harbora.Web
         run: npm ci
 
-      - name: Build Vue islands bundle (must succeed)
+      - name: Build the bundle (must succeed)
         working-directory: src/Harbora.Web
         run: npm run build
+
+      # `vite build` exiting 0 is not the property Razor depends on. ViteManifest.Resolve looks the
+      # entry point up by the key "Scripts/main.ts" in wwwroot/build/manifest.json, and a build that
+      # writes the manifest somewhere else — the default hidden .vite/ directory, which the .NET SDK
+      # then excludes from publish — produces a green step and an application with no CSS or JS.
+      # That has happened; vite.config.js carries the comment. This asserts the actual contract.
+      - name: The manifest Razor reads must exist and name the entry point
+        run: |
+          manifest=src/Harbora.Web/wwwroot/build/manifest.json
+          if [ ! -s "$manifest" ]; then
+            echo "::error::The bundle built but produced no manifest at $manifest. Razor resolves every asset through that file, so the panel would render with no CSS or JS."
+            exit 1
+          fi
+          if ! grep -q '"Scripts/main.ts"' "$manifest"; then
+            echo "::error::$manifest does not contain the key \"Scripts/main.ts\", which is what ViteManifest.Resolve looks up. The bundle exists but Razor cannot find its entry point."
+            cat "$manifest"
+            exit 1
+          fi
+          echo "ok  manifest present and names Scripts/main.ts"
+
+  # ---------------------------------------------------------------------------------------------
+  # Every shell script the project ships, not just the three in deploy/node-agent that a glob
+  # happened to reach. deploy/install.sh is over a thousand lines that run as root on a stranger's
+  # VPS and was never syntax-checked by anything.
+  # ---------------------------------------------------------------------------------------------
+  scripts:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Discover and syntax-check every script
+        run: |
+          set -euo pipefail
+
+          # Tracked files only, so nothing a build left behind is checked, and by shebang as well as
+          # by extension — deploy/harbora is a long bash program with no .sh on the end, which is
+          # exactly why the old `deploy/node-agent/*.sh` glob never saw it.
+          mapfile -t scripts < <(
+            git ls-files deploy .github/scripts | while IFS= read -r f; do
+              [ -f "$f" ] || continue
+              case "$f" in
+                *.sh) echo "$f" ;;
+                *) head -1 "$f" | grep -qE '^#!.*\b(bash|sh)\b' && echo "$f" || true ;;
+              esac
+            done
+          )
+
+          count=${#scripts[@]}
+          echo "Found $count script(s):"
+          printf '  %s\n' "${scripts[@]}"
+
+          # A glob that matches nothing passes every check ever written against it. This is the
+          # difference between "all the scripts are fine" and "there were no scripts".
+          if [ "$count" -lt 6 ]; then
+            echo "::error::Only $count shell script(s) were discovered under deploy/ and .github/scripts/. That is fewer than this repository has ever had, so the discovery is broken rather than the repository being empty."
+            exit 1
+          fi
+
+          # Named individually because their absence from the sweep was the actual defect, and a
+          # count alone would not notice one of them being renamed out of reach again.
+          for required in deploy/install.sh deploy/harbora deploy/live-host-proof.sh; do
+            printf '%s\n' "${scripts[@]}" | grep -qx "$required" || {
+              echo "::error::$required was not picked up by the sweep, so it would not have been checked."
+              exit 1
+            }
+          done
+
+          failed=0
+          for script in "${scripts[@]}"; do
+            if bash -n "$script"; then
+              echo "ok    $script"
+            else
+              echo "::error file=$script::$script is not valid bash."
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      # Advisory, deliberately: `systemd-analyze verify` warns about a unit whose ExecStart does not
+      # exist on the checking machine, which is always true on a runner that has not installed the
+      # agent. It is here to be read, not to gate. What the unit must actually contain is asserted
+      # in tests/Harbora.NodeAgent.Tests/DeploymentArtifactTests.cs, where it can be specific.
+      - name: systemd unit parses (advisory — never fails the build)
+        run: systemd-analyze verify deploy/node-agent/harbora-node-agent.service || true
+
+  # ---------------------------------------------------------------------------------------------
+  # The agent ships as a self-contained single file. A build that only works on the developer's
+  # framework-dependent path is a release that fails at tag time, in front of everybody.
+  # ---------------------------------------------------------------------------------------------
+  node-agent-publish:
+    name: Node agent publishes (${{ matrix.rid }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rid: [linux-x64, linux-arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish ${{ matrix.rid }}
+        run: |
+          dotnet publish src/Harbora.NodeAgent/Harbora.NodeAgent.csproj \
+            -c Release -r ${{ matrix.rid }} --self-contained true \
+            -p:PublishSingleFile=true -p:DebugType=none -o out
+
+          test -x out/harbora-node-agent
+
+  # ---------------------------------------------------------------------------------------------
+  # The one check to require in branch protection.
+  #
+  # `if: always()` so this runs even when something upstream failed, and the loop refuses anything
+  # that is not "success" — including "skipped" and "cancelled". Without that, a job removed from
+  # the graph, or skipped by a condition somebody adds later, would let the tick through while
+  # proving nothing. Requiring this single job means requiring all of them.
+  # ---------------------------------------------------------------------------------------------
+  complete:
+    name: Every suite ran
+    if: always()
+    needs: [dotnet, postgres, frontend, scripts, node-agent-publish]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: No job may have failed, been skipped, or been cancelled
+        run: |
+          results='${{ join(needs.*.result, " ") }}'
+          echo "Upstream job results: $results"
+
+          for result in $results; do
+            if [ "$result" != "success" ]; then
+              echo "::error::CI is not green: at least one job did not succeed (results were: $results). A skipped or cancelled job counts as a failure here on purpose — this check exists so that one green tick means every suite ran, and a job that did not run has proven nothing."
+              exit 1
+            fi
+          done
+
+          echo "ok  every job succeeded — all four .NET suites, the bundle, the scripts and the agent publish."

@@ -1,0 +1,192 @@
+name: Nightly — live-host proof
+
+# The R0 proof: the README's install-and-deploy claim, walked on real hosts, every night.
+#
+# This workflow is the TRIGGER. The proof itself is deploy/live-host-proof.sh, which an operator can
+# run by hand on a VPS with no GitHub involved — that is deliberate, because the half of this
+# deliverable that outlives any CI system is the script. Everything below does three things: check
+# that the lane is configured, put the script under test on the host, and run it.
+#
+# ── What an operator must provide ────────────────────────────────────────────────────────────────
+#
+# Two disposable hosts and a DNS zone. Both hosts are re-usable between runs only because the
+# script tears down what it created on success (E2E_TEARDOWN=1 below); a FAILED run deliberately
+# leaves the host installed so it can be inspected, and the next run then refuses at its first
+# precondition rather than building a "fresh install" claim on last night's leftovers. When that
+# happens, re-image both hosts.
+#
+#   Secret              What it is
+#   ──────────────────  ────────────────────────────────────────────────────────────────────────
+#   E2E_SSH_HOST        Address of the disposable PANEL host. Root SSH, ports 80/443 open.
+#   E2E_SSH_USER        User to connect as (root, or one with passwordless sudo).
+#   E2E_SSH_KEY         Private key for the panel host, PEM.
+#   E2E_NODE_HOST       Address of the SECOND disposable host, enrolled as a node.
+#   E2E_NODE_SSH_KEY    Private key for the node host, PEM. Copied to the panel host for the run,
+#                       because it is the panel host that installs the agent over SSH.
+#   E2E_PANEL_DOMAIN    e.g. panel.e2e.example.com   → A record to E2E_SSH_HOST
+#   E2E_ROOT_DOMAIN     e.g. apps.e2e.example.com    → *.<this> A record to E2E_SSH_HOST
+#   E2E_ACME_EMAIL      Registration address for the ACME account.
+#   E2E_OWNER_EMAIL     The owner account the wizard creates. Throwaway.
+#   E2E_OWNER_PASSWORD  Its password, 8+ characters. Throwaway.
+#
+#   DNS, all A records pointing at E2E_SSH_HOST:
+#     $E2E_PANEL_DOMAIN
+#     nodes.$E2E_PANEL_DOMAIN      the node channel's mTLS host
+#     *.$E2E_ROOT_DOMAIN           the wildcard every deployed app is published under
+#
+# Certificates come from Let's Encrypt STAGING, so none of this consumes production rate limit and
+# the certificates are not trusted by anything outside the run.
+
+on:
+  schedule:
+    # 03:00 UTC. Nothing depends on the hour beyond it being quiet.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      from_ref:
+        description: 'Install this ref first (the "previous release")'
+        required: false
+        default: 'master'
+      to_ref:
+        description: 'Then upgrade to this ref (the one under test)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+# Two runs sharing one pair of hosts would tread on each other, and the loser would report a
+# failure that says nothing about the code. Queue instead of cancelling: a half-finished run that
+# was killed mid-install leaves exactly the dirty host the script refuses to work on.
+concurrency:
+  group: live-host-proof
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    name: Install, deploy, certificate, backup, node, upgrade
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # A lane whose secrets are half-configured must not run at all. Without this the run would get
+      # as far as SSH, fail with something unhelpful, and look like a product failure rather than a
+      # setup failure — and a lane people learn to ignore is a lane that proves nothing.
+      - name: Every secret this lane needs must be configured
+        env:
+          E2E_SSH_HOST: ${{ secrets.E2E_SSH_HOST }}
+          E2E_SSH_USER: ${{ secrets.E2E_SSH_USER }}
+          E2E_SSH_KEY: ${{ secrets.E2E_SSH_KEY }}
+          E2E_NODE_HOST: ${{ secrets.E2E_NODE_HOST }}
+          E2E_NODE_SSH_KEY: ${{ secrets.E2E_NODE_SSH_KEY }}
+          E2E_PANEL_DOMAIN: ${{ secrets.E2E_PANEL_DOMAIN }}
+          E2E_ROOT_DOMAIN: ${{ secrets.E2E_ROOT_DOMAIN }}
+          E2E_ACME_EMAIL: ${{ secrets.E2E_ACME_EMAIL }}
+          E2E_OWNER_EMAIL: ${{ secrets.E2E_OWNER_EMAIL }}
+          E2E_OWNER_PASSWORD: ${{ secrets.E2E_OWNER_PASSWORD }}
+        run: |
+          missing=""
+          for name in E2E_SSH_HOST E2E_SSH_USER E2E_SSH_KEY E2E_NODE_HOST E2E_NODE_SSH_KEY \
+                      E2E_PANEL_DOMAIN E2E_ROOT_DOMAIN E2E_ACME_EMAIL E2E_OWNER_EMAIL E2E_OWNER_PASSWORD; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::The live-host proof is not configured. Missing secret(s):${missing}. See the comment at the top of this workflow for what each one is."
+            exit 1
+          fi
+          echo "ok  all ten secrets are present."
+
+      - name: Write the SSH keys
+        env:
+          PANEL_KEY: ${{ secrets.E2E_SSH_KEY }}
+          NODE_KEY: ${{ secrets.E2E_NODE_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$PANEL_KEY" > ~/.ssh/panel_key
+          printf '%s\n' "$NODE_KEY"  > ~/.ssh/node_key
+          chmod 600 ~/.ssh/panel_key ~/.ssh/node_key
+
+      # The script from THIS checkout, not whatever happens to be on the host. The whole point is to
+      # test the ref under test, and a host that keeps its own copy would quietly test yesterday's.
+      - name: Put the proof script (and the node's key) on the panel host
+        env:
+          HOST: ${{ secrets.E2E_SSH_HOST }}
+          USER: ${{ secrets.E2E_SSH_USER }}
+        run: |
+          scp -i ~/.ssh/panel_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 \
+            deploy/live-host-proof.sh "${USER}@${HOST}:/tmp/live-host-proof.sh"
+          scp -i ~/.ssh/panel_key -o StrictHostKeyChecking=accept-new \
+            ~/.ssh/node_key "${USER}@${HOST}:/tmp/e2e_node_key"
+          ssh -i ~/.ssh/panel_key -o StrictHostKeyChecking=accept-new \
+            "${USER}@${HOST}" 'chmod 600 /tmp/e2e_node_key && chmod 700 /tmp/live-host-proof.sh'
+
+      # E2E_SKIP_NODE is deliberately never set here. The script offers it so an operator with one
+      # VPS can still run the rest by hand; a scheduled lane that quietly proved less than it claims
+      # is the exact failure this whole task exists to close. The assertion after this step refuses
+      # a run that skipped the node half anyway, so the two cannot drift.
+      - name: Run the proof
+        env:
+          HOST: ${{ secrets.E2E_SSH_HOST }}
+          USER: ${{ secrets.E2E_SSH_USER }}
+          E2E_PANEL_DOMAIN: ${{ secrets.E2E_PANEL_DOMAIN }}
+          E2E_ROOT_DOMAIN: ${{ secrets.E2E_ROOT_DOMAIN }}
+          E2E_ACME_EMAIL: ${{ secrets.E2E_ACME_EMAIL }}
+          E2E_OWNER_EMAIL: ${{ secrets.E2E_OWNER_EMAIL }}
+          E2E_OWNER_PASSWORD: ${{ secrets.E2E_OWNER_PASSWORD }}
+          E2E_NODE_HOST: ${{ secrets.E2E_NODE_HOST }}
+          FROM_REF: ${{ inputs.from_ref || 'master' }}
+          TO_REF: ${{ inputs.to_ref || github.ref_name }}
+        run: |
+          set -o pipefail
+          ssh -i ~/.ssh/panel_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 \
+              -o ServerAliveInterval=30 "${USER}@${HOST}" \
+              "sudo env \
+                 E2E_PANEL_DOMAIN='${E2E_PANEL_DOMAIN}' \
+                 E2E_ROOT_DOMAIN='${E2E_ROOT_DOMAIN}' \
+                 E2E_ACME_EMAIL='${E2E_ACME_EMAIL}' \
+                 E2E_OWNER_EMAIL='${E2E_OWNER_EMAIL}' \
+                 E2E_OWNER_PASSWORD='${E2E_OWNER_PASSWORD}' \
+                 E2E_NODE_HOST='${E2E_NODE_HOST}' \
+                 E2E_NODE_SSH_KEY=/tmp/e2e_node_key \
+                 E2E_FROM_REF='${FROM_REF}' \
+                 E2E_TO_REF='${TO_REF}' \
+                 E2E_REPO_URL='${{ github.server_url }}/${{ github.repository }}' \
+                 E2E_REPO_RAW='https://raw.githubusercontent.com/${{ github.repository }}' \
+                 E2E_TEARDOWN=1 \
+                 bash /tmp/live-host-proof.sh" 2>&1 | tee proof.log
+
+      # The script exits non-zero on any failure, so this is not the primary gate — it is the guard
+      # against a run that somehow exits 0 without having done the work. Both conditions matter: the
+      # banner is only printed by the last line of the script, and "NOT TESTED" is only printed when
+      # the node half was skipped, which this lane must never accept.
+      - name: The proof must have run in full
+        if: always()
+        run: |
+          if [ ! -s proof.log ]; then
+            echo "::error::No output was captured, so nothing can be said about whether the proof ran."
+            exit 1
+          fi
+          if grep -q 'NOT TESTED' proof.log; then
+            echo "::error::The run skipped part of the proof (E2E_SKIP_NODE). A scheduled lane must never do that — it would report success for the node feature without testing it."
+            exit 1
+          fi
+          if ! grep -q 'The live-host proof passed' proof.log; then
+            echo "::error::The proof did not reach its success banner, so it did not complete."
+            tail -40 proof.log
+            exit 1
+          fi
+          echo "ok  the proof ran end to end, node half included."
+
+      - name: Always clean the keys off the runner
+        if: always()
+        run: rm -f ~/.ssh/panel_key ~/.ssh/node_key
+
+      - name: Keep the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-host-proof-log
+          path: proof.log
+          if-no-files-found: warn

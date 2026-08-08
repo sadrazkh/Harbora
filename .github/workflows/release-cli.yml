@@ -42,10 +42,26 @@ jobs:
           if [[ "${{ matrix.rid }}" == win-* ]]; then cp out/${{ matrix.rid }}/harbora.exe ${{ matrix.asset }};
           else cp out/${{ matrix.rid }}/harbora ${{ matrix.asset }}; fi
 
+      # The node-agent's assets have shipped with a checksum since they existed; the CLI's never
+      # have, which means the one artifact a developer downloads over the public internet and runs
+      # on their own machine is the one nobody can verify. Same shape as release-node-agent.yml so
+      # the two releases are read the same way.
+      #
+      # Note what this does NOT yet do: deploy/install-cli.sh downloads from `releases/latest` and
+      # does not check the checksum. Teaching it to would break every install against the releases
+      # that predate this change, so publishing the checksum comes first and the installer's
+      # verification is a follow-up that can require it once a release has one.
+      - name: Checksum
+        run: |
+          sha256sum ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
+          cat ${{ matrix.asset }}.sha256
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.asset }}
+          files: |
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}.sha256
           fail_on_unmatched_files: true
 
   dotnet-tool:
@@ -63,8 +79,33 @@ jobs:
           files: nupkg/*.nupkg
       # Optional: publish to NuGet so `dotnet tool install -g Harbora.Cli` works globally.
       # Add a NUGET_API_KEY repo secret to enable it.
+      #
+      # This used to read `if: ${{ env.NUGET_API_KEY != '' }}` with NUGET_API_KEY defined in the
+      # step's OWN env: block. A step's env: is not in scope while that step's if: is being
+      # evaluated, so the expression compared an always-empty value against '' and the condition was
+      # false on every run this workflow has ever had. The step has therefore never executed, and
+      # nothing said so — it rendered as a normal grey "skipped", which is what a correctly
+      # configured optional step looks like.
+      #
+      # The `secrets` context is not available in a step-level if: either, so the fix is a step that
+      # decides in bash and publishes an output. steps.<id>.outputs IS in scope, and the decision is
+      # visible in the log rather than inferred from a grey tick.
+      - name: Is a NuGet key configured?
+        id: nuget
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -n "$NUGET_API_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "A NUGET_API_KEY secret is set — the package will be pushed to nuget.org."
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "No NUGET_API_KEY secret is set, so the package will NOT be pushed to nuget.org."
+            echo "The release still carries the .nupkg; only 'dotnet tool install -g Harbora.Cli' is unavailable."
+          fi
+
       - name: Push to NuGet
-        if: ${{ env.NUGET_API_KEY != '' }}
+        if: steps.nuget.outputs.configured == 'true'
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: dotnet nuget push nupkg/*.nupkg -k "$NUGET_API_KEY" -s https://api.nuget.org/v3/index.json --skip-duplicate
