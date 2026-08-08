@@ -1,5 +1,30 @@
 # 17 — Next Roadmap
 
+> ### ⛔ Superseded for planning
+>
+> **`docs/product-audit/17-implementation-roadmap.md` is the plan. This document is history.**
+>
+> Four documents in this directory number their phases in four incompatible ways, and each was
+> written believing it replaced the previous one:
+>
+> | Document | Scheme |
+> |---|---|
+> | `12-implementation-roadmap.md` | **P0 – P15+** |
+> | `15-phase-plan.md` | **Phase A, B, C, …**, re-sequencing doc 12 after PR #1 merged |
+> | `16-paas-strategy.md` §7 | **Phase 0 – 9**, which is the scheme `progress.md` writes in |
+> | `17-next-roadmap.md` | **R0 – R5** |
+>
+> So "Phase 2" means at least three different bodies of work depending on which one you have open,
+> and "done" in one of them does not mean done in another. Nothing here is deleted — the design
+> reasoning, the requirement traceability and the record of what was actually verified on a live
+> host are all worth keeping, and several of these documents are the only place a decision was
+> written down. But **do not schedule work from this directory.** Take the phase numbers in
+> `docs/product-audit/17-implementation-roadmap.md`, which are the ones the current work uses.
+>
+> The delivery rules in `17-next-roadmap.md` are the exception: they are policy, not a plan, and
+> `docs/product-audit/19-do-not-change-list.md` adopts them as an exit gate.
+
+
 Updated 2026-08-03 after the panel and template-marketplace implementation. This document is the
 short execution plan for work that remains; the earlier roadmaps retain the design history and
 requirement traceability.

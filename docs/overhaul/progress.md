@@ -1,5 +1,20 @@
 ﻿# Harbora Overhaul — Progress Log
 
+> ### ⛔ No longer maintained — last entry 2026-07-31
+>
+> **This log stopped. It is not a record of what the product does now.** Work has continued for
+> weeks past its newest entry: the product audit, the platform-expansion phase, and the two phases
+> of reliability work on top of that. None of it is here, and several things this log describes as
+> pending or as gaps were closed afterwards. Read it as a diary of one stretch, not as a status.
+>
+> Two specific traps. Its phase numbers are `16-paas-strategy.md` §7's scheme (Phase 0–9), which is
+> one of the four incompatible schemes in this directory and is **not** the one current work uses —
+> see the banner on `12-implementation-roadmap.md`. And the pinned "Baseline reference" at the very
+> bottom is deliberately frozen at commit `84603e0`, 0 tests; it is a comparison point, not a state.
+>
+> For what is true now: `docs/product-audit/` (audited at `8b1f6e9`, and dated), the READMEs, and
+> `deploy/RUNBOOK.md`. For what is planned: `docs/product-audit/17-implementation-roadmap.md`.
+
 Newest entries on top. Every entry records: what was done · files changed · tests/checks run ·
 result (success/fail) · decisions · next step.
 

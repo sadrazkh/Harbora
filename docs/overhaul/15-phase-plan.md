@@ -1,5 +1,30 @@
 # 15 — Phase Plan (post-merge, reliability-first)
 
+> ### ⛔ Superseded for planning
+>
+> **`docs/product-audit/17-implementation-roadmap.md` is the plan. This document is history.**
+>
+> Four documents in this directory number their phases in four incompatible ways, and each was
+> written believing it replaced the previous one:
+>
+> | Document | Scheme |
+> |---|---|
+> | `12-implementation-roadmap.md` | **P0 – P15+** |
+> | `15-phase-plan.md` | **Phase A, B, C, …**, re-sequencing doc 12 after PR #1 merged |
+> | `16-paas-strategy.md` §7 | **Phase 0 – 9**, which is the scheme `progress.md` writes in |
+> | `17-next-roadmap.md` | **R0 – R5** |
+>
+> So "Phase 2" means at least three different bodies of work depending on which one you have open,
+> and "done" in one of them does not mean done in another. Nothing here is deleted — the design
+> reasoning, the requirement traceability and the record of what was actually verified on a live
+> host are all worth keeping, and several of these documents are the only place a decision was
+> written down. But **do not schedule work from this directory.** Take the phase numbers in
+> `docs/product-audit/17-implementation-roadmap.md`, which are the ones the current work uses.
+>
+> The delivery rules in `17-next-roadmap.md` are the exception: they are policy, not a plan, and
+> `docs/product-audit/19-do-not-change-list.md` adopts them as an exit gate.
+
+
 Written after PR #1 merged into `master` (`a18b217`). Doc 12 laid out P0–P15+ as a *forward* plan;
 this doc records what actually landed versus what was claimed, and re-sequences the remaining work
 around a constraint doc 12 assumed away: **there is currently no Docker host available for
