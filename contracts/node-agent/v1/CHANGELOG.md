@@ -4,6 +4,30 @@ Versioning: the directory name (`v1`) is the **major** version and appears in ev
 changes are recorded here and do not move the directory. A breaking change creates `v2/` and both
 are served until every node has moved.
 
+## v1.3.0 — per-workload resource statistics
+
+Additive. The verb is advertised through `supportedCommands`, which the agent derives from the
+handlers it has actually wired up, so an older node simply does not offer it and a control plane
+that consults capabilities — as this contract requires — does not send it. There is no capability
+flag for it: the command name in `supportedCommands` *is* the flag.
+
+- **`GetWorkloadStats`** (`workloads:read`) — a point-in-time CPU, memory and network reading for
+  one workload's containers.
+- **`workloadStats`** — the response shape. Every figure is nullable and is **absent** when the
+  runtime did not report it, never zero: a control plane that reads a missing value as zero draws an
+  idle application, which is the opposite of what an unmeasured one means.
+
+Added because a node had no way to answer "how much is this application using". `GetStatsAsync`
+returned null by design — the contract had no verb for it — so an application on a node charted an
+empty graph, which reads as silence rather than as an unanswered question.
+
+The CPU percentage is computed from the same formula on both sides (`ContainerCpu` in the C#
+mirror). Two copies of it means the same container reads differently depending on where it runs, and
+the difference gets blamed on the node. Both counters at zero — an idle container's first sample —
+is 0/0, and rather than write a `NaN` that JSON cannot carry, the whole response fails.
+
+---
+
 ## v1.2.0 — HTTP ingress over an outbound tunnel
 
 Additive. A node that does not implement it reports `supportsHttpIngressTunnel: false` and is never
@@ -56,6 +80,13 @@ Initial contract. Covers:
 - **Inventory & capabilities** — what the node is and what this build can actually do
 - **Command envelope** — allowlist, idempotency key, nonce + freshness window, required scope,
   timeout, cancellation, correlation id, audit metadata
+- **The allowlist itself, 21 verbs** — `DeployWorkload`, `UpdateWorkload`, `StopWorkload`,
+  `StartWorkload`, `RestartWorkload`, `DeleteWorkload`, `GetWorkloadStatus`, `StreamLogs`,
+  `CreateNetwork`, `DeleteNetwork`, `CreateVolume`, `SnapshotVolume`, `RestoreVolume`,
+  `CreateDatabaseAccessGrant`, `RevokeDatabaseAccessGrant`, `RotateDatabaseAccessCredential`,
+  `RegisterHttpRoute`, `RegisterTcpRoute`, `RemoveRoute`, `DrainNode`, `UpdateAgent`.
+  Written out because a verb that reaches the schema without reaching this file is a capability
+  nobody reviewed; `DocumentationDriftTests` fails the build when one does
 - **Command ack / progress / result** — exactly one terminal result per accepted command
 - **Workload specification** — containers pinned by digest, named volumes only, no host bind mounts,
   privileged/host-namespace flags that default off and are refused without an explicit host flag

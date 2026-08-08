@@ -370,7 +370,7 @@ one that needs the warning next to it about existing routes keeping their upstre
 
 There is deliberately **no** endpoint that forwards an arbitrary command to a node. The node's
 allowlist is what makes a compromised panel survivable, and a passthrough here would move the
-boundary from "twenty-one verbs" to "twenty-one verbs plus whatever that endpoint accepts".
+boundary from "twenty-four verbs" to "twenty-four verbs plus whatever that endpoint accepts".
 
 ---
 

@@ -39,14 +39,27 @@ Untouched: every view and Vue island, the template catalog, the AI gateway, the 
 
 ---
 
-## The existing `Harbora.Agent` is untouched and still works
+## The existing `Harbora.Agent` is deprecated, and still works
 
-`src/Harbora.Agent` is the current inbound HTTP agent: a bearer token, port 9700, a thin proxy over
-the Docker API. Panels talk to it through `RemoteDockerEngine`.
+> **Deprecated as of v0.2.0.** Node Agent v1 is the way to add a node. The legacy HTTP agent is
+> frozen: it receives fixes for security and for outright breakage, and nothing else. **Support
+> continues for at least two minor versions** after v0.2.0 — an end-of-life release will not be
+> named before then, and when it is named it will be named here first. Nodes already running it keep
+> working; no upgrade is forced on anybody.
+>
+> Two things an operator should know before choosing it for something new. It ships with **no
+> automated tests at all** — `src/Harbora.Agent` is a single `Program.cs` and no test project
+> references it, which is why it is frozen rather than developed. And a server reached through it
+> **cannot back up its own volumes or databases**: `BackupEngine` refuses in front of the work
+> rather than writing an archive onto a disk the panel cannot read. See
+> [disaster-recovery.md](../disaster-recovery.md).
 
-It is deliberately left alone. Nodes running it keep working exactly as before, and the panel's
-`ServerEngineFactory` path is unchanged. The two can coexist on the same fleet indefinitely — they
-are different services, on different ports, with different credentials.
+`src/Harbora.Agent` is the inbound HTTP agent: a bearer token, port 9700, a thin proxy over the
+Docker API. Panels talk to it through `RemoteDockerEngine`.
+
+Its code is deliberately left alone. Nodes running it keep working exactly as before, and the
+panel's `ServerEngineFactory` path is unchanged. The two coexist on the same fleet — they are
+different services, on different ports, with different credentials.
 
 The difference between them, for whoever decides when to migrate:
 
@@ -55,7 +68,7 @@ The difference between them, for whoever decides when to migrate:
 | Direction | Inbound: the panel connects to port 9700 | Outbound only: the node dials the panel |
 | Firewall | Needs an inbound rule on the customer's server | None |
 | Credential | A static bearer token, optional mTLS | Enrollment token → mTLS certificate, rotated |
-| Command surface | The Docker API, effectively | 21 named verbs, no shell |
+| Command surface | The Docker API, effectively | 24 named verbs, no shell |
 | Idempotency | None | Per-command, durable |
 | Replay protection | None | Nonce + freshness window, durable |
 | Rollback on failed health | No | Yes, automatic |
@@ -157,7 +170,11 @@ thing either branch needs and doing it once is less work than doing it twice.
 | Ingress tunnel across panel replicas | `NodeIngressRegistry` is per-instance, like `NodeChannelRegistry`. A node's tunnel lands on one replica, and only that replica's listeners can serve it. Single-instance Harbora is unaffected | The same shared routing layer the command path would need |
 | Building on a v1 node | The contract has no build verb, deliberately: a build context is arbitrary code plus an arbitrary Dockerfile. An app deployed from a Git source cannot be placed on a v1 node, and `NodeWorkloadEngine.BuildImageAsync` refuses by name rather than failing obscurely | Build centrally, push to a registry, let the node pull by digest |
 | Release tasks and volume backups on a v1 node | Both need a one-off container, which is a shell with extra steps and so is not a verb. `RunOneOffAsync` throws `NodeCapabilityException` instead of skipping the task quietly | A narrow `RunReleaseTask` verb whose command comes from the app manifest rather than from the request |
-| Per-container statistics from a v1 node | `GetStatsAsync` returns null, so the metrics collector keeps host pressure from the heartbeat but has no per-app CPU or memory | A `GetWorkloadStats` verb |
+
+Closed since this table was written: **per-container statistics from a v1 node**. `GetStatsAsync`
+returned null, so the metrics collector had host pressure from the heartbeat and no per-app CPU or
+memory. `GetWorkloadStats` is that verb, added in contract v1.3.0 and dispatched by
+`NodeWorkloadEngine.GetStatsAsync`.
 
 ---
 
