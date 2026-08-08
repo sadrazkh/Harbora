@@ -126,11 +126,66 @@ public sealed partial class DatabasesController
         // password and Harbora could not record it, or never heard whether it did. Both are shown —
         // the banner because the old password may be dead, the panel because this page is the only
         // place the new one will ever exist.
-        return View("Access", await BuildAccessPageAsync(id, ct, error: error, issued: new IssuedCredentialViewModel(
-            grant.Username, password, connection, grant.ExpiresAt, Rotated: true)));
+        var issued = new IssuedCredentialViewModel(
+            grant.Username, password, connection, grant.ExpiresAt, Rotated: true);
+
+        try
+        {
+            return View("Access", await BuildAccessPageAsync(id, ct, error: error, issued: issued));
+        }
+        catch (Exception) when (service is not null)
+        {
+            // Rebuilding the page reads the same connection the rotation just wrote through, and the
+            // failures worth surviving here are precisely the ones that take both: a dropped
+            // connection, a failover, an exhausted pool. Unguarded, those reads throw, MVC serves
+            // /Home/Error, and the password is destroyed by the second failure rather than the first
+            // — the exact end state the whole path above exists to prevent.
+            //
+            // Everything this render needs is already in this request's hands, so it is drawn
+            // without asking the database anything. The exception worth reading was already logged
+            // by RotateAsync, with the grant and the service on it.
+            return View("Access", FromMemory(service, grant, issued, error));
+        }
     }
 
     // ---- helpers ----
+
+    /// <summary>
+    /// The access page built out of what the request is already holding, for the moment Harbora's
+    /// own database cannot be read.
+    ///
+    /// <para>
+    /// The lists are what this request knows rather than what the store holds — the one grant it
+    /// touched, and no history. That is a worse page than the real one and an immeasurably better
+    /// one than the error page, which would take an unrecoverable password with it.
+    /// </para>
+    /// </summary>
+    private DatabaseAccessPageViewModel FromMemory(
+        ManagedService service, DatabaseAccessGrant grant, IssuedCredentialViewModel issued, string? error)
+    {
+        ViewData["Title"] = service.Name;
+
+        return new DatabaseAccessPageViewModel
+        {
+            Database = service,
+            Grants = [grant],
+            History = [],
+
+            // The rotation already happened, so nothing here is unavailable; and Refuse() would be
+            // answering about a database this page can no longer verify anything about.
+            Unavailable = null,
+            Issued = issued,
+
+            // The rotation's own sentence wins when there is one — it is the more important of the
+            // two facts. Otherwise the reader is told why the rest of the page looks thin, so a
+            // missing history is not mistaken for a missing history.
+            Error = error ?? (IsFa
+                ? "Harbora نتوانست بقیهٔ این صفحه را دوباره بخواند، پس فهرست مجوزها و تاریخچه کامل نیست. "
+                  + "رمز پایین از این موضوع اثر نگرفته — همین حالا کپی‌اش کنید؛ فقط یک بار نشان داده می‌شود."
+                : "Harbora could not read the rest of this page back, so the grants and history below "
+                  + "are incomplete. The password below is unaffected — copy it now, it is shown only once.")
+        };
+    }
 
     private Task<ManagedService?> FindDatabaseAsync(Guid id, CancellationToken ct) =>
         db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);

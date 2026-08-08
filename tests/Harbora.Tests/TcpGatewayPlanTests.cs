@@ -325,11 +325,11 @@ public class TcpGatewayPlanTests
     /// <b>What this test cannot prove, and what proves it.</b> "Fails loudly" is the one property of
     /// these statements that is not the same on both engines, and only half of it is pinned here.
     /// For PostgreSQL it is written into the argv — <c>ON_ERROR_STOP=1</c> and no <c>IF EXISTS</c> —
-    /// so it is asserted directly. For MySQL/MariaDB there is no such flag: <c>mariadb -e</c> aborts
-    /// the batch at the first error and exits non-zero by default, which is the client's documented
-    /// behaviour and not something a statement string can carry. All that can be asserted here is
-    /// the absence of an <c>IF EXISTS</c> that would make the failure impossible. The other half
-    /// needs a live engine: issue a grant, drop the login behind Harbora's back, rotate, and require
+    /// so it is asserted directly. For MySQL/MariaDB there is no such flag: <c>mariadb -e</c> exits
+    /// non-zero when its statement errors, which is the client's documented behaviour and not
+    /// something a statement string can carry. What can be asserted is the absence of an
+    /// <c>IF EXISTS</c> that would remove the error there was to fail on. The other half needs a
+    /// live engine: issue a grant, drop the login behind Harbora's back, rotate, and require
     /// <c>DatabaseGrantExecutor.RotateAsync</c> to come back not-Ok. Nothing on this machine can run
     /// that (no Docker daemon), so it is named rather than faked.
     /// </para>
@@ -368,6 +368,42 @@ public class TcpGatewayPlanTests
             command.Should().Contain("secret123");
             command.Should().NotContain("CREATE USER");
             command.Should().NotContain("DROP");
+        }
+    }
+
+    /// <summary>
+    /// A rotation is one statement on every engine, and the caller's correctness rests on it.
+    ///
+    /// <para>
+    /// <c>DatabaseAccessService.RotateAsync</c> reads a non-zero exit as "the ALTER did not take"
+    /// and discards the new password on the strength of it. That is only sound while nothing can
+    /// fail *after* the ALTER has succeeded. Create and Drop end with <c>FLUSH PRIVILEGES</c> and
+    /// the rotation used to copy them for symmetry — a statement that changed nothing (an account
+    /// statement updates the grant tables itself) but needed the RELOAD privilege to succeed, on a
+    /// connection made as <c>harbora</c> rather than root. Wherever the ALTER was permitted and the
+    /// reload was not, the batch exited non-zero with the password already changed, and an operator
+    /// was told the database had refused. Symmetry is not worth that, so this asserts the shape
+    /// rather than trusting the next person to remember why.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void A_rotation_is_a_single_statement_so_nothing_can_fail_after_it_has_worked()
+    {
+        foreach (var type in new[]
+                 { ManagedServiceType.PostgreSql, ManagedServiceType.MySql, ManagedServiceType.MariaDb })
+        {
+            var rotate = DatabaseGrantSql.Rotate(type, "host", 5432, "harbora", "shop", "hb_reader", "secret123")!;
+            var command = string.Join(" ", rotate.Command);
+
+            command.Should().NotContain("FLUSH PRIVILEGES",
+                "it cannot help, and it can fail after the password has already changed");
+
+            // One ALTER and nothing following it. The PostgreSQL branch spells its statement with
+            // -c, the MySQL family with -e; either way there is one, and it ends the argv.
+            rotate.Command[^1].TrimEnd().Should().EndWith("';",
+                "the statement the client is given must end at the ALTER");
+            rotate.Command.Count(a => a.Contains("ALTER USER", StringComparison.Ordinal))
+                .Should().Be(1);
         }
     }
 

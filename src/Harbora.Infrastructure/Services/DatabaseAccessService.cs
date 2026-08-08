@@ -282,9 +282,13 @@ public sealed class DatabaseAccessService(
 
         if (!rotated.Ok)
         {
-            // Answered: the client ran and gave a verdict. The rotation is one statement with
-            // ON_ERROR_STOP set, so a non-zero exit means the ALTER did not take — the customer's
-            // existing password is still the live one and there is nothing to hand over.
+            // Answered: the client ran and gave a verdict. On both engines a rotation is exactly one
+            // statement — there is no second one that could fail *after* the ALTER succeeded and
+            // report a completed change as an error — and PostgreSQL's carries ON_ERROR_STOP as
+            // well. So a reported refusal means the ALTER did not take: the customer's existing
+            // password is still the live one and there is nothing to hand over. That argument is
+            // why DatabaseGrantSql.Rotate has no trailing FLUSH PRIVILEGES; adding a second
+            // statement to either branch would break it here, silently.
             if (rotated.Answered)
                 return (null, rotated.Error ?? "The database refused to change the password.");
 
@@ -298,11 +302,14 @@ public sealed class DatabaseAccessService(
             return (replacement.Password, (rotated.Error is { } lost ? lost + " " : "") + MayBeLive);
         }
 
-        grant.PasswordHash = DatabaseCredentialManager.Hash(replacement.Password);
-        await AuditAsync(grant, "rotated", actor, null, ct);
-
+        // Everything from here to the return is inside the guard, and not only the save. The
+        // invariant the caller depends on is "once the ALTER has succeeded, nothing may throw before
+        // the password is returned" — and an invariant that holds because the two statements above
+        // happen not to throw today is one line away from not holding.
         try
         {
+            grant.PasswordHash = DatabaseCredentialManager.Hash(replacement.Password);
+            await AuditAsync(grant, "rotated", actor, null, ct);
             await db.SaveChangesAsync(ct);
         }
         catch (Exception ex)
@@ -312,6 +319,10 @@ public sealed class DatabaseAccessService(
             // "nothing happened, my old password still works" — and it is the one reading that is
             // guaranteed wrong. The password is returned so the grant is still usable, and the
             // sentence says which credential is dead.
+            //
+            // The caller has the other half of this: if whatever broke the save also broke reads,
+            // rebuilding the page throws in turn and loses the password again. See
+            // DatabaseAccessActions.RotateAccess.
             logger.LogError(
                 ex, "Grant {Grant} on {Service} was rotated on the database but not recorded.",
                 grant.Id, service.Name);
@@ -337,11 +348,21 @@ public sealed class DatabaseAccessService(
         "could not record the change. Copy the new password below now; it is kept nowhere else. " +
         "Then rotate this access again, so Harbora's record and the database agree.";
 
-    /// <summary>What an operator reads when nothing ever reported back on the <c>ALTER</c>.</summary>
+    /// <summary>
+    /// What an operator reads when nothing ever reported back on the <c>ALTER</c>.
+    ///
+    /// <para>
+    /// Careful not to say the database was told anything. The unanswered case covers everything from
+    /// "the client image could not be pulled", where nothing ran at all, to "the statement went in
+    /// and the exit code was lost on the way out" — and no code here can tell those apart. "The one
+    /// it would have been given" is true of all of them; "the one it was told to use" would be a
+    /// claim in the half where nothing happened.
+    /// </para>
+    /// </summary>
     internal const string MayBeLive =
-        "The password below is the one the database was told to use: it may already be live, and the " +
-        "one before it may already be dead. Copy it now — it is kept nowhere else — and rotate this " +
-        "access again either way, so Harbora's record and the database agree.";
+        "The password below is the one this database would have been given: it may already be live, " +
+        "and the one before it may already be dead. Copy it now — it is kept nowhere else — and " +
+        "rotate this access again either way, so Harbora's record and the database agree.";
 
     /// <summary>Grants past their time, read without a session because the sweeper has none.</summary>
     public async Task<IReadOnlyList<DatabaseAccessGrant>> ExpiredAsync(CancellationToken ct)

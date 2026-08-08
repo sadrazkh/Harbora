@@ -43,20 +43,6 @@ public class DatabaseAccessPageTests
     private sealed record Fixture(
         HarboraDbContext Db, DatabasesController Controller, ManagedService Database, Guid WorkspaceId);
 
-    /// <summary>Harbora's own database, able to refuse one save on demand.</summary>
-    private sealed class BrittleContext(DbContextOptions<HarboraDbContext> options) : HarboraDbContext(options)
-    {
-        public Exception? FailTheNextSaveWith { get; set; }
-
-        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
-        {
-            if (FailTheNextSaveWith is not { } failure) return base.SaveChangesAsync(cancellationToken);
-
-            FailTheNextSaveWith = null;
-            throw failure;
-        }
-    }
-
     private sealed record LocalFixture(
         BrittleContext Db, DatabasesController Controller, ManagedService Database, FakeDockerEngine Docker);
 
@@ -334,7 +320,8 @@ public class DatabaseAccessPageTests
     }
 
     /// <summary>
-    /// A rotation Harbora could not record still puts the password on the page.
+    /// A rotation Harbora could not record still puts the password on the page — when the store
+    /// refused the write but is otherwise fine.
     ///
     /// <para>
     /// This is the only screen the new password ever appears on. Before, the failed save threw
@@ -342,6 +329,13 @@ public class DatabaseAccessPageTests
     /// "nothing happened", while the database was holding a password no human had seen and the old
     /// one no longer worked. So the banner and the credential panel are shown together: the banner
     /// because the old password is dead, the panel because this is the last chance at the new one.
+    /// </para>
+    ///
+    /// <para>
+    /// This is the <b>benign half</b> of a failed save: a constraint, a concurrency conflict, a
+    /// statement timeout. The connection survives, so rebuilding the page works. The other half is
+    /// <see cref="A_rotation_whose_failure_takes_the_panels_own_database_with_it_still_shows_the_password"/>,
+    /// and it is the one that used to lose the password twice over.
     /// </para>
     /// </summary>
     [Fact]
@@ -354,7 +348,7 @@ public class DatabaseAccessPageTests
         issuedPage.Issued.Should().NotBeNull("the fixture has local reach, so a grant can be made");
 
         var grant = await f.Db.DatabaseAccessGrants.SingleAsync();
-        f.Db.FailTheNextSaveWith = new DbUpdateException("Harbora's own database went away.");
+        f.Db.FailTheNextSaveWith = new DbUpdateException("The row was rejected; the connection is fine.");
 
         var page = PageOf(await f.Controller.RotateAccess(
             f.Database.Id, grant.Id, CancellationToken.None));
@@ -363,6 +357,58 @@ public class DatabaseAccessPageTests
         page.Issued.Should().NotBeNull("this page is the only place the new password will ever exist");
         page.Issued!.Password.Should().NotBe(issuedPage.Issued!.Password);
         page.Issued.Rotated.Should().BeTrue();
+
+        f.Docker.OneOffCommands
+            .Should().ContainSingle(c => c.Contains("ALTER USER", StringComparison.Ordinal))
+            .Which.Should().Contain(page.Issued.Password,
+                "the password shown must be the one the database was actually given");
+    }
+
+    /// <summary>
+    /// The half that matters: the save failed because Harbora's own database went away, so every
+    /// read after it fails too.
+    ///
+    /// <para>
+    /// Returning the password from the service is not enough on its own. The action hands it to
+    /// <c>BuildAccessPageAsync</c>, which then issues three reads on the very connection that just
+    /// died — and unguarded, those throw, MVC serves <c>/Home/Error</c>, and the password is gone
+    /// again. Same end state as the original defect, reached one line later: the <c>ALTER</c>
+    /// landed, the old password is dead, the new one was never seen, and the screen says nothing.
+    /// </para>
+    ///
+    /// <para>
+    /// So the rebuild is guarded and falls back to a render that asks the database nothing — the
+    /// service, the grant, the banner and the credential are all already in the request's hands.
+    /// The page it draws is worse than the real one, and immeasurably better than the error page.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_rotation_whose_failure_takes_the_panels_own_database_with_it_still_shows_the_password()
+    {
+        var f = BuildLocal();
+
+        var issuedPage = PageOf(await f.Controller.IssueAccess(
+            f.Database.Id, DatabaseAccessKind.Persistent, 0, null, CancellationToken.None));
+
+        var grant = await f.Db.DatabaseAccessGrants.SingleAsync();
+        var rotateUrl = f.Database.Id;
+
+        // Not just this save: the connection with it. Nothing on this context answers again.
+        f.Db.LoseTheConnectionToo = true;
+        f.Db.FailTheNextSaveWith = new DbUpdateException("Harbora's own database went away.");
+
+        var page = PageOf(await f.Controller.RotateAccess(rotateUrl, grant.Id, CancellationToken.None));
+
+        page.Issued.Should().NotBeNull(
+            "the ALTER landed, so this password is the only usable credential in existence");
+        page.Issued!.Password.Should().NotBe(issuedPage.Issued!.Password);
+        page.Error.Should().NotBeNullOrWhiteSpace();
+
+        // Drawn from memory, so the page still renders: a database to name, the grant it belongs to,
+        // and an empty history rather than a throw.
+        page.Database.Id.Should().Be(f.Database.Id);
+        page.Grants.Should().ContainSingle().Which.Id.Should().Be(grant.Id);
+        page.History.Should().BeEmpty();
 
         f.Docker.OneOffCommands
             .Should().ContainSingle(c => c.Contains("ALTER USER", StringComparison.Ordinal))

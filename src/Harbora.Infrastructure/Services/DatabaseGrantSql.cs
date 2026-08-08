@@ -83,9 +83,17 @@ public static class DatabaseGrantSql
     /// Changes the password on a login that already exists, leaving its privileges alone.
     ///
     /// The opposite of <see cref="Drop"/> on repetition: <c>ON_ERROR_STOP</c> is set and neither
-    /// statement carries an <c>IF EXISTS</c>, so rotating a login the database does not have fails
+    /// branch carries an <c>IF EXISTS</c>, so rotating a login the database does not have fails
     /// loudly. Reporting success there would hand somebody a password nothing will ever accept,
     /// while the old one — the one they wanted retired — kept working.
+    ///
+    /// <para>
+    /// Both branches are also exactly <b>one</b> statement, which the caller depends on: it reads a
+    /// non-zero exit as "the ALTER did not take" and discards the new password on the strength of
+    /// it. A second statement that could fail after a successful ALTER would turn a completed
+    /// rotation into a reported refusal and lose the only copy of a live credential. See the note on
+    /// the MySQL branch, and <c>DatabaseAccessService.RotateAsync</c>'s <c>Answered</c> arm.
+    /// </para>
     /// </summary>
     public static GrantCommand? Rotate(
         ManagedServiceType type, string host, int port, string adminUser,
@@ -106,15 +114,20 @@ public static class DatabaseGrantSql
             // ALTER USER rather than SET PASSWORD: the latter needs the hash function whose name
             // changed between MySQL and MariaDB, and this one client image talks to both.
             //
-            // FLUSH PRIVILEGES here is a no-op and is kept only so the three statements read alike:
-            // an account-management statement updates the in-memory grant tables itself, and the
-            // flush is for grants written into the mysql.* tables directly. Nothing depends on it —
-            // deleting it would change no behaviour, and nothing should be built as if it did. It
-            // also has no error to raise, so it cannot mask the ALTER's exit code.
+            // One statement, and deliberately no trailing FLUSH PRIVILEGES — unlike Create and Drop.
+            // The flush was never doing anything: an account-management statement updates the
+            // in-memory grant tables itself, and the flush is for rows written into mysql.* by hand.
+            // But it could still *fail*. It needs the RELOAD privilege and errors 1227 without it,
+            // and this connects as the service's own admin account — "harbora", the name every
+            // managed service is provisioned with — not as root. On any install where the ALTER is
+            // permitted and the reload is not, the batch would exit non-zero after the password had
+            // already changed, and the caller reads a non-zero exit as "the ALTER did not take" and
+            // throws the new password away. A statement that cannot change anything could still cost
+            // an operator the only copy of a live credential, so it is gone.
             _ => new GrantCommand("mariadb:11",
             [
                 "mariadb", "-h", host, "-P", port.ToString(), "-u", adminUser,
-                "-e", $"ALTER USER '{username}'@'%' IDENTIFIED BY '{password}'; FLUSH PRIVILEGES;"
+                "-e", $"ALTER USER '{username}'@'%' IDENTIFIED BY '{password}';"
             ])
         };
     }

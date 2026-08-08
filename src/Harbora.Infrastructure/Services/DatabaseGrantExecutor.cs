@@ -88,11 +88,20 @@ public sealed class DatabaseGrantExecutor(
     /// The operation, in the words the operator reads. It goes into the refusal and into the log.
     /// </param>
     /// <returns>
-    /// <c>Answered</c> is whether the client ran and gave a verdict. False means the container was
-    /// started and no exit code ever came back — the daemon went away, the stream broke, the token
-    /// was cancelled while the logs drained — and in that case the statement may have reached the
-    /// database before things went wrong. A caller holding a secret that statement carried has to
-    /// treat it as possibly live; saying only "could not be reached" invites the opposite reading.
+    /// <c>Answered</c> is whether the client gave a verdict — an exit code, or a refusal raised
+    /// before anything was run.
+    ///
+    /// <para>
+    /// False is <b>everything else the one-off can throw</b>, and it is deliberately not narrower
+    /// than that: the image could not be pulled, the container could not be created or started, the
+    /// token was already cancelled and nothing ran at all — through to the container running the
+    /// statement and the exit code being lost on the way out. Those are very different facts about a
+    /// customer's database and nothing here can tell them apart, so the flag claims only the weak
+    /// thing they share: <i>this did not report back, so assume the statement may have landed.</i> A
+    /// caller holding a secret that statement carried must not throw it away on that; saying only
+    /// "could not be reached" invites exactly that reading, and a message that asserts the database
+    /// <i>was</i> told something overshoots in the other direction.
+    /// </para>
     /// </returns>
     private async Task<(bool Ok, string? Error, bool Answered)> RunAsync(
         ManagedService service, string networkName, GrantCommand command, string what, CancellationToken ct)

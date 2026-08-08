@@ -59,29 +59,10 @@ public class DatabaseAccessLifecycleTests
     }
 
     /// <summary>
-    /// Harbora's own database, able to refuse one save on demand.
-    ///
-    /// <para>
-    /// The window it opens is the whole point. The customer's database and this row cannot be
-    /// committed together, so there is a moment where the <c>ALTER USER</c> has landed and the
-    /// record of it has not — and everything the operator is told after that moment has to be true
-    /// about which of the two passwords is live.
-    /// </para>
+    /// The single-server install, with everything <see cref="DatabaseAccessService.CanOpenLocally"/>
+    /// needs. Its store is a <see cref="BrittleContext"/>, because the window this feature has to
+    /// survive is the one where the <c>ALTER USER</c> has landed and the record of it has not.
     /// </summary>
-    private sealed class BrittleContext(DbContextOptions<HarboraDbContext> options) : HarboraDbContext(options)
-    {
-        public Exception? FailTheNextSaveWith { get; set; }
-
-        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
-        {
-            if (FailTheNextSaveWith is not { } failure) return base.SaveChangesAsync(cancellationToken);
-
-            FailTheNextSaveWith = null;
-            throw failure;
-        }
-    }
-
-    /// <summary>The single-server install, with everything <see cref="DatabaseAccessService.CanOpenLocally"/> needs.</summary>
     private sealed record LocalStack(
         BrittleContext Db,
         DatabaseAccessService Service,
@@ -364,6 +345,12 @@ public class DatabaseAccessLifecycleTests
     /// no ordering commits them together. What can be closed is the silence. The password comes back
     /// with the error instead of dying with the save, and the sentence says which credential is live.
     /// </para>
+    ///
+    /// <para>
+    /// This is the service's half, so the refusal modelled here is one that leaves the connection
+    /// alive. Whether the page can still be drawn when it does not is the controller's problem, and
+    /// <c>DatabaseAccessPageTests</c> holds it.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task A_rotation_the_panel_could_not_record_still_hands_over_the_password_the_database_took()
@@ -374,7 +361,7 @@ public class DatabaseAccessLifecycleTests
             stack.Database.Id, DatabaseAccessKind.Persistent, null, null, null, null, default);
 
         var grant = await stack.Db.DatabaseAccessGrants.SingleAsync();
-        stack.Db.FailTheNextSaveWith = new DbUpdateException("Harbora's own database went away.");
+        stack.Db.FailTheNextSaveWith = new DbUpdateException("The row was rejected; the connection is fine.");
 
         var (password, error) = await stack.Service.RotateAsync(grant, "me@example.com", default);
 
