@@ -17,6 +17,36 @@
 }
 <h1 class="text-2xl font-bold tracking-tight text-ink mb-6">@(isFa ? "سرورها" : "Servers")</h1>
 
+@*
+    The deprecation is met here, at the moment somebody decides to use it, rather than only in a
+    document they were never going to open. Nothing on this page is disabled: fleets run this agent,
+    it works, and taking the form away would strand them. It says what it is and where to go
+    instead. DocumentationDriftTests keeps this notice tied to src/Harbora.Agent's existence, so it
+    cannot outlive the thing it describes or quietly disappear while the thing does not.
+*@
+<div class="mb-6 rounded-xl border border-warn bg-warn-soft p-4">
+    <div class="flex items-center gap-2 text-sm font-semibold text-warn">
+        <i data-lucide="alert-triangle" class="h-4 w-4"></i>
+        @(isFa
+            ? "این صفحه ایجنت HTTP قدیمی است — منسوخ"
+            : "This page is the older HTTP agent — Deprecated")
+    </div>
+    <p class="mt-1.5 text-xs text-ink-muted">
+        @(isFa
+            ? "برای نود جدید از «نودها → افزودن نود» استفاده کنید: هیچ پورت ورودی باز نمی‌کند، پشت NAT کار می‌کند و mTLS دارد. ایجنت قدیمی دست‌کم تا دو نسخه‌ی minor دیگر پشتیبانی می‌شود و سرورهای فعلی همان‌طور کار می‌کنند."
+            : "For a new node use Nodes → Add a node: it opens no inbound port, works behind NAT, and is mTLS throughout. The older agent stays supported for at least two more minor versions and the servers already on it keep working.")
+    </p>
+    <p class="mt-1.5 text-xs text-ink-faint">
+        @(isFa
+            ? "یک سرور پشت این ایجنت نمی‌تواند از والیوم یا دیتابیس خودش بکاپ بگیرد — Harbora قبل از شروع امتناع می‌کند."
+            : "A server behind this agent cannot back up its own volumes or databases — Harbora refuses before it starts.")
+    </p>
+    <a href="/nodes" class="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-hover">
+        <i data-lucide="cpu" class="h-3.5 w-3.5"></i>
+        @(isFa ? "رفتن به نودها" : "Go to Nodes")
+    </a>
+</div>
+
 @if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
 @if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
 
