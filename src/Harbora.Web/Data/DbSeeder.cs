@@ -208,11 +208,18 @@ public sealed class DbSeeder(HarboraDbContext db)
         }
         await db.SaveChangesAsync();
 
-        // Ensure existing workspaces point at the default plan.
+        // Ensure existing workspaces point at the default plan. Tracked rather than ExecuteUpdate:
+        // this is a handful of rows on a path that runs once per boot, and ExecuteUpdate is a
+        // relational-only statement — it was the single line that made the whole startup sequence,
+        // and therefore every HTTP-level test of the pipeline it starts, impossible to run against
+        // anything but PostgreSQL.
         var defaultPlanId = await db.Plans.Where(p => p.IsDefault).Select(p => p.Id).FirstOrDefaultAsync();
         if (defaultPlanId != Guid.Empty)
-            await db.Workspaces.Where(w => w.PlanId == null)
-                .ExecuteUpdateAsync(s => s.SetProperty(w => w.PlanId, defaultPlanId));
+        {
+            foreach (var workspace in await db.Workspaces.Where(w => w.PlanId == null).ToListAsync())
+                workspace.PlanId = defaultPlanId;
+            await db.SaveChangesAsync();
+        }
     }
 
     /// <summary>

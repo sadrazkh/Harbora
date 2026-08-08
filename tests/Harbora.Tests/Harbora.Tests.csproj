@@ -14,6 +14,12 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <PackageReference Include="FluentAssertions" Version="6.12.1" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.4" />
+    <!--
+      The HTTP lane (tests/Harbora.Tests/Http) boots Harbora.Web's real pipeline in-process through
+      WebApplicationFactory. Everything else in this project exercises classes directly; this is the
+      only reference that needs a server.
+    -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.4" />
   </ItemGroup>
 
   <ItemGroup>

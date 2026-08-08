@@ -31,7 +31,10 @@ public sealed class TokenService(HarboraDbContext db, ISystemClock clock) : ITok
         if (parts.Length < 4) return null;
         var prefix = string.Join('_', parts[0], parts[1], parts[2]);
 
-        var token = await db.ApiTokens.AsNoTracking()
+        // Tracked, because the row is stamped below. Reading it untracked and then writing it with
+        // ExecuteUpdate cost the same two round trips and made bearer authentication a relational-only
+        // code path — which is why no test could reach it until the HTTP lane needed to.
+        var token = await db.ApiTokens
             .FirstOrDefaultAsync(t => t.Prefix == prefix && !t.IsRevoked, ct);
         if (token is null) return null;
         if (token.ExpiresAt is { } exp && exp < clock.UtcNow) return null;
@@ -42,8 +45,8 @@ public sealed class TokenService(HarboraDbContext db, ISystemClock clock) : ITok
         if (!CryptographicOperations.FixedTimeEquals(a, b)) return null;
 
         // best-effort last-used stamp
-        await db.ApiTokens.Where(t => t.Id == token.Id)
-            .ExecuteUpdateAsync(s => s.SetProperty(t => t.LastUsedAt, clock.UtcNow), ct);
+        token.LastUsedAt = clock.UtcNow;
+        await db.SaveChangesAsync(ct);
 
         return token.UserId;
     }

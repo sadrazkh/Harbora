@@ -166,10 +166,18 @@ try
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
-    // A restore point first, when this boot is an upgrade of an existing install. Migrating with no
-    // way back to the previous data is the one step of an upgrade that cannot be undone.
-    await scope.ServiceProvider.GetRequiredService<UpgradeSafetyService>().EnsureRestorePointAsync(default);
-    await db.Database.MigrateAsync();
+    // Only a relational provider has migrations, or a database a restore point could be taken of.
+    // In production that is always Npgsql and this is always true. The HTTP test harness boots this
+    // very pipeline on EF InMemory, where both calls answer with an exception rather than doing
+    // nothing — which would have made the whole request surface untestable. Seeding runs either
+    // way, so a test host starts from the same rows a real boot leaves behind.
+    if (db.Database.IsRelational())
+    {
+        // A restore point first, when this boot is an upgrade of an existing install. Migrating with
+        // no way back to the previous data is the one step of an upgrade that cannot be undone.
+        await scope.ServiceProvider.GetRequiredService<UpgradeSafetyService>().EnsureRestorePointAsync(default);
+        await db.Database.MigrateAsync();
+    }
     await scope.ServiceProvider.GetRequiredService<DbSeeder>().SeedAsync();
 }
 catch (Exception ex)
@@ -238,3 +246,11 @@ app.MapNodeChannel();
 
 await app.RunAsync();
 return 0;
+
+/// <summary>
+/// Names the entry point so the HTTP tests can boot this exact pipeline
+/// (<c>WebApplicationFactory&lt;Program&gt;</c>). Top-level statements generate this class as
+/// internal, which no other assembly can name; declaring it here changes nothing about how the
+/// panel runs and is the only way a test can prove the middleware order above is the one that ships.
+/// </summary>
+public partial class Program;
