@@ -18,18 +18,29 @@ namespace Harbora.NodeAgent.Hosting;
 public sealed class ChannelEventPublisher(ControlChannel channel, ILogger<ChannelEventPublisher> log)
     : INodeEventPublisher
 {
-    public async Task PublishAsync(NodeEvent nodeEvent, CancellationToken ct)
+    public async Task<bool> PublishAsync(NodeEvent nodeEvent, CancellationToken ct)
     {
         log.LogInformation("Event {Kind}: {Message}", nodeEvent.Kind, nodeEvent.Message);
 
         try
         {
             await channel.SendAsync(NodeFrames.Event, nodeEvent, correlationId: null, ct);
+            return true;
         }
         catch (Exception e) when (e is IOException or InvalidOperationException)
         {
-            // The outbox already holds it; a send failure here is not worth failing the caller for.
-            log.LogDebug(e, "Event {Kind} is queued for the next connection.", nodeEvent.Kind);
+            // This used to say "queued for the next connection", and it could never have been true.
+            // ControlChannel.SendAsync appends to the outbox first and then swallows a failed
+            // transmission itself, so the only way one of these reaches here is that the outbox
+            // write failed — a full disk, which is exactly the state a pressure event describes.
+            // Nothing holds the event at that point, and saying otherwise sent an operator looking
+            // for a frame that was never written.
+            log.LogError(
+                e,
+                "Event {Kind} could not be recorded for delivery and is lost unless its source repeats it.",
+                nodeEvent.Kind);
+
+            return false;
         }
     }
 }
@@ -37,9 +48,14 @@ public sealed class ChannelEventPublisher(ControlChannel channel, ILogger<Channe
 /// <summary>A publisher that only writes to the journal. Used before the channel exists.</summary>
 public sealed class LocalEventPublisher(ILogger<LocalEventPublisher> log) : INodeEventPublisher
 {
-    public Task PublishAsync(NodeEvent nodeEvent, CancellationToken ct)
+    /// <summary>
+    /// True because the journal is all this one ever promised. It is not registered in the running
+    /// agent, and a caller that needs the control plane to hear about something must not be given
+    /// this publisher.
+    /// </summary>
+    public Task<bool> PublishAsync(NodeEvent nodeEvent, CancellationToken ct)
     {
         log.LogInformation("Event {Kind}: {Message}", nodeEvent.Kind, nodeEvent.Message);
-        return Task.CompletedTask;
+        return Task.FromResult(true);
     }
 }

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Harbora.NodeAgent.Contracts;
 
 namespace Harbora.NodeAgent.Observability;
@@ -14,13 +15,11 @@ public sealed record NodeConditions
 {
     public required HealthVerdict Health { get; init; }
 
+    /// <summary>The one host reading this heartbeat was built from. See <see cref="HostSample"/>.</summary>
+    public required HostSample Host { get; init; }
+
     /// <summary>When the node's own credential stops working. A change of this value is a rotation.</summary>
     public DateTimeOffset? CertificateExpiresAt { get; init; }
-
-    public long FreeDiskBytes { get; init; }
-    public long FreeMemoryBytes { get; init; }
-    public double Load1 { get; init; }
-    public int CpuCores { get; init; }
 
     /// <summary>Container name → what it was doing. Keyed by name because that is what survives a list call.</summary>
     public IReadOnlyDictionary<string, ContainerObservation> Containers { get; init; } =
@@ -44,65 +43,87 @@ public sealed record NodeConditions
 /// </para>
 ///
 /// <para>
-/// The previous observation lives in memory and nowhere else. That is deliberate: the first
-/// observation after a process start establishes a baseline and announces nothing, because whatever
-/// was true before the restart had already been published, and the durable outbox is what carried it
-/// across the outage. The cost is a condition that both began and ended while the agent was down,
-/// which nobody could have observed anyway.
+/// <b>Computing and committing are separate on purpose.</b> <see cref="Changes"/> says what has
+/// happened; only <see cref="Accept"/> records it as told. A transition whose event never reached
+/// the outbox is therefore reported again on the next heartbeat rather than being forgotten,
+/// because a condition the control plane was never told about has not been announced no matter what
+/// this object believes. The cost is a duplicate when some of a batch got away and some did not,
+/// which is the same at-least-once bargain the channel itself makes.
+/// </para>
+///
+/// <para>
+/// The previous observation lives in memory and nowhere else. The first observation after a process
+/// start establishes a baseline and announces nothing: whatever was true before the restart had
+/// already been published, and the durable outbox is what carried it across the outage.
+/// </para>
+///
+/// <para>
+/// Each method is individually safe to call from any thread. A caller that needs the
+/// compute-publish-commit sequence to be atomic — and one that can be entered twice must — has to
+/// serialise it itself, because the publishing in the middle is asynchronous and cannot be done
+/// under a lock. <c>HeartbeatReporter</c> does exactly that.
 /// </para>
 /// </summary>
 public sealed class NodeConditionTracker
 {
+    private readonly Lock _gate = new();
     private NodeConditions? _previous;
 
-    public IReadOnlyList<NodeEvent> Observe(NodeConditions current, DateTimeOffset at)
+    /// <summary>What has changed since the last accepted observation. Records nothing.</summary>
+    public IReadOnlyList<NodeEvent> Changes(NodeConditions current, DateTimeOffset at)
     {
-        var previous = _previous;
-        _previous = current;
+        NodeConditions? previous;
+        lock (_gate) previous = _previous;
 
         if (previous is null) return [];
 
         var events = new List<NodeEvent>();
 
-        Edge(events, at, NodeEventKinds.DiskPressure,
-            previous.Health.DiskPressure, current.Health.DiskPressure,
-            $"This node is low on disk: {NodeHealthEvaluator.FormatBytes(current.FreeDiskBytes)} free.",
-            "Disk pressure on this node has cleared.",
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["freeBytes"] = current.FreeDiskBytes.ToString(CultureInfo.InvariantCulture),
-            });
+        if (previous.Health.DiskPressure != current.Health.DiskPressure)
+            events.Add(Edge(
+                NodeEventKinds.DiskPressure, current.Health.DiskPressure, at,
+                $"This node is low on disk: {NodeHealthEvaluator.FormatBytes(current.Host.Disk.FreeBytes)} free.",
+                "Disk pressure on this node has cleared.",
+                ("freeBytes", Number(current.Host.Disk.FreeBytes)),
+                ("totalBytes", Number(current.Host.Disk.TotalBytes))));
 
-        Edge(events, at, NodeEventKinds.MemoryPressure,
-            previous.Health.MemoryPressure, current.Health.MemoryPressure,
-            $"This node is low on memory: {NodeHealthEvaluator.FormatBytes(current.FreeMemoryBytes)} free.",
-            "Memory pressure on this node has cleared.",
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["freeBytes"] = current.FreeMemoryBytes.ToString(CultureInfo.InvariantCulture),
-            });
+        if (previous.Health.MemoryPressure != current.Health.MemoryPressure)
+            events.Add(Edge(
+                NodeEventKinds.MemoryPressure, current.Health.MemoryPressure, at,
+                $"This node is low on memory: {NodeHealthEvaluator.FormatBytes(current.Host.FreeMemoryBytes)} free.",
+                "Memory pressure on this node has cleared.",
+                ("freeBytes", Number(current.Host.FreeMemoryBytes)),
+                ("totalBytes", Number(current.Host.TotalMemoryBytes))));
 
-        Edge(events, at, NodeEventKinds.CpuPressure,
-            previous.Health.CpuPressure, current.Health.CpuPressure,
-            $"This node is saturated: load {Load(current.Load1)} across {current.CpuCores} core(s).",
-            "CPU pressure on this node has cleared.",
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["load1"] = Load(current.Load1),
-                ["cores"] = current.CpuCores.ToString(CultureInfo.InvariantCulture),
-            });
+        if (previous.Health.CpuPressure != current.Health.CpuPressure)
+            events.Add(Edge(
+                NodeEventKinds.CpuPressure, current.Health.CpuPressure, at,
+                $"This node is saturated: load {Load(current.Host.Load.One)} across {current.Host.CpuCores} core(s).",
+                "CPU pressure on this node has cleared.",
+                ("load1", Load(current.Host.Load.One)),
+                ("cores", Number(current.Host.CpuCores))));
 
-        Edge(events, at, NodeEventKinds.CertificateExpiring,
-            previous.Health.CertificateExpiringSoon, current.Health.CertificateExpiringSoon,
-            $"This node's credential expires {current.CertificateExpiresAt:u}.",
-            "This node's credential is no longer close to expiry.",
-            Expiry(current.CertificateExpiresAt));
+        if (previous.Health.CertificateExpiringSoon != current.Health.CertificateExpiringSoon)
+            events.Add(Edge(
+                NodeEventKinds.CertificateExpiring, current.Health.CertificateExpiringSoon, at,
+                $"This node's credential expires {current.CertificateExpiresAt:u}.",
+                "This node's credential is no longer close to expiry.",
+                ("expiresAt", $"{current.CertificateExpiresAt:u}")));
 
         Rotation(events, at, previous.CertificateExpiresAt, current.CertificateExpiresAt);
         Containers(events, at, previous, current);
         Tunnels(events, at, previous, current);
 
         return events;
+    }
+
+    /// <summary>
+    /// Record an observation as told. Only a caller that got every one of its events away calls
+    /// this; anyone else leaves the baseline where it was, so the next heartbeat says it again.
+    /// </summary>
+    public void Accept(NodeConditions current)
+    {
+        lock (_gate) _previous = current;
     }
 
     /// <summary>
@@ -121,7 +142,7 @@ public sealed class NodeConditionTracker
             Message = $"This node's credential was replaced; the new one is valid until {now:u}.",
             Data = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["previousExpiresAt"] = $"{was:u}",
+                ["previous"] = $"{was:u}",
                 ["expiresAt"] = $"{now:u}",
             },
             At = at,
@@ -180,39 +201,47 @@ public sealed class NodeConditionTracker
                 {
                     ["tunnel"] = key,
                     ["previous"] = Name(was),
-                    ["status"] = Name(now),
+                    ["state"] = Name(now),
                 },
                 At = at,
             });
         }
     }
 
-    private static void Edge(
-        List<NodeEvent> events, DateTimeOffset at, string kind,
-        bool before, bool now, string entered, string cleared, Dictionary<string, string> data)
+    /// <summary>
+    /// An edge on a condition that is either on or off. The key is <c>transition</c> rather than
+    /// <c>state</c>, because the events describing a thing that has states of its own — a container,
+    /// a tunnel — use <c>state</c> for that thing's state, and one key cannot mean both.
+    /// </summary>
+    private static NodeEvent Edge(
+        string kind, bool entered, DateTimeOffset at, string enteredMessage, string clearedMessage,
+        params (string Key, string Value)[] facts)
     {
-        if (before == now) return;
+        var data = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["transition"] = entered ? "entered" : "cleared",
+        };
 
-        data["state"] = now ? "entered" : "cleared";
+        foreach (var (key, value) in facts) data[key] = value;
 
-        events.Add(new NodeEvent
+        return new NodeEvent
         {
             Kind = kind,
-            Message = now ? entered : cleared,
+            Message = entered ? enteredMessage : clearedMessage,
             Data = data,
             At = at,
-        });
+        };
     }
 
-    private static Dictionary<string, string> Expiry(DateTimeOffset? expiresAt)
-    {
-        var data = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (expiresAt is { } when) data["expiresAt"] = $"{when:u}";
-        return data;
-    }
+    private static string Number(long value) => value.ToString(CultureInfo.InvariantCulture);
 
     private static string Load(double load) => load.ToString("0.00", CultureInfo.InvariantCulture);
 
+    /// <summary>
+    /// The status as it is spelt on the wire, through the contract's own serializer rather than by
+    /// re-deriving the naming policy here. Two spellings of one enum is the same class of drift this
+    /// whole task exists to close.
+    /// </summary>
     private static string Name(TunnelStatus status) =>
-        System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(status.ToString());
+        JsonSerializer.SerializeToElement(status, NodeContract.Json).GetString()!;
 }

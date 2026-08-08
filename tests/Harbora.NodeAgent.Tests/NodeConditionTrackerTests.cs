@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Harbora.NodeAgent.Contracts;
+using Harbora.NodeAgent.Inventory;
 using Harbora.NodeAgent.Observability;
 using Xunit;
 
@@ -23,8 +24,13 @@ public class NodeConditionTrackerTests
 
     private readonly NodeConditionTracker _tracker = new();
 
-    private List<NodeEvent> Observe(NodeConditions conditions) =>
-        _tracker.Observe(conditions, Now).ToList();
+    /// <summary>One heartbeat that got its events away: compute, then commit.</summary>
+    private List<NodeEvent> Observe(NodeConditions conditions)
+    {
+        var changes = _tracker.Changes(conditions, Now).ToList();
+        _tracker.Accept(conditions);
+        return changes;
+    }
 
     // --- the baseline ---
 
@@ -43,6 +49,48 @@ public class NodeConditionTrackerTests
         Observe(Conditions());
 
         Observe(Conditions()).Should().BeEmpty();
+    }
+
+    // --- a transition is only spent once somebody has actually told the control plane ---
+
+    [Fact]
+    public void A_change_that_was_never_accepted_is_reported_again()
+    {
+        Observe(Conditions());
+
+        var first = _tracker.Changes(Conditions(disk: true), Now);
+
+        // Nobody called Accept, which is what a caller does when every event got away. An event
+        // that never reached the outbox has not been announced, whatever this object believes.
+        var second = _tracker.Changes(Conditions(disk: true), Now);
+
+        first.Should().ContainSingle().Which.Kind.Should().Be(NodeEventKinds.DiskPressure);
+        second.Should().ContainSingle().Which.Kind.Should().Be(NodeEventKinds.DiskPressure);
+    }
+
+    [Fact]
+    public void Computing_the_changes_twice_does_not_move_the_baseline()
+    {
+        Observe(Conditions());
+
+        _tracker.Changes(Conditions(disk: true), Now);
+        _tracker.Accept(Conditions(disk: true));
+
+        // Accepted now, so the condition is spent.
+        _tracker.Changes(Conditions(disk: true), Now).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void The_baseline_is_the_observation_that_was_accepted_not_the_last_one_computed()
+    {
+        Observe(Conditions());
+
+        _tracker.Changes(Conditions(disk: true, memory: true), Now);   // never accepted
+        _tracker.Accept(Conditions(disk: true));                       // only the disk edge got away
+
+        // Memory pressure is still unannounced, and is still true, so it is still news.
+        _tracker.Changes(Conditions(disk: true, memory: true), Now)
+            .Should().ContainSingle().Which.Kind.Should().Be(NodeEventKinds.MemoryPressure);
     }
 
     // --- pressure ---
@@ -82,8 +130,8 @@ public class NodeConditionTrackerTests
         var leaving = Observe(Conditions()).Single();
 
         // A consumer must not have to diff two events to know which way the node went.
-        entering.Data!["state"].Should().Be("entered");
-        leaving.Data!["state"].Should().Be("cleared");
+        entering.Data!["transition"].Should().Be("entered");
+        leaving.Data!["transition"].Should().Be("cleared");
     }
 
     [Fact]
@@ -91,7 +139,7 @@ public class NodeConditionTrackerTests
     {
         Observe(Conditions());
 
-        var entered = Observe(Conditions(disk: true) with { FreeDiskBytes = 1_610_612_736 }).Single();
+        var entered = Observe(Conditions(disk: true) with { Host = Sample(freeDisk: 1_610_612_736) }).Single();
 
         entered.Message.Should().Contain("1.5 GiB");
         entered.Data!["freeBytes"].Should().Be("1610612736");
@@ -102,7 +150,7 @@ public class NodeConditionTrackerTests
     {
         Observe(Conditions());
 
-        var entered = Observe(Conditions(cpu: true) with { Load1 = 9.25, CpuCores = 4 }).Single();
+        var entered = Observe(Conditions(cpu: true) with { Host = Sample(load: 9.25) }).Single();
 
         entered.Message.Should().Contain("9.25").And.Contain("4 core");
     }
@@ -253,7 +301,7 @@ public class NodeConditionTrackerTests
 
         dropped.Data!["tunnel"].Should().Be("ingress");
         dropped.Data!["previous"].Should().Be("connected");
-        dropped.Data!["status"].Should().Be("failed");
+        dropped.Data!["state"].Should().Be("failed");
         dropped.Message.Should().Contain("ingress");
     }
 
@@ -302,7 +350,7 @@ public class NodeConditionTrackerTests
         Observe(Conditions());
 
         var later = Now.AddSeconds(30);
-        var events = _tracker.Observe(Conditions(disk: true), later);
+        var events = _tracker.Changes(Conditions(disk: true), later);
 
         events.Should().OnlyContain(e => e.At == later);
     }
@@ -330,14 +378,21 @@ public class NodeConditionTrackerTests
         Health = new HealthVerdict(
             disk || memory || cpu ? NodeHealthState.Degraded : NodeHealthState.Healthy,
             disk, memory, cpu, certificate, []),
+        Host = Sample(),
         CertificateExpiresAt = expiry ?? Expiry,
-        FreeDiskBytes = 4L * 1024 * 1024 * 1024,
-        FreeMemoryBytes = 512L * 1024 * 1024,
-        Load1 = 0.4,
-        CpuCores = 4,
         Containers = containers ?? new Dictionary<string, ContainerObservation>(),
         Tunnels = tunnels ?? new Dictionary<string, TunnelStatus>(),
     };
+
+    private static HostSample Sample(
+        long freeDisk = 4L * 1024 * 1024 * 1024,
+        long freeMemory = 512L * 1024 * 1024,
+        double load = 0.4) => new(
+        new DiskSpace(200L * 1024 * 1024 * 1024, freeDisk),
+        freeMemory,
+        8L * 1024 * 1024 * 1024,
+        new LoadAverage(load, load, load),
+        4);
 
     private static Dictionary<string, ContainerObservation> Containers(params (string Name, string State)[] containers) =>
         containers.ToDictionary(c => c.Name, c => new ContainerObservation(c.State, "wl-shop"));

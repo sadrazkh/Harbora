@@ -106,9 +106,29 @@ public sealed class AcceptingTunnelGateway : ITunnelConnectionFactory
 
     public int PublicPort { get; set; } = 41000;
 
+    /// <summary>Set false to make the gateway refuse the next registration, as it does for a grant it does not know.</summary>
+    public bool Accept { get; set; } = true;
+
+    private readonly List<DuplexStream> _remotes = [];
+
+    /// <summary>
+    /// Hang up on every tunnel, the way a gateway restart does. The node reads end-of-stream, the
+    /// tunnel records itself failed, and the supervisor keeps the entry and retries — so the same
+    /// tunnel is observable under the same key with a different status.
+    /// </summary>
+    public void Drop()
+    {
+        lock (_remotes)
+        {
+            foreach (var remote in _remotes) remote.Dispose();
+            _remotes.Clear();
+        }
+    }
+
     public Task<Stream> ConnectAsync(Uri gateway, NodeIdentity identity, CancellationToken ct)
     {
         var (node, remote) = DuplexStream.CreatePair();
+        lock (_remotes) _remotes.Add(remote);
 
         _ = Task.Run(async () =>
         {
@@ -126,12 +146,20 @@ public sealed class AcceptingTunnelGateway : ITunnelConnectionFactory
                     System.Text.Encoding.UTF8.GetString(buffer.ToArray()))!;
 
             var response = Harbora.NodeAgent.Contracts.NodeContract.Serialize(
-                new Harbora.NodeAgent.Contracts.TunnelRegistrationResponse
-                {
-                    Accepted = true,
-                    PublicEndpoint = $"{gateway.Host}:{PublicPort}",
-                    PublicPort = PublicPort,
-                }) + "\n";
+                Accept
+                    ? new Harbora.NodeAgent.Contracts.TunnelRegistrationResponse
+                    {
+                        Accepted = true,
+                        PublicEndpoint = $"{gateway.Host}:{PublicPort}",
+                        PublicPort = PublicPort,
+                    }
+                    : new Harbora.NodeAgent.Contracts.TunnelRegistrationResponse
+                    {
+                        Accepted = false,
+                        Error = Harbora.NodeAgent.Contracts.NodeError.From(
+                            Harbora.NodeAgent.Contracts.NodeErrorCode.TunnelRejected,
+                            "the gateway does not know this grant"),
+                    }) + "\n";
 
             await remote.WriteAsync(System.Text.Encoding.UTF8.GetBytes(response), ct);
             await remote.FlushAsync(ct);

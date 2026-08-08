@@ -43,6 +43,7 @@ public sealed class HeartbeatTests : IDisposable
     private readonly WorkloadRegistry _workloads;
     private readonly LocalSecretVault _vault;
     private readonly List<NodeEvent> _events = [];
+    private readonly CollectingEvents _publisher;
 
     private TunnelSupervisor? _tunnels;
     private ControlChannel? _channel;
@@ -50,6 +51,7 @@ public sealed class HeartbeatTests : IDisposable
 
     public HeartbeatTests()
     {
+        _publisher = new CollectingEvents(_events);
         _metrics = new NodeMetrics(_clock);
         _state = TestFactories.Store<NodeState>(_agent, "node.json");
         _state.Save(TestFactories.EnrolledState());
@@ -262,7 +264,100 @@ public sealed class HeartbeatTests : IDisposable
         _events.Should().OnlyContain(e => e.Kind == NodeEventKinds.DatabaseGrantRevoked);
     }
 
+    [Fact]
+    public async Task A_tunnel_that_drops_between_heartbeats_is_reported()
+    {
+        // The one adapter in this path with any logic in it is TunnelSupervisor.ByKey(); the tracker
+        // tests prove the rule, and this proves the rule is actually being fed.
+        _agent.Options.Reconnect.Jitter = false;
+        _agent.Options.Reconnect.InitialDelayMs = 1;
+
+        var channel = await ConnectedChannelAsync();
+        var reporter = Reporter(channel);
+
+        await Manager().CreateAsync(GrantSpec(), CancellationToken.None);
+        Tunnels().ByKey()["gr-1"].Status.Should().Be(TunnelStatus.Connected);
+
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        // The gateway hangs up and then refuses the retry, the way it does for a grant it no longer
+        // knows. The supervisor keeps the entry either way, so the same key is present in both
+        // observations under two statuses — which is the case the panel's feed exists for.
+        _gateway.Accept = false;
+        _gateway.Drop();
+        await WaitUntilAsync(() => Tunnels().ByKey()["gr-1"].Status == TunnelStatus.Failed);
+
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        var reported = _events.Should().ContainSingle(e => e.Kind == NodeEventKinds.TunnelStateChanged).Subject;
+        reported.Data!["tunnel"].Should().Be("gr-1");
+        reported.Data!["previous"].Should().Be("connected");
+    }
+
+    // --- the two ways an announcement can go wrong ---
+
+    [Fact]
+    public async Task An_event_that_could_not_be_recorded_is_announced_again_next_heartbeat()
+    {
+        var channel = await ConnectedChannelAsync();
+        var reporter = Reporter(channel);
+
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        // A full disk is what fails the outbox write, and a full disk is what the event is about.
+        _publisher.Refuse = true;
+        _host.DiskSpace = new DiskSpace(100_000_000_000, 1_000_000_000);
+
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+        _events.Should().BeEmpty("nothing was recorded, so nothing was announced");
+
+        _publisher.Refuse = false;
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        _events.Should().ContainSingle(e => e.Kind == NodeEventKinds.DiskPressure,
+            "a transition the control plane never heard is still news");
+    }
+
+    [Fact]
+    public async Task Two_heartbeat_loops_at_once_announce_a_transition_once()
+    {
+        // RunSessionAsync waits only five bounded seconds for a heartbeat task before reconnecting,
+        // so a heartbeat blocked on a sick daemon leaves one loop running as the next one starts.
+        var channel = await ConnectedChannelAsync();
+        var reporter = Reporter(channel);
+
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        _host.DiskSpace = new DiskSpace(100_000_000_000, 1_000_000_000);
+        _publisher.BlockNextPublish();
+
+        var first = reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+        await _publisher.WaitUntilBlockedAsync();
+
+        // The second loop starts while the first is still mid-publish, with the baseline not yet
+        // moved. Unserialised, it would compute the same transition and announce it a second time.
+        var second = reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        _publisher.ReleaseBlocked();
+        await Task.WhenAll(first, second);
+
+        _events.Should().ContainSingle(e => e.Kind == NodeEventKinds.DiskPressure);
+    }
+
     // --- helpers ---
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return;
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException("The condition never became true.");
+    }
 
     private void Deploy(string containerName, string state) =>
         _runtime.Containers[containerName] = Container(containerName, state, "wl-pg");
@@ -307,7 +402,7 @@ public sealed class HeartbeatTests : IDisposable
     /// </summary>
     private HeartbeatReporter Reporter(ControlChannel channel) => _reporter ??= new HeartbeatReporter(
         _agent.Wrapped, channel, _runtime, _host, _state, Manager(), Tunnels(), _metrics,
-        new CollectingEvents(_events), _clock, TestFactories.Log<HeartbeatReporter>());
+        _publisher, _clock, TestFactories.Log<HeartbeatReporter>());
 
     private TunnelSupervisor Tunnels() => _tunnels ??= new TunnelSupervisor(
         _agent.Wrapped, _gateway, new FakeLocalDialer(), _metrics,
@@ -325,7 +420,7 @@ public sealed class HeartbeatTests : IDisposable
         _redactor,
         TestFactories.Audit(_agent, _redactor),
         _metrics,
-        new CollectingEvents(_events),
+        _publisher,
         _clock,
         TestFactories.Log<DatabaseAccessManager>());
 
@@ -391,12 +486,37 @@ public sealed class HeartbeatTests : IDisposable
         _agent.Dispose();
     }
 
+    /// <summary>
+    /// Collects what was published, and can be made to behave like the two ways publishing goes
+    /// wrong: refusing outright (the outbox write failed) and stalling mid-publish.
+    /// </summary>
     private sealed class CollectingEvents(List<NodeEvent> sink) : INodeEventPublisher
     {
-        public Task PublishAsync(NodeEvent nodeEvent, CancellationToken ct)
+        private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _blocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private int _blockOnce;
+
+        public bool Refuse { get; set; }
+
+        public void BlockNextPublish() => Interlocked.Exchange(ref _blockOnce, 1);
+
+        public Task WaitUntilBlockedAsync() => _blocked.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        public void ReleaseBlocked() => _gate.TrySetResult();
+
+        public async Task<bool> PublishAsync(NodeEvent nodeEvent, CancellationToken ct)
         {
+            if (Interlocked.Exchange(ref _blockOnce, 0) == 1)
+            {
+                _blocked.TrySetResult();
+                await _gate.Task;
+            }
+
+            if (Refuse) return false;
+
             lock (sink) sink.Add(nodeEvent);
-            return Task.CompletedTask;
+            return true;
         }
     }
 }

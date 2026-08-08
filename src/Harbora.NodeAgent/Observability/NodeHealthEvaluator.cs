@@ -3,6 +3,33 @@ using Harbora.NodeAgent.Inventory;
 
 namespace Harbora.NodeAgent.Observability;
 
+/// <summary>
+/// One reading of the host, taken at a single moment.
+///
+/// <para>
+/// <see cref="IHostFacts"/> re-reads <c>/proc/loadavg</c>, <c>/proc/meminfo</c> and re-stats the
+/// drive on every property access, with no caching. Three readers of "free disk" in one heartbeat
+/// were therefore three different samples, and the number in the frame, the number the verdict was
+/// made on and the number a pressure event quoted could all disagree. Taking the reading once and
+/// passing it down is what makes them one number.
+/// </para>
+/// </summary>
+public sealed record HostSample(
+    DiskSpace Disk,
+    long FreeMemoryBytes,
+    long TotalMemoryBytes,
+    LoadAverage Load,
+    int CpuCores)
+{
+    public static HostSample Take(IHostFacts host, string dataDirectory) => new(
+        host.Disk(dataDirectory),
+        host.FreeMemoryBytes,
+        host.TotalMemoryBytes,
+        host.Load,
+        // A machine that reports no cores would otherwise divide the load by zero.
+        Math.Max(1, host.CpuCores));
+}
+
 /// <summary>Inputs to the health verdict, gathered once per heartbeat.</summary>
 public sealed record HealthInputs
 {
@@ -11,6 +38,9 @@ public sealed record HealthInputs
     public required bool ChannelConnected { get; init; }
     public DateTimeOffset? CertificateExpiresAt { get; init; }
     public bool CredentialRevoked { get; init; }
+
+    /// <summary>The host as it was when this heartbeat began, not as it is by the time it is read.</summary>
+    public required HostSample Host { get; init; }
 }
 
 /// <summary>The verdict plus the pressure flags that produced it.</summary>
@@ -32,7 +62,7 @@ public sealed record HealthVerdict(
 /// "unhealthy" would evacuate a node that was fine.
 /// </para>
 /// </summary>
-public sealed class NodeHealthEvaluator(IHostFacts host, NodeAgentOptions options)
+public sealed class NodeHealthEvaluator
 {
     /// <summary>Below this fraction of free disk, the node stops being a good place for new work.</summary>
     public const double DiskPressureFreeRatio = 0.10;
@@ -52,24 +82,24 @@ public sealed class NodeHealthEvaluator(IHostFacts host, NodeAgentOptions option
     {
         var reasons = new List<string>();
 
-        var disk = host.Disk(options.DataDirectory);
+        var disk = inputs.Host.Disk;
         var diskPressure = disk.TotalBytes > 0 &&
                            (disk.FreeBytes < DiskPressureFreeBytes ||
                             (double)disk.FreeBytes / disk.TotalBytes < DiskPressureFreeRatio);
 
-        var totalMemory = host.TotalMemoryBytes;
+        var totalMemory = inputs.Host.TotalMemoryBytes;
         var memoryPressure = totalMemory > 0 &&
-                             (double)host.FreeMemoryBytes / totalMemory < MemoryPressureFreeRatio;
+                             (double)inputs.Host.FreeMemoryBytes / totalMemory < MemoryPressureFreeRatio;
 
-        var cores = Math.Max(1, host.CpuCores);
-        var cpuPressure = host.Load.One / cores > CpuPressureLoadPerCore;
+        var cores = inputs.Host.CpuCores;
+        var cpuPressure = inputs.Host.Load.One / cores > CpuPressureLoadPerCore;
 
         var certificateExpiring = inputs.CertificateExpiresAt is { } expiry &&
                                   expiry - now < CertificateWarningWindow;
 
         if (diskPressure) reasons.Add($"disk free {FormatBytes(disk.FreeBytes)} of {FormatBytes(disk.TotalBytes)}");
-        if (memoryPressure) reasons.Add($"memory free {FormatBytes(host.FreeMemoryBytes)} of {FormatBytes(totalMemory)}");
-        if (cpuPressure) reasons.Add($"load {host.Load.One:0.00} across {cores} core(s)");
+        if (memoryPressure) reasons.Add($"memory free {FormatBytes(inputs.Host.FreeMemoryBytes)} of {FormatBytes(totalMemory)}");
+        if (cpuPressure) reasons.Add($"load {inputs.Host.Load.One:0.00} across {cores} core(s)");
         if (certificateExpiring) reasons.Add($"credential expires {inputs.CertificateExpiresAt:u}");
         if (!inputs.ChannelConnected) reasons.Add("control channel disconnected");
 

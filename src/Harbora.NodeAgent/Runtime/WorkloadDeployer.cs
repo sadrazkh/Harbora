@@ -14,7 +14,12 @@ namespace Harbora.NodeAgent.Runtime;
 /// <summary>Somewhere for the agent to announce state changes the control plane did not ask about.</summary>
 public interface INodeEventPublisher
 {
-    Task PublishAsync(NodeEvent nodeEvent, CancellationToken ct);
+    /// <summary>
+    /// Announce an unsolicited change. Returns false when the event could not even be made durable,
+    /// so a caller that can say it again knows it has to. Most callers cannot and ignore it — a
+    /// deploy must not fail because the news about it did.
+    /// </summary>
+    Task<bool> PublishAsync(NodeEvent nodeEvent, CancellationToken ct);
 }
 
 /// <summary>Raised when a deploy cannot proceed; carries the contract code and every violation found.</summary>

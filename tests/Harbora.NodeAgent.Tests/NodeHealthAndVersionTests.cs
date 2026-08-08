@@ -57,29 +57,32 @@ public class NodeHealthEvaluatorTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 4, 12, 0, 0, TimeSpan.Zero);
 
-    private static (NodeHealthEvaluator Evaluator, FakeHostFacts Host) Build(Action<FakeHostFacts>? configure = null)
+    /// <summary>
+    /// The host is sampled once, here, and handed to the evaluator as an input. It used to read
+    /// <see cref="IHostFacts"/> itself, which re-reads /proc on every access — so one verdict could
+    /// be built from three different moments.
+    /// </summary>
+    private static (NodeHealthEvaluator Evaluator, HealthInputs Healthy) Build(Action<FakeHostFacts>? configure = null)
     {
         var host = new FakeHostFacts();
         configure?.Invoke(host);
 
-        var options = new NodeAgentOptions { ControlPlaneUrl = "https://panel.test", DataDirectory = "/tmp" };
-        return (new NodeHealthEvaluator(host, options), host);
+        return (new NodeHealthEvaluator(), new HealthInputs
+        {
+            RuntimeAvailable = true,
+            Draining = false,
+            ChannelConnected = true,
+            CertificateExpiresAt = Now.AddDays(60),
+            Host = HostSample.Take(host, "/tmp"),
+        });
     }
-
-    private static HealthInputs Healthy => new()
-    {
-        RuntimeAvailable = true,
-        Draining = false,
-        ChannelConnected = true,
-        CertificateExpiresAt = Now.AddDays(60),
-    };
 
     [Fact]
     public void A_node_with_room_is_healthy()
     {
-        var (evaluator, _) = Build();
+        var (evaluator, healthy) = Build();
 
-        var verdict = evaluator.Evaluate(Healthy, Now);
+        var verdict = evaluator.Evaluate(healthy, Now);
 
         verdict.State.Should().Be(NodeHealthState.Healthy);
         verdict.Reasons.Should().BeEmpty();
@@ -90,9 +93,9 @@ public class NodeHealthEvaluatorTests
     {
         // The containers already running are fine; what the node must not do is accept a deploy
         // that will pull two gigabytes.
-        var (evaluator, _) = Build(h => h.DiskSpace = new DiskSpace(100_000_000_000, 1_000_000_000));
+        var (evaluator, healthy) = Build(h => h.DiskSpace = new DiskSpace(100_000_000_000, 1_000_000_000));
 
-        var verdict = evaluator.Evaluate(Healthy, Now);
+        var verdict = evaluator.Evaluate(healthy, Now);
 
         verdict.State.Should().Be(NodeHealthState.Degraded);
         verdict.DiskPressure.Should().BeTrue();
@@ -102,21 +105,21 @@ public class NodeHealthEvaluatorTests
     [Fact]
     public void A_large_disk_with_a_small_free_ratio_still_counts_as_pressure()
     {
-        var (evaluator, _) = Build(h => h.DiskSpace = new DiskSpace(4_000_000_000_000, 200_000_000_000));
+        var (evaluator, healthy) = Build(h => h.DiskSpace = new DiskSpace(4_000_000_000_000, 200_000_000_000));
 
-        evaluator.Evaluate(Healthy, Now).DiskPressure.Should().BeTrue("5% free is pressure regardless of the absolute number");
+        evaluator.Evaluate(healthy, Now).DiskPressure.Should().BeTrue("5% free is pressure regardless of the absolute number");
     }
 
     [Fact]
     public void Memory_and_cpu_pressure_are_reported_separately()
     {
-        var (evaluator, _) = Build(h =>
+        var (evaluator, healthy) = Build(h =>
         {
             h.FreeMemoryBytes = 100 * 1024 * 1024;
             h.Load = new LoadAverage(20, 18, 15);
         });
 
-        var verdict = evaluator.Evaluate(Healthy, Now);
+        var verdict = evaluator.Evaluate(healthy, Now);
 
         verdict.MemoryPressure.Should().BeTrue();
         verdict.CpuPressure.Should().BeTrue();
@@ -126,9 +129,9 @@ public class NodeHealthEvaluatorTests
     [Fact]
     public void An_unavailable_runtime_is_unhealthy()
     {
-        var (evaluator, _) = Build();
+        var (evaluator, healthy) = Build();
 
-        var verdict = evaluator.Evaluate(Healthy with { RuntimeAvailable = false }, Now);
+        var verdict = evaluator.Evaluate(healthy with { RuntimeAvailable = false }, Now);
 
         verdict.State.Should().Be(NodeHealthState.Unhealthy);
         verdict.Reasons.Should().Contain("container runtime unavailable");
@@ -137,9 +140,9 @@ public class NodeHealthEvaluatorTests
     [Fact]
     public void A_revoked_credential_outranks_everything_else()
     {
-        var (evaluator, _) = Build(h => h.DiskSpace = new DiskSpace(100, 1));
+        var (evaluator, healthy) = Build(h => h.DiskSpace = new DiskSpace(100, 1));
 
-        var verdict = evaluator.Evaluate(Healthy with { CredentialRevoked = true }, Now);
+        var verdict = evaluator.Evaluate(healthy with { CredentialRevoked = true }, Now);
 
         verdict.State.Should().Be(NodeHealthState.Unhealthy);
         verdict.Reasons.Should().ContainMatch("*re-enroll*");
@@ -149,17 +152,17 @@ public class NodeHealthEvaluatorTests
     public void Draining_outranks_pressure()
     {
         // Reporting a drained node as merely degraded would invite the scheduler to try it.
-        var (evaluator, _) = Build(h => h.DiskSpace = new DiskSpace(100_000_000_000, 1_000_000_000));
+        var (evaluator, healthy) = Build(h => h.DiskSpace = new DiskSpace(100_000_000_000, 1_000_000_000));
 
-        evaluator.Evaluate(Healthy with { Draining = true }, Now).State.Should().Be(NodeHealthState.Draining);
+        evaluator.Evaluate(healthy with { Draining = true }, Now).State.Should().Be(NodeHealthState.Draining);
     }
 
     [Fact]
     public void A_certificate_close_to_expiry_is_flagged_long_before_it_bites()
     {
-        var (evaluator, _) = Build();
+        var (evaluator, healthy) = Build();
 
-        var verdict = evaluator.Evaluate(Healthy with { CertificateExpiresAt = Now.AddDays(3) }, Now);
+        var verdict = evaluator.Evaluate(healthy with { CertificateExpiresAt = Now.AddDays(3) }, Now);
 
         verdict.CertificateExpiringSoon.Should().BeTrue();
         verdict.Reasons.Should().ContainMatch("credential expires*");
@@ -168,9 +171,9 @@ public class NodeHealthEvaluatorTests
     [Fact]
     public void A_disconnected_channel_is_recorded_as_a_reason_without_condemning_the_node()
     {
-        var (evaluator, _) = Build();
+        var (evaluator, healthy) = Build();
 
-        var verdict = evaluator.Evaluate(Healthy with { ChannelConnected = false }, Now);
+        var verdict = evaluator.Evaluate(healthy with { ChannelConnected = false }, Now);
 
         verdict.Reasons.Should().Contain("control channel disconnected");
         verdict.State.Should().Be(NodeHealthState.Healthy, "the containers keep running while the panel is unreachable");

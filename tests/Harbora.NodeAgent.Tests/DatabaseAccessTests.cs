@@ -490,10 +490,10 @@ public sealed class DatabaseAccessTests : IDisposable
 
     private sealed class CollectingEvents(List<NodeEvent> sink) : INodeEventPublisher
     {
-        public Task PublishAsync(NodeEvent nodeEvent, CancellationToken ct)
+        public Task<bool> PublishAsync(NodeEvent nodeEvent, CancellationToken ct)
         {
             lock (sink) sink.Add(nodeEvent);
-            return Task.CompletedTask;
+            return Task.FromResult(true);
         }
     }
 }

@@ -38,8 +38,20 @@ public sealed class HeartbeatReporter(
     private static readonly Dictionary<string, string> ManagedByThisNode = new() { [NodeLabels.Managed] = "true" };
 
     private readonly NodeAgentOptions _options = options.Value;
-    private readonly NodeHealthEvaluator _health = new(host, options.Value);
+    private readonly NodeHealthEvaluator _health = new();
     private readonly NodeConditionTracker _conditions = new();
+
+    /// <summary>
+    /// Serialises announcing, which the heartbeat loop cannot be trusted to do for itself.
+    ///
+    /// <para>
+    /// <c>RunSessionAsync</c> waits only five bounded seconds for a heartbeat task to end before
+    /// reconnecting, so a heartbeat blocked on a sick daemon — the very thing that drops a channel —
+    /// leaves one loop running while the next one starts. Two of them working through
+    /// compute-publish-commit at once would either announce a transition twice or lose it entirely.
+    /// </para>
+    /// </summary>
+    private readonly SemaphoreSlim _announcing = new(1, 1);
 
     internal async Task SendAsync(NodeIdentity? identity, bool credentialRevoked, CancellationToken ct)
     {
@@ -58,6 +70,10 @@ public sealed class HeartbeatReporter(
 
         var persisted = stateStore.Load() ?? new NodeState();
 
+        // One reading, used by the verdict, the frame and every event this heartbeat produces.
+        // IHostFacts re-reads /proc on each access, so asking it three times gave three answers.
+        var sample = HostSample.Take(host, _options.DataDirectory);
+
         var verdict = _health.Evaluate(
             new HealthInputs
             {
@@ -66,13 +82,12 @@ public sealed class HeartbeatReporter(
                 ChannelConnected = channel.IsConnected,
                 CertificateExpiresAt = identity?.NotAfter,
                 CredentialRevoked = credentialRevoked,
+                Host = sample,
             },
             clock.GetUtcNow());
 
         metrics.Health(verdict);
         metrics.RunningWorkloads(managed.Count);
-
-        var disk = host.Disk(_options.DataDirectory);
 
         // Read, not remembered. The manager owns the grant store and the supervisor owns the
         // sockets, so asking them is the only way the number on the operator's screen and the
@@ -85,11 +100,11 @@ public sealed class HeartbeatReporter(
             NodeId = persisted.NodeId ?? "unknown",
             AgentVersion = AgentVersion.Current,
             Health = verdict.State,
-            Load1 = host.Load.One,
-            Load5 = host.Load.Five,
-            Load15 = host.Load.Fifteen,
-            FreeMemoryBytes = host.FreeMemoryBytes,
-            FreeDiskBytes = disk.FreeBytes,
+            Load1 = sample.Load.One,
+            Load5 = sample.Load.Five,
+            Load15 = sample.Load.Fifteen,
+            FreeMemoryBytes = sample.FreeMemoryBytes,
+            FreeDiskBytes = sample.Disk.FreeBytes,
             RunningWorkloads = managed.Count,
             ActiveDatabaseGrants = activeGrants,
             ActiveTunnels = activeTunnels,
@@ -100,7 +115,7 @@ public sealed class HeartbeatReporter(
         if (verdict.State is NodeHealthState.Degraded or NodeHealthState.Unhealthy)
             log.LogWarning("Node health is {State}: {Reasons}.", verdict.State, string.Join("; ", verdict.Reasons));
 
-        await AnnounceChangesAsync(verdict, identity, everything, ct);
+        await AnnounceChangesAsync(verdict, sample, identity, everything, ct);
     }
 
     /// <summary>
@@ -110,27 +125,49 @@ public sealed class HeartbeatReporter(
     /// Sent after the heartbeat, not before: an event says a number moved, and the frame carrying
     /// the number it moved to should already be on the wire when it arrives.
     /// </para>
+    ///
+    /// <para>
+    /// The new baseline is recorded only once every event is durably away. An event that could not
+    /// be written to the outbox has not been announced, whatever this process believes, so leaving
+    /// the baseline alone is what makes the next heartbeat say it again. The price is a repeat of
+    /// the ones that did get through, which is the bargain the whole channel already makes.
+    /// </para>
     /// </summary>
     private async Task AnnounceChangesAsync(
-        HealthVerdict verdict, NodeIdentity? identity, IReadOnlyList<RuntimeContainer> containers, CancellationToken ct)
+        HealthVerdict verdict,
+        HostSample sample,
+        NodeIdentity? identity,
+        IReadOnlyList<RuntimeContainer> containers,
+        CancellationToken ct)
     {
-        var disk = host.Disk(_options.DataDirectory);
+        var conditions = new NodeConditions
+        {
+            Health = verdict,
+            Host = sample,
+            CertificateExpiresAt = identity?.NotAfter,
+            Containers = Observed(containers),
+            Tunnels = tunnels.ByKey().ToDictionary(t => t.Key, t => t.Value.Status, StringComparer.Ordinal),
+        };
 
-        var observed = _conditions.Observe(
-            new NodeConditions
-            {
-                Health = verdict,
-                CertificateExpiresAt = identity?.NotAfter,
-                FreeDiskBytes = disk.FreeBytes,
-                FreeMemoryBytes = host.FreeMemoryBytes,
-                Load1 = host.Load.One,
-                CpuCores = host.CpuCores,
-                Containers = Observed(containers),
-                Tunnels = tunnels.ByKey().ToDictionary(t => t.Key, t => t.Value.Status, StringComparer.Ordinal),
-            },
-            clock.GetUtcNow());
+        await _announcing.WaitAsync(ct);
 
-        foreach (var change in observed) await events.PublishAsync(change, ct);
+        try
+        {
+            foreach (var change in _conditions.Changes(conditions, clock.GetUtcNow()))
+                if (!await events.PublishAsync(change, ct))
+                {
+                    log.LogWarning(
+                        "Node event {Kind} could not be recorded; this node will report the change again on its next heartbeat.",
+                        change.Kind);
+                    return;
+                }
+
+            _conditions.Accept(conditions);
+        }
+        finally
+        {
+            _announcing.Release();
+        }
     }
 
     /// <summary>
