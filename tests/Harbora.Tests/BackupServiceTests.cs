@@ -92,6 +92,7 @@ public sealed class BackupServiceTests : IDisposable
         new StubEngineResolver(),
         new StubCredentialReader("password"),
         new StubDatabaseRestores(),
+        new BackupTargetResolver(Docker, new StubDatabaseStager(), new StubApplicationStager(), Options.Create(_options), NullLogger<BackupTargetResolver>.Instance),
         _jobs,
         _notifications,
         new StubCaller(_workspace),
@@ -298,8 +299,9 @@ public sealed class BackupServiceTests : IDisposable
         using var scoped = ContextFor(new FixedWorkspaceScope(_workspace));
         var restores = new RestoreService(
             scoped, new StubEngineResolver(), new StubCredentialReader("password"),
-            new StubDatabaseRestores(), _jobs,
-            _notifications, new StubCaller(_workspace), new NoopAudit(),
+            new StubDatabaseRestores(),
+            new BackupTargetResolver(Docker, new StubDatabaseStager(), new StubApplicationStager(), Options.Create(_options), NullLogger<BackupTargetResolver>.Instance),
+            _jobs, _notifications, new StubCaller(_workspace), new NoopAudit(),
             Options.Create(_options), NullLogger<RestoreService>.Instance);
 
         var result = await restores.QueueAsync(_workspace, new RestoreRequest(

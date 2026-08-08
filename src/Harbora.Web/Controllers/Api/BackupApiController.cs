@@ -557,11 +557,19 @@ public sealed record RestoreDto(
     string ConflictStrategy, string Status, int Progress,
     long RestoredFilesCount, long RestoredBytes,
     DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt, string? FailureReason,
+
+    /// <summary>
+    /// The snapshot holding the destination as it was just before this restore started, when one
+    /// was taken. Reported here as well as on the Backup Center: an API client that automated the
+    /// restore is the caller least able to go and look for the way back afterwards.
+    /// </summary>
+    string? SafetySnapshotRef,
+
     DateTimeOffset CreatedAt)
 {
     public static RestoreDto From(RestoreJob r) => new(
         r.Id, r.SnapshotId, r.RestoreType.ToString(), r.Destination, r.OverwritesLiveTarget,
         r.ConflictStrategy.ToString(), r.Status.ToString(), r.Progress,
         r.RestoredFilesCount, r.RestoredBytes, r.StartedAt, r.CompletedAt, r.FailureReason,
-        r.CreatedAt);
+        r.SafetySnapshotRef, r.CreatedAt);
 }

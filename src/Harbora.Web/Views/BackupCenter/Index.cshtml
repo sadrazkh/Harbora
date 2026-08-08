@@ -348,6 +348,10 @@
                                     <a asp-action="Snapshot" asp-route-id="@s.Id" class="text-accent-text hover:underline">
                                         @(isFa ? "مرور" : "browse")
                                     </a>
+                                    <form asp-action="VerifySnapshot" asp-route-id="@s.Id" method="post" class="inline ms-2">
+                                        @Html.AntiForgeryToken()
+                                        <button class="text-accent-text hover:underline">@(isFa ? "بررسی کن" : "verify now")</button>
+                                    </form>
                                 }
                                 <form asp-action="DeleteSnapshot" asp-route-id="@s.Id" method="post" class="inline ms-2">
                                     @Html.AntiForgeryToken()
@@ -381,6 +385,14 @@
                         @if (r.OverwritesLiveTarget)
                         {
                             <span class="text-warn">@(isFa ? "روی داده موجود" : "overwrote live data")</span>
+                        }
+                        @* The way back. A recorded reference nobody can reach is not one, so it is a
+                           link to the snapshot's own page rather than a guid on the screen. *@
+                        @if (Guid.TryParse(r.SafetySnapshotRef, out var safetyId))
+                        {
+                            <a asp-action="Snapshot" asp-route-id="@safetyId" class="text-accent-text hover:underline">
+                                @(isFa ? "نسخه ایمنی" : "safety copy")
+                            </a>
                         }
                         <span>@r.RestoredFilesCount.ToString("N0") @(isFa ? "فایل" : "files")</span>
                         <span class="rounded px-1.5 py-0.5 @(r.Status == Harbora.Modules.Backup.Contracts.RestoreJobStatus.Completed ? "bg-ok/15 text-ok" : r.Status == Harbora.Modules.Backup.Contracts.RestoreJobStatus.Failed ? "bg-danger/15 text-danger" : "bg-accent-hover/15 text-accent-text")">@r.Status</span>

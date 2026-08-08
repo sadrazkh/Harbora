@@ -76,8 +76,8 @@ public sealed class BackupApiTests : IDisposable
             NullLogger<BackupSnapshotService>.Instance);
 
         var restores = new RestoreService(
-            _db, new StubResolver(), new StubCredentials(), new StubDatabaseRestores(), _jobs,
-            new RecordingBackupNotifications(), new Caller(_workspace), new SilentAudit(),
+            _db, new StubResolver(), new StubCredentials(), new StubDatabaseRestores(), Resolver(),
+            _jobs, new RecordingBackupNotifications(), new Caller(_workspace), new SilentAudit(),
             Options.Create(_options), NullLogger<RestoreService>.Instance);
 
         var controller = new BackupApiController(

@@ -189,6 +189,30 @@ public sealed class BackupCenterController(
         });
     }
 
+    /// <summary>
+    /// "Verify now" — the operator-triggered half of the check.
+    ///
+    /// <para>
+    /// The automatic one runs at the end of every backup; this exists for the snapshot that was
+    /// taken before that did, for the one whose check failed and may have been a passing storage
+    /// fault, and for the operator who simply wants to know today rather than tomorrow.
+    /// </para>
+    /// </summary>
+    [HttpPost("snapshots/{id:guid}/verify")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> VerifySnapshot(Guid id, CancellationToken ct)
+    {
+        if (!Enabled) return NotFound();
+
+        var result = await snapshots.QueueVerificationAsync(id, ct);
+
+        if (result.Succeeded)
+            TempData["Message"] = "Verification queued. The Verified column updates when it finishes.";
+        else TempData["Error"] = result.Error;
+
+        return RedirectToAction(nameof(Index));
+    }
+
     [HttpPost("snapshots/{id:guid}/delete")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> DeleteSnapshot(Guid id, CancellationToken ct)

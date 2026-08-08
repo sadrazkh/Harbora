@@ -1025,6 +1025,9 @@ public sealed class BackupCrashRecoveryTests : IDisposable
         new StubEngineResolver(),
         new StubCredentialReader(),
         new StubDatabaseRestores(),
+        new BackupTargetResolver(new FakeDockerEngine(), new StubDatabaseStager(),
+            new StubApplicationStager(), Options.Create(_options),
+            NullLogger<BackupTargetResolver>.Instance),
         _jobs, _notifications, new StubCaller(_workspace), new NoopAudit(),
         Options.Create(_options), NullLogger<RestoreService>.Instance);
 

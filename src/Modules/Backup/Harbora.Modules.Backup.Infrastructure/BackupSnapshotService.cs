@@ -118,6 +118,39 @@ public sealed class BackupSnapshotService(
     }
 
     /// <summary>
+    /// Ask the verifier to read a finished snapshot back.
+    ///
+    /// <para>
+    /// The queue's job, not this method's: reading a snapshot back means fetching and decrypting an
+    /// archive, which is not work to do inside the request an operator is waiting on. The job
+    /// excludes on the snapshot's own id, so a "verify now" pressed twice, or pressed while the
+    /// automatic check from the backup is still queued, runs one after the other rather than twice
+    /// at once — and either order leaves the same answer on the row.
+    /// </para>
+    /// <para>
+    /// Read through the ordinary filtered set, so a snapshot belonging to another workspace is
+    /// indistinguishable from one that is not there.
+    /// </para>
+    /// </summary>
+    public async Task<SnapshotOutcome> QueueVerificationAsync(Guid snapshotId, CancellationToken ct)
+    {
+        var snapshot = await db.BackupSnapshots.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == snapshotId, ct);
+
+        if (snapshot is null) return new SnapshotOutcome(false, Error: "That snapshot no longer exists.");
+
+        // Same sentence the handler writes when it is asked to verify something unfinished, so the
+        // refusal an operator reads on the screen and the note they would have read on the row say
+        // the same thing.
+        if (!snapshot.IsRestorable)
+            return new SnapshotOutcome(false, Error:
+                $"This backup is {snapshot.Status} — only a completed backup can be verified.");
+
+        await jobs.EnqueueAsync(JobKind.BackupVerify, snapshot.Id, ct);
+        return new SnapshotOutcome(true, snapshot.Id);
+    }
+
+    /// <summary>
     /// The job body.
     ///
     /// <para>
@@ -270,6 +303,28 @@ public sealed class BackupSnapshotService(
             logger.LogInformation(
                 "Snapshot {SnapshotId} completed: {Files} file(s), {Stored} byte(s) stored. [{Correlation}]",
                 snapshot.Id, result.FilesCount, result.StoredSizeBytes, snapshot.CorrelationId);
+
+            // The check is asked for HERE — at the end of the job that produced the snapshot —
+            // rather than from BackupPolicyScheduler, and the choice is not stylistic.
+            //
+            // The scheduler only knows about policies. A manual "back up now", an API-triggered
+            // snapshot and the safety copy a restore takes have no policy at all, so a scheduled
+            // sweep would leave precisely the backups a person asked for unchecked. This is also the
+            // first moment at which the thing to check exists and is known to be finished, which is
+            // what makes NotVerified a state a snapshot passes through rather than one it sits in
+            // until the next tick.
+            //
+            // It cannot collide with the work around it. The queue excludes on a (kind, target)
+            // pair: this is a BackupVerify keyed on the snapshot's own id, so it is invisible to the
+            // BackupSnapshot job it was enqueued from — which is right, because that job is finished
+            // with the repository by now and verification only reads. What it does exclude with is
+            // another verify of the SAME snapshot, so the automatic check and an operator pressing
+            // "verify now" queue behind one another instead of both browsing at once; either order
+            // leaves the same answer on the row.
+            //
+            // Enqueued after the completion is saved, and never allowed to undo it — see
+            // BackupVerificationQueue.
+            await BackupVerificationQueue.RequestAsync(jobs, snapshot.Id, logger, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

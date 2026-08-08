@@ -448,7 +448,11 @@ public sealed class BackupModuleReconciler(
         foreach (var job in restores)
         {
             job.Status = RestoreJobStatus.Failed;
-            job.FailureReason = RestoreInterrupted;
+            // Through the same sentence RestoreService.FailAsync uses, so a restore a restart
+            // interrupted names its safety copy exactly as one the engine failed does. This is the
+            // case that needs it most: the message above says part of the data may already have been
+            // written, and the reader's next question is what they can put back.
+            job.FailureReason = RestoreService.WithTheWayBack(RestoreInterrupted, job.SafetySnapshotRef);
             job.CompletedAt = now;
 
             // Only a database restore stages inside the module's own directory, under a name
