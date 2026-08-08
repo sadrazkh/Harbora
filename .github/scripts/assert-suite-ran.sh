@@ -10,7 +10,8 @@
 # the check that makes the tick mean something, and it is a separate file rather than a heredoc in
 # each job so that the three lanes that need it cannot drift apart.
 #
-# It refuses four things:
+# It refuses eight things — four about the TRX, and four about being asked a question it cannot
+# answer honestly. The TRX four:
 #
 #   1. No TRX at all. Nothing can be said about a run that left no record.
 #   2. Any outcome="NotExecuted". Every skip in this repository is environmental — DockerFact and
@@ -20,8 +21,13 @@
 #      already have failed, and this catches the day somebody adds `|| true` or `continue-on-error`.
 #   4. Fewer passing tests than the floor. A filter typo that narrows a 3,000-test suite to 3 leaves
 #      a TRX with no skips, no failures and nothing in it. The floors are floors, deliberately well
-#      under the real counts, so ordinary churn does not touch this file; they are a catastrophe
-#      detector, not an inventory. Raise one only when it stops being catastrophic.
+#      under the real counts. They are a catastrophe detector, not an inventory: a floor is a line
+#      somebody moves deliberately, in a commit that says why, not headroom generous enough to sleep
+#      through the thing it was put there to notice.
+#
+# And four refusals of the question itself, each exit 2 rather than 1, because they mean the caller
+# is wrong rather than the suite: no arguments at all, a non-numeric floor, and a floor of zero —
+# which would accept a well-formed empty TRX and quietly disable check 4.
 #
 # The passing count is a count of occurrences of outcome="Passed", so a data-driven test's inner
 # results are counted individually. That can only make a floor easier to clear, which is the safe

@@ -63,10 +63,19 @@ on:
 # names) before the next one can say anything. The failure step below opens or updates a GitHub
 # issue so that this is somebody's job rather than a tick nobody watches.
 #
-# One thing no workflow can fix from the inside: GitHub disables `schedule:` triggers after 60 days
-# with no repository activity. A quiet repository silently loses this lane. A failing run opens an
-# issue, which is itself activity — but a passing run is invisible, so if this repository ever goes
-# quiet for two months, check that the schedule is still enabled before trusting its silence.
+# Two things no workflow can fix from the inside, both of which end with this lane going quiet:
+#
+#   1. GitHub disables `schedule:` triggers after 60 days with no repository activity. It is
+#      DOCUMENTED that this happens; it is NOT documented what counts as activity, and the issue the
+#      failure step opens is created by github.token, whose events GitHub treats specially in other
+#      contexts. So do not assume a failing lane keeps itself alive — it may or may not. If this
+#      repository ever goes quiet for two months, check that the schedule is still enabled before
+#      trusting its silence.
+#
+#   2. The failure step itself can fail — issues disabled on the repository, an org policy, a GitHub
+#      API outage — and when it does it goes red inside a job that is already red, which is the one
+#      place nobody is looking. There is no way to notice that from in here. If red nights stop
+#      producing issue comments, the notification is what broke, not necessarily the product.
 
 permissions:
   contents: read
@@ -196,6 +205,41 @@ jobs:
           fi
           echo "ok  the proof ran end to end, node half included."
 
+      # proof.log is written by `tee`, and GitHub's secret masking applies to the LOG STREAM — not
+      # to a file on disk, not to an uploaded artifact, and not to an issue body. The log routinely
+      # contains the panel and root domains, the host's public address, the owner's email address
+      # and, on a step-7 failure, the first 20 characters of a live enrolment token. All but the
+      # token are configured as repository secrets, and this repository is public, so the raw log is
+      # never what gets published: the redacted copy is uploaded and quoted instead.
+      - name: Redact the log before anything publishes it
+        if: always()
+        env:
+          E2E_PANEL_DOMAIN: ${{ secrets.E2E_PANEL_DOMAIN }}
+          E2E_ROOT_DOMAIN: ${{ secrets.E2E_ROOT_DOMAIN }}
+          E2E_ACME_EMAIL: ${{ secrets.E2E_ACME_EMAIL }}
+          E2E_OWNER_EMAIL: ${{ secrets.E2E_OWNER_EMAIL }}
+          E2E_OWNER_PASSWORD: ${{ secrets.E2E_OWNER_PASSWORD }}
+          E2E_SSH_HOST: ${{ secrets.E2E_SSH_HOST }}
+          E2E_NODE_HOST: ${{ secrets.E2E_NODE_HOST }}
+        run: |
+          [ -f proof.log ] || { echo "No proof.log to redact."; exit 0; }
+          python3 - <<'PY'
+          import os, re
+          text = open('proof.log', errors='replace').read()
+          for name in ('E2E_OWNER_PASSWORD', 'E2E_PANEL_DOMAIN', 'E2E_ROOT_DOMAIN',
+                       'E2E_ACME_EMAIL', 'E2E_OWNER_EMAIL', 'E2E_SSH_HOST', 'E2E_NODE_HOST'):
+              value = os.environ.get(name, '')
+              if value:
+                  text = text.replace(value, f'<{name}>')
+          # Any remaining IPv4 literal: the script prints the host's public address at step 0, and
+          # the node host's address appears in ssh diagnostics that no substitution above covers.
+          text = re.sub(r'\b\d{1,3}(?:\.\d{1,3}){3}\b', '<ip>', text)
+          # The enrolment token prefix the script logs deliberately as a correlation aid.
+          text = re.sub(r'(prefix\s+)\S+', r'\1<token>', text)
+          open('proof.redacted.log', 'w').write(text)
+          PY
+          echo "Redacted log written."
+
       # Nobody watches a nightly they did not break. A red tick on a scheduled run is seen by
       # exactly the people already looking at the Actions tab, which on a quiet night is nobody —
       # and because a failure leaves the hosts dirty, every subsequent run also fails, so the signal
@@ -224,16 +268,20 @@ jobs:
             echo "script then refuses at step 0 on every later run rather than claiming a fresh"
             echo "install it did not do. Until they are re-imaged, expect this to stay red."
             echo
-            if [ -s proof.log ]; then
-              echo "<details><summary>Last 60 lines of proof.log</summary>"
+            # The REDACTED copy, never proof.log. This repository is public and an issue body is
+            # not covered by GitHub's secret masking, which only applies to the live log stream.
+            if [ -s proof.redacted.log ]; then
+              echo "<details><summary>Last 60 lines (redacted — domains, addresses, email and token elided)</summary>"
               echo
               echo '```'
-              tail -60 proof.log
+              tail -60 proof.redacted.log
               echo '```'
               echo
               echo "</details>"
+              echo
+              echo "The full redacted log is attached to the run as an artifact."
             else
-              echo "_No \`proof.log\` was produced — the run failed before the script started_"
+              echo "_No log was produced — the run failed before the script started_"
               echo "_(most likely a missing secret; see the first step)._"
             fi
           } > issue-body.md
@@ -253,10 +301,13 @@ jobs:
         if: always()
         run: rm -f ~/.ssh/panel_key ~/.ssh/node_key
 
+      # The redacted copy, not proof.log. Artifacts on a public repository are downloadable by
+      # anyone, and the raw log carries values configured as secrets. If you need the unredacted
+      # detail, it is on the host — which a failed run deliberately leaves standing.
       - name: Keep the log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: live-host-proof-log
-          path: proof.log
+          path: proof.redacted.log
           if-no-files-found: warn

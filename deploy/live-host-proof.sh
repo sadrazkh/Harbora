@@ -255,20 +255,35 @@ fi
 
 # The directory is not the whole story, and this is the gap that could have destroyed somebody's
 # data. `install.sh uninstall` KEEPS volumes unless the operator says otherwise, so a host where
-# somebody uninstalled and then removed /opt/harbora still has harbora_pgdata, harbora_backups and
-# the MinIO volumes sitting there. Without this check that host passes the test above, install.sh
-# silently adopts those volumes as if they were ours, and step 9's `docker compose down -v`
-# destroys them — breaking this script's own promise, at the top of this file, that it never
-# removes state it did not create.
+# somebody uninstalled and then removed /opt/harbora still has the database, the object store and
+# the backups sitting there. Without this check that host passes the test above, install.sh silently
+# adopts those volumes as if they were ours, and step 9's `docker compose down -v` destroys them —
+# breaking this script's own promise, at the top of this file, that it never removes state it did
+# not create.
+#
+# NOT anchored, and that is the whole point. deploy/docker-compose.yml declares no top-level `name:`
+# and nothing sets COMPOSE_PROJECT_NAME, so Compose takes the project name from the directory the
+# file sits in — /opt/harbora/app/deploy — and six of the seven volumes are really called
+# deploy_harbora_pgdata, deploy_harbora_objects, deploy_harbora_redis, deploy_harbora_acme,
+# deploy_harbora_builds and deploy_harbora_keys. Only harbora_backups escapes the prefix, because
+# the compose file pins it with an explicit `name:` so the panel and its one-off tar containers can
+# both mount it by that name. docs/disaster-recovery.md says the same thing.
+#
+# An anchored '^harbora_' therefore matched exactly ONE volume of seven — and the remediation this
+# block used to print removed that one, which let the next run pass step 0 and reach a `down -v`
+# that ate deploy_harbora_pgdata. The guard appeared to work only because uninstall leaves the whole
+# set, so harbora_backups was accidentally standing in as a canary for its six prefixed siblings.
 if command -v docker >/dev/null 2>&1; then
-  orphans="$(docker volume ls -q --filter name='^harbora_' 2>/dev/null || true)"
+  orphans="$(docker volume ls -q --filter name='harbora_' 2>/dev/null || true)"
   if [ -n "$orphans" ]; then
     err "This host is not clean: it already has Harbora data volumes, even though $HARBORA_DIR is gone."
     printf '  %s\n' $orphans >&2
     err "install.sh would adopt these as its own and this script's teardown would then delete them."
-    err "They are somebody's data and this script will not touch them. Re-image the host, or remove"
-    err "them BY HAND once you are certain they are disposable:"
-    err "    docker volume rm \$(docker volume ls -q --filter name='^harbora_')"
+    err "They are somebody's data and this script will not touch them. Re-image the host, or — once"
+    err "you are certain every one of the volumes listed above is disposable — remove them BY HAND:"
+    err "    docker volume rm \$(docker volume ls -q --filter name='harbora_')"
+    err "Note the unanchored filter: most of these are named deploy_harbora_*, not harbora_*, and a"
+    err "'^harbora_' pattern would leave the database behind while looking like it had cleaned up."
     exit 1
   fi
 fi
@@ -444,23 +459,9 @@ wait_until "$W_PANEL" "the panel answers /healthz over public DNS and a trusted 
 # ---------------------------------------------------------------------------------------------
 step "3 — enable the Backup module, then create the owner"
 # ---------------------------------------------------------------------------------------------
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-#  READ THIS BEFORE BELIEVING STEP 6.
-#
-#  Step 6 proves the Backup module under a configuration NO DEFAULT INSTALL HAS. Three settings are
-#  changed here, and a green run says nothing about any of them as shipped:
-#
-#    1. Features:Backup — ships FALSE (appsettings.json). The module is entirely off by default,
-#       and appsettings.json calls enabling it a deliberate act. This is that act.
-#    2. Backups:Module:AllowedSourceRoots — ships EMPTY, and appsettings.json says "EMPTY on
-#       purpose". BackupTargetResolver refuses every Directory target outright while it is empty,
-#       so with the shipped configuration the ONLY thing a directory backup can prove is that it is
-#       refused. An allowlist entry is what makes there be anything to test.
-#
-#  What step 6 therefore proves: given an operator who has enabled the module and allowed a source
-#  root, a directory snapshot and its restore move real bytes. What it does NOT prove: that any of
-#  this is reachable on a default install. It is not.
-# ══════════════════════════════════════════════════════════════════════════════════════════════
+# The disclosure below is PRINTED, not just commented. A caveat that lives only in the source is a
+# caveat nobody reading a green run will ever see — and proof.log, the workflow artifact and the
+# failure issue all carry stdout, not this file.
 #
 # Done with a compose override rather than by editing docker-compose.yml: compose MERGES mappings
 # like `environment`, so an override adds keys without restating anything and cannot drift.
@@ -479,6 +480,19 @@ services:
       Features__Backup: "true"
       Backups__Module__AllowedSourceRoots__0: "/var/lib/harbora/builds"
 OVERRIDE
+
+warn "═══════════════════════════════════════════════════════════════════════════"
+warn "  STEP 6 RUNS UNDER A CONFIGURATION NO DEFAULT INSTALL HAS."
+warn "  Two shipped defaults are overridden here, and a green step 6 says nothing"
+warn "  about either of them as Harbora ships them:"
+warn "    1. Features:Backup ships FALSE — the module is entirely off by default."
+warn "    2. Backups:Module:AllowedSourceRoots ships EMPTY, and appsettings.json"
+warn "       says 'EMPTY on purpose'. While it is empty BackupTargetResolver"
+warn "       refuses every directory target, so on a default install the only"
+warn "       provable behaviour is refusal."
+warn "  What a green step 6 proves: for an operator who has opened BOTH gates, a"
+warn "  directory snapshot and its restore move real bytes. Nothing more."
+warn "═══════════════════════════════════════════════════════════════════════════"
 
 (cd "$COMPOSE_DIR" && docker compose up -d panel)
 wait_until "$W_PANEL" "the panel is healthy again with the Backup module enabled" panel_healthy
@@ -604,16 +618,30 @@ web_get "/apps/$APP_ID" > "$WORK/app-details.html"
 # Two assertions, not one, because the presence of the name is not sufficient: AppsController's
 # ReservedHostRefusal is `'{host}' is one of the platform's own host names…` — it ECHOES the host
 # it rejected. A page rendering that refusal contains the alias, so a lone `grep` for the alias
-# would read a refusal as a success. Both refusal paths are excluded by their own wording instead.
+# would read a refusal as a success.
+#
+# AddDomain has THREE refusing redirects, not two: "Host is required.", "This domain is already in
+# use." and the reserved-host refusal. Only the latter two are matched by wording here; the empty
+# host is covered by the alias-presence assertion below, because an empty host adds no domain and
+# the alias then cannot appear. The enumeration is complete in effect — this note exists so the next
+# reader does not have to re-derive that.
+#
+# Matched on substrings that sit BEFORE the apostrophe in each message: Razor renders ' as &#x27;,
+# so a pattern spanning it can never match rendered HTML.
+#
+# Latent, not a bug today: ReservedHostRefusal is localised and returns Persian when the request
+# culture is fa. These patterns are English-only, which is safe solely because the alias is a random
+# e2e-* name under the operator's own root domain and can never BE a reserved host. If that ever
+# stops being true, this needs the Persian wording too.
 if grep -qF 'one of the platform' "$WORK/app-details.html" \
    || grep -qF 'already in use' "$WORK/app-details.html"; then
   err "AddDomain refused $ALIAS_DOMAIN. The panel said:"
-  grep -oF -e 'one of the platform'\''s own host names and cannot be routed to an app.' \
-           -e 'This domain is already in use.' "$WORK/app-details.html" | head -2 >&2 || true
+  grep -oF -e 'one of the platform' -e 'This domain is already in use.' \
+      "$WORK/app-details.html" | head -2 >&2 || true
   die "The domain was not attached."
 fi
 grep -qF "$ALIAS_DOMAIN" "$WORK/app-details.html" \
-  || die "The POST redirected and reported no error, but $ALIAS_DOMAIN does not appear on the app's page at all."
+  || die "The POST redirected and reported no error, but $ALIAS_DOMAIN does not appear on the app's page at all — which is also what an empty or rejected host looks like."
 ok "Domain $ALIAS_DOMAIN is attached to the app, and the page carries no refusal."
 
 # "Domain added. Redeploy to route it." — AddDomain's own words. WireProxyAsync is the only thing
@@ -672,6 +700,26 @@ step "6 — take a backup through the Backup module and restore it"
 # configuration (see the banner in step 3). It is not a mounted volume, so the restored copy lives
 # in the panel container's writable layer — which is fine, because it is verified in this step, in
 # this container, moments later.
+#
+# ── KNOWN RED AT THE TIME OF WRITING ────────────────────────────────────────────────────────────
+# This step cannot pass yet, and the cause is a product defect rather than anything here.
+# HarboraNativeBackupEngine builds its storage key as "{RepositoryId:N}/{archive}" — with a slash —
+# and BackupStorage.PutFileAsync's Local branch creates only `root` before File.Copy'ing to
+# <root>/<repoGuid>/<file>, so the per-repository subdirectory never exists and the copy throws
+# DirectoryNotFoundException. The Local repository path therefore cannot write a snapshot at all.
+# It went unnoticed because the module's own tests use a storage double that calls
+# Directory.CreateDirectory(Path.GetDirectoryName(target)) while its comment claims it behaves
+# exactly as BackupStorage does.
+#
+# A separate change fixes it in src/Harbora.Infrastructure/Backups/. Until that lands this step will
+# fail at the snapshot, loudly and with the engine's own message, which is the correct behaviour —
+# but expect it, and do not read it as a regression in this lane.
+#
+# Deliberately NOT worked around by pointing the repository at the stack's own MinIO: a Local
+# repository is what an operator on one box actually uses, it is the default the Backup Center
+# offers first, and it is the only destination that needs no credentials — so it is precisely the
+# path worth proving. Swapping to S3 would turn a red step into a green one while leaving the broken
+# path untested, which is the kind of green this whole task exists to prevent.
 SRC_DIR="/var/lib/harbora/builds/e2e-${RUN_ID}"
 DST_DIR="/var/lib/harbora/restore/e2e-${RUN_ID}"
 
@@ -870,11 +918,16 @@ api GET /api/v1/apps | jq -er --arg s "$APP_SLUG" '[.[] | select(.slug == $s)] |
   || die "The app created in step 4 is not there after the upgrade."
 ok "$DEPLOYMENTS_AFTER app(s) survived the upgrade, including $APP_SLUG."
 
-app_serves_over_tls || die "The deployed app stopped serving after the upgrade."
+# Waited on rather than probed once. `install.sh update` has just recreated the whole stack, so
+# Traefik may still be re-reading labels for a few seconds; a single-shot curl here is a false red
+# waiting to happen, and a lane that goes red for its own timing is a lane people learn to re-run
+# instead of read. This is a flake guard, not a vacuous pass — the wait still ends in a failure if
+# the app never comes back.
+wait_until "$W_CERT" "https://${APP_DOMAIN}/ serves again after the upgrade" app_serves_over_tls
 # The alias too: it is the one whose Route row was created by step 5's redeploy rather than by the
 # app's creation, so it is the one that would be lost if an upgrade rebuilt routing from the app
 # record alone.
-alias_serves_over_tls || die "The alias domain attached in step 5 stopped serving after the upgrade."
+wait_until "$W_CERT" "https://${ALIAS_DOMAIN}/ serves again after the upgrade" alias_serves_over_tls
 ok "https://${APP_DOMAIN}/ and https://${ALIAS_DOMAIN}/ both still answer after the upgrade."
 
 if [ "$E2E_SKIP_NODE" != "1" ]; then
@@ -927,3 +980,7 @@ else
 ok "    node             $E2E_NODE_NAME on $E2E_NODE_HOST, workload confirmed on the host"
 fi
 ok "══════════════════════════════════════════════════════════════════════════"
+# The caveat travels with the success, because this banner is what gets read.
+warn "  Read step 6 narrowly: the Backup module was proved with Features:Backup"
+warn "  turned on and an AllowedSourceRoots entry added. Both ship OFF/EMPTY, so"
+warn "  this says nothing about the module on a default install."
