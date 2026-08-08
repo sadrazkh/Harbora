@@ -1,6 +1,10 @@
 # Harbora platform stack. The installer templates the .env file consumed here.
 # Traefik terminates TLS (Let's Encrypt) and reverse-proxies both the panel and every
-# deployed app; Postgres and Redis back the platform itself.
+# deployed app; Postgres backs the platform itself, and MinIO holds objects.
+#
+# The redis service below is started and used by nothing. The queue is Postgres — see
+# DatabaseJobQueue and the Jobs table. It is left running rather than removed because taking a
+# service out of a running stack is an upgrade decision, not a comment-fixing one (HARBORA-0052).
 services:
   traefik:
     # v3.6+ is required for Docker Engine 27+/29 (older Traefik negotiates Docker API 1.24 and
