@@ -21,13 +21,20 @@ public sealed record HostSample(
     LoadAverage Load,
     int CpuCores)
 {
+    /// <summary>
+    /// At least one, always. The load-per-core division has no guard of its own, and zero cores
+    /// yields <c>Infinity</c> — which is not a crash but a fabricated CPU-pressure verdict, the
+    /// worse of the two outcomes. Clamped here rather than at the one call site that reads a real
+    /// machine, so a sample built any other way cannot skip it.
+    /// </summary>
+    public int CpuCores { get; init; } = Math.Max(1, CpuCores);
+
     public static HostSample Take(IHostFacts host, string dataDirectory) => new(
         host.Disk(dataDirectory),
         host.FreeMemoryBytes,
         host.TotalMemoryBytes,
         host.Load,
-        // A machine that reports no cores would otherwise divide the load by zero.
-        Math.Max(1, host.CpuCores));
+        host.CpuCores);
 }
 
 /// <summary>Inputs to the health verdict, gathered once per heartbeat.</summary>

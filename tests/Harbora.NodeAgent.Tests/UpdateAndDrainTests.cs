@@ -338,6 +338,9 @@ public sealed class UpdateAndDrainTests : IDisposable
             lock (sink) sink.Add(nodeEvent);
             return Task.FromResult(true);
         }
+
+        public Task<bool> PublishEphemeralAsync(NodeEvent nodeEvent, CancellationToken ct) =>
+            PublishAsync(nodeEvent, ct);
     }
 
     private sealed class FakeDownloader : IUpdateDownloader

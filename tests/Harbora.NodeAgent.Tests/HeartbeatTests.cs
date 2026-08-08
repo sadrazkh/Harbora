@@ -48,6 +48,8 @@ public sealed class HeartbeatTests : IDisposable
     private TunnelSupervisor? _tunnels;
     private ControlChannel? _channel;
     private HeartbeatReporter? _reporter;
+    private StallableTransport _transport = null!;
+    private ChannelOutbox _outbox = null!;
 
     public HeartbeatTests()
     {
@@ -292,6 +294,33 @@ public sealed class HeartbeatTests : IDisposable
         var reported = _events.Should().ContainSingle(e => e.Kind == NodeEventKinds.TunnelStateChanged).Subject;
         reported.Data!["tunnel"].Should().Be("gr-1");
         reported.Data!["previous"].Should().Be("connected");
+        reported.Data!["state"].Should().Be("failed", "the status is spelt by the contract's serializer");
+    }
+
+    [Fact]
+    public async Task A_tunnel_whose_gateway_hung_up_stops_being_counted_as_active()
+    {
+        // The pump returns without throwing when the gateway closes cleanly, and nothing on that
+        // path used to touch the status — so the tunnel went on reporting Connected with no socket
+        // behind it, and ActiveTunnels counts exactly that field. A remembered copy is precisely
+        // what this gauge was added not to be.
+        _agent.Options.Reconnect.Jitter = false;
+        _agent.Options.Reconnect.InitialDelayMs = 60_000;
+
+        var channel = await ConnectedChannelAsync();
+        var reporter = Reporter(channel);
+
+        await Manager().CreateAsync(GrantSpec(), CancellationToken.None);
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+        (await NextHeartbeatAsync()).ActiveTunnels.Should().Be(1);
+
+        _gateway.Drop();
+        await WaitUntilAsync(() => Tunnels().ByKey()["gr-1"].Status != TunnelStatus.Connected);
+
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        (await NextHeartbeatAsync()).ActiveTunnels.Should().Be(0,
+            "the socket is gone and the node cannot know otherwise");
     }
 
     // --- the two ways an announcement can go wrong ---
@@ -344,6 +373,109 @@ public sealed class HeartbeatTests : IDisposable
         _events.Should().ContainSingle(e => e.Kind == NodeEventKinds.DiskPressure);
     }
 
+    [Fact]
+    public async Task An_older_reading_arriving_late_does_not_invent_a_transition()
+    {
+        // Serialising the commit does not serialise the reading it commits. One loop can sample the
+        // host before another and reach the tracker after it, and a stale reading compared against a
+        // newer baseline announces a condition whose end has already been reported — leaving the
+        // feed reading cleared, entered, cleared, with the middle event a fabrication.
+        var channel = await ConnectedChannelAsync();
+        var reporter = Reporter(channel);
+
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        _host.DiskSpace = new DiskSpace(100_000_000_000, 1_000_000_000);
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+        _events.Should().ContainSingle(e => e.Kind == NodeEventKinds.DiskPressure);
+
+        // The old loop reads a host that is still under pressure, then stalls on its heartbeat
+        // frame — before it reaches the tracker.
+        _transport.StallNextSend();
+        var stale = reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+        await _transport.WaitUntilStalledAsync();
+
+        // The pressure ends, and the loop that started later sees the node as it now is.
+        _host.DiskSpace = new DiskSpace(200_000_000_000, 100_000_000_000);
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        _transport.Release();
+        await stale;
+
+        var pressure = _events.Where(e => e.Kind == NodeEventKinds.DiskPressure).ToList();
+
+        pressure.Should().HaveCount(2);
+        pressure[0].Data!["transition"].Should().Be("entered");
+        pressure[1].Data!["transition"].Should().Be("cleared");
+    }
+
+    [Fact]
+    public async Task Condition_events_do_not_spend_the_outbox_that_protects_deploy_results()
+    {
+        // Through the real ChannelEventPublisher, not the collecting double — the whole question is
+        // which channel path these frames take, and a fake publisher takes neither.
+        //
+        // The outbox is capped at 500 and evicts oldest-first, so a crash-looping container would
+        // push out the deploy results the outbox exists to hold. Worse, an entry evicted after the
+        // baseline moved would leave the panel with a cleared it was never told the start of — the
+        // same fabrication a failed outbox write used to produce.
+        var channel = await ConnectedChannelAsync();
+
+        var reporter = new HeartbeatReporter(
+            _agent.Wrapped, channel, _runtime, _host, _state, Manager(), Tunnels(), _metrics,
+            new ChannelEventPublisher(channel, TestFactories.Log<ChannelEventPublisher>()),
+            _clock, TestFactories.Log<HeartbeatReporter>());
+
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        _host.DiskSpace = new DiskSpace(100_000_000_000, 1_000_000_000);
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        // It went out…
+        var sent = _pair.SentByNode.Where(json => json.Contains(NodeEventKinds.DiskPressure)).ToList();
+        sent.Should().ContainSingle("the control plane is told exactly once");
+
+        // …and it is not holding a slot that a deploy result will need.
+        _outbox.Pending().Should().NotContain(e => e.Json.Contains(NodeEventKinds.DiskPressure),
+            "a condition re-derived every thirty seconds does not need the outbox and must not compete for it");
+    }
+
+    [Fact]
+    public async Task A_deploy_result_still_gets_the_durable_path()
+    {
+        // The other side of the same choice: what the outbox exists for must keep using it.
+        var channel = await ConnectedChannelAsync();
+        var publisher = new ChannelEventPublisher(channel, TestFactories.Log<ChannelEventPublisher>());
+
+        await publisher.PublishAsync(
+            new NodeEvent { Kind = NodeEventKinds.DeploymentRolledBack, Message = "rolled back" },
+            CancellationToken.None);
+
+        _outbox.Pending().Should().Contain(e => e.Json.Contains(NodeEventKinds.DeploymentRolledBack),
+            "'the deploy rolled back' is the frame the outbox was built to survive a disconnect for");
+    }
+
+    [Fact]
+    public async Task A_transition_that_never_left_the_node_is_offered_again()
+    {
+        // The other half of sending without the outbox: an ephemeral send that quietly does nothing
+        // because the channel is down must not count as having told anyone.
+        var channel = await ConnectedChannelAsync();
+        var reporter = Reporter(channel);
+
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        _publisher.Refuse = true;
+        _host.DiskSpace = new DiskSpace(100_000_000_000, 1_000_000_000);
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+        _events.Should().BeEmpty();
+
+        _publisher.Refuse = false;
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        _events.Should().ContainSingle(e => e.Kind == NodeEventKinds.DiskPressure);
+    }
+
     // --- helpers ---
 
     private static async Task WaitUntilAsync(Func<bool> condition)
@@ -374,10 +506,12 @@ public sealed class HeartbeatTests : IDisposable
 
     private async Task<ControlChannel> ConnectedChannelAsync()
     {
+        _transport = new StallableTransport(_pair.NodeSide);
+
         _channel = new ControlChannel(
             _agent.Wrapped,
-            new InMemoryTransportFactory(_pair),
-            new ChannelOutbox(TestFactories.Store<OutboxState>(_agent, "outbox.json"), TestFactories.Log<ChannelOutbox>()),
+            new StallableTransportFactory(_transport),
+            _outbox = new ChannelOutbox(TestFactories.Store<OutboxState>(_agent, "outbox.json"), TestFactories.Log<ChannelOutbox>()),
             _state,
             TestFactories.Inventory(_agent, _host, _runtime),
             _clock,
@@ -518,5 +652,52 @@ public sealed class HeartbeatTests : IDisposable
             lock (sink) sink.Add(nodeEvent);
             return true;
         }
+
+        public Task<bool> PublishEphemeralAsync(NodeEvent nodeEvent, CancellationToken ct) =>
+            PublishAsync(nodeEvent, ct);
+    }
+
+    /// <summary>
+    /// Wraps the in-memory transport so a test can park the node mid-send. The interesting moment
+    /// for the heartbeat is between reading the host and reaching the tracker, and the heartbeat
+    /// frame goes out in exactly that gap.
+    /// </summary>
+    private sealed class StallableTransport(IMessageTransport inner) : IMessageTransport
+    {
+        private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _stalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private int _stallOnce;
+
+        public void StallNextSend() => Interlocked.Exchange(ref _stallOnce, 1);
+
+        public Task WaitUntilStalledAsync() => _stalled.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        public void Release() => _gate.TrySetResult();
+
+        public bool IsOpen => inner.IsOpen;
+
+        public async Task SendAsync(string message, CancellationToken ct)
+        {
+            if (Interlocked.Exchange(ref _stallOnce, 0) == 1)
+            {
+                _stalled.TrySetResult();
+                await _gate.Task;
+            }
+
+            await inner.SendAsync(message, ct);
+        }
+
+        public Task<string?> ReceiveAsync(CancellationToken ct) => inner.ReceiveAsync(ct);
+
+        public Task CloseAsync(string reason, CancellationToken ct) => inner.CloseAsync(reason, ct);
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+
+    private sealed class StallableTransportFactory(IMessageTransport transport) : IMessageTransportFactory
+    {
+        public Task<IMessageTransport> ConnectAsync(Uri uri, NodeIdentity identity, CancellationToken ct) =>
+            Task.FromResult(transport);
     }
 }

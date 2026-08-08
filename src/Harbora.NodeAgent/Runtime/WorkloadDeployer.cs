@@ -15,11 +15,25 @@ namespace Harbora.NodeAgent.Runtime;
 public interface INodeEventPublisher
 {
     /// <summary>
-    /// Announce an unsolicited change. Returns false when the event could not even be made durable,
-    /// so a caller that can say it again knows it has to. Most callers cannot and ignore it — a
-    /// deploy must not fail because the news about it did.
+    /// Announce an unsolicited change, durably. Returns false when the event could not even be made
+    /// durable, so a caller that can say it again knows it has to. Most callers cannot and ignore it
+    /// — a deploy must not fail because the news about it did.
     /// </summary>
     Task<bool> PublishAsync(NodeEvent nodeEvent, CancellationToken ct);
+
+    /// <summary>
+    /// Announce a change the caller can work out again, without spending durable outbox capacity on
+    /// it.
+    ///
+    /// <para>
+    /// The outbox is capped and evicts its oldest entries first, and what it exists to protect is
+    /// the frame saying a deploy finished. An event whose condition is re-derived from the host on
+    /// every heartbeat does not need that protection and must not compete for it: it is either sent
+    /// now or worked out and offered again in thirty seconds. Returns false when it did not go out,
+    /// and a caller must not record it as told.
+    /// </para>
+    /// </summary>
+    Task<bool> PublishEphemeralAsync(NodeEvent nodeEvent, CancellationToken ct);
 }
 
 /// <summary>Raised when a deploy cannot proceed; carries the contract code and every violation found.</summary>

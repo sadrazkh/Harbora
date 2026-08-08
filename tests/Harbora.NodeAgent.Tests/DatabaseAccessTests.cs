@@ -495,5 +495,8 @@ public sealed class DatabaseAccessTests : IDisposable
             lock (sink) sink.Add(nodeEvent);
             return Task.FromResult(true);
         }
+
+        public Task<bool> PublishEphemeralAsync(NodeEvent nodeEvent, CancellationToken ct) =>
+            PublishAsync(nodeEvent, ct);
     }
 }

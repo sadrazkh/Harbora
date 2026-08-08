@@ -543,5 +543,7 @@ public sealed class CommandHandlerTests : IDisposable
     private sealed class NullEvents : INodeEventPublisher
     {
         public Task<bool> PublishAsync(NodeEvent nodeEvent, CancellationToken ct) => Task.FromResult(true);
+
+        public Task<bool> PublishEphemeralAsync(NodeEvent nodeEvent, CancellationToken ct) => Task.FromResult(true);
     }
 }

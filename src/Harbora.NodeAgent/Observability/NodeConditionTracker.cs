@@ -18,6 +18,19 @@ public sealed record NodeConditions
     /// <summary>The one host reading this heartbeat was built from. See <see cref="HostSample"/>.</summary>
     public required HostSample Host { get; init; }
 
+    /// <summary>
+    /// Which reading this is. Assigned when the host is sampled, not when the comparison is made.
+    ///
+    /// <para>
+    /// Serialising the commit does not serialise the reading it commits: two heartbeat loops can
+    /// sample the host in one order and reach the tracker in the other, and the later arrival would
+    /// then compare a stale reading against a newer baseline and announce the condition it had
+    /// already watched end. Ordering the readings themselves is what stops the tracker inventing a
+    /// transition that never happened.
+    /// </para>
+    /// </summary>
+    public long Sequence { get; init; }
+
     /// <summary>When the node's own credential stops working. A change of this value is a rotation.</summary>
     public DateTimeOffset? CertificateExpiresAt { get; init; }
 
@@ -77,6 +90,10 @@ public sealed class NodeConditionTracker
 
         if (previous is null) return [];
 
+        // A reading older than the one already accepted describes a node that has since moved on.
+        // Comparing it would announce a condition whose end has already been reported.
+        if (current.Sequence < previous.Sequence) return [];
+
         var events = new List<NodeEvent>();
 
         if (previous.Health.DiskPressure != current.Health.DiskPressure)
@@ -123,7 +140,10 @@ public sealed class NodeConditionTracker
     /// </summary>
     public void Accept(NodeConditions current)
     {
-        lock (_gate) _previous = current;
+        lock (_gate)
+            // Never backwards. A stale reading announced nothing, so it has no baseline to leave.
+            if (_previous is null || current.Sequence >= _previous.Sequence)
+                _previous = current;
     }
 
     /// <summary>

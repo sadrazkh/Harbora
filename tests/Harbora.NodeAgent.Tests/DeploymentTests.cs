@@ -618,5 +618,8 @@ public sealed class DeploymentTests : IDisposable
             lock (Published) Published.Add(nodeEvent);
             return Task.FromResult(true);
         }
+
+        public Task<bool> PublishEphemeralAsync(NodeEvent nodeEvent, CancellationToken ct) =>
+            PublishAsync(nodeEvent, ct);
     }
 }

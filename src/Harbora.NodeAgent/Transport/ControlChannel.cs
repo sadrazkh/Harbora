@@ -118,17 +118,24 @@ public sealed class ControlChannel(
     /// to send is worthless a second later, and replaying a queue of them after a reconnect would
     /// tell the panel about a liveness that is now historical.
     /// </summary>
-    public async Task SendEphemeralAsync<T>(string type, T payload, CancellationToken ct)
+    /// <returns>
+    /// True when the frame actually went to the transport. False is not an error — there is no
+    /// connection, or one was closing — but a caller that can work the frame out again and resend it
+    /// must not treat false as delivered.
+    /// </returns>
+    public async Task<bool> SendEphemeralAsync<T>(string type, T payload, CancellationToken ct)
     {
-        if (_transport is not { IsOpen: true } transport) return;
+        if (_transport is not { IsOpen: true } transport) return false;
 
         try
         {
             await transport.SendAsync(NodeContract.Serialize(ControlFrame.Create(type, payload)), ct);
+            return true;
         }
         catch (Exception e) when (e is IOException or InvalidOperationException or System.Net.WebSockets.WebSocketException)
         {
             log.LogDebug(e, "Dropping an ephemeral {Type} frame; the channel is closing.", type);
+            return false;
         }
     }
 

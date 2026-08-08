@@ -43,6 +43,24 @@ public sealed class ChannelEventPublisher(ControlChannel channel, ILogger<Channe
             return false;
         }
     }
+
+    public async Task<bool> PublishEphemeralAsync(NodeEvent nodeEvent, CancellationToken ct)
+    {
+        if (await channel.SendEphemeralAsync(NodeFrames.Event, nodeEvent, ct))
+        {
+            log.LogInformation("Event {Kind}: {Message}", nodeEvent.Kind, nodeEvent.Message);
+            return true;
+        }
+
+        // Debug, not Error: a node with no connection is the ordinary case, and the caller is going
+        // to work this out again and offer it on the next heartbeat. Logging it as a failure once
+        // every thirty seconds for the length of an outage would bury the ones that matter.
+        log.LogDebug(
+            "Event {Kind} was not sent; the channel is down and the node will offer it again.",
+            nodeEvent.Kind);
+
+        return false;
+    }
 }
 
 /// <summary>A publisher that only writes to the journal. Used before the channel exists.</summary>
@@ -58,4 +76,7 @@ public sealed class LocalEventPublisher(ILogger<LocalEventPublisher> log) : INod
         log.LogInformation("Event {Kind}: {Message}", nodeEvent.Kind, nodeEvent.Message);
         return Task.FromResult(true);
     }
+
+    public Task<bool> PublishEphemeralAsync(NodeEvent nodeEvent, CancellationToken ct) =>
+        PublishAsync(nodeEvent, ct);
 }

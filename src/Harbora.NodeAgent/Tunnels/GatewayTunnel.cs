@@ -99,6 +99,15 @@ public sealed class GatewayTunnel(
                 response.PublicEndpoint is { Length: > 0 } endpoint ? $" at {endpoint}" : string.Empty);
 
             await PumpAsync(targets, ct);
+
+            // The gateway hung up cleanly: the framer read end-of-stream and the pump returned
+            // without throwing, so none of the handlers below ran and nothing else on this path
+            // touches the status. Left alone it stayed Connected until the next attempt reopened it
+            // — and TunnelSupervisor.ActiveCount counts exactly this field, so the node went on
+            // reporting a tunnel it no longer had a socket for. The window grew with each clean
+            // close, because the retry backoff does not reset while the status still reads
+            // Connected, which is the shape a gateway rolling restart produces.
+            SetState(State with { Status = TunnelStatus.Closed });
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

@@ -53,6 +53,17 @@ public sealed class HeartbeatReporter(
     /// </summary>
     private readonly SemaphoreSlim _announcing = new(1, 1);
 
+    /// <summary>
+    /// Longest a heartbeat will wait for its turn to announce. Skipping is safe — nothing is
+    /// accepted, so the next heartbeat says the same thing — and waiting is not: the outbox writes
+    /// under a lock that no token cancels, so an unbounded wait would let one stuck publish silence
+    /// every heartbeat after it.
+    /// </summary>
+    private static readonly TimeSpan AnnounceWait = TimeSpan.FromSeconds(5);
+
+    /// <summary>Orders the readings, which ordering the commits does not do. See <see cref="NodeConditions.Sequence"/>.</summary>
+    private long _observation;
+
     internal async Task SendAsync(NodeIdentity? identity, bool credentialRevoked, CancellationToken ct)
     {
         var runtimeInfo = await runtime.GetInfoAsync(ct);
@@ -73,6 +84,7 @@ public sealed class HeartbeatReporter(
         // One reading, used by the verdict, the frame and every event this heartbeat produces.
         // IHostFacts re-reads /proc on each access, so asking it three times gave three answers.
         var sample = HostSample.Take(host, _options.DataDirectory);
+        var observation = Interlocked.Increment(ref _observation);
 
         var verdict = _health.Evaluate(
             new HealthInputs
@@ -115,7 +127,7 @@ public sealed class HeartbeatReporter(
         if (verdict.State is NodeHealthState.Degraded or NodeHealthState.Unhealthy)
             log.LogWarning("Node health is {State}: {Reasons}.", verdict.State, string.Join("; ", verdict.Reasons));
 
-        await AnnounceChangesAsync(verdict, sample, identity, everything, ct);
+        await AnnounceChangesAsync(verdict, sample, observation, identity, everything, ct);
     }
 
     /// <summary>
@@ -127,15 +139,19 @@ public sealed class HeartbeatReporter(
     /// </para>
     ///
     /// <para>
-    /// The new baseline is recorded only once every event is durably away. An event that could not
-    /// be written to the outbox has not been announced, whatever this process believes, so leaving
-    /// the baseline alone is what makes the next heartbeat say it again. The price is a repeat of
-    /// the ones that did get through, which is the bargain the whole channel already makes.
+    /// Sent without the durable outbox, and the new baseline is recorded only once every one of
+    /// them actually went out. Both halves matter. The outbox is capped and drops its oldest
+    /// entries first, so a crash-looping container would otherwise evict the deploy results the
+    /// outbox exists to protect — and an entry evicted after the baseline moved would leave the
+    /// panel with a <c>cleared</c> for a condition it was never told had begun. Nothing here needs
+    /// the outbox: every one of these conditions is re-derived from the host on the next heartbeat,
+    /// so an event that did not go out is simply offered again thirty seconds later.
     /// </para>
     /// </summary>
     private async Task AnnounceChangesAsync(
         HealthVerdict verdict,
         HostSample sample,
+        long observation,
         NodeIdentity? identity,
         IReadOnlyList<RuntimeContainer> containers,
         CancellationToken ct)
@@ -144,20 +160,25 @@ public sealed class HeartbeatReporter(
         {
             Health = verdict,
             Host = sample,
+            Sequence = observation,
             CertificateExpiresAt = identity?.NotAfter,
             Containers = Observed(containers),
             Tunnels = tunnels.ByKey().ToDictionary(t => t.Key, t => t.Value.Status, StringComparer.Ordinal),
         };
 
-        await _announcing.WaitAsync(ct);
+        if (!await _announcing.WaitAsync(AnnounceWait, ct))
+        {
+            log.LogDebug("Skipped announcing; another heartbeat still holds the turn. Nothing is lost.");
+            return;
+        }
 
         try
         {
             foreach (var change in _conditions.Changes(conditions, clock.GetUtcNow()))
-                if (!await events.PublishAsync(change, ct))
+                if (!await events.PublishEphemeralAsync(change, ct))
                 {
-                    log.LogWarning(
-                        "Node event {Kind} could not be recorded; this node will report the change again on its next heartbeat.",
+                    log.LogDebug(
+                        "Node event {Kind} did not go out; this node will report the change again on its next heartbeat.",
                         change.Kind);
                     return;
                 }
