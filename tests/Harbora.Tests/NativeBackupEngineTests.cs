@@ -509,4 +509,3 @@ internal sealed class GatingProtector(ISecretProtector inner) : ISecretProtector
     public string Protect(string plaintext) => inner.Protect(plaintext);
     public string Unprotect(string ciphertext) => inner.Unprotect(ciphertext);
 }
-

@@ -7,7 +7,8 @@
     seconds and people run it constantly; this one starts a container, applies sixty-odd migrations
     per database and is measured in tens of seconds. Folding the two together would either slow the
     fast suite down for everyone or bury these behind a filter nobody remembers — and CI needs to be
-    able to name this lane on its own to prove it actually ran (.github/workflows/ci-postgres.yml).
+    able to name this lane on its own to prove it actually ran (the postgres job in
+    .github/workflows/ci.yml).
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>

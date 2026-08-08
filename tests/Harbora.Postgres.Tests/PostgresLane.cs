@@ -194,8 +194,8 @@ public sealed class PostgresCollection : ICollectionFixture<PostgresLane>;
 /// </para>
 ///
 /// <para>
-/// CI refuses the skip: <c>.github/workflows/ci-postgres.yml</c> greps the TRX for
-/// <c>outcome="NotExecuted"</c> and fails the job, exactly as <c>ci-node-agent.yml</c> does for the
+/// CI refuses the skip: the postgres job in <c>.github/workflows/ci.yml</c> reads the TRX and fails
+/// when the suite did not really run, exactly as the consolidated workflow does for the node-agent
 /// container tests. A lane that skips forever proves nothing and looks green doing it.
 /// </para>
 /// </summary>
