@@ -255,7 +255,13 @@ update` writes the router and the settings; a hand-built install needs §8.
   (`docker compose logs traefik`).
 - App shows *Failed* health check — the app must listen on the **Container Port** you set and
   return `<400` on its health path.
-- A node enrols but never comes online — the mTLS channel in §8. `harbora doctor` names it.
+- A node enrols but never comes online — the mTLS channel in §8. **`harbora doctor` will not find
+  this**: it checks the master key, the domains, the database password, three container states and
+  ports 80/443, and knows nothing about nodes, the CA or the channel router. It will say "No
+  configuration problems found" while the node sits offline. The thing that actually checks the node
+  channel is the installer: `bash install.sh update` renders the router, backfills
+  `NodeAgent__PublicUrl`, and then verifies both. After that, `harbora logs panel` names what the
+  panel saw — it logs the certificate it was offered and why it did not match.
 - **Recovering from a lost panel, a lost app or a lost node:**
   [../docs/disaster-recovery.md](../docs/disaster-recovery.md).
 - Reset everything (destroys data): `docker compose down -v`.

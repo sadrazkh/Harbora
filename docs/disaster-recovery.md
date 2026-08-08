@@ -29,6 +29,14 @@ It is *not* a backup — you need the real values.
 | **Volume** / **Database** | The volume's contents, or a logical dump (`pg_dump`, `mysqldump`, `mongodump`; Redis keeps its own snapshot file, so its volume is copied instead) | Yes, with a typed confirmation |
 | **Full platform** | A JSON *description* — settings, and a list of app and route names | **Only the settings.** It is an inventory, not an image. It will not rebuild your apps, users or routes |
 
+This document describes the **Backups** page, which every install has. It does **not** cover the
+separate **Backup Center** module (repositories, policies, the native and Kopia snapshot engines).
+That module is off by default — `Features:Backup` is `false` in `appsettings.json`, and its sidebar
+entry is not even contributed until it is switched on — and it is not what any procedure below uses.
+If you turn it on, prove one repository end to end before you rely on it for recovery: take a
+snapshot, then restore it somewhere harmless. A repository that has never had a snapshot restored
+out of it is a plan, exactly like an unrehearsed runbook.
+
 **The restore point for the platform itself is the database dump**, not the "full platform" backup:
 
 ```bash
@@ -236,9 +244,18 @@ From wherever you kept it. Not from Harbora, for anything that was on that node.
 ## Commands used here
 
 All of these are the server-side `harbora` command installed by `deploy/install.sh` at
-`/usr/local/bin/harbora`. They deliberately do **not** need a healthy panel — each runs the app as a
-one-off container that never starts the web server — so they still work while the panel is
-crash-looping, which is when you need them.
+`/usr/local/bin/harbora`. They deliberately do **not** need a healthy panel, which is the property
+that makes them worth having — but by two different mechanisms, and it is worth knowing which is
+which when one of them misbehaves:
+
+- **Host-side, pure shell and Compose** — `doctor`, `env`, `set-domain`, `fix-key`, `restart`,
+  `stop`, `status`, `logs`, `backups`, `backup-db`, `restore-db`. These never enter the panel at
+  all. `backup-db` and `restore-db` reach the *Postgres* container directly, which is why they work
+  when the panel is crash-looping in a loop the database is causing.
+- **Through a one-off panel container** — `info`, `users`, `reset-password`, `make-owner`,
+  `unlock`, `node-ca`. These need the app's own code to read the database and decrypt secrets, so
+  they run the image with admin arguments instead of the web server. A running panel is still not
+  required; a *buildable* one is.
 
 | | |
 |---|---|

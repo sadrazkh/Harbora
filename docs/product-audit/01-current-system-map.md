@@ -5,7 +5,7 @@
 
 ---
 
-## 1. Solution layout (16 projects + 3 test projects)
+## 1. Solution layout (16 projects + 4 test projects)
 
 | Project | Responsibility | Depends on |
 |---|---|---|
@@ -14,8 +14,8 @@
 | `Harbora.Data` | `HarboraDbContext` (63 tables), 46 Npgsql migrations, `DbSeeder`. PostgreSQL only — zero SQLite support. | Domain, Application |
 | `Harbora.Infrastructure` | ~230 files / 29k LOC. Deployment pipeline, job queue, Docker engines, Traefik proxy, managed services, backups (legacy), monitoring, notifications, nodes control plane, AI gateway, storage, tenancy. | Domain, Application, Data |
 | `Harbora.Web` | ASP.NET control plane: 34 UI controllers + 5 API controllers, 84 Razor views, 4 Vue islands, SignalR hub, localization (fa default / en), PWA. | Infrastructure |
-| `Harbora.Cli` | `harbora` deploy CLI: 10 files / ~830 LOC, Spectre.Console. 8 commands. | (standalone; talks to `/api/v1`) |
-| `Harbora.Agent` | **Legacy** inbound HTTP agent (port 9700, bearer token). Minimal API over Docker. Not deprecated, no tests. | Application, Infrastructure, Shared |
+| `Harbora.Cli` | `harbora` deploy CLI: 10 files / ~830 LOC, Spectre.Console. 10 commands. | (standalone; talks to `/api/v1`) |
+| `Harbora.Agent` | **Legacy** inbound HTTP agent (port 9700, bearer token). Minimal API over Docker. **Deprecated as of v0.2.0** (badge on the Servers page, notice in `docs/node-agent/merge-notes.md`, supported for at least two more minor versions); still no tests, which is why it is frozen. | Application, Infrastructure, Shared |
 | `Harbora.NodeAgent` | Node Agent v1: outbound-only systemd agent, mTLS, 24-verb dispatcher, durable outbox/ledger, self-update with rollback, ingress tunnel. | NodeAgent.Contracts |
 | `Harbora.NodeAgent.Contracts` | Versioned protocol v1: frames, verbs, specs. Mirrored by `contracts/node-agent/v1/node-agent.v1.schema.json` (draft 2020-12) and enforced by conformance tests. | — |
 | `Harbora.Shared` | `PathGuard` (shared so Backup and Sync modules stay decoupled). | — |
@@ -24,6 +24,7 @@
 | `tests/Harbora.Tests` | 183 files, ~2,066 facts. EF InMemory only — no Postgres, no Testcontainers, no `WebApplicationFactory`. | all |
 | `tests/Harbora.NodeAgent.Tests` | 17 files, ~285 facts + 19 `[DockerFact]` real-daemon tests. Deliberately EF/ASP.NET-free. | NodeAgent |
 | `tests/Harbora.NodeIngress.Tests` | End-to-end ingress tunnel over real sockets/mTLS (15 facts). Only project referencing both codebases. | NodeAgent + Infrastructure |
+| `tests/Harbora.Postgres.Tests` | *Added after the audit (Phase 2).* The only suite that opens a connection to a real PostgreSQL: migrations, hand-written backfills, partial unique indexes, and the upgrade from the previous release. Testcontainers; skips wholesale without a Docker daemon. | Data, Infrastructure |
 
 **Local build/test result (2026-08-07, Windows, .NET 10.0.302, no Docker):**
 - `dotnet build Harbora.slnx` → **0 errors, 0 warnings** (31 s).
@@ -49,7 +50,7 @@
 
 ## 3. Job/queue architecture — the platform's spine (and its main constraint)
 
-- **Postgres-backed durable queue.** `Job` row + `JobSignal` + 5 s poll backstop (`Jobs/DatabaseJobQueue.cs`). Claim via `ClaimStamp` optimistic concurrency (migration `20260728133857_DurableJobQueue`). Redis is **not used anywhere** — `StackExchange.Redis` is a dead package reference (`Harbora.Infrastructure.csproj:20`); README's "Jobs: background worker + Redis" is wrong.
+- **Postgres-backed durable queue.** `Job` row + `JobSignal` + 5 s poll backstop (`Jobs/DatabaseJobQueue.cs`). Claim via `ClaimStamp` optimistic concurrency (migration `20260728133857_DurableJobQueue`). Redis is **not used anywhere** — `StackExchange.Redis` is a dead package reference (`Harbora.Infrastructure.csproj:20`). *Corrected 2026-08-08: the README said "Jobs: background worker + Redis" at audit time; it now names PostgreSQL and admits the dead package and the unused container. `DocumentationDriftTests` fails the build if anything in `src/` starts using Redis while those READMEs say nothing does.*
 - `JobKind`: `Deployment, Backup, ServiceProvision, CronRun` (built-in) + `BackupSnapshot, BackupRestore, BackupVerify, BackupPrune, RepositoryHealthCheck` (module handlers).
 - **One `JobWorker`, strictly serial** — claims and fully awaits exactly one job (`JobWorker.cs:40-100`; single registration `DependencyInjection.cs:100`). A 20-minute build blocks every backup, provision, cron and every other tenant's deploy. The multi-worker claim machinery exists but nothing runs a second worker.
 - **No retry** (`Job.Attempts` incremented, never read; no-retry decision documented `JobReconciler.cs:47-49`). **No job-level timeout** (only per-operation bounds: release task 30 min, cron 1 h, remote agent HTTP 30 min). **Cancellation** is process-local (`JobCancellationRegistry`); cross-instance cancellation is claimed in comments but no checkpoint polling exists.

@@ -1,10 +1,10 @@
 # 16 — Prioritized Backlog (human view)
 
-Machine-readable source of truth: [`backlog.json`](backlog.json) (65 items, full acceptance criteria/tests/risks/evidence per item).
+Machine-readable source of truth: [`backlog.json`](backlog.json) (66 items, full acceptance criteria/tests/risks/evidence per item).
 
 This view groups by priority. Phase numbers reference 17. Type: B=bug, D=tech-debt, G=feature-gap, U=ux, X=needs-investigation.
 
-> 0055-0065 were found while *executing* Phases 1 and 2 rather than during the audit, and were folded in on 2026-08-08 from `.superpowers/sdd/discovered-backlog.md`, which records where each came from. Two items on that list were dropped as already closed and two were narrowed; the annotations are in that file.
+> 0055-0066 were found while *executing* Phases 1 and 2 rather than during the audit, and were folded in on 2026-08-08 from `.superpowers/sdd/discovered-backlog.md`, which records where each came from. One item on that list was dropped as already closed and three were narrowed; the annotations are in that file.
 
 ## P0 — reliability blockers
 | ID | Title | T | Scope | Ph |
@@ -80,6 +80,7 @@ This view groups by priority. Phase numbers reference 17. Type: B=bug, D=tech-de
 | 0063 | Decide what runningWorkloads and activeTunnels mean on the Nodes page | X | S | 6 |
 | 0061 | RestoreJob has no StagingPath, so a staged dump has no retry pointer | D | S | 8 |
 | 0064 | SftpTransfer.Download's local-name substitution is unproven | D | S | 8 |
+| 0066 | Adminer's route save and proxy apply sit outside its own failure path | B | S | 7 |
 | 0050 | Custom certificates + DNS-01 wildcard (Cloudflare first) | G | L | 16 |
 
 ## P3 — future

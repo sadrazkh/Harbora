@@ -1,7 +1,7 @@
 # 00 — Executive Summary
 
 **Harbora product audit · 2026-08-07 · master @ `8b1f6e9` · v0.2.0**
-Full evidence in docs 01–20 + `backlog.json` (54 items at audit time; 64 now — 0055-0064 were found while executing Phases 1 and 2 and were folded in on 2026-08-08). Security review explicitly out of scope (separate process).
+Full evidence in docs 01–20 + `backlog.json` (54 items at audit time; 66 now — 0055-0066 were found while executing Phases 1 and 2 and were folded in on 2026-08-08). Security review explicitly out of scope (separate process).
 
 > **Correction, 2026-08-08.** The "strongest assets" list below names *genuine multi-tenancy* among
 > the things this product already does well. Implementing Phase 1 found a P0 that contradicts it:

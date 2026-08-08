@@ -1168,5 +1168,23 @@
     "risks": ["Substituting an empty value must not bind an empty string over the code's default"],
     "evidence": ["deploy/docker-compose.yml panel.environment has no Jobs__ key and no env_file", "src/Harbora.Infrastructure/Jobs/JobQueueOptions.cs:31", "src/Harbora.Web/appsettings.json Jobs._comment_concurrency describes the setting"],
     "recommendedPhase": 3
+  },
+  {
+    "id": "HARBORA-0066",
+    "title": "Adminer's route save and proxy apply are outside its own failure path",
+    "category": "database",
+    "type": "bug",
+    "priority": "P2",
+    "problem": "AdminerService.OpenAsync withdraws the session properly when ApplyAllAsync RETURNS a failure - route removed, container removed, config republished, all on CancellationToken.None. But SaveChangesAsync(ct) and ApplyAllAsync(..., ct) are themselves unguarded, and ct here is a web request's token, cancelled by the operator navigating away. Cancel between the two and an enabled basic-auth route is committed pointing at a throwaway container, with the withdrawal block never entered. Smaller than it first looked: the container is running by then, so the hourly AdminerSweeper reaps both within the hour. Bounded, not silent, not absent.",
+    "userValue": "Navigating away from a database page never leaves a published admin host behind.",
+    "operationalValue": "Closes the last unguarded write on a path that publishes a route.",
+    "scope": "S",
+    "dependencies": [],
+    "affectedComponents": ["Harbora.Infrastructure/Services/AdminerService.cs"],
+    "acceptanceCriteria": ["A cancellation at the save or the apply withdraws the route and the container the same way a returned failure does", "The withdrawal continues to run on CancellationToken.None", "A test cancels between the save and the apply and asserts no route row survives"],
+    "requiredTests": ["AdminerSessionTests case cancelling mid-open"],
+    "risks": ["Catching OperationCanceledException here must not swallow shutdown"],
+    "evidence": ["src/Harbora.Infrastructure/Services/AdminerService.cs:121-124", "the returned-failure path at :126-158 was added by 7dd1d7e and covers only that case"],
+    "recommendedPhase": 7
   }
 ]
