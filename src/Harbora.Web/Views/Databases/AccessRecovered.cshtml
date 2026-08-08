@@ -1,0 +1,86 @@
+@model DatabaseAccessPageViewModel
+@{
+    // No layout, and that is the entire reason this file exists rather than reusing Access.cshtml.
+    //
+    // Razor renders after the action has returned, so no try/catch in a controller can protect a
+    // render — and _ViewStart puts every other view inside _Layout, whose sidebar reads db.Users and
+    // db.Settings (PanelModeProvider) and whose topbar reads db.Environments (EnvironmentSwitcher),
+    // all on the same scoped DbContext the action holds. This page is reached precisely when that
+    // context has stopped answering. Rendering the chrome would throw three times over, the error
+    // handler would serve the generic page, and the password below — the only copy in existence of a
+    // credential that is already live on a customer's database — would go with it. The layout also
+    // writes itself *before* it renders the body, so the password would already be buffered behind
+    // the partial that threw.
+    //
+    // So: no layout, no partials, no view components, no tag helpers, no injected services. Nothing
+    // on this page asks anything of any store. It is plain and it always renders.
+    Layout = null;
+
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    ViewData["Title"] = Model.Database.Name;
+}
+<!DOCTYPE html>
+<html lang="@(isFa ? "fa" : "en")" dir="@(isFa ? "rtl" : "ltr")">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@(isFa ? "رمز تازه" : "New password") — @Model.Database.Name</title>
+    @* Inline, because a stylesheet link is one more thing that can fail to arrive on the page
+       whose whole job is to survive. *@
+    <style>
+        :root { color-scheme: light dark; }
+        body { margin: 0; padding: 2rem 1rem; font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+               background: #0f1115; color: #e6e8ec; }
+        main { max-width: 44rem; margin: 0 auto; }
+        h1 { font-size: 1.15rem; margin: 0 0 1rem; }
+        .banner { border: 1px solid #b4472f; background: #2a1512; color: #ffd9d0;
+                  border-radius: .75rem; padding: 1rem 1.15rem; margin-bottom: 1.5rem; }
+        .field { margin-bottom: 1rem; }
+        .label { display: block; font-size: .7rem; letter-spacing: .08em; text-transform: uppercase;
+                 color: #97a0ae; margin-bottom: .35rem; }
+        code { display: block; direction: ltr; unicode-bidi: embed; word-break: break-all;
+               background: #191d24; border: 1px solid #2b313b; border-radius: .55rem;
+               padding: .7rem .85rem; font: 14px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+        a { color: #7fb2ff; }
+        p.after { margin-top: 2rem; font-size: .85rem; color: #97a0ae; }
+    </style>
+</head>
+<body>
+<main>
+    <h1>@Model.Database.Name — @(isFa ? "رمز تازه" : "new password")</h1>
+
+    @if (Model.Error is { } error)
+    {
+        <div class="banner">@error</div>
+    }
+
+    @if (Model.Issued is { } issued)
+    {
+        <div class="field">
+            <span class="label">@(isFa ? "نام کاربری" : "Username")</span>
+            <code>@issued.Username</code>
+        </div>
+        <div class="field">
+            <span class="label">@(isFa ? "رمز" : "Password")</span>
+            <code>@issued.Password</code>
+        </div>
+        @if (issued.ConnectionString is { } connection)
+        {
+            <div class="field">
+                <span class="label">@(isFa ? "رشتهٔ اتصال" : "Connection string")</span>
+                <code>@connection</code>
+            </div>
+        }
+    }
+
+    @* A plain href rather than an action link: a tag helper needs the URL helper, and this page is
+       built to need nothing. *@
+    <p class="after">
+        @(isFa
+            ? "پس از کپی کردن رمز، به صفحهٔ دسترسی برگردید:"
+            : "Once you have copied the password, go back to the access page:")
+        <a href="/databases/@Model.Database.Id/access">/databases/@Model.Database.Id/access</a>
+    </p>
+</main>
+</body>
+</html>

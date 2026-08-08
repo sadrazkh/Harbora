@@ -398,8 +398,14 @@ public class TcpGatewayPlanTests
             command.Should().NotContain("FLUSH PRIVILEGES",
                 "it cannot help, and it can fail after the password has already changed");
 
-            // One ALTER and nothing following it. The PostgreSQL branch spells its statement with
-            // -c, the MySQL family with -e; either way there is one, and it ends the argv.
+            // The claim is "one statement", so count statements, not mentions of ALTER. Counting
+            // only the latter would pass an added -c "GRANT …;" pair, which re-breaks the caller's
+            // argument in exactly the way FLUSH PRIVILEGES did. psql takes each statement as a -c
+            // and the mariadb client takes its one as -e.
+            rotate.Command.Count(a => a is "-c" or "-e").Should().Be(1,
+                "a second statement could fail after the ALTER has already succeeded, and the "
+                + "caller reads a non-zero exit as 'the password did not change'");
+
             rotate.Command[^1].TrimEnd().Should().EndWith("';",
                 "the statement the client is given must end at the ALTER");
             rotate.Command.Count(a => a.Contains("ALTER USER", StringComparison.Ordinal))

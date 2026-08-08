@@ -11,7 +11,10 @@ using Harbora.Web.Controllers;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -42,6 +45,38 @@ public class DatabaseAccessPageTests
 
     private sealed record Fixture(
         HarboraDbContext Db, DatabasesController Controller, ManagedService Database, Guid WorkspaceId);
+
+    /// <summary>
+    /// A request that can resolve services, because one of these actions asks the request for a
+    /// logger. <c>new DefaultHttpContext()</c> leaves <c>RequestServices</c> null, and a controller
+    /// written around that would have to reach for it defensively in production too.
+    ///
+    /// <para>
+    /// <c>ITempDataDictionaryFactory</c> comes along for the ride: <c>Controller.View()</c> reads
+    /// <c>TempData</c>, which skips the lookup entirely while <c>RequestServices</c> is null and
+    /// demands the factory the moment it is not. A discarding provider is the honest stand-in —
+    /// these actions deliberately never put anything in TempData, because it is cookie-backed here
+    /// and a database password does not belong in a browser cookie.
+    /// </para>
+    /// </summary>
+    private static DefaultHttpContext RequestWithServices() => new()
+    {
+        RequestServices = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<ITempDataDictionaryFactory, DiscardingTempData>()
+            .BuildServiceProvider()
+    };
+
+    private sealed class DiscardingTempData : ITempDataDictionaryFactory
+    {
+        public ITempDataDictionary GetTempData(HttpContext context) => new TempDataDictionary(context, new Nowhere());
+
+        private sealed class Nowhere : ITempDataProvider
+        {
+            public IDictionary<string, object?> LoadTempData(HttpContext context) => new Dictionary<string, object?>();
+            public void SaveTempData(HttpContext context, IDictionary<string, object?> values) { }
+        }
+    }
 
     private sealed record LocalFixture(
         BrittleContext Db, DatabasesController Controller, ManagedService Database, FakeDockerEngine Docker);
@@ -119,7 +154,7 @@ public class DatabaseAccessPageTests
             node,
             currentUser)
         {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+            ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
 
         return new LocalFixture(db, controller, database, docker);
@@ -172,7 +207,7 @@ public class DatabaseAccessPageTests
             node,
             currentUser)
         {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+            ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
 
         return new Fixture(db, controller, database, workspaceId);
@@ -397,12 +432,21 @@ public class DatabaseAccessPageTests
         f.Db.LoseTheConnectionToo = true;
         f.Db.FailTheNextSaveWith = new DbUpdateException("Harbora's own database went away.");
 
-        var page = PageOf(await f.Controller.RotateAccess(rotateUrl, grant.Id, CancellationToken.None));
+        var result = await f.Controller.RotateAccess(rotateUrl, grant.Id, CancellationToken.None);
+        var page = PageOf(result);
+        var view = (ViewResult)result;
 
         page.Issued.Should().NotBeNull(
             "the ALTER landed, so this password is the only usable credential in existence");
         page.Issued!.Password.Should().NotBe(issuedPage.Issued!.Password);
         page.Error.Should().NotBeNullOrWhiteSpace();
+
+        // The view, not just the model. Razor runs after the action returns, so no try in the
+        // controller covers the render — and every other view here is wrapped by _Layout, whose
+        // sidebar and topbar read this same dead context. Rendering "Access" would throw in the
+        // chrome and lose the password exactly as before, one frame later.
+        view.ViewName.Should().Be("AccessRecovered",
+            "the fallback has to render through no layout, or the chrome reads the store that just died");
 
         // Drawn from memory, so the page still renders: a database to name, the grant it belongs to,
         // and an empty history rather than a throw.
@@ -414,6 +458,86 @@ public class DatabaseAccessPageTests
             .Should().ContainSingle(c => c.Contains("ALTER USER", StringComparison.Ordinal))
             .Which.Should().Contain(page.Issued.Password,
                 "the password shown must be the one the database was actually given");
+    }
+
+    /// <summary>
+    /// The fallback view asks no store anything — asserted on the file, because the property is
+    /// about what the view does not do and there is no assertion that can be made about an absence
+    /// by calling it.
+    ///
+    /// <para>
+    /// The same idiom as <see cref="Every_action_reaches_the_database_and_its_grants_through_the_scoped_helpers"/>:
+    /// a rule that has to hold for code nobody has written yet is pinned on the shape of the file.
+    /// A future edit that adds a partial, a view component or an injected service to this view would
+    /// reintroduce the exact defect it exists to close, and would do it silently, because the
+    /// controller test above only inspects a <c>ViewResult</c> and never executes Razor.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What this does not prove:</b> that Razor actually emits the password. That needs a render
+    /// harness — an MVC service provider with the Web assembly's application part and localization
+    /// registered for <c>_ViewImports</c>'s <c>IHtmlLocalizer</c> — which does not exist anywhere in
+    /// <c>tests/</c> and is not built here. Named rather than skipped: see the report.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void The_fallback_view_renders_without_a_layout_and_without_touching_any_store()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Harbora.slnx")))
+            dir = dir.Parent;
+        dir.Should().NotBeNull();
+
+        var view = Path.Combine(
+            dir!.FullName, "src", "Harbora.Web", "Views", "Databases", "AccessRecovered.cshtml");
+        File.Exists(view).Should().BeTrue();
+
+        var source = File.ReadAllText(view);
+
+        source.Should().Contain("Layout = null",
+            "_ViewStart wraps every other view in _Layout, whose sidebar and topbar both read the "
+            + "DbContext this page exists because it cannot reach");
+
+        source.Should().NotContain("<partial",
+            "a partial is how _Layout reaches _Sidebar, which is how the store gets read");
+        source.Should().NotContain("Component.InvokeAsync",
+            "the topbar's environment switcher queries db.Environments");
+        source.Should().NotContain("@inject",
+            "an injected service is a dependency this page has no way to guarantee");
+
+        source.Should().Contain("issued.Password",
+            "the one thing this page exists to put in front of somebody");
+    }
+
+    /// <summary>
+    /// The database row disappearing mid-rotation is not an exception, so the guard around the
+    /// rebuild does not catch it — <c>BuildAccessPageAsync</c> simply answers null, and
+    /// <c>Access.cshtml</c> dereferences <c>Model.Database</c> on its first line. The password would
+    /// be lost to a NullReferenceException instead of a database one, which is the same loss.
+    /// </summary>
+    [Fact]
+    public async Task A_database_deleted_while_the_rotation_ran_does_not_take_the_password_with_it()
+    {
+        var f = BuildLocal();
+
+        await f.Controller.IssueAccess(
+            f.Database.Id, DatabaseAccessKind.Persistent, 0, null, CancellationToken.None);
+
+        var grant = await f.Db.DatabaseAccessGrants.SingleAsync();
+
+        // Another request drops the database in the instant between the rotation's save and this
+        // request rebuilding its page.
+        f.Db.AfterTheNextSave = () =>
+        {
+            f.Db.ManagedServices.Remove(f.Db.ManagedServices.Single(s => s.Id == f.Database.Id));
+            f.Db.SaveChanges();
+        };
+
+        var result = await f.Controller.RotateAccess(f.Database.Id, grant.Id, CancellationToken.None);
+
+        ((ViewResult)result).ViewName.Should().Be("AccessRecovered");
+        PageOf(result).Issued.Should().NotBeNull(
+            "the ALTER landed before the row went away, so the password is live and unrecorded");
     }
 
     [Fact]

@@ -38,29 +38,44 @@ public sealed class BrittleContext(DbContextOptions<HarboraDbContext> options) :
     /// <summary>When true, the failing save takes the context with it — reads included.</summary>
     public bool LoseTheConnectionToo { get; set; }
 
+    /// <summary>
+    /// Runs once, immediately after the next save succeeds — the seam another request would slip
+    /// through. It is the only way to model "somebody deleted the row between this request's write
+    /// and its next read" in a test that has exactly one thread.
+    /// </summary>
+    public Action? AfterTheNextSave { get; set; }
+
     public override int SaveChanges()
     {
         Refuse();
-        return base.SaveChanges();
+        var saved = base.SaveChanges();
+        Interleave();
+        return saved;
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         Refuse();
-        return base.SaveChanges(acceptAllChangesOnSuccess);
+        var saved = base.SaveChanges(acceptAllChangesOnSuccess);
+        Interleave();
+        return saved;
     }
 
-    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         Refuse();
-        return base.SaveChangesAsync(cancellationToken);
+        var saved = await base.SaveChangesAsync(cancellationToken);
+        Interleave();
+        return saved;
     }
 
-    public override Task<int> SaveChangesAsync(
+    public override async Task<int> SaveChangesAsync(
         bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
         Refuse();
-        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        var saved = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        Interleave();
+        return saved;
     }
 
     private void Refuse()
@@ -71,5 +86,14 @@ public sealed class BrittleContext(DbContextOptions<HarboraDbContext> options) :
         if (LoseTheConnectionToo) Dispose();
 
         throw failure;
+    }
+
+    /// <summary>Cleared before it runs, so the overloads delegating to each other cannot double-fire it.</summary>
+    private void Interleave()
+    {
+        if (AfterTheNextSave is not { } interruption) return;
+
+        AfterTheNextSave = null;
+        interruption();
     }
 }

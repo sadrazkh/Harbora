@@ -119,11 +119,21 @@ public static class DatabaseGrantSql
             // in-memory grant tables itself, and the flush is for rows written into mysql.* by hand.
             // But it could still *fail*. It needs the RELOAD privilege and errors 1227 without it,
             // and this connects as the service's own admin account — "harbora", the name every
-            // managed service is provisioned with — not as root. On any install where the ALTER is
-            // permitted and the reload is not, the batch would exit non-zero after the password had
-            // already changed, and the caller reads a non-zero exit as "the ALTER did not take" and
-            // throws the new password away. A statement that cannot change anything could still cost
-            // an operator the only copy of a live credential, so it is gone.
+            // managed service is provisioned with, on both provisioning paths — not as root. On any
+            // install where the ALTER is permitted and the reload is not, the batch would exit
+            // non-zero after the password had already changed, and the caller reads a non-zero exit
+            // as "the ALTER did not take" and throws the new password away. A statement that cannot
+            // change anything could still cost an operator the only copy of a live credential.
+            //
+            // The other two keep theirs, and they are not the same case:
+            //  * Drop's is harmless. CloseAsync discards DropAsync's result and closes the row
+            //    either way, so a 1227 after DROP USER changes nothing anybody sees.
+            //  * Create's is NOT harmless, and is left only because it is outside this task. The
+            //    same 1227 would land after CREATE USER and GRANT have both succeeded; IssueAsync
+            //    then marks the grant Failed and returns the error *without* calling DropAsync —
+            //    unlike its endpoint-failure branch, which does undo the login — leaving a live
+            //    '%'-host login with ALL PRIVILEGES on a customer's database that Harbora has
+            //    recorded as never created. Reported rather than fixed; see the task report.
             _ => new GrantCommand("mariadb:11",
             [
                 "mariadb", "-h", host, "-P", port.ToString(), "-u", adminUser,

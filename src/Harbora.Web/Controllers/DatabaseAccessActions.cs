@@ -6,6 +6,8 @@ using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Harbora.Web.Controllers;
 
@@ -111,11 +113,16 @@ public sealed partial class DatabasesController
         if (ExternalAccessAvailability.Refuse(node, service, databaseAccess.CanOpenLocally) is { } unavailable)
             return View("Access", await BuildAccessPageAsync(id, ct, error: IsFa ? unavailable.ReasonFa : unavailable.Reason));
 
+        // Refuse() answers for a database that is not there, so past that line there is one. Said
+        // out loud rather than inferred, because everything below produces a password and needs
+        // somewhere to put it that does not depend on reading anything again.
+        if (service is null) return NotFound();
+
         var (password, error) = await databaseAccess.RotateAsync(grant, User.Identity?.Name, ct);
         if (password is null)
             return View("Access", await BuildAccessPageAsync(id, ct, error: error));
 
-        var connection = service is null || grant.GatewayHost is null || grant.GatewayPort is null
+        var connection = grant.GatewayHost is null || grant.GatewayPort is null
             ? null
             : DatabaseCredentialManager.ConnectionString(
                 service.Type.ToString(), grant.GatewayHost, grant.GatewayPort.Value,
@@ -131,9 +138,14 @@ public sealed partial class DatabasesController
 
         try
         {
-            return View("Access", await BuildAccessPageAsync(id, ct, error: error, issued: issued));
+            // Null rather than thrown: the database row was deleted between the read at the top of
+            // this action and this rebuild. Not an exception, so the catch below never sees it, and
+            // Access.cshtml dereferences Model.Database on its first line — falling through with
+            // null would lose the password to a NullReferenceException instead of a database one.
+            if (await BuildAccessPageAsync(id, ct, error: error, issued: issued) is { } page)
+                return View("Access", page);
         }
-        catch (Exception) when (service is not null)
+        catch (Exception ex)
         {
             // Rebuilding the page reads the same connection the rotation just wrote through, and the
             // failures worth surviving here are precisely the ones that take both: a dropped
@@ -141,18 +153,30 @@ public sealed partial class DatabasesController
             // /Home/Error, and the password is destroyed by the second failure rather than the first
             // — the exact end state the whole path above exists to prevent.
             //
-            // Everything this render needs is already in this request's hands, so it is drawn
-            // without asking the database anything. The exception worth reading was already logged
-            // by RotateAsync, with the grant and the service on it.
-            return View("Access", FromMemory(service, grant, issued, error));
+            // Logged here rather than relying on RotateAsync's log: this also covers the arm where
+            // the save *succeeded* and the read then failed, which nothing else in the request has
+            // anything to say about. Resolved off the request rather than taken in the constructor,
+            // which is thirteen arguments long already.
+            HttpContext.RequestServices.GetRequiredService<ILogger<DatabasesController>>()
+                .LogError(ex, "The access page could not be rebuilt after rotating grant {Grant}.", grant.Id);
         }
+
+        // Everything this render needs is already in this request's hands, so it is drawn without
+        // asking the database anything — and through AccessRecovered.cshtml, which sets Layout to
+        // null. That last part is not cosmetic: Razor runs after this method returns, so no try here
+        // can protect a render, and _ViewStart wraps every other view in _Layout, whose sidebar
+        // reads db.Users and db.Settings and whose topbar reads db.Environments — three more reads
+        // on the context that has just stopped answering, all of them emitted *before* RenderBody,
+        // so the password would already be buffered behind the partial that threw.
+        return View("AccessRecovered", FromMemory(service, grant, issued, error));
     }
 
     // ---- helpers ----
 
     /// <summary>
     /// The access page built out of what the request is already holding, for the moment Harbora's
-    /// own database cannot be read.
+    /// own database cannot be read. Rendered by <c>AccessRecovered.cshtml</c>, which carries no
+    /// layout — see the note where this is returned.
     ///
     /// <para>
     /// The lists are what this request knows rather than what the store holds — the one grant it
@@ -171,9 +195,14 @@ public sealed partial class DatabasesController
             Grants = [grant],
             History = [],
 
-            // The rotation already happened, so nothing here is unavailable; and Refuse() would be
-            // answering about a database this page can no longer verify anything about.
-            Unavailable = null,
+            // Filled rather than left null. The recovered view has no "New grant" form to hide, so
+            // nothing reads this today — but a model that says a database Harbora cannot currently
+            // read is available for new grants is a lie waiting for the next view to believe it.
+            Unavailable = new AccessUnavailable(
+                "Harbora could not read its own database while finishing this rotation, so nothing "
+                + "further can be issued until this page loads normally again.",
+                "Harbora هنگام پایان این تعویض نتوانست دیتابیس خودش را بخواند، پس تا وقتی این صفحه "
+                + "دوباره درست بارگذاری نشود چیز تازه‌ای صادر نمی‌شود."),
             Issued = issued,
 
             // The rotation's own sentence wins when there is one — it is the more important of the
