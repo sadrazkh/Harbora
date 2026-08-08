@@ -254,6 +254,18 @@
                                         <button class="btn-danger px-3 py-1.5 text-xs">@(isFa ? "بستن" : "Close")</button>
                                     </form>
                                 </div>
+
+                                @* Rotate and Close sit side by side and read as two shades of the
+                                   same action. They are not. Neither PostgreSQL nor MySQL drops a
+                                   connection that is already open when a password changes, so the
+                                   reason people usually reach for rotation — a credential that has
+                                   leaked — is the one it does not finish on its own. Said here
+                                   rather than in a doc nobody opens at the moment they press it. *@
+                                <p class="mt-2 text-[11px] leading-4 text-ink-faint">
+                                    @(isFa
+                                        ? "تعویض رمز فقط روی اتصال‌های تازه اثر دارد؛ نشست‌هایی که همین حالا بازند تا وقتی قطع نشوند کار می‌کنند. اگر رمز لو رفته، «بستن» کاری است که در را می‌بندد."
+                                        : "Rotating changes the password for new connections only — sessions already open keep working until they disconnect. If the password has leaked, Close is what shuts the door.")
+                                </p>
                             }
                             else if (grant.RevokedReason is { } reason)
                             {

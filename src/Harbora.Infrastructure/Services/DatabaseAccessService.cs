@@ -243,6 +243,15 @@ public sealed class DatabaseAccessService(
     /// so the credential the customer already holds keeps working — which is the only safe way round.
     /// The reverse would record a password the database never took.
     /// </para>
+    ///
+    /// <para>
+    /// Between those two writes there is a window no ordering can close, because a customer's
+    /// database and this row are two systems that cannot be committed together. So the window is
+    /// answered rather than avoided: whenever the <c>ALTER</c> may already have landed, the password
+    /// comes back <em>with</em> the error instead of dying with it. A failure that returns nothing
+    /// reads as "the rotation did not happen and my old password still works", which in exactly
+    /// those cases is inverted — the old password is dead and the new one has never been seen.
+    /// </para>
     /// </summary>
     public async Task<(string? Password, string? Error)> RotateAsync(
         DatabaseAccessGrant grant, string? actor, CancellationToken ct)
@@ -253,11 +262,12 @@ public sealed class DatabaseAccessService(
         var service = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == grant.ManagedServiceId, ct);
         if (service is null) return (null, "That database no longer exists.");
 
-        // Refused before a replacement is even generated. The node contract has a method for this,
-        // but no node implements it — the whole node-hosted path for external database access is
-        // unbuilt work, so calling it would return a simulation's answer about a login it never
-        // made. Naming the backlog item is the difference between "wait for it" and "hunt for a
-        // login that was never missing".
+        // Refused before a replacement is even generated. The node agent itself does implement
+        // credential rotation (Harbora.NodeAgent DatabaseEngineOperations.RotatePasswordAsync); what
+        // does not exist yet is a non-simulated INodeAgentClient on this side, so the only thing
+        // registered here answers about a book of logins it never wrote in. That is HARBORA-0034,
+        // and naming it is the difference between "wait for it" and "hunt for a login that was never
+        // missing".
         if (!CanOpenLocally)
             return (null,
                 "This installation cannot reach that database itself, and rotating a password through " +
@@ -270,14 +280,68 @@ public sealed class DatabaseAccessService(
         var rotated = await grants!.RotateAsync(
             service, network, grant.Username, replacement.Password, ct);
 
-        if (!rotated.Ok) return (null, rotated.Error ?? "The database refused to change the password.");
+        if (!rotated.Ok)
+        {
+            // Answered: the client ran and gave a verdict. The rotation is one statement with
+            // ON_ERROR_STOP set, so a non-zero exit means the ALTER did not take — the customer's
+            // existing password is still the live one and there is nothing to hand over.
+            if (rotated.Answered)
+                return (null, rotated.Error ?? "The database refused to change the password.");
+
+            // Unanswered. The statement may have reached the database, so the generated password may
+            // already be the live one; it is handed over with the doubt attached rather than thrown
+            // away, because if it did land it is the only copy in existence.
+            logger.LogError(
+                "Rotation of grant {Grant} on {Service} got no verdict; the new password may be live.",
+                grant.Id, service.Name);
+
+            return (replacement.Password, (rotated.Error is { } lost ? lost + " " : "") + MayBeLive);
+        }
 
         grant.PasswordHash = DatabaseCredentialManager.Hash(replacement.Password);
         await AuditAsync(grant, "rotated", actor, null, ct);
-        await db.SaveChangesAsync(ct);
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            // The database took the new password and Harbora could not write it down. Letting this
+            // throw sent the operator to a generic error page, from which the only sane reading is
+            // "nothing happened, my old password still works" — and it is the one reading that is
+            // guaranteed wrong. The password is returned so the grant is still usable, and the
+            // sentence says which credential is dead.
+            logger.LogError(
+                ex, "Grant {Grant} on {Service} was rotated on the database but not recorded.",
+                grant.Id, service.Name);
+
+            return (replacement.Password, NotRecorded);
+        }
 
         return (replacement.Password, null);
     }
+
+    /// <summary>
+    /// What an operator reads when the <c>ALTER</c> landed and the row did not.
+    ///
+    /// <para>
+    /// Written so the reader finishes the sentence certain which password is live, in the spirit of
+    /// the backup module's <c>SafetyCopyRefused</c>: "rotation failed" is ambiguous at exactly the
+    /// moment ambiguity is most expensive. It sits above the panel that shows the password, which is
+    /// why it can say "below".
+    /// </para>
+    /// </summary>
+    internal const string NotRecorded =
+        "The password on this database was changed — the previous one no longer works — but Harbora " +
+        "could not record the change. Copy the new password below now; it is kept nowhere else. " +
+        "Then rotate this access again, so Harbora's record and the database agree.";
+
+    /// <summary>What an operator reads when nothing ever reported back on the <c>ALTER</c>.</summary>
+    internal const string MayBeLive =
+        "The password below is the one the database was told to use: it may already be live, and the " +
+        "one before it may already be dead. Copy it now — it is kept nowhere else — and rotate this " +
+        "access again either way, so Harbora's record and the database agree.";
 
     /// <summary>Grants past their time, read without a session because the sweeper has none.</summary>
     public async Task<IReadOnlyList<DatabaseAccessGrant>> ExpiredAsync(CancellationToken ct)

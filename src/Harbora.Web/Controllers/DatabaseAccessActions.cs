@@ -122,7 +122,11 @@ public sealed partial class DatabasesController
                 grant.Username, password, service.DatabaseName,
                 service.TlsEnabled ? DatabaseTls.ConnectionParameter(service.Type) : null);
 
-        return View("Access", await BuildAccessPageAsync(id, ct, issued: new IssuedCredentialViewModel(
+        // A password *and* an error is the half-finished rotation: the database took the new
+        // password and Harbora could not record it, or never heard whether it did. Both are shown —
+        // the banner because the old password may be dead, the panel because this page is the only
+        // place the new one will ever exist.
+        return View("Access", await BuildAccessPageAsync(id, ct, error: error, issued: new IssuedCredentialViewModel(
             grant.Username, password, connection, grant.ExpiresAt, Rotated: true)));
     }
 

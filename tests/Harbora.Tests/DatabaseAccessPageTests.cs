@@ -3,6 +3,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Services;
+using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Nodes;
 using Harbora.Infrastructure.Services;
 using Harbora.Tests.Fakes;
@@ -41,6 +42,102 @@ public class DatabaseAccessPageTests
 
     private sealed record Fixture(
         HarboraDbContext Db, DatabasesController Controller, ManagedService Database, Guid WorkspaceId);
+
+    /// <summary>Harbora's own database, able to refuse one save on demand.</summary>
+    private sealed class BrittleContext(DbContextOptions<HarboraDbContext> options) : HarboraDbContext(options)
+    {
+        public Exception? FailTheNextSaveWith { get; set; }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            if (FailTheNextSaveWith is not { } failure) return base.SaveChangesAsync(cancellationToken);
+
+            FailTheNextSaveWith = null;
+            throw failure;
+        }
+    }
+
+    private sealed record LocalFixture(
+        BrittleContext Db, DatabasesController Controller, ManagedService Database, FakeDockerEngine Docker);
+
+    /// <summary>
+    /// The single-server install, reached through the controller rather than the service.
+    ///
+    /// <para>
+    /// <see cref="Build"/> above is the install with no local reach, where
+    /// <see cref="ExternalAccessAvailability"/> refuses every access action before it starts. That
+    /// makes it the wrong fixture for anything about what a rotation puts on the screen, because no
+    /// rotation ever runs on it.
+    /// </para>
+    /// </summary>
+    private static LocalFixture BuildLocal()
+    {
+        var db = new BrittleContext(new DbContextOptionsBuilder<HarboraDbContext>()
+            .UseInMemoryDatabase("dbaccess-page-local-" + Guid.NewGuid()).Options);
+
+        var workspaceId = Guid.CreateVersion7();
+        db.Add(new Harbora.Domain.Identity.Workspace { Id = workspaceId, Name = "Acme", Slug = "acme" });
+
+        var protector = new PassthroughProtector();
+        var database = new ManagedService
+        {
+            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId,
+
+            // Guid.Empty is the panel's own machine, which is what the gateway insists on before it
+            // will publish a port.
+            ServerId = Guid.Empty,
+            Name = "Shop DB", ContainerName = "harbora-svc-shop", DatabaseName = "shop",
+            Username = "postgres", EncryptedPassword = protector.Protect("admin_secret"),
+            InternalPort = 5432, Type = ManagedServiceType.PostgreSql, Status = ServiceStatus.Running
+        };
+        db.Add(database);
+
+        var currentUser = new Caller(workspaceId);
+        db.Add(new Harbora.Domain.Identity.User
+        {
+            Id = currentUser.UserId!.Value,
+            Email = currentUser.Email!,
+            DisplayName = "Tester",
+            Role = SystemRole.Owner,
+            ScopedToProjects = false
+        });
+        db.SaveChanges();
+
+        var docker = new FakeDockerEngine();
+        var engines = new FakeServerEngineFactory(docker);
+        var clock = new Clock();
+        var node = new FakeNodeAgentClient(NullLogger<FakeNodeAgentClient>.Instance);
+
+        var access = new DatabaseAccessService(
+            db, node, clock, NullLogger<DatabaseAccessService>.Instance,
+            new DockerTcpGateway(db, engines, NullLogger<DockerTcpGateway>.Instance),
+            new DatabaseGrantExecutor(docker, protector, NullLogger<DatabaseGrantExecutor>.Instance),
+            new ManagedServiceEngine(
+                db, engines, protector, new NoopJobQueue(),
+                Microsoft.Extensions.Options.Options.Create(new HarboraRuntimeOptions()), clock,
+                NullLogger<ManagedServiceEngine>.Instance),
+            protector);
+
+        var controller = new DatabasesController(
+            db,
+            new FakeManagedServiceEngine(),
+            new AlwaysAllowedQuota(),
+            new PlacesOnTheFirstServer(db),
+            protector,
+            new Harbora.Infrastructure.Projects.ProjectService(db, clock),
+            new ServiceUsageService(db, protector),
+            new Harbora.Infrastructure.Security.ProjectAccessService(db, currentUser),
+            access,
+            adminer: null!,
+            audit: new SilentAudit(),
+            node,
+            currentUser)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        return new LocalFixture(db, controller, database, docker);
+    }
 
     private static Fixture Build(ServiceStatus status = ServiceStatus.Running)
     {
@@ -234,6 +331,43 @@ public class DatabaseAccessPageTests
         var page = PageOf(await f.Controller.Access(f.Database.Id, CancellationToken.None));
 
         page.Issued.Should().BeNull();
+    }
+
+    /// <summary>
+    /// A rotation Harbora could not record still puts the password on the page.
+    ///
+    /// <para>
+    /// This is the only screen the new password ever appears on. Before, the failed save threw
+    /// straight past the action and the operator landed on the generic error page — which reads as
+    /// "nothing happened", while the database was holding a password no human had seen and the old
+    /// one no longer worked. So the banner and the credential panel are shown together: the banner
+    /// because the old password is dead, the panel because this is the last chance at the new one.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_rotation_the_panel_could_not_record_still_shows_the_password_on_the_page()
+    {
+        var f = BuildLocal();
+
+        var issuedPage = PageOf(await f.Controller.IssueAccess(
+            f.Database.Id, DatabaseAccessKind.Persistent, 0, null, CancellationToken.None));
+        issuedPage.Issued.Should().NotBeNull("the fixture has local reach, so a grant can be made");
+
+        var grant = await f.Db.DatabaseAccessGrants.SingleAsync();
+        f.Db.FailTheNextSaveWith = new DbUpdateException("Harbora's own database went away.");
+
+        var page = PageOf(await f.Controller.RotateAccess(
+            f.Database.Id, grant.Id, CancellationToken.None));
+
+        page.Error.Should().NotBeNullOrWhiteSpace("the operator has to be told the old password is gone");
+        page.Issued.Should().NotBeNull("this page is the only place the new password will ever exist");
+        page.Issued!.Password.Should().NotBe(issuedPage.Issued!.Password);
+        page.Issued.Rotated.Should().BeTrue();
+
+        f.Docker.OneOffCommands
+            .Should().ContainSingle(c => c.Contains("ALTER USER", StringComparison.Ordinal))
+            .Which.Should().Contain(page.Issued.Password,
+                "the password shown must be the one the database was actually given");
     }
 
     [Fact]

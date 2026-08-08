@@ -317,17 +317,41 @@ public class TcpGatewayPlanTests
             "bob\"; DROP TABLE users; --", "secret123").Should().BeNull();
     }
 
+    /// <summary>
+    /// The opposite of <c>Drop</c>. A rotation that silently did nothing would hand somebody a
+    /// password no database will accept, while the one they wanted retired kept working.
+    ///
+    /// <para>
+    /// <b>What this test cannot prove, and what proves it.</b> "Fails loudly" is the one property of
+    /// these statements that is not the same on both engines, and only half of it is pinned here.
+    /// For PostgreSQL it is written into the argv — <c>ON_ERROR_STOP=1</c> and no <c>IF EXISTS</c> —
+    /// so it is asserted directly. For MySQL/MariaDB there is no such flag: <c>mariadb -e</c> aborts
+    /// the batch at the first error and exits non-zero by default, which is the client's documented
+    /// behaviour and not something a statement string can carry. All that can be asserted here is
+    /// the absence of an <c>IF EXISTS</c> that would make the failure impossible. The other half
+    /// needs a live engine: issue a grant, drop the login behind Harbora's back, rotate, and require
+    /// <c>DatabaseGrantExecutor.RotateAsync</c> to come back not-Ok. Nothing on this machine can run
+    /// that (no Docker daemon), so it is named rather than faked.
+    /// </para>
+    /// </summary>
     [Fact]
     public void Rotating_a_login_that_is_not_there_has_to_fail_rather_than_pass_quietly()
     {
-        // The opposite of Drop. A rotation that silently did nothing would hand somebody a password
-        // no database will accept, while the one they wanted retired kept working.
         var command = string.Join(" ", DatabaseGrantSql
             .Rotate(ManagedServiceType.PostgreSql, "host", 5432, "harbora", "shop", "hb_reader", "secret123")!
             .Command);
 
         command.Should().Contain("ON_ERROR_STOP");
         command.Should().NotContain("IF EXISTS");
+
+        foreach (var type in new[] { ManagedServiceType.MySql, ManagedServiceType.MariaDb })
+        {
+            string.Join(" ", DatabaseGrantSql
+                    .Rotate(type, "host", 3306, "harbora", "shop", "hb_reader", "secret123")!.Command)
+                .Should().NotContain("IF EXISTS",
+                    "the client aborts on error by itself, but an IF EXISTS would remove the error "
+                    + "there was to abort on");
+        }
     }
 
     [Fact]

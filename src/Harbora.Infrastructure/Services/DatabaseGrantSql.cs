@@ -105,6 +105,12 @@ public static class DatabaseGrantSql
 
             // ALTER USER rather than SET PASSWORD: the latter needs the hash function whose name
             // changed between MySQL and MariaDB, and this one client image talks to both.
+            //
+            // FLUSH PRIVILEGES here is a no-op and is kept only so the three statements read alike:
+            // an account-management statement updates the in-memory grant tables itself, and the
+            // flush is for grants written into the mysql.* tables directly. Nothing depends on it —
+            // deleting it would change no behaviour, and nothing should be built as if it did. It
+            // also has no error to raise, so it cannot mask the ALTER's exit code.
             _ => new GrantCommand("mariadb:11",
             [
                 "mariadb", "-h", host, "-P", port.ToString(), "-u", adminUser,

@@ -58,9 +58,32 @@ public class DatabaseAccessLifecycleTests
         return (db, service, node, clock, database);
     }
 
+    /// <summary>
+    /// Harbora's own database, able to refuse one save on demand.
+    ///
+    /// <para>
+    /// The window it opens is the whole point. The customer's database and this row cannot be
+    /// committed together, so there is a moment where the <c>ALTER USER</c> has landed and the
+    /// record of it has not — and everything the operator is told after that moment has to be true
+    /// about which of the two passwords is live.
+    /// </para>
+    /// </summary>
+    private sealed class BrittleContext(DbContextOptions<HarboraDbContext> options) : HarboraDbContext(options)
+    {
+        public Exception? FailTheNextSaveWith { get; set; }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            if (FailTheNextSaveWith is not { } failure) return base.SaveChangesAsync(cancellationToken);
+
+            FailTheNextSaveWith = null;
+            throw failure;
+        }
+    }
+
     /// <summary>The single-server install, with everything <see cref="DatabaseAccessService.CanOpenLocally"/> needs.</summary>
     private sealed record LocalStack(
-        HarboraDbContext Db,
+        BrittleContext Db,
         DatabaseAccessService Service,
         FakeDockerEngine Docker,
         FakeNodeAgentClient Node,
@@ -74,7 +97,7 @@ public class DatabaseAccessLifecycleTests
     /// </summary>
     private static LocalStack BuildLocal()
     {
-        var db = new HarboraDbContext(new DbContextOptionsBuilder<HarboraDbContext>()
+        var db = new BrittleContext(new DbContextOptionsBuilder<HarboraDbContext>()
             .UseInMemoryDatabase("dbaccess-local-" + Guid.NewGuid()).Options);
 
         var workspace = new Workspace { Id = Guid.CreateVersion7(), Name = "Acme", Slug = "acme" };
@@ -323,6 +346,92 @@ public class DatabaseAccessLifecycleTests
         error.Should().NotBeNullOrWhiteSpace();
         DatabaseCredentialManager.Verify(issued.Issued!.Password, grant.PasswordHash)
             .Should().BeTrue("nothing changed on the database, so nothing may change here either");
+    }
+
+    /// <summary>
+    /// The half-failed rotation: the database took the new password, and Harbora could not write it
+    /// down.
+    ///
+    /// <para>
+    /// Letting the save's exception escape produced a generic failure page, from which the only
+    /// reasonable inference is "the rotation did not happen, my old password still works" — the
+    /// exact opposite of the truth. The database now holds a password nobody has ever seen and the
+    /// old one is dead, so the grant is bricked with no signal at all.
+    /// </para>
+    ///
+    /// <para>
+    /// The window itself cannot be closed: the customer's database and this row are two systems and
+    /// no ordering commits them together. What can be closed is the silence. The password comes back
+    /// with the error instead of dying with the save, and the sentence says which credential is live.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_rotation_the_panel_could_not_record_still_hands_over_the_password_the_database_took()
+    {
+        var stack = BuildLocal();
+
+        var issued = await stack.Service.IssueAsync(
+            stack.Database.Id, DatabaseAccessKind.Persistent, null, null, null, null, default);
+
+        var grant = await stack.Db.DatabaseAccessGrants.SingleAsync();
+        stack.Db.FailTheNextSaveWith = new DbUpdateException("Harbora's own database went away.");
+
+        var (password, error) = await stack.Service.RotateAsync(grant, "me@example.com", default);
+
+        password.Should().NotBeNullOrWhiteSpace(
+            "the database holds it now, and this is the only moment it exists anywhere else");
+        password.Should().NotBe(issued.Issued!.Password);
+
+        var statement = stack.Docker.OneOffCommands
+            .Should().ContainSingle(c => c.Contains("ALTER USER", StringComparison.Ordinal)).Subject;
+        statement.Should().Contain(password!, "the operator must be handed the password that landed");
+
+        error.Should().NotBeNullOrWhiteSpace("silence here reads as 'nothing happened'");
+        error.Should().Contain("was changed",
+            "the one thing the operator must not conclude is that their old password still works");
+        error.Should().ContainEquivalentOf("rotate this access again",
+            "Harbora's record and the database disagree until somebody does");
+        error.Should().NotContain(password!,
+            "the banner is a string that gets logged; the password travels in its own field");
+    }
+
+    /// <summary>
+    /// The same silence one layer down: the client ran but never reported an exit code, so whether
+    /// the <c>ALTER</c> landed is unknown.
+    ///
+    /// <para>
+    /// "The database could not be reached" does not claim nothing changed, but it does not say
+    /// something may have — and an operator reading it puts the old password back into service. The
+    /// password is handed over here too, because the only two possibilities are that it is now the
+    /// live one or that it is inert, and neither is made worse by knowing it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_rotation_that_never_reported_back_says_so_and_hands_over_the_password_it_may_have_set()
+    {
+        var stack = BuildLocal();
+
+        await stack.Service.IssueAsync(
+            stack.Database.Id, DatabaseAccessKind.Persistent, null, null, null, null, default);
+
+        var grant = await stack.Db.DatabaseAccessGrants.SingleAsync();
+
+        // Recorded before it throws, exactly like a client that ran the statement and then died on
+        // the way out — cancellation while the logs were still draining is the ordinary way.
+        stack.Docker.OneOffThrows = new IOException("the daemon closed the stream");
+
+        var (password, error) = await stack.Service.RotateAsync(grant, "me@example.com", default);
+
+        password.Should().NotBeNullOrWhiteSpace();
+        error.Should().NotBeNullOrWhiteSpace();
+        error.Should().ContainEquivalentOf("not known",
+            "the honest words: nothing here can say whether the statement reached the database");
+        error.Should().Contain("may already",
+            "'could not be reached' invites the reading that nothing changed, which is the one "
+            + "reading that could be wrong");
+        error.Should().ContainEquivalentOf("rotate this access again",
+            "the way out of not knowing is to do it again");
+        error.Should().NotContain(password!);
     }
 
     /// <summary>
