@@ -1,7 +1,7 @@
 # Traefik configuration for the Harbora node channel — TEMPLATE.
 #
 # deploy/install.sh renders this into traefik/dynamic/node-agent.yml on every install and update,
-# substituting {{PANEL_DOMAIN}} with PANEL_DOMAIN from .env. It lives here, outside the directory
+# substituting {{NODE_DOMAIN}} with NODE_DOMAIN from .env. It lives here, outside the directory
 # Traefik watches, for two reasons:
 #
 #   * a copy in the watched directory is loaded as it stands, and a router for somebody else's
@@ -9,18 +9,44 @@
 #   * the update path is `git reset --hard`, which would put the unrendered original back over an
 #     edited one on every upgrade. The rendered file is untracked, so it survives.
 #
+# ---------------------------------------------------------------------------------------------
+# ONE HOST NAME, ONE SET OF TLS OPTIONS. This is the reason the node channel has a domain of its
+# own instead of sharing the panel's.
+#
+# Traefik resolves TLS options per SNI host name, not per router. When two routers claim the same
+# host with different options it logs
+#
+#   "found different TLS options for routers on the same host … using the default TLS options"
+#
+# and falls back — and the default options ask for NO client certificate. A TLS client only sends
+# one when the server asks, so the node's credential would never leave the node, passTLSClientCert
+# would set no header, and the channel would answer 401 forever. An mTLS router sharing the panel's
+# host silently stops requiring the very credential it exists to check.
+#
+# So: NODE_DOMAIN carries exactly one router and exactly one option set, and nothing else in this
+# stack claims it. The panel keeps PANEL_DOMAIN (its Docker labels), apps keep *.ROOT_DOMAIN.
+#
+# ENROLLMENT IS DELIBERATELY NOT HERE. A node has no certificate when it enrolls — that exchange is
+# what produces one — so it cannot complete a RequireAndVerifyClientCert handshake. It calls
+# POST /api/node-agent/v1/enroll on the PANEL's host, which the panel's own catch-all router already
+# serves, and the enrollment response hands back NodeAgent__PublicUrl — this file's host. The agent
+# stores it and uses it for the channel and for renewals from then on
+# (src/Harbora.NodeAgent/Enrollment/EnrollmentService.cs, Transport/ControlChannel.cs).
+# ---------------------------------------------------------------------------------------------
+#
 # The node endpoints are the only place the panel authenticates a caller with a client certificate.
 # Traefik terminates TLS, so it — not Kestrel — is what must ask for one and pass it through.
 #
 # The two settings that make the panel accept the result live in deploy/.env, written by the same
 # installer run:
 #
-#   NodeAgent__PublicUrl=https://{{PANEL_DOMAIN}}
+#   NodeAgent__PublicUrl=https://{{NODE_DOMAIN}}
 #   NodeAgent__TrustForwardedClientCertificate=true
 #
 # TrustForwardedClientCertificate is the operator asserting that the two pieces below are in place.
 # Without them, the header is something any client can set, and a certificate header anyone can set
-# is a login form with no password field.
+# is a login form with no password field. install.sh writes it only after this file is in place, so
+# the assertion is true from the moment it is made.
 
 tls:
   options:
@@ -30,10 +56,13 @@ tls:
       clientAuth:
         # The CA the panel owns. The installer exports it here before it puts this file in place:
         #
-        #   harbora node-ca > /opt/harbora/app/deploy/traefik/dynamic/node-ca.pem
+        #   harbora node-ca | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' \
+        #     > /opt/harbora/app/deploy/traefik/dynamic/node-ca.pem
         #
         # Inside the stack that command is `docker compose run --rm -T panel admin node-ca`; there
-        # is no `harbora` binary in the panel image, only the entrypoint's admin verbs.
+        # is no `harbora` binary in the panel image, only the entrypoint's admin verbs. The filter
+        # matters: `compose run` prints its own lines, and anything that is not the certificate is
+        # a Traefik parse error rather than a trust anchor.
         #
         # /dynamic is where docker-compose.yml mounts deploy/traefik/dynamic into Traefik, so this
         # path and the one above are the same file seen from either side.
@@ -44,6 +73,12 @@ tls:
         # chain to the node CA, never reaches the panel. The panel checks again — the certificate
         # must also be the current credential of a node that is not revoked — but this keeps
         # unauthenticated traffic off the endpoint entirely.
+        #
+        # It is also what makes the forwarded header trustworthy. passTLSClientCert *sets* the
+        # header when there is a peer certificate; it does not *strip* an inbound one when there is
+        # none. Requiring the certificate is therefore the thing that guarantees the header is
+        # always overwritten, and the reason a weaker clientAuthType (VerifyClientCertIfGiven, so
+        # that enrollment could share this host) was rejected.
         clientAuthType: RequireAndVerifyClientCert
 
 http:
@@ -55,19 +90,12 @@ http:
         pem: true
 
   routers:
-    # Enrollment: authenticated by a single-use token, not by a certificate, so it gets the ordinary
-    # TLS options. A node has no certificate yet when it calls this.
-    harbora-node-enroll:
-      rule: "Host(`{{PANEL_DOMAIN}}`) && Path(`/api/node-agent/v1/enroll`)"
-      entryPoints: [websecure]
-      service: harbora-panel
-      tls:
-        certResolver: letsencrypt
-
-    # Renewal and the channel: both require the node's certificate.
+    # Renewal and the channel: both require the node's certificate, and both are the only things
+    # served on this host. Path-scoped rather than a bare Host() so a node credential is not also a
+    # way into the panel's UI over this name.
     harbora-node-mtls:
       rule: >-
-        Host(`{{PANEL_DOMAIN}}`) &&
+        Host(`{{NODE_DOMAIN}}`) &&
         (Path(`/api/node-agent/v1/credential/renew`) || Path(`/api/node-agent/v1/channel`))
       entryPoints: [websecure]
       service: harbora-panel

@@ -170,15 +170,31 @@ cmd_set_domain() {
   e.g. harbora set-domain panel.example.com apps.example.com"
   [ -n "$root" ] || die "An apps domain is required too (used for *.apps subdomains)."
 
+  local old_panel node_domain
+  old_panel="$(env_get PANEL_DOMAIN)"
+  node_domain="$(env_get NODE_DOMAIN)"
+
   env_set PANEL_DOMAIN "$panel"
   env_set ROOT_DOMAIN "$root"
-  ok "Domains updated: panel=$panel apps=$root"
-  warn "Point DNS at this server for $panel and *.$root, then wait for the certificate."
-  # The node mTLS router is rendered from the panel domain by the installer, not by this script, so
-  # it still names the old one until that runs. Saying nothing here would leave a fleet that cannot
-  # reconnect and no clue why.
+
+  # NODE_DOMAIN is derived from the panel domain when the installer first writes it. Re-derive it
+  # here only while it still holds that derived value — an operator who chose their own host for the
+  # node channel keeps it. Leaving it alone unconditionally would point the fleet at a name that no
+  # longer belongs to this install, and backfill_env on the next update would not correct it because
+  # the key is present.
+  if [ -z "$node_domain" ] || [ "$node_domain" = "nodes.$old_panel" ]; then
+    node_domain="nodes.$panel"
+    env_set NODE_DOMAIN "$node_domain"
+    env_set NodeAgent__PublicUrl "https://$node_domain"
+  fi
+
+  ok "Domains updated: panel=$panel apps=$root nodes=$node_domain"
+  warn "Point DNS at this server for $panel, $node_domain and *.$root, then wait for the certificate."
+  # The node mTLS router is rendered by the installer, not by this script, so it still names the old
+  # host until that runs. Saying nothing here would leave a fleet that cannot reconnect and no clue
+  # why — and a message that does not name the command is barely better.
   [ -f "$COMPOSE_DIR/traefik/dynamic/node-agent.yml" ] &&
-    warn "Nodes: re-run the installer's update to point the node router at $panel." || true
+    warn "Nodes: the router still names the old host. Re-render it:  bash $COMPOSE_DIR/install.sh update" || true
   cmd_restart
 }
 
@@ -278,9 +294,14 @@ harbora — Harbora server administration
     harbora fix-key                     Generate a missing/insecure master key and restart
 
   Nodes
-    harbora node-ca                     Print the node CA (PEM). The installer redirects it into
+    harbora node-ca                     Print the node CA (PEM). It belongs in
                                         traefik/dynamic/node-ca.pem, which the mTLS router verifies
-                                        node certificates against.
+                                        node certificates against. Filter to the certificate — the
+                                        one-off container prints lines of its own, and anything that
+                                        is not the PEM is a Traefik parse error:
+                                          harbora node-ca \
+                                            | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' \
+                                            > /opt/harbora/app/deploy/traefik/dynamic/node-ca.pem
 
   Database restore points
     harbora backups                     List restore points (pre-upgrade-* are automatic)

@@ -403,7 +403,7 @@ public sealed class NodesController(
             nodes.Select(ToRow).ToList(),
             tokens,
             clock.GetUtcNow(),
-            ControlPlaneUrl,
+            EnrollmentUrl,
             TempData["NodeToken"] as string,
             TempData["NodeTokenInstall"] as string);
     }
@@ -461,14 +461,22 @@ public sealed class NodesController(
         }
     }
 
-    private string ControlPlaneUrl =>
-        string.IsNullOrWhiteSpace(_options.PublicUrl)
-            ? $"{Request.Scheme}://{Request.Host}"
-            : _options.PublicUrl.TrimEnd('/');
+    /// <summary>
+    /// Where a node <em>enrolls</em>: this panel's own URL, taken from the request that asked for
+    /// the token.
+    ///
+    /// <para>
+    /// Deliberately not <c>NodeAgent:PublicUrl</c>, which it used to be. That setting names the node
+    /// channel's own host, and every connection to that host must present a client certificate — a
+    /// node has none until enrollment has produced one, so it could not complete the handshake.
+    /// Enrollment is served on the panel's host; the enrollment response then hands the node
+    /// <c>PublicUrl</c>, and it uses that for the channel and for renewals from then on.
+    /// </para>
+    /// </summary>
+    private string EnrollmentUrl => $"{Request.Scheme}://{Request.Host}";
 
     private string InstallCommand(string token, string? nodeName) =>
-        "curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/node-agent/install.sh | \\\n" +
-        $"  bash -s -- --control-plane {ControlPlaneUrl} --token {token} --name {nodeName ?? "<node-name>"}";
+        NodeInstallCommand.For(EnrollmentUrl, token, nodeName);
 
     private static bool Fa() =>
         System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -483,4 +491,25 @@ public sealed class NodesController(
         try { return JsonSerializer.Deserialize<T>(json, NodeContract.Json); }
         catch (JsonException) { return null; }
     }
+}
+
+/// <summary>
+/// The one-line install command the panel shows beside a freshly minted enrollment token.
+///
+/// <para>
+/// Pure and separate from the controller so the property that matters can be executed in a test
+/// rather than asserted about: <c>--control-plane</c> must name the URL enrollment is served on.
+/// Point it at the node channel's mTLS host instead and every operator who copies it gets a TLS
+/// handshake failure, because that host demands a certificate the node does not have yet.
+/// </para>
+/// </summary>
+public static class NodeInstallCommand
+{
+    public const string ScriptUrl =
+        "https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/node-agent/install.sh";
+
+    public static string For(string enrollmentUrl, string token, string? nodeName) =>
+        $"curl -fsSL {ScriptUrl} | \\\n" +
+        $"  bash -s -- --control-plane {enrollmentUrl.TrimEnd('/')} --token {token} " +
+        $"--name {nodeName ?? "<node-name>"}";
 }

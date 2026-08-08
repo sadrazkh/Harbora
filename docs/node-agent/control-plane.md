@@ -35,7 +35,7 @@ Under `NodeAgent:` in `appsettings.json`, or `NodeAgent__*` in `deploy/.env`:
 ```json
 {
   "NodeAgent": {
-    "PublicUrl": "https://panel.example.com",
+    "PublicUrl": "https://nodes.panel.example.com",
     "MinimumAgentVersion": "0.2.0",
     "HeartbeatIntervalSeconds": 30,
     "EnrollmentTokenMinutes": 30,
@@ -57,7 +57,7 @@ Under `NodeAgent:` in `appsettings.json`, or `NodeAgent__*` in `deploy/.env`:
 
 | Setting | Notes |
 |---|---|
-| `PublicUrl` | What nodes keep using after enrollment, whatever URL the installer was given |
+| `PublicUrl` | The **node channel's** host (`NODE_DOMAIN` in `deploy/.env`), handed back in the enrollment response and used for the channel and renewals from then on. Not the panel's own host — see [Client certificates behind Traefik](#client-certificates-behind-traefik). Empty means the node keeps whatever URL it was installed with, which is the panel's, where nothing asks it for a certificate: it enrols and then never connects |
 | `MinimumAgentVersion` | Nodes below it are told they are too old and refuse work themselves. Raising it is how a fleet is forced forward |
 | `EnrollmentTokenMinutes` | Capped at 24 hours. The token's job is to survive a copy-paste, not to live in a wiki |
 | `TrustForwardedClientCertificate` | **Off by default.** See the mTLS section — turning it on without the Traefik half removes authentication rather than adding it |
@@ -73,23 +73,55 @@ Under `NodeAgent:` in `appsettings.json`, or `NodeAgent__*` in `deploy/.env`:
 The panel runs behind Traefik, which terminates TLS — so Traefik is what must request the node's
 client certificate and pass it through. [`deploy/traefik/node-agent.yml.template`](../../deploy/traefik/node-agent.yml.template)
 is a working configuration; `deploy/install.sh` renders it into `traefik/dynamic/node-agent.yml`
-with this install's panel domain, on install and on update. Two things have to be true:
+with this install's `NODE_DOMAIN`, on install and on update. Two things have to be true:
 
 1. `clientAuthType: RequireAndVerifyClientCert` against the node CA, so a request with no
    certificate never reaches the panel.
 2. `passTLSClientCert` with `pem: true`, so `X-Forwarded-Tls-Client-Cert` is **overwritten** on
    every request.
 
+### The channel has a host name of its own
+
+`NODE_DOMAIN`, which the installer derives as `nodes.$PANEL_DOMAIN`. This is not cosmetic.
+
+Traefik resolves TLS options **per SNI host name**, not per router. If two routers claim one host
+with different options it logs `found different TLS options for routers on the same host` and falls
+back to the *default* options — which ask for no client certificate. A TLS client only sends one
+when the server asks, so on a shared host the node's credential never leaves the node,
+`passTLSClientCert` sets no header, and `/channel` and `/credential/renew` answer 401 forever. The
+panel's own catch-all router claims `PANEL_DOMAIN` with default options, so the mTLS router cannot
+live there.
+
+It also matters for point 2. `passTLSClientCert` *sets* the header when there is a peer certificate;
+it does not *strip* an inbound one when there is none. Requiring the certificate is therefore what
+guarantees the header is always overwritten — and the reason a weaker `clientAuthType` (so that
+enrollment could share the host) was rejected.
+
+**Enrollment is served on the panel's host, not this one.** A node has no certificate when it
+enrols — that exchange is what produces one — so it could not complete the handshake here. The
+install command the panel prints therefore points `--control-plane` at the panel, and the enrollment
+response hands back `PublicUrl` (this host), which the agent stores and uses from then on.
+
+On a real domain this needs **one more A record**, `nodes.<panel domain>` → the server. On nip.io it
+needs nothing: `nodes.panel.<ip>.nip.io` already resolves. `deploy/install.sh` checks it with the
+others and `verify_install` fails if the channel answers without a certificate.
+
+### The flag
+
 Only then set `TrustForwardedClientCertificate`. The flag is the operator asserting they did the
 above; it is off by default in code because a certificate header any client can set is not
-authentication. The installer writes it into `.env` as part of the same run that installs the
-Traefik half, which is what makes the assertion true rather than hopeful.
+authentication. The installer writes it into `.env` **after** the router is on disk, in
+`enable_node_channel`, and recreates the panel — so the assertion is true from the moment it is made
+rather than for the length of a build.
 
 Export the CA for Traefik — the installer does this before it puts the router in place, and this is
-the same command:
+the same command. The filter is not optional: the one-off container prints lines of its own, and
+anything that is not the certificate is a Traefik parse error rather than a trust anchor.
 
 ```bash
-harbora node-ca > /opt/harbora/app/deploy/traefik/dynamic/node-ca.pem
+harbora node-ca \
+  | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' \
+  > /opt/harbora/app/deploy/traefik/dynamic/node-ca.pem
 ```
 
 It creates the CA if this panel has never had one, so the file exists before the first node enrolls

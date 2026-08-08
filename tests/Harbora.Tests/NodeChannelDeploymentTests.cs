@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Harbora.Web.Controllers;
 using Harbora.Web.Infrastructure;
 using Xunit;
 
@@ -37,6 +38,31 @@ public class NodeChannelDeploymentTests
     private static string Template() => File.ReadAllText(Deploy("traefik", "node-agent.yml.template"));
 
     /// <summary>
+    /// The substitution <c>install.sh</c> performs, applied to the same source with the same
+    /// placeholder. It proves the template is fully parameterised — not that the installer runs.
+    /// </summary>
+    private static string Render(string nodeDomain) =>
+        Template().Replace("{{NODE_DOMAIN}}", nodeDomain, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Just the <c>routers:</c> block of the rendered file. The comments above it discuss the hosts
+    /// and paths this file deliberately does <em>not</em> serve, and an assertion that reads them as
+    /// configuration is an assertion about prose.
+    /// </summary>
+    private static string RenderedRouters(string nodeDomain)
+    {
+        var rendered = Render(nodeDomain);
+
+        var start = rendered.IndexOf("\n  routers:\n", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(-1, "the template should declare routers");
+
+        var end = rendered.IndexOf("\n  services:\n", start, StringComparison.Ordinal);
+        end.Should().BeGreaterThan(start, "and the routers block should end at the services block");
+
+        return rendered[start..end];
+    }
+
+    /// <summary>
     /// The body of one shell function, so an assertion about <c>repair_env</c> cannot be satisfied by
     /// a line somewhere else in the script.
     /// </summary>
@@ -54,14 +80,38 @@ public class NodeChannelDeploymentTests
     // --- the two settings that switch the channel on ---
 
     [Fact]
-    public void The_installer_backfills_both_node_settings_through_the_only_when_absent_path()
+    public void The_installer_backfills_the_node_settings_through_the_only_when_absent_path()
     {
         var repair = ShellFunction(Installer(), "repair_env");
 
         // backfill_env is the only-when-absent path: it is what makes a re-run safe and what stops
-        // an operator's deliberate `false` from being flipped back on by the next update.
+        // an operator's deliberate override from being flipped back by the next update.
+        repair.Should().Contain("backfill_env NODE_DOMAIN");
         repair.Should().Contain("backfill_env NodeAgent__PublicUrl");
-        repair.Should().Contain("backfill_env NodeAgent__TrustForwardedClientCertificate");
+    }
+
+    [Fact]
+    public void The_trust_flag_is_not_written_before_the_router_that_makes_it_true()
+    {
+        var installer = Installer();
+
+        // repair_env runs before `start`. A flag written there has the panel trusting an inbound
+        // X-Forwarded-Tls-Client-Cert through the whole build-and-wait window with nothing
+        // overwriting it — and permanently, if the router never lands.
+        ShellFunction(installer, "repair_env")
+            .Should().NotContain("backfill_env NodeAgent__TrustForwardedClientCertificate",
+                "the flag asserts something repair_env has not put in place yet");
+
+        var enable = ShellFunction(installer, "enable_node_channel");
+        enable.Should().Contain("backfill_env NodeAgent__TrustForwardedClientCertificate");
+
+        // And the panel has to be recreated to see it: the value is an environment variable fixed at
+        // container creation, so `restart` would re-run the same container with the old environment.
+        enable.Should().Contain("docker compose up -d panel");
+
+        var flag = enable.IndexOf("backfill_env NodeAgent__TrustForwardedClientCertificate", StringComparison.Ordinal);
+        enable.IndexOf("render_node_router", StringComparison.Ordinal).Should().BeLessThan(flag,
+            "the router must be on disk before the flag claims it is");
     }
 
     [Fact]
@@ -102,8 +152,13 @@ public class NodeChannelDeploymentTests
         // Shipping it inside the watched directory is what made it unfixable: it named
         // panel.example.com, it pointed at a CA file nothing created, and `git reset --hard` in the
         // update path put both back on every upgrade.
-        File.Exists(Deploy("traefik", "dynamic", "node-agent.yml")).Should().BeFalse(
-            "the rendered file is generated per install, not tracked");
+        //
+        // Asserted against .gitignore rather than against the filesystem: the rendered file is a
+        // per-install artifact, and a developer who has ever run the render step locally has one.
+        // A test that fails on their machine and nowhere else teaches people to ignore it.
+        File.ReadAllText(Path.Combine(RepoRoot(), ".gitignore"))
+            .Should().Contain("deploy/traefik/dynamic/node-agent.yml",
+                "the rendered file is generated per install, and must not be tracked");
     }
 
     [Fact]
@@ -112,12 +167,69 @@ public class NodeChannelDeploymentTests
         // The templating step is a substitution in install.sh; this is that substitution, applied to
         // the same source with the same placeholder. It proves the template is fully parameterised —
         // not that install.sh runs, which nothing here can show.
-        var rendered = Template().Replace("{{PANEL_DOMAIN}}", "panel.acme.test", StringComparison.Ordinal);
+        var rendered = Render("nodes.panel.acme.test");
 
         rendered.Should().NotContain("example.com");
         rendered.Should().NotContain("{{", "an unsubstituted placeholder is a router that matches nothing");
-        rendered.Should().Contain("Host(`panel.acme.test`) && Path(`/api/node-agent/v1/enroll`)");
-        rendered.Should().Contain("Host(`panel.acme.test`) &&");
+        rendered.Should().Contain("Host(`nodes.panel.acme.test`) &&");
+    }
+
+    /// <summary>
+    /// The Critical this file exists to keep fixed.
+    ///
+    /// <para>
+    /// Traefik resolves TLS options per SNI host name, not per router. Two routers on one host with
+    /// different options make it log "found different TLS options for routers on the same host" and
+    /// fall back to the default options — which ask for no client certificate. The node then never
+    /// sends its credential, <c>passTLSClientCert</c> sets no header, and the channel answers 401
+    /// forever. So: every router in this file names the same host, and every one of them carries the
+    /// mTLS option set.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void One_host_name_carries_one_set_of_tls_options()
+    {
+        var routers = RenderedRouters("nodes.panel.acme.test");
+
+        var hosts = System.Text.RegularExpressions.Regex
+            .Matches(routers, @"Host\(`([^`]+)`\)")
+            .Select(m => m.Groups[1].Value)
+            .Distinct()
+            .ToList();
+
+        hosts.Should().Equal(["nodes.panel.acme.test"],
+            "the node channel's host is its own; sharing the panel's is what made Traefik drop the options");
+
+        var declared = System.Text.RegularExpressions.Regex.Matches(routers, @"\n    [a-z][a-z0-9-]*:\n").Count;
+        var optioned = System.Text.RegularExpressions.Regex.Matches(routers, @"options: harbora-node-mtls").Count;
+
+        declared.Should().Be(1, "a second router on this host is a second chance to disagree about TLS options");
+        optioned.Should().Be(declared, "a router here without the mTLS options is the conflict, in one file");
+    }
+
+    [Fact]
+    public void Enrolment_is_not_served_on_the_host_that_demands_a_certificate()
+    {
+        // A node has no certificate when it enrols — that exchange is what produces one — so it
+        // cannot complete a RequireAndVerifyClientCert handshake. Enrolment is served by the panel's
+        // own catch-all router on the panel's host, and the response hands back PublicUrl.
+        RenderedRouters("nodes.panel.acme.test").Should().NotContain("/api/node-agent/v1/enroll",
+            "putting enrolment on the mTLS host would either fail the handshake or force the host " +
+            "to stop requiring a certificate");
+    }
+
+    [Fact]
+    public void The_node_channel_does_not_share_the_panels_host()
+    {
+        var installer = Installer();
+        var compose = File.ReadAllText(Deploy("docker-compose.yml"));
+
+        // The panel's Docker label claims PANEL_DOMAIN with the default TLS options. The node router
+        // must therefore be somewhere else, and NODE_DOMAIN is where.
+        compose.Should().Contain("traefik.http.routers.harbora.rule=Host(`${PANEL_DOMAIN}`)");
+        installer.Should().Contain("backfill_env NODE_DOMAIN \"nodes.${_panel}\"");
+        installer.Should().Contain("backfill_env NodeAgent__PublicUrl \"https://${_node}\"",
+            "what a node is handed at enrolment must be the host the mTLS router is on");
     }
 
     [Fact]
@@ -125,8 +237,8 @@ public class NodeChannelDeploymentTests
     {
         var installer = Installer();
 
-        Template().Should().Contain("{{PANEL_DOMAIN}}");
-        installer.Should().Contain("{{PANEL_DOMAIN}}");
+        Template().Should().Contain("{{NODE_DOMAIN}}");
+        installer.Should().Contain("{{NODE_DOMAIN}}");
         installer.Should().Contain("traefik/node-agent.yml.template");
         installer.Should().Contain("traefik/dynamic/node-agent.yml");
     }
@@ -134,8 +246,11 @@ public class NodeChannelDeploymentTests
     [Fact]
     public void Templating_does_not_weaken_what_the_router_is_for()
     {
-        var rendered = Template().Replace("{{PANEL_DOMAIN}}", "panel.acme.test", StringComparison.Ordinal);
+        var rendered = Render("nodes.panel.acme.test");
 
+        // RequireAndVerifyClientCert is also what makes the forwarded header trustworthy:
+        // passTLSClientCert sets the header when there is a peer certificate but does not strip an
+        // inbound one when there is none. Requiring the certificate is what guarantees an overwrite.
         rendered.Should().Contain("clientAuthType: RequireAndVerifyClientCert");
         rendered.Should().Contain("pem: true", "the panel only trusts the header because Traefik overwrites it");
     }
@@ -157,13 +272,43 @@ public class NodeChannelDeploymentTests
     [Fact]
     public void The_installer_will_not_install_the_router_without_the_ca_it_verifies_against()
     {
-        var installer = Installer();
+        var enable = ShellFunction(Installer(), "enable_node_channel");
 
         // A named TLS option Traefik cannot build falls back to the default one — which asks for no
         // client certificate at all. Placing the router before its CA file exists would therefore
         // publish the channel unauthenticated, so the installer refuses and says so.
-        installer.Should().Contain("Could not export the node CA");
-        installer.Should().Contain("harbora node-ca");
+        enable.Should().Contain("Could not export the node CA");
+        enable.Should().Contain("harbora node-ca");
+    }
+
+    [Fact]
+    public void A_missing_ca_takes_an_already_rendered_router_down_with_it()
+    {
+        var enable = ShellFunction(Installer(), "enable_node_channel");
+
+        // Refusing to render is only half of it. A host that rendered the router on an earlier run
+        // and has since lost node-ca.pem keeps a live router whose named TLS option Traefik cannot
+        // build — which is the same unauthenticated fallback, reached from the other side. The
+        // orphan is moved out of the watched directory, not merely complained about.
+        enable.Should().Contain("mv -f \"$(node_rendered)\" \"$(node_disabled)\"");
+        enable.Should().Contain("An orphaned node router was moved aside");
+
+        // Out of the watched directory, not renamed inside it: Traefik's file provider reads the
+        // whole directory, and "disabled" has to mean Traefik cannot see it.
+        Installer().Should().Contain("traefik/node-agent.yml.disabled");
+        Installer().Should().NotContain("traefik/dynamic/node-agent.yml.disabled");
+    }
+
+    [Fact]
+    public void The_hand_run_ca_recovery_filters_to_the_certificate()
+    {
+        // The automated path strips everything outside BEGIN/END because `compose run` prints lines
+        // of its own. The command an operator reaches for after a failure has to do the same, or it
+        // writes a Traefik parse error into the file it is meant to repair.
+        var enable = ShellFunction(Installer(), "enable_node_channel");
+
+        var recovery = enable[enable.IndexOf("Later:", StringComparison.Ordinal)..];
+        recovery.Should().Contain("sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p'");
     }
 
     [Fact]
@@ -213,19 +358,98 @@ public class NodeChannelDeploymentTests
         verify.Should().Contain("/api/node-agent/v1/enroll");
         verify.Should().Contain("-X POST", "a GET on that route says nothing about whether enrolment works");
 
-        // A JSON refusal is the healthy answer: the endpoint is anonymous and the request carries no
-        // token. A 404 means the route is not being served at all.
-        verify.Should().Contain("401");
-        verify.Should().Contain("404");
+        // Sliced from the enrol probe onwards, because the panel-route check above it has a 404
+        // branch of its own — asserting on the whole function passed even with this probe deleted.
+        var enrol = EnrolSlice(verify);
+        enrol.Should().Contain("401", "a JSON refusal is the healthy answer to a request with no token");
+        enrol.Should().Contain("404", "and a 404 means the route is not being served at all");
     }
 
     [Fact]
     public void The_enrolment_preflight_explains_a_404_in_both_languages()
     {
-        var verify = ShellFunction(Installer(), "verify_install");
-        var enrol = verify[verify.IndexOf("/api/node-agent/v1/enroll", StringComparison.Ordinal)..];
+        var enrol = EnrolSlice(ShellFunction(Installer(), "verify_install"));
 
         enrol.Should().Contain("ثبت", "the installer speaks Persian first everywhere else it explains a failure");
         enrol.Should().Contain("enrollment", "and English second");
+    }
+
+    /// <summary>
+    /// The preflight that can fail. The enrol probe above it cannot: the panel's own catch-all
+    /// router answers <c>/enroll</c> whether or not the mTLS router was ever rendered, so a 401
+    /// there proves nothing about the channel.
+    /// </summary>
+    [Fact]
+    public void Verify_install_fails_when_the_router_is_absent_as_loudly_as_when_it_is_stale()
+    {
+        var verify = ShellFunction(Installer(), "verify_install");
+
+        // Absence. This is the state a failed CA export produces, and it used to be skipped in
+        // silence because the staleness check was guarded by "if the rendered file exists".
+        verify.Should().Contain("[ ! -f \"$(node_rendered)\" ]");
+        verify.Should().Contain("The node mTLS router was never rendered");
+
+        // Staleness, and the settings that have to agree with it.
+        verify.Should().Contain("The node router names a different host");
+        verify.Should().Contain("NodeAgent__PublicUrl");
+
+        // Both are errors, not warnings, and both are visible in the closing message.
+        verify.Should().Contain("VERIFY_FAILED=1");
+        ShellFunction(Installer(), "next_steps").Should().Contain("VERIFY_FAILED");
+    }
+
+    [Fact]
+    public void Verify_install_proves_the_channel_refuses_a_caller_with_no_certificate()
+    {
+        var verify = ShellFunction(Installer(), "verify_install");
+
+        // The node host carries one router and it requires a client certificate, so a curl without
+        // one must die in the handshake. An HTTP status back means either the router did not load
+        // (404) or it loaded without its TLS options — which is precisely what Traefik does when two
+        // routers claim one host name.
+        verify.Should().Contain("/api/node-agent/v1/channel");
+        verify.Should().Contain("mTLS is enforced");
+        verify.Should().Contain("WITHOUT a client certificate");
+        verify.Should().Contain("two routers claim one host name");
+    }
+
+    // --- the command the panel prints ---
+
+    [Fact]
+    public void The_enrolment_command_names_the_url_enrolment_is_actually_served_on()
+    {
+        // --control-plane is where the node POSTs its CSR. That is the panel's own host: the mTLS
+        // host demands a client certificate, and a node enrolling has none yet.
+        var command = NodeInstallCommand.For("https://panel.acme.test/", "hbr_enroll_abc", "web-01");
+
+        command.Should().Contain("--control-plane https://panel.acme.test ",
+            "a trailing slash would make the agent's base URL end in a double slash");
+        command.Should().Contain("--token hbr_enroll_abc");
+        command.Should().Contain("--name web-01");
+
+        NodeInstallCommand.For("https://panel.acme.test", "t", nodeName: null)
+            .Should().Contain("--name <node-name>");
+
+        // And the controller must not build it from PublicUrl, which now names the mTLS host.
+        File.ReadAllText(Path.Combine(RepoRoot(), "src", "Harbora.Web", "Controllers", "NodesController.cs"))
+            .Should().NotContain("_options.PublicUrl",
+                "PublicUrl is the node channel's host; enrolment is served on the panel's");
+    }
+
+    /// <summary>
+    /// Just the enrolment probe: from its URL to the start of the next numbered step. Bounded at
+    /// both ends on purpose — the panel-route check before it and the channel check after it both
+    /// have 404 branches of their own, so an unbounded slice let this assertion pass with the
+    /// enrolment probe deleted outright.
+    /// </summary>
+    private static string EnrolSlice(string verifyInstall)
+    {
+        var start = verifyInstall.IndexOf("/api/node-agent/v1/enroll", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(-1, "verify_install should probe the enrolment endpoint");
+
+        var end = verifyInstall.IndexOf("\n  # 4)", start, StringComparison.Ordinal);
+        end.Should().BeGreaterThan(start, "the enrolment step should be followed by the next one");
+
+        return verifyInstall[start..end];
     }
 }

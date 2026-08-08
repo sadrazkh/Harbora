@@ -78,7 +78,11 @@ public sealed record NodeListViewModel(
     IReadOnlyList<NodeRow> Nodes,
     IReadOnlyList<EnrollmentTokenRow> Tokens,
     DateTimeOffset Now,
-    string ControlPlaneUrl,
+    /// <summary>
+    /// Where a node <em>enrolls</em> — this panel's own URL. Not <c>NodeAgent:PublicUrl</c>, which
+    /// names the node channel's mTLS host and refuses anyone without a client certificate.
+    /// </summary>
+    string EnrollmentUrl,
     /// <summary>
     /// Shown once, immediately after minting. The panel stores only a hash, so this is the single
     /// moment the value exists anywhere it can be read.

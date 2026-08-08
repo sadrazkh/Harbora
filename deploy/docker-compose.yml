@@ -118,14 +118,20 @@ services:
       Storage__S3__PublicEndpoint: "https://${S3_DOMAIN}"
       Storage__S3__AccessKey: ${MINIO_ROOT_USER}
       Storage__S3__SecretKey: ${MINIO_ROOT_PASSWORD}
-      # The node channel. PublicUrl is what an enrolled node keeps calling afterwards; the flag lets
-      # the panel believe Traefik's X-Forwarded-Tls-Client-Cert, which is only safe because
-      # traefik/dynamic/node-agent.yml requires a client certificate and overwrites the header.
-      # install.sh writes both into .env and installs that router in the same run.
+      # The node channel. PublicUrl is the mTLS host (NODE_DOMAIN) an enrolled node is handed and
+      # keeps calling afterwards — deliberately not this panel's own host, because two routers on
+      # one host name with different TLS options make Traefik fall back to options that ask for no
+      # client certificate. The flag lets the panel believe Traefik's X-Forwarded-Tls-Client-Cert,
+      # which is only safe because traefik/dynamic/node-agent.yml requires a client certificate and
+      # therefore always overwrites that header. install.sh writes the flag only once that router is
+      # on disk.
       #
-      # Defaults, so a .env written before those keys existed does not stop the panel: an empty
-      # PublicUrl simply means nodes keep the URL they were installed with, and the flag fails
-      # closed rather than binding "" to a bool and throwing on startup.
+      # Defaults, so a .env written before those keys existed does not stop the panel — but they are
+      # a way to boot, not a working configuration. An empty PublicUrl is handed to the node as an
+      # empty ControlPlaneUrl (NodeEnrollmentService), so the node falls back to whatever URL it was
+      # installed with: the panel's host, where nothing asks it for a certificate. It enrols and then
+      # never connects. install.sh checks both values in verify_install for exactly that reason.
+      # The flag at least fails closed rather than binding "" to a bool and throwing on startup.
       NodeAgent__PublicUrl: ${NodeAgent__PublicUrl:-}
       NodeAgent__TrustForwardedClientCertificate: ${NodeAgent__TrustForwardedClientCertificate:-false}
     # Without this a panel whose process has died or hung stays "running" forever: Docker never
