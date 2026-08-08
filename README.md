@@ -349,10 +349,24 @@ The tunnel reaches **only ports the node itself published for a deployed workloa
 port rather than an address, so it cannot be turned into a port-forward into the customer's private
 network. Deleting a workload withdraws its port with no separate step to forget.
 
-### The older HTTP agent
+### The older HTTP agent — deprecated
 
-Still supported. It listens on a port and the panel connects **in**, so it needs an inbound rule and a
-reachable address:
+> **Deprecated as of v0.2.0. Do not use it for a new node** — use Node Agent v1 above.
+> It keeps working and it stays supported for **at least two more minor versions**; no end-of-life
+> date is set, and one will be announced here before it takes effect. Nothing is being taken away
+> from a fleet that already runs it.
+
+It listens on a port and the panel connects **in**, so it needs an inbound firewall rule and a
+publicly reachable address. Two things it cannot do, which Node Agent v1 can:
+
+- **It has no automated tests.** `src/Harbora.Agent` is one file and no test project references it.
+  That is why it is frozen rather than being developed further.
+- **A server behind it cannot back up its own volumes or databases.** The helper container would
+  stage the archive on *its* host while the panel reads its own, so the panel refuses in front of
+  the work instead of writing an archive nobody can collect. See
+  [docs/disaster-recovery.md](docs/disaster-recovery.md).
+
+For a node that already runs it, the install was:
 
 ```bash
 git clone https://github.com/sadrazkh/Harbora /opt/harbora/app && cd /opt/harbora/app/deploy
@@ -361,8 +375,9 @@ export HARBORA_AGENT_TOKEN=$(openssl rand -hex 24); echo "$HARBORA_AGENT_TOKEN"
 docker compose -f agent.compose.yml up -d
 ```
 
-Then **Servers → Add a server** → `http://<worker-ip>:9700` + that token. Optional **mTLS** hardens
-the link. Prefer Node Agent v1 for anything new.
+and the panel connects at **Servers → Add a server** → `http://<worker-ip>:9700` + that token, with
+optional **mTLS**. Moving a node to Node Agent v1 means enrolling it as a node and redeploying the
+apps on it; there is no in-place conversion.
 
 ---
 
@@ -373,8 +388,10 @@ the link. Prefer Node Agent v1 for anything new.
   HMAC-verified webhooks; commit metadata, deploy history, rollback.
 - **Visual routing designer**: drag-and-drop rules, host/path routing, SSL toggle, HTTP→HTTPS,
   WebSocket, basic-auth, custom headers, live Traefik-config preview, validate + apply with rollback.
-- **Managed databases**: PostgreSQL, MySQL, MariaDB, Redis, MongoDB — provisioned with encrypted
-  credentials, safe connection info, one-click attach to an app.
+- **Managed services**: five databases — PostgreSQL, MySQL, MariaDB, Redis, MongoDB — and two
+  message brokers, **RabbitMQ** and **NATS**. All seven are provisioned the same way: encrypted
+  credentials Harbora generates, a place on the environment's private network, safe connection info,
+  and one-click attach that injects the connection into the app.
 - **Backups**: app config, volume/database, full platform; local + S3-compatible; scheduled; retention;
   a copy of every backup can also be **sent to Telegram or email** (Backups → *Send backups to*) — the
   panel finds your Telegram chat id for you, and refuses an artifact too large for the channel instead
@@ -412,7 +429,15 @@ Domain → Application (ports) → Infrastructure / Data → Web
 - **Nodes: a versioned contract**, not an API surface that drifted. `contracts/node-agent/v1/` holds
   the JSON schema, the framing and the compatibility rules; the C# mirror is checked against it by
   conformance tests, so the two ends cannot disagree silently.
-- **Live logs: SignalR.** **Jobs: background worker + Redis.** **DB: PostgreSQL + EF Core.**
+- **Live logs: SignalR.** **DB: PostgreSQL + EF Core.**
+- **Jobs: a durable queue in PostgreSQL.** Enqueuing is a row in the `Jobs` table; an in-process
+  worker pool claims rows from it, so a job survives a restart of the panel and a build that is
+  running when the process dies is picked up again rather than lost. Concurrency is
+  `Jobs:MaxConcurrency`, defaulting to `min(4, ProcessorCount)`; setting it to `1` restores the
+  single-worker behaviour older installs had. **There is no Redis in this path** — the compose stack
+  still starts a `redis` container and `Harbora.Infrastructure` still carries the
+  `StackExchange.Redis` package, and today nothing in the product opens a connection to either.
+  Redis appears in Harbora only as a database you can offer a customer.
 
 ## 🛠 Local development
 
@@ -453,6 +478,15 @@ dotnet run --project src/Harbora.Web                             # auto-migrates
   fine for ordinary web apps, worth measuring before you put a busy one behind it.
 - A v1 node runs prebuilt images. Building from source happens on the panel; the node is told a digest
   to pull, never a repository to clone.
+- **Only the panel's own host can back up volumes and databases.** A volume or managed database that
+  lives on any other server — a v1 node or a legacy agent — cannot be backed up or restored yet:
+  carrying an archive between two machines needs a transport Harbora does not have. Harbora refuses
+  before it starts rather than writing an archive onto a disk it cannot read back. Plan for it in
+  [docs/disaster-recovery.md](docs/disaster-recovery.md).
+- **The AI service is a preview.** Everything around it is built and tested — plans, keys, routing,
+  rate limits, metering, SSRF checks — but no request has ever been made to a real model provider
+  from this codebase, so nothing has proven the last hop. It is labelled *Preview* in the panel and
+  hidden from the sidebar in Simple mode until one has.
 - Git OAuth requires registering an OAuth app (client id/secret); token connection needs no setup.
 - Usage metering records the billing *basis* (GB-hours / vCPU-hours from committed size); there's no
   invoicing/payment engine yet.
