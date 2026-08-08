@@ -34,7 +34,17 @@ public sealed class GatewayTunnel(
 
     private Stream? _connection;
     private TunnelFramer? _framer;
-    private TunnelState _state = null!;
+
+    /// <summary>
+    /// Pending until <see cref="RunAsync"/> names the registration this tunnel serves.
+    ///
+    /// <para>
+    /// A real value rather than <c>null!</c>: the supervisor puts a tunnel in its dictionary before
+    /// the detached loop has run a line, so anyone counting tunnels in that window — the heartbeat
+    /// does, twice a minute — would read a null through <see cref="State"/>.
+    /// </para>
+    /// </summary>
+    private TunnelState _state = new() { TunnelId = string.Empty, Status = TunnelStatus.Pending };
 
     public TunnelState State
     {

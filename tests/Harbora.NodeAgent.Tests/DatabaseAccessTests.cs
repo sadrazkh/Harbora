@@ -30,7 +30,7 @@ public sealed class DatabaseAccessTests : IDisposable
     private readonly NodeIdentityStore _identities;
     private readonly WorkloadRegistry _workloads;
     private readonly LocalSecretVault _vault;
-    private readonly StubTunnels _tunnels = new();
+    private readonly AcceptingTunnelGateway _tunnels = new();
     private readonly List<NodeEvent> _events = [];
 
     public DatabaseAccessTests()
@@ -82,7 +82,7 @@ public sealed class DatabaseAccessTests : IDisposable
     private TunnelSupervisor? _supervisor;
 
     private TunnelSupervisor Tunnels() => _supervisor ??= new TunnelSupervisor(
-        _agent.Wrapped, _tunnels.Gateway(), new FakeLocalDialer(), new NodeMetrics(_clock),
+        _agent.Wrapped, _tunnels, new FakeLocalDialer(), new NodeMetrics(_clock),
         _clock, NullLoggerFactory.Instance, TestFactories.Log<TunnelSupervisor>());
 
     private DatabaseAccessManager Manager() => new(
@@ -427,7 +427,7 @@ public sealed class DatabaseAccessTests : IDisposable
     {
         await Manager().CreateAsync(Spec(ttlSeconds: 3600), CancellationToken.None);
         await Tunnels().StopAllAsync();
-        _tunnels.Started.Clear();
+        _tunnels.Registered.Clear();
 
         _clock.Advance(TimeSpan.FromMinutes(5));
 
@@ -435,7 +435,7 @@ public sealed class DatabaseAccessTests : IDisposable
         await afterRestart.RestoreAsync(CancellationToken.None);
 
         afterRestart.StatusOf("gr-1", "tenant-1")!.State.Should().Be(DatabaseAccessState.Active);
-        _tunnels.Started.Should().Contain("gr-1");
+        _tunnels.Registered.Should().Contain("gr-1");
     }
 
     // --- vault ---
@@ -494,65 +494,6 @@ public sealed class DatabaseAccessTests : IDisposable
         {
             lock (sink) sink.Add(nodeEvent);
             return Task.CompletedTask;
-        }
-    }
-
-    /// <summary>
-    /// The real supervisor, driven by a gateway that always accepts. The tunnel's own framing and
-    /// forwarding are covered by TunnelProtocolTests; using the real supervisor here means the
-    /// manager's start/stop bookkeeping is exercised rather than stubbed past.
-    /// </summary>
-    private sealed class StubTunnels
-    {
-        public List<string> Started { get; } = [];
-
-        internal void Record(string grantId) => Started.Add(grantId);
-
-        /// <summary>
-        /// Answers the registration immediately with a published port, so
-        /// <see cref="TunnelSupervisor.StartAsync"/> observes a connected tunnel.
-        /// </summary>
-        public ITunnelConnectionFactory Gateway() => new AlwaysConnected(this);
-
-        private sealed class AlwaysConnected(StubTunnels owner) : ITunnelConnectionFactory
-        {
-            public Task<Stream> ConnectAsync(Uri gateway, NodeIdentity identity, CancellationToken ct)
-            {
-                var (node, remote) = DuplexStream.CreatePair();
-
-                _ = Task.Run(async () =>
-                {
-                    var framer = new TunnelFramer(remote);
-
-                    // Read the registration line, then answer it.
-                    var buffer = new List<byte>();
-                    var single = new byte[1];
-
-                    while (await remote.ReadAsync(single, ct) == 1 && single[0] != (byte)'\n')
-                        buffer.Add(single[0]);
-
-                    var registration = NodeContract.Deserialize<TunnelRegistration>(
-                        Encoding.UTF8.GetString(buffer.ToArray()))!;
-
-                    var response = NodeContract.Serialize(new TunnelRegistrationResponse
-                    {
-                        Accepted = true,
-                        PublicEndpoint = $"{gateway.Host}:41000",
-                        PublicPort = 41000,
-                    }) + "\n";
-
-                    await remote.WriteAsync(Encoding.UTF8.GetBytes(response), ct);
-                    await remote.FlushAsync(ct);
-
-                    // Key rather than GrantId: an ingress registration carries no grant, so the
-                    // tunnel's own name is what identifies it on both ends. For a database tunnel
-                    // the two are the same string.
-                    owner.Record(registration.Key);
-                    _ = framer;
-                }, ct);
-
-                return Task.FromResult<Stream>(node);
-            }
         }
     }
 }

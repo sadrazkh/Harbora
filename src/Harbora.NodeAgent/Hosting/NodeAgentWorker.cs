@@ -33,9 +33,8 @@ public sealed class NodeAgentWorker(
     StateReconciler reconciler,
     Harbora.NodeAgent.Tunnels.IngressTunnel ingress,
     Harbora.NodeAgent.Updates.AgentUpdater updater,
-    JsonFileStore<NodeState> stateStore,
+    HeartbeatReporter heartbeat,
     InventoryCollector inventory,
-    IContainerRuntime runtime,
     IHostFacts host,
     NodeAuditLog audit,
     NodeMetrics metrics,
@@ -45,7 +44,6 @@ public sealed class NodeAgentWorker(
 {
     private readonly NodeAgentOptions _options = options.Value;
     private readonly ReconnectPolicy _reconnect = new(options.Value.Reconnect);
-    private readonly NodeHealthEvaluator _health = new(host, options.Value);
 
     private NodeIdentity? _identity;
     private bool _credentialRevoked;
@@ -359,7 +357,7 @@ public sealed class NodeAgentWorker(
         {
             try
             {
-                await SendHeartbeatAsync(ct);
+                await heartbeat.SendAsync(_identity, _credentialRevoked, ct);
             }
             catch (OperationCanceledException)
             {
@@ -372,52 +370,6 @@ public sealed class NodeAgentWorker(
 
             await SafeDelayAsync(interval, ct);
         }
-    }
-
-    private async Task SendHeartbeatAsync(CancellationToken ct)
-    {
-        var runtimeInfo = await runtime.GetInfoAsync(ct);
-
-        var managed = runtimeInfo.Available
-            ? await runtime.ListContainersAsync(
-                new Dictionary<string, string> { [NodeLabels.Managed] = "true" }, includeStopped: false, ct)
-            : [];
-
-        var persisted = stateStore.Load() ?? new NodeState();
-
-        var verdict = _health.Evaluate(
-            new HealthInputs
-            {
-                RuntimeAvailable = runtimeInfo.Available,
-                Draining = persisted.Draining,
-                ChannelConnected = channel.IsConnected,
-                CertificateExpiresAt = _identity?.NotAfter,
-                CredentialRevoked = _credentialRevoked,
-            },
-            clock.GetUtcNow());
-
-        metrics.Health(verdict);
-        metrics.RunningWorkloads(managed.Count);
-
-        var disk = host.Disk(_options.DataDirectory);
-
-        await channel.SendEphemeralAsync(NodeFrames.Heartbeat, new NodeHeartbeat
-        {
-            NodeId = persisted.NodeId ?? "unknown",
-            AgentVersion = AgentVersion.Current,
-            Health = verdict.State,
-            Load1 = host.Load.One,
-            Load5 = host.Load.Five,
-            Load15 = host.Load.Fifteen,
-            FreeMemoryBytes = host.FreeMemoryBytes,
-            FreeDiskBytes = disk.FreeBytes,
-            RunningWorkloads = managed.Count,
-            Draining = persisted.Draining,
-            CertificateExpiresAt = _identity?.NotAfter,
-        }, ct);
-
-        if (verdict.State is NodeHealthState.Degraded or NodeHealthState.Unhealthy)
-            log.LogWarning("Node health is {State}: {Reasons}.", verdict.State, string.Join("; ", verdict.Reasons));
     }
 
     private static async Task SafeDelayAsync(TimeSpan delay, CancellationToken ct)

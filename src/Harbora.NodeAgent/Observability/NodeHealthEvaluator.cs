@@ -67,8 +67,8 @@ public sealed class NodeHealthEvaluator(IHostFacts host, NodeAgentOptions option
         var certificateExpiring = inputs.CertificateExpiresAt is { } expiry &&
                                   expiry - now < CertificateWarningWindow;
 
-        if (diskPressure) reasons.Add($"disk free {Format(disk.FreeBytes)} of {Format(disk.TotalBytes)}");
-        if (memoryPressure) reasons.Add($"memory free {Format(host.FreeMemoryBytes)} of {Format(totalMemory)}");
+        if (diskPressure) reasons.Add($"disk free {FormatBytes(disk.FreeBytes)} of {FormatBytes(disk.TotalBytes)}");
+        if (memoryPressure) reasons.Add($"memory free {FormatBytes(host.FreeMemoryBytes)} of {FormatBytes(totalMemory)}");
         if (cpuPressure) reasons.Add($"load {host.Load.One:0.00} across {cores} core(s)");
         if (certificateExpiring) reasons.Add($"credential expires {inputs.CertificateExpiresAt:u}");
         if (!inputs.ChannelConnected) reasons.Add("control channel disconnected");
@@ -102,7 +102,12 @@ public sealed class NodeHealthEvaluator(IHostFacts host, NodeAgentOptions option
         return disk || memory || cpu ? NodeHealthState.Degraded : NodeHealthState.Healthy;
     }
 
-    private static string Format(long bytes) => bytes switch
+    /// <summary>
+    /// Shared with <see cref="NodeConditionTracker"/> on purpose: the size in a pressure event and
+    /// the size in the health reason an operator sees beside it must be the same number, written the
+    /// same way.
+    /// </summary>
+    internal static string FormatBytes(long bytes) => bytes switch
     {
         >= 1L << 30 => $"{bytes / (double)(1L << 30):0.0} GiB",
         >= 1L << 20 => $"{bytes / (double)(1L << 20):0.0} MiB",

@@ -85,3 +85,61 @@ public sealed class FakeLocalDialer : ILocalDialer
         return Task.FromResult<Stream>(node);
     }
 }
+
+/// <summary>
+/// A gateway that answers every registration immediately with a published port, so
+/// <see cref="TunnelSupervisor.StartAsync"/> observes a connected tunnel.
+///
+/// <para>
+/// The tunnel's own framing and forwarding are covered by the protocol tests; this exists so a test
+/// about something above the tunnel can use the real supervisor — with its real start/stop and
+/// counting bookkeeping — rather than stub past it.
+/// </para>
+/// </summary>
+public sealed class AcceptingTunnelGateway : ITunnelConnectionFactory
+{
+    /// <summary>
+    /// Keys the gateway saw register, in order. Key rather than grant id: an ingress registration
+    /// carries no grant, so the tunnel's own name is what identifies it on both ends.
+    /// </summary>
+    public List<string> Registered { get; } = [];
+
+    public int PublicPort { get; set; } = 41000;
+
+    public Task<Stream> ConnectAsync(Uri gateway, NodeIdentity identity, CancellationToken ct)
+    {
+        var (node, remote) = DuplexStream.CreatePair();
+
+        _ = Task.Run(async () =>
+        {
+            var framer = new TunnelFramer(remote);
+
+            // Read the registration line, then answer it.
+            var buffer = new List<byte>();
+            var single = new byte[1];
+
+            while (await remote.ReadAsync(single, ct) == 1 && single[0] != (byte)'\n')
+                buffer.Add(single[0]);
+
+            var registration = Harbora.NodeAgent.Contracts.NodeContract
+                .Deserialize<Harbora.NodeAgent.Contracts.TunnelRegistration>(
+                    System.Text.Encoding.UTF8.GetString(buffer.ToArray()))!;
+
+            var response = Harbora.NodeAgent.Contracts.NodeContract.Serialize(
+                new Harbora.NodeAgent.Contracts.TunnelRegistrationResponse
+                {
+                    Accepted = true,
+                    PublicEndpoint = $"{gateway.Host}:{PublicPort}",
+                    PublicPort = PublicPort,
+                }) + "\n";
+
+            await remote.WriteAsync(System.Text.Encoding.UTF8.GetBytes(response), ct);
+            await remote.FlushAsync(ct);
+
+            lock (Registered) Registered.Add(registration.Key);
+            _ = framer;
+        }, ct);
+
+        return Task.FromResult<Stream>(node);
+    }
+}

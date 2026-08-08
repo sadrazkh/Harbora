@@ -39,6 +39,15 @@ public sealed class TunnelSupervisor(
 
     public IReadOnlyList<TunnelState> All() => _tunnels.Values.Select(t => t.Tunnel.State).ToList();
 
+    /// <summary>
+    /// Every tunnel under the key both ends name it with — a grant id, or <c>ingress</c>. The state
+    /// alone cannot be matched across two observations: an ingress tunnel's <c>TunnelId</c> is
+    /// derived from the node id, and a grant's is derived from the grant, so the key is the only
+    /// name that is stable and unique for both.
+    /// </summary>
+    public IReadOnlyDictionary<string, TunnelState> ByKey() =>
+        _tunnels.ToDictionary(t => t.Key, t => t.Value.Tunnel.State, StringComparer.Ordinal);
+
     /// <summary>Whether the node's single ingress tunnel is up right now.</summary>
     public bool IngressConnected =>
         StateFor(TunnelRegistration.IngressKey) is { Status: TunnelStatus.Connected };

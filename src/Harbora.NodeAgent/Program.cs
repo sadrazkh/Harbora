@@ -122,6 +122,7 @@ builder.Services.AddSingleton<NodeMetrics>();
 builder.Services.AddSingleton<CommandLedger>();
 builder.Services.AddSingleton<CommandDispatcher>();
 builder.Services.AddSingleton<INodeEventPublisher, ChannelEventPublisher>();
+builder.Services.AddSingleton<HeartbeatReporter>();
 
 // --- command handlers: one registration per verb in the allowlist ---
 
