@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using FluentAssertions;
 using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Jobs;
@@ -119,7 +120,8 @@ public class DependencyInjectionTests
                 ("Retention:CronRunDays", "14"),
                 ("Retention:NodeCommandDays", "45"),
                 ("Retention:NodeEventDays", "45"),
-                ("Retention:PasswordResetTokenDays", "3"))
+                ("Retention:PasswordResetTokenDays", "3"),
+                ("Retention:SweepHourUtc", "11"))
             .BuildServiceProvider()
             .GetRequiredService<IOptions<RetentionOptions>>().Value;
 
@@ -129,6 +131,7 @@ public class DependencyInjectionTests
         configured.NodeCommandDays.Should().Be(45);
         configured.NodeEventDays.Should().Be(45);
         configured.PasswordResetTokenDays.Should().Be(3);
+        configured.SweepHourUtc.Should().Be(11);
     }
 
     [Fact]
@@ -144,5 +147,41 @@ public class DependencyInjectionTests
         unconfigured.NodeCommandDays.Should().Be(90);
         unconfigured.NodeEventDays.Should().Be(90);
         unconfigured.PasswordResetTokenDays.Should().Be(7);
+        unconfigured.SweepHourUtc.Should().Be(3);
+    }
+
+    [Fact]
+    public void The_defaults_an_operator_reads_in_appsettings_are_the_defaults_the_code_ships()
+    {
+        // The shipped file sets none of these keys, so the C# defaults are the single source of
+        // truth for what they *are* — but the file still has to say what they are, or the only way
+        // to discover a cutoff is to read the source. That left the values written twice again,
+        // this time as prose beside code, with nothing comparing the two. This compares them.
+        using var settings = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(RepoRoot(), "src", "Harbora.Web", "appsettings.json")));
+
+        var documented = settings.RootElement
+            .GetProperty(RetentionOptions.SectionName)
+            .GetProperty("_comment_defaults").GetString()!
+            .TrimEnd('.')
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(pair => pair.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .ToDictionary(pair => pair[0], pair => pair[1]);
+
+        var shipped = typeof(RetentionOptions).GetProperties()
+            .ToDictionary(knob => knob.Name, knob => knob.GetValue(new RetentionOptions())!.ToString()!);
+
+        documented.Should().Equal(shipped,
+            "every retention knob has to be named in appsettings.json with the value it actually ships");
+    }
+
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Harbora.slnx")))
+            dir = dir.Parent;
+
+        dir.Should().NotBeNull("the tests must be able to find the repository root");
+        return dir!.FullName;
     }
 }

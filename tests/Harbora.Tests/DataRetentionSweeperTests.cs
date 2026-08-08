@@ -46,6 +46,25 @@ public class DataRetentionSweeperTests
                 : base.Set<TEntity>();
     }
 
+    /// <summary>
+    /// Asks to stop the moment the sweep reaches one table, and then fails the way a query does
+    /// when its token is cancelled. Stands in for the panel being stopped mid-sweep.
+    /// </summary>
+    private sealed class StopsMidSweepDbContext(
+        DbContextOptions<HarboraDbContext> options, Type stopAt, CancellationTokenSource stopping)
+        : HarboraDbContext(options)
+    {
+        public bool Armed { get; set; }
+
+        public override DbSet<TEntity> Set<TEntity>()
+        {
+            if (!Armed || typeof(TEntity) != stopAt) return base.Set<TEntity>();
+
+            stopping.Cancel();
+            throw new OperationCanceledException(stopping.Token);
+        }
+    }
+
     private static DbContextOptions<HarboraDbContext> NewOptions() =>
         new DbContextOptionsBuilder<HarboraDbContext>()
             .UseInMemoryDatabase("retention-" + Guid.NewGuid()).Options;
@@ -168,6 +187,46 @@ public class DataRetentionSweeperTests
     }
 
     [Fact]
+    public async Task One_unusable_number_of_days_does_not_abandon_the_whole_sweep()
+    {
+        // The cutoff is worked out before the per-table guard is entered, and deployment logs are
+        // swept first — so a value too large to be a date on that one key used to throw past every
+        // guard in the class and end the pass before any table was reached, every night, saying
+        // only "the data retention sweep failed".
+        using var db = new HarboraDbContext(NewOptions());
+        await SeedBothSidesAsync(db, Guid.NewGuid());
+
+        var result = await NewSweeper(db, new RetentionOptions { DeploymentLogDays = int.MaxValue })
+            .SweepAsync(CancellationToken.None);
+
+        result.Failures.Should().BeEmpty();
+        result.KeptForever.Should().Contain(RetentionTables.DeploymentLogs);
+        db.DeploymentLogs.Should().HaveCount(2, "a span too long to be a date means keep, not delete");
+        result.Deleted.Should().HaveCount(6, "every other table was still swept");
+    }
+
+    [Fact]
+    public async Task Being_asked_to_stop_mid_sweep_is_not_a_table_failure()
+    {
+        // Shutdown must not be recorded as seven broken tables, and must not be swallowed either:
+        // the tables after the stop are simply not swept, and the caller learns the pass ended.
+        using var stopping = new CancellationTokenSource();
+        using var db = new StopsMidSweepDbContext(NewOptions(), typeof(AuditLog), stopping);
+        await SeedBothSidesAsync(db, Guid.NewGuid());
+        db.Armed = true;
+
+        var sweep = async () => await NewSweeper(db).SweepAsync(stopping.Token);
+
+        await sweep.Should().ThrowAsync<OperationCanceledException>();
+        db.Armed = false;
+
+        // Without the guard this would be filed as a failure of AuditLogs and the sweep would carry
+        // on through the five tables after it.
+        db.NodeEvents.Should().HaveCount(2);
+        db.PasswordResetTokens.Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task A_table_set_to_keep_forever_is_left_alone_and_says_so()
     {
         using var db = new HarboraDbContext(NewOptions());
@@ -193,12 +252,38 @@ public class DataRetentionSweeperTests
         using var db = new HarboraDbContext(NewOptions(), someoneElse);
         await SeedBothSidesAsync(db, tenant);
 
+        // The protection set is read from Deployments and Apps, and both of those carry a workspace
+        // filter too. This is the read where a leak is worst: an empty candidate set merely fails to
+        // delete, while an empty protection set deletes the rows that must never go — the build
+        // still being written, and the account of what an app is running right now.
+        var building = Guid.NewGuid();
+        var live = Guid.NewGuid();
+        db.Deployments.AddRange(
+            new Deployment
+            {
+                Id = building, AppId = Guid.NewGuid(), WorkspaceId = tenant,
+                Number = 1, Status = DeploymentStatus.Building
+            },
+            new Deployment
+            {
+                Id = live, AppId = Guid.NewGuid(), WorkspaceId = tenant,
+                Number = 2, Status = DeploymentStatus.Succeeded
+            });
+        db.Apps.Add(new App { Name = "shop", Slug = "shop", WorkspaceId = tenant, ActiveDeploymentId = live });
+        db.DeploymentLogs.AddRange(
+            new DeploymentLog { DeploymentId = building, Message = "still building", Timestamp = Now.AddDays(-400) },
+            new DeploymentLog { DeploymentId = live, Message = "what is running now", Timestamp = Now.AddDays(-400) });
+        await db.SaveChangesAsync();
+
         var result = await NewSweeper(db).SweepAsync(CancellationToken.None);
 
         result.Deleted[RetentionTables.CronRuns].Should().Be(1);
         result.Deleted[RetentionTables.IdempotencyRecords].Should().Be(1);
         db.CronRuns.IgnoreQueryFilters().Should().ContainSingle();
         db.IdempotencyRecords.IgnoreQueryFilters().Should().ContainSingle();
+
+        db.DeploymentLogs.Select(log => log.Message).Should()
+            .BeEquivalentTo(["new", "still building", "what is running now"]);
     }
 
     [Fact]

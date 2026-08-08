@@ -71,7 +71,15 @@ public sealed record RetentionSweepResult(
 /// <para>
 /// <b>One failure does not end the sweep.</b> Each table is swept inside its own try/catch, because
 /// a single locked or damaged table ending the pass would leave the other six growing for ever while
-/// the logs mentioned only the seventh.
+/// the logs mentioned only the seventh. The same goes for a value that cannot be a cutoff: a span of
+/// days too long to be a date is read as "keep for ever" by <see cref="RetentionRule.CutoffFor"/>
+/// rather than thrown, because that arithmetic happens before the per-table guard is entered.
+/// </para>
+///
+/// <para>
+/// <b>Once a night, at an hour you choose.</b> <c>Retention:SweepHourUtc</c> (default 03:00 UTC)
+/// decides when, so the largest delete pass an install ever runs — its first — can be put somewhere
+/// quiet instead of landing at whatever time the panel was last restarted.
 /// </para>
 /// </summary>
 public sealed class DataRetentionSweeper(
@@ -80,23 +88,31 @@ public sealed class DataRetentionSweeper(
     ISystemClock clock,
     ILogger<DataRetentionSweeper> logger) : BackgroundService
 {
-    /// <summary>Nightly. Nothing here is urgent, and a delete pass is the last thing a busy panel needs hourly.</summary>
-    private static readonly TimeSpan Tick = TimeSpan.FromHours(24);
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Deliberately off the boot path. This settles nothing anyone is waiting for, and a large
-        // first sweep on an install that has never had one would compete with the reconcilers.
-        try { await Task.Delay(TimeSpan.FromMinutes(10), stoppingToken); }
-        catch (OperationCanceledException) { return; }
-
-        using var timer = new PeriodicTimer(Tick);
-        do
+        while (!stoppingToken.IsCancellationRequested)
         {
+            // An hour of the night, not a period since boot. A 24-hour period started ten minutes
+            // after start-up means the sweep runs at whatever time this panel was last restarted,
+            // which is the one time of day nobody chose — and the first pass on an old install is
+            // the largest DELETE this platform will ever issue. RetentionRule.DelayUntilNextSweep
+            // also keeps the first one clear of the boot path, where it settles nothing anyone is
+            // waiting for and would only compete with the reconcilers.
+            try { await Task.Delay(RetentionRule.DelayUntilNextSweep(clock.UtcNow, options.Value.SweepHourUtc), stoppingToken); }
+            catch (OperationCanceledException) { return; }
+
             try { await SweepAsync(stoppingToken); }
-            catch (Exception ex) { logger.LogError(ex, "The data retention sweep failed."); }
+            catch (Exception ex)
+            {
+                // Shutdown is not a sweep failure, for the same reason it is not a table failure
+                // one frame down: the per-table guard deliberately re-raises what it sees when the
+                // token is cancelled, and without the same guard here that landed as "the sweep
+                // failed" — an error on every stop that caught a sweep in progress.
+                if (stoppingToken.IsCancellationRequested) return;
+
+                logger.LogError(ex, "The data retention sweep failed.");
+            }
         }
-        while (await timer.WaitForNextTickAsync(stoppingToken));
     }
 
     /// <summary>

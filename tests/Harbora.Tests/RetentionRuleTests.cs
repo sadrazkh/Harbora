@@ -46,6 +46,71 @@ public class RetentionRuleTests
         RetentionRule.CutoffFor(days, Now).Should().BeNull();
     }
 
+    [Theory]
+    [InlineData(int.MaxValue)]      // TimeSpan.FromDays gives up first, past ~10.7 million days
+    [InlineData(2_000_000)]         // ~5,500 years: the subtraction underflows instead
+    public void A_span_of_days_too_long_to_be_a_date_means_keep_forever_rather_than_throwing(int days)
+    {
+        // An operator reaching for a very large integer to mean "keep this for a very long time"
+        // is the ordinary way to arrive here, and the two readings agree: nothing in a database is
+        // older than the beginning of representable time.
+        //
+        // This is not a nicety. CutoffFor is called from the sweeper OUTSIDE the per-table
+        // try/catch, so one such value threw past every table's guard and out of SweepAsync — and
+        // because deployment logs are swept first, a bad value on that one key meant no table was
+        // ever swept, every night, behind a log line that named neither the table nor the key.
+        RetentionRule.CutoffFor(days, Now).Should().BeNull();
+    }
+
+    [Fact]
+    public void A_long_but_representable_retention_is_still_an_ordinary_cutoff()
+    {
+        // The clamp above must not swallow values an operator could plausibly mean: a century of
+        // audit history is a real answer to a real obligation.
+        RetentionRule.CutoffFor(36_500, Now).Should().Be(Now.AddDays(-36_500));
+    }
+
+    [Fact]
+    public void Keep_forever_begins_exactly_where_a_date_stops_being_representable()
+    {
+        // Written from the clock rather than as a magic number, because the boundary moves with
+        // "now": how far back a cutoff can reach is how far "now" is from the start of time.
+        var reach = (int)(Now - DateTimeOffset.MinValue).TotalDays;
+
+        RetentionRule.CutoffFor(reach - 2, Now).Should().NotBeNull("this one still lands on a real date");
+        RetentionRule.CutoffFor(reach, Now).Should().BeNull("this one cannot, so it means keep forever");
+    }
+
+    // ---------- when the sweep runs ----------
+
+    private static DateTimeOffset At(int hour, int minute) => new(2026, 8, 8, hour, minute, 0, TimeSpan.Zero);
+
+    [Theory]
+    [InlineData(23, 30, 3, 210)]       // late-evening boot: tonight's window is three and a half hours off
+    [InlineData(2, 0, 3, 60)]          // an hour short of it
+    [InlineData(3, 0, 3, 1440)]        // standing exactly on it: the next one, not one right now
+    [InlineData(2, 55, 3, 1445)]       // five minutes short of it is still the boot path; wait a day
+    public void The_sweep_is_scheduled_for_a_chosen_hour_rather_than_a_day_after_whenever_the_panel_booted(
+        int bootHour, int bootMinute, int sweepHourUtc, int expectedMinutes)
+    {
+        // A fixed period measured from start-up runs the sweep at whatever time the panel happened
+        // to be restarted — the one time of day nobody chose. "Nightly" has to mean a night.
+        RetentionRule.DelayUntilNextSweep(At(bootHour, bootMinute), sweepHourUtc)
+            .Should().Be(TimeSpan.FromMinutes(expectedMinutes));
+    }
+
+    [Theory]
+    [InlineData(-1, 0)]
+    [InlineData(24, 23)]
+    [InlineData(int.MaxValue, 23)]
+    public void An_hour_outside_the_clock_is_clamped_rather_than_throwing(int configured, int effective)
+    {
+        // Same reasoning as the cutoff: a mistyped hour must cost an operator a sweep at an odd
+        // time, not the sweeper.
+        RetentionRule.DelayUntilNextSweep(Now, configured)
+            .Should().Be(RetentionRule.DelayUntilNextSweep(Now, effective));
+    }
+
     // ---------- deployment logs ----------
 
     private static DeploymentLog Line(Guid deploymentId, DateTimeOffset at) =>
@@ -160,24 +225,53 @@ public class RetentionRuleTests
     }
 
     [Fact]
-    public void A_revocation_can_never_be_swept_before_the_grant_it_revokes()
+    public void A_command_issued_later_is_never_swept_while_an_earlier_one_survives()
     {
-        // Defence in depth behind sweeping node commands by IssuedAt rather than CompletedAt. A
-        // revoke is always issued after its grant, so any cutoff that reaches the revoke has already
-        // reached the grant: the pair can only disappear grant-first, which fails closed. Losing a
-        // revocation while its grant survived would re-authorise access somebody withdrew.
+        // This is the ordering that makes "a revocation can never be swept before the grant it
+        // revokes" true structurally, behind the outright exclusion above. A revoke is always
+        // issued after its grant, so any cutoff that reaches the revoke has already reached the
+        // grant: the pair can only disappear grant-first, and a grant with no row is denied.
+        // Losing a revocation while its grant survived would re-authorise access somebody withdrew.
         //
-        // The completion times below are deliberately inverted — a slow grant and an instant revoke,
-        // which is the ordinary case, since creating a credential does more work than dropping one.
-        // Judging age by CompletedAt would therefore sweep the revocation first, and this test says
-        // so rather than leaving the choice of basis looking arbitrary.
+        // The property has to be asserted on the predicate that actually deletes, not on a parallel
+        // helper — the two are separate declarations, and a change of basis in the predicate is
+        // exactly the change that would matter. The verbs here are ordinary ones because the ledger
+        // verbs are excluded outright, which would make the ordering unobservable.
+        //
+        // The completion times are deliberately inverted: a slow command issued first that finished
+        // after the cutoff, and a fast one issued later that finished before it. That is the
+        // ordinary shape of a grant and a revoke, since creating a credential does more work than
+        // dropping one — and under a CompletedAt basis it takes the later row and leaves the
+        // earlier one, which is the inversion this test exists to forbid.
         var cutoff = Now.AddDays(-90);
-        var grant = Command(NodeCommands.CreateDatabaseAccessGrant, NodeCommandStatus.Succeeded, cutoff.AddDays(-10));
-        grant.CompletedAt = cutoff.AddDays(-8);
-        var revoke = Command(NodeCommands.RevokeDatabaseAccessGrant, NodeCommandStatus.Succeeded, cutoff.AddDays(-9));
-        revoke.CompletedAt = cutoff.AddDays(-9);
 
-        RetentionRule.NodeCommandAgeBasis(grant).Should().BeBefore(RetentionRule.NodeCommandAgeBasis(revoke));
+        var earlierButSlow = Command(NodeCommands.DeployWorkload, NodeCommandStatus.Succeeded, cutoff.AddHours(-2));
+        earlierButSlow.CompletedAt = cutoff.AddHours(1);
+        var laterButInstant = Command(NodeCommands.DeployWorkload, NodeCommandStatus.Succeeded, cutoff.AddMinutes(-30));
+        laterButInstant.CompletedAt = cutoff.AddMinutes(-29);
+
+        var selected = Selected(RetentionRule.NodeCommandsToDelete(cutoff), earlierButSlow, laterButInstant);
+
+        selected.Should().Contain(laterButInstant)
+            .And.Contain(earlierButSlow, "the later row can never go while the earlier one stays");
+    }
+
+    [Fact]
+    public void The_predicate_and_the_entity_agree_about_which_statuses_are_finished()
+    {
+        // NodeCommandsToDelete spells the terminal statuses out because it has to become SQL, while
+        // NodeCommandRecord.IsTerminal is C#. Nothing in the type system keeps the two lists in
+        // step, so this does: a status appended to the enum and to only one of them fails here.
+        var cutoff = Now.AddDays(-90);
+
+        foreach (var status in Enum.GetValues<NodeCommandStatus>())
+        {
+            var record = Command(NodeCommands.DeployWorkload, status, cutoff.AddDays(-1));
+
+            Selected(RetentionRule.NodeCommandsToDelete(cutoff), record).Should()
+                .HaveCount(record.IsTerminal ? 1 : 0,
+                    "the sweep's idea of a finished {0} command must match the record's own", status);
+        }
     }
 
     // ---------- node events ----------

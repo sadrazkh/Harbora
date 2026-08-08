@@ -36,8 +36,54 @@ public static class RetentionRule
     /// a mistyped key and a section that never got bound all arrive here as 0.
     /// </para>
     /// </summary>
-    public static DateTimeOffset? CutoffFor(int days, DateTimeOffset now) =>
-        days <= 0 ? null : now - TimeSpan.FromDays(days);
+    public static DateTimeOffset? CutoffFor(int days, DateTimeOffset now)
+    {
+        if (days <= 0) return null;
+
+        // A span too long to be a date also means "keep for ever", and it has to be answered here
+        // rather than left to the arithmetic. TimeSpan.FromDays gives up past ~10.7 million days
+        // and the subtraction underflows past however far "now" is from the start of time — and
+        // this is called before the sweeper enters its per-table guard, so either exception used to
+        // escape every table's catch and end the whole pass. Deployment logs are swept first, so
+        // one operator reaching for a big integer to mean "keep this a very long time" stopped
+        // every table being swept, every night, behind a line that named neither table nor key.
+        // The two readings agree anyway: nothing in a database is older than the year 1.
+        //
+        // A day of slack keeps the subtraction off the boundary itself for any clock offset.
+        if (days >= (now - DateTimeOffset.MinValue).TotalDays - 1) return null;
+
+        return now - TimeSpan.FromDays(days);
+    }
+
+    /// <summary>How long after start-up the first sweep may run, so it is never on the boot path.</summary>
+    public static readonly TimeSpan MinimumStartupDelay = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// How long to wait, from <paramref name="now"/>, for the next sweep at <paramref name="hourUtc"/>.
+    ///
+    /// <para>
+    /// An hour of the day rather than a period since start-up: a 24-hour period counted from boot
+    /// runs the sweep at whatever time the panel was last restarted, which is the one time of day
+    /// nobody chose — so "nightly" would mean "nightly at 14:20" for an install restarted after
+    /// lunch. The first pass on a year-old install is the largest <c>DELETE</c> this platform will
+    /// ever issue, and an operator ought to be able to put it somewhere quiet.
+    /// </para>
+    /// <para>
+    /// The window is never less than <see cref="MinimumStartupDelay"/> away, so a panel started a
+    /// few minutes before its own sweep hour still keeps the delete pass off the boot path. An hour
+    /// outside 0–23 is clamped: a mistyped setting should cost a sweep at an odd time, not the
+    /// sweeper.
+    /// </para>
+    /// </summary>
+    public static TimeSpan DelayUntilNextSweep(DateTimeOffset now, int hourUtc)
+    {
+        var next = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero)
+            .AddHours(Math.Clamp(hourUtc, 0, 23));
+
+        while (next - now < MinimumStartupDelay) next = next.AddDays(1);
+
+        return next - now;
+    }
 
     /// <summary>
     /// Persisted build output past the cutoff, except for deployments named in
@@ -88,16 +134,6 @@ public static class RetentionRule
         run => run.FinishedAt != null && run.FinishedAt < cutoff;
 
     /// <summary>
-    /// The age a node command is judged by: when it was issued.
-    ///
-    /// <para>
-    /// Exposed as its own member because the choice is load-bearing rather than cosmetic — see
-    /// <see cref="NodeCommandsToDelete"/>.
-    /// </para>
-    /// </summary>
-    public static DateTimeOffset NodeCommandAgeBasis(NodeCommandRecord record) => record.IssuedAt;
-
-    /// <summary>
     /// Node commands that have finished, were issued before the cutoff, and are not part of the
     /// database-access grant ledger.
     ///
@@ -118,13 +154,16 @@ public static class RetentionRule
     /// by the number of grants an operator has ever issued, which is small.
     /// </para>
     /// <para>
-    /// 3. Age is taken from <c>IssuedAt</c>, and that is what keeps the exclusion in 2 from being
-    /// the only thing standing between this sweep and a security regression. A revocation is always
-    /// issued after the grant it revokes, so a cutoff that reaches a revocation has already reached
-    /// its grant: the pair can only ever disappear grant-first, which fails closed. Sweeping by
-    /// <c>CompletedAt</c> would not have that property — a revocation that completed quickly could
-    /// outrank a grant that took an hour — and losing a revocation while its grant survives would
-    /// re-authorise access somebody deliberately withdrew.
+    /// 3. Age is taken from <c>IssuedAt</c> in the predicate below, and that is what keeps the
+    /// exclusion in 2 from being the only thing standing between this sweep and a security
+    /// regression. A revocation is always issued after the grant it revokes, so a cutoff that
+    /// reaches a revocation has already reached its grant: the pair can only ever disappear
+    /// grant-first, which fails closed. Sweeping by <c>CompletedAt</c> would not have that property
+    /// — a revocation that completed quickly could outrank a grant that took an hour — and losing a
+    /// revocation while its grant survives would re-authorise access somebody deliberately withdrew.
+    /// The basis is asserted on this expression itself
+    /// (<c>A_command_issued_later_is_never_swept_while_an_earlier_one_survives</c>) rather than on a
+    /// parallel member, because a member the delete path never calls pins nothing about the delete.
     /// </para>
     /// </summary>
     public static Expression<Func<NodeCommandRecord, bool>> NodeCommandsToDelete(DateTimeOffset cutoff) =>
@@ -146,7 +185,8 @@ public static class RetentionRule
     /// <para>
     /// <b>Safety.</b> Events are what a node reported unprompted, held so the panel can show a node's
     /// story without polling it. Nothing derives state from them — a node's status, scopes and
-    /// capabilities all live on the node row — and the only reader takes the most recent 40.
+    /// capabilities all live on the node row — and the readers take only the most recent handful
+    /// (40 on the node page, 50 through the admin API).
     /// </para>
     /// </summary>
     public static Expression<Func<NodeEventRecord, bool>> NodeEventsToDelete(DateTimeOffset cutoff) =>

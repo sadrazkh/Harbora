@@ -51,12 +51,15 @@ public sealed class RetentionOptions
     public int CronRunDays { get; set; } = 90;
 
     /// <summary>
-    /// What the panel asked each node to do. The node detail page shows the last 30, so 90 days is
-    /// already far more than anything reads.
+    /// What the panel asked each node to do. The node detail page shows the last 30 and the admin
+    /// API returns the last 25, so 90 days is already far more than anything reads.
     /// </summary>
     public int NodeCommandDays { get; set; } = 90;
 
-    /// <summary>What nodes reported unprompted. The node detail page shows the last 40.</summary>
+    /// <summary>
+    /// What nodes reported unprompted. The node detail page shows the last 40 and the admin API
+    /// returns the last 50.
+    /// </summary>
     public int NodeEventDays { get; set; } = 90;
 
     /// <summary>
@@ -65,4 +68,18 @@ public sealed class RetentionOptions
     /// support conversation; a week covers that and nothing longer serves anyone.
     /// </summary>
     public int PasswordResetTokenDays { get; set; } = 7;
+
+    /// <summary>
+    /// The hour (UTC, 0–23) the nightly sweep runs at. Defaults to 03:00 UTC.
+    ///
+    /// <para>
+    /// An hour rather than a period, because a period counted from start-up runs the sweep at
+    /// whatever time the panel was last restarted — which is the one time of day nobody chose, and
+    /// is as likely to be the busiest hour as the quietest. The first pass on an install that has
+    /// been running for a year is the largest <c>DELETE</c> this platform will ever issue, so being
+    /// able to put it somewhere quiet is worth one setting. Values outside 0–23 are clamped rather
+    /// than rejected: a mistyped hour should cost a sweep at an odd time, not the sweeper.
+    /// </para>
+    /// </summary>
+    public int SweepHourUtc { get; set; } = 3;
 }
