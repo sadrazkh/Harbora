@@ -16,6 +16,12 @@ src/Harbora.Web/wwwroot/build/
 deploy/**/.env
 appsettings.*.local.json
 
+# Node channel: both are generated per install from traefik/node-agent.yml.template and the panel's
+# own CA. They name one server's domain and one server's trust anchor, and the installer rewrites
+# them on every run — committing either would put someone else's install in the repository.
+deploy/traefik/dynamic/node-agent.yml
+deploy/traefik/dynamic/node-ca.pem
+
 # OS / IDE
 .vs/
 .idea/

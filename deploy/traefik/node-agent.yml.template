@@ -1,12 +1,21 @@
-# Traefik configuration for the Harbora node channel.
+# Traefik configuration for the Harbora node channel — TEMPLATE.
+#
+# deploy/install.sh renders this into traefik/dynamic/node-agent.yml on every install and update,
+# substituting {{PANEL_DOMAIN}} with PANEL_DOMAIN from .env. It lives here, outside the directory
+# Traefik watches, for two reasons:
+#
+#   * a copy in the watched directory is loaded as it stands, and a router for somebody else's
+#     domain pointing at a CA file that does not exist is worse than no router at all;
+#   * the update path is `git reset --hard`, which would put the unrendered original back over an
+#     edited one on every upgrade. The rendered file is untracked, so it survives.
 #
 # The node endpoints are the only place the panel authenticates a caller with a client certificate.
 # Traefik terminates TLS, so it — not Kestrel — is what must ask for one and pass it through.
 #
-# Copy this file next to the rest of the dynamic configuration and set NodeAgent settings in
-# deploy/.env:
+# The two settings that make the panel accept the result live in deploy/.env, written by the same
+# installer run:
 #
-#   NodeAgent__PublicUrl=https://panel.example.com
+#   NodeAgent__PublicUrl=https://{{PANEL_DOMAIN}}
 #   NodeAgent__TrustForwardedClientCertificate=true
 #
 # TrustForwardedClientCertificate is the operator asserting that the two pieces below are in place.
@@ -19,11 +28,17 @@ tls:
       minVersion: VersionTLS12
 
       clientAuth:
-        # The CA the panel created on first enrollment. Export it with:
-        #   docker exec harbora-panel harbora node-ca > /opt/harbora/app/deploy/traefik/node-ca.pem
-        # or copy the value of the `nodeagent.ca.certificate` setting.
+        # The CA the panel owns. The installer exports it here before it puts this file in place:
+        #
+        #   harbora node-ca > /opt/harbora/app/deploy/traefik/dynamic/node-ca.pem
+        #
+        # Inside the stack that command is `docker compose run --rm -T panel admin node-ca`; there
+        # is no `harbora` binary in the panel image, only the entrypoint's admin verbs.
+        #
+        # /dynamic is where docker-compose.yml mounts deploy/traefik/dynamic into Traefik, so this
+        # path and the one above are the same file seen from either side.
         caFiles:
-          - /etc/traefik/dynamic/node-ca.pem
+          - /dynamic/node-ca.pem
 
         # RequireAndVerifyClientCert: a connection with no client certificate, or one that does not
         # chain to the node CA, never reaches the panel. The panel checks again — the certificate
@@ -43,7 +58,7 @@ http:
     # Enrollment: authenticated by a single-use token, not by a certificate, so it gets the ordinary
     # TLS options. A node has no certificate yet when it calls this.
     harbora-node-enroll:
-      rule: "Host(`panel.example.com`) && Path(`/api/node-agent/v1/enroll`)"
+      rule: "Host(`{{PANEL_DOMAIN}}`) && Path(`/api/node-agent/v1/enroll`)"
       entryPoints: [websecure]
       service: harbora-panel
       tls:
@@ -52,7 +67,7 @@ http:
     # Renewal and the channel: both require the node's certificate.
     harbora-node-mtls:
       rule: >-
-        Host(`panel.example.com`) &&
+        Host(`{{PANEL_DOMAIN}}`) &&
         (Path(`/api/node-agent/v1/credential/renew`) || Path(`/api/node-agent/v1/channel`))
       entryPoints: [websecure]
       service: harbora-panel

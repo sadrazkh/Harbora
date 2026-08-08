@@ -118,6 +118,16 @@ services:
       Storage__S3__PublicEndpoint: "https://${S3_DOMAIN}"
       Storage__S3__AccessKey: ${MINIO_ROOT_USER}
       Storage__S3__SecretKey: ${MINIO_ROOT_PASSWORD}
+      # The node channel. PublicUrl is what an enrolled node keeps calling afterwards; the flag lets
+      # the panel believe Traefik's X-Forwarded-Tls-Client-Cert, which is only safe because
+      # traefik/dynamic/node-agent.yml requires a client certificate and overwrites the header.
+      # install.sh writes both into .env and installs that router in the same run.
+      #
+      # Defaults, so a .env written before those keys existed does not stop the panel: an empty
+      # PublicUrl simply means nodes keep the URL they were installed with, and the flag fails
+      # closed rather than binding "" to a bool and throwing on startup.
+      NodeAgent__PublicUrl: ${NodeAgent__PublicUrl:-}
+      NodeAgent__TrustForwardedClientCertificate: ${NodeAgent__TrustForwardedClientCertificate:-false}
     # Without this a panel whose process has died or hung stays "running" forever: Docker never
     # restarts it, and every request gets a 502 with nothing to explain why. Observed in production.
     healthcheck:

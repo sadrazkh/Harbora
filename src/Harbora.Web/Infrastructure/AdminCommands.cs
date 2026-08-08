@@ -1,8 +1,10 @@
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
+using Harbora.Infrastructure.Nodes;
 using Harbora.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Harbora.Web.Infrastructure;
 
@@ -33,6 +35,7 @@ public static class AdminCommands
                 "reset-password" => await ResetPasswordAsync(args, config),
                 "make-owner" => await MakeOwnerAsync(args, config),
                 "unlock" => await UnlockAsync(args, config),
+                "node-ca" => await NodeCaAsync(config),
                 "help" or "--help" or "-h" => Help(),
                 _ => Unknown(command)
             };
@@ -170,6 +173,43 @@ public static class AdminCommands
         return 0;
     }
 
+    /// <summary>
+    /// Print the node CA certificate, and nothing else, so it can be redirected into the file
+    /// Traefik's mTLS configuration names.
+    ///
+    /// <para>
+    /// Creating the CA when none exists is deliberate. The authority is otherwise minted on first
+    /// enrollment, which is too late for the installer: Traefik must already trust the CA before the
+    /// node router is in place, and a named TLS option Traefik cannot build falls back to the default
+    /// one — which asks for no client certificate at all. Running this is the "first use" the
+    /// authority is documented to be created on; it just happens during the install rather than
+    /// during the first enrollment.
+    /// </para>
+    ///
+    /// <para>
+    /// Like every other verb here it builds what it needs by hand instead of asking a container, so
+    /// it works while the panel refuses to start. Unlike the others it needs the master key, because
+    /// the CA's private key is protected with it — and it says so rather than writing a CA nothing
+    /// could ever decrypt.
+    /// </para>
+    /// </summary>
+    private static async Task<int> NodeCaAsync(IConfiguration config)
+    {
+        var masterKey = Coalesce(config["Harbora:MasterKey"], Environment.GetEnvironmentVariable("HARBORA_MASTER_KEY"));
+
+        if (string.IsNullOrWhiteSpace(masterKey))
+            return Fail("HARBORA_MASTER_KEY is not set, so the node CA's private key could not be protected. Run: harbora fix-key");
+
+        await using var db = Open(config);
+
+        // NullLogger, not the console: this command's stdout is a certificate file.
+        var authority = new NodeCertificateAuthority(
+            db, new AesGcmSecretProtector(masterKey), NullLogger<NodeCertificateAuthority>.Instance);
+
+        Console.Out.Write(CaPemForRedirect(await authority.GetCaCertificatePemAsync(CancellationToken.None)));
+        return 0;
+    }
+
     private static int Help()
     {
         Console.WriteLine("""
@@ -181,6 +221,7 @@ public static class AdminCommands
                                      [--password Y]
               harbora make-owner --email X            Promote an account to Owner
               harbora unlock --email X                Re-enable a deactivated account
+              harbora node-ca                         Print the node CA (PEM) for Traefik's mTLS config
 
             These work even when the panel refuses to start.
             """);
@@ -195,6 +236,13 @@ public static class AdminCommands
     }
 
     // ---- helpers ----
+
+    /// <summary>
+    /// The exact bytes <c>node-ca</c> puts on stdout. Kept separate because the whole value of the
+    /// verb is that its output can be redirected into a file Traefik parses: a trailing blank line
+    /// or a missing final newline is not a cosmetic difference there.
+    /// </summary>
+    public static string CaPemForRedirect(string pem) => pem.TrimEnd('\r', '\n') + "\n";
 
     /// <summary>
     /// Minimal DbContext — system-scoped, no global filters in the way, and none of the

@@ -205,6 +205,17 @@ repair_env() {
   backfill_env MINIO_ROOT_PASSWORD "$(openssl rand -hex 24)" && {
     warn "Generated the object-storage root password. / رمز ریشهٔ فضای ذخیره‌سازی ساخته شد."
     repaired=1; }
+
+  # The node channel. Without both of these the panel reads no PublicUrl and refuses every forwarded
+  # client certificate, so the enrollment endpoint answers but nothing can ever use it — the flagship
+  # multi-server feature was off on every install that ever existed.
+  #
+  # The flag is the operator asserting that Traefik requires and overwrites the certificate header.
+  # It is only written because the same installer run puts that half in place (enable_node_channel).
+  # backfill_env, so an operator who deliberately set it to false keeps their answer.
+  backfill_env NodeAgent__PublicUrl "https://${_panel}" && repaired=1
+  backfill_env NodeAgent__TrustForwardedClientCertificate "true" && repaired=1
+
   [ "$repaired" -eq 1 ] && ok "Repaired .env (existing values untouched)." || true
 }
 
@@ -234,6 +245,11 @@ MINIO_ROOT_PASSWORD=$(openssl rand -hex 24)
 EOF
   chmod 600 .env
   ok "Config written (secrets generated, mode 600)."
+
+  # Settings that are derived rather than asked for live in repair_env, and a fresh .env goes through
+  # it too. One path, so an install and an upgrade end up with the same keys — the alternative is a
+  # setting that only exists on installs that happen to have been upgraded once.
+  repair_env
 }
 
 preflight_ports() {
@@ -283,6 +299,97 @@ wait_panel() {
 }
 
 # ---------------------------------------------------------------------------
+# The node channel: the mTLS router Traefik needs before any node can enroll.
+#
+# Two artifacts, in this order and never the other way round:
+#
+#   1. traefik/dynamic/node-ca.pem  — the CA the panel signs node certificates with.
+#   2. traefik/dynamic/node-agent.yml — rendered from traefik/node-agent.yml.template, which names
+#      the panel's own domain and points clientAuth at (1).
+#
+# The order matters. Traefik falls back to its DEFAULT TLS options when a named one cannot be built,
+# and the default asks for no client certificate — so a router placed before its CA file exists
+# publishes the channel unauthenticated instead of refusing it. Neither file is tracked in git, so
+# `git reset --hard` in the update path leaves both alone.
+# ---------------------------------------------------------------------------
+node_template()  { echo "$COMPOSE_DIR/traefik/node-agent.yml.template"; }
+node_rendered()  { echo "$COMPOSE_DIR/traefik/dynamic/node-agent.yml"; }
+node_ca_file()   { echo "$COMPOSE_DIR/traefik/dynamic/node-ca.pem"; }
+
+# Asks the panel image for the CA, creating it if this install has never had one. `compose run`
+# starts a one-off container, so this works whether or not the running panel is healthy — the same
+# reason every other database-side admin command is invoked that way.
+export_node_ca() {
+  local target tmp noise
+  target="$(node_ca_file)"; tmp="$(mktemp)"; noise="$(mktemp)"
+
+  # Only the certificate is kept: `compose run` writes its own progress lines, and everything but
+  # the PEM would be a Traefik parse error rather than a trust anchor.
+  if (cd "$COMPOSE_DIR" && docker compose run --rm -T panel admin node-ca 2>"$noise") \
+       | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' > "$tmp" \
+     && grep -q -- "-----END CERTIFICATE-----" "$tmp"; then
+    # Only when it changed: rewriting the file makes Traefik reload, and a reload on every install
+    # run of an unchanged fleet is churn for nothing.
+    if cmp -s "$tmp" "$target" 2>/dev/null; then rm -f "$tmp"; else
+      mv "$tmp" "$target"; chmod 644 "$target"      # a CA certificate is public; Traefik must read it
+    fi
+    rm -f "$noise"
+    return 0
+  fi
+
+  # Say why. "Could not export the CA" with no reason sends the operator to the wrong place.
+  tail -5 "$noise" 2>/dev/null | sed 's/^/     /' >&2 || true
+  rm -f "$tmp" "$noise"
+  return 1
+}
+
+# Substitution in bash rather than sed or envsubst: a domain needs no escaping this way, and envsubst
+# is not installed on a minimal server. The pattern is quoted so it is matched literally.
+NODE_DOMAIN_PLACEHOLDER='{{PANEL_DOMAIN}}'
+
+render_node_router() {
+  local domain="$1" template rendered tmp line
+  template="$(node_template)"; rendered="$(node_rendered)"; tmp="$(mktemp)"
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    printf '%s\n' "${line//"$NODE_DOMAIN_PLACEHOLDER"/$domain}"
+  done < "$template" > "$tmp"
+
+  if cmp -s "$tmp" "$rendered" 2>/dev/null; then rm -f "$tmp"; return 1; fi
+  mv "$tmp" "$rendered"; chmod 644 "$rendered"
+  return 0
+}
+
+enable_node_channel() {
+  cd "$COMPOSE_DIR"; . ./.env
+  [ -f "$(node_template)" ] || { warn "No node channel template in this source tree; skipping."; return 0; }
+
+  log "پیکربندی کانال نودها… / Configuring the node channel…"
+
+  # The rule is "no router without a CA file", not "no router without a fresh export": a transient
+  # Docker failure on an update must not take a working fleet's routing away, and the CA on disk is
+  # the same CA it was five minutes ago.
+  if export_node_ca; then :
+  elif [ -s "$(node_ca_file)" ]; then
+    warn "CA نودها تازه‌سازی نشد؛ فایل موجود حفظ شد. / Could not refresh the node CA; keeping $(node_ca_file)."
+  else
+    err "گواهی CA نودها استخراج نشد؛ مسیر mTLS نصب نشد."
+    err "Could not export the node CA — the node mTLS router was NOT installed."
+    err "  یعنی هیچ نودی ثبت نمی‌شود. / No node can enroll until this is fixed."
+    err "  .env has NodeAgent__TrustForwardedClientCertificate=true but Traefik is not enforcing it."
+    err "  بعداً / Later:  harbora node-ca > $(node_ca_file)"
+    err "                 cd $COMPOSE_DIR && docker compose restart traefik"
+    return 1
+  fi
+
+  if render_node_router "$PANEL_DOMAIN"; then
+    ok "کانال نودها آماده است ($PANEL_DOMAIN). / Node channel configured for $PANEL_DOMAIN."
+  else
+    ok "کانال نودها از قبل به‌روز بود. / Node channel already up to date."
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Post-install verification: Docker-API compat, panel route via Traefik, SSL.
 # ---------------------------------------------------------------------------
 verify_install() {
@@ -324,7 +431,39 @@ verify_install() {
     *)   warn "Panel route returned HTTP $code (expected 200). Check: docker compose logs traefik panel" ;;
   esac
 
-  # 3) SSL certificate (needs public DNS → this server; nip.io passes automatically).
+  # 3) The node enrollment endpoint. A correct install refuses an empty request with a JSON error —
+  # the route is anonymous by design, and "no enrollment token was supplied" means it is being
+  # served. A 404 means it is not, and every `harbora node install` an operator is about to run
+  # would fail with the same 404 half an hour from now instead of here.
+  local enroll=000
+  enroll=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
+           -H 'Content-Type: application/json' -d '{}' \
+           --resolve "${PANEL_DOMAIN}:443:127.0.0.1" \
+           "https://${PANEL_DOMAIN}/api/node-agent/v1/enroll" 2>/dev/null || echo 000)
+  case "$enroll" in
+    401|400|422) ok "مسیر ثبت نود پاسخ می‌دهد. / Node enrollment endpoint answers (HTTP $enroll)." ;;
+    404)
+      err "مسیر ثبت نود 404 می‌دهد — یعنی روتر mTLS نودها بارگذاری نشده است."
+      err "The node enrollment route returns 404 — the node mTLS router did not load."
+      err "  بررسی / Inspect:  docker compose logs traefik | grep -i node"
+      err "  فایل‌ها / Files:   $(node_ca_file)"
+      err "                    $(node_rendered)"
+      err "  بازسازی / Rebuild: bash $COMPOSE_DIR/install.sh update" ;;
+    000)
+      warn "مسیر ثبت نود پاسخی نداد. / No response from the node enrollment route yet." ;;
+    *)   warn "Node enrollment endpoint returned HTTP $enroll (expected a JSON refusal). Check: docker compose logs traefik panel" ;;
+  esac
+
+  # The probe above only shows the route is served — the panel's own catch-all router answers it
+  # either way. What it cannot see is a node router left on a domain this panel no longer uses,
+  # which is exactly what `harbora set-domain` leaves behind. Say so; the channel would refuse
+  # every node with nothing in the panel's log to explain it.
+  if [ -f "$(node_rendered)" ] && ! grep -q "Host(\`${PANEL_DOMAIN}\`)" "$(node_rendered)"; then
+    warn "روتر نودها برای دامنه‌ی دیگری تنظیم شده است. / The node router names a different domain."
+    warn "  رفع / Fix:  bash $COMPOSE_DIR/install.sh update"
+  fi
+
+  # 4) SSL certificate (needs public DNS → this server; nip.io passes automatically).
   if curl -s -o /dev/null --max-time 20 "https://${PANEL_DOMAIN}/healthz" 2>/dev/null; then
     ok "گواهی SSL معتبر صادر شده است. / Valid SSL certificate issued."
   else
@@ -364,6 +503,7 @@ install_command() {
 cmd_install() {
   require_root; check_os; detect_pkg; install_prereqs; install_docker
   fetch_source; write_env; install_command; preflight_ports; start; wait_panel
+  enable_node_channel || true
   verify_install || true
   next_steps
 }
@@ -376,6 +516,10 @@ cmd_update() {
   # update looks like it "broke everything".
   (cd "$COMPOSE_DIR" && repair_env)
   install_command; start; wait_panel
+  # Same treatment as a fresh install: the template moved out of the watched directory, so an
+  # install that predates it has no rendered router at all, and one that has it may be on a domain
+  # that changed since.
+  enable_node_channel || true
   verify_install || true
   ok "Harbora updated. / به‌روزرسانی انجام شد."
   echo "  If anything looks wrong:  harbora doctor"

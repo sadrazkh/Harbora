@@ -174,6 +174,11 @@ cmd_set_domain() {
   env_set ROOT_DOMAIN "$root"
   ok "Domains updated: panel=$panel apps=$root"
   warn "Point DNS at this server for $panel and *.$root, then wait for the certificate."
+  # The node mTLS router is rendered from the panel domain by the installer, not by this script, so
+  # it still names the old one until that runs. Saying nothing here would leave a fleet that cannot
+  # reconnect and no clue why.
+  [ -f "$COMPOSE_DIR/traefik/dynamic/node-agent.yml" ] &&
+    warn "Nodes: re-run the installer's update to point the node router at $panel." || true
   cmd_restart
 }
 
@@ -272,6 +277,11 @@ harbora — Harbora server administration
     harbora set-domain <panel> <apps>   Change domains and restart
     harbora fix-key                     Generate a missing/insecure master key and restart
 
+  Nodes
+    harbora node-ca                     Print the node CA (PEM). The installer redirects it into
+                                        traefik/dynamic/node-ca.pem, which the mTLS router verifies
+                                        node certificates against.
+
   Database restore points
     harbora backups                     List restore points (pre-upgrade-* are automatic)
     harbora backup-db                   Take one now, before doing something risky
@@ -296,7 +306,7 @@ case "${1:-help}" in
   backups)        shift; cmd_backups "$@" ;;
   backup-db)      shift; cmd_backup_db "$@" ;;
   restore-db)     shift; cmd_restore_db "$@" ;;
-  info|users|reset-password|make-owner|unlock)
+  info|users|reset-password|make-owner|unlock|node-ca)
                   panel_admin "$@" ;;
   help|--help|-h) cmd_help ;;
   *)              err "Unknown command '$1'."; echo; cmd_help; exit 1 ;;

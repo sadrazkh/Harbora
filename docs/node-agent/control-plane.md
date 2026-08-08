@@ -71,8 +71,9 @@ Under `NodeAgent:` in `appsettings.json`, or `NodeAgent__*` in `deploy/.env`:
 ## Client certificates behind Traefik
 
 The panel runs behind Traefik, which terminates TLS — so Traefik is what must request the node's
-client certificate and pass it through. [`deploy/traefik/dynamic/node-agent.yml`](../../deploy/traefik/dynamic/node-agent.yml)
-is a working configuration. Two things have to be true:
+client certificate and pass it through. [`deploy/traefik/node-agent.yml.template`](../../deploy/traefik/node-agent.yml.template)
+is a working configuration; `deploy/install.sh` renders it into `traefik/dynamic/node-agent.yml`
+with this install's panel domain, on install and on update. Two things have to be true:
 
 1. `clientAuthType: RequireAndVerifyClientCert` against the node CA, so a request with no
    certificate never reaches the panel.
@@ -80,13 +81,20 @@ is a working configuration. Two things have to be true:
    every request.
 
 Only then set `TrustForwardedClientCertificate`. The flag is the operator asserting they did the
-above; it is off by default because a certificate header any client can set is not authentication.
+above; it is off by default in code because a certificate header any client can set is not
+authentication. The installer writes it into `.env` as part of the same run that installs the
+Traefik half, which is what makes the assertion true rather than hopeful.
 
-Export the CA for Traefik:
+Export the CA for Traefik — the installer does this before it puts the router in place, and this is
+the same command:
 
-```sql
-select value from "Settings" where "Key" = 'nodeagent.ca.certificate';
+```bash
+harbora node-ca > /opt/harbora/app/deploy/traefik/dynamic/node-ca.pem
 ```
+
+It creates the CA if this panel has never had one, so the file exists before the first node enrolls
+rather than after. Inside the stack the same verb is `docker compose run --rm -T panel admin
+node-ca`; there is no `harbora` binary in the panel image.
 
 Kestrel with its own listener works too — `Connection.ClientCertificate` is checked first and no
 header can override it. That path needs no flag and no Traefik configuration.
