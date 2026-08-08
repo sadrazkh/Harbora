@@ -51,7 +51,10 @@ public class NodeChannelDeploymentTests
     /// </summary>
     private static string RenderedRouters(string nodeDomain)
     {
-        var rendered = Render(nodeDomain);
+        // Git may materialise YAML as CRLF on a Windows checkout. The assertion is about the
+        // routers/services structure, not the platform's line-ending policy, so make both honest
+        // checkouts present the same text without weakening either boundary below.
+        var rendered = Render(nodeDomain).Replace("\r\n", "\n", StringComparison.Ordinal);
 
         var start = rendered.IndexOf("\n  routers:\n", StringComparison.Ordinal);
         start.Should().BeGreaterThan(-1, "the template should declare routers");
