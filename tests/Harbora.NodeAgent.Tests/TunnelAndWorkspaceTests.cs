@@ -2,6 +2,7 @@ using System.Text;
 using FluentAssertions;
 using Harbora.NodeAgent.Contracts;
 using Harbora.NodeAgent.Identity;
+using Harbora.NodeAgent.Observability;
 using Harbora.NodeAgent.Runtime;
 using Harbora.NodeAgent.Tests.Fakes;
 using Harbora.NodeAgent.Tunnels;
@@ -446,4 +447,139 @@ public sealed class DockerWorkspaceTests : IDisposable
     }
 
     public void Dispose() => _agent.Dispose();
+}
+
+/// <summary>
+/// What the end of a tunnel session means: the status it leaves behind, and whether the retry
+/// schedule treats it as a session that worked.
+///
+/// <para>
+/// Both were wrong at once and in opposite directions. A gateway that hung up cleanly left the
+/// tunnel reporting itself connected with no socket, because the pump returns at end-of-stream
+/// without throwing and none of the handlers that record a status ran. Recording <c>Closed</c> there
+/// fixed the count and broke the schedule, because <c>Connected</c> had silently been the only exit
+/// that reset the backoff — so every reconnect ratcheted towards the five-minute cap and stayed.
+/// </para>
+/// </summary>
+public sealed class TunnelSessionEndTests : IDisposable
+{
+    private readonly TempAgent _agent = new(o =>
+    {
+        // Big enough that a ratcheting schedule is unmistakable next to scheduler noise, and no
+        // jitter, because the point is the schedule rather than the spread.
+        o.Reconnect.Jitter = false;
+        o.Reconnect.InitialDelayMs = 500;
+    });
+
+    private readonly TestCertificateAuthority _ca = new();
+    private readonly AcceptingTunnelGateway _gateway = new();
+    private readonly ManualClock _clock = new(DateTimeOffset.UtcNow);
+
+    private TunnelSupervisor? _supervisor;
+
+    private TunnelSupervisor Tunnels() => _supervisor ??= new TunnelSupervisor(
+        _agent.Wrapped, _gateway, new FakeLocalDialer(), new NodeMetrics(_clock),
+        _clock, NullLoggerFactory.Instance, TestFactories.Log<TunnelSupervisor>());
+
+    private NodeIdentity Identity()
+    {
+        var store = new NodeIdentityStore(_agent.Options.IdentityDirectory);
+        var csr = store.CreateSigningRequest("test-node", newKey: true);
+        store.StoreCertificate(_ca.Sign(csr, _clock.GetUtcNow(), _clock.GetUtcNow().AddDays(90)), _ca.CertificatePem);
+        return store.Load()!;
+    }
+
+    [Fact]
+    public async Task A_tunnel_whose_gateway_hangs_up_records_itself_closed()
+    {
+        // Straight at the tunnel, because through the supervisor this state lasts no time at all —
+        // a session that worked retries immediately, which is the point of the test below.
+        var tunnel = new GatewayTunnel(
+            _gateway, new FakeLocalDialer(), _clock, NullLogger<GatewayTunnel>.Instance);
+
+        var run = tunnel.RunAsync(
+            new Uri("tcp://gw.harbora.test:8443"), Identity(), Registration(),
+            new FixedTunnelTarget(new TunnelTarget("db", 5432)), CancellationToken.None);
+
+        await WaitUntilAsync(() => tunnel.State.Status == TunnelStatus.Connected);
+
+        _gateway.Drop();
+        await run;
+
+        // ActiveCount reads exactly this field, so anything but a closed status here is the node
+        // telling the panel about a door it no longer has.
+        tunnel.State.Status.Should().Be(TunnelStatus.Closed);
+    }
+
+    [Fact]
+    public async Task A_tunnel_that_keeps_coming_back_keeps_reconnecting_promptly()
+    {
+        // A gateway rolling restart closes every tunnel cleanly, and each close used to push the
+        // next reconnect further out with nothing to bring it back: a customer's database tunnel
+        // healthy for weeks would then take up to five minutes to return, permanently.
+        await Tunnels().StartAsync(
+            "gw.harbora.test:8443", Identity(), Registration(),
+            new FixedTunnelTarget(new TunnelTarget("db", 5432)), TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        Tunnels().StateFor("gr-1")!.Status.Should().Be(TunnelStatus.Connected);
+
+        var started = DateTime.UtcNow;
+
+        // Three clean closes, each with a successful session in between.
+        for (var reconnect = 2; reconnect <= 4; reconnect++)
+        {
+            _gateway.Drop();
+            await WaitForRegistrationsAsync(reconnect);
+        }
+
+        var elapsed = DateTime.UtcNow - started;
+
+        // A schedule that never resets would spend 500 + 1000 + 2000 ms waiting before the third
+        // reconnect even arrives.
+        elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(2_000),
+            "a session that was established and then hung up on is a session that worked");
+    }
+
+    private static TunnelRegistration Registration() => new()
+    {
+        NodeId = "node-1",
+        TunnelId = "tun-gr-1",
+        GrantId = "gr-1",
+        TenantId = "tenant-1",
+    };
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return;
+            await Task.Delay(10);
+        }
+
+        throw new TimeoutException("The condition never became true.");
+    }
+
+    private async Task WaitForRegistrationsAsync(int count)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            lock (_gateway.Registered)
+                if (_gateway.Registered.Count >= count) return;
+
+            await Task.Delay(10);
+        }
+
+        throw new TimeoutException($"The gateway saw {_gateway.Registered.Count} registration(s), not {count}.");
+    }
+
+    public void Dispose()
+    {
+        _supervisor?.StopAllAsync().GetAwaiter().GetResult();
+        _ca.Dispose();
+        _agent.Dispose();
+    }
 }

@@ -125,7 +125,11 @@ public sealed class ControlChannel(
     /// </returns>
     public async Task<bool> SendEphemeralAsync<T>(string type, T payload, CancellationToken ct)
     {
-        if (_transport is not { IsOpen: true } transport) return false;
+        // IsConnected, not merely an open transport: OpenAsync attaches the transport before the
+        // hello-ack comes back, and a frame sent in that window reaches the control plane before the
+        // handshake that tells it which protocol version the frame is in. A caller that treats "sent"
+        // as "told" would move on from it.
+        if (!IsConnected || _transport is not { } transport) return false;
 
         try
         {

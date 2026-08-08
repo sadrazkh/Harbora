@@ -46,7 +46,22 @@ public sealed class ChannelEventPublisher(ControlChannel channel, ILogger<Channe
 
     public async Task<bool> PublishEphemeralAsync(NodeEvent nodeEvent, CancellationToken ct)
     {
-        if (await channel.SendEphemeralAsync(NodeFrames.Event, nodeEvent, ct))
+        bool sent;
+
+        try
+        {
+            sent = await channel.SendEphemeralAsync(NodeFrames.Event, nodeEvent, ct);
+        }
+        // SendEphemeralAsync handles the transport's own failure modes; anything else — a disposed
+        // socket, a payload that will not serialize — would otherwise escape into the heartbeat
+        // loop and cost the node a heartbeat over an event nobody was waiting for.
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log.LogWarning(e, "Event {Kind} could not be sent; the node will offer it again.", nodeEvent.Kind);
+            return false;
+        }
+
+        if (sent)
         {
             log.LogInformation("Event {Kind}: {Message}", nodeEvent.Kind, nodeEvent.Message);
             return true;

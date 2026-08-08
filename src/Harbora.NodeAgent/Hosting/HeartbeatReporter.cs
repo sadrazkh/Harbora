@@ -66,6 +66,14 @@ public sealed class HeartbeatReporter(
 
     internal async Task SendAsync(NodeIdentity? identity, bool credentialRevoked, CancellationToken ct)
     {
+        // Taken before the first thing is read, not in the middle of reading. The sequence has to
+        // order the whole gathering, because the containers, the host and the tunnels are read at
+        // three different moments: a loop that started earlier but stalled between two of those
+        // reads would otherwise carry a higher sequence than a loop that started later, pass the
+        // staleness check with older container data, and announce a change that had already been
+        // reported the other way round.
+        var observation = Interlocked.Increment(ref _observation);
+
         var runtimeInfo = await runtime.GetInfoAsync(ct);
 
         var managed = runtimeInfo.Available
@@ -84,7 +92,6 @@ public sealed class HeartbeatReporter(
         // One reading, used by the verdict, the frame and every event this heartbeat produces.
         // IHostFacts re-reads /proc on each access, so asking it three times gave three answers.
         var sample = HostSample.Take(host, _options.DataDirectory);
-        var observation = Interlocked.Increment(ref _observation);
 
         var verdict = _health.Evaluate(
             new HealthInputs

@@ -38,7 +38,17 @@ public sealed class FakeHostFacts : IHostFacts
     public List<string> Ips { get; set; } = ["203.0.113.10"];
     public List<int> Ports { get; set; } = [22, 443];
 
-    public DiskSpace Disk(string path) => DiskSpace;
+    /// <summary>
+    /// Runs at the start of every disk read. A heartbeat samples the host part-way through its
+    /// gathering, so this is where a test parks one loop to let another overtake it.
+    /// </summary>
+    public Action? BeforeDiskRead { get; set; }
+
+    public DiskSpace Disk(string path)
+    {
+        BeforeDiskRead?.Invoke();
+        return DiskSpace;
+    }
     public IReadOnlyList<string> IpAddresses() => Ips;
     public IReadOnlyList<int> ListeningPorts() => Ports;
     public string MachineFingerprint() => "fingerprint-test";

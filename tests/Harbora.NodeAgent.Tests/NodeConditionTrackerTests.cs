@@ -93,6 +93,30 @@ public class NodeConditionTrackerTests
             .Should().ContainSingle().Which.Kind.Should().Be(NodeEventKinds.MemoryPressure);
     }
 
+    // --- readings that arrive out of order ---
+
+    [Fact]
+    public void A_reading_taken_before_the_baseline_says_nothing()
+    {
+        // Every other test in this file uses the default sequence for each observation, which models
+        // heartbeats that ran one after another and leaves this guard inert. Here it is on its own.
+        _tracker.Accept(Conditions() with { Sequence = 7 });
+
+        _tracker.Changes(Conditions(disk: true) with { Sequence = 6 }, Now).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_reading_taken_before_the_baseline_cannot_become_the_baseline()
+    {
+        _tracker.Accept(Conditions() with { Sequence = 7 });
+        _tracker.Accept(Conditions(disk: true) with { Sequence = 6 });
+
+        // Had the stale one been recorded, this would read as "no change" and the pressure that is
+        // actually there would never be announced.
+        _tracker.Changes(Conditions(disk: true) with { Sequence = 8 }, Now)
+            .Should().ContainSingle().Which.Kind.Should().Be(NodeEventKinds.DiskPressure);
+    }
+
     // --- pressure ---
 
     [Theory]

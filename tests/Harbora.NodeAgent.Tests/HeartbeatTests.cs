@@ -300,12 +300,12 @@ public sealed class HeartbeatTests : IDisposable
     [Fact]
     public async Task A_tunnel_whose_gateway_hung_up_stops_being_counted_as_active()
     {
-        // The pump returns without throwing when the gateway closes cleanly, and nothing on that
-        // path used to touch the status — so the tunnel went on reporting Connected with no socket
-        // behind it, and ActiveTunnels counts exactly that field. A remembered copy is precisely
-        // what this gauge was added not to be.
+        // That the pump returning records a closed tunnel is pinned deterministically by
+        // TunnelSessionEndTests — through the supervisor that state lasts no time at all, because a
+        // session that worked retries at once. What this asserts is the end of the chain: the gauge
+        // follows the sockets rather than remembering them.
         _agent.Options.Reconnect.Jitter = false;
-        _agent.Options.Reconnect.InitialDelayMs = 60_000;
+        _agent.Options.Reconnect.InitialDelayMs = 1;
 
         var channel = await ConnectedChannelAsync();
         var reporter = Reporter(channel);
@@ -314,8 +314,9 @@ public sealed class HeartbeatTests : IDisposable
         await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
         (await NextHeartbeatAsync()).ActiveTunnels.Should().Be(1);
 
+        _gateway.Accept = false;
         _gateway.Drop();
-        await WaitUntilAsync(() => Tunnels().ByKey()["gr-1"].Status != TunnelStatus.Connected);
+        await WaitUntilAsync(() => Tunnels().ByKey()["gr-1"].Status == TunnelStatus.Failed);
 
         await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
 
@@ -410,6 +411,48 @@ public sealed class HeartbeatTests : IDisposable
     }
 
     [Fact]
+    public async Task A_loop_overtaken_between_listing_and_sampling_does_not_reverse_a_container_event()
+    {
+        // The sequence orders the whole gathering, not just the host reading. The containers, the
+        // host and the tunnels are read at three different moments, and a loop that lists first but
+        // stalls before it is numbered would otherwise carry the higher number with the older list —
+        // announcing exited→running against a baseline that had just recorded running→exited, and
+        // committing the stale map so the next heartbeat says exited again.
+        var channel = await ConnectedChannelAsync();
+        var reporter = Reporter(channel);
+
+        Deploy("shop-app-r1", "running");
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        using var reached = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var once = 1;
+
+        // A disk read is a filesystem stat, on a node whose disk may be the thing under pressure.
+        _host.BeforeDiskRead = () =>
+        {
+            if (Interlocked.Exchange(ref once, 0) != 1) return;
+            reached.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+        };
+
+        var overtaken = Task.Run(() => reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None));
+        reached.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue();
+
+        // The container falls over, and the loop behind reads it correctly and reports it.
+        Deploy("shop-app-r1", "exited");
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        release.Set();
+        await overtaken;
+
+        var container = _events.Where(e => e.Kind == NodeEventKinds.ContainerStateChanged).ToList();
+
+        container.Should().ContainSingle();
+        container[0].Data!["state"].Should().Be("exited");
+    }
+
+    [Fact]
     public async Task Condition_events_do_not_spend_the_outbox_that_protects_deploy_results()
     {
         // Through the real ChannelEventPublisher, not the collecting double — the whole question is
@@ -438,6 +481,56 @@ public sealed class HeartbeatTests : IDisposable
         // …and it is not holding a slot that a deploy result will need.
         _outbox.Pending().Should().NotContain(e => e.Json.Contains(NodeEventKinds.DiskPressure),
             "a condition re-derived every thirty seconds does not need the outbox and must not compete for it");
+    }
+
+    [Fact]
+    public async Task The_real_channel_reports_an_event_it_could_not_send_and_the_node_says_it_again()
+    {
+        // Through the real ChannelEventPublisher and the real ControlChannel, because the whole
+        // ephemeral bargain rests on SendEphemeralAsync answering honestly. The collecting double
+        // cannot show that: a channel that quietly returned true would pass every other test here.
+        var channel = Channel();
+
+        var reporter = new HeartbeatReporter(
+            _agent.Wrapped, channel, _runtime, _host, _state, Manager(), Tunnels(), _metrics,
+            new ChannelEventPublisher(channel, TestFactories.Log<ChannelEventPublisher>()),
+            _clock, TestFactories.Log<HeartbeatReporter>());
+
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        _host.DiskSpace = new DiskSpace(100_000_000_000, 1_000_000_000);
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        _pair.SentByNode.Should().NotContain(json => json.Contains(NodeEventKinds.DiskPressure),
+            "there is no negotiated session, so nothing left the node");
+
+        await OpenAsync(channel);
+        await reporter.SendAsync(Identity(), credentialRevoked: false, CancellationToken.None);
+
+        _pair.SentByNode.Should().ContainSingle(json => json.Contains(NodeEventKinds.DiskPressure),
+            "a transition nobody received is still owed");
+    }
+
+    [Fact]
+    public async Task A_frame_sent_before_the_handshake_finished_does_not_count_as_sent()
+    {
+        // A failed negotiation leaves the transport attached and the session null. Anything sent in
+        // that window reaches the control plane before the hello-ack that says which protocol
+        // version it is in, so "it went to the socket" is not "it was told".
+        var channel = Channel();
+
+        _pair.PushToNode(ControlFrame.Create(ControlFrames.HelloAck, new ControlHelloAck
+        {
+            ProtocolVersion = 99,
+            ResumeToken = "resume-1",
+            ServerTime = _clock.GetUtcNow(),
+        }));
+
+        var open = async () => await channel.OpenAsync(Identity(), CancellationToken.None);
+        await open.Should().ThrowAsync<ProtocolNegotiationException>();
+
+        (await channel.SendEphemeralAsync(NodeFrames.Event, new NodeEvent { Kind = "x", Message = "y" },
+            CancellationToken.None)).Should().BeFalse();
     }
 
     [Fact]
@@ -504,11 +597,12 @@ public sealed class HeartbeatTests : IDisposable
             labels, new Dictionary<int, int>(), new Dictionary<string, string>());
     }
 
-    private async Task<ControlChannel> ConnectedChannelAsync()
+    /// <summary>Built but not opened: no transport attached and no session negotiated.</summary>
+    private ControlChannel Channel()
     {
         _transport = new StallableTransport(_pair.NodeSide);
 
-        _channel = new ControlChannel(
+        return _channel = new ControlChannel(
             _agent.Wrapped,
             new StallableTransportFactory(_transport),
             _outbox = new ChannelOutbox(TestFactories.Store<OutboxState>(_agent, "outbox.json"), TestFactories.Log<ChannelOutbox>()),
@@ -516,7 +610,17 @@ public sealed class HeartbeatTests : IDisposable
             TestFactories.Inventory(_agent, _host, _runtime),
             _clock,
             TestFactories.Log<ControlChannel>());
+    }
 
+    private async Task<ControlChannel> ConnectedChannelAsync()
+    {
+        var channel = Channel();
+        await OpenAsync(channel);
+        return channel;
+    }
+
+    private async Task OpenAsync(ControlChannel channel)
+    {
         _pair.PushToNode(ControlFrame.Create(ControlFrames.HelloAck, new ControlHelloAck
         {
             ProtocolVersion = NodeContract.ProtocolVersion,
@@ -526,8 +630,7 @@ public sealed class HeartbeatTests : IDisposable
             GrantedScopes = NodeScopes.Default,
         }));
 
-        await _channel.OpenAsync(Identity(), CancellationToken.None);
-        return _channel;
+        await channel.OpenAsync(Identity(), CancellationToken.None);
     }
 
     /// <summary>
@@ -695,6 +798,11 @@ public sealed class HeartbeatTests : IDisposable
         public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
+    /// <summary>
+    /// Hands back the same transport for every connect, so a reopened channel keeps the instance the
+    /// test is holding. Its one-shot gate is therefore already spent on a reconnect, which is what
+    /// these tests want: only the first send is ever parked.
+    /// </summary>
     private sealed class StallableTransportFactory(IMessageTransport transport) : IMessageTransportFactory
     {
         public Task<IMessageTransport> ConnectAsync(Uri uri, NodeIdentity identity, CancellationToken ct) =>

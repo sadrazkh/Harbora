@@ -162,7 +162,14 @@ public sealed class TunnelSupervisor(
                 return;
             }
 
-            if (tunnel.State.Status == TunnelStatus.Connected) attempt = 0;
+            // Closed belongs here as much as Connected does, and for a while it did not: once the
+            // clean-close path started recording a status, no exit from RunAsync left Connected
+            // behind, so this reset became unreachable and every tunnel's backoff ratcheted towards
+            // the five-minute cap and stayed there. A gateway rolling restart — the ordinary reason
+            // a healthy tunnel closes — was what drove it up. Closed at this point means the tunnel
+            // was established and then hung up on, which is a session that worked; the cancellation
+            // path also ends Closed but has already returned above.
+            if (tunnel.State.Status is TunnelStatus.Connected or TunnelStatus.Closed) attempt = 0;
 
             Report();
         }

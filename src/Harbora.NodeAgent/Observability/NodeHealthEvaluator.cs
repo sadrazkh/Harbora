@@ -21,13 +21,24 @@ public sealed record HostSample(
     LoadAverage Load,
     int CpuCores)
 {
+    private readonly int _cpuCores = Math.Max(1, CpuCores);
+
     /// <summary>
     /// At least one, always. The load-per-core division has no guard of its own, and zero cores
     /// yields <c>Infinity</c> — which is not a crash but a fabricated CPU-pressure verdict, the
-    /// worse of the two outcomes. Clamped here rather than at the one call site that reads a real
-    /// machine, so a sample built any other way cannot skip it.
+    /// worse of the two outcomes.
+    ///
+    /// <para>
+    /// Clamped through a backing field rather than a property initialiser, because an initialiser
+    /// only runs for the constructor: <c>with { CpuCores = 0 }</c> goes through the <c>init</c>
+    /// setter and would have skipped it.
+    /// </para>
     /// </summary>
-    public int CpuCores { get; init; } = Math.Max(1, CpuCores);
+    public int CpuCores
+    {
+        get => _cpuCores;
+        init => _cpuCores = Math.Max(1, value);
+    }
 
     public static HostSample Take(IHostFacts host, string dataDirectory) => new(
         host.Disk(dataDirectory),
