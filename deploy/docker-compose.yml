@@ -20,6 +20,16 @@ services:
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      # Which ACME directory to ask for certificates. The default is Let's Encrypt production and is
+      # byte-identical to what Traefik uses when the flag is absent, so an existing install that
+      # never sets ACME_CA_SERVER behaves exactly as it did before this line existed.
+      #
+      # It is here for deploy/live-host-proof.sh, which installs a whole panel and takes real
+      # certificates on every run. Against production that burns the five-duplicate-certificates-per
+      # -week limit and the lane starts failing by midweek; against staging the handshake is real and
+      # the issuer is checkable, which is what the proof actually asserts. Operators should leave it
+      # alone — a staging certificate is not trusted by browsers.
+      - --certificatesresolvers.letsencrypt.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
     ports:
       - "80:80"
       - "443:443"
