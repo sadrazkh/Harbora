@@ -176,13 +176,28 @@ internal static class UpgradeFromPreviousRelease
         await ActiveSnapshotAsync(seed, Seeded.LoneSnapshot, "vol-alone",
             BackupSnapshotStatus.Running, BeforeTheUpgrade);
 
-        // An active run beside its own finished history. The finished one is outside the index's
-        // filter, so it is not a duplicate and neither row may be touched.
+        // An active run with finished history on both sides of it. Finished rows are outside the
+        // index's filter, so none of these three is a duplicate of another and none may be touched.
+        //
+        // The newer finished row is the one that makes that claim falsifiable. The EXISTS in the
+        // settling statement asks "is there a newer run of this target?" and restricts the search to
+        // ACTIVE rows; with only the older finished sibling present, "o.CreatedAt > s.CreatedAt"
+        // already excludes it, so the status term inside the EXISTS never decides anything and could
+        // be deleted with nothing going red. This row is finished AND an hour newer than the live
+        // one, so the CreatedAt term lets it through and the status term is the only thing standing
+        // between a running backup and being settled Failed by the upgrade meant to carry it across.
+        //
+        // Its id is the greater of the pair, following TiedSnapshotLoser/TiedSnapshotWinner — but the
+        // tie-break cannot engage here: it only applies where CreatedAt is equal, and these are an
+        // hour apart.
         await ActiveSnapshotAsync(seed, Seeded.SnapshotWithHistory, "vol-with-history",
             BackupSnapshotStatus.Running, BeforeTheUpgrade);
-        await SnapshotAsync(seed, Seeded.CompletedSnapshotOfTheSameTarget, Seeded.WorkspaceOne,
+        await SnapshotAsync(seed, Seeded.OlderCompletedSnapshotOfTheSameTarget, Seeded.WorkspaceOne,
             BackupTargetType.DockerVolume, "vol-with-history",
             BackupSnapshotStatus.Completed, BeforeTheUpgrade.AddHours(-4));
+        await SnapshotAsync(seed, Seeded.NewerCompletedSnapshotOfTheSameTarget, Seeded.WorkspaceOne,
+            BackupTargetType.DockerVolume, "vol-with-history",
+            BackupSnapshotStatus.Completed, BeforeTheUpgrade.AddHours(1));
 
         // The same target reference, in another tenant. The index is workspace-scoped, so these are
         // not duplicates of each other and settling either would destroy a live backup.
@@ -250,12 +265,21 @@ internal static class UpgradeFromPreviousRelease
         await RestoreAsync(seed, Seeded.LoneRestore, Seeded.WorkspaceOne,
             "/srv/harbora/restore/alone", RestoreJobStatus.Running, BeforeTheUpgrade);
 
-        // An active restore beside a finished one into the same place. The finished row is the audit
-        // trail of a destructive act and is outside the filter; neither may be touched.
+        // An active restore with a finished one on either side of it, into the same place. Finished
+        // rows are the audit trail of a destructive act and are outside the filter; none may be
+        // touched.
+        //
+        // The newer one is here for the same reason as the snapshot above: it is what makes the
+        // status term inside the EXISTS decide something. A finished restore that is OLDER than the
+        // live one is already excluded by "o.CreatedAt > r.CreatedAt", so it can never demonstrate
+        // that the search is restricted to active rows. This one is newer, and without that
+        // restriction it would settle a running restore Failed.
         await RestoreAsync(seed, Seeded.RestoreWithHistory, Seeded.WorkspaceOne,
             "/srv/harbora/restore/historic", RestoreJobStatus.Running, BeforeTheUpgrade);
-        await RestoreAsync(seed, Seeded.CompletedRestoreOfTheSamePath, Seeded.WorkspaceOne,
+        await RestoreAsync(seed, Seeded.OlderCompletedRestoreOfTheSamePath, Seeded.WorkspaceOne,
             "/srv/harbora/restore/historic", RestoreJobStatus.Completed, BeforeTheUpgrade.AddHours(-5));
+        await RestoreAsync(seed, Seeded.NewerCompletedRestoreOfTheSamePath, Seeded.WorkspaceOne,
+            "/srv/harbora/restore/historic", RestoreJobStatus.Completed, BeforeTheUpgrade.AddHours(1));
 
         // Longer than the index can hold. Without the settling UPDATE the migration dies on
         // "index row size … exceeds btree version 4 maximum 2704" and the panel does not boot.
@@ -320,7 +344,8 @@ internal static class UpgradeFromPreviousRelease
         public static readonly Guid TiedSnapshotWinner = new("50000000-0000-0000-0000-000000000012");
         public static readonly Guid LoneSnapshot = new("50000000-0000-0000-0000-000000000021");
         public static readonly Guid SnapshotWithHistory = new("50000000-0000-0000-0000-000000000031");
-        public static readonly Guid CompletedSnapshotOfTheSameTarget = new("50000000-0000-0000-0000-000000000032");
+        public static readonly Guid OlderCompletedSnapshotOfTheSameTarget = new("50000000-0000-0000-0000-000000000032");
+        public static readonly Guid NewerCompletedSnapshotOfTheSameTarget = new("50000000-0000-0000-0000-000000000033");
         public static readonly Guid OtherWorkspaceSnapshot = new("50000000-0000-0000-0000-000000000041");
         public static readonly Guid OtherTargetTypeSnapshot = new("50000000-0000-0000-0000-000000000051");
         public static readonly Guid RestorableSnapshot = new("50000000-0000-0000-0000-000000000061");
@@ -333,7 +358,8 @@ internal static class UpgradeFromPreviousRelease
         public static readonly Guid TiedRestoreWinner = new("60000000-0000-0000-0000-000000000022");
         public static readonly Guid LoneRestore = new("60000000-0000-0000-0000-000000000031");
         public static readonly Guid RestoreWithHistory = new("60000000-0000-0000-0000-000000000041");
-        public static readonly Guid CompletedRestoreOfTheSamePath = new("60000000-0000-0000-0000-000000000042");
+        public static readonly Guid OlderCompletedRestoreOfTheSamePath = new("60000000-0000-0000-0000-000000000042");
+        public static readonly Guid NewerCompletedRestoreOfTheSamePath = new("60000000-0000-0000-0000-000000000043");
         public static readonly Guid ActiveRestoreWithAnOverLongDestination = new("60000000-0000-0000-0000-000000000051");
         public static readonly Guid CompletedRestoreWithAnOverLongDestination = new("60000000-0000-0000-0000-000000000052");
         public static readonly Guid RestoreAtExactlyTheBound = new("60000000-0000-0000-0000-000000000053");

@@ -45,6 +45,26 @@ public sealed class PartialUniqueIndexTests(PostgresLane lane)
     }
 
     [PostgresFact]
+    public async Task A_backup_that_is_only_preparing_holds_the_target_just_as_firmly()
+    {
+        // Preparing is the middle of the three states the filter covers and the one nothing else in
+        // this lane reaches: the fact above pairs Running with Pending, and the migration's settling
+        // statement carries its own status list, which is a different list in a different statement.
+        // An index filtered to IN (0, 2) would pass every other fact here and leave the guard open
+        // for exactly as long as a backup spends preparing — which is the window a manual run and
+        // the scheduler are likeliest to collide in, because preparing is the slow part.
+        await using var db = PostgresLane.Open(await lane.FreshlyMigratedAsync("preparing_backup"));
+        var repository = await RepositoryAsync(db);
+
+        db.BackupSnapshots.Add(Snapshot(repository, TenantOne, "vol-preparing", BackupSnapshotStatus.Preparing));
+        await db.SaveChangesAsync();
+
+        db.BackupSnapshots.Add(Snapshot(repository, TenantOne, "vol-preparing", BackupSnapshotStatus.Pending));
+
+        (await Refusal(db)).ConstraintName.Should().Be("IX_BackupSnapshots_ActiveTarget");
+    }
+
+    [PostgresFact]
     public async Task A_backup_of_the_same_target_is_allowed_once_the_first_one_has_finished()
     {
         // The filter, in one fact. If it were dropped, a volume could be backed up once and never

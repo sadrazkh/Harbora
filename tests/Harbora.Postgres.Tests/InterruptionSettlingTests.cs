@@ -102,16 +102,42 @@ public sealed class InterruptionSettlingTests(PostgresLane lane)
     [PostgresFact]
     public async Task A_finished_backup_of_the_same_target_is_not_a_duplicate()
     {
+        // The newer of the two finished rows is the one this fact turns on. The statement's EXISTS
+        // asks "is there a newer run of this target?" and restricts that search to ACTIVE rows; the
+        // older finished sibling cannot show that restriction working, because being older it is
+        // thrown out by the CreatedAt comparison whatever its status. The newer one is finished and
+        // an hour ahead of the live run, so it reaches the status term and nothing else — and if
+        // that term were missing, this upgrade would settle a running backup Failed on the grounds
+        // that a backup which had already succeeded came after it.
         var upgraded = await lane.UpgradedAsync();
 
         var active = await UpgradedReads.SnapshotAsync(upgraded.ConnectionString, Seeded.SnapshotWithHistory);
-        var history = await UpgradedReads.SnapshotAsync(
-            upgraded.ConnectionString, Seeded.CompletedSnapshotOfTheSameTarget);
+        var older = await UpgradedReads.SnapshotAsync(
+            upgraded.ConnectionString, Seeded.OlderCompletedSnapshotOfTheSameTarget);
+        var newer = await UpgradedReads.SnapshotAsync(
+            upgraded.ConnectionString, Seeded.NewerCompletedSnapshotOfTheSameTarget);
 
-        active.Status.Should().Be(BackupSnapshotStatus.Running);
-        history.Status.Should().Be(BackupSnapshotStatus.Completed,
-            "the index only covers live runs, so history is not in the running for being settled");
-        history.FailureReason.Should().BeNull();
+        newer.CreatedAt.Should().BeAfter(active.CreatedAt,
+            "a finished run that came after the live one is the only kind that can reach the status " +
+            "term inside the EXISTS, and so the only kind that proves it is there");
+        older.CreatedAt.Should().BeBefore(active.CreatedAt, "the other half of the pair, for contrast");
+
+        active.Status.Should().Be(BackupSnapshotStatus.Running,
+            "every other run of this target has finished, so nothing is racing it and it is not a " +
+            "duplicate of anything");
+        active.FailureReason.Should().BeNull();
+        active.CompletedAt.Should().BeNull();
+        active.UpdatedAt.Should().BeCloseTo(active.CreatedAt, TimeSpan.FromMilliseconds(1),
+            "nothing wrote to the live row");
+
+        foreach (var history in new[] { older, newer })
+        {
+            history.Status.Should().Be(BackupSnapshotStatus.Completed,
+                "the index only covers live runs, so history is not in the running for being settled");
+            history.FailureReason.Should().BeNull();
+            history.UpdatedAt.Should().BeCloseTo(history.CreatedAt, TimeSpan.FromMilliseconds(1),
+                "the outer status term is what keeps a finished row out, and it held");
+        }
     }
 
     [PostgresFact]
@@ -207,15 +233,38 @@ public sealed class InterruptionSettlingTests(PostgresLane lane)
     [PostgresFact]
     public async Task A_finished_restore_into_the_same_path_is_not_a_duplicate()
     {
+        // As with the backups: the newer finished restore is the interesting one. A restore that
+        // finished BEFORE the live one never reaches the status term inside the EXISTS, because the
+        // CreatedAt comparison has already dismissed it. This one finished an hour after, so the
+        // word "active" in that subquery is the only thing that stops a running restore being
+        // settled Failed because a completed restore into the same directory came later.
         var upgraded = await lane.UpgradedAsync();
 
         var active = await UpgradedReads.RestoreAsync(upgraded.ConnectionString, Seeded.RestoreWithHistory);
-        var history = await UpgradedReads.RestoreAsync(
-            upgraded.ConnectionString, Seeded.CompletedRestoreOfTheSamePath);
+        var older = await UpgradedReads.RestoreAsync(
+            upgraded.ConnectionString, Seeded.OlderCompletedRestoreOfTheSamePath);
+        var newer = await UpgradedReads.RestoreAsync(
+            upgraded.ConnectionString, Seeded.NewerCompletedRestoreOfTheSamePath);
 
-        active.Status.Should().Be(RestoreJobStatus.Running);
-        history.Status.Should().Be(RestoreJobStatus.Completed);
-        history.FailureReason.Should().BeNull("it is the audit trail of a destructive operation");
+        newer.CreatedAt.Should().BeAfter(active.CreatedAt,
+            "only a finished restore that came after the live one can prove the search is confined " +
+            "to active rows");
+        older.CreatedAt.Should().BeBefore(active.CreatedAt, "the other half of the pair, for contrast");
+
+        active.Status.Should().Be(RestoreJobStatus.Running,
+            "no other restore into this path is still live, so it is not a duplicate of anything");
+        active.FailureReason.Should().BeNull();
+        active.CompletedAt.Should().BeNull();
+        active.UpdatedAt.Should().BeCloseTo(active.CreatedAt, TimeSpan.FromMilliseconds(1),
+            "nothing wrote to the live row");
+
+        foreach (var history in new[] { older, newer })
+        {
+            history.Status.Should().Be(RestoreJobStatus.Completed);
+            history.FailureReason.Should().BeNull("it is the audit trail of a destructive operation");
+            history.UpdatedAt.Should().BeCloseTo(history.CreatedAt, TimeSpan.FromMilliseconds(1),
+                "the outer status term is what keeps a finished row out, and it held");
+        }
     }
 
     // ---- restores, by destination length ----------------------------------------------------

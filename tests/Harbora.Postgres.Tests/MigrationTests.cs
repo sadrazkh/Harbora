@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -70,8 +72,12 @@ public sealed class MigrationTests(PostgresLane lane)
         (await ColumnAsync(connectionString, "Jobs", "ExclusiveWith"))
             .Should().Be(new ColumnShape("uuid", Nullable: true));
 
+        // The length is part of the column, not decoration. StagingPath holds a filesystem path the
+        // node writes into, and a migration that declared it character varying with no bound — or
+        // with a smaller one — would still be "character varying" here while quietly changing what
+        // the panel can store.
         (await ColumnAsync(connectionString, "BackupSnapshots", "StagingPath"))
-            .Should().Be(new ColumnShape("character varying", Nullable: true));
+            .Should().Be(new ColumnShape("character varying", Nullable: true, MaxLength: 1024));
     }
 
     [PostgresFact]
@@ -82,9 +88,13 @@ public sealed class MigrationTests(PostgresLane lane)
 
         definition.Should().StartWith("CREATE UNIQUE INDEX");
         definition.Should().Contain("""("WorkspaceId", "TargetType", "TargetRef")""");
-        // Postgres rewrites IN (0, 1, 2) as = ANY (ARRAY[...]); what matters is that a filter
-        // survived at all, because without one a target could be backed up exactly once, ever.
-        definition.Should().Contain("WHERE").And.Contain("Status");
+
+        // Pending, Preparing, Running — the three live states, spelled as the migration spells them
+        // because a migration that has shipped goes on meaning the numbers it was written with.
+        FilteredStatuses(definition).Should().BeEquivalentTo(new[] { 0, 1, 2 },
+            "a filter over any other set covers the wrong rows: too few and a second live backup of " +
+            "one target walks straight past the index, too many and a target can be backed up once " +
+            "and never again. Postgres printed the index as {0}", definition);
     }
 
     [PostgresFact]
@@ -98,7 +108,12 @@ public sealed class MigrationTests(PostgresLane lane)
         definition.Should().NotContain("WorkspaceId",
             "a destination names one thing on the machine, so two tenants racing for it is the case " +
             "a workspace-scoped index would wave through");
-        definition.Should().Contain("WHERE").And.Contain("Status");
+
+        // Pending and Running. A restore has no Preparing, so this list is shorter than the backups'
+        // by one — and Completed is out, or a directory could be restored into exactly once, ever.
+        FilteredStatuses(definition).Should().BeEquivalentTo(new[] { 0, 1 },
+            "the index has to cover every state a restore can still be holding the directory in, and " +
+            "no state in which it has let go of it. Postgres printed the index as {0}", definition);
     }
 
     [PostgresFact]
@@ -175,6 +190,47 @@ public sealed class MigrationTests(PostgresLane lane)
         return string.Join("\n", lines);
     }
 
+    /// <summary>
+    /// The status values a partial index's filter admits, with the syntax thrown away.
+    ///
+    /// <para>
+    /// Postgres does not hand back the <c>WHERE "Status" IN (0, 1, 2)</c> the migration wrote. It
+    /// reprints the parsed predicate, which over the versions has been <c>= ANY (ARRAY[0, 1, 2])</c>
+    /// and <c>= ANY ('{0,1,2}'::integer[])</c>, and could be a chain of <c>OR</c>s tomorrow. Pinning
+    /// any one of those spellings would be a test that breaks on a Postgres upgrade while the index
+    /// is still exactly right. So this reads the numbers out and ignores everything around them:
+    /// every rendering of a membership test over integers prints those integers, and prints no
+    /// others.
+    /// </para>
+    ///
+    /// <para>
+    /// Digits that touch a letter are not values — they are the tail of a type name like
+    /// <c>int4</c>, which some renderings of a cast reach for. Excluding them costs nothing if
+    /// Postgres never emits one, and is the difference between a green lane and an afternoon spent
+    /// on a filter that was correct all along if it does. This lane has never run, so that spelling
+    /// is a guess until it has; the caller prints the definition it read for the same reason.
+    /// </para>
+    ///
+    /// <para>
+    /// What it buys over asking whether the definition merely mentions <c>WHERE</c> and
+    /// <c>Status</c>: that pair is equally happy with <c>WHERE "Status" = 6</c> — a unique index over
+    /// <i>failed</i> rows, which would refuse a second failure of the same target and let two live
+    /// backups run side by side. Which rows the filter covers is the whole of what the filter is.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<int> FilteredStatuses(string definition)
+    {
+        var filter = definition.IndexOf("WHERE", StringComparison.Ordinal);
+
+        filter.Should().BeGreaterThanOrEqualTo(0,
+            "an index with no filter at all covers finished rows too, and a target would be backed " +
+            "up exactly once, ever");
+
+        return Regex.Matches(definition[filter..], "(?<![A-Za-z0-9_])[0-9]+(?![A-Za-z0-9_])")
+            .Select(match => int.Parse(match.Value, CultureInfo.InvariantCulture))
+            .ToList();
+    }
+
     private static async Task<string> IndexDefinitionAsync(string connectionString, string index)
     {
         var definition = await PostgresLane.ScalarAsync<string>(connectionString,
@@ -189,7 +245,7 @@ public sealed class MigrationTests(PostgresLane lane)
         await using var connection = await PostgresLane.ConnectAsync(connectionString);
         await using var command = new NpgsqlCommand(
             """
-            SELECT data_type, is_nullable FROM information_schema.columns
+            SELECT data_type, is_nullable, character_maximum_length FROM information_schema.columns
             WHERE table_schema = 'public' AND table_name = @table AND column_name = @column
             """, connection);
         command.Parameters.AddWithValue("table", table);
@@ -198,8 +254,16 @@ public sealed class MigrationTests(PostgresLane lane)
         await using var reader = await command.ExecuteReaderAsync();
         (await reader.ReadAsync()).Should().BeTrue($"\"{table}\".\"{column}\" should exist");
 
-        return new ColumnShape(reader.GetString(0), reader.GetString(1) == "YES");
+        return new ColumnShape(
+            reader.GetString(0),
+            reader.GetString(1) == "YES",
+            await reader.IsDBNullAsync(2) ? null : reader.GetInt32(2));
     }
 
-    private sealed record ColumnShape(string DataType, bool Nullable);
+    /// <summary>
+    /// <paramref name="MaxLength"/> is null for every type that has no length — a uuid, a timestamp —
+    /// which is what <c>information_schema</c> reports for them, so the default says "not that kind
+    /// of column" rather than "unchecked".
+    /// </summary>
+    private sealed record ColumnShape(string DataType, bool Nullable, int? MaxLength = null);
 }
