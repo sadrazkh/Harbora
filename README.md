@@ -30,7 +30,8 @@ That's it. The installer is **fully self-contained and interactive (فارسی/E
 4. **tests DNS** for the panel + apps wildcard — warns clearly if records don't point at the server (you can still continue and fix DNS later),
 5. asks for the **Let's Encrypt email** (blank → sensible default),
 6. generates `/opt/harbora/app/deploy/.env` with freshly-random secrets,
-7. **builds the platform from source** and starts it (Traefik v3.6 + PostgreSQL + Redis + the panel),
+7. **builds the platform from source** and starts it (Traefik v3.6, PostgreSQL, MinIO for object
+   storage, the panel — and a Redis container nothing uses; see *Architecture*),
 8. **verifies the install**: Traefik↔Docker API compatibility, the panel route through Traefik (a 404 prints a clear bilingual fix), and SSL issuance (on failure it prints the ACME log lines and likely causes).
 
 It is **idempotent** — safe to re-run; an existing `.env` (your secrets) is never overwritten, and a running stack is reused.

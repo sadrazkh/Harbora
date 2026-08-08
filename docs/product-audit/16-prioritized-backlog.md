@@ -1,10 +1,10 @@
 # 16 — Prioritized Backlog (human view)
 
-Machine-readable source of truth: [`backlog.json`](backlog.json) (64 items, full acceptance criteria/tests/risks/evidence per item).
+Machine-readable source of truth: [`backlog.json`](backlog.json) (65 items, full acceptance criteria/tests/risks/evidence per item).
 
 This view groups by priority. Phase numbers reference 17. Type: B=bug, D=tech-debt, G=feature-gap, U=ux, X=needs-investigation.
 
-> 0055-0064 were found while *executing* Phases 1 and 2 rather than during the audit, and were folded in on 2026-08-08 from `.superpowers/sdd/discovered-backlog.md`, which records where each came from. Two items on that list were dropped as already closed and two were narrowed; the annotations are in that file.
+> 0055-0065 were found while *executing* Phases 1 and 2 rather than during the audit, and were folded in on 2026-08-08 from `.superpowers/sdd/discovered-backlog.md`, which records where each came from. Two items on that list were dropped as already closed and two were narrowed; the annotations are in that file.
 
 ## P0 — reliability blockers
 | ID | Title | T | Scope | Ph |
@@ -50,6 +50,7 @@ This view groups by priority. Phase numbers reference 17. Type: B=bug, D=tech-de
 | 0053 | Setup wizard steps + onboarding checklist gains backup & SMTP steps | U | M | 15 |
 | 0056 | Decide what a workspace operator sees in the audit log (unscoped today) | X | M | 4 |
 | 0059 | Database grants + Adminer still inject the local Docker engine | B | M | 7 |
+| 0065 | Jobs:MaxConcurrency cannot be set on a compose install (no env pass-through) | B | S | 3 |
 
 ## P2 — product completion
 | ID | Title | T | Scope | Ph |

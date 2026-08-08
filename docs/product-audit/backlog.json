@@ -1150,5 +1150,23 @@
     "risks": [],
     "evidence": ["src/Harbora.Infrastructure/Backups/SftpTransfer.cs:64-74", "tests/Harbora.Tests/SftpTransferTests.cs:90,98 call the six-argument overload only"],
     "recommendedPhase": 8
+  },
+  {
+    "id": "HARBORA-0065",
+    "title": "Jobs:MaxConcurrency cannot be set on a compose install",
+    "category": "operations",
+    "type": "bug",
+    "priority": "P1",
+    "problem": "The documented way to put the worker pool back to one job at a time is Jobs:MaxConcurrency, and on the shipped stack there is no way to set it. The panel service names its environment variables explicitly and has no env_file, so a key added to deploy/.env is only available for substitution and never reaches the process. The only routes today are editing docker-compose.yml, rebuilding the image with an edited appsettings.json, or a hand-written docker-compose.override.yml - which the RUNBOOK now documents as the workaround. Found while writing the release note that promises the setting.",
+    "userValue": "None directly.",
+    "operationalValue": "The one rollback lever for the parallel-worker change actually works, and by the same route as every other setting.",
+    "scope": "S",
+    "dependencies": ["HARBORA-0001"],
+    "affectedComponents": ["deploy/docker-compose.yml", "deploy/install.sh", "deploy/RUNBOOK.md"],
+    "acceptanceCriteria": ["The panel service passes Jobs__MaxConcurrency from .env with the code's default when unset", "install.sh backfills the key on update, only when absent", "A test asserts every operator-settable option named in the RUNBOOK reaches the container"],
+    "requiredTests": ["Compose-to-runbook drift test extended from documented-variable to reachable-variable"],
+    "risks": ["Substituting an empty value must not bind an empty string over the code's default"],
+    "evidence": ["deploy/docker-compose.yml panel.environment has no Jobs__ key and no env_file", "src/Harbora.Infrastructure/Jobs/JobQueueOptions.cs:31", "src/Harbora.Web/appsettings.json Jobs._comment_concurrency describes the setting"],
+    "recommendedPhase": 3
   }
 ]
