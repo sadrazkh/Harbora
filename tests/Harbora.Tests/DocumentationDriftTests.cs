@@ -240,6 +240,37 @@ public class DocumentationDriftTests
             "invented it.");
     }
 
+    [Fact]
+    public void Every_command_the_deploy_CLI_registers_is_documented_in_the_README()
+    {
+        // `harbora cancel` shipped with the queue-transparency work and never reached the README,
+        // so the one verb somebody reaches for while a bad build is running was the one they could
+        // not find. A command nobody is told about is a command nobody uses, and the effort that
+        // built it is spent either way.
+        //
+        // Read out of Program.cs's own registrations rather than from a list kept here, because a
+        // list kept here would be a second thing to forget. The CLI's commands are configured
+        // inside a lambda in a top-level program, so there is no public surface to reflect over —
+        // this is the same source-reading idiom the localization and navigation conventions use.
+        var program = Read("src", "Harbora.Cli", "Program.cs");
+        var readme = Read("README.md");
+
+        var registered = Regex.Matches(program, @"AddCommand<\w+>\(""([a-z][a-z0-9-]*)""\)")
+            .Select(m => m.Groups[1].Value)
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .ToList();
+
+        registered.Should().Contain("deploy", "the registrations were not parsed as expected");
+
+        var undocumented = registered
+            .Where(command => !readme.Contains("harbora " + command, StringComparison.Ordinal))
+            .ToList();
+
+        undocumented.Should().BeEmpty(
+            "README.md must show every command the CLI accepts. Missing: " +
+            $"{string.Join(", ", undocumented)}. Add it to the 'Deploy directly' block.");
+    }
+
     // ---- the legacy agent ----
 
     [Fact]

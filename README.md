@@ -283,6 +283,7 @@ values in the app's **Environment Variables**, not by uploading a file.
 ```bash
 harbora login                                  # asks: email + password, or an API token
 harbora login --token hbr_cli_xxx --server https://panel.example.com   # non-interactive (CI)
+harbora whoami                                 # which account, on which panel
 
 # Signed in to more than one panel? They all stay signed in:
 harbora accounts                               # list them; deploy asks which to use
@@ -299,6 +300,7 @@ harbora deploy my-app --ref main
 harbora deploy my-app --tag v1.0.0             # deploy a specific tag
 harbora apps
 harbora logs <deploymentId>
+harbora cancel <deploymentId>                  # stop one that is queued or running
 harbora status
 ```
 
