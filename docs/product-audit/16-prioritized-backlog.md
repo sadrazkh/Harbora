@@ -1,6 +1,10 @@
 # 16 — Prioritized Backlog (human view)
 
-Machine-readable source of truth: [`backlog.json`](backlog.json) (54 items, full acceptance criteria/tests/risks/evidence per item). This view groups by priority. Phase numbers reference 17. Type: B=bug, D=tech-debt, G=feature-gap, U=ux, X=needs-investigation.
+Machine-readable source of truth: [`backlog.json`](backlog.json) (64 items, full acceptance criteria/tests/risks/evidence per item).
+
+This view groups by priority. Phase numbers reference 17. Type: B=bug, D=tech-debt, G=feature-gap, U=ux, X=needs-investigation.
+
+> 0055-0064 were found while *executing* Phases 1 and 2 rather than during the audit, and were folded in on 2026-08-08 from `.superpowers/sdd/discovered-backlog.md`, which records where each came from. Two items on that list were dropped as already closed and two were narrowed; the annotations are in that file.
 
 ## P0 — reliability blockers
 | ID | Title | T | Scope | Ph |
@@ -44,6 +48,8 @@ Machine-readable source of truth: [`backlog.json`](backlog.json) (54 items, full
 | 0038 | Customer email service phase 1 (BYO providers, ingest relay, Dev Inbox, DNS guide, injection) | G | L | 10 |
 | 0042 | API v1 expansion + OpenAPI + CLI phase 2 (env/domains/rollback/list/cancel/--json) | G | L | 11 |
 | 0053 | Setup wizard steps + onboarding checklist gains backup & SMTP steps | U | M | 15 |
+| 0056 | Decide what a workspace operator sees in the audit log (unscoped today) | X | M | 4 |
+| 0059 | Database grants + Adminer still inject the local Docker engine | B | M | 7 |
 
 ## P2 — product completion
 | ID | Title | T | Scope | Ph |
@@ -65,6 +71,14 @@ Machine-readable source of truth: [`backlog.json`](backlog.json) (54 items, full
 | 0048 | Platform admin: announcements, maintenance banner, feature-flag UI, support tooling | G | L | 13 |
 | 0049 | Metering covers services/volumes/buckets | G | M | 13 |
 | 0039 | Harbora-managed email relay (SES-class upstream, tenant sandboxing, quotas) | G | L | 14 |
+| 0057 | Deployment coalescing is an unguarded read-then-insert (partial unique index) | D | S | 3 |
+| 0058 | Reserved-host guard missing on the template and preview host paths | B | S | 3 |
+| 0060 | No startup re-apply of the proxy configuration | B | M | 3 |
+| 0055 | MonitoringMetrics index mis-shaped for its own query | D | S | 6 |
+| 0062 | Retention sweep result has no consumer; a clean sweep logs nothing | D | S | 6 |
+| 0063 | Decide what runningWorkloads and activeTunnels mean on the Nodes page | X | S | 6 |
+| 0061 | RestoreJob has no StagingPath, so a staged dump has no retry pointer | D | S | 8 |
+| 0064 | SftpTransfer.Download's local-name substitution is unproven | D | S | 8 |
 | 0050 | Custom certificates + DNS-01 wildcard (Cloudflare first) | G | L | 16 |
 
 ## P3 — future

@@ -126,6 +126,7 @@ sequenceDiagram
 
 - Domain rows unique on `Host`; default `{slug}.{RootDomain}` assigned per service kind.
 - Routes are per-domain `Route` rows → `TraefikProxyEngine.Render` (StringBuilder-YAML) → validate → tmp+bak file swap into the Traefik-watched dynamic dir; Traefik hot-reloads. Rollback restores `.bak`; **no verification that Traefik accepted the file** (promised in `IProxyEngine` doc comment, absent in code).
+  - **Corrected 2026-08-08:** at audit time the route list was a *caller-supplied* argument, and one file being rendered from one caller's subset was the P0 named in doc 00's correction block. The engine now reads every route itself through `IRouteCatalog`, serialises applies behind a gate, and leaves an invalid route out of the render rather than refusing the whole file — so one tenant's broken row fails only that tenant. A subset is no longer expressible.
 - **SSL is 100 % Traefik ACME (HTTP-01, per-domain certs, `certresolver: letsencrypt`).** The panel never issues/renews; `CertificateWatcher` (daily) records observed state via a real TLS handshake (`DomainInspector`), recognizing Traefik's self-signed default as "no cert yet", and raises `SslExpiring` inside a 14-day window.
 - UI has live per-domain DNS + TLS test buttons (`/domains/test-dns|test-ssl`).
 

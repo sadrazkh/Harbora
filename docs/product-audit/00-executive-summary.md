@@ -1,7 +1,17 @@
 # 00 — Executive Summary
 
 **Harbora product audit · 2026-08-07 · master @ `8b1f6e9` · v0.2.0**
-Full evidence in docs 01–20 + `backlog.json` (54 items). Security review explicitly out of scope (separate process).
+Full evidence in docs 01–20 + `backlog.json` (54 items at audit time; 64 now — 0055-0064 were found while executing Phases 1 and 2 and were folded in on 2026-08-08). Security review explicitly out of scope (separate process).
+
+> **Correction, 2026-08-08.** The "strongest assets" list below names *genuine multi-tenancy* among
+> the things this product already does well. Implementing Phase 1 found a P0 that contradicts it:
+> `TraefikProxyEngine.ApplyAsync` rendered the whole platform's routing file from whatever route
+> list a caller passed, and every caller passed only its own workspace's routes — so on a
+> multi-tenant install any deployment, route edit or Adminer session in one workspace removed every
+> other tenant's routing until something re-applied for them. The headline differentiator was
+> broken in the one place the audit did not look, because query-filter tenancy is what "multi-tenancy"
+> was read to mean and the proxy render is not a query. Fixed (`IRouteCatalog` owns the query, so a
+> subset is no longer expressible); the claim below was wrong when it was written.
 
 ## State of the product, honestly
 Harbora is a real, unusually well-engineered self-hosted multi-tenant PaaS — not a demo. **Build: clean (0 errors/0 warnings). Tests: 3,141 pass, 0 fail** (17 honest Docker-gated skips locally; CI runs them). Live-host verification has covered install→deploy→domains→ACME→managed DBs→backup/restore→multi-server (legacy agent). The strongest assets: the deployment pipeline with a real state machine and zero-downtime cutover; the Node Agent v1 protocol (versioned contract + conformance tests + durable outbox/ledger + self-update-with-rollback — best-in-class for the category); upgrade safety (pre-migration dump that refuses to proceed on failure); genuine multi-tenancy (query filters, plans, quotas, metering, capacity scheduler); a disciplined bilingual RTL UI that never prints a fake zero; and a panel-down recovery CLI.

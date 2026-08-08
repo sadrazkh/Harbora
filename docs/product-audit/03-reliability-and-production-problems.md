@@ -123,10 +123,11 @@ Classification: **[BUG]** wrong behavior · **[DEBT]** structural/technical debt
 - **Fix:** raise alert (new event) + failure reason on the row + UI surfacing (page already shows status).
 - **Phase:** 3
 
-### R-16 · RUNBOOK/README drift misleads operators [DEBT-docs]
+### R-16 · RUNBOOK/README drift misleads operators [DEBT-docs] — **CLOSED 2026-08-08 (0017)**
 - **Confidence:** H · **Examples:** RUNBOOK omits required `S3_DOMAIN`/`MINIO_*` env keys and teaches the legacy agent; README claims "Jobs: … + Redis" (unused) and lists 5 DB engines vs 7; `platform-expansion-v1.md` claims "not merged" though code is on master; three node docs say "21 verbs" (actual 24); merge-notes still lists shipped `GetWorkloadStats` as a gap; contract CHANGELOG missing entries past v1.2.0.
 - **Fix:** single doc-truth pass + the repo's own delivery rule ("documentation must describe shipped behavior only"); add drift tests where cheap (verb count vs catalog).
 - **Phase:** 2
+- **Outcome:** every example above verified against the code and corrected. Two refinements to the finding itself: the engine count is 7 *managed services* — five databases plus RabbitMQ and NATS as brokers, not "7 DB engines" — and the "21 verbs" claims were **correct when written** (v1.0.0 of the contract shipped exactly 21, `git show fad78b5`) and were never updated as three additive versions landed, which is a different failure from an error. `DocumentationDriftTests` now holds the parts that are facts about code: verb counts in digits or words across every node document, every verb appearing in the contract changelog, every managed service named in both READMEs, every compose variable documented in the RUNBOOK, every `harbora` command in the DR runbook existing in `deploy/harbora`, and the legacy-agent deprecation notice being tied to that project's existence.
 
 ---
 
