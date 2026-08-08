@@ -59,6 +59,8 @@ public class DocumentationDriftTests
     /// </summary>
     private static readonly Dictionary<string, int> NumberWords = new(StringComparer.OrdinalIgnoreCase)
     {
+        ["one"] = 1, ["two"] = 2, ["three"] = 3, ["four"] = 4, ["five"] = 5,
+        ["six"] = 6, ["seven"] = 7, ["eight"] = 8, ["nine"] = 9,
         ["ten"] = 10, ["eleven"] = 11, ["twelve"] = 12, ["thirteen"] = 13, ["fourteen"] = 14,
         ["fifteen"] = 15, ["sixteen"] = 16, ["seventeen"] = 17, ["eighteen"] = 18, ["nineteen"] = 19,
         ["twenty"] = 20, ["twenty-one"] = 21, ["twenty-two"] = 22, ["twenty-three"] = 23,
@@ -67,13 +69,38 @@ public class DocumentationDriftTests
     };
 
     /// <summary>
+    /// The same table for the Persian README, which is not a translation of the English one but a
+    /// document in its own right and states its own counts. A guard that only reads English would
+    /// hold half the product's documentation to no standard at all — and the Persian README is the
+    /// default language of this panel.
+    /// </summary>
+    private static readonly Dictionary<string, int> PersianNumberWords = new(StringComparer.Ordinal)
+    {
+        ["یک"] = 1, ["دو"] = 2, ["سه"] = 3, ["چهار"] = 4, ["پنج"] = 5,
+        ["شش"] = 6, ["هفت"] = 7, ["هشت"] = 8, ["نه"] = 9, ["ده"] = 10,
+    };
+
+    /// <summary>
     /// A number immediately in front of the word "verbs" — "24 verbs", "21 named verbs",
     /// "twenty-four verbs". Anything else in front of it ("the verbs", "these verbs", "no verbs")
     /// resolves to nothing and is passed over, because it is prose rather than a count.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The leading <c>\b</c> earns its place: without it, "the v1 verbs" matches as the number
     /// one, because <c>\d+</c> is happy to start halfway through a word.
+    /// </para>
+    /// <para>
+    /// <b>Two forms it does not catch,</b> stated rather than chased. An unhyphenated spelling
+    /// ("twenty one verbs") resolves only its second word, which is not in the table, so the claim
+    /// is skipped; and an attributive form ("a 24-verb allowlist") is not matched at all, because
+    /// the noun is singular and hyphen-joined. Both are silent passes rather than false failures,
+    /// which is the right way round for a guard: it never blocks a build over a sentence it
+    /// misread. Widening the pattern to cover them means either a full number-word grammar or a
+    /// regex loose enough to start matching prose, and neither is worth it for two spellings this
+    /// repository does not currently use. If one appears, add it to <see cref="NumberWords"/> or to
+    /// the pattern — the test will not tell you it is there.
+    /// </para>
     /// </remarks>
     private static readonly Regex VerbCountClaim =
         new(@"\b([A-Za-z]+(?:-[A-Za-z]+)?|\d+)\s+(?:named\s+|runtime\s+)?verbs\b",
@@ -224,8 +251,11 @@ public class DocumentationDriftTests
 
         dispatched.Should().Contain("doctor", "the dispatch table was not parsed as expected");
 
-        var invoked = Regex.Matches(doc, @"\bharbora ([a-z][a-z0-9-]*)")
-            .Select(m => m.Groups[1].Value)
+        // Only what the document presents *as a command* — a fenced block or an inline code span.
+        // Matching bare prose would mean an ordinary sentence like "run harbora again once DNS has
+        // moved" failing the build with a message claiming the document invented a verb called
+        // `again`, which is a guard that punishes writing rather than drift.
+        var invoked = CommandsPresentedAsCode(doc)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(v => v, StringComparer.Ordinal)
             .ToList();
@@ -269,6 +299,172 @@ public class DocumentationDriftTests
         undocumented.Should().BeEmpty(
             "README.md must show every command the CLI accepts. Missing: " +
             $"{string.Join(", ", undocumented)}. Add it to the 'Deploy directly' block.");
+    }
+
+    [Fact]
+    public void No_document_states_a_CLI_command_count_the_CLI_does_not_have()
+    {
+        // The first version of this scoped to README.md, corrected the two missing commands there,
+        // and left "8 commands" standing in docs/product-audit/01-current-system-map.md — the same
+        // drift, in a second file, surviving the test that was written for it. A guard whose file
+        // set is one file guards one file.
+        //
+        // So the count is asserted wherever it is claimed, the same way the verb count is.
+        var registered = Regex.Matches(Read("src", "Harbora.Cli", "Program.cs"),
+                                       @"AddCommand<\w+>\(""[a-z][a-z0-9-]*""\)").Count;
+        registered.Should().BeGreaterThan(0, "the registrations were not parsed as expected");
+
+        string[] files =
+        [
+            At("README.md"),
+            At("README.fa.md"),
+            At("docs", "product-audit", "01-current-system-map.md"),
+            At("docs", "cli-deploy.md"),
+        ];
+
+        foreach (var file in files.Where(File.Exists))
+        {
+            // Only a count attributed to the CLI: "10 commands" on a line that also names the CLI,
+            // rather than every "N commands" in the repository. The node agent has commands too,
+            // and they are a different number.
+            foreach (Match line in Regex.Matches(File.ReadAllText(file), @"(?m)^.*\bcommands\b.*$"))
+            {
+                if (!line.Value.Contains("Harbora.Cli", StringComparison.Ordinal)
+                    && !line.Value.Contains("deploy CLI", StringComparison.Ordinal)) continue;
+
+                var claim = Regex.Match(line.Value, @"\b(\d+|[A-Za-z]+(?:-[A-Za-z]+)?)\s+commands\b");
+                if (!claim.Success) continue;
+
+                var token = claim.Groups[1].Value;
+                var claimed = int.TryParse(token, out var digits) ? digits
+                    : NumberWords.TryGetValue(token, out var word) ? word
+                    : (int?)null;
+
+                if (claimed is null) continue;
+
+                claimed.Should().Be(registered,
+                    $"{Relative(file)} says \"{claim.Value}\" of the deploy CLI, but " +
+                    $"src/Harbora.Cli/Program.cs registers {registered}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every <c>harbora &lt;verb&gt;</c> the document presents as something to type: inside a fenced
+    /// code block, or inside an inline code span. Prose is deliberately not read.
+    /// </summary>
+    private static IEnumerable<string> CommandsPresentedAsCode(string markdown)
+    {
+        var fenced = Regex.Matches(markdown, @"```[a-z]*\r?\n(.*?)```", RegexOptions.Singleline)
+            .Select(m => m.Groups[1].Value);
+        var inline = Regex.Matches(markdown, @"`([^`\r\n]+)`").Select(m => m.Groups[1].Value);
+
+        foreach (var span in fenced.Concat(inline))
+            foreach (Match command in Regex.Matches(span, @"(?<![\w./-])harbora ([a-z][a-z0-9-]*)"))
+                yield return command.Groups[1].Value;
+    }
+
+    // ---- counts that are facts about the code ----
+
+    [Theory]
+    [InlineData("README.md", "databases", "message brokers")]
+    [InlineData("README.fa.md", "دیتابیس", "صف پیام")]
+    public void Both_READMEs_state_the_managed_service_counts_the_catalogue_has(
+        string readme, string databaseNoun, string brokerNoun)
+    {
+        // The names are asserted above; this is the sentence around them. "Five databases and two
+        // message brokers" is a claim with two numbers in it, and an eighth service would leave both
+        // wrong while every name in the list stayed correct — which is precisely how the original
+        // "five managed databases" survived RabbitMQ and NATS arriving.
+        //
+        // The split comes from ServiceTypeKey.IsBroker rather than from a list here, because that
+        // predicate is what the product itself asks when it decides whether a thing has data worth
+        // backing up.
+        var databases = ServiceCatalog.All.Keys.Count(t => !ServiceTypeKey.IsBroker(t));
+        var brokers = ServiceCatalog.All.Keys.Count(ServiceTypeKey.IsBroker);
+
+        // Anchored to the bullet that lists the services rather than searched for across the whole
+        // README. The first attempt scanned the document, and on the Persian side matched "یک
+        // دیتابیس" — "a database" — in an unrelated sentence, reported a claim of one, and would
+        // have had me "correcting" a number that was never wrong. A count is only a claim in the
+        // sentence that makes it.
+        //
+        // The bullet finds itself: it is the one that names every service in the catalogue, which
+        // is the same fact the test above asserts.
+        var names = ServiceCatalog.All.Values.Select(s => s.DisplayName).ToList();
+        var bullets = Regex.Split(Read(readme), @"(?m)^- ")
+            .Select(b => Regex.Replace(b, @"\s*\r?\n\s*", " "))
+            .Where(b => names.All(n => b.Contains(n, StringComparison.Ordinal)))
+            .ToList();
+
+        bullets.Should().ContainSingle(
+            $"{readme} must have exactly one bullet that lists every managed service, and it is the " +
+            "one these counts are read from");
+
+        var claim = bullets[0];
+        var words = readme.Contains(".fa.", StringComparison.Ordinal) ? PersianNumberWords : NumberWords;
+
+        int? Claimed(string noun) => words
+            .Where(w => Regex.IsMatch(claim, $@"(?<![\p{{L}}]){Regex.Escape(w.Key)}\s+{Regex.Escape(noun)}",
+                                      RegexOptions.IgnoreCase))
+            .Select(w => (int?)w.Value)
+            .FirstOrDefault();
+
+        Claimed(databaseNoun).Should().Be(databases,
+            $"{readme} must say, in words, how many databases the panel provisions, beside the list " +
+            $"of them. ServiceCatalog has {databases} that ServiceTypeKey.IsBroker calls stores.");
+
+        Claimed(brokerNoun).Should().Be(brokers,
+            $"{readme} must say, in words, how many message brokers the panel provisions. " +
+            $"ServiceTypeKey.IsBroker counts {brokers}.");
+    }
+
+    // ---- claims about what the code does not contain ----
+
+    [Fact]
+    public void Nothing_in_the_product_opens_a_connection_to_Redis()
+    {
+        // Both READMEs say the job queue is PostgreSQL and that the Redis package and container are
+        // leftovers nothing uses. That is a claim about an absence, and an absence is exactly the
+        // kind of thing that stops being true without anybody noticing: the package reference is
+        // still in Harbora.Infrastructure.csproj, so the day somebody types `new
+        // ConnectionMultiplexer(...)` it will compile. Then the READMEs are wrong and nothing says
+        // so.
+        //
+        // If this fails, the honest fix is usually to correct the READMEs rather than to delete the
+        // code — but it must be one or the other, on purpose.
+        var offenders = Directory
+            .EnumerateFiles(At("src"), "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                        && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+            .Where(f => Regex.IsMatch(File.ReadAllText(f), @"StackExchange\.Redis|ConnectionMultiplexer"))
+            .Select(Relative)
+            .ToList();
+
+        offenders.Should().BeEmpty(
+            "README.md and README.fa.md both state that nothing in Harbora connects to Redis and " +
+            "that the package reference is dead. Something now uses it: " +
+            $"{string.Join(", ", offenders)}. Correct the READMEs, or remove the usage.");
+    }
+
+    [Fact]
+    public void No_test_project_references_the_legacy_agent()
+    {
+        // The deprecation notices in the README, the Servers page and merge-notes all give "it has
+        // no automated tests" as the reason it is frozen rather than developed. If somebody ever
+        // writes tests for it, that reason evaporates and three documents are quietly wrong about
+        // why a supported component is not being worked on.
+        var referencing = Directory
+            .EnumerateFiles(At("tests"), "*.csproj", SearchOption.AllDirectories)
+            .Where(f => File.ReadAllText(f).Contains("Harbora.Agent", StringComparison.Ordinal))
+            .Select(Relative)
+            .ToList();
+
+        referencing.Should().BeEmpty(
+            "the legacy agent's deprecation notices — README.md, README.fa.md, " +
+            "docs/node-agent/merge-notes.md and Views/Servers/Index.cshtml — all say it ships with " +
+            $"no tests, which is why it is frozen. These now test it: {string.Join(", ", referencing)}. " +
+            "Update those notices, or drop the reference.");
     }
 
     // ---- the legacy agent ----
