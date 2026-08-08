@@ -24,6 +24,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/Harbora.NodeAgent.Tests/Harbora.NodeAgent.Tests.csproj" />
     <Project Path="tests/Harbora.NodeIngress.Tests/Harbora.NodeIngress.Tests.csproj" />
+    <Project Path="tests/Harbora.Postgres.Tests/Harbora.Postgres.Tests.csproj" />
     <Project Path="tests/Harbora.Tests/Harbora.Tests.csproj" />
   </Folder>
 </Solution>

@@ -1,0 +1,364 @@
+using Harbora.Modules.Backup.Contracts;
+using Harbora.Domain.Jobs;
+using Microsoft.EntityFrameworkCore;
+
+namespace Harbora.Postgres.Tests;
+
+/// <summary>A database that was carried across the upgrade these branches ship.</summary>
+public sealed record UpgradedInstall(string ConnectionString);
+
+/// <summary>
+/// The upgrade, performed once: a database at the previous release, carrying the rows a real
+/// install could be carrying, migrated the rest of the way.
+///
+/// <para>
+/// Three of the four migrations on these branches contain hand-written SQL, and until this lane
+/// existed none of it had been executed anywhere. Two of them are not additive in the way a column
+/// is: they <b>change rows</b>, and one of them has to, because the <c>CREATE UNIQUE INDEX</c> that
+/// follows would otherwise fail and leave the panel unable to boot. What follows is the set of rows
+/// that reaches every branch of every one of those statements — the ones that must be changed, and,
+/// just as importantly, the ones that must be left alone.
+/// </para>
+///
+/// <para>
+/// Seeded all at once and upgraded once, rather than a database per case: the migration run is the
+/// expensive part, the groups do not interact (different targets, different workspaces), and one
+/// upgrade over a mixed table is a closer likeness of the thing being tested than a dozen upgrades
+/// over one row each.
+/// </para>
+/// </summary>
+internal static class UpgradeFromPreviousRelease
+{
+    /// <summary>
+    /// The last migration on <c>master</c>, and therefore the schema an operator upgrading to these
+    /// branches is coming <i>from</i>.
+    /// </summary>
+    public const string PreviousRelease = "20260806145158_AlertThresholds";
+
+    /// <summary>What this upgrade applies, in order. <see cref="MigrationTests"/> pins that they are these.</summary>
+    public static readonly string[] Applied =
+    [
+        "20260807090816_JobNextAttemptAt",
+        "20260807132914_JobExclusiveWith",
+        "20260807151317_BackupInterruptionRecovery",
+        "20260808061352_MetricRollupChartIndex"
+    ];
+
+    /// <summary>
+    /// Everything the seed writes is dated from here, and every seeded row's <c>UpdatedAt</c> is set
+    /// to match its <c>CreatedAt</c>. That is what makes "was this row written to?" answerable
+    /// without trusting two clocks against each other: a settled row's <c>UpdatedAt</c> is the
+    /// migration's <c>NOW()</c> and is weeks ahead of its own <c>CreatedAt</c>; an untouched row's
+    /// is still exactly equal to it.
+    /// </summary>
+    public static readonly DateTimeOffset BeforeTheUpgrade = DateTimeOffset.UtcNow.AddDays(-30);
+
+    public static async Task<UpgradedInstall> RunAsync(PostgresLane lane)
+    {
+        var connectionString = await lane.NewDatabaseAsync("upgrade");
+
+        await using (var db = PostgresLane.Open(connectionString))
+            await PostgresLane.MigrateToAsync(db, PreviousRelease);
+
+        await using (var connection = await PostgresLane.ConnectAsync(connectionString))
+            await SeedAsync(new SchemaSeed(connection));
+
+        // The whole point. If any hand-written statement is wrong — or merely in the wrong order —
+        // this throws, and every fact in the upgrade tests reports the failure rather than a
+        // misleading assertion further down.
+        await using (var db = PostgresLane.Open(connectionString))
+            await db.Database.MigrateAsync();
+
+        return new UpgradedInstall(connectionString);
+    }
+
+    private static async Task SeedAsync(SchemaSeed seed)
+    {
+        await SeedDeploymentQueueAsync(seed);
+        await SeedBackupSnapshotsAsync(seed);
+        await SeedRestoreJobsAsync(seed);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // JobExclusiveWith — UPDATE "Jobs" SET "ExclusiveWith" = d."AppId" FROM "Deployments" d …
+    // ---------------------------------------------------------------------------------------
+
+    private static async Task SeedDeploymentQueueAsync(SchemaSeed seed)
+    {
+        await seed.InsertAsync("Apps",
+            ("Id", Seeded.AppOne), ("WorkspaceId", Seeded.WorkspaceOne),
+            ("Name", "one"), ("Slug", "one"), ("ServerId", Seeded.Server));
+
+        await seed.InsertAsync("Apps",
+            ("Id", Seeded.AppTwo), ("WorkspaceId", Seeded.WorkspaceOne),
+            ("Name", "two"), ("Slug", "two"), ("ServerId", Seeded.Server));
+
+        // Two deployments of one app — the case ExclusiveWith exists for. Under the serial worker
+        // they merely queued behind each other; beside the parallel worker they would build twice.
+        await seed.InsertAsync("Deployments",
+            ("Id", Seeded.DeploymentOfAppOne), ("AppId", Seeded.AppOne),
+            ("WorkspaceId", Seeded.WorkspaceOne), ("Number", 1), ("Status", 0));
+
+        await seed.InsertAsync("Deployments",
+            ("Id", Seeded.SecondDeploymentOfAppOne), ("AppId", Seeded.AppOne),
+            ("WorkspaceId", Seeded.WorkspaceOne), ("Number", 2), ("Status", 1));
+
+        await seed.InsertAsync("Deployments",
+            ("Id", Seeded.DeploymentOfAppTwo), ("AppId", Seeded.AppTwo),
+            ("WorkspaceId", Seeded.WorkspaceOne), ("Number", 1), ("Status", 0));
+
+        // Kind 0 is JobKind.Deployment; Status 0 and 1 are Pending and Running. Literals here for
+        // the same reason the migration uses them: these are frozen wire values, and the test has to
+        // fail if somebody renumbers the enum without a data migration.
+        await seed.InsertAsync("Jobs",
+            ("Id", Seeded.PendingDeploymentJob), ("Kind", 0), ("Status", 0),
+            ("TargetId", Seeded.DeploymentOfAppOne), ("CreatedAt", BeforeTheUpgrade), ("UpdatedAt", BeforeTheUpgrade));
+
+        await seed.InsertAsync("Jobs",
+            ("Id", Seeded.RunningDeploymentJob), ("Kind", 0), ("Status", 1),
+            ("TargetId", Seeded.SecondDeploymentOfAppOne), ("CreatedAt", BeforeTheUpgrade), ("UpdatedAt", BeforeTheUpgrade));
+
+        await seed.InsertAsync("Jobs",
+            ("Id", Seeded.OtherAppDeploymentJob), ("Kind", 0), ("Status", 0),
+            ("TargetId", Seeded.DeploymentOfAppTwo), ("CreatedAt", BeforeTheUpgrade), ("UpdatedAt", BeforeTheUpgrade));
+
+        // The deployment row is gone — deleted with its app, most likely. The backfill must leave
+        // this null rather than reach for Guid.Empty, which would make it exclude against every
+        // other keyless deployment on the platform.
+        await seed.InsertAsync("Jobs",
+            ("Id", Seeded.OrphanedDeploymentJob), ("Kind", 0), ("Status", 0),
+            ("TargetId", Seeded.DeploymentThatWasDeleted), ("CreatedAt", BeforeTheUpgrade), ("UpdatedAt", BeforeTheUpgrade));
+
+        // Finished work. Nothing will ever claim these again, so stamping them would be noise.
+        await seed.InsertAsync("Jobs",
+            ("Id", Seeded.SucceededDeploymentJob), ("Kind", 0), ("Status", 2),
+            ("TargetId", Seeded.DeploymentOfAppOne), ("CreatedAt", BeforeTheUpgrade), ("UpdatedAt", BeforeTheUpgrade));
+
+        await seed.InsertAsync("Jobs",
+            ("Id", Seeded.FailedDeploymentJob), ("Kind", 0), ("Status", 3),
+            ("TargetId", Seeded.DeploymentOfAppOne), ("CreatedAt", BeforeTheUpgrade), ("UpdatedAt", BeforeTheUpgrade));
+
+        // A backup job whose target id happens to be a deployment's. Nothing stops that — they are
+        // ids from different tables — and the Kind term is the only thing that keeps the backfill
+        // from stamping an app id onto a backup.
+        await seed.InsertAsync("Jobs",
+            ("Id", Seeded.BackupJobPointingAtADeploymentId), ("Kind", 1), ("Status", 0),
+            ("TargetId", Seeded.DeploymentOfAppOne), ("CreatedAt", BeforeTheUpgrade), ("UpdatedAt", BeforeTheUpgrade));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // BackupInterruptionRecovery — settling duplicates before IX_BackupSnapshots_ActiveTarget
+    // ---------------------------------------------------------------------------------------
+
+    private static async Task SeedBackupSnapshotsAsync(SchemaSeed seed)
+    {
+        await seed.InsertAsync("BackupRepositories",
+            ("Id", Seeded.Repository), ("WorkspaceId", Seeded.WorkspaceOne), ("Name", "primary"));
+
+        // Three active runs of one target: what the old read-then-insert guard could let through.
+        // The newest survives; the older two are settled Failed with a reason on them.
+        await ActiveSnapshotAsync(seed, Seeded.OldestOfThree, "vol-duplicated",
+            BackupSnapshotStatus.Pending, BeforeTheUpgrade.AddHours(-3));
+        await ActiveSnapshotAsync(seed, Seeded.MiddleOfThree, "vol-duplicated",
+            BackupSnapshotStatus.Preparing, BeforeTheUpgrade.AddHours(-2));
+        await ActiveSnapshotAsync(seed, Seeded.NewestOfThree, "vol-duplicated",
+            BackupSnapshotStatus.Running, BeforeTheUpgrade.AddHours(-1));
+
+        // Written in the same second, which is not rare — a manual run and the scheduler's. The id
+        // is the tie-break, so the larger one survives.
+        await ActiveSnapshotAsync(seed, Seeded.TiedSnapshotLoser, "vol-tied",
+            BackupSnapshotStatus.Running, BeforeTheUpgrade);
+        await ActiveSnapshotAsync(seed, Seeded.TiedSnapshotWinner, "vol-tied",
+            BackupSnapshotStatus.Running, BeforeTheUpgrade);
+
+        // One active row, which is the ordinary state and also exactly what a second run of the
+        // migration would find. Nothing may happen to it.
+        await ActiveSnapshotAsync(seed, Seeded.LoneSnapshot, "vol-alone",
+            BackupSnapshotStatus.Running, BeforeTheUpgrade);
+
+        // An active run beside its own finished history. The finished one is outside the index's
+        // filter, so it is not a duplicate and neither row may be touched.
+        await ActiveSnapshotAsync(seed, Seeded.SnapshotWithHistory, "vol-with-history",
+            BackupSnapshotStatus.Running, BeforeTheUpgrade);
+        await SnapshotAsync(seed, Seeded.CompletedSnapshotOfTheSameTarget, Seeded.WorkspaceOne,
+            BackupTargetType.DockerVolume, "vol-with-history",
+            BackupSnapshotStatus.Completed, BeforeTheUpgrade.AddHours(-4));
+
+        // The same target reference, in another tenant. The index is workspace-scoped, so these are
+        // not duplicates of each other and settling either would destroy a live backup.
+        await SnapshotAsync(seed, Seeded.OtherWorkspaceSnapshot, Seeded.WorkspaceTwo,
+            BackupTargetType.DockerVolume, "vol-duplicated",
+            BackupSnapshotStatus.Running, BeforeTheUpgrade);
+
+        // The same reference and the same workspace, but a different kind of target — a directory
+        // called "vol-duplicated" is not the volume called "vol-duplicated".
+        await SnapshotAsync(seed, Seeded.OtherTargetTypeSnapshot, Seeded.WorkspaceOne,
+            BackupTargetType.Directory, "vol-duplicated",
+            BackupSnapshotStatus.Running, BeforeTheUpgrade);
+    }
+
+    private static Task ActiveSnapshotAsync(
+        SchemaSeed seed, Guid id, string targetRef, BackupSnapshotStatus status, DateTimeOffset createdAt) =>
+        SnapshotAsync(seed, id, Seeded.WorkspaceOne, BackupTargetType.DockerVolume, targetRef, status, createdAt);
+
+    private static Task SnapshotAsync(
+        SchemaSeed seed, Guid id, Guid workspaceId, BackupTargetType targetType,
+        string targetRef, BackupSnapshotStatus status, DateTimeOffset createdAt) =>
+        seed.InsertAsync("BackupSnapshots",
+            ("Id", id), ("WorkspaceId", workspaceId), ("RepositoryId", Seeded.Repository),
+            ("TargetType", (int)targetType), ("TargetRef", targetRef),
+            ("Status", (int)status), ("CreatedAt", createdAt), ("UpdatedAt", createdAt));
+
+    // ---------------------------------------------------------------------------------------
+    // BackupInterruptionRecovery — settling restores, by duplicate destination and by length
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary><c>RestoreJob.MaxDestinationLength</c>, spelled out the way the migration spells it.</summary>
+    private const int LongestDestinationTheServiceAccepts = 512;
+
+    /// <summary>
+    /// Three bytes each in UTF-8. 1024 of them is 3072 bytes, past the ~2704 a btree index row can
+    /// hold — so a row like this is precisely what would make <c>CREATE UNIQUE INDEX</c> throw, and
+    /// therefore what proves the settling statement runs first.
+    /// </summary>
+    private const char ThreeByteCharacter = '一';
+
+    private static async Task SeedRestoreJobsAsync(SchemaSeed seed)
+    {
+        await SnapshotAsync(seed, Seeded.RestorableSnapshot, Seeded.WorkspaceOne,
+            BackupTargetType.DockerVolume, "vol-restorable",
+            BackupSnapshotStatus.Completed, BeforeTheUpgrade.AddHours(-6));
+
+        // Two restores racing for one directory, which is the state the index exists to prevent.
+        await RestoreAsync(seed, Seeded.OlderRestoreOfOneDestination, Seeded.WorkspaceOne,
+            "/srv/harbora/restore/duplicated", RestoreJobStatus.Pending, BeforeTheUpgrade.AddHours(-2));
+        await RestoreAsync(seed, Seeded.NewerRestoreOfOneDestination, Seeded.WorkspaceOne,
+            "/srv/harbora/restore/duplicated", RestoreJobStatus.Running, BeforeTheUpgrade.AddHours(-1));
+
+        // Two tenants, one path on the machine. IX_RestoreJobs_ActiveDestination is deliberately not
+        // workspace-scoped, so this IS a duplicate and one of them has to be settled.
+        await RestoreAsync(seed, Seeded.RestoreIntoASharedPath, Seeded.WorkspaceOne,
+            "/srv/harbora/restore/shared", RestoreJobStatus.Running, BeforeTheUpgrade.AddHours(-2));
+        await RestoreAsync(seed, Seeded.OtherTenantsRestoreIntoTheSamePath, Seeded.WorkspaceTwo,
+            "/srv/harbora/restore/shared", RestoreJobStatus.Running, BeforeTheUpgrade.AddHours(-1));
+
+        await RestoreAsync(seed, Seeded.TiedRestoreLoser, Seeded.WorkspaceOne,
+            "/srv/harbora/restore/tied", RestoreJobStatus.Running, BeforeTheUpgrade);
+        await RestoreAsync(seed, Seeded.TiedRestoreWinner, Seeded.WorkspaceOne,
+            "/srv/harbora/restore/tied", RestoreJobStatus.Running, BeforeTheUpgrade);
+
+        await RestoreAsync(seed, Seeded.LoneRestore, Seeded.WorkspaceOne,
+            "/srv/harbora/restore/alone", RestoreJobStatus.Running, BeforeTheUpgrade);
+
+        // An active restore beside a finished one into the same place. The finished row is the audit
+        // trail of a destructive act and is outside the filter; neither may be touched.
+        await RestoreAsync(seed, Seeded.RestoreWithHistory, Seeded.WorkspaceOne,
+            "/srv/harbora/restore/historic", RestoreJobStatus.Running, BeforeTheUpgrade);
+        await RestoreAsync(seed, Seeded.CompletedRestoreOfTheSamePath, Seeded.WorkspaceOne,
+            "/srv/harbora/restore/historic", RestoreJobStatus.Completed, BeforeTheUpgrade.AddHours(-5));
+
+        // Longer than the index can hold. Without the settling UPDATE the migration dies on
+        // "index row size … exceeds btree version 4 maximum 2704" and the panel does not boot.
+        await RestoreAsync(seed, Seeded.ActiveRestoreWithAnOverLongDestination, Seeded.WorkspaceOne,
+            new string(ThreeByteCharacter, 1024), RestoreJobStatus.Pending, BeforeTheUpgrade);
+
+        // The same length, already finished. Outside the index's filter, so it does not break the
+        // build — and it is a record of what was written where, which nothing here has any business
+        // rewriting.
+        await RestoreAsync(seed, Seeded.CompletedRestoreWithAnOverLongDestination, Seeded.WorkspaceOne,
+            new string('二', 1024), RestoreJobStatus.Completed, BeforeTheUpgrade);
+
+        // Exactly the bound. The statement says "> 512", so this one stays.
+        await RestoreAsync(seed, Seeded.RestoreAtExactlyTheBound, Seeded.WorkspaceOne,
+            new string('三', LongestDestinationTheServiceAccepts), RestoreJobStatus.Running, BeforeTheUpgrade);
+
+        // One character past it.
+        await RestoreAsync(seed, Seeded.RestoreOneCharacterPastTheBound, Seeded.WorkspaceOne,
+            new string('四', LongestDestinationTheServiceAccepts + 1), RestoreJobStatus.Running, BeforeTheUpgrade);
+    }
+
+    private static Task RestoreAsync(
+        SchemaSeed seed, Guid id, Guid workspaceId, string destination,
+        RestoreJobStatus status, DateTimeOffset createdAt) =>
+        seed.InsertAsync("RestoreJobs",
+            ("Id", id), ("WorkspaceId", workspaceId), ("SnapshotId", Seeded.RestorableSnapshot),
+            ("Destination", destination), ("Status", (int)status),
+            ("CreatedAt", createdAt), ("UpdatedAt", createdAt));
+
+    /// <summary>
+    /// The seeded rows, by name. Written out rather than generated because two of them are a
+    /// tie-break — <c>…0001</c> loses to <c>…0002</c> — and a reader has to be able to see that.
+    /// </summary>
+    internal static class Seeded
+    {
+        public static readonly Guid WorkspaceOne = new("11111111-0000-0000-0000-000000000001");
+        public static readonly Guid WorkspaceTwo = new("11111111-0000-0000-0000-000000000002");
+        public static readonly Guid Server = new("55555555-0000-0000-0000-000000000001");
+
+        public static readonly Guid AppOne = new("aaaaaaaa-0000-0000-0000-000000000001");
+        public static readonly Guid AppTwo = new("aaaaaaaa-0000-0000-0000-000000000002");
+
+        public static readonly Guid DeploymentOfAppOne = new("dddddddd-0000-0000-0000-000000000001");
+        public static readonly Guid SecondDeploymentOfAppOne = new("dddddddd-0000-0000-0000-000000000002");
+        public static readonly Guid DeploymentOfAppTwo = new("dddddddd-0000-0000-0000-000000000003");
+        public static readonly Guid DeploymentThatWasDeleted = new("dddddddd-0000-0000-0000-0000000000ff");
+
+        public static readonly Guid PendingDeploymentJob = new("10b00000-0000-0000-0000-000000000001");
+        public static readonly Guid RunningDeploymentJob = new("10b00000-0000-0000-0000-000000000002");
+        public static readonly Guid OtherAppDeploymentJob = new("10b00000-0000-0000-0000-000000000003");
+        public static readonly Guid OrphanedDeploymentJob = new("10b00000-0000-0000-0000-000000000004");
+        public static readonly Guid SucceededDeploymentJob = new("10b00000-0000-0000-0000-000000000005");
+        public static readonly Guid FailedDeploymentJob = new("10b00000-0000-0000-0000-000000000006");
+        public static readonly Guid BackupJobPointingAtADeploymentId = new("10b00000-0000-0000-0000-000000000007");
+
+        public static readonly Guid Repository = new("bbbbbbbb-0000-0000-0000-000000000001");
+
+        public static readonly Guid OldestOfThree = new("50000000-0000-0000-0000-000000000001");
+        public static readonly Guid MiddleOfThree = new("50000000-0000-0000-0000-000000000002");
+        public static readonly Guid NewestOfThree = new("50000000-0000-0000-0000-000000000003");
+        public static readonly Guid TiedSnapshotLoser = new("50000000-0000-0000-0000-000000000011");
+        public static readonly Guid TiedSnapshotWinner = new("50000000-0000-0000-0000-000000000012");
+        public static readonly Guid LoneSnapshot = new("50000000-0000-0000-0000-000000000021");
+        public static readonly Guid SnapshotWithHistory = new("50000000-0000-0000-0000-000000000031");
+        public static readonly Guid CompletedSnapshotOfTheSameTarget = new("50000000-0000-0000-0000-000000000032");
+        public static readonly Guid OtherWorkspaceSnapshot = new("50000000-0000-0000-0000-000000000041");
+        public static readonly Guid OtherTargetTypeSnapshot = new("50000000-0000-0000-0000-000000000051");
+        public static readonly Guid RestorableSnapshot = new("50000000-0000-0000-0000-000000000061");
+
+        public static readonly Guid OlderRestoreOfOneDestination = new("60000000-0000-0000-0000-000000000001");
+        public static readonly Guid NewerRestoreOfOneDestination = new("60000000-0000-0000-0000-000000000002");
+        public static readonly Guid RestoreIntoASharedPath = new("60000000-0000-0000-0000-000000000011");
+        public static readonly Guid OtherTenantsRestoreIntoTheSamePath = new("60000000-0000-0000-0000-000000000012");
+        public static readonly Guid TiedRestoreLoser = new("60000000-0000-0000-0000-000000000021");
+        public static readonly Guid TiedRestoreWinner = new("60000000-0000-0000-0000-000000000022");
+        public static readonly Guid LoneRestore = new("60000000-0000-0000-0000-000000000031");
+        public static readonly Guid RestoreWithHistory = new("60000000-0000-0000-0000-000000000041");
+        public static readonly Guid CompletedRestoreOfTheSamePath = new("60000000-0000-0000-0000-000000000042");
+        public static readonly Guid ActiveRestoreWithAnOverLongDestination = new("60000000-0000-0000-0000-000000000051");
+        public static readonly Guid CompletedRestoreWithAnOverLongDestination = new("60000000-0000-0000-0000-000000000052");
+        public static readonly Guid RestoreAtExactlyTheBound = new("60000000-0000-0000-0000-000000000053");
+        public static readonly Guid RestoreOneCharacterPastTheBound = new("60000000-0000-0000-0000-000000000054");
+    }
+}
+
+/// <summary>Reading the upgraded rows back. Unscoped, because the sweepers that own them are.</summary>
+internal static class UpgradedReads
+{
+    public static async Task<Job> JobAsync(string connectionString, Guid id)
+    {
+        await using var db = PostgresLane.Open(connectionString);
+        return await db.Jobs.AsNoTracking().SingleAsync(j => j.Id == id);
+    }
+
+    public static async Task<Modules.Backup.Domain.BackupSnapshot> SnapshotAsync(string connectionString, Guid id)
+    {
+        await using var db = PostgresLane.Open(connectionString);
+        return await db.BackupSnapshots.AsNoTracking().SingleAsync(s => s.Id == id);
+    }
+
+    public static async Task<Modules.Backup.Domain.RestoreJob> RestoreAsync(string connectionString, Guid id)
+    {
+        await using var db = PostgresLane.Open(connectionString);
+        return await db.RestoreJobs.AsNoTracking().SingleAsync(r => r.Id == id);
+    }
+}

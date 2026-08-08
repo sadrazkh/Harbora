@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The only suite in the repository that talks to a real PostgreSQL.
+
+    Kept out of Harbora.Tests deliberately. Everything there runs on EF InMemory in a couple of
+    seconds and people run it constantly; this one starts a container, applies sixty-odd migrations
+    per database and is measured in tens of seconds. Folding the two together would either slow the
+    fast suite down for everyone or bury these behind a filter nobody remembers — and CI needs to be
+    able to name this lane on its own to prove it actually ran (.github/workflows/ci-postgres.yml).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>Harbora.Postgres.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="FluentAssertions" Version="6.12.1" />
+    <!--
+      4.11.0 rather than the newest: it is the version already pinned across this machine's package
+      graph, and its Docker.DotNet.Enhanced dependency resolves cleanly against the Docker.DotNet
+      that Harbora.Infrastructure brings in (both ship an assembly called Docker.DotNet; the build
+      unifies on the higher one with no conflict warning, and nothing in this lane calls the
+      panel's Docker code).
+    -->
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.11.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Harbora.Domain\Harbora.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Harbora.Application\Harbora.Application.csproj" />
+    <ProjectReference Include="..\..\src\Harbora.Data\Harbora.Data.csproj" />
+    <!-- For JobClaimQuery: the point of the claim tests is to run the real predicate, not a copy. -->
+    <ProjectReference Include="..\..\src\Harbora.Infrastructure\Harbora.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Backup\Harbora.Modules.Backup.Contracts\Harbora.Modules.Backup.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Backup\Harbora.Modules.Backup.Domain\Harbora.Modules.Backup.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
