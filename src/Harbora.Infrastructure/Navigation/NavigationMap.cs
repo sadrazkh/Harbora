@@ -56,7 +56,20 @@ public static class NavigationMap
         // AI sits in its own group rather than under Insight: it is a service somebody uses, not a
         // report they read, and burying it under monitoring is how a feature goes unnoticed.
         new("intelligence", [
-            new("ai", "Ai", "Index", "sparkles"),
+            // Advanced-only, and this is the one entry here where that is a statement about
+            // confidence rather than about specialism.
+            //
+            // Everything around the gateway is built and covered — plans, keys, routing, circuit
+            // breaking, sliding-window rate limits, metering, the SSRF guard on a stored base URL —
+            // and not one request has ever been made from this codebase to a real model provider.
+            // Nothing proves the last hop. That is a fine thing to offer somebody who went looking
+            // for it; it is not a fine thing to put in front of a person who chose the simple panel
+            // precisely because they want the parts that just work.
+            //
+            // Folded, not removed: /ai still answers in both modes, so a link in a runbook or a
+            // support message works either way. Take the Advanced flag off once one live
+            // round-trip has been made and recorded (HARBORA-0054).
+            new("ai", "Ai", "Index", "sparkles", Advanced: true),
             // Administering the AI service is a different job from using it: providers, tokens,
             // pricing and plans. It needs the platform capability and belongs in Advanced.
             new("ai-admin", "AiAdmin", "Index", "sliders-horizontal", Capabilities.PlatformManage, Advanced: true)

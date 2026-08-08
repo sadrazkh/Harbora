@@ -14,6 +14,30 @@
         ? "با یک کلید Harbora به مدل‌های پلن خودتان وصل شوید. درخواست‌ها از سرور Harbora ارسال می‌شوند."
         : "Reach the models on your plan with one Harbora key. Requests are sent from Harbora's own servers."))" />
 
+@* Said on the page rather than only in the release notes. Everything up to the network boundary is
+   built and tested; no request has ever left this codebase for a real provider, so the last hop is
+   the one thing nothing here proves. Somebody about to hand this key to a customer should be told
+   that before they do, not after the first support ticket. Remove this block, and the Advanced flag
+   in NavigationMap, together — once one live round-trip has been made and recorded (HARBORA-0054). *@
+<div class="mb-6 rounded-xl border border-warn bg-warn-soft p-4">
+    <div class="flex items-center gap-2 text-sm font-semibold text-warn">
+        @* Same mark as the deprecation notice on the Servers page: both are "read this before you
+           rely on it", and IconCoverageTests already holds this one as importable. *@
+        <i data-lucide="alert-triangle" class="h-4 w-4"></i>
+        @(isFa ? "پیش‌نمایش" : "Preview")
+    </div>
+    <p class="mt-1.5 text-xs text-ink-muted">
+        @(isFa
+            ? "این سرویس هرگز در برابر یک provider واقعی اجرا نشده. پلن‌ها، کلیدها، مسیریابی، محدودیت نرخ و اندازه‌گیری ساخته و تست شده‌اند، ولی هیچ درخواستی از این کد به یک مدل واقعی نرفته — یعنی آخرین قدم اثبات‌نشده است."
+            : "This service has never been run against a real provider. Plans, keys, routing, rate limits and metering are all built and tested, but no request has ever gone from this code to a live model — so the last hop is unproven.")
+    </p>
+    <p class="mt-1.5 text-xs text-ink-faint">
+        @(isFa
+            ? "تا آن‌وقت در حالت ساده از منو پنهان است؛ آدرس صفحه در هر دو حالت کار می‌کند."
+            : "Until then it is hidden from the sidebar in Simple mode; the page itself answers in both modes.")
+    </p>
+</div>
+
 @if (message is not null)
 {
     <div class="mb-4 rounded-lg border border-ok bg-ok-soft px-4 py-2 text-sm text-ok">@message</div>

@@ -1,8 +1,12 @@
 # Harbora platform expansion v1
 
-Branch: `feature/harbora-platform-expansion-v1`. Not merged into `master`.
+Branch: `feature/harbora-platform-expansion-v1`, **merged into `master`**. Everything below is
+shipped behaviour, not a proposal — the sentence saying otherwise was written before the merge and
+outlived it.
 
 This document records what was added, what was deliberately not added, and the risks that remain.
+It is a record of one phase and is not kept current: the test count and the "not built" list below
+were true when the phase closed. Where a later phase has changed one of them, it says so inline.
 
 ---
 
@@ -392,6 +396,20 @@ Production database tunnelling is not real until the node agent ships.
 only up to the network boundary. The same is true of `ContainerRegistryClient`: the token dance and
 the digest header are written to the OCI distribution spec and covered by tests up to the HTTP
 boundary, but no run in this environment has spoken to Docker Hub.
+
+> **Still true, and now said on the product rather than only here.** Nothing has since made a
+> request from this codebase to a live model provider, so the last hop remains the one thing no test
+> covers. Rather than leave a full user-facing surface with no indication of that, the AI
+> destination is **labelled *Preview* on its own page and hidden from the sidebar in Simple mode**
+> (`NavigationMap`, `Views/Ai/Index.cshtml`). It is not disabled and no configuration flag was
+> added: the routes answer in both modes, the gateway is untouched, and both marks come off together
+> once one live round-trip has been made and recorded — **HARBORA-0054**, whose acceptance is
+> exactly that. `AiAdminPageTests` holds the gate and the label so neither can be removed by
+> accident.
+>
+> `ContainerRegistryClient` is the narrower case and has moved: the ready-app digests were
+> re-resolved against the real registries from a server (`6ef8c2c`), which is a person doing it by
+> hand rather than a test doing it, and it proved the client's answers are the registries' answers.
 
 ---
 
