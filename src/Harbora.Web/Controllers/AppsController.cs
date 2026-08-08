@@ -33,11 +33,31 @@ public sealed class AppsController(
     IProxyEngine proxy,
     ILogger<AppsController> logger,
     IJobQueue jobs,
+    IConfiguration config,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
     private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    /// <summary>
+    /// Whether a typed host is one the platform answers on itself — see <see cref="ReservedHosts"/>
+    /// for what claiming the node channel's host silently costs.
+    ///
+    /// <para>
+    /// Read from configuration on each call rather than cached or mirrored into the database: these
+    /// are per-install values (<c>PANEL_DOMAIN</c>, <c>NodeAgent__PublicUrl</c>,
+    /// <c>Storage__S3__PublicEndpoint</c> in <c>deploy/.env</c>) that <c>harbora set-domain</c> can
+    /// change under a running panel, and a second copy is a second thing to be wrong.
+    /// </para>
+    /// </summary>
+    private bool IsReservedHost(string? host) =>
+        ReservedHosts.IsReserved(host, ReservedHosts.ForPlatform(
+            config["PANEL_DOMAIN"], config["NodeAgent:PublicUrl"], config["Storage:S3:PublicEndpoint"]));
+
+    private string ReservedHostRefusal(string host) => IsFa
+        ? $"«{host}» یکی از نام‌های خودِ سامانه است و نمی‌توان آن را به یک اپ داد."
+        : $"'{host}' is one of the platform's own host names and cannot be routed to an app.";
 
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -256,6 +276,14 @@ public sealed class AppsController(
         var rootDomain = await db.Settings.Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.PlatformRootDomain)
             .Select(s => s.Value).FirstOrDefaultAsync(ct);
         var host = Harbora.Infrastructure.Deployments.ServicePlan.HostFor(model.Kind, model.Domain, slug, rootDomain);
+        // A typed domain arrives here too, so the reserved-host rule has to be here too. The refusal
+        // is the same message the domains form gives, and it happens before the app is written.
+        if (IsReservedHost(host))
+        {
+            ModelState.AddModelError(nameof(model.Domain), ReservedHostRefusal(host!));
+            await PopulateTemplates(ct);
+            return View(model);
+        }
         if (!string.IsNullOrWhiteSpace(host) && !await db.Domains.AnyAsync(d => d.Host == host, ct))
             app.Domains.Add(new DomainName { Host = host, SslEnabled = true, ForceHttps = true, IsPrimary = true });
 
@@ -1193,6 +1221,13 @@ public sealed class AppsController(
         host = (host ?? "").Trim().ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(host)) { TempData["Error"] = "Host is required."; return RedirectToAction(nameof(Details), new { id }); }
         if (await db.Domains.AnyAsync(d => d.Host == host, ct)) { TempData["Error"] = "This domain is already in use."; return RedirectToAction(nameof(Details), new { id }); }
+
+        // A uniqueness check is not an ownership check. The platform's own host names are not in
+        // db.Domains — nothing ever inserted them — so until this guard they were free to claim,
+        // and the node channel's host is the one where taking it costs more than it looks: see
+        // ReservedHosts for why a second router on that SNI name turns mTLS off instead of adding
+        // a route.
+        if (IsReservedHost(host)) { TempData["Error"] = ReservedHostRefusal(host); return RedirectToAction(nameof(Details), new { id }); }
 
         app.Domains.Add(new DomainName { Host = host, SslEnabled = ssl, ForceHttps = ssl, IsPrimary = app.Domains.Count == 0 });
         await db.SaveChangesAsync(ct);

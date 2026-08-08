@@ -57,7 +57,7 @@ Under `NodeAgent:` in `appsettings.json`, or `NodeAgent__*` in `deploy/.env`:
 
 | Setting | Notes |
 |---|---|
-| `PublicUrl` | The **node channel's** host (`NODE_DOMAIN` in `deploy/.env`), handed back in the enrollment response and used for the channel and renewals from then on. Not the panel's own host — see [Client certificates behind Traefik](#client-certificates-behind-traefik). Empty means the node keeps whatever URL it was installed with, which is the panel's, where nothing asks it for a certificate: it enrols and then never connects |
+| `PublicUrl` | The **node channel's** host (`NODE_DOMAIN` in `deploy/.env`), handed back in the enrollment response and used for the channel and renewals from then on. Not the panel's own host — see [Client certificates behind Traefik](#client-certificates-behind-traefik). **Empty is not a fallback:** the node stores the empty string as its control-plane URL, and `ControlChannel` then throws `UriFormatException` building a channel URI from it. The node enrols, reports success, and never opens a channel |
 | `MinimumAgentVersion` | Nodes below it are told they are too old and refuse work themselves. Raising it is how a fleet is forced forward |
 | `EnrollmentTokenMinutes` | Capped at 24 hours. The token's job is to survive a copy-paste, not to live in a wiki |
 | `TrustForwardedClientCertificate` | **Off by default.** See the mTLS section — turning it on without the Traefik half removes authentication rather than adding it |

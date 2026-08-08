@@ -280,6 +280,29 @@ public sealed class ControlChannelTests : IDisposable
     public void Channel_uri_is_derived_from_the_control_plane_url(string baseUrl, string expected) =>
         ControlChannel.ChannelUri(baseUrl).ToString().Should().Be(expected);
 
+    /// <summary>
+    /// A panel with an empty <c>NodeAgent:PublicUrl</c> hands that empty string back as the
+    /// enrollment response's <c>ControlPlaneUrl</c>, and <c>EnrollmentService</c> stores it verbatim.
+    /// <c>OpenAsync</c> then reads <c>state.ControlPlaneUrl ?? _options.ControlPlaneUrl</c>, and
+    /// <c>??</c> does not catch an empty string — so the fallback everyone assumes is there is not.
+    ///
+    /// <para>
+    /// This is pinned because the deployment documentation describes what happens next, and it
+    /// described it wrongly for two commits: the node does <b>not</b> quietly keep talking to the URL
+    /// it was installed with. It throws before it opens a socket. Loud, but not the failure the
+    /// comments claimed — and if a fallback is ever added, this test is what says the comments have
+    /// to change with it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void An_empty_control_plane_url_does_not_fall_back_to_the_installed_one()
+    {
+        var act = () => ControlChannel.ChannelUri("");
+
+        act.Should().Throw<UriFormatException>(
+            "an empty stored ControlPlaneUrl crashes the channel rather than being ignored");
+    }
+
     private static async Task<ControlFrame?> FirstFrameAsync(ControlChannel channel)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));

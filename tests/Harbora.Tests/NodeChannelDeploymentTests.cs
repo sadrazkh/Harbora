@@ -436,6 +436,136 @@ public class NodeChannelDeploymentTests
                 "PublicUrl is the node channel's host; enrolment is served on the panel's");
     }
 
+    // --- what the preflight could not see ---
+
+    [Fact]
+    public void The_channel_probe_waits_for_traefik_the_way_the_panel_probe_does()
+    {
+        // enable_node_channel wrote that router seconds ago and Traefik's file provider may not have
+        // re-read it. The panel probe retries for exactly this reason; the channel probe fired once,
+        // so a set-domain followed by an update — a re-render with no container restart to absorb
+        // the delay — turned a slow reload into a red VERIFY_FAILED on a correct install.
+        var channel = ChannelSlice(ShellFunction(Installer(), "verify_install"));
+
+        channel.Should().Contain("for attempt in $(seq 1 12)");
+        channel.Should().Contain("sleep 5");
+    }
+
+    [Fact]
+    public void A_port_with_nothing_behind_it_is_not_reported_as_mtls_working()
+    {
+        // curl exiting non-zero with an HTTP code of 000 is what a refused handshake looks like —
+        // and equally what a closed port, a stopped Traefik or a timeout looks like. The old branch
+        // tested only "curl failed" and printed the green "mTLS is enforced" for all four.
+        var channel = ChannelSlice(ShellFunction(Installer(), "verify_install"));
+
+        // 35 (SSL connect error) and 56 (the peer's alert arriving after our Finished) are the two
+        // ways OpenSSL reports "the server demanded a certificate we did not have".
+        channel.Should().Contain("35|56)", "only a TLS-level refusal earns the green tick");
+
+        var green = channel.IndexOf("mTLS is enforced", StringComparison.Ordinal);
+        green.Should().BeGreaterThan(channel.IndexOf("35|56)", StringComparison.Ordinal),
+            "the tick has to sit inside that branch, not beside it");
+
+        // And the cases that used to reach it say what they are instead.
+        channel.Should().Contain("7|28)");
+        channel.Should().Contain("it is Traefik not listening");
+    }
+
+    [Fact]
+    public void Verify_install_checks_the_node_hosts_certificate_and_not_only_the_panels()
+    {
+        // Everything above step 5 pins the name to 127.0.0.1 with --resolve and passes -k, so a host
+        // with no public DNS and no certificate at all scores four green ticks. A node is stricter
+        // than curl -k: ControlPlaneTls rejects a name mismatch outright and never falls back to the
+        // CA it was handed at enrollment, so Traefik's default self-signed certificate — what this
+        // host serves until ACME issues — makes every node enrol and then fail TLS forever.
+        var ssl = SslSlice(ShellFunction(Installer(), "verify_install"));
+
+        ssl.Should().Contain("${node_domain}", "step 5 checked only the panel's host");
+
+        // The two negative assertions read the commands only. The comments in this step discuss
+        // --resolve and -k at length — they are there to say why this step uses neither — and an
+        // assertion that reads them is an assertion about prose.
+        Commands(ssl).Should().NotContain("--resolve", "a certificate check that bypasses public DNS proves nothing");
+        Commands(ssl).Should().NotContain("-sk", "and one that accepts any certificate proves less than nothing");
+
+        // The two failures are told apart, because the operator's next action differs: add a DNS
+        // record, or wait for / unblock ACME.
+        ssl.Should().Contain("6)", "curl exit 6 is 'this name does not resolve publicly'");
+        ssl.Should().Contain("51|60)", "and 60 is 'the certificate is not one a node would accept'");
+        ssl.Should().Contain("VERIFY_FAILED=1", "a node channel nothing can connect to is not a warning");
+    }
+
+    [Fact]
+    public void An_update_says_the_node_channel_needs_a_dns_record_of_its_own()
+    {
+        var installer = Installer();
+
+        // configure_domains is the only place that ever asked for this record, and write_env calls
+        // it on a fresh .env only. An existing install upgrading gets NODE_DOMAIN backfilled and the
+        // router rendered, and verify_install's --resolve makes the channel check pass green with no
+        // public DNS at all — so without this the operator is told nothing whatsoever.
+        installer.Should().Contain("\ncheck_node_dns() {");
+        ShellFunction(installer, "cmd_update").Should().Contain("check_node_dns");
+
+        var check = ShellFunction(installer, "check_node_dns");
+        check.Should().Contain("NODE_DOMAIN", "it has to check the host this install actually uses");
+        check.Should().Contain("check_dns", "against public DNS, which is the thing --resolve hides");
+    }
+
+    [Fact]
+    public void The_orphaned_router_the_installer_moves_aside_cannot_be_committed_by_accident()
+    {
+        // fetch_source updates with `git reset --hard`, which leaves untracked files alone — so a
+        // node-agent.yml.disabled dropped by a failed CA export survives in the working tree for
+        // ever and shows up as a dirty repository nobody can explain.
+        File.ReadAllText(Path.Combine(RepoRoot(), ".gitignore"))
+            .Should().Contain("deploy/traefik/node-agent.yml.disabled");
+    }
+
+    [Fact]
+    public void The_documented_cost_of_an_empty_public_url_is_the_one_it_actually_has()
+    {
+        // NodeEnrollmentService hands the empty string back, EnrollmentService stores it, and
+        // ControlChannel reads `state.ControlPlaneUrl ?? _options.ControlPlaneUrl` — which does not
+        // catch an empty string. There is no fallback to the installed URL. ChannelUri("") throws.
+        // ControlChannelTests executes that; these two documents have to agree with it.
+        var compose = File.ReadAllText(Deploy("docker-compose.yml"));
+        var doc = File.ReadAllText(Path.Combine(RepoRoot(), "docs", "node-agent", "control-plane.md"));
+
+        foreach (var text in new[] { compose, doc })
+        {
+            text.Should().NotContain("falls back to whatever URL it was installed with");
+            text.Should().NotContain("keeps whatever URL it was installed with");
+            text.Should().Contain("UriFormatException",
+                "the failure is a channel that cannot build a URL, not one that dials the wrong host");
+        }
+    }
+
+    // --- the host a tenant must not be able to take ---
+
+    [Fact]
+    public void A_custom_domain_cannot_claim_a_host_the_platform_serves_itself()
+    {
+        // TraefikProxyEngine.RenderRouter writes `tls: certResolver:` with no `options:`. A tenant
+        // route on the node channel's host is therefore a second router on that SNI name with the
+        // DEFAULT TLS options — the two-routers-one-host conflict the last commit removed, rebuilt
+        // from outside, on the one host where the panel trusts a client-settable header.
+        var controller = File.ReadAllText(
+            Path.Combine(RepoRoot(), "src", "Harbora.Web", "Controllers", "AppsController.cs"));
+
+        controller.Should().Contain("ReservedHosts.IsReserved");
+
+        // Both places a tenant can type a host, not just the domains form: an app can be created
+        // with a custom domain in the same request that creates it.
+        Between(controller, "public async Task<IActionResult> AddDomain", "app.Domains.Add")
+            .Should().Contain("ReservedHost", "the domains form is the obvious way in");
+
+        Between(controller, "var host = Harbora.Infrastructure.Deployments.ServicePlan.HostFor", "app.Domains.Add")
+            .Should().Contain("ReservedHost", "and app creation takes a typed domain too");
+    }
+
     /// <summary>
     /// Just the enrolment probe: from its URL to the start of the next numbered step. Bounded at
     /// both ends on purpose — the panel-route check before it and the channel check after it both
@@ -451,5 +581,41 @@ public class NodeChannelDeploymentTests
         end.Should().BeGreaterThan(start, "the enrolment step should be followed by the next one");
 
         return verifyInstall[start..end];
+    }
+
+    /// <summary>Step 4 alone: the router file and the mTLS probe, up to where the SSL step begins.</summary>
+    private static string ChannelSlice(string verifyInstall) =>
+        Between(verifyInstall, "\n  # 4)", "\n  # 5)");
+
+    /// <summary>
+    /// Step 5 alone. Bounded at the front so the <c>--resolve</c> and <c>-k</c> that steps 2–4 use
+    /// deliberately cannot satisfy — or violate — an assertion about the step that must use neither.
+    /// </summary>
+    private static string SslSlice(string verifyInstall)
+    {
+        var start = verifyInstall.IndexOf("\n  # 5)", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(-1, "verify_install should end with the certificate checks");
+
+        return verifyInstall[start..];
+    }
+
+    /// <summary>
+    /// A shell fragment with its comment-only lines removed, for assertions about what the script
+    /// <em>does</em>. This file's comments explain at length what the installer deliberately does
+    /// not do, so a negative assertion read against them fails on the explanation.
+    /// </summary>
+    private static string Commands(string shell) =>
+        string.Join('\n', shell.Split('\n').Where(line => !line.TrimStart().StartsWith('#')));
+
+    /// <summary>The text between two markers, with both ends pinned so a slice cannot silently widen.</summary>
+    private static string Between(string text, string from, string to)
+    {
+        var start = text.IndexOf(from, StringComparison.Ordinal);
+        start.Should().BeGreaterThan(-1, $"'{from}' should be present");
+
+        var end = text.IndexOf(to, start, StringComparison.Ordinal);
+        end.Should().BeGreaterThan(start, $"'{to}' should follow '{from}'");
+
+        return text[start..end];
     }
 }

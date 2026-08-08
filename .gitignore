@@ -21,6 +21,10 @@ appsettings.*.local.json
 # them on every run — committing either would put someone else's install in the repository.
 deploy/traefik/dynamic/node-agent.yml
 deploy/traefik/dynamic/node-ca.pem
+# And where the installer moves an orphaned router when the CA it verifies against has gone. It is
+# untracked by construction, and fetch_source updates with `git reset --hard`, which leaves
+# untracked files exactly where they are — so nothing would ever clean it up or explain it.
+deploy/traefik/node-agent.yml.disabled
 
 # OS / IDE
 .vs/

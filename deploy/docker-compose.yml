@@ -128,9 +128,12 @@ services:
       #
       # Defaults, so a .env written before those keys existed does not stop the panel — but they are
       # a way to boot, not a working configuration. An empty PublicUrl is handed to the node as an
-      # empty ControlPlaneUrl (NodeEnrollmentService), so the node falls back to whatever URL it was
-      # installed with: the panel's host, where nothing asks it for a certificate. It enrols and then
-      # never connects. install.sh checks both values in verify_install for exactly that reason.
+      # empty ControlPlaneUrl (NodeEnrollmentService), which EnrollmentService stores verbatim; the
+      # agent then reads `state.ControlPlaneUrl ?? _options.ControlPlaneUrl`, and `??` does not catch
+      # an empty string. There is no fallback to the URL it was installed with: ControlChannel builds
+      # its channel URI from "" and throws UriFormatException on every attempt. The node enrols,
+      # reports success, and never opens a channel. install.sh checks both values in verify_install
+      # for exactly that reason.
       # The flag at least fails closed rather than binding "" to a bool and throwing on startup.
       NodeAgent__PublicUrl: ${NodeAgent__PublicUrl:-}
       NodeAgent__TrustForwardedClientCertificate: ${NodeAgent__TrustForwardedClientCertificate:-false}

@@ -108,6 +108,25 @@ check_dns() { # check_dns <domain> <server-ip>
   ok "DNS: $domain → $ip"
 }
 
+# The node channel's host needs a public A record of its own, and configure_domains — the only place
+# that ever asks for one — runs on a fresh .env and nowhere else. An install that predates the node
+# channel gets NODE_DOMAIN backfilled and its router rendered by `update` without anyone mentioning
+# the record, and verify_install's checks pin the name to 127.0.0.1 with --resolve precisely so they
+# do not need DNS, so they cannot mention it either. This is the update path's version of the
+# question the fresh path asks out loud. On nip.io it prints one green line and asks for nothing.
+check_node_dns() {
+  local node ip
+  node="$(cd "$COMPOSE_DIR" && sed -n 's/^NODE_DOMAIN=//p' .env 2>/dev/null | head -1)"
+  [ -n "$node" ] || return 0
+
+  ip="$(public_ip)"
+  log "بررسی DNS کانال نودها… / Checking the node channel's DNS…"
+  check_dns "$node" "$ip" || {
+    warn "     این میزبان تازه است: کانال نودها حالا نام خودش را دارد. / This host is new: the node channel now has a name of its own."
+    warn "     بدون این رکورد نودها ثبت می‌شوند ولی هرگز وصل نمی‌شوند. / Without this record nodes enrol and then never connect."
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Interactive domain / email configuration (Persian-first, env vars override)
 # ---------------------------------------------------------------------------
@@ -551,42 +570,127 @@ verify_install() {
       VERIFY_FAILED=1
     fi
 
-    local chan=000 chan_rc=0
-    chan=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 15 \
-           --resolve "${node_domain}:443:127.0.0.1" \
-           "https://${node_domain}/api/node-agent/v1/channel" 2>/dev/null) || chan_rc=$?
-    if [ "$chan" = "000" ] && [ "$chan_rc" -ne 0 ]; then
-      ok "کانال نودها بدون گواهی کلاینت رد می‌شود (mTLS فعال است). / Node channel refuses a connection with no client certificate — mTLS is enforced."
-    elif [ "$chan" = "404" ]; then
-      err "کانال نودها 404 می‌دهد — روتر mTLS بارگذاری نشده است."
-      err "The node channel returns 404 — the mTLS router did not load."
-      err "  بررسی / Inspect:  docker compose logs traefik | grep -i node"
-      err "  فایل‌ها / Files:   $(node_ca_file)"
-      err "                    $(node_rendered)"
-      err "  سپس / Then:      docker compose restart traefik"
-      VERIFY_FAILED=1
-    else
-      err "کانال نودها بدون گواهی کلاینت پاسخ داد (HTTP $chan) — mTLS اعمال نمی‌شود."
-      err "The node channel answered (HTTP $chan) WITHOUT a client certificate — mTLS is not being enforced."
-      err "  معمولاً یعنی دو روتر یک نام میزبان را ادعا کرده‌اند و Traefik به گزینه‌های پیش‌فرض برگشته است."
-      err "  Usually two routers claim one host name, so Traefik fell back to the default TLS options."
-      err "  بررسی / Inspect:  docker compose logs traefik | grep -i 'tls options'"
-      err "  هیچ نودی احراز هویت نمی‌شود تا این درست شود. / Until this is fixed no node is authenticated."
-      VERIFY_FAILED=1
-    fi
+    # -k is deliberate here and only here: this step answers "is mTLS enforced", and a missing
+    # certificate must not be able to masquerade as an answer to it. Step 5 asks the certificate
+    # question separately, with neither -k nor --resolve.
+    #
+    # Retried for the same reason the panel probe is. enable_node_channel wrote this file seconds
+    # ago and Traefik's file provider may not have re-read it yet; on a re-render where nothing else
+    # changed — `harbora set-domain` followed by an update — there is no container restart to absorb
+    # the delay, so a single probe turns a slow reload into a red mark on a correct install.
+    local chan=000 chan_rc=0 attempt
+    for attempt in $(seq 1 12); do
+      chan=000; chan_rc=0
+      chan=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 15 \
+             --resolve "${node_domain}:443:127.0.0.1" \
+             "https://${node_domain}/api/node-agent/v1/channel" 2>/dev/null) || chan_rc=$?
+      # Only two states improve with waiting: Traefik has not read the file yet (404), or it is
+      # restarting and nothing accepts the connection (7). Everything else is a settled answer.
+      case "${chan_rc}:${chan}" in
+        0:404|7:*) sleep 5 ;;
+        *) break ;;
+      esac
+    done
+
+    # curl's exit code, not its HTTP code, is the verdict — a handshake the server refuses produces
+    # no HTTP status at all. 35 (SSL connect error) and 56 (the peer's alert arriving after our
+    # Finished) are the two ways OpenSSL reports "the server demanded a certificate we did not
+    # have". The old branch asked only whether curl had failed, so a closed port, a stopped Traefik
+    # and a timeout all printed the green tick for an mTLS that was enforcing nothing.
+    case "$chan_rc" in
+      35|56)
+        ok "کانال نودها بدون گواهی کلاینت رد می‌شود (mTLS فعال است). / Node channel refuses a connection with no client certificate — mTLS is enforced." ;;
+      7|28)
+        err "کانال نودها اصلاً پاسخی نداد (curl exit $chan_rc) — چیزی روی 443 گوش نمی‌دهد."
+        err "Nothing answered on the node channel (curl exit $chan_rc) — this is not mTLS working, it is Traefik not listening."
+        err "  بررسی / Inspect:  docker compose ps traefik && docker compose logs traefik | tail -50"
+        VERIFY_FAILED=1 ;;
+      0)
+        if [ "$chan" = "404" ]; then
+          err "کانال نودها 404 می‌دهد — روتر mTLS بارگذاری نشده است."
+          err "The node channel returns 404 — the mTLS router did not load."
+          err "  بررسی / Inspect:  docker compose logs traefik | grep -i node"
+          err "  فایل‌ها / Files:   $(node_ca_file)"
+          err "                    $(node_rendered)"
+          err "  سپس / Then:      docker compose restart traefik"
+        else
+          err "کانال نودها بدون گواهی کلاینت پاسخ داد (HTTP $chan) — mTLS اعمال نمی‌شود."
+          err "The node channel answered (HTTP $chan) WITHOUT a client certificate — mTLS is not being enforced."
+          err "  معمولاً یعنی دو روتر یک نام میزبان را ادعا کرده‌اند و Traefik به گزینه‌های پیش‌فرض برگشته است."
+          err "  Usually two routers claim one host name, so Traefik fell back to the default TLS options."
+          err "  بررسی / Inspect:  docker compose logs traefik | grep -i 'tls options'"
+          err "  هیچ نودی احراز هویت نمی‌شود تا این درست شود. / Until this is fixed no node is authenticated."
+        fi
+        VERIFY_FAILED=1 ;;
+      *)
+        warn "نتیجه‌ی بررسی کانال نودها روشن نبود (curl exit $chan_rc). / The node channel check was inconclusive (curl exit $chan_rc)."
+        warn "  با دست / By hand:  curl -vk https://${node_domain}/api/node-agent/v1/channel" ;;
+    esac
   fi
 
-  # 5) SSL certificate (needs public DNS → this server; nip.io passes automatically).
+  # 5) The certificates the outside world is served — the panel's, and the node channel's.
+  #
+  # Both probes go over public DNS with no --resolve and no -k, and that is what makes this step
+  # different from every step above it. Steps 2–4 pin the name to 127.0.0.1 so they can test routing
+  # on a box whose DNS is not ready, which also means they pass on a host with no public DNS at all;
+  # and step 4 passes -k, so Traefik's default self-signed certificate — what this host serves for
+  # any name ACME has not issued for — reads there as a perfectly enforcing channel.
+  #
+  # A node is not curl -k. Harbora.NodeAgent's ControlPlaneTls treats RemoteCertificateNameMismatch
+  # as fatal and never falls back to the CA it was handed at enrollment, so that default certificate
+  # is exactly what makes a node enrol, report success, and fail TLS on every connect afterwards.
+  # Nothing inside this box notices unless this step asks.
+  local panel_ssl=1
   if curl -s -o /dev/null --max-time 20 "https://${PANEL_DOMAIN}/healthz" 2>/dev/null; then
-    ok "گواهی SSL معتبر صادر شده است. / Valid SSL certificate issued."
+    panel_ssl=0
+    ok "گواهی SSL پنل معتبر است. / Valid SSL certificate for the panel."
   else
-    warn "گواهی SSL هنوز صادر نشده. / SSL certificate not issued yet."
+    warn "گواهی SSL پنل هنوز صادر نشده. / The panel's SSL certificate is not issued yet."
     warn "  دلایل رایج / Common causes:"
     warn "   - DNS هنوز به IP این سرور اشاره نمی‌کند / DNS not pointing at this server"
     warn "   - پورت 80 از اینترنت باز نیست (برای HTTP challenge لازم است) / Port 80 not reachable"
     warn "  لاگ ACME:  docker logs harbora-traefik 2>&1 | grep -i acme | tail -20"
     docker logs harbora-traefik 2>&1 | grep -i "acme\|certificate" | tail -5 || true
   fi
+
+  # The node channel's certificate cannot be fetched with a plain GET — the router requires a client
+  # certificate and we deliberately have none — so again the exit code is the verdict:
+  #   6      the name does not resolve publicly: the A record nobody was ever asked for
+  #   51|60  it resolves, but the certificate is not one a node would accept (ACME never issued)
+  #   35|56  the certificate was accepted and the handshake then failed for want of OURS — healthy
+  local node_ssl=0
+  for attempt in $(seq 1 6); do
+    node_ssl=0
+    curl -s -o /dev/null --max-time 20 "https://${node_domain}/api/node-agent/v1/channel" >/dev/null 2>&1 || node_ssl=$?
+    # ACME is asked for this name moments before this runs, so an unissued certificate is worth
+    # waiting on. A missing DNS record is not: nothing here will fix it.
+    case "$node_ssl" in 51|60|7|28) sleep 10 ;; *) break ;; esac
+  done
+  case "$node_ssl" in
+    35|56) ok "گواهی SSL کانال نودها معتبر است. / Valid SSL certificate for the node channel." ;;
+    6)
+      err "‏${node_domain} در DNS عمومی وجود ندارد — رکورد A آن اضافه نشده است."
+      err "${node_domain} does not resolve on public DNS — its A record was never added."
+      err "  بررسی‌های بالا نام را به 127.0.0.1 می‌بندند، پس این را نمی‌بینند. / The checks above pin the name to 127.0.0.1 and cannot see this."
+      err "  رکورد لازم / Add:  ${node_domain}  A  $(public_ip)"
+      err "  بدون آن ACME گواهی صادر نمی‌کند و هیچ نودی وصل نمی‌شود. / Without it ACME never issues and no node connects."
+      VERIFY_FAILED=1 ;;
+    51|60)
+      if [ "$panel_ssl" -ne 0 ]; then
+        warn "گواهی کانال نودها هم هنوز صادر نشده (همان دلیل بالا). / The node channel's certificate is not issued either — same cause as the panel's, above."
+      else
+        err "گواهی ${node_domain} صادر نشده؛ Traefik گواهی پیش‌فرض خودش را می‌دهد."
+        err "No certificate for ${node_domain} — Traefik is serving its own default, self-signed one."
+        err "  پنل گواهی دارد، پس فقط همین نام مشکل دارد (احتمالاً رکورد DNS جدا). / The panel has one, so this name alone is failing — most likely its own DNS record."
+        err "  نود آن را نمی‌پذیرد: نودها ثبت می‌شوند و بعد هرگز وصل نمی‌شوند. / A node rejects it outright: they enrol and then never connect."
+        err "  لاگ ACME:  docker logs harbora-traefik 2>&1 | grep -i \"${node_domain}\""
+        VERIFY_FAILED=1
+      fi ;;
+    0)   : ;;   # It answered over HTTP. Step 4 has already said what that means.
+    *)
+      warn "بررسی گواهی کانال نودها نتیجه‌ی روشنی نداد (curl exit $node_ssl). / The node channel's certificate check was inconclusive (curl exit $node_ssl)."
+      warn "  با دست / By hand:  curl -v https://${node_domain}/api/node-agent/v1/channel" ;;
+  esac
 }
 
 next_steps() {
@@ -636,6 +740,11 @@ cmd_update() {
   # An older .env may predate settings the new code requires — repair before starting, or the
   # update looks like it "broke everything".
   (cd "$COMPOSE_DIR" && repair_env)
+  # repair_env has just given this install a NODE_DOMAIN it never had, and enable_node_channel is
+  # about to publish a router on it. Nobody has ever asked its operator for that DNS record: this
+  # path never calls configure_domains and never reaches next_steps. So it is asked here, before the
+  # rebuild, while there is still something useful to do with the answer.
+  check_node_dns
   install_command; start; wait_panel
   # Same treatment as a fresh install: the template moved out of the watched directory, so an
   # install that predates it has no rendered router at all, and one that has it may be on a domain
