@@ -153,22 +153,23 @@ public sealed class DeploymentPipeline(
             await db.SaveChangesAsync(CancellationToken.None);
         }
 
-        // One surface of the failure report, attempted on its own.
+        // One surface of the report a finished deployment owes somebody, attempted on its own.
         //
-        // The three below share nothing but being downstream of one failure, and they used to run
-        // as a single unguarded sequence — so a fault in the first took the other two with it. The
-        // realistic fault is not cancellation (they already run on None): it is a host shutting
-        // down and disposing the SignalR hub context out from under an in-flight deploy, which
-        // throws ObjectDisposedException. That is the "one catch block failing five different ways
-        // from a single cause" this method's own comment names, and a hub that is going away is not
-        // a reason for nobody to be alerted.
+        // The failure path's three share nothing but being downstream of one failure, and they used
+        // to run as a single unguarded sequence — so a fault in the first took the other two with
+        // it. The realistic fault is not cancellation (they already run on None): it is a host
+        // shutting down and disposing the SignalR hub context out from under an in-flight deploy,
+        // which throws ObjectDisposedException. That is the "one catch block failing five different
+        // ways from a single cause" this method's own comment names, and a hub that is going away is
+        // not a reason for nobody to be alerted. The success tail's one line uses it for the same
+        // reason, which is why the warning below names neither an outcome nor a count.
         async Task TellSomebody(Func<Task> surface, string what)
         {
             try { await surface(); }
             catch (Exception surfaceError)
             {
                 logger.LogWarning(surfaceError,
-                    "Deployment {Id} failed, and the {Surface} could not be told.", deploymentId, what);
+                    "Deployment {Id} has finished, and the {Surface} could not be told.", deploymentId, what);
             }
         }
 
@@ -439,9 +440,52 @@ public sealed class DeploymentPipeline(
             await Log(LogStream.System, $"✅ Deployment #{deployment.Number} succeeded.");
 
             // Only after the deployment is recorded as succeeded — pruning is housekeeping and must
-            // never be able to turn a live, working deployment into a failure.
+            // never be able to turn a live, working deployment into a failure. Ordering is half of
+            // that; the other half is the success-tail catch below, because this still logs on `ct`
+            // and a deadline landing here escapes retention's own best-effort catch.
             await PruneOldImagesAsync(docker, app, Log, ct);
             await FlushLog();
+        }
+        // A deployment that reached Succeeded is never afterwards reported as failed. Stated once,
+        // here, at the pipeline's own exit — not left for each thing that runs after the success
+        // transition to remember, because the list grows and the cost of forgetting is the whole
+        // point of this phase.
+        //
+        // The try block has one exit that is not a failure, and everything in it runs on a row the
+        // database already records as Succeeded: the ✅ line, image retention, the flush. The first
+        // two log through Log, which publishes on the work's own token, so a deadline firing in
+        // that window throws out of a deployment that worked. The catch below would then stamp
+        // ErrorMessage over the successful row, publish Failed to the page it had just told
+        // Succeeded, and raise DeployFailed — a live status contradicting the stored one, which is
+        // the sentence this phase exists to make false.
+        //
+        // And it would not stop at saying so: the container it removes is named for THIS deployment
+        // number, which before the cutover is the container nothing owns yet and after it is the
+        // release serving traffic. Reporting the deployment failed would also make it fail, minutes
+        // after telling the user it was live.
+        //
+        // Retention's own failure is not swallowed, it is filed against retention: PruneOldImagesAsync
+        // logs its warning to the host log, and the line below puts it on the deployment's page with
+        // what it leaves behind. Silence would be a different lie.
+        catch (Exception tailError) when (DeploymentStateMachine.IsSuccessful(deployment.Status))
+        {
+            logger.LogWarning(tailError,
+                "Deployment {Id} succeeded; the housekeeping after it did not finish.", deploymentId);
+
+            var whatStopped = LogText.Clean(redactor.Redact(tailError.Message, secrets));
+            var tailLine = Stage(LogStream.System,
+                $"⚠ Deployment #{deployment.Number} succeeded, but the housekeeping after it did " +
+                $"not finish: {whatStopped} Superseded images may still be on the node.");
+            // Durable first, and on None — the commonest way to arrive here is the token that would
+            // refuse the save. This is also the flush FlushLog never reached, so it is what carries
+            // the ✅ line and anything retention staged.
+            await db.SaveChangesAsync(CancellationToken.None);
+            // Then the surface that is not the row, guarded like the failure path's three: a hub
+            // disposed under a finishing deploy must not cost a line that is already stored. No
+            // status is published — the page was told Succeeded, and that is still true.
+            await TellSomebody(
+                () => stream.PublishLogAsync(deploymentId, LogStream.System, tailLine, CancellationToken.None),
+                "deploy log");
         }
         catch (Exception ex)
         {
@@ -954,6 +998,10 @@ public sealed class DeploymentPipeline(
     /// explicit promise: rollback reaches exactly as far back as the retained images, and the depth
     /// is configurable rather than "however long until someone runs docker image prune".
     /// Entirely best-effort — a failure here is logged and never touches the deployment's outcome.
+    /// The catch below cannot make that true on its own: it logs through the pipeline's own logger,
+    /// which publishes on the work's token, so a cancellation raised by the log call is one this
+    /// catch cannot swallow. What keeps the promise is the pipeline's success-tail catch, which
+    /// refuses to report a failure for a deployment already recorded as succeeded.
     /// </summary>
     private async Task PruneOldImagesAsync(
         IDockerEngine docker, App app, Func<LogStream, string, Task> log, CancellationToken ct)

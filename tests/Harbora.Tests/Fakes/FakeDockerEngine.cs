@@ -103,6 +103,23 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// </summary>
     public CancellationTokenSource? DeadlineFiresOnceTheContainerIsUp { get; set; }
 
+    /// <summary>
+    /// Cancelled the instant image retention starts looking at the node.
+    ///
+    /// <para>
+    /// The third window, and the only one that opens AFTER the deployment has been durably recorded
+    /// as succeeded: the cutover is done, the release is live, and what is left running is
+    /// housekeeping. A deadline that fires here is firing on a deployment that worked, so it is the
+    /// window in which "the job ran out of time" and "the deployment failed" are different facts.
+    /// </para>
+    /// <para>
+    /// The call itself then fails, rather than returning and leaving the next await to notice: the
+    /// real engine is an HTTP request to the daemon, and a token that dies mid-request takes the
+    /// request with it. Same shape as <see cref="PullNeverFinishes"/> above, without the wait.
+    /// </para>
+    /// </summary>
+    public CancellationTokenSource? DeadlineFiresWhenImagesAreListed { get; set; }
+
     // ---- assertions helpers ----
 
     public IReadOnlyList<string> OperationsOn(string target) =>
@@ -191,6 +208,12 @@ public sealed class FakeDockerEngine : IDockerEngine
     public Task<IReadOnlyList<ImageInfo>> ListImagesAsync(string? tagPrefix, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+
+        if (DeadlineFiresWhenImagesAreListed is { } retentionDeadline)
+        {
+            retentionDeadline.Cancel();
+            ct.ThrowIfCancellationRequested();
+        }
 
         // Not recorded: like ListContainersAsync this is a query, and recording it would bury the
         // ordering assertions in noise.

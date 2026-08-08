@@ -42,6 +42,24 @@ public static class DeploymentStateMachine
 
     public static bool IsInFlight(DeploymentStatus status) => InFlight.Contains(status);
 
+    /// <summary>
+    /// Terminal states the deployment reached by <b>succeeding</b> — the release it was asked to
+    /// make happened and is live. <see cref="DeploymentStatus.RolledBack"/> is one of them: it is
+    /// what a succeeded deployment becomes when a later one supersedes it, and it says nothing
+    /// about this deployment having failed.
+    ///
+    /// <para>
+    /// Asked by anything that runs <i>after</i> the success transition and might otherwise report a
+    /// failure: from that point the database already records that this deployment worked, and a
+    /// fault in what follows — image retention, the terminal log line, whatever is added beside
+    /// them — is a fact about that work and not about the release. Reporting it as the
+    /// deployment's failure makes the live status contradict the stored row, which is the platform
+    /// lying about a deployment.
+    /// </para>
+    /// </summary>
+    public static bool IsSuccessful(DeploymentStatus status) =>
+        status is DeploymentStatus.Succeeded or DeploymentStatus.RolledBack;
+
     public static bool CanTransition(DeploymentStatus from, DeploymentStatus to) =>
         from != to && Allowed.TryGetValue(from, out var next) && Array.IndexOf(next, to) >= 0;
 

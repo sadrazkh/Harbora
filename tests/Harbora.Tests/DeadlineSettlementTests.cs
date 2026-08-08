@@ -134,6 +134,129 @@ public class DeadlineSettlementTests
             "until it is restarted, and the range is shared with every other app on it");
     }
 
+    // --- a deadline that fires after the deployment already succeeded ------------------------------
+
+    /// <summary>
+    /// The window the other three tests do not reach: everything after the success transition.
+    ///
+    /// <para>
+    /// By the time image retention runs, <c>SetStatus(Succeeded)</c> has already committed — the
+    /// database records that this deployment worked, and the container it started is serving. But
+    /// retention logs through the pipeline's ordinary <c>Log</c>, which publishes on the work's own
+    /// token, so a deadline firing here throws out of a deployment that is over and successful. The
+    /// pipeline's failure path then stamped <c>ErrorMessage</c>, published <c>Failed</c> and raised
+    /// <c>DeployFailed</c> over a row that says <c>Succeeded</c>.
+    /// </para>
+    /// <para>
+    /// That is the platform lying about a deployment — told to the user as a failure, and
+    /// contradicted by its own stored row a refresh later. Housekeeping running out of time is a
+    /// fact about housekeeping.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_deadline_during_image_retention_leaves_a_succeeded_deployment_succeeded()
+    {
+        using var h = new PipelineHarness();
+        using var deadline = new CancellationTokenSource();
+        h.WithPreviousDeployment(number: 1);
+        h.Docker.DeadlineFiresWhenImagesAreListed = deadline;
+
+        var deployment = h.QueueDeployment(number: 2);
+
+        await RunUntilTheDeadlineEndsIt(() =>
+            h.BuildPipeline().ExecuteAsync(deployment.Id, deadline.Token));
+
+        var stored = await h.Db.Deployments.AsNoTracking().FirstAsync(d => d.Id == deployment.Id);
+        stored.Status.Should().Be(DeploymentStatus.Succeeded,
+            "the release went live and the row already said so before retention was reached");
+        stored.ErrorMessage.Should().BeNull(
+            "a deployment page showing a reason it failed, above a status that says it succeeded, " +
+            "leaves the user no way to know which half to believe");
+    }
+
+    [Fact]
+    public async Task Nobody_is_told_a_succeeded_deployment_failed_because_retention_ran_out_of_time()
+    {
+        using var h = new PipelineHarness();
+        using var deadline = new CancellationTokenSource();
+        h.WithPreviousDeployment(number: 1);
+        h.Docker.DeadlineFiresWhenImagesAreListed = deadline;
+
+        var deployment = h.QueueDeployment(number: 2);
+
+        await RunUntilTheDeadlineEndsIt(() =>
+            h.BuildPipeline().ExecuteAsync(deployment.Id, deadline.Token));
+
+        h.Stream.Statuses.Should().NotContain(DeploymentStatus.Failed,
+            "the page is live; a Failed after the Succeeded it already showed is the platform " +
+            "contradicting itself in front of the person watching");
+        h.Notifications.Notifications.Should().NotContain(n => n.Event == AlertEvent.DeployFailed,
+            "an alert wakes somebody who is not looking at the panel, and this one would send them " +
+            "to investigate a deployment that worked");
+    }
+
+    /// <summary>
+    /// The consequence that outlives the lie. The failure path removes the container named for this
+    /// deployment number — correct while the deploy is in flight, because that container is the one
+    /// nothing owns yet. After the cutover it is the release that is serving traffic, so reporting
+    /// the deployment failed would also make it fail.
+    /// </summary>
+    [Fact]
+    public async Task Housekeeping_running_out_of_time_does_not_tear_down_the_release_it_follows()
+    {
+        using var h = new PipelineHarness();
+        using var deadline = new CancellationTokenSource();
+        h.WithPreviousDeployment(number: 1);
+        h.Docker.DeadlineFiresWhenImagesAreListed = deadline;
+
+        var deployment = h.QueueDeployment(number: 2);
+
+        await RunUntilTheDeadlineEndsIt(() =>
+            h.BuildPipeline().ExecuteAsync(deployment.Id, deadline.Token));
+
+        h.Docker.LiveContainerNames.Should().Contain(h.ContainerFor(2),
+            "this container IS the deployment that succeeded — removing it takes the app down " +
+            "minutes after telling the user the release is live");
+
+        var app = await h.Db.Apps.AsNoTracking().FirstAsync(a => a.Id == h.App.Id);
+        app.ActiveDeploymentId.Should().Be(deployment.Id);
+        app.Status.Should().Be(AppStatus.Running);
+    }
+
+    /// <summary>
+    /// The other half: not reporting retention's failure as the deployment's must not mean not
+    /// reporting it. Superseded images are still on the node's disk, which is a thing an operator
+    /// acts on — so it belongs on the deployment's own page, where somebody reading this deploy
+    /// will find it, and not only in a host log nobody opens.
+    /// </summary>
+    [Fact]
+    public async Task Retention_that_could_not_finish_still_says_so_on_the_deployment()
+    {
+        using var h = new PipelineHarness();
+        using var deadline = new CancellationTokenSource();
+        h.WithPreviousDeployment(number: 1);
+        h.Docker.DeadlineFiresWhenImagesAreListed = deadline;
+
+        var deployment = h.QueueDeployment(number: 2);
+
+        await RunUntilTheDeadlineEndsIt(() =>
+            h.BuildPipeline().ExecuteAsync(deployment.Id, deadline.Token));
+
+        // Persisted, not merely streamed: the deploy is over, so the only reader left is somebody
+        // opening the page afterwards.
+        var stored = await h.Db.DeploymentLogs.AsNoTracking()
+            .Where(l => l.DeploymentId == deployment.Id)
+            .OrderBy(l => l.Sequence).ToListAsync();
+
+        stored.Should().Contain(l => l.Message.Contains("✅ Deployment"),
+            "the line that says it worked has to survive the throw as well — nothing saved after it "
+            + "on this path but the block that handles this");
+        stored.Should().Contain(l => l.Message.Contains("housekeeping"),
+            "silence would leave images accumulating on the node with nothing anywhere saying why");
+        stored.Should().NotContain(l => l.Message.Contains("❌ Deployment failed"),
+            "the deploy log is the account of the deployment, and it did not fail");
+    }
+
     // --- what a person watching is told ------------------------------------------------------------
 
     /// <summary>
