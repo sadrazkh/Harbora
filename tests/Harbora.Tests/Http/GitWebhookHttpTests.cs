@@ -194,17 +194,9 @@ public class GitWebhookHttpTests(HarboraHttpFixture fixture)
         (await response.JsonAsync()).GetProperty("message").GetString().Should().Be("Unknown repository.");
     }
 
-    [Fact]
-    public async Task The_webhook_route_is_reachable_before_first_run_setup_has_happened()
-    {
-        // /webhooks is on SetupGuardMiddleware's exemption list. A delivery arriving at a panel that
-        // is mid-install must be refused on its signature, not answered with a redirect to a wizard.
-        var repositoryId = GivenRepository("guard-exempt", out _);
-        var client = Panel.ClientFrom("203.0.113.78");
-
-        var response = await client.SendAsync(Delivery(repositoryId, ("X-Gitlab-Token", Secret)));
-
-        response.StatusCode.Should().NotBe(HttpStatusCode.Found);
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-    }
+    // The "a delivery reaches a mid-install panel" case deliberately does not live here. On this
+    // shared panel setup is long finished, so SetupGuardMiddleware short-circuits on its cached flag
+    // and the /webhooks exemption is never the reason anything passes through — the case would pass
+    // with the exemption entry deleted. It belongs on a panel that has never been set up, and it is
+    // in SetupGuardHttpTests.
 }

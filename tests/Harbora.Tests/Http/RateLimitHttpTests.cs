@@ -124,19 +124,28 @@ public class RateLimitHttpTests(HarboraHttpFixture fixture)
     [Fact]
     public async Task The_webhook_window_is_wider_than_the_login_one()
     {
-        // Not a restatement of the numbers: it is the assertion that the two routes are on different
-        // policies at all. One shared limiter would let a busy repository lock out every login.
+        // Two mutations to discriminate, and the contrast is what does it. Asserting only that the
+        // sixteenth delivery is a 401 would pass with the limiter deleted outright — a 401 is what an
+        // unknown repository answers anyway. So the same address also spends its login window, and
+        // the pair says both things at once: the limiter is running, and the webhook route is not on
+        // the policy that just ran out. One shared limiter would let a busy repository lock out every
+        // login on the platform.
         var client = Panel.ClientFrom("203.0.113.66");
         var unknownRepository = Guid.CreateVersion7();
-
-        for (var attempt = 0; attempt < AuthPermits + 5; attempt++)
-            await client.PostAsync($"/webhooks/git/{unknownRepository}",
-                HttpConversation.Json(new { @ref = "refs/heads/main" }));
-
-        var webhook = await client.PostAsync($"/webhooks/git/{unknownRepository}",
+        var delivery = () => client.PostAsync($"/webhooks/git/{unknownRepository}",
             HttpConversation.Json(new { @ref = "refs/heads/main" }));
 
+        for (var attempt = 0; attempt <= AuthPermits; attempt++)
+            await client.PostAsync("/api/v1/auth/token", WrongCredentials());
+        for (var attempt = 0; attempt < AuthPermits + 5; attempt++)
+            await delivery();
+
+        var login = await client.PostAsync("/api/v1/auth/token", WrongCredentials());
+        var webhook = await delivery();
+
+        login.StatusCode.Should().Be(HttpStatusCode.TooManyRequests,
+            "this address has spent its auth window, so the limiter is demonstrably running");
         webhook.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
-            "fifteen deliveries are well inside the webhook window even though they exceed the auth one");
+            "and fifteen deliveries are well inside the webhook window, which is a different one");
     }
 }

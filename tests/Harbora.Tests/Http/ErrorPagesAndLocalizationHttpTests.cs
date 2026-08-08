@@ -34,14 +34,13 @@ public class ErrorPagesAndLocalizationHttpTests(HarboraHttpFixture fixture)
     [Fact]
     public async Task A_refusal_from_an_action_is_re_executed_the_same_way()
     {
-        var owner = Panel.GivenUser(fixture.WorkspaceId, "error-owner@example.com", Harbora.Domain.Common.SystemRole.Owner);
+        Panel.GivenUser(fixture.WorkspaceId, "error-owner@example.com", Harbora.Domain.Common.SystemRole.Owner);
         var client = await Panel.SignedInAs("203.0.113.91", "error-owner@example.com");
 
         var response = await client.GetAsync($"/Apps/Details/{Guid.CreateVersion7()}");
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await response.Content.ReadAsStringAsync()).Should().Contain("<!DOCTYPE html>");
-        owner.Should().NotBeNull();
     }
 
     [Fact]

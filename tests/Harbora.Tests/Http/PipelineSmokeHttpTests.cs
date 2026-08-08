@@ -42,9 +42,23 @@ public class PipelineSmokeHttpTests(HarboraHttpFixture fixture)
     [Fact]
     public void The_harness_removed_Harboras_background_workers_and_kept_the_web_host()
     {
-        // A guard on the substitution itself. If DependencyInjection ever registers its workers in a
-        // shape this factory does not recognise, the count collapses and every `dotnet test` run
-        // starts talking to Docker and GitHub — slowly, and then flakily.
-        fixture.Panel.RemovedBackgroundWorkers.Should().BeGreaterThan(15);
+        // A guard on the substitution itself, stated three ways because the count alone is weak: a
+        // loose lower bound would let a third of the registrations stop being recognised in silence,
+        // and every `dotnet test` run would quietly start talking to Docker, a registry and GitHub.
+        //
+        // The count is the floor as it stands today (24). It is a floor rather than an equality on
+        // purpose — a task that adds a hosted service should not fail here — but the second
+        // assertion is the real one: whatever the shape of the registration, nothing of Harbora's
+        // may be left running.
+        fixture.Panel.RemovedBackgroundWorkers.Should().BeGreaterThanOrEqualTo(24,
+            "every worker DependencyInjection and the two modules register has to be recognised");
+
+        fixture.Panel.RemainingHostedServices.Should().NotContain(
+            name => name.StartsWith("Harbora", StringComparison.Ordinal),
+            "a worker the removal did not recognise is one that runs during every test run");
+
+        fixture.Panel.RemainingHostedServices.Should().Contain(
+            name => name.EndsWith("GenericWebHostService", StringComparison.Ordinal),
+            "and taking the host's own service out would leave a server that never listens");
     }
 }

@@ -44,7 +44,19 @@ public sealed class TokenService(HarboraDbContext db, ISystemClock clock) : ITok
         var b = Convert.FromHexString(token.TokenHash);
         if (!CryptographicOperations.FixedTimeEquals(a, b)) return null;
 
-        // best-effort last-used stamp
+        // Best-effort last-used stamp.
+        //
+        // Two things this SaveChanges carries that the ExecuteUpdate it replaced did not, both
+        // deliberate and both worth knowing before adding anything above it:
+        //
+        //  * The context's SaveChangesAsync override stamps UpdatedAt on every modified BaseEntity,
+        //    so an authenticated request now also writes ApiToken.UpdatedAt. Nothing reads that
+        //    column, and the cost is one more column in the same UPDATE — but "when was this token
+        //    record last edited" is no longer distinct from "when was it last used".
+        //  * TokenAuthenticationHandler resolves the request-scoped HarboraDbContext, so this
+        //    flushes that request's whole change tracker. It is empty today: authentication runs
+        //    before anything that writes. Middleware added ahead of UseAuthentication that writes
+        //    to this context would be committed here, as a side effect of presenting a token.
         token.LastUsedAt = clock.UtcNow;
         await db.SaveChangesAsync(ct);
 

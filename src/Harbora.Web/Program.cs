@@ -178,6 +178,16 @@ try
         await scope.ServiceProvider.GetRequiredService<UpgradeSafetyService>().EnsureRestorePointAsync(default);
         await db.Database.MigrateAsync();
     }
+    else
+    {
+        // Unreachable in anything that ships — the registration above configures Npgsql and takes no
+        // argument about it. Said out loud anyway, because the alternative to saying it is a panel
+        // that came up with no schema and no restore point and looked exactly like a healthy one.
+        app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup").LogWarning(
+            "The database provider is {Provider}, which has no migrations: this boot applied no schema " +
+            "and took no restore point. Only the HTTP test harness is expected to reach this.",
+            db.Database.ProviderName);
+    }
     await scope.ServiceProvider.GetRequiredService<DbSeeder>().SeedAsync();
 }
 catch (Exception ex)

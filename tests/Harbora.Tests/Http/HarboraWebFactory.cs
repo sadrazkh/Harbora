@@ -61,11 +61,15 @@ public sealed class HarboraWebFactory : WebApplicationFactory<Program>
     public RecordingDeploymentEngine Deployments { get; } = new();
 
     /// <summary>
-    /// How many background workers were taken out. Asserted by the smoke test: if the registration
-    /// idiom in <c>DependencyInjection</c> ever changes shape, this harness must not quietly start
-    /// running Docker jobs during a unit-test run.
+    /// How many background workers were taken out, and what was left behind. Asserted by the smoke
+    /// test: if the registration idiom in <c>DependencyInjection</c> ever changes shape, this harness
+    /// must not quietly start running Docker jobs during a unit-test run — and must not have taken
+    /// the web host's own service with it either.
     /// </summary>
     public int RemovedBackgroundWorkers { get; private set; }
+
+    /// <summary>Type names of the hosted services still registered after the removal.</summary>
+    public IReadOnlyList<string> RemainingHostedServices { get; private set; } = [];
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -90,7 +94,7 @@ public sealed class HarboraWebFactory : WebApplicationFactory<Program>
         builder.ConfigureTestServices(services =>
         {
             UseInMemoryDatabase(services);
-            RemovedBackgroundWorkers = RemoveBackgroundWorkers(services);
+            (RemovedBackgroundWorkers, RemainingHostedServices) = RemoveBackgroundWorkers(services);
 
             services.RemoveAll<IDeploymentEngine>();
             services.AddSingleton<IDeploymentEngine>(Deployments);
@@ -237,7 +241,8 @@ public sealed class HarboraWebFactory : WebApplicationFactory<Program>
     /// <c>GenericWebHostService</c> is what serves the requests, so a blanket removal would leave a
     /// server that never listens.
     /// </summary>
-    private static int RemoveBackgroundWorkers(IServiceCollection services)
+    private static (int Removed, IReadOnlyList<string> Remaining) RemoveBackgroundWorkers(
+        IServiceCollection services)
     {
         var doomed = services
             .Where(d => !d.IsKeyedService
@@ -246,7 +251,13 @@ public sealed class HarboraWebFactory : WebApplicationFactory<Program>
             .ToList();
 
         foreach (var descriptor in doomed) services.Remove(descriptor);
-        return doomed.Count;
+
+        var remaining = services
+            .Where(d => !d.IsKeyedService && d.ServiceType == typeof(IHostedService))
+            .Select(d => ImplementationTypeOf(d)?.FullName ?? "<unknown>")
+            .ToList();
+
+        return (doomed.Count, remaining);
     }
 
     private static bool IsHarbora(Type? type) =>
