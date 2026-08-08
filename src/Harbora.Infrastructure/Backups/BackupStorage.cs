@@ -4,6 +4,7 @@ using Amazon.S3.Model;
 using Harbora.Application.Abstractions;
 using Harbora.Domain.Backups;
 using Harbora.Domain.Common;
+using Harbora.Shared;
 using Microsoft.Extensions.Options;
 
 namespace Harbora.Infrastructure.Backups;
@@ -30,8 +31,22 @@ public sealed class BackupStorage(
 
         if (dest.Type == BackupDestinationType.Local)
         {
-            var root = string.IsNullOrWhiteSpace(dest.LocalPath) ? _opt.StagingDir : dest.LocalPath;
+            var root = LocalRoot(dest);
             Directory.CreateDirectory(root);
+
+            // A key may name a folder as well as a file — the backup module groups its artifacts by
+            // repository, so every key it writes has one. Only the root was created here, and
+            // File.Copy into a directory that is not there throws rather than making it, so every
+            // snapshot into a local repository failed with a path error. Confined first and created
+            // second: the check is what says this folder is one the destination may have.
+            Directory.CreateDirectory(Path.GetDirectoryName(Confined(root, key, "written to"))!);
+
+            // The reference is the root joined to the key as the caller spelled it, and deliberately
+            // not the resolved form the check returned. BackupEngine compares this string against the
+            // staging path it passed in to decide whether the staging copy is a second copy it may
+            // delete — so normalising here would, for a destination that IS the staging directory
+            // under a differently spelled path, turn "these are the same file" into "these differ"
+            // and delete the artifact it had just stored.
             var finalPath = Path.Combine(root, key);
             if (!string.Equals(Path.GetFullPath(finalPath), Path.GetFullPath(localFilePath), StringComparison.OrdinalIgnoreCase))
                 File.Copy(localFilePath, finalPath, overwrite: true);
@@ -66,8 +81,12 @@ public sealed class BackupStorage(
     public async Task<string> GetToLocalAsync(
         BackupDestination dest, string artifactRef, CancellationToken ct, string? localFileName = null)
     {
+        // Nothing to download: the artifact is a file already. A caller that recorded the reference
+        // PutFileAsync returned hands back an absolute path and gets it straight back; a caller that
+        // asks by the key it stored under gets that key resolved inside the destination, which is
+        // where the artifact actually is.
         if (dest.Type == BackupDestinationType.Local)
-            return artifactRef; // already a local path
+            return LocalArtifact(dest, artifactRef, "read from");
 
         Directory.CreateDirectory(_opt.StagingDir);
 
@@ -92,7 +111,7 @@ public sealed class BackupStorage(
             return staged;
         }
 
-        var (bucket, objectKey) = ParseS3(artifactRef);
+        var (bucket, objectKey) = S3Location(dest, artifactRef);
         var localPath = Path.Combine(_opt.StagingDir, string.IsNullOrWhiteSpace(localFileName)
             ? Path.GetFileName(objectKey)
             : Path.GetFileName(localFileName));
@@ -107,7 +126,12 @@ public sealed class BackupStorage(
     {
         if (dest.Type == BackupDestinationType.Local)
         {
-            if (File.Exists(artifactRef)) File.Delete(artifactRef);
+            // Resolved the same way a read resolves it. Retention deletes by whatever reference the
+            // caller stored, and a key it could not resolve simply found no file — so the row went
+            // and the artifact stayed, on every pass, for ever, while every screen said it had been
+            // pruned. A delete that removes nothing must not be reachable by spelling.
+            var path = LocalArtifact(dest, artifactRef, "deleted from");
+            if (File.Exists(path)) File.Delete(path);
             return;
         }
         if (dest.Type == BackupDestinationType.Sftp)
@@ -118,9 +142,51 @@ public sealed class BackupStorage(
             return;
         }
 
-        var (bucket, objectKey) = ParseS3(artifactRef);
+        var (bucket, objectKey) = S3Location(dest, artifactRef);
         using var client = CreateS3(dest);
         await client.DeleteObjectAsync(bucket, objectKey, ct);
+    }
+
+    /// <summary>Where a local destination keeps its artifacts; staging when it names nowhere else.</summary>
+    private string LocalRoot(BackupDestination dest) =>
+        string.IsNullOrWhiteSpace(dest.LocalPath) ? _opt.StagingDir : dest.LocalPath;
+
+    /// <summary>
+    /// The file a reference names on a local destination.
+    ///
+    /// <para>
+    /// Two kinds of reference arrive here and both are legitimate. The platform's own engine records
+    /// the absolute path <see cref="PutFileAsync"/> returned and hands that back for the rest of the
+    /// artifact's life — including after the destination has been pointed somewhere else, so it is
+    /// taken exactly as given and never re-based. The backup module keeps no such path: its
+    /// artifacts are found by the key they were stored under, which is relative to the destination
+    /// and means nothing without it. Resolving a relative reference against the process's working
+    /// directory — which is what returning it unchanged did — pointed a restore at the panel's own
+    /// installation directory, and pointed a delete at nothing at all.
+    /// </para>
+    /// </summary>
+    private string LocalArtifact(BackupDestination dest, string artifactRef, string what) =>
+        Path.IsPathRooted(artifactRef) ? artifactRef : Confined(LocalRoot(dest), artifactRef, what);
+
+    /// <summary>
+    /// A key resolved inside the destination it belongs to, or a refusal.
+    ///
+    /// <para>
+    /// Every key Harbora builds today is made of Guids and timestamps, so nothing has ever escaped.
+    /// That is a property of the callers, though, and this is the layer that turns a key into a path
+    /// on a disk — the one place that can promise a destination only ever holds what was meant for
+    /// it. <see cref="PathGuard"/> resolves before it compares, which is what makes a "..", a
+    /// symlinked parent and an absolute key fail the same way.
+    /// </para>
+    /// </summary>
+    private static string Confined(string root, string key, string what)
+    {
+        var check = PathGuard.ResolveWithin(root, key);
+        if (!check.Allowed)
+            throw new InvalidOperationException(
+                $"'{key}' does not name a file inside {root} ({check.Rejection}), so nothing was {what} it.");
+
+        return check.ResolvedPath!;
     }
 
     /// <summary>
@@ -164,10 +230,41 @@ public sealed class BackupStorage(
         return new AmazonS3Client(creds, config);
     }
 
-    private static (string Bucket, string Key) ParseS3(string artifactRef)
+    /// <summary>
+    /// The bucket and object a reference names.
+    ///
+    /// <para>
+    /// Two forms arrive here, exactly as they do on the local branch. A reference
+    /// <see cref="PutFileAsync"/> returned carries its own bucket — recorded on the row so an
+    /// artifact stays readable after the destination has been pointed at a different one — and a
+    /// bare key does not, because the backup module stores no reference at all: it rebuilds the key
+    /// from the repository and snapshot ids every time it reads.
+    /// </para>
+    /// <para>
+    /// This used to split on the first slash without asking whether a scheme was there, so a key
+    /// like <c>{repository}/{snapshot}.tar.gz.enc</c> read as bucket <c>{repository}</c> — a bucket
+    /// named after a Guid, which exists nowhere. That is every restore, browse and delete a module
+    /// repository performs, and the write probe that decides whether a new S3 repository can be
+    /// created at all, since the probe deletes by the key it wrote.
+    /// </para>
+    /// </summary>
+    public static (string Bucket, string Key) S3Location(BackupDestination dest, string artifactRef)
     {
-        var withoutScheme = artifactRef.Replace("s3://", "");
+        ArgumentNullException.ThrowIfNull(dest);
+
+        const string scheme = "s3://";
+        if (!artifactRef.StartsWith(scheme, StringComparison.Ordinal))
+            return (dest.Bucket ?? "", artifactRef.TrimStart('/'));
+
+        var withoutScheme = artifactRef[scheme.Length..];
         var slash = withoutScheme.IndexOf('/');
+
+        // A scheme with no object after the bucket is not something that can be fetched or removed.
+        // Said in words rather than left to crash on the substring, because the reference comes off
+        // a row and the operator's question will be which backup it belongs to.
+        if (slash <= 0 || slash == withoutScheme.Length - 1)
+            throw new InvalidOperationException($"'{artifactRef}' does not name an object inside a bucket.");
+
         return (withoutScheme[..slash], withoutScheme[(slash + 1)..]);
     }
 }

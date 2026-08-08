@@ -71,10 +71,28 @@ public sealed class NativeBackupEngineTests : IDisposable
 
     // --- helpers ---------------------------------------------------------------------------
 
+    /// <summary>
+    /// The platform's own storage adapter, not a stand-in for it.
+    ///
+    /// <para>
+    /// There used to be a double here — <c>KeyedFileStorage</c> — whose comment said it behaved
+    /// "exactly as BackupStorage" and which created the directory a key names, something production
+    /// did not do. Every test in this file passed while no local repository could store a snapshot
+    /// at all. A double of the layer under test is the one place a claim like that cannot be
+    /// checked, so the claim is gone and so is the double: a local destination needs no Docker and
+    /// no network, which is exactly why there was never a reason to fake it.
+    /// </para>
+    /// </summary>
+    private BackupStorage Storage() => new(
+        Options.Create(new BackupOptions { StagingDir = _options.Value.StagingDirectory }),
+        Options.Create(new Harbora.Infrastructure.Deployments.HarboraRuntimeOptions()),
+        _protector,
+        new FakeDockerEngine());
+
     /// <summary>The same engine, over a protector a test can hold open mid-decrypt.</summary>
     private HarboraNativeBackupEngine EngineWith(ISecretProtector protector) => new(
         _db,
-        new KeyedFileStorage(_repository),
+        Storage(),
         new RepositoryCredentialReader(_db, _protector, NullLogger<RepositoryCredentialReader>.Instance),
         new RepositoryDestinationFactory(_protector),
         protector,
@@ -492,49 +510,3 @@ internal sealed class GatingProtector(ISecretProtector inner) : ISecretProtector
     public string Unprotect(string ciphertext) => inner.Unprotect(ciphertext);
 }
 
-/// <summary>
-/// Storage that behaves like a real destination: the artifact is copied to a location derived from
-/// its key, and the caller's staging file is theirs to delete.
-///
-/// <para>
-/// Deliberately not the existing <c>LocalOnlyStorage</c>, which returns the staging path unchanged.
-/// That would make this engine's cleanup of its own staging copy delete the artifact, and the tests
-/// would pass for a reason that has nothing to do with the code under test.
-/// </para>
-/// </summary>
-internal sealed class KeyedFileStorage(string root) : IBackupStorage
-{
-    public string LocalStagingDir => root;
-
-    public Task<(string ArtifactRef, long SizeBytes)> PutFileAsync(
-        BackupDestination dest, string key, string localFilePath, CancellationToken ct)
-    {
-        var target = Path.Combine(root, key.Replace('/', Path.DirectorySeparatorChar));
-        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        File.Copy(localFilePath, target, overwrite: true);
-        return Task.FromResult((target, new FileInfo(target).Length));
-    }
-
-    public Task<string> GetToLocalAsync(
-        BackupDestination dest, string artifactRef, CancellationToken ct, string? localFileName = null)
-    {
-        // A local destination has nothing to download, so the artifact's own path comes back and the
-        // caller's preferred name is not used — exactly as BackupStorage behaves.
-        var path = Path.IsPathRooted(artifactRef)
-            ? artifactRef
-            : Path.Combine(root, artifactRef.Replace('/', Path.DirectorySeparatorChar));
-
-        if (!File.Exists(path)) throw new FileNotFoundException("No such artifact.", path);
-        return Task.FromResult(path);
-    }
-
-    public Task DeleteAsync(BackupDestination dest, string artifactRef, CancellationToken ct)
-    {
-        var path = Path.IsPathRooted(artifactRef)
-            ? artifactRef
-            : Path.Combine(root, artifactRef.Replace('/', Path.DirectorySeparatorChar));
-
-        if (File.Exists(path)) File.Delete(path);
-        return Task.CompletedTask;
-    }
-}
