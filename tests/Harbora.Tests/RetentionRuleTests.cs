@@ -71,14 +71,17 @@ public class RetentionRuleTests
     }
 
     [Fact]
-    public void Keep_forever_begins_exactly_where_a_date_stops_being_representable()
+    public void The_longest_span_that_is_still_a_date_gets_a_cutoff_and_the_next_one_up_does_not()
     {
-        // Written from the clock rather than as a magic number, because the boundary moves with
-        // "now": how far back a cutoff can reach is how far "now" is from the start of time.
-        var reach = (int)(Now - DateTimeOffset.MinValue).TotalDays;
-
-        RetentionRule.CutoffFor(reach - 2, Now).Should().NotBeNull("this one still lands on a real date");
-        RetentionRule.CutoffFor(reach, Now).Should().BeNull("this one cannot, so it means keep forever");
+        // The two numbers are worked out by hand rather than from the implementation's own
+        // expression, which would only pin the shape of the code against itself. From 0001-01-01 to
+        // this test's Now of 2026-08-08 is 2,025 whole years (739,125 days, plus 491 leap days) and
+        // then 219 days: 739,835 days and three hours. The rule keeps a day of slack off that
+        // boundary, so 739,834 is the last span that still lands on a real date.
+        RetentionRule.CutoffFor(739_834, Now).Should()
+            .Be(Now.AddDays(-739_834), "this one still lands on a real date, and on the right one");
+        RetentionRule.CutoffFor(739_835, Now).Should()
+            .BeNull("one day further back cannot be a date at all, so it means keep forever");
     }
 
     // ---------- when the sweep runs ----------

@@ -4,9 +4,13 @@ namespace Harbora.Infrastructure.Maintenance;
 /// How long each unbounded table keeps its rows.
 ///
 /// <para>
-/// Every value is a number of days, and <b>0 or less means keep forever</b>. That reading is
-/// deliberate: an operator who blanks a setting, or a config file that loses a line, must get the
-/// harmless answer rather than a cutoff of "now" that empties the table on the next tick.
+/// Every value is a number of days, and <b>0 or less means keep forever</b> — as does a number too
+/// large to be a date (roughly 739,000 and up, which is how far back the calendar goes). Both
+/// readings are deliberate: an operator who blanks a setting, or a config file that loses a line,
+/// must get the harmless answer rather than a cutoff of "now" that empties the table on the next
+/// tick; and somebody reaching for a huge integer to mean "keep this a very long time" must get what
+/// they meant rather than an exception. A table kept for either reason is named in the log every
+/// sweep — with a <i>warning</i> in the too-large case, since nobody chooses that on purpose.
 /// </para>
 /// <para>
 /// <see cref="Harbora.Domain.Common.IdempotencyRecord"/> has no knob here on purpose. It carries its

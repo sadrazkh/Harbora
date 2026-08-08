@@ -159,13 +159,19 @@ public class DependencyInjectionTests
         // this time as prose beside code, with nothing comparing the two. This compares them.
         using var settings = JsonDocument.Parse(File.ReadAllText(
             Path.Combine(RepoRoot(), "src", "Harbora.Web", "appsettings.json")));
+        var section = settings.RootElement.GetProperty(RetentionOptions.SectionName);
 
-        var documented = settings.RootElement
-            .GetProperty(RetentionOptions.SectionName)
-            .GetProperty("_comment_defaults").GetString()!
+        var documented = section.GetProperty("_comment_defaults").GetString()!
             .TrimEnd('.')
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(pair => pair.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .Select(pair =>
+            {
+                // "DeploymentLogDays 90 days" would otherwise compare equal on "90" while saying
+                // something the next reader has to interpret. A pair is a name and a number.
+                pair.Should().HaveCount(2, "every documented default is one key and one value");
+                return pair;
+            })
             .ToDictionary(pair => pair[0], pair => pair[1]);
 
         var shipped = typeof(RetentionOptions).GetProperties()
@@ -173,6 +179,22 @@ public class DependencyInjectionTests
 
         documented.Should().Equal(shipped,
             "every retention knob has to be named in appsettings.json with the value it actually ships");
+    }
+
+    [Fact]
+    public void The_shipped_retention_section_sets_no_key_at_all()
+    {
+        // The other half of the same guarantee. Comparing the comment against the C# defaults is
+        // only worth anything while the file leaves the keys unset — add "AuditLogDays": 400 and
+        // every test above still passes while the product ships 400 and the comment says 365.
+        using var settings = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(RepoRoot(), "src", "Harbora.Web", "appsettings.json")));
+
+        settings.RootElement.GetProperty(RetentionOptions.SectionName).EnumerateObject()
+            .Select(key => key.Name)
+            .Should().OnlyContain(name => name.StartsWith("_comment"),
+                "the section documents the knobs and sets none of them, so the C# defaults stay the "
+                + "single source of truth for what an install actually does");
     }
 
     private static string RepoRoot()

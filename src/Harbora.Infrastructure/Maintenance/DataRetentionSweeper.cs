@@ -152,33 +152,56 @@ public sealed class DataRetentionSweeper(
             }
         }
 
-        // A table swept by a configured age, which the operator may turn off entirely.
+        // A table swept by a configured age, which the operator may turn off entirely — or turn off
+        // by accident, by typing a number too long to be a date.
         async Task SweepAgedTableAsync<TEntity>(
-            string table, int days, Func<DateTimeOffset, Task<Expression<Func<TEntity, bool>>>> ruleFor)
+            string table, string key, int days,
+            Func<DateTimeOffset, Task<Expression<Func<TEntity, bool>>>> ruleFor)
             where TEntity : class
         {
             if (RetentionRule.CutoffFor(days, now) is not { } cutoff)
             {
                 keptForever.Add(table);
+
+                // Said out loud, not merely recorded. RetentionSweepResult keeps "kept" apart from
+                // "swept" so that a table nobody swept can never pass for a table with nothing to
+                // sweep — but the result itself goes nowhere: the timer loop discards it, and the
+                // nightly line counts only what was deleted. A table absent from that line is
+                // exactly the thing this has to make visible, so it goes in the log.
+                if (days > 0)
+                    // Nobody means this. The value was read as "keep for ever" so that it could not
+                    // end the whole sweep, and this is the other half of that bargain: a table has
+                    // silently stopped being bounded, and the line has to name the setting to edit
+                    // and the value that was typed, or the operator is hunting for it.
+                    logger.LogWarning(
+                        "Retention of {Table} is set to {Days} days, which is too long to be a date, so " +
+                        "nothing is being deleted from it. Set {Setting} to a number of days it can keep, " +
+                        "or to 0 if you meant to keep everything for ever.",
+                        table, days, $"{RetentionOptions.SectionName}:{key}");
+                else
+                    logger.LogInformation(
+                        "Retention of {Table} is off ({Setting} is {Days}); every row is being kept.",
+                        table, $"{RetentionOptions.SectionName}:{key}", days);
+
                 return;
             }
 
             await SweepTableAsync(table, () => ruleFor(cutoff));
         }
 
-        await SweepAgedTableAsync<DeploymentLog>(RetentionTables.DeploymentLogs, config.DeploymentLogDays,
+        await SweepAgedTableAsync<DeploymentLog>(RetentionTables.DeploymentLogs, nameof(RetentionOptions.DeploymentLogDays), config.DeploymentLogDays,
             async cutoff => RetentionRule.DeploymentLogsToDelete(cutoff, await ProtectedDeploymentsAsync(db, ct)));
 
-        await SweepAgedTableAsync<Domain.Auditing.AuditLog>(RetentionTables.AuditLogs, config.AuditLogDays,
+        await SweepAgedTableAsync<Domain.Auditing.AuditLog>(RetentionTables.AuditLogs, nameof(RetentionOptions.AuditLogDays), config.AuditLogDays,
             cutoff => Task.FromResult(RetentionRule.AuditLogsToDelete(cutoff)));
 
-        await SweepAgedTableAsync<Domain.Apps.CronRun>(RetentionTables.CronRuns, config.CronRunDays,
+        await SweepAgedTableAsync<Domain.Apps.CronRun>(RetentionTables.CronRuns, nameof(RetentionOptions.CronRunDays), config.CronRunDays,
             cutoff => Task.FromResult(RetentionRule.CronRunsToDelete(cutoff)));
 
-        await SweepAgedTableAsync<Domain.Nodes.NodeCommandRecord>(RetentionTables.NodeCommands, config.NodeCommandDays,
+        await SweepAgedTableAsync<Domain.Nodes.NodeCommandRecord>(RetentionTables.NodeCommands, nameof(RetentionOptions.NodeCommandDays), config.NodeCommandDays,
             cutoff => Task.FromResult(RetentionRule.NodeCommandsToDelete(cutoff)));
 
-        await SweepAgedTableAsync<Domain.Nodes.NodeEventRecord>(RetentionTables.NodeEvents, config.NodeEventDays,
+        await SweepAgedTableAsync<Domain.Nodes.NodeEventRecord>(RetentionTables.NodeEvents, nameof(RetentionOptions.NodeEventDays), config.NodeEventDays,
             cutoff => Task.FromResult(RetentionRule.NodeEventsToDelete(cutoff)));
 
         // No configured age, and so no "keep forever" either: the row's own ExpiresAt is the
@@ -187,7 +210,8 @@ public sealed class DataRetentionSweeper(
             () => Task.FromResult(RetentionRule.IdempotencyRecordsToDelete(now)));
 
         await SweepAgedTableAsync<Domain.Identity.PasswordResetToken>(
-            RetentionTables.PasswordResetTokens, config.PasswordResetTokenDays,
+            RetentionTables.PasswordResetTokens, nameof(RetentionOptions.PasswordResetTokenDays),
+            config.PasswordResetTokenDays,
             cutoff => Task.FromResult(RetentionRule.PasswordResetTokensToDelete(cutoff)));
 
         var result = new RetentionSweepResult(deleted, keptForever, failures);

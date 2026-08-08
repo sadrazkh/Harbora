@@ -31,9 +31,12 @@ public static class RetentionRule
     /// forever".
     ///
     /// <para>
-    /// Zero has to mean "never delete" rather than "delete everything older than now", because those
-    /// two readings differ by the whole table and one of them is unrecoverable. A blanked setting,
-    /// a mistyped key and a section that never got bound all arrive here as 0.
+    /// <b>Two values mean keep forever.</b> Zero or less, because "never delete" and "delete
+    /// everything older than now" differ by the whole table and one of them is unrecoverable — and a
+    /// blanked setting, a mistyped key and a section that never got bound all arrive here as 0. And
+    /// any span too long to be a date, because that is what somebody reaching for a large integer
+    /// meant, and because the alternative is an exception thrown from outside the sweeper's
+    /// per-table guard.
     /// </para>
     /// </summary>
     public static DateTimeOffset? CutoffFor(int days, DateTimeOffset now)
@@ -55,8 +58,16 @@ public static class RetentionRule
         return now - TimeSpan.FromDays(days);
     }
 
-    /// <summary>How long after start-up the first sweep may run, so it is never on the boot path.</summary>
-    public static readonly TimeSpan MinimumStartupDelay = TimeSpan.FromMinutes(10);
+    /// <summary>
+    /// The nearest ahead a sweep is ever scheduled.
+    ///
+    /// <para>
+    /// It earns its keep at both ends of the loop, which is why it is not named for start-up: on the
+    /// first pass it keeps a delete off the boot path, and on every pass after it stops a sweep that
+    /// finished inside its own hour from firing a second time the same night.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan MinimumWait = TimeSpan.FromMinutes(10);
 
     /// <summary>
     /// How long to wait, from <paramref name="now"/>, for the next sweep at <paramref name="hourUtc"/>.
@@ -69,10 +80,10 @@ public static class RetentionRule
     /// ever issue, and an operator ought to be able to put it somewhere quiet.
     /// </para>
     /// <para>
-    /// The window is never less than <see cref="MinimumStartupDelay"/> away, so a panel started a
-    /// few minutes before its own sweep hour still keeps the delete pass off the boot path. An hour
-    /// outside 0–23 is clamped: a mistyped setting should cost a sweep at an odd time, not the
-    /// sweeper.
+    /// The window is never less than <see cref="MinimumWait"/> away, so a panel started a few
+    /// minutes before its own sweep hour still keeps the delete pass off the boot path — and a sweep
+    /// that finishes inside its own hour cannot start again the same night. An hour outside 0–23 is
+    /// clamped: a mistyped setting should cost a sweep at an odd time, not the sweeper.
     /// </para>
     /// </summary>
     public static TimeSpan DelayUntilNextSweep(DateTimeOffset now, int hourUtc)
@@ -80,7 +91,7 @@ public static class RetentionRule
         var next = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero)
             .AddHours(Math.Clamp(hourUtc, 0, 23));
 
-        while (next - now < MinimumStartupDelay) next = next.AddDays(1);
+        while (next - now < MinimumWait) next = next.AddDays(1);
 
         return next - now;
     }

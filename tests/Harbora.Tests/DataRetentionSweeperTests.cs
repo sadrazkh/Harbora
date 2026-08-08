@@ -12,9 +12,14 @@ using Harbora.NodeAgent.Contracts;
 using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
+
+// Harbora.Domain.Common has a LogLevel of its own (deployment build output), and this file is about
+// the other one.
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace Harbora.Tests;
 
@@ -69,8 +74,32 @@ public class DataRetentionSweeperTests
         new DbContextOptionsBuilder<HarboraDbContext>()
             .UseInMemoryDatabase("retention-" + Guid.NewGuid()).Options;
 
+    /// <summary>
+    /// Captures what an operator would actually see, with the level, because the whole point of the
+    /// lines below is that a table nobody swept must not pass for a table with nothing to sweep.
+    /// </summary>
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
+    }
+
     private static DataRetentionSweeper NewSweeper(
-        HarboraDbContext db, RetentionOptions? options = null, DateTimeOffset? now = null)
+        HarboraDbContext db, RetentionOptions? options = null, DateTimeOffset? now = null,
+        ILogger<DataRetentionSweeper>? logger = null)
     {
         // Registered as a singleton instance so the scope the sweeper opens does not dispose the
         // context the test is still holding. The sweeper resolves it exactly as it does in
@@ -83,7 +112,7 @@ public class DataRetentionSweeperTests
             provider.GetRequiredService<IServiceScopeFactory>(),
             Options.Create(options ?? new RetentionOptions()),
             new FixedClock(now ?? Now),
-            NullLogger<DataRetentionSweeper>.Instance);
+            logger ?? NullLogger<DataRetentionSweeper>.Instance);
     }
 
     /// <summary>
@@ -203,6 +232,48 @@ public class DataRetentionSweeperTests
         result.KeptForever.Should().Contain(RetentionTables.DeploymentLogs);
         db.DeploymentLogs.Should().HaveCount(2, "a span too long to be a date means keep, not delete");
         result.Deleted.Should().HaveCount(6, "every other table was still swept");
+    }
+
+    [Fact]
+    public async Task A_cutoff_too_large_to_be_a_date_is_said_out_loud_with_the_key_and_the_value()
+    {
+        // Reading an unusable value as "keep for ever" stops it ending the sweep, but on its own it
+        // makes the largest table stop being swept in silence — and the nightly line about the other
+        // six then reads like a healthy pass. RetentionSweepResult keeps "kept" apart from "swept"
+        // precisely so that cannot happen, and nothing in src/ ever read that field: one producer,
+        // no consumers. So it has to be said in the log, where somebody will see it, and it has to
+        // name the setting an operator would go and edit.
+        using var db = new HarboraDbContext(NewOptions());
+        await SeedBothSidesAsync(db, Guid.NewGuid());
+        var logger = new RecordingLogger<DataRetentionSweeper>();
+
+        await NewSweeper(db, new RetentionOptions { DeploymentLogDays = 900_000_000 }, logger: logger)
+            .SweepAsync(CancellationToken.None);
+
+        var warnings = logger.Entries.Where(e => e.Level == LogLevel.Warning).ToList();
+
+        warnings.Should().ContainSingle().Which.Message.Should()
+            .Contain("Retention:DeploymentLogDays", "an operator needs the key, not just the table")
+            .And.Contain("900000000", "and the value they typed, so they can recognise it")
+            .And.Contain(RetentionTables.DeploymentLogs);
+    }
+
+    [Fact]
+    public async Task A_table_turned_off_on_purpose_is_reported_once_and_not_as_a_problem()
+    {
+        // The other reading of "keep for ever" is a deliberate one, and it must still appear — a
+        // table nobody swept should never be indistinguishable from a table with nothing to sweep —
+        // but it is a decision somebody made, not something to wake anyone up about.
+        using var db = new HarboraDbContext(NewOptions());
+        await SeedBothSidesAsync(db, Guid.NewGuid());
+        var logger = new RecordingLogger<DataRetentionSweeper>();
+
+        await NewSweeper(db, new RetentionOptions { AuditLogDays = 0 }, logger: logger)
+            .SweepAsync(CancellationToken.None);
+
+        logger.Entries.Should().NotContain(e => e.Level >= LogLevel.Warning);
+        logger.Entries.Should()
+            .ContainSingle(e => e.Level == LogLevel.Information && e.Message.Contains(RetentionTables.AuditLogs));
     }
 
     [Fact]
