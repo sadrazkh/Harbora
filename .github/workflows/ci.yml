@@ -68,18 +68,28 @@ jobs:
       - name: Restore
         run: dotnet restore Harbora.slnx
 
+      # id: build, because the test steps below run on `always()` so that one red suite does not
+      # hide the other two — and they must still be skipped when there is nothing to test.
       - name: Build the whole solution (Release)
+        id: build
         run: dotnet build Harbora.slnx -c Release --no-restore
 
       # --no-build throughout: the solution build above already produced every test assembly, and
       # rebuilding per project is how a suite ends up running against something other than what was
       # built.
+      # Each suite runs even if an earlier one failed. Without `if: always()` a panel failure means
+      # the agent and ingress suites never run at all, the guard below then reports "no TRX" for
+      # both, and the whole run tells you less than the two-workflow layout this replaced did — it
+      # could at least say whether the agent suite was green while the panel was red. One red suite
+      # should not hide the state of the other two.
       - name: Panel, application and HTTP-pipeline suite
+        if: always() && steps.build.conclusion == 'success'
         run: |
           dotnet test tests/Harbora.Tests/Harbora.Tests.csproj -c Release --no-build \
             --logger "trx;LogFileName=panel.trx" --results-directory ./trx
 
       - name: Node agent suite (includes the Docker integration tests)
+        if: always() && steps.build.conclusion == 'success'
         run: |
           dotnet test tests/Harbora.NodeAgent.Tests/Harbora.NodeAgent.Tests.csproj -c Release --no-build \
             --logger "trx;LogFileName=node-agent.trx" --results-directory ./trx
@@ -88,13 +98,18 @@ jobs:
       # Every way ingress breaks is a disagreement between the two codebases, and this is the only
       # suite with both of them in the room.
       - name: End-to-end ingress tunnel suite
+        if: always() && steps.build.conclusion == 'success'
         run: |
           dotnet test tests/Harbora.NodeIngress.Tests/Harbora.NodeIngress.Tests.csproj -c Release --no-build \
             --logger "trx;LogFileName=ingress.trx" --results-directory ./trx
 
-      # The floors are floors — well under the real counts, so ordinary churn never touches this
-      # file. They exist to catch a filter typo that narrows a 3,000-test suite to three, which
-      # leaves a TRX with no skips, no failures and nothing in it.
+      # The floors are a catastrophe detector, not a headroom allowance. They are set an order of
+      # magnitude below the failure they exist to catch — a filter typo or a broken discovery that
+      # leaves three tests where there were three thousand — and only a few per cent below the real
+      # counts (3,177 / 515 / 15 at the time of writing). So a legitimate change that deletes more
+      # than about 180 panel tests WILL trip this, and that is the intended trade: it is a line
+      # somebody has to consciously move, in a commit that says why, rather than a number generous
+      # enough to sleep through the thing it was put there to notice.
       - name: Every suite must have actually run
         if: always()
         run: |

@@ -52,8 +52,25 @@ on:
         required: false
         default: ''
 
+# ── When this goes red ───────────────────────────────────────────────────────────────────────────
+#
+# A failed run deliberately leaves the panel host installed so it can be inspected, which means
+# EVERY LATER RUN WILL REFUSE at step 0 until somebody acts. That is correct — it is what stops a
+# "fresh install" claim being built on last night's leftovers — but it also means one bad night
+# turns into red every night, and a lane that is always red is a lane people stop reading.
+#
+# So: a red run means RE-IMAGE BOTH HOSTS (or clean them by hand, following the paths the script
+# names) before the next one can say anything. The failure step below opens or updates a GitHub
+# issue so that this is somebody's job rather than a tick nobody watches.
+#
+# One thing no workflow can fix from the inside: GitHub disables `schedule:` triggers after 60 days
+# with no repository activity. A quiet repository silently loses this lane. A failing run opens an
+# issue, which is itself activity — but a passing run is invisible, so if this repository ever goes
+# quiet for two months, check that the schedule is still enabled before trusting its silence.
+
 permissions:
   contents: read
+  issues: write   # the failure step below opens/updates one issue; nothing else needs write
 
 # Two runs sharing one pair of hosts would tread on each other, and the loser would report a
 # failure that says nothing about the code. Queue instead of cancelling: a half-finished run that
@@ -178,6 +195,59 @@ jobs:
             exit 1
           fi
           echo "ok  the proof ran end to end, node half included."
+
+      # Nobody watches a nightly they did not break. A red tick on a scheduled run is seen by
+      # exactly the people already looking at the Actions tab, which on a quiet night is nobody —
+      # and because a failure leaves the hosts dirty, every subsequent run also fails, so the signal
+      # decays into wallpaper within a week.
+      #
+      # One issue, reused. Reused rather than one-per-night because seven identical issues is the
+      # same wallpaper in a different room; a single issue that keeps gaining comments shows both
+      # that it is still broken and how long it has been.
+      - name: Open or update the failure issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create nightly-failure --color B60205 \
+            --description 'The nightly live-host proof is failing' --force >/dev/null 2>&1 || true
+
+          {
+            echo "The nightly live-host proof failed."
+            echo
+            echo "- Run: $RUN_URL"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo
+            echo "**Both hosts must be re-imaged before the next run can prove anything.** A failed"
+            echo "run leaves the panel host installed on purpose so it can be inspected, and the"
+            echo "script then refuses at step 0 on every later run rather than claiming a fresh"
+            echo "install it did not do. Until they are re-imaged, expect this to stay red."
+            echo
+            if [ -s proof.log ]; then
+              echo "<details><summary>Last 60 lines of proof.log</summary>"
+              echo
+              echo '```'
+              tail -60 proof.log
+              echo '```'
+              echo
+              echo "</details>"
+            else
+              echo "_No \`proof.log\` was produced — the run failed before the script started_"
+              echo "_(most likely a missing secret; see the first step)._"
+            fi
+          } > issue-body.md
+
+          existing="$(gh issue list --state open --label nightly-failure --limit 1 \
+                        --json number --jq '.[0].number // empty' || true)"
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file issue-body.md
+            echo "Commented on existing issue #$existing."
+          else
+            gh issue create --title 'Nightly live-host proof is failing' \
+              --label nightly-failure --body-file issue-body.md
+          fi
 
       - name: Always clean the keys off the runner
         if: always()

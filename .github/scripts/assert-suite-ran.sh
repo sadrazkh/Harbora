@@ -43,6 +43,14 @@ case "$floor" in
     exit 2 ;;
 esac
 
+# A floor of 0 disables the only check that catches a TRX which is well-formed and empty, turning
+# this script into an expensive way of agreeing with `dotnet test`. If a suite genuinely has no
+# tests it should not have a guard; if it has tests, it has a floor above zero.
+if [ "$floor" -eq 0 ]; then
+  echo "assert-suite-ran.sh: a minimum-passing floor of 0 would accept a TRX with no passing tests in it, which is the thing this script exists to refuse. Give a real floor." >&2
+  exit 2
+fi
+
 # GitHub renders ::error:: as an annotation on the job. Outside Actions it is just a prefixed line,
 # which is why this script is runnable by hand:
 #   bash .github/scripts/assert-suite-ran.sh ./trx/panel.trx 3000 'Harbora.Tests'

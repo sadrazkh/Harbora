@@ -57,7 +57,13 @@ E2E_NODE_SSH_KEY="${E2E_NODE_SSH_KEY:-}"
 E2E_NODE_NAME="${E2E_NODE_NAME:-harbora-e2e-node}"
 
 # "The previous release" is what an operator is running today. There are no release tags yet, so
-# master is the honest answer; this is a variable so a tag can replace it without touching the file.
+# master is the honest answer, and this is a variable so another BRANCH can replace it.
+#
+# BRANCH NAMES ONLY — a tag will not work here, and the failure is not obvious. install.sh's
+# fetch_source does `git fetch --depth 1 origin "$REPO_BRANCH"` then
+# `git reset --hard "origin/$REPO_BRANCH"`, and `origin/<tag>` is not a ref that exists. Pointing
+# either of these at v1.2.3 fails inside the installer, not here. Making a tagged release testable
+# means changing install.sh, not this file.
 E2E_FROM_REF="${E2E_FROM_REF:-master}"
 E2E_TO_REF="${E2E_TO_REF:-master}"
 
@@ -89,7 +95,11 @@ WORK="$(mktemp -d /tmp/harbora-e2e.XXXXXX)"
 COOKIES="$WORK/cookies.txt"
 API_TOKEN=""
 RUN_ID="$(date -u +%Y%m%d-%H%M%S)"
-MARKER="harbora-e2e-${RUN_ID}-$$"
+# The canary written into the backed-up file, and — separately — the repository's encryption
+# password. They must not be the same string: if they were, any file containing the password would
+# satisfy step 6's final grep, and the module's own metadata is exactly such a file.
+MARKER="harbora-e2e-canary-${RUN_ID}-$$"
+REPO_PASSWORD="harbora-e2e-repopw-${RUN_ID}-$$"
 
 c_g='\033[0;32m'; c_b='\033[0;34m'; c_y='\033[1;33m'; c_r='\033[0;31m'; c_0='\033[0m'
 log()  { echo -e "${c_b}➜${c_0} $*"; }
@@ -243,6 +253,26 @@ if [ -e "$HARBORA_DIR" ]; then
   exit 1
 fi
 
+# The directory is not the whole story, and this is the gap that could have destroyed somebody's
+# data. `install.sh uninstall` KEEPS volumes unless the operator says otherwise, so a host where
+# somebody uninstalled and then removed /opt/harbora still has harbora_pgdata, harbora_backups and
+# the MinIO volumes sitting there. Without this check that host passes the test above, install.sh
+# silently adopts those volumes as if they were ours, and step 9's `docker compose down -v`
+# destroys them — breaking this script's own promise, at the top of this file, that it never
+# removes state it did not create.
+if command -v docker >/dev/null 2>&1; then
+  orphans="$(docker volume ls -q --filter name='^harbora_' 2>/dev/null || true)"
+  if [ -n "$orphans" ]; then
+    err "This host is not clean: it already has Harbora data volumes, even though $HARBORA_DIR is gone."
+    printf '  %s\n' $orphans >&2
+    err "install.sh would adopt these as its own and this script's teardown would then delete them."
+    err "They are somebody's data and this script will not touch them. Re-image the host, or remove"
+    err "them BY HAND once you are certain they are disposable:"
+    err "    docker volume rm \$(docker volume ls -q --filter name='^harbora_')"
+    exit 1
+  fi
+fi
+
 if [ "$E2E_FROM_REF" = "$E2E_TO_REF" ]; then
   warn "E2E_FROM_REF and E2E_TO_REF are both '$E2E_FROM_REF'."
   warn "  Step 8 will therefore re-apply the same code. That still proves the update path runs and"
@@ -358,13 +388,17 @@ install_staging_roots() {  # runs on whichever host it is called on
   return 0
 }
 
-if ! install_staging_roots; then
-  case $? in
+# Captured BEFORE any test touches it. `if ! cmd; then case $?` reads the status of the negation,
+# which is always 0, so every one of these specific diagnostics was unreachable and the generic
+# message was the only one that could ever print.
+install_staging_roots && roots_rc=0 || roots_rc=$?
+if [ "$roots_rc" -ne 0 ]; then
+  case "$roots_rc" in
     9) die "This host has neither /usr/local/share/ca-certificates nor /etc/pki/ca-trust/source/anchors, so the staging root cannot be trusted. Without it the node agent will refuse every connection." ;;
     8) die "Could not download a Let's Encrypt staging root from: $E2E_STAGING_ROOTS. If Let's Encrypt has moved these files, set E2E_STAGING_ROOTS to the current URLs." ;;
     7) die "What was downloaded from $E2E_STAGING_ROOTS is not a PEM certificate." ;;
     6) die "Refreshing the system trust store failed." ;;
-    *) die "Could not install the staging roots." ;;
+    *) die "Could not install the staging roots (exit $roots_rc)." ;;
   esac
 fi
 ok "Let's Encrypt staging root(s) trusted on the panel host."
@@ -410,21 +444,40 @@ wait_until "$W_PANEL" "the panel answers /healthz over public DNS and a trusted 
 # ---------------------------------------------------------------------------------------------
 step "3 — enable the Backup module, then create the owner"
 # ---------------------------------------------------------------------------------------------
-# The Backup module ships OFF (appsettings.json "Features": {"Backup": false}) and enabling it is
-# described there as a deliberate act. This lane is that deliberate act, and it is worth being
-# explicit that step 6 therefore tests a NON-DEFAULT configuration.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+#  READ THIS BEFORE BELIEVING STEP 6.
+#
+#  Step 6 proves the Backup module under a configuration NO DEFAULT INSTALL HAS. Three settings are
+#  changed here, and a green run says nothing about any of them as shipped:
+#
+#    1. Features:Backup — ships FALSE (appsettings.json). The module is entirely off by default,
+#       and appsettings.json calls enabling it a deliberate act. This is that act.
+#    2. Backups:Module:AllowedSourceRoots — ships EMPTY, and appsettings.json says "EMPTY on
+#       purpose". BackupTargetResolver refuses every Directory target outright while it is empty,
+#       so with the shipped configuration the ONLY thing a directory backup can prove is that it is
+#       refused. An allowlist entry is what makes there be anything to test.
+#
+#  What step 6 therefore proves: given an operator who has enabled the module and allowed a source
+#  root, a directory snapshot and its restore move real bytes. What it does NOT prove: that any of
+#  this is reachable on a default install. It is not.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
 #
 # Done with a compose override rather than by editing docker-compose.yml: compose MERGES mappings
-# like `environment`, so an override adds one key without restating anything and cannot drift.
+# like `environment`, so an override adds keys without restating anything and cannot drift.
 # (`command` is a list and is REPLACED, which is why the ACME setting had to be a variable in the
 # real file instead.) git reset --hard in the updater does not remove untracked files, so this
 # survives step 8.
+#
+# The __0 suffix is how .NET's environment-variable configuration provider expresses the first
+# element of a list; the section is BackupModuleOptions.SectionName = "Backups:Module".
 cat > "$COMPOSE_DIR/docker-compose.override.yml" <<'OVERRIDE'
-# Written by deploy/live-host-proof.sh. Not part of a normal install.
+# Written by deploy/live-host-proof.sh. NOT part of a normal install — see the banner in the
+# script's step 3 for exactly which shipped defaults this departs from and what that costs.
 services:
   panel:
     environment:
       Features__Backup: "true"
+      Backups__Module__AllowedSourceRoots__0: "/var/lib/harbora/builds"
 OVERRIDE
 
 (cd "$COMPOSE_DIR" && docker compose up -d panel)
@@ -522,34 +575,71 @@ wait_until "$W_DEPLOY" "deployment $DEPLOYMENT_ID reached Succeeded" deployment_
 # ---------------------------------------------------------------------------------------------
 step "5 — attach a domain and take a certificate from Let's Encrypt STAGING"
 # ---------------------------------------------------------------------------------------------
+# The host step 4 already got for free. AppsController.Create calls
+# ServicePlan.HostFor(kind, model.Domain, slug, rootDomain), which returns "{slug}.{rootDomain}"
+# when nothing was typed, and adds it with SslEnabled = true. So this name is ALREADY attached and
+# ALREADY has a certificate before this step begins.
 APP_DOMAIN="${APP_SLUG}.${E2E_ROOT_DOMAIN}"
+
+# …which is why this step attaches a DIFFERENT one. Re-posting APP_DOMAIN would hit
+# `if (await db.Domains.AnyAsync(d => d.Host == host))` → "This domain is already in use." — and
+# AddDomain returns RedirectToAction on EVERY path, success and refusal alike, so the 302 would look
+# identical to success and the certificate assertions below would then pass on step 4's work. That
+# is a step reporting success for an operation the panel is certain to reject.
+ALIAS_DOMAIN="e2e-alias-${RUN_ID}.${E2E_ROOT_DOMAIN}"
 
 domain_token="$(antiforgery_token "/apps/$APP_ID")"
 status="$(web_post "/apps/$APP_ID/domains" "$domain_token" \
   "__RequestVerificationToken=$domain_token" \
-  "host=${APP_DOMAIN}" "ssl=true")"
+  "host=${ALIAS_DOMAIN}" "ssl=true")"
 case "$status" in
-  302|303|200) ok "Domain $APP_DOMAIN attached (HTTP $status)." ;;
-  *) die "Attaching $APP_DOMAIN answered HTTP $status." ;;
+  302|303) : ;;
+  *) die "Attaching $ALIAS_DOMAIN answered HTTP $status, not a redirect." ;;
 esac
 
+# The 302 proves nothing on its own. The app's own page is the only place that distinguishes a
+# domain that was added from one that was refused, so it is asked.
+web_get "/apps/$APP_ID" > "$WORK/app-details.html"
+
+# Two assertions, not one, because the presence of the name is not sufficient: AppsController's
+# ReservedHostRefusal is `'{host}' is one of the platform's own host names…` — it ECHOES the host
+# it rejected. A page rendering that refusal contains the alias, so a lone `grep` for the alias
+# would read a refusal as a success. Both refusal paths are excluded by their own wording instead.
+if grep -qF 'one of the platform' "$WORK/app-details.html" \
+   || grep -qF 'already in use' "$WORK/app-details.html"; then
+  err "AddDomain refused $ALIAS_DOMAIN. The panel said:"
+  grep -oF -e 'one of the platform'\''s own host names and cannot be routed to an app.' \
+           -e 'This domain is already in use.' "$WORK/app-details.html" | head -2 >&2 || true
+  die "The domain was not attached."
+fi
+grep -qF "$ALIAS_DOMAIN" "$WORK/app-details.html" \
+  || die "The POST redirected and reported no error, but $ALIAS_DOMAIN does not appear on the app's page at all."
+ok "Domain $ALIAS_DOMAIN is attached to the app, and the page carries no refusal."
+
+# "Domain added. Redeploy to route it." — AddDomain's own words. WireProxyAsync is the only thing
+# that creates the Route row, so without this the alias has a database row, no router, and no
+# certificate, and the wait below would time out for a reason that has nothing to do with ACME.
+deploy_app "$APP_SLUG" "Redeploy to route the new domain"
+wait_until "$W_DEPLOY" "the redeploy that routes $ALIAS_DOMAIN reached Succeeded" deployment_settled
+
 app_serves_over_tls() { curl -fsS --max-time 20 -o /dev/null "https://${APP_DOMAIN}/"; }
-wait_until "$W_CERT" "https://${APP_DOMAIN}/ answers with a certificate this host trusts" app_serves_over_tls
+alias_serves_over_tls() { curl -fsS --max-time 20 -o /dev/null "https://${ALIAS_DOMAIN}/"; }
+wait_until "$W_CERT" "https://${ALIAS_DOMAIN}/ answers with a certificate this host trusts" alias_serves_over_tls
 
 # The claim is not "TLS worked" — curl would have said that against a production certificate too,
 # and a nightly quietly burning production rate limit is exactly the failure this is meant to avoid.
 # The claim is "this certificate came from the staging CA", so the issuer is read and asserted.
-openssl s_client -servername "$APP_DOMAIN" -connect "${APP_DOMAIN}:443" </dev/null 2>/dev/null \
-  > "$WORK/appcert.txt" || die "Could not complete a TLS handshake with ${APP_DOMAIN}:443."
+openssl s_client -servername "$ALIAS_DOMAIN" -connect "${ALIAS_DOMAIN}:443" </dev/null 2>/dev/null \
+  > "$WORK/appcert.txt" || die "Could not complete a TLS handshake with ${ALIAS_DOMAIN}:443."
 
 issuer="$(grep -m1 '^issuer=' "$WORK/appcert.txt" || true)"
-[ -n "$issuer" ] || die "No issuer line in the certificate served by $APP_DOMAIN."
+[ -n "$issuer" ] || die "No issuer line in the certificate served by $ALIAS_DOMAIN."
 echo "  $issuer"
 case "$issuer" in
   *STAGING*|*staging*|*Pretend*|*Doctored*)
     ok "The certificate was issued by the Let's Encrypt STAGING CA." ;;
   *)
-    err "The certificate for $APP_DOMAIN was NOT issued by Let's Encrypt staging."
+    err "The certificate for $ALIAS_DOMAIN was NOT issued by Let's Encrypt staging."
     err "  $issuer"
     err "  Either ACME_CA_SERVER did not reach Traefik — check that deploy/docker-compose.yml"
     err "  carries --certificatesresolvers.letsencrypt.acme.caserver — or this is Traefik's own"
@@ -558,13 +648,13 @@ case "$issuer" in
 esac
 
 # Belt and braces: a self-signed Traefik default would also fail this, and it proves the name on the
-# certificate is the name we asked for rather than some other host's.
-if ! grep -qi "CN *= *${APP_DOMAIN}" "$WORK/appcert.txt" \
-   && ! openssl s_client -servername "$APP_DOMAIN" -connect "${APP_DOMAIN}:443" </dev/null 2>/dev/null \
-      | openssl x509 -noout -text 2>/dev/null | grep -qi "DNS:${APP_DOMAIN}"; then
-  die "The certificate served by $APP_DOMAIN does not name $APP_DOMAIN in its subject or SANs."
+# certificate is the one this step asked for rather than the one step 4 already had.
+if ! grep -qi "CN *= *${ALIAS_DOMAIN}" "$WORK/appcert.txt" \
+   && ! openssl s_client -servername "$ALIAS_DOMAIN" -connect "${ALIAS_DOMAIN}:443" </dev/null 2>/dev/null \
+      | openssl x509 -noout -text 2>/dev/null | grep -qi "DNS:${ALIAS_DOMAIN}"; then
+  die "The certificate served by $ALIAS_DOMAIN does not name $ALIAS_DOMAIN in its subject or SANs."
 fi
-ok "The certificate names $APP_DOMAIN."
+ok "The certificate names $ALIAS_DOMAIN — a host that did not exist before this step."
 
 # ---------------------------------------------------------------------------------------------
 step "6 — take a backup through the Backup module and restore it"
@@ -572,9 +662,22 @@ step "6 — take a backup through the Backup module and restore it"
 # A marker file goes in, a snapshot is taken, the snapshot is restored somewhere else, and the
 # marker is looked for in what came back. "The job said Completed" is not the claim; "the bytes
 # returned" is.
+#
+# SRC_DIR must sit under the AllowedSourceRoots entry step 3 added, or BackupTargetResolver refuses
+# the target at queue time. DST_DIR must resolve inside BackupModuleOptions.RestoreRoot — default
+# /var/lib/harbora/restore — or RestoreService refuses the destination. Both are configuration
+# guards rather than bugs, and both are why a destination "next to the source" cannot work.
+#
+# RestoreRoot is deliberately left at its default: one fewer departure from the shipped
+# configuration (see the banner in step 3). It is not a mounted volume, so the restored copy lives
+# in the panel container's writable layer — which is fine, because it is verified in this step, in
+# this container, moments later.
 SRC_DIR="/var/lib/harbora/builds/e2e-${RUN_ID}"
-DST_DIR="/var/lib/harbora/builds/e2e-${RUN_ID}-restored"
+DST_DIR="/var/lib/harbora/restore/e2e-${RUN_ID}"
 
+# Two distinct strings. The repository password used to double as the canary, which meant any file
+# that happened to contain the password would satisfy the grep at the end of this step — including
+# ones the module wrote itself. A canary that its own plumbing can forge is not a canary.
 panel_exec "mkdir -p '$SRC_DIR' && printf '%s\n' '$MARKER' > '$SRC_DIR/marker.txt'"
 panel_exec "grep -q '$MARKER' '$SRC_DIR/marker.txt'" || die "Could not seed the marker file inside the panel container."
 ok "Seeded $SRC_DIR/marker.txt with $MARKER"
@@ -582,7 +685,7 @@ ok "Seeded $SRC_DIR/marker.txt with $MARKER"
 # Enums are serialised by NUMBER: nothing registers a JsonStringEnumConverter, so "Local" would be a
 # 400. Local = 0, Native = 0, Directory = 2, Folder = 1, Overwrite = 1.
 REPO_ID="$(api POST /api/v1/backup/repositories "$(jq -nc \
-  --arg name "e2e-${RUN_ID}" --arg pw "$MARKER" --arg path "/var/lib/harbora/backups/e2e-${RUN_ID}" \
+  --arg name "e2e-${RUN_ID}" --arg pw "$REPO_PASSWORD" --arg path "/var/lib/harbora/backups/e2e-${RUN_ID}" \
   '{name:$name, type:0, engine:0, password:$pw, localPath:$path}')" | jq -er '.id')"
 [ -n "$REPO_ID" ] || die "Creating a backup repository returned no id. If this was a 404, the Backup module did not come up enabled."
 ok "Backup repository $REPO_ID"
@@ -614,7 +717,9 @@ restore_settled() {
   case "$(jq -r '.status' "$WORK/restore.json")" in
     Completed) return 0 ;;
     Failed|Cancelled)
-      err "Restore $RESTORE_ID ended $(jq -r '.status' "$WORK/restore.json"): $(jq -r '.errorMessage // "no reason recorded"' "$WORK/restore.json")"
+      # RestoreDto exposes failureReason, not errorMessage — asking for the wrong one made every
+      # failed restore print "no reason recorded", which is the one moment the reason matters.
+      err "Restore $RESTORE_ID ended $(jq -r '.status' "$WORK/restore.json"): $(jq -r '.failureReason // .errorMessage // "no reason recorded"' "$WORK/restore.json")"
       exit 1 ;;
     *) return 1 ;;
   esac
@@ -655,7 +760,12 @@ EOF
 
   # Enrolment is addressed to the PANEL's host: a node has no certificate yet, so it cannot be asked
   # for one. The panel hands back the mTLS host (NODE_DOMAIN) that the node uses from then on.
-  node_ssh "curl -fsSL '${E2E_REPO_RAW}/${E2E_TO_REF}/deploy/node-agent/install.sh' | bash -s -- \
+  # `set -o pipefail` inside the REMOTE shell, which does not inherit this script's. Without it a
+  # 404 on the installer URL makes curl exit 22 with no output, bash reads empty stdin and exits 0,
+  # and the whole pipeline succeeds — so `|| die` never fires and the failure surfaces 600 seconds
+  # later as a node that never came Online, blaming the mTLS channel for a download that never
+  # happened.
+  node_ssh "set -o pipefail; curl -fsSL '${E2E_REPO_RAW}/${E2E_TO_REF}/deploy/node-agent/install.sh' | bash -s -- \
       --control-plane '${PANEL_URL}' --token '${ENROLL_TOKEN}' --name '${E2E_NODE_NAME}'" \
     2>&1 | tee "$WORK/node-install.log" \
     || die "The node agent installer failed on $E2E_NODE_HOST — see $WORK/node-install.log."
@@ -761,7 +871,11 @@ api GET /api/v1/apps | jq -er --arg s "$APP_SLUG" '[.[] | select(.slug == $s)] |
 ok "$DEPLOYMENTS_AFTER app(s) survived the upgrade, including $APP_SLUG."
 
 app_serves_over_tls || die "The deployed app stopped serving after the upgrade."
-ok "https://${APP_DOMAIN}/ still answers after the upgrade."
+# The alias too: it is the one whose Route row was created by step 5's redeploy rather than by the
+# app's creation, so it is the one that would be lost if an upgrade rebuilt routing from the app
+# record alone.
+alias_serves_over_tls || die "The alias domain attached in step 5 stopped serving after the upgrade."
+ok "https://${APP_DOMAIN}/ and https://${ALIAS_DOMAIN}/ both still answer after the upgrade."
 
 if [ "$E2E_SKIP_NODE" != "1" ]; then
   wait_until "$W_NODE" "the node reconnected after the panel restarted" node_online
@@ -773,7 +887,10 @@ step "9 — teardown"
 if [ "$E2E_TEARDOWN" = "1" ]; then
   log "E2E_TEARDOWN=1 — removing what this run created."
   if [ "$E2E_SKIP_NODE" != "1" ]; then
-    node_ssh "curl -fsSL '${E2E_REPO_RAW}/${E2E_TO_REF}/deploy/node-agent/uninstall.sh' | bash -s -- --yes" \
+    # pipefail again, and for a sharper reason than on the install path: nothing downstream checks
+    # the node host afterwards, so without it a 404 here reports a clean teardown while the agent is
+    # still installed and running.
+    node_ssh "set -o pipefail; curl -fsSL '${E2E_REPO_RAW}/${E2E_TO_REF}/deploy/node-agent/uninstall.sh' | bash -s -- --yes" \
       || warn "Node teardown did not complete cleanly; $E2E_NODE_HOST needs re-imaging before the next run. The next run will refuse on it rather than proceed."
   fi
 
@@ -802,7 +919,8 @@ ok "═════════════════════════�
 ok "  The live-host proof passed."
 ok "    installed from   $E2E_FROM_REF, upgraded to $E2E_TO_REF"
 ok "    panel            $PANEL_URL"
-ok "    app + staging TLS https://${APP_DOMAIN}/"
+ok "    app              https://${APP_DOMAIN}/"
+ok "    alias + staging TLS https://${ALIAS_DOMAIN}/  (attached, routed and certified by step 5)"
 if [ "$E2E_SKIP_NODE" = "1" ]; then
 ok "    node             NOT TESTED (E2E_SKIP_NODE=1)"
 else
