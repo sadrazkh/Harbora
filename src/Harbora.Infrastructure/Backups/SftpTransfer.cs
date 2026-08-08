@@ -54,13 +54,21 @@ public static class SftpTransfer
         return Build(host, port, username, password, script);
     }
 
-    /// <summary>Fetches one artifact back into the staging directory.</summary>
+    /// <summary>
+    /// Fetches one artifact back into the staging directory.
+    /// </summary>
+    /// <param name="localFileName">
+    /// What to call it once it lands, when the caller needs a name of its own — two reads of one
+    /// artifact would otherwise download over each other. Defaults to the remote name.
+    /// </param>
     public static SftpCommand Download(string host, int port, string username, string password,
-                                       string? remoteDirectory, string fileName)
+                                       string? remoteDirectory, string fileName,
+                                       string? localFileName = null)
     {
         var directory = NormaliseDirectory(remoteDirectory);
         var remote = directory is null ? fileName : $"{directory}/{fileName}";
-        var script = string.Join("\n", [$"get {Quote(remote)} {Quote($"/backup/{fileName}")}", "bye"]);
+        var local = string.IsNullOrWhiteSpace(localFileName) ? fileName : localFileName;
+        var script = string.Join("\n", [$"get {Quote(remote)} {Quote($"/backup/{local}")}", "bye"]);
 
         return Build(host, port, username, password, script);
     }

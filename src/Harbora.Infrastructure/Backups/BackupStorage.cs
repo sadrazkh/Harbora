@@ -63,7 +63,8 @@ public sealed class BackupStorage(
         return ($"s3://{dest.Bucket}/{key}", size);
     }
 
-    public async Task<string> GetToLocalAsync(BackupDestination dest, string artifactRef, CancellationToken ct)
+    public async Task<string> GetToLocalAsync(
+        BackupDestination dest, string artifactRef, CancellationToken ct, string? localFileName = null)
     {
         if (dest.Type == BackupDestinationType.Local)
             return artifactRef; // already a local path
@@ -73,20 +74,29 @@ public sealed class BackupStorage(
         if (dest.Type == BackupDestinationType.Sftp)
         {
             var name = Path.GetFileName(artifactRef);
+
+            // The remote name and the local one are separate questions: what to ask the server for,
+            // and what to call the copy that lands in the volume the panel shares with the transfer
+            // container. Only the second is the caller's to choose.
+            var local = string.IsNullOrWhiteSpace(localFileName) ? name : Path.GetFileName(localFileName);
+
             await RunSftpAsync(dest, SftpTransfer.Download(
                 dest.SftpHost!, dest.SftpPort, dest.SftpUsername!, SftpPassword(dest),
-                dest.SftpDirectory, name), "download", ct);
+                dest.SftpDirectory, name, local), "download", ct);
 
-            var staged = Path.Combine(_opt.StagingDir, name);
+            var staged = Path.Combine(_opt.StagingDir, local);
             if (!File.Exists(staged))
                 throw new InvalidOperationException(
-                    $"The transfer reported success but {name} did not arrive in {_opt.StagingDir}. " +
+                    $"The transfer reported success but {local} did not arrive in {_opt.StagingDir}. " +
                     $"Check that the panel and the transfer container share the volume '{_opt.StagingVolume}'.");
             return staged;
         }
 
         var (bucket, objectKey) = ParseS3(artifactRef);
-        var localPath = Path.Combine(_opt.StagingDir, Path.GetFileName(objectKey));
+        var localPath = Path.Combine(_opt.StagingDir, string.IsNullOrWhiteSpace(localFileName)
+            ? Path.GetFileName(objectKey)
+            : Path.GetFileName(localFileName));
+
         using var client = CreateS3(dest);
         using var response = await client.GetObjectAsync(bucket, objectKey, ct);
         await response.WriteResponseStreamToFileAsync(localPath, append: false, ct);

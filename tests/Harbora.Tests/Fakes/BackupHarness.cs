@@ -295,7 +295,8 @@ public sealed class LocalOnlyStorage(string dir) : IBackupStorage
         BackupDestination dest, string key, string localFilePath, CancellationToken ct)
         => Task.FromResult((localFilePath, new FileInfo(localFilePath).Length));
 
-    public Task<string> GetToLocalAsync(BackupDestination dest, string artifactRef, CancellationToken ct)
+    public Task<string> GetToLocalAsync(
+        BackupDestination dest, string artifactRef, CancellationToken ct, string? localFileName = null)
         => Task.FromResult(artifactRef);
 
     public Task DeleteAsync(BackupDestination dest, string artifactRef, CancellationToken ct)

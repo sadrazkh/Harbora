@@ -859,6 +859,55 @@ public sealed class BackupCrashRecoveryTests : IDisposable
         result.StagingPathsSwept.Should().Be(2);
     }
 
+    /// <summary>
+    /// The other half of the same bargain, for reads rather than writes.
+    ///
+    /// <para>
+    /// A browse and a restore each decrypt the artifact under a name of their own, which is what
+    /// keeps two of them from deleting each other's copy — and it means the copy a kill abandons no
+    /// longer gets overwritten by the next read of the same snapshot. It belongs to no row, so
+    /// nothing points at it: a full plaintext archive with no way to find it but this.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_copy_a_read_was_decrypting_when_the_process_died_is_removed()
+    {
+        var snapshotId = Guid.CreateVersion7();
+        var abandoned = Path.Combine(
+            _staging, BackupStagingLayout.ReadArchiveFile(snapshotId, Guid.CreateVersion7()));
+        var downloaded = Path.Combine(
+            _staging, BackupStagingLayout.FetchedArchiveFile(snapshotId, Guid.CreateVersion7()));
+
+        File.WriteAllText(abandoned, "a decrypted archive of the whole snapshot, in the clear");
+        File.WriteAllText(downloaded, "the artifact this read had fetched");
+
+        var reconciler = Reconciler();
+        await reconciler.StartingAsync(default);
+        await reconciler.StartedAsync(default);
+        await reconciler.StagingSwept;
+
+        File.Exists(abandoned).Should().BeFalse(
+            "a plaintext archive nothing has a pointer to is the least discoverable leak there is");
+        File.Exists(downloaded).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// And it is only ever read at the one moment nothing can be mid-read. <c>ReconcileAsync</c> is
+    /// a "reconcile now" verb with no such guarantee, so it must not touch these — deleting the copy
+    /// a live browse is part-way through is the exact fault the per-read naming exists to prevent.
+    /// </summary>
+    [Fact]
+    public async Task Reconciling_on_demand_leaves_a_read_in_progress_alone()
+    {
+        var live = Path.Combine(
+            _staging, BackupStagingLayout.ReadArchiveFile(Guid.CreateVersion7(), Guid.CreateVersion7()));
+        File.WriteAllText(live, "a restore is reading this right now");
+
+        await Reconciler().ReconcileAsync(default);
+
+        File.Exists(live).Should().BeTrue();
+    }
+
     // --- a delete that failed is retried, not forgotten ------------------------------------------
 
     /// <summary>

@@ -2,6 +2,7 @@ using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Jobs;
+using Harbora.Infrastructure.Jobs;
 using Harbora.Modules.Backup.Contracts;
 using Harbora.Modules.Backup.Domain;
 using Harbora.Modules.Backup.Infrastructure;
@@ -52,6 +53,11 @@ public sealed class BackupModuleVerificationTests : IDisposable
     private readonly BackupModuleOptions _options;
     private readonly BackupRepository _repository;
     private readonly Guid _workspace = Guid.CreateVersion7();
+
+    /// <summary>The name a database restore's typed confirmation has to repeat.</summary>
+    private const string DatabaseName = "orders-production";
+
+    private readonly StubDatabaseRestores _restores = new() { Name = DatabaseName };
 
     /// <summary>Scopes for the reconciler, over the same store the services use.</summary>
     private readonly ServiceProvider _sp;
@@ -421,6 +427,231 @@ public sealed class BackupModuleVerificationTests : IDisposable
             "a recorded way back nobody can see is not a way back");
     }
 
+    /// <summary>
+    /// The failure that costs the reference, and the reason this enqueue moved.
+    ///
+    /// <para>
+    /// <c>DatabaseJobQueue.AddAsync</c> adds the <c>Job</c> to the <b>caller's</b> scoped context and
+    /// saves it there, and EF leaves a failed <c>Added</c> entity tracked. So a swallowed enqueue is
+    /// only harmless while nothing saves afterwards — and inside <c>TakeSafetyCopyAsync</c> a great
+    /// deal saved afterwards, starting with the write that records <c>SafetySnapshotRef</c>. The
+    /// leaked insert either rides along on somebody else's save (here, on the in-memory provider) or
+    /// throws again and takes the reference down with it (on Postgres). Both are the same defect.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_verification_that_could_not_be_queued_does_not_cost_the_way_back()
+    {
+        var destination = LiveDestination("live", "production data");
+        var job = await QueueOverwritingRestoreAsync(destination, confirmation: "live");
+
+        var leaky = new LeakyJobQueue(_db, JobKind.BackupVerify);
+        await Restores(leaky).RunAsync(job, default);
+
+        var row = await _db.RestoreJobs.AsNoTracking().FirstAsync(r => r.Id == job);
+        row.Status.Should().Be(RestoreJobStatus.Completed, row.FailureReason);
+        row.SafetySnapshotRef.Should().NotBeNullOrWhiteSpace(
+            "a check that could not be queued must never cost the only record of where the way back is");
+
+        (await _db.Jobs.CountAsync()).Should().Be(0,
+            "a failed enqueue must leave nothing tracked for the caller's next SaveChanges to commit " +
+            "or to throw on");
+    }
+
+    /// <summary>
+    /// Five presses of "verify now" are one question, not five browses of the same archive. Asked
+    /// through the real queue, because the rule is a query over the job table.
+    /// </summary>
+    [Fact]
+    public async Task Asking_twice_for_the_same_check_queues_it_once()
+    {
+        var snapshot = AddCompletedSnapshot(filesCount: 3);
+        var queue = RealQueue();
+
+        for (var i = 0; i < 5; i++)
+        {
+            var result = await Snapshots(queue).QueueVerificationAsync(snapshot.Id, default);
+            result.Succeeded.Should().BeTrue(result.Error);
+        }
+
+        (await _db.Jobs.CountAsync(j => j.Kind == JobKind.BackupVerify && j.TargetId == snapshot.Id))
+            .Should().Be(1, "a check already waiting answers every press until it runs");
+    }
+
+    /// <summary>
+    /// A check that has already run does not block the next question: an operator pressing "verify
+    /// now" wants a fresh answer, not the old one.
+    /// </summary>
+    [Fact]
+    public async Task A_check_that_already_finished_can_be_asked_for_again()
+    {
+        var snapshot = AddCompletedSnapshot(filesCount: 3);
+        var queue = RealQueue();
+
+        await Snapshots(queue).QueueVerificationAsync(snapshot.Id, default);
+
+        foreach (var settled in await _db.Jobs.ToListAsync()) settled.Status = JobStatus.Succeeded;
+        await _db.SaveChangesAsync();
+
+        await Snapshots(queue).QueueVerificationAsync(snapshot.Id, default);
+
+        (await _db.Jobs.CountAsync(j => j.Kind == JobKind.BackupVerify && j.TargetId == snapshot.Id))
+            .Should().Be(2);
+    }
+
+    // --- the destructive branch -----------------------------------------------------------------
+
+    /// <summary>
+    /// The branch every other test here avoids. A database destination is not tarred where it
+    /// stands — a tar of a running database's files is a torn copy and a torn way back is not one —
+    /// so the copy is dumped through the same client a database backup target uses.
+    /// </summary>
+    [Fact]
+    public async Task A_database_restore_copies_the_database_aside_through_its_own_client()
+    {
+        var stager = new RecordingDatabaseStager(Path.Combine(_root, "dump"));
+        var serviceId = Guid.CreateVersion7();
+        var job = await QueueDatabaseRestoreAsync(serviceId);
+
+        await Restores(targets: Targets(stager)).RunAsync(job, default);
+
+        var row = await _db.RestoreJobs.AsNoTracking().FirstAsync(r => r.Id == job);
+        row.Status.Should().Be(RestoreJobStatus.Completed, row.FailureReason);
+
+        stager.Staged.Should().ContainSingle().Which.ServiceId.Should().Be(serviceId,
+            "the safety copy of a database is taken from the database, not from a directory");
+
+        var safety = await _db.BackupSnapshots.AsNoTracking()
+            .FirstAsync(s => s.Id == Guid.Parse(row.SafetySnapshotRef!));
+
+        safety.TargetType.Should().Be(BackupTargetType.Database);
+        safety.TargetRef.Should().Be(serviceId.ToString());
+        safety.TriggeredBy.Should().Be(BackupTrigger.Safety);
+    }
+
+    /// <summary>
+    /// And the refusal on the same branch: a database that cannot be dumped is a restore that does
+    /// not start. This is the most destructive path in the product.
+    /// </summary>
+    [Fact]
+    public async Task A_database_restore_whose_dump_fails_does_not_happen()
+    {
+        var job = await QueueDatabaseRestoreAsync(Guid.CreateVersion7());
+
+        await Restores(targets: Targets(new StubDatabaseStager())).RunAsync(job, default);
+
+        var row = await _db.RestoreJobs.AsNoTracking().FirstAsync(r => r.Id == job);
+        row.Status.Should().Be(RestoreJobStatus.Failed);
+        row.FailureReason.Should().Contain("nothing at the destination was changed");
+        _engine.Calls.Should().NotContain(c => c.StartsWith("restore:", StringComparison.Ordinal));
+        _restores.Loaded.Should().BeEmpty("no dump may reach the server when there is no way back");
+    }
+
+    // --- the rule that names the way back -------------------------------------------------------
+
+    [Fact]
+    public void The_way_back_is_named_when_there_is_one()
+    {
+        RestoreService.WithTheWayBack("The archive ended early.", "a-snapshot-id")
+            .Should().StartWith("The archive ended early.").And.Contain("a-snapshot-id");
+    }
+
+    [Fact]
+    public void A_failure_with_no_copy_behind_it_says_nothing_about_one()
+    {
+        RestoreService.WithTheWayBack("The archive ended early.", null)
+            .Should().Be("The archive ended early.");
+
+        RestoreService.WithTheWayBack("The archive ended early.", "   ")
+            .Should().Be("The archive ended early.");
+    }
+
+    /// <summary>
+    /// The guard belongs on what is written, not on one half of it. A reference long enough to leave
+    /// the reason no room at all used to return a string longer than the column — the clamp was on
+    /// the reason, which is the one quantity that was already being shortened.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 4000)]
+    [InlineData(4000, 1)]
+    [InlineData(4000, 4000)]
+    [InlineData(0, 0)]
+    public void Whatever_it_is_given_the_sentence_fits_the_column(int reasonLength, int refLength)
+    {
+        var told = RestoreService.WithTheWayBack(
+            new string('r', reasonLength), refLength == 0 ? null : new string('s', refLength));
+
+        told.Length.Should().BeLessThanOrEqualTo(2048,
+            "a reason that will not save is a reason lost at the moment it matters most");
+    }
+
+    // --- what the panel calls a successful backup -----------------------------------------------
+
+    /// <summary>
+    /// "Last successful" answers "is my protection working". A copy taken because somebody was about
+    /// to overwrite something is not evidence that it is — and for a database restore its TargetRef
+    /// is a bare service guid, which is not a target anyone recognises.
+    /// </summary>
+    [Fact]
+    public void The_last_successful_backup_is_not_a_pre_restore_copy()
+    {
+        var scheduled = new BackupSnapshot
+        {
+            TargetRef = "/srv/app",
+            Status = BackupSnapshotStatus.Completed,
+            TriggeredBy = BackupTrigger.Schedule,
+            CreatedAt = DateTimeOffset.UtcNow.AddHours(-6)
+        };
+        var safety = new BackupSnapshot
+        {
+            TargetRef = Guid.CreateVersion7().ToString(),
+            Status = BackupSnapshotStatus.Completed,
+            TriggeredBy = BackupTrigger.Safety,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        var model = new BackupCenterViewModel { Snapshots = [safety, scheduled] };
+
+        model.LastSuccessful.Should().BeSameAs(scheduled);
+        model.StoredBytes.Should().Be(0);
+    }
+
+    /// <summary>Nothing else claims to be a backup, so a panel with only safety copies says so.</summary>
+    [Fact]
+    public void A_panel_holding_only_safety_copies_reports_no_successful_backup()
+    {
+        var model = new BackupCenterViewModel
+        {
+            Snapshots =
+            [
+                new BackupSnapshot
+                {
+                    TargetRef = "x",
+                    Status = BackupSnapshotStatus.Completed,
+                    TriggeredBy = BackupTrigger.Safety
+                }
+            ]
+        };
+
+        model.LastSuccessful.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Nothing prunes a safety copy — retention filters on <c>PolicyId</c> and a safety copy has
+    /// none — so the page an operator reads has to say so, or the growth is a surprise.
+    /// </summary>
+    [Fact]
+    public void The_backup_center_says_a_safety_copy_is_kept_until_someone_deletes_it()
+    {
+        var markup = File.ReadAllText(
+            Path.Combine(TestPaths.WebRoot, "Views", "BackupCenter", "Index.cshtml"));
+
+        markup.Should().Contain("BackupTrigger.Safety",
+            "a row that is a pre-restore copy must say so rather than looking like a backup");
+        markup.Should().Contain("SafetyCopyNote",
+            "and it must say that no schedule will ever remove it");
+    }
+
     // --- fixtures -----------------------------------------------------------------------------
 
     private static EngineEntry Entry(string name) =>
@@ -467,18 +698,46 @@ public sealed class BackupModuleVerificationTests : IDisposable
         return queued.RestoreJobId!.Value;
     }
 
-    private BackupTargetResolver Targets() => new(
-        new FakeDockerEngine(), new StubDatabaseStager(), new StubApplicationStager(),
+    /// <summary>
+    /// A restore of a managed database, which is the branch the folder tests never reach: the
+    /// destination is a service id, <c>OverwritesLiveTarget</c> is unconditional, and the safety copy
+    /// has to be dumped rather than read off disk.
+    /// </summary>
+    private async Task<Guid> QueueDatabaseRestoreAsync(Guid serviceId)
+    {
+        var snapshot = AddCompletedSnapshot(filesCount: 3);
+
+        var queued = await Restores().QueueAsync(_workspace, new RestoreRequest(
+            snapshot.Id, RestoreType.Database, serviceId.ToString(),
+            RestoreConflictStrategy.Overwrite, ConfirmationText: DatabaseName), default);
+
+        queued.Succeeded.Should().BeTrue(queued.Error);
+
+        var row = await _db.RestoreJobs.FirstAsync(r => r.Id == queued.RestoreJobId);
+        row.OverwritesLiveTarget.Should().BeTrue("loading a dump always replaces what is there");
+
+        return queued.RestoreJobId!.Value;
+    }
+
+    private BackupTargetResolver Targets(IDatabaseTargetStager? databases = null) => new(
+        new FakeDockerEngine(), databases ?? new StubDatabaseStager(), new StubApplicationStager(),
         Options.Create(_options), NullLogger<BackupTargetResolver>.Instance);
 
-    private BackupSnapshotService Snapshots() => new(
-        _db, new SingleEngineResolver(_engine), new StubPassword("password"), Targets(), _jobs,
+    /// <summary>
+    /// The real queue over the same in-memory store, for the rules that are queries over the job
+    /// table rather than calls on an interface.
+    /// </summary>
+    private DatabaseJobQueue RealQueue() => new(
+        _db, new FixedClock(DateTimeOffset.UtcNow), new JobCancellationRegistry(), new JobSignal());
+
+    private BackupSnapshotService Snapshots(IJobQueue? jobs = null) => new(
+        _db, new SingleEngineResolver(_engine), new StubPassword("password"), Targets(), jobs ?? _jobs,
         _notifications, new TestCaller(_workspace), new SilentAuditLog(),
         NullLogger<BackupSnapshotService>.Instance);
 
-    private RestoreService Restores() => new(
+    private RestoreService Restores(IJobQueue? jobs = null, BackupTargetResolver? targets = null) => new(
         _db, new SingleEngineResolver(_engine), new StubPassword("password"),
-        new StubDatabaseRestores(), Targets(), _jobs, _notifications, new TestCaller(_workspace),
+        _restores, targets ?? Targets(), jobs ?? _jobs, _notifications, new TestCaller(_workspace),
         new SilentAuditLog(), Options.Create(_options), NullLogger<RestoreService>.Instance);
 
     private BackupModuleReconciler Reconciler() => new(
@@ -582,6 +841,54 @@ public sealed class BackupModuleVerificationTests : IDisposable
         public Task<EngineOperationResult> DeleteSnapshotAsync(
             DeleteSnapshotRequest r, CancellationToken ct)
             => Task.FromResult(new EngineOperationResult(true));
+    }
+
+    /// <summary>
+    /// Fails the way the real queue fails.
+    ///
+    /// <para>
+    /// <c>DatabaseJobQueue.AddAsync</c> adds the <c>Job</c> to the caller's own scoped context before
+    /// it saves, so an insert that is refused leaves an <c>Added</c> entity behind in a context the
+    /// caller is going to save again. A fake that merely throws would test the easy half.
+    /// </para>
+    /// </summary>
+    private sealed class LeakyJobQueue(HarboraDbContext db, JobKind failOn) : IJobQueue
+    {
+        public Task<Guid> EnqueueAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
+        {
+            if (kind != failOn) return Task.FromResult(Guid.CreateVersion7());
+
+            db.Jobs.Add(new Job { Kind = kind, TargetId = targetId, Status = JobStatus.Pending });
+            throw new InvalidOperationException("the jobs table refused the insert");
+        }
+
+        public Task<Guid> EnqueueExclusiveAsync(
+            JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default)
+            => EnqueueAsync(kind, targetId, ct);
+
+        public Task<bool> RequestCancellationAsync(
+            JobKind kind, Guid targetId, CancellationToken ct = default) => Task.FromResult(false);
+    }
+
+    /// <summary>
+    /// A database stager that succeeds, so the destructive branch of <c>AcquireDestinationAsync</c>
+    /// can be driven end to end. <see cref="StubDatabaseStager"/> refuses by design, which is the
+    /// other half of the same branch.
+    /// </summary>
+    private sealed class RecordingDatabaseStager(string directory) : IDatabaseTargetStager
+    {
+        public List<(Guid ServiceId, Guid SnapshotId)> Staged { get; } = [];
+
+        public Task<(DatabasePlan? Plan, string? Error)> PlanAsync(Guid serviceId, CancellationToken ct)
+            => Task.FromResult<(DatabasePlan?, string?)>((null, "not used in this test"));
+
+        public Task<TargetLease> StageAsync(Guid serviceId, Guid snapshotId, CancellationToken ct)
+        {
+            Staged.Add((serviceId, snapshotId));
+            var path = Path.Combine(directory, snapshotId.ToString("N"));
+            Directory.CreateDirectory(path);
+            return Task.FromResult(TargetLease.Ok(path));
+        }
     }
 
     private sealed class StubPassword(string password) : IRepositoryCredentialReader

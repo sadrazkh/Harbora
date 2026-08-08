@@ -146,7 +146,16 @@ public sealed class BackupSnapshotService(
             return new SnapshotOutcome(false, Error:
                 $"This backup is {snapshot.Status} — only a completed backup can be verified.");
 
-        await jobs.EnqueueAsync(JobKind.BackupVerify, snapshot.Id, ct);
+        // A check already waiting is the answer to this press. Five presses of a button that fetches
+        // and decrypts an archive would otherwise be five fetches of the same archive, each one
+        // excluding the next through the queue and all of them producing the identical row.
+        //
+        // Reported as SUCCESS rather than as a refusal, because it is one: the operator asked for
+        // the Verified column to be brought up to date and it is going to be. Failing here would put
+        // a red message on the screen for a request that is being honoured.
+        if (!await BackupVerificationQueue.AlreadyQueuedAsync(db, snapshot.Id, ct))
+            await jobs.EnqueueAsync(JobKind.BackupVerify, snapshot.Id, ct);
+
         return new SnapshotOutcome(true, snapshot.Id);
     }
 
@@ -322,9 +331,10 @@ public sealed class BackupSnapshotService(
             // "verify now" queue behind one another instead of both browsing at once; either order
             // leaves the same answer on the row.
             //
-            // Enqueued after the completion is saved, and never allowed to undo it — see
+            // Enqueued after the completion is saved, and never allowed to undo it — nor to leave a
+            // refused insert tracked in this context for the next save to trip over. See
             // BackupVerificationQueue.
-            await BackupVerificationQueue.RequestAsync(jobs, snapshot.Id, logger, ct);
+            await BackupVerificationQueue.RequestAsync(jobs, db, snapshot.Id, logger, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

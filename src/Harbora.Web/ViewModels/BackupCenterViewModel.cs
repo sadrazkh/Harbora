@@ -25,10 +25,35 @@ public sealed class BackupCenterViewModel
     /// <summary>Empty means no directory may be backed up yet — the page says so rather than failing later.</summary>
     public IReadOnlyList<string> AllowedSourceRoots { get; init; } = [];
 
+    /// <summary>
+    /// The most recent backup that <b>was a backup</b>.
+    ///
+    /// <para>
+    /// A pre-restore safety copy is a completed snapshot and belongs in the list, but it is not
+    /// evidence that protection is working — it is evidence that somebody was about to overwrite
+    /// something. Counting it here put a copy taken minutes ago at the top of a card headed "last
+    /// successful" while the nightly schedule was failing, and put the copy's <c>TargetRef</c>
+    /// underneath it as the subtitle: for a database restore, a bare service guid naming nothing an
+    /// operator recognises. The card answers "is my protection working", so it reads only the
+    /// snapshots that would answer it.
+    /// </para>
+    /// <para>
+    /// <see cref="StoredBytes"/> deliberately still counts them. It answers a different question —
+    /// how much space the repository is using — and a safety copy uses exactly as much of it as any
+    /// other snapshot.
+    /// </para>
+    /// </summary>
     public BackupSnapshot? LastSuccessful => Snapshots
-        .Where(s => s.Status is BackupSnapshotStatus.Completed or BackupSnapshotStatus.CompletedWithWarnings)
+        .Where(s => s.TriggeredBy is not BackupTrigger.Safety
+                    && s.Status is BackupSnapshotStatus.Completed
+                        or BackupSnapshotStatus.CompletedWithWarnings)
         .MaxBy(s => s.CreatedAt);
 
+    /// <summary>
+    /// Every failed snapshot, safety copies included — a copy that was meant to protect data and
+    /// did not is a failure worth a number on a card, and the restore it belongs to says so beside
+    /// it on this same page.
+    /// </summary>
     public int FailedCount => Snapshots.Count(s => s.Status == BackupSnapshotStatus.Failed);
 
     public int RunningCount => Snapshots.Count(s =>

@@ -166,11 +166,18 @@ public sealed class HarboraNativeBackupEngine(
         var key = $"{request.RepositoryId:N}/{snapshotId:N}.tar.gz{ArchiveCipher.Extension}";
         var destination = destinations.ToDestination(repository, await CredentialsFor(repository, cancellationToken));
 
+        // This read, and no other. Every temporary file below is named from it, so a browse or a
+        // second restore of the same snapshot cannot delete or truncate one of them mid-read —
+        // see BackupStagingLayout.ReadArchiveFile.
+        var operationId = Guid.CreateVersion7();
+
         string? fetched = null, decrypted = null;
         try
         {
-            fetched = await storage.GetToLocalAsync(destination, key, cancellationToken);
-            decrypted = await DecryptAsync(fetched, cancellationToken);
+            fetched = await storage.GetToLocalAsync(destination, key, cancellationToken,
+                BackupStagingLayout.FetchedArchiveFile(snapshotId, operationId));
+
+            decrypted = await DecryptAsync(fetched, snapshotId, operationId, cancellationToken);
 
             var extraction = await ExtractAsync(
                 decrypted, request.DestinationPath, request.Entries, request.ConflictStrategy, cancellationToken);
@@ -184,9 +191,7 @@ public sealed class HarboraNativeBackupEngine(
         }
         finally
         {
-            // Never leave a decrypted copy on disk after the operation that needed it.
-            if (decrypted is not null && !string.Equals(decrypted, fetched, StringComparison.Ordinal))
-                Delete(decrypted);
+            CleanUpRead(fetched, decrypted, snapshotId, operationId);
         }
     }
 
@@ -272,17 +277,23 @@ public sealed class HarboraNativeBackupEngine(
         var key = $"{request.RepositoryId:N}/{snapshotId:N}.tar.gz{ArchiveCipher.Extension}";
         var destination = destinations.ToDestination(repository, await CredentialsFor(repository, cancellationToken));
 
+        // As in RestoreAsync: this browse's own files. The Backup Center browses on every page view
+        // and a verify browses on every completed backup, so two of these overlap far more readily
+        // than two restores do.
+        var operationId = Guid.CreateVersion7();
+
         string? fetched = null, decrypted = null;
         try
         {
-            fetched = await storage.GetToLocalAsync(destination, key, cancellationToken);
-            decrypted = await DecryptAsync(fetched, cancellationToken);
+            fetched = await storage.GetToLocalAsync(destination, key, cancellationToken,
+                BackupStagingLayout.FetchedArchiveFile(snapshotId, operationId));
+
+            decrypted = await DecryptAsync(fetched, snapshotId, operationId, cancellationToken);
             return ListTarLevel(decrypted, request.RelativePath);
         }
         finally
         {
-            if (decrypted is not null && !string.Equals(decrypted, fetched, StringComparison.Ordinal))
-                Delete(decrypted);
+            CleanUpRead(fetched, decrypted, snapshotId, operationId);
         }
     }
 
@@ -376,13 +387,35 @@ public sealed class HarboraNativeBackupEngine(
         return total;
     }
 
-    private async Task<string> DecryptAsync(string path, CancellationToken ct)
+    /// <summary>
+    /// Decrypts a fetched artifact into staging, under a name belonging to this read alone.
+    ///
+    /// <para>
+    /// The target used to be derived from the archive's own path — the same path, therefore, for
+    /// every reader of one snapshot. Both <see cref="RestoreAsync"/> and
+    /// <see cref="BrowseSnapshotAsync"/> remove it in a <c>finally</c>, so two operations on one
+    /// snapshot could delete or truncate the copy the other was reading: a restore that stops short,
+    /// or a verification that records <c>Failed</c> and raises a Critical alert about a backup with
+    /// nothing wrong with it.
+    /// </para>
+    /// <para>
+    /// It also used to be derived from the artifact's <i>location</i>, and for a local repository
+    /// that location is the repository, because fetching a local artifact hands back its own path.
+    /// So reading a backup wrote a plaintext copy of it inside the repository — briefly, and for
+    /// exactly as long as the read took, but a repository is the thing most likely to be on a share
+    /// somebody else can list. Staging is where plaintext belongs, and the reconciler already treats
+    /// everything in it as such.
+    /// </para>
+    /// </summary>
+    private async Task<string> DecryptAsync(
+        string path, Guid snapshotId, Guid operationId, CancellationToken ct)
     {
         if (!await ArchiveCipher.IsEncryptedArchiveAsync(path, ct)) return path;
 
-        var target = path.EndsWith(ArchiveCipher.Extension, StringComparison.Ordinal)
-            ? path[..^ArchiveCipher.Extension.Length]
-            : path + ".plain";
+        Directory.CreateDirectory(_options.StagingDirectory);
+
+        var target = Path.Combine(
+            _options.StagingDirectory, BackupStagingLayout.ReadArchiveFile(snapshotId, operationId));
 
         await using (var cipher = File.OpenRead(path))
         await using (var plain = File.Create(target))
@@ -568,6 +601,35 @@ public sealed class HarboraNativeBackupEngine(
         }
 
         return Path.Combine(directory, $"{stem} ({Guid.CreateVersion7():N}){extension}");
+    }
+
+    /// <summary>
+    /// Removes what one read of a snapshot put on disk, and nothing it merely looked at.
+    ///
+    /// <para>
+    /// Both files are told apart by the names this read asked for, each of which carries its own
+    /// operation id — so neither can name the repository's artifact, and neither can name another
+    /// operation's copy. The alternative, "delete it if it is inside the staging directory", would
+    /// delete the artifact of a local repository whose base path happens to sit under staging.
+    /// </para>
+    /// <para>
+    /// The decrypted copy is skipped when it IS the fetched file, which is what
+    /// <see cref="DecryptAsync"/> returns for an artifact that was never encrypted.
+    /// </para>
+    /// </summary>
+    private static void CleanUpRead(string? fetched, string? decrypted, Guid snapshotId, Guid operationId)
+    {
+        // Plaintext application data. It goes whatever happened.
+        if (decrypted is not null && !string.Equals(decrypted, fetched, StringComparison.Ordinal))
+            Delete(decrypted);
+
+        // Only a repository that downloads produced one of these; a local one hands back the
+        // artifact's own path, which is not ours to remove.
+        if (fetched is not null && string.Equals(
+                Path.GetFileName(fetched),
+                BackupStagingLayout.FetchedArchiveFile(snapshotId, operationId),
+                StringComparison.Ordinal))
+            Delete(fetched);
     }
 
     private static void Delete(string? path)

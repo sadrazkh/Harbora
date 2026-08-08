@@ -557,19 +557,24 @@ public sealed record RestoreDto(
     string ConflictStrategy, string Status, int Progress,
     long RestoredFilesCount, long RestoredBytes,
     DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt, string? FailureReason,
+    DateTimeOffset CreatedAt,
 
     /// <summary>
     /// The snapshot holding the destination as it was just before this restore started, when one
     /// was taken. Reported here as well as on the Backup Center: an API client that automated the
     /// restore is the caller least able to go and look for the way back afterwards.
+    ///
+    /// <para>
+    /// Appended, not inserted. The JSON is name-keyed either way, but the positional constructor is
+    /// a shape of its own — a record's <c>Deconstruct</c> and every positional construction of it
+    /// move with it — and adding a field is not a reason to change one.
+    /// </para>
     /// </summary>
-    string? SafetySnapshotRef,
-
-    DateTimeOffset CreatedAt)
+    string? SafetySnapshotRef = null)
 {
     public static RestoreDto From(RestoreJob r) => new(
         r.Id, r.SnapshotId, r.RestoreType.ToString(), r.Destination, r.OverwritesLiveTarget,
         r.ConflictStrategy.ToString(), r.Status.ToString(), r.Progress,
         r.RestoredFilesCount, r.RestoredBytes, r.StartedAt, r.CompletedAt, r.FailureReason,
-        r.SafetySnapshotRef, r.CreatedAt);
+        r.CreatedAt, r.SafetySnapshotRef);
 }

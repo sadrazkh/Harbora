@@ -48,6 +48,16 @@
         _ => "text-ink-faint"
     };
 
+    // A pre-restore copy is a real snapshot and sits in this list like any other, so without this it
+    // reads as an ordinary backup of a target nobody scheduled — and for a database restore its
+    // target is a bare service guid. It is also the one kind of snapshot NOTHING will ever remove:
+    // BackupRetentionService prunes by PolicyId and a safety copy has none, by design, because the
+    // point of it is to still be there. That is a decision an operator has to be able to read,
+    // rather than discover as a repository that only grows.
+    string SafetyCopyNote = isFa
+        ? "پیش از یک بازگردانی گرفته شده است. هیچ سیاست نگهداشتی آن را پاک نمی‌کند؛ وقتی دیگر به آن نیاز ندارید خودتان حذفش کنید."
+        : "Taken before a restore. No retention policy will ever remove it — delete it yourself once you no longer need the way back.";
+
     var header = new Harbora.Web.ViewModels.PageHeaderModel(
         isFa ? "مرکز پشتیبان" : "Backup Center",
         isFa
@@ -330,7 +340,14 @@
                     @foreach (var s in Model.Snapshots)
                     {
                         <tr class="border-b border-line/50">
-                            <td class="py-2 truncate max-w-[220px]" title="@s.TargetRef">@s.TargetRef</td>
+                            <td class="py-2 truncate max-w-[220px]" title="@s.TargetRef">
+                                @s.TargetRef
+                                @if (s.TriggeredBy == BackupTrigger.Safety)
+                                {
+                                    <span class="ms-1 rounded px-1.5 py-0.5 text-[11px] bg-warn/15 text-warn"
+                                          title="@SafetyCopyNote">@(isFa ? "نسخه ایمنی" : "safety copy")</span>
+                                }
+                            </td>
                             <td class="py-2">
                                 <span class="rounded px-1.5 py-0.5 text-[11px] @StatusClass(s.Status)">@s.Status</span>
                                 @if (s.FailureReason is { Length: > 0 })
@@ -363,6 +380,16 @@
                 </tbody>
             </table>
         </div>
+
+        @* Said out loud, not only in a tooltip: this is the one kind of snapshot no schedule will
+           ever prune, so an operator who never reads it watches the repository grow and cannot see
+           why. Shown only when there is one, so it is information rather than furniture. *@
+        @if (Model.Snapshots.Any(s => s.TriggeredBy == BackupTrigger.Safety))
+        {
+            <p class="mt-3 text-[11px] text-ink-faint">
+                @(isFa ? "نسخه ایمنی" : "Safety copies"): @SafetyCopyNote
+            </p>
+        }
     }
 </section>
 

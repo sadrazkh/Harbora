@@ -28,11 +28,21 @@ public sealed record BackupReconciliation(int Snapshots, int Restores, int Stagi
 /// </summary>
 public sealed record BackupSweepPlan(
     IReadOnlyList<SnapshotStagingPaths> Snapshots,
-    IReadOnlyList<string> RestorePaths)
+
+    /// <summary>
+    /// Paths that belong to no snapshot row: the dump directory a database restore stages into, and
+    /// the copies an interrupted read of an archive abandoned. Deleted without anything being
+    /// written back, because there is no column pointing at them to clear.
+    /// </summary>
+    IReadOnlyList<string> LoosePaths)
 {
     public static readonly BackupSweepPlan Nothing = new([], []);
 
-    public bool IsEmpty => Snapshots.Count == 0 && RestorePaths.Count == 0;
+    public bool IsEmpty => Snapshots.Count == 0 && LoosePaths.Count == 0;
+
+    /// <summary>This plan plus more loose paths, for a caller that knows about some it does not.</summary>
+    public BackupSweepPlan And(IReadOnlyList<string> more) =>
+        more.Count == 0 ? this : this with { LoosePaths = [.. LoosePaths, .. more] };
 }
 
 /// <summary>Every staged copy one snapshot could have left behind, against the row that named them.</summary>
@@ -240,7 +250,7 @@ public sealed class BackupModuleReconciler(
             return;
         }
 
-        try { _deferred = (await SettleAsync(ct)).Sweep; }
+        try { _deferred = (await SettleAsync(ct)).Sweep.And(AbandonedReadCopies()); }
         catch (Exception ex)
         {
             // Never FAIL startup on reconciliation — a panel that will not boot because it could
@@ -470,6 +480,52 @@ public sealed class BackupModuleReconciler(
     }
 
     /// <summary>
+    /// The plaintext copies an interrupted <b>read</b> of an archive left in staging.
+    ///
+    /// <para>
+    /// A browse and a restore each decrypt the artifact under a name of their own — that is what
+    /// stops two of them deleting each other's copy, see
+    /// <see cref="BackupStagingLayout.ReadArchiveFile"/> — and each removes its own in a
+    /// <c>finally</c>. The names belong to no row, so nothing else could ever find them: a copy a
+    /// kill abandons is a full plaintext archive of somebody's data with no pointer to it anywhere.
+    /// </para>
+    /// <para>
+    /// <b>Called from <see cref="StartingAsync"/> and from nowhere else, and that is the whole of
+    /// its safety.</b> The host runs <c>StartingAsync</c> on every hosted service before any
+    /// <c>StartAsync</c>, so at this moment Kestrel has not bound its listener and
+    /// <c>JobStartupGateOpener</c> has not released the worker — there is no browse and no restore
+    /// in this process, and every matching file is therefore abandoned by definition. It is not
+    /// folded into <see cref="SettleAsync"/> because <see cref="ReconcileAsync"/> calls that at an
+    /// arbitrary moment and offers no such guarantee; reading the directory there would eventually
+    /// hand the sweep a copy a live read was part-way through writing, which is the exact bug the
+    /// per-operation naming exists to prevent.
+    /// </para>
+    /// <para>
+    /// The list is captured now and deleted later, behind the listener, like everything else in the
+    /// plan. A read that starts in between is safe from it: its files carry a fresh operation id, so
+    /// they cannot be among the names taken here.
+    /// </para>
+    /// </summary>
+    private List<string> AbandonedReadCopies()
+    {
+        try
+        {
+            if (!Directory.Exists(_options.StagingDirectory)) return [];
+
+            return Directory.EnumerateFiles(
+                _options.StagingDirectory, BackupStagingLayout.AbandonedReadPattern).ToList();
+        }
+        catch (Exception ex)
+        {
+            // One listing of one directory, on the startup path. Never worth a boot.
+            logger.LogWarning(ex,
+                "Could not list {Root} for copies an interrupted read left behind.",
+                _options.StagingDirectory);
+            return [];
+        }
+    }
+
+    /// <summary>
     /// Removes the copies a settled row left in staging, and updates each row to say what is still
     /// there.
     ///
@@ -501,7 +557,7 @@ public sealed class BackupModuleReconciler(
             remaining[item.SnapshotId] = RemainingStagingPath(attempts);
         }
 
-        foreach (var path in plan.RestorePaths)
+        foreach (var path in plan.LoosePaths)
         {
             if (ct.IsCancellationRequested) break;
             if (Sweep(path) is SweepResult.Removed) swept++;

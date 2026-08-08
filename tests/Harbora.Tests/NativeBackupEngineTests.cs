@@ -36,6 +36,7 @@ public sealed class NativeBackupEngineTests : IDisposable
     private readonly PassthroughProtector _protector = new();
     private readonly HarboraNativeBackupEngine _engine;
     private readonly BackupRepository _repositoryRow;
+    private readonly IOptions<BackupModuleOptions> _options;
 
     public NativeBackupEngineTests()
     {
@@ -59,23 +60,26 @@ public sealed class NativeBackupEngineTests : IDisposable
         _db.BackupRepositories.Add(_repositoryRow);
         _db.SaveChanges();
 
-        var options = Options.Create(new BackupModuleOptions
+        _options = Options.Create(new BackupModuleOptions
         {
             StagingDirectory = Path.Combine(_root, "staging"),
             RestoreRoot = Path.Combine(_root, "restore")
         });
 
-        _engine = new HarboraNativeBackupEngine(
-            _db,
-            new KeyedFileStorage(_repository),
-            new RepositoryCredentialReader(_db, _protector, NullLogger<RepositoryCredentialReader>.Instance),
-            new RepositoryDestinationFactory(_protector),
-            _protector,
-            options,
-            NullLogger<HarboraNativeBackupEngine>.Instance);
+        _engine = EngineWith(_protector);
     }
 
     // --- helpers ---------------------------------------------------------------------------
+
+    /// <summary>The same engine, over a protector a test can hold open mid-decrypt.</summary>
+    private HarboraNativeBackupEngine EngineWith(ISecretProtector protector) => new(
+        _db,
+        new KeyedFileStorage(_repository),
+        new RepositoryCredentialReader(_db, _protector, NullLogger<RepositoryCredentialReader>.Instance),
+        new RepositoryDestinationFactory(_protector),
+        protector,
+        _options,
+        NullLogger<HarboraNativeBackupEngine>.Instance);
 
     private void WriteSource(string relativePath, string content)
     {
@@ -327,6 +331,85 @@ public sealed class NativeBackupEngineTests : IDisposable
     }
 
     /// <summary>
+    /// Two reads of one snapshot must not name the same file.
+    ///
+    /// <para>
+    /// The decrypted copy used to be derived from the archive's own name, so a browse and a restore
+    /// of the same snapshot produced the same path — and both delete it in a <c>finally</c>. One
+    /// truncates or removes what the other is reading. Automatic verification made that pairing
+    /// reachable without anyone browsing: the check is queued the moment a backup finishes, on the
+    /// same page the restore is launched from.
+    /// </para>
+    /// <para>
+    /// Deterministic rather than timed. The gate holds the first read <i>inside</i> its decrypt, with
+    /// its output file open, and lets the second run to completion beside it — which is the exact
+    /// interleaving the race needs, and one that never happens by luck.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Two_reads_of_one_snapshot_do_not_share_a_decrypted_copy()
+    {
+        WriteSource("config.yml", "port: 8080");
+        var snapshot = await SnapshotAsync();
+        snapshot.Succeeded.Should().BeTrue(snapshot.Error);
+
+        var gate = new GatingProtector(_protector);
+        var engine = EngineWith(gate);
+
+        // Started on the pool: the engine runs synchronously as far as the gate, and blocking the
+        // test thread there would deadlock before the task was ever handed back.
+        var browse = Task.Run(() => engine.BrowseSnapshotAsync(
+            new BrowseSnapshotRequest(_repositoryRow.Id, snapshot.EngineSnapshotId!, "unused"), default));
+
+        await gate.FirstIsInside;
+
+        var destination = Path.Combine(_root, "beside-a-browse");
+        var restore = await engine.RestoreAsync(new RestoreBackupRequest(
+            _repositoryRow.Id, snapshot.EngineSnapshotId!, "unused", destination,
+            RestoreConflictStrategy.Overwrite, null), default);
+
+        restore.Succeeded.Should().BeTrue(
+            restore.Error ?? "a restore must not be blocked or corrupted by a check running beside it");
+        (await File.ReadAllTextAsync(Path.Combine(destination, "config.yml"))).Should().Be("port: 8080");
+
+        gate.ReleaseFirst();
+
+        var entries = await browse;
+        entries.Should().Contain(e => e.Name == "config.yml",
+            "and the check must still be able to read the copy it decrypted");
+    }
+
+    /// <summary>
+    /// And for a LOCAL repository the decrypted copy used to land in the repository itself, because
+    /// the fetch of a local artifact returns the artifact's own path and the target was derived from
+    /// it. Asserted <i>during</i> the read: the file is removed in a <c>finally</c>, so afterwards
+    /// the repository looks innocent either way.
+    /// </summary>
+    [Fact]
+    public async Task A_read_never_leaves_plaintext_beside_the_artifact()
+    {
+        WriteSource("secrets.env", "DATABASE_PASSWORD=hunter2");
+        var snapshot = await SnapshotAsync();
+        snapshot.Succeeded.Should().BeTrue(snapshot.Error);
+
+        var gate = new GatingProtector(_protector);
+        var engine = EngineWith(gate);
+
+        var browse = Task.Run(() => engine.BrowseSnapshotAsync(
+            new BrowseSnapshotRequest(_repositoryRow.Id, snapshot.EngineSnapshotId!, "unused"), default));
+
+        await gate.FirstIsInside;
+
+        // The decrypt is holding its output file open at this instant.
+        Directory.GetFiles(_repository, "*", SearchOption.AllDirectories)
+            .Should().OnlyContain(a => a.EndsWith(ArchiveCipher.Extension, StringComparison.Ordinal),
+                "a repository holds encrypted artifacts and nothing else, mid-read included");
+
+        gate.ReleaseFirst();
+        await browse;
+    }
+
+    /// <summary>
     /// Writes an archive the engine will accept but whose contents are hostile, straight into the
     /// repository — the shape of a snapshot taken from a volume an attacker could write into.
     /// </summary>
@@ -372,6 +455,44 @@ public sealed class NativeBackupEngineTests : IDisposable
 }
 
 /// <summary>
+/// Holds the FIRST caller inside <see cref="DeriveKey"/> until it is let go, and waves every later
+/// one straight through.
+///
+/// <para>
+/// <c>DeriveKey</c> is evaluated after the decrypt has opened its output file and before a byte is
+/// written to it, which makes it the one seam where a test can pin two reads of the same snapshot
+/// on top of each other on purpose. Keys are delegated, so both callers still read the same archive.
+/// </para>
+/// </summary>
+internal sealed class GatingProtector(ISecretProtector inner) : ISecretProtector
+{
+    private readonly TaskCompletionSource _inside =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private readonly ManualResetEventSlim _released = new(false);
+    private int _callers;
+
+    /// <summary>Completes once the first caller is holding its output file open.</summary>
+    public Task FirstIsInside => _inside.Task;
+
+    public void ReleaseFirst() => _released.Set();
+
+    public byte[] DeriveKey(string purpose)
+    {
+        if (Interlocked.Increment(ref _callers) == 1)
+        {
+            _inside.TrySetResult();
+            _released.Wait(TimeSpan.FromSeconds(30));
+        }
+
+        return inner.DeriveKey(purpose);
+    }
+
+    public string Protect(string plaintext) => inner.Protect(plaintext);
+    public string Unprotect(string ciphertext) => inner.Unprotect(ciphertext);
+}
+
+/// <summary>
 /// Storage that behaves like a real destination: the artifact is copied to a location derived from
 /// its key, and the caller's staging file is theirs to delete.
 ///
@@ -394,8 +515,11 @@ internal sealed class KeyedFileStorage(string root) : IBackupStorage
         return Task.FromResult((target, new FileInfo(target).Length));
     }
 
-    public Task<string> GetToLocalAsync(BackupDestination dest, string artifactRef, CancellationToken ct)
+    public Task<string> GetToLocalAsync(
+        BackupDestination dest, string artifactRef, CancellationToken ct, string? localFileName = null)
     {
+        // A local destination has nothing to download, so the artifact's own path comes back and the
+        // caller's preferred name is not used — exactly as BackupStorage behaves.
         var path = Path.IsPathRooted(artifactRef)
             ? artifactRef
             : Path.Combine(root, artifactRef.Replace('/', Path.DirectorySeparatorChar));

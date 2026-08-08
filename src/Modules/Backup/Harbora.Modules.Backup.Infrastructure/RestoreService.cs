@@ -312,6 +312,14 @@ public sealed class RestoreService(
                 job.SafetySnapshotRef = safety.Reference;
                 job.Progress = 40;
                 await db.SaveChangesAsync(ct);
+
+                // Checked like any other backup, and asked for HERE rather than inside the copy.
+                // This is the one snapshot whose readability is about to be relied on, so leaving it
+                // as the only unverified thing in the repository would be the wrong exception to
+                // make — but the reference to it is worth more than the check is, and the enqueue
+                // is the step that can fail. Recording where the way back is comes first, and the
+                // save above is what makes it durable. See BackupVerificationQueue.
+                await BackupVerificationQueue.RequestAsync(jobs, db, safety.SnapshotId, logger, ct);
             }
 
             var isDatabase = job.RestoreType is RestoreType.Database;
@@ -407,8 +415,22 @@ public sealed class RestoreService(
         }
     }
 
-    /// <summary>What one attempt at a pre-restore copy produced.</summary>
-    private sealed record SafetyCopy(bool Succeeded, string? Reference = null, string? Error = null);
+    /// <summary>
+    /// What one attempt at a pre-restore copy produced.
+    ///
+    /// <para>
+    /// The row id, not a formatted string, because the caller needs both: one to write onto
+    /// <c>RestoreJob.SafetySnapshotRef</c> and one to hand to the verifier.
+    /// </para>
+    /// </summary>
+    private sealed record SafetyCopy(bool Succeeded, Guid SnapshotId = default, string? Error = null)
+    {
+        /// <summary>
+        /// What goes on the row: the snapshot's own id. Not the engine handle — a reference an
+        /// operator cannot reach in the Backup Center is not a reference.
+        /// </summary>
+        public string Reference => SnapshotId.ToString();
+    }
 
     /// <summary>
     /// Copies what is at the destination into the repository before the restore overwrites it.
@@ -518,12 +540,10 @@ public sealed class RestoreService(
                 "Copied {Destination} aside as backup {SnapshotId} before restore {RestoreId}. [{Correlation}]",
                 job.Destination, snapshot.Id, job.Id, job.CorrelationId);
 
-            // Checked like any other backup. This is the one snapshot whose readability is about to
-            // be relied on, so leaving it as the only unverified thing in the repository would be
-            // the wrong exception to make.
-            await BackupVerificationQueue.RequestAsync(jobs, snapshot.Id, logger, ct);
-
-            return new SafetyCopy(true, snapshot.Id.ToString());
+            // The copy exists and is written down. Nothing else happens in here — the caller records
+            // where it is FIRST and asks for it to be verified afterwards, because those two are not
+            // worth the same and only one of them can fail.
+            return new SafetyCopy(true, snapshot.Id);
         }
         catch (OperationCanceledException)
         {
@@ -636,19 +656,32 @@ public sealed class RestoreService(
     /// engine's message can be long, and losing the pointer to the only copy of the previous
     /// contents is the one part of this sentence that must survive.
     /// </para>
+    /// <para>
+    /// The bound is then applied to the <b>result</b>, not to the reason. Trimming only the reason
+    /// is the preference — which half to sacrifice — and it was standing in for the guarantee, which
+    /// is that whatever is returned will save. A reference long enough to leave the reason no room
+    /// at all took the preference to zero and returned a suffix longer than the column, so the
+    /// method's one hard promise rested on <c>SafetySnapshotRef</c> happening to be short. It is
+    /// capped at 1024 characters and so it always is; that is a fact about another file.
+    /// </para>
     /// </summary>
     public static string WithTheWayBack(string reason, string? safetySnapshotRef)
     {
-        if (string.IsNullOrWhiteSpace(safetySnapshotRef))
-            return reason.Length > FailureReasonLimit ? reason[..FailureReasonLimit] : reason;
+        if (string.IsNullOrWhiteSpace(safetySnapshotRef)) return Clamp(reason);
 
         var suffix = " The destination as it was just before this restore started was copied to " +
                      $"backup {safetySnapshotRef}; restore from it in the Backup Center to put " +
                      "things back.";
 
         var room = FailureReasonLimit - suffix.Length;
-        return (reason.Length > room ? reason[..Math.Max(0, room)] : reason) + suffix;
+        var told = room <= 0 ? suffix : (reason.Length > room ? reason[..room] : reason) + suffix;
+
+        return Clamp(told);
     }
+
+    /// <summary>The column is the authority; nothing leaves here longer than it.</summary>
+    private static string Clamp(string reason) =>
+        reason.Length > FailureReasonLimit ? reason[..FailureReasonLimit] : reason;
 
     public Task<List<RestoreJob>> ListAsync(int take, CancellationToken ct) =>
         db.RestoreJobs.AsNoTracking().OrderByDescending(r => r.CreatedAt).Take(take).ToListAsync(ct);
