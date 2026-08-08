@@ -216,6 +216,13 @@ public static class DependencyInjection
         services.AddScoped<Maintenance.DiskCleanupService>();
         services.AddScoped<Notifications.PlatformMailer>();
         services.AddHostedService<Maintenance.UpdateCheckService>();
+        // Bounds the seven tables that had no retention at all — build logs first among them. A
+        // nightly timer, and so deliberately BELOW JobStartupGateOpener: it is not a startup
+        // reconciler, it settles nothing the job worker is waiting on, and putting a delete pass on
+        // the boot path would hold the worker behind it for no benefit.
+        services.Configure<Maintenance.RetentionOptions>(
+            config.GetSection(Maintenance.RetentionOptions.SectionName));
+        services.AddHostedService<Maintenance.DataRetentionSweeper>();
         services.AddScoped<Services.AdminerService>();
         services.AddHostedService<Services.AdminerSweeper>();
 

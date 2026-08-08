@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using FluentAssertions;
 using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Jobs;
+using Harbora.Infrastructure.Maintenance;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -86,5 +87,62 @@ public class DependencyInjectionTests
             .GetRequiredService<IOptions<JobQueueOptions>>().Value;
 
         unconfigured.MaxConcurrency.Should().Be(JobQueueOptions.DefaultMaxConcurrency);
+    }
+
+    [Fact]
+    public void The_retention_sweeper_starts_after_the_gate_because_it_is_not_a_startup_reconciler()
+    {
+        // It runs on a nightly timer and settles nothing the job worker is waiting on. Registering
+        // it above the opener would put a delete pass on the boot path for no benefit, and would
+        // hold up the worker behind it.
+        var hostedServices = BuildServices()
+            .Where(d => d.ServiceType == typeof(IHostedService))
+            .Select(d => d.ImplementationType)
+            .ToList();
+
+        var sweeperIndex = hostedServices.IndexOf(typeof(DataRetentionSweeper));
+        var openerIndex = hostedServices.IndexOf(typeof(JobStartupGateOpener));
+
+        sweeperIndex.Should().BeGreaterThan(-1, "the sweeper must be registered as a hosted service at all");
+        sweeperIndex.Should().BeGreaterThan(openerIndex,
+            "a timer-driven sweeper is not a startup reconciler and belongs below the gate opener");
+    }
+
+    [Fact]
+    public void Every_retention_cutoff_is_readable_from_configuration()
+    {
+        // "An operator can see and change every cutoff" is the acceptance criterion, and an option
+        // bound to the wrong section is a knob that turns and does nothing.
+        var configured = BuildServices(
+                ("Retention:DeploymentLogDays", "30"),
+                ("Retention:AuditLogDays", "2555"),
+                ("Retention:CronRunDays", "14"),
+                ("Retention:NodeCommandDays", "45"),
+                ("Retention:NodeEventDays", "45"),
+                ("Retention:PasswordResetTokenDays", "3"))
+            .BuildServiceProvider()
+            .GetRequiredService<IOptions<RetentionOptions>>().Value;
+
+        configured.DeploymentLogDays.Should().Be(30);
+        configured.AuditLogDays.Should().Be(2555);
+        configured.CronRunDays.Should().Be(14);
+        configured.NodeCommandDays.Should().Be(45);
+        configured.NodeEventDays.Should().Be(45);
+        configured.PasswordResetTokenDays.Should().Be(3);
+    }
+
+    [Fact]
+    public void An_install_that_says_nothing_about_retention_gets_the_shipped_defaults()
+    {
+        var unconfigured = BuildServices()
+            .BuildServiceProvider()
+            .GetRequiredService<IOptions<RetentionOptions>>().Value;
+
+        unconfigured.DeploymentLogDays.Should().Be(90);
+        unconfigured.AuditLogDays.Should().Be(365);
+        unconfigured.CronRunDays.Should().Be(90);
+        unconfigured.NodeCommandDays.Should().Be(90);
+        unconfigured.NodeEventDays.Should().Be(90);
+        unconfigured.PasswordResetTokenDays.Should().Be(7);
     }
 }

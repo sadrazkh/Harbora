@@ -1,0 +1,252 @@
+using FluentAssertions;
+using Harbora.Application.Abstractions;
+using Harbora.Data;
+using Harbora.Domain.Apps;
+using Harbora.Domain.Auditing;
+using Harbora.Domain.Common;
+using Harbora.Domain.Deployments;
+using Harbora.Domain.Identity;
+using Harbora.Domain.Nodes;
+using Harbora.Infrastructure.Maintenance;
+using Harbora.NodeAgent.Contracts;
+using Harbora.Tests.Fakes;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Xunit;
+
+namespace Harbora.Tests;
+
+/// <summary>
+/// The nightly sweeper that keeps the seven unbounded tables bounded (HARBORA-0012).
+///
+/// <para>
+/// Every clock here is fixed. A retention test that slept would be testing the scheduler, which is
+/// the one part of this that has no decisions in it.
+/// </para>
+/// </summary>
+public class DataRetentionSweeperTests
+{
+    private static readonly DateTimeOffset Now = new(2026, 8, 8, 3, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
+    /// Throws for exactly one entity type, the way a table with a lock or a broken index would.
+    /// Everything else behaves normally, which is the point: the other six tables must still be
+    /// swept. Armed after seeding, so the fixture itself can still be written.
+    /// </summary>
+    private sealed class OneBadTableDbContext(DbContextOptions<HarboraDbContext> options, Type broken)
+        : HarboraDbContext(options)
+    {
+        public bool Armed { get; set; }
+
+        public override DbSet<TEntity> Set<TEntity>() =>
+            Armed && typeof(TEntity) == broken
+                ? throw new InvalidOperationException("relation is locked")
+                : base.Set<TEntity>();
+    }
+
+    private static DbContextOptions<HarboraDbContext> NewOptions() =>
+        new DbContextOptionsBuilder<HarboraDbContext>()
+            .UseInMemoryDatabase("retention-" + Guid.NewGuid()).Options;
+
+    private static DataRetentionSweeper NewSweeper(
+        HarboraDbContext db, RetentionOptions? options = null, DateTimeOffset? now = null)
+    {
+        // Registered as a singleton instance so the scope the sweeper opens does not dispose the
+        // context the test is still holding. The sweeper resolves it exactly as it does in
+        // production — through a scope from IServiceScopeFactory.
+        var services = new ServiceCollection();
+        services.AddSingleton(db);
+        var provider = services.BuildServiceProvider();
+
+        return new DataRetentionSweeper(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            Options.Create(options ?? new RetentionOptions()),
+            new FixedClock(now ?? Now),
+            NullLogger<DataRetentionSweeper>.Instance);
+    }
+
+    /// <summary>
+    /// One row per table on each side of its own cutoff. Seeded through a system-scoped context so
+    /// the fixture itself is never the thing the workspace filter hides.
+    /// </summary>
+    private static async Task SeedBothSidesAsync(HarboraDbContext db, Guid workspaceId)
+    {
+        var oldDeployment = Guid.NewGuid();
+        var newDeployment = Guid.NewGuid();
+
+        db.DeploymentLogs.AddRange(
+            new DeploymentLog { DeploymentId = oldDeployment, Message = "old", Timestamp = Now.AddDays(-91) },
+            new DeploymentLog { DeploymentId = newDeployment, Message = "new", Timestamp = Now.AddDays(-89) });
+
+        db.AuditLogs.AddRange(
+            new AuditLog { Action = "user.login", CreatedAt = Now.AddDays(-366) },
+            new AuditLog { Action = "user.login", CreatedAt = Now.AddDays(-364) });
+
+        db.CronRuns.AddRange(
+            new CronRun { WorkspaceId = workspaceId, AppId = Guid.NewGuid(), StartedAt = Now.AddDays(-92), FinishedAt = Now.AddDays(-91) },
+            new CronRun { WorkspaceId = workspaceId, AppId = Guid.NewGuid(), StartedAt = Now.AddDays(-90), FinishedAt = Now.AddDays(-89) });
+
+        db.NodeCommands.AddRange(
+            new NodeCommandRecord
+            {
+                NodeId = "node-1", CommandId = "c-old", Command = NodeCommands.DeployWorkload,
+                IdempotencyKey = "k-old", Status = NodeCommandStatus.Succeeded, IssuedAt = Now.AddDays(-91)
+            },
+            new NodeCommandRecord
+            {
+                NodeId = "node-1", CommandId = "c-new", Command = NodeCommands.DeployWorkload,
+                IdempotencyKey = "k-new", Status = NodeCommandStatus.Succeeded, IssuedAt = Now.AddDays(-89)
+            });
+
+        db.NodeEvents.AddRange(
+            new NodeEventRecord { NodeId = "node-1", Kind = "DiskPressure", At = Now.AddDays(-91) },
+            new NodeEventRecord { NodeId = "node-1", Kind = "DiskPressure", At = Now.AddDays(-89) });
+
+        db.IdempotencyRecords.AddRange(
+            new IdempotencyRecord { WorkspaceId = workspaceId, Key = "old", Endpoint = "e", ExpiresAt = Now.AddMinutes(-1) },
+            new IdempotencyRecord { WorkspaceId = workspaceId, Key = "new", Endpoint = "e", ExpiresAt = Now.AddMinutes(1) });
+
+        db.PasswordResetTokens.AddRange(
+            new PasswordResetToken { UserId = Guid.NewGuid(), TokenHash = "old", ExpiresAt = Now.AddDays(-8) },
+            new PasswordResetToken { UserId = Guid.NewGuid(), TokenHash = "new", ExpiresAt = Now.AddMinutes(30) });
+
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task Every_table_loses_its_rows_past_the_cutoff_and_keeps_the_rest()
+    {
+        using var db = new HarboraDbContext(NewOptions());
+        await SeedBothSidesAsync(db, Guid.NewGuid());
+
+        var result = await NewSweeper(db).SweepAsync(CancellationToken.None);
+
+        result.Failures.Should().BeEmpty();
+
+        db.DeploymentLogs.Should().ContainSingle().Which.Message.Should().Be("new");
+        db.AuditLogs.Should().ContainSingle().Which.CreatedAt.Should().Be(Now.AddDays(-364));
+        db.CronRuns.IgnoreQueryFilters().Should().ContainSingle()
+            .Which.FinishedAt.Should().Be(Now.AddDays(-89));
+        db.NodeCommands.Should().ContainSingle().Which.CommandId.Should().Be("c-new");
+        db.NodeEvents.Should().ContainSingle().Which.At.Should().Be(Now.AddDays(-89));
+        db.IdempotencyRecords.IgnoreQueryFilters().Should().ContainSingle().Which.Key.Should().Be("new");
+        db.PasswordResetTokens.Should().ContainSingle().Which.TokenHash.Should().Be("new");
+
+        // Seven tables, one row each — and the sweep says so, rather than reporting a bare total
+        // that could hide a table it never reached.
+        result.Deleted.Should().HaveCount(7);
+        result.Deleted.Values.Should().AllSatisfy(n => n.Should().Be(1));
+        result.TotalDeleted.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task A_table_that_throws_does_not_stop_the_others()
+    {
+        // The failure this is really about: one locked or corrupt table silently ending the sweep,
+        // so six tables grow forever and the logs mention only the seventh.
+        using var db = new OneBadTableDbContext(NewOptions(), typeof(NodeEventRecord));
+        await SeedBothSidesAsync(db, Guid.NewGuid());
+        db.Armed = true;
+
+        var result = await NewSweeper(db).SweepAsync(CancellationToken.None);
+        db.Armed = false;
+
+        result.Failures.Should().ContainKey(RetentionTables.NodeEvents);
+        result.Failures[RetentionTables.NodeEvents].Should().Contain("relation is locked");
+
+        // The other six still ran.
+        result.Deleted.Should().HaveCount(6);
+        result.Deleted.Should().NotContainKey(RetentionTables.NodeEvents);
+        db.DeploymentLogs.Should().ContainSingle();
+        db.AuditLogs.Should().ContainSingle();
+        db.CronRuns.IgnoreQueryFilters().Should().ContainSingle();
+        db.NodeCommands.Should().ContainSingle();
+        db.IdempotencyRecords.IgnoreQueryFilters().Should().ContainSingle();
+        db.PasswordResetTokens.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task A_table_set_to_keep_forever_is_left_alone_and_says_so()
+    {
+        using var db = new HarboraDbContext(NewOptions());
+        await SeedBothSidesAsync(db, Guid.NewGuid());
+
+        var result = await NewSweeper(db, new RetentionOptions { AuditLogDays = 0 })
+            .SweepAsync(CancellationToken.None);
+
+        db.AuditLogs.Should().HaveCount(2);
+        result.Deleted.Should().NotContainKey(RetentionTables.AuditLogs);
+        result.KeptForever.Should().Contain(RetentionTables.AuditLogs);
+    }
+
+    [Fact]
+    public async Task The_sweep_reaches_every_tenant_even_from_a_workspace_scoped_context()
+    {
+        // The trap this codebase has paid for repeatedly: a filtered read from a sessionless path
+        // finds nothing, deletes nothing, and reports a clean pass. CronRun and IdempotencyRecord
+        // are the two swept tables that carry a workspace filter.
+        var tenant = Guid.NewGuid();
+        var someoneElse = new FixedWorkspaceScope(Guid.NewGuid());
+
+        using var db = new HarboraDbContext(NewOptions(), someoneElse);
+        await SeedBothSidesAsync(db, tenant);
+
+        var result = await NewSweeper(db).SweepAsync(CancellationToken.None);
+
+        result.Deleted[RetentionTables.CronRuns].Should().Be(1);
+        result.Deleted[RetentionTables.IdempotencyRecords].Should().Be(1);
+        db.CronRuns.IgnoreQueryFilters().Should().ContainSingle();
+        db.IdempotencyRecords.IgnoreQueryFilters().Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task The_logs_of_a_running_build_survive_however_old_the_cutoff_makes_them()
+    {
+        using var db = new HarboraDbContext(NewOptions());
+
+        var building = new Deployment
+        {
+            Id = Guid.NewGuid(), AppId = Guid.NewGuid(), WorkspaceId = Guid.NewGuid(),
+            Number = 1, Status = DeploymentStatus.Building
+        };
+        db.Deployments.Add(building);
+        db.DeploymentLogs.Add(new DeploymentLog
+        {
+            DeploymentId = building.Id, Message = "still building", Timestamp = Now.AddDays(-400)
+        });
+        await db.SaveChangesAsync();
+
+        await NewSweeper(db).SweepAsync(CancellationToken.None);
+
+        db.DeploymentLogs.Should().ContainSingle().Which.Message.Should().Be("still building");
+    }
+
+    [Fact]
+    public async Task The_logs_of_the_release_an_app_is_running_survive()
+    {
+        using var db = new HarboraDbContext(NewOptions());
+
+        var deploymentId = Guid.NewGuid();
+        var workspaceId = Guid.NewGuid();
+        db.Deployments.Add(new Deployment
+        {
+            Id = deploymentId, AppId = Guid.NewGuid(), WorkspaceId = workspaceId,
+            Number = 1, Status = DeploymentStatus.Succeeded
+        });
+        db.Apps.Add(new App
+        {
+            Name = "shop", Slug = "shop", WorkspaceId = workspaceId, ActiveDeploymentId = deploymentId
+        });
+        db.DeploymentLogs.Add(new DeploymentLog
+        {
+            DeploymentId = deploymentId, Message = "what is running now", Timestamp = Now.AddDays(-400)
+        });
+        await db.SaveChangesAsync();
+
+        await NewSweeper(db).SweepAsync(CancellationToken.None);
+
+        db.DeploymentLogs.Should().ContainSingle().Which.Message.Should().Be("what is running now");
+    }
+}
