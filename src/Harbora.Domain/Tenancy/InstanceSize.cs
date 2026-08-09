@@ -28,6 +28,18 @@ public class InstanceSize : BaseEntity
     /// </summary>
     public long DiskBytes { get; set; }
 
+    /// <summary>
+    /// What one hour of this size costs while it is running, in minor units. Zero means free, which
+    /// is what every size built before billing existed reads as until somebody prices it.
+    /// </summary>
+    public long RunningRatePerHourMinor { get; set; }
+
+    /// <summary>
+    /// What one hour costs while the workload is stopped but not deleted — the reserved slot, the
+    /// image and the port. Disk is charged separately per gibibyte, so this is only the slot.
+    /// </summary>
+    public long StoppedRatePerHourMinor { get; set; }
+
     public bool IsBuiltIn { get; set; }
     public bool IsEnabled { get; set; } = true;
     public int SortOrder { get; set; }
