@@ -1662,6 +1662,27 @@ through the code.
 - [ ] **Step 5: Audit the change.** Price changes are the most disputable thing an admin does. Follow
   the auditing pattern already used by the surrounding admin actions.
 
+- [ ] **Step 6: Decide what to do about the three overage rate columns, and do it.** Task 7 found
+  that `Plan.OverageCpuCoreHourMinor`, `OverageMemoryGbHourMinor` and `OverageDiskGbHourMinor` are
+  read by **nothing**. When a workspace exceeds a cap with `AllowsOverage` on, the excess is charged
+  at the ordinary per-resource meter, so a plan with all three blank still bills correctly.
+
+  That leaves three columns that look like prices and set none. Putting them on your admin form as
+  if they worked would be the worst outcome available — an operator would set a burst price, see it
+  saved, and be charged nothing extra for ever, with every tick reporting success.
+
+  You own the rate surface, so you decide. Either:
+  - **wire them**, so the excess above a cap is charged at the overage rate rather than the ordinary
+    one — a real feature, and more than a form field, because the tick has to know which portion of a
+    resource's hour is over the cap; or
+  - **remove them.** They have never shipped: this branch is unmerged and no database has them. The
+    agreed model is that a customer pays the ordinary meter for what they run, which does not need a
+    second rate. Removing them is the smaller, more honest change.
+
+  My leaning is removal, on YAGNI — but you have read the surrounding code more recently than I have.
+  Argue whichever you pick. What is not acceptable is leaving them present and unread, or surfacing
+  them in the UI without wiring them.
+
 ### Task 9: Warn before the lights go out
 
 **Files:**
