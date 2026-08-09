@@ -1520,6 +1520,48 @@ MSG
 
 ---
 
+### Task 8b: An admin can actually set the prices
+
+**Added after Task 2, which found the gap. Dispatch after Task 8 and before Task 9.**
+
+Task 2 gave `Plan` five rate columns and `InstanceSize` two. Nothing in Tasks 1–10 as originally
+written ever sets one. `PlansController.CreatePlan` and `CreateSize` take explicit scalar parameter
+lists — not model binding — and neither list mentions a rate, so the columns are unreachable from
+the admin UI and every one of them stays `0`.
+
+Follow that through: the tick runs hourly, every rate resolves to zero, Task 3 drops zero-value
+lines, the ledger stays empty, no balance ever moves, nobody is ever suspended, and every run
+reports success. The feature would ship charging nobody and saying it worked — the failure this
+whole codebase has spent two phases learning to recognise, arrived at through the plan rather than
+through the code.
+
+**Files:**
+- Modify: `src/Harbora.Web/Controllers/PlansController.cs`
+- Modify: the plan and size forms under `src/Harbora.Web/Views/Plans/`
+- Test: `tests/Harbora.Tests/Billing/RateAdminTests.cs`
+
+- [ ] **Step 1: Write the failing test.** A rate set through the controller action must come back
+  from the database. Assert on all seven columns — five on `Plan`, two on `InstanceSize` — because a
+  parameter list that silently omits one is exactly how this gap was created. The test must name the
+  columns explicitly rather than looping over reflection, so adding an eighth rate later fails loudly
+  instead of being quietly uncovered.
+
+- [ ] **Step 2: Extend both parameter lists and both forms.** Money is entered by a person, so accept
+  it in major units in the form and convert once at the boundary to `long` minor units; do not put a
+  `decimal` on the entity. Note `CreatePlan` already takes a `decimal monthlyPrice` — that is
+  pre-existing display pricing, unrelated to these rates. Leave it alone and do not follow its
+  pattern.
+
+- [ ] **Step 3: Refuse a negative rate**, and say so in the form rather than storing it. A negative
+  rate is a machine that pays customers to run workloads.
+
+- [ ] **Step 4: A rate of zero must remain expressible and must mean free**, not "unset" — an
+  operator may legitimately want a free tier. Confirm Task 3's zero-line dropping still reads as
+  "this line costs nothing" and not as "this rate is missing", and say in your report which it is.
+
+- [ ] **Step 5: Audit the change.** Price changes are the most disputable thing an admin does. Follow
+  the auditing pattern already used by the surrounding admin actions.
+
 ### Task 9: Warn before the lights go out
 
 **Files:**
