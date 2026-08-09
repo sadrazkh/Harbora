@@ -12,12 +12,13 @@ public sealed record UpgradedInstall(string ConnectionString);
 /// install could be carrying, migrated the rest of the way.
 ///
 /// <para>
-/// Three of the four migrations on these branches contain hand-written SQL, and until this lane
-/// existed none of it had been executed anywhere. Two of them are not additive in the way a column
-/// is: they <b>change rows</b>, and one of them has to, because the <c>CREATE UNIQUE INDEX</c> that
-/// follows would otherwise fail and leave the panel unable to boot. What follows is the set of rows
-/// that reaches every branch of every one of those statements — the ones that must be changed, and,
-/// just as importantly, the ones that must be left alone.
+/// Three of the seven migrations on these branches contain hand-written SQL, and until this lane
+/// existed none of it had been executed anywhere. All three <b>change rows</b> rather than being
+/// additive in the way a column is; one has to, because the <c>CREATE UNIQUE INDEX</c> that follows
+/// would otherwise fail and leave the panel unable to boot, and one has to because the migration
+/// before it filled a price column with a zero that would read as a decision. What follows is the
+/// set of rows that reaches every branch of every one of those statements — the ones that must be
+/// changed, and, just as importantly, the ones that must be left alone.
 /// </para>
 ///
 /// <para>
@@ -77,6 +78,31 @@ internal static class UpgradeFromPreviousRelease
         await SeedDeploymentQueueAsync(seed);
         await SeedBackupSnapshotsAsync(seed);
         await SeedRestoreJobsAsync(seed);
+        await SeedTenancyPricingAsync(seed);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // BillingRatesNullable — UPDATE … SET "…Minor" = NULLIF("…Minor", 0)
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A plan and a size that were on the install before billing existed, so neither can carry a
+    /// price. What makes them worth seeding is what happens to them on the way across:
+    /// <c>BillingRates</c> adds the seven columns as <c>NOT NULL DEFAULT 0</c>, which writes a zero
+    /// into both of these rows, and <c>BillingRatesNullable</c> then has to turn those zeros back
+    /// into nulls. Without that statement an upgraded install arrives with every plan and every tier
+    /// priced at zero — which now reads as <i>deliberately free</i> — and nothing downstream has any
+    /// way to know it was never asked.
+    /// </summary>
+    private static async Task SeedTenancyPricingAsync(SchemaSeed seed)
+    {
+        await seed.InsertAsync("Plans",
+            ("Id", Seeded.PlanCarriedAcross), ("Name", "carried"), ("NameFa", "carried"),
+            ("CreatedAt", BeforeTheUpgrade), ("UpdatedAt", BeforeTheUpgrade));
+
+        await seed.InsertAsync("InstanceSizes",
+            ("Id", Seeded.SizeCarriedAcross), ("Key", "carried"), ("Name", "carried"), ("NameFa", "carried"),
+            ("CreatedAt", BeforeTheUpgrade), ("UpdatedAt", BeforeTheUpgrade));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -364,6 +390,9 @@ internal static class UpgradeFromPreviousRelease
         public static readonly Guid CompletedRestoreWithAnOverLongDestination = new("60000000-0000-0000-0000-000000000052");
         public static readonly Guid RestoreAtExactlyTheBound = new("60000000-0000-0000-0000-000000000053");
         public static readonly Guid RestoreOneCharacterPastTheBound = new("60000000-0000-0000-0000-000000000054");
+
+        public static readonly Guid PlanCarriedAcross = new("70000000-0000-0000-0000-000000000001");
+        public static readonly Guid SizeCarriedAcross = new("70000000-0000-0000-0000-000000000002");
     }
 }
 

@@ -33,8 +33,16 @@ public class Plan : BaseEntity
     /// <summary>
     /// The floor. A workspace on this plan pays at least this much per hour, whatever it is running
     /// — including nothing. <see cref="MonthlyPrice"/> is unrelated and remains display-only.
+    ///
+    /// <para>
+    /// <b>Null means nobody has priced this plan; zero means it has no floor on purpose.</b> Every
+    /// rate on this class reads that way, and it is the opposite of the convention the caps above
+    /// follow, where zero means unlimited. A cap left blank is a decision not to cap; a price left
+    /// blank is not a decision to charge nothing. The two look identical in a column of zeros, and
+    /// the difference is a bill nobody sends.
+    /// </para>
     /// </summary>
-    public long BaseRatePerHourMinor { get; set; }
+    public long? BaseRatePerHourMinor { get; set; }
 
     /// <summary>
     /// Whether this plan sells capacity past its own caps. False keeps today's behaviour, where
@@ -44,24 +52,29 @@ public class Plan : BaseEntity
 
     /// <summary>
     /// Charged per core-hour beyond <see cref="MaxCpuCores"/>. Only read when
-    /// <see cref="AllowsOverage"/>.
+    /// <see cref="AllowsOverage"/>. Null is unpriced; see <see cref="BaseRatePerHourMinor"/>.
+    /// A plan that sells overage without pricing it gives the capacity away, which is the exact
+    /// shape this nullability exists to make visible.
     /// </summary>
-    public long OverageCpuCoreHourMinor { get; set; }
+    public long? OverageCpuCoreHourMinor { get; set; }
 
     /// <summary>
     /// Charged per gibibyte-hour beyond <see cref="MaxMemoryBytes"/>. Only read when
-    /// <see cref="AllowsOverage"/>.
+    /// <see cref="AllowsOverage"/>. Null is unpriced; see <see cref="BaseRatePerHourMinor"/>.
     /// </summary>
-    public long OverageMemoryGbHourMinor { get; set; }
+    public long? OverageMemoryGbHourMinor { get; set; }
 
     /// <summary>
     /// Charged per gibibyte-hour beyond <see cref="MaxDiskBytes"/>. Only read when
-    /// <see cref="AllowsOverage"/>.
+    /// <see cref="AllowsOverage"/>. Null is unpriced; see <see cref="BaseRatePerHourMinor"/>.
     /// </summary>
-    public long OverageDiskGbHourMinor { get; set; }
+    public long? OverageDiskGbHourMinor { get; set; }
 
-    /// <summary>Charged per gibibyte-hour of allocated volume, inside the caps as well as past them.</summary>
-    public long DiskGbHourMinor { get; set; }
+    /// <summary>
+    /// Charged per gibibyte-hour of allocated volume, inside the caps as well as past them.
+    /// Null is unpriced; see <see cref="BaseRatePerHourMinor"/>.
+    /// </summary>
+    public long? DiskGbHourMinor { get; set; }
 
     public bool IsDefault { get; set; }
     public bool IsEnabled { get; set; } = true;

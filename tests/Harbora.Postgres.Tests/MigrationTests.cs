@@ -13,8 +13,8 @@ namespace Harbora.Postgres.Tests;
 /// <para>
 /// <c>MigrationConsistencyTests</c> in the fast suite already proves the model and the snapshot
 /// agree. What it cannot prove is that the statements run: it never opens a connection. Sixty-odd
-/// migrations had never been executed against a PostgreSQL by anything in this repository, and the
-/// four newest carry hand-written SQL.
+/// migrations had never been executed against a PostgreSQL by anything in this repository, and
+/// three of the newest carry hand-written SQL.
 /// </para>
 /// </summary>
 [Collection(PostgresLane.Collection)]
