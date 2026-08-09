@@ -290,8 +290,15 @@ And in `OnModelCreating`, beside the other entity blocks:
             // same double-charge this index exists to prevent, arriving through the one line with no
             // resource behind it. Credit and Adjustment are made by a person and may legitimately
             // repeat within an hour, so they are outside the filter.
+            //
+            // PlanMinimumTopUp rows carry a null ResourceId by design (BilledResourceType.PlanBase's
+            // doc comment) — there is no resource behind that line. Postgres's default treats two
+            // NULLs as distinct, which would let a retried tick write the plan-minimum line twice
+            // right through this index. AreNullsDistinct(false) closes that: NULLS NOT DISTINCT
+            // (PG15+) makes the two NULL ResourceIds collide like any other equal value.
             e.HasIndex(x => new { x.WorkspaceId, x.ResourceType, x.ResourceId, x.BillingHour })
                 .IsUnique()
+                .AreNullsDistinct(false)
                 .HasFilter("\"Kind\" IN (0, 2)");
         });
 ```

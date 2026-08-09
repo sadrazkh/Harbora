@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    [Migration("20260809140708_Billing")]
+    [Migration("20260809144722_Billing")]
     partial class Billing
     {
         /// <inheritdoc />
@@ -1086,6 +1086,8 @@ namespace Harbora.Data.Migrations
                     b.HasIndex("WorkspaceId", "ResourceType", "ResourceId", "BillingHour")
                         .IsUnique()
                         .HasFilter("\"Kind\" IN (0, 2)");
+
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("WorkspaceId", "ResourceType", "ResourceId", "BillingHour"), false);
 
                     b.ToTable("BillingLedger");
                 });

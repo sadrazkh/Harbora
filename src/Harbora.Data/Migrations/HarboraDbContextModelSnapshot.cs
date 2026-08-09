@@ -1084,6 +1084,8 @@ namespace Harbora.Data.Migrations
                         .IsUnique()
                         .HasFilter("\"Kind\" IN (0, 2)");
 
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("WorkspaceId", "ResourceType", "ResourceId", "BillingHour"), false);
+
                     b.ToTable("BillingLedger");
                 });
 

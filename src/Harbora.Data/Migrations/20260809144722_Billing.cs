@@ -69,7 +69,8 @@ namespace Harbora.Data.Migrations
                 table: "BillingLedger",
                 columns: new[] { "WorkspaceId", "ResourceType", "ResourceId", "BillingHour" },
                 unique: true,
-                filter: "\"Kind\" IN (0, 2)");
+                filter: "\"Kind\" IN (0, 2)")
+                .Annotation("Npgsql:NullsDistinct", false);
 
             migrationBuilder.CreateIndex(
                 name: "IX_Wallets_WorkspaceId",
