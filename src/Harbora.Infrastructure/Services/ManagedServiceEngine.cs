@@ -1,4 +1,4 @@
-﻿using Harbora.Application.Abstractions;
+using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Services;
@@ -13,12 +13,23 @@ namespace Harbora.Infrastructure.Services;
 /// <summary>
 /// Provisions backing services as containers on the shared Harbora network. Credentials live
 /// encrypted in the DB; the container gets the plaintext only through its seed env on first boot.
+///
+/// <para>
+/// A managed database is a workload the platform charges for — the hourly tick bills its disk by
+/// the gibibyte — so the two methods that leave one running ask <see cref="IBillingGate"/> first.
+/// This is the path the plan for pay-as-you-go did not name: five call sites queue a provision
+/// (the database form, its rebuild button, a template stack, an environment clone) and one starts a
+/// stopped database by hand, and none of them checked anything about money. A suspended workspace
+/// could create a Postgres, rebuild it, and start it again after the suspension had stopped its
+/// apps.
+/// </para>
 /// </summary>
 public sealed class ManagedServiceEngine(
     HarboraDbContext db,
     IServerEngineFactory engineFactory,
     ISecretProtector protector,
     IJobQueue jobs,
+    IBillingGate billing,
     IOptions<HarboraRuntimeOptions> options,
     ISystemClock clock,
     ILogger<ManagedServiceEngine> logger) : IManagedServiceEngine
@@ -41,6 +52,20 @@ public sealed class ManagedServiceEngine(
     {
         var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == serviceId, ct);
         if (svc is null) return;
+
+        // Asked here and not only where the provision was queued. The queue is durable, so a request
+        // can be claimed long after it was made — by which time the balance that paid for it may be
+        // gone. Reported the way every other provision failure is reported, so a database that will
+        // not appear says Failed on the screen rather than Provisioning for ever.
+        var mayStart = await billing.CanStartAsync(svc.WorkspaceId, ct);
+        if (!mayStart.Allowed)
+        {
+            svc.Status = ServiceStatus.Failed;
+            await db.SaveChangesAsync(CancellationToken.None);
+            logger.LogWarning("{Svc} was not provisioned: {Reason}", svc.Name, mayStart.Reason);
+            return;
+        }
+
         var def = ServiceCatalog.All[svc.Type];
         var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
 
@@ -176,6 +201,13 @@ public sealed class ManagedServiceEngine(
     public async Task StartAsync(Guid serviceId, CancellationToken ct)
     {
         var svc = await db.ManagedServices.FirstAsync(s => s.Id == serviceId, ct);
+
+        // Throws rather than returning, for the reason AppOperationsService states at length: the
+        // two lines below write Running, and a start that reports success without starting anything
+        // hands the hourly tick an hour to bill for a container that is not there.
+        var mayStart = await billing.CanStartAsync(svc.WorkspaceId, ct);
+        if (!mayStart.Allowed) throw new InvalidOperationException(mayStart.Reason);
+
         var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
         var id = await FindContainerIdAsync(docker, svc.ContainerName, ct);
         if (id is not null) await docker.RestartContainerAsync(id, ct); // restart starts a stopped container

@@ -1061,7 +1061,15 @@ public sealed class AppsController(
     public async Task<IActionResult> Restart(Guid id, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
-        await ops.RestartAsync(id, ct);
+        try { await ops.RestartAsync(id, ct); }
+        catch (InvalidOperationException ex)
+        {
+            // The billing gate refusing a workspace with no balance, in the same shape this
+            // controller already uses for a rollback that cannot be coalesced: the reason where a
+            // quota refusal appears, rather than a 500 for a decision the platform made on purpose.
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
         TempData["Message"] = "Restarted.";
         return RedirectToAction(nameof(Details), new { id });
     }
@@ -1083,7 +1091,12 @@ public sealed class AppsController(
     public async Task<IActionResult> Start(Guid id, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
-        await ops.StartAsync(id, ct);
+        try { await ops.StartAsync(id, ct); }
+        catch (InvalidOperationException ex)
+        {
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
         TempData["Message"] = "Started.";
         return RedirectToAction(nameof(Details), new { id });
     }

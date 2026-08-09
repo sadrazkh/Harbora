@@ -1,4 +1,4 @@
-﻿using Harbora.Application.Abstractions;
+using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
@@ -7,16 +7,29 @@ using Microsoft.Extensions.Logging;
 
 namespace Harbora.Infrastructure.Deployments;
 
-/// <summary>Container lifecycle + logs for an app, routed to the app's server engine.</summary>
+/// <summary>
+/// Container lifecycle + logs for an app, routed to the app's server engine.
+///
+/// <para>
+/// The two verbs that leave a container running ask <see cref="IBillingGate"/> first, and they ask
+/// it here rather than at the button. This is the single place an app's status is written, so a
+/// second caller — the resume after a top-up already is one, and an admin tool or a recovery
+/// command would be the next — cannot start an app without going past it. Stopping, deleting and
+/// reading logs are not gated: a workspace with no balance must still be able to put things down
+/// and take them away.
+/// </para>
+/// </summary>
 public sealed class AppOperationsService(
     HarboraDbContext db,
     IServerEngineFactory engineFactory,
     IProxyEngine proxy,
+    IBillingGate billing,
     HostPortAllocator hostPorts,
     ILogger<AppOperationsService> logger) : IAppOperationsService
 {
     public async Task RestartAsync(Guid appId, CancellationToken ct)
     {
+        await RefuseIfUnpaidAsync(appId, ct);
         var (app, docker, id) = await ResolveAsync(appId, ct);
         if (id is not null) await docker.RestartContainerAsync(id, ct);
         await SetStatusAsync(app, AppStatus.Running, ct);
@@ -24,9 +37,43 @@ public sealed class AppOperationsService(
 
     public async Task StartAsync(Guid appId, CancellationToken ct)
     {
+        await RefuseIfUnpaidAsync(appId, ct);
         var (app, docker, id) = await ResolveAsync(appId, ct);
         if (id is not null) await docker.RestartContainerAsync(id, ct); // restart also starts a stopped container
         await SetStatusAsync(app, AppStatus.Running, ct);
+    }
+
+    /// <summary>
+    /// Refuses before the server engine is even resolved, and throws rather than returning quietly.
+    ///
+    /// <para>
+    /// First, because <see cref="ResolveAsync"/> reaches the node to list its containers — asking a
+    /// server about a workspace that may not start anything is work nobody is paying for, and on an
+    /// unreachable node it turns a refusal into a timeout.
+    /// </para>
+    ///
+    /// <para>
+    /// Throwing, because a start route that returns without an exception and without starting
+    /// anything is the exact shape this branch keeps finding: the status is written
+    /// <c>Running</c>, the hourly tick bills the hour, and nothing is running. Every caller either
+    /// surfaces the message — the panel shows it where a quota refusal is shown — or records it as a
+    /// failure, which is what <c>BillingSuspension.ResumeAsync</c> does.
+    /// </para>
+    ///
+    /// <para>
+    /// The workspace is read unfiltered. These two verbs are reached from a request that has one and
+    /// from the resume after a top-up, which has none; under the tenant filter that second caller
+    /// finds no app and this would throw "Sequence contains no elements" instead of answering.
+    /// </para>
+    /// </summary>
+    private async Task RefuseIfUnpaidAsync(Guid appId, CancellationToken ct)
+    {
+        var workspaceId = await db.Apps.IgnoreQueryFilters().AsNoTracking()
+            .Where(a => a.Id == appId).Select(a => a.WorkspaceId).FirstOrDefaultAsync(ct);
+        if (workspaceId == Guid.Empty) return; // No such app; ResolveAsync below says so properly.
+
+        var mayStart = await billing.CanStartAsync(workspaceId, ct);
+        if (!mayStart.Allowed) throw new InvalidOperationException(mayStart.Reason);
     }
 
     public async Task StopAsync(Guid appId, CancellationToken ct)

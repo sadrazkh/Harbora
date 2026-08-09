@@ -411,7 +411,14 @@ public sealed partial class DatabasesController(
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
     public async Task<IActionResult> Start(Guid id, CancellationToken ct)
-    { await Guard(id, ct); await engine.StartAsync(id, ct); return RedirectToAction(nameof(Details), new { id }); }
+    {
+        await Guard(id, ct);
+        // The billing gate refusing a workspace with no balance. Surfaced where this controller
+        // already surfaces a quota refusal, rather than as a 500 for a deliberate decision.
+        try { await engine.StartAsync(id, ct); }
+        catch (InvalidOperationException ex) { TempData["Error"] = ex.Message; }
+        return RedirectToAction(nameof(Details), new { id });
+    }
 
     /// <summary>
     /// Recreates the container from the current definition, keeping the data volume.

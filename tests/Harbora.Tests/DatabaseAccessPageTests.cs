@@ -135,6 +135,10 @@ public class DatabaseAccessPageTests
             new DatabaseGrantExecutor(docker, protector, NullLogger<DatabaseGrantExecutor>.Instance),
             new ManagedServiceEngine(
                 db, engines, protector, new NoopJobQueue(),
+                new Harbora.Infrastructure.Billing.BillingGate(
+                    db,
+                    Microsoft.Extensions.Options.Options.Create(
+                        new Harbora.Infrastructure.Billing.BillingOptions())),
                 Microsoft.Extensions.Options.Options.Create(new HarboraRuntimeOptions()), clock,
                 NullLogger<ManagedServiceEngine>.Instance),
             protector);

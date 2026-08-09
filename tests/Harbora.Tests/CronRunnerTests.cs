@@ -39,6 +39,13 @@ public class CronRunnerTests : IDisposable
         services.AddSingleton<ISecretProtector>(new PassthroughProtector());
         services.AddSingleton<IServerEngineFactory>(new SingleEngine(_docker));
         services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new HarboraRuntimeOptions()));
+        // The real billing gate with Billing:Enabled false — the shipped default — rather than a
+        // fake that always allows. Every test in this file then runs the line production runs, and
+        // the one that watches a job refused for an empty balance lives beside the gate itself.
+        services.AddSingleton(Microsoft.Extensions.Options.Options.Create(
+            new Harbora.Infrastructure.Billing.BillingOptions()));
+        services.AddScoped<Harbora.Application.Abstractions.IBillingGate,
+            Harbora.Infrastructure.Billing.BillingGate>();
         // The real runner over the real context: the schedule and the button share this path, so a
         // fake here would test the fake rather than the guarantee.
         services.AddScoped<CronJobRunner>();

@@ -116,6 +116,10 @@ public class DatabaseAccessLifecycleTests
             new DatabaseGrantExecutor(docker, protector, NullLogger<DatabaseGrantExecutor>.Instance),
             new ManagedServiceEngine(
                 db, engines, protector, new NoopJobQueue(),
+                // The real gate with billing off — the shipped default — rather than a fake that
+                // always says yes, so these tests keep exercising the line production runs.
+                new Harbora.Infrastructure.Billing.BillingGate(
+                    db, Options.Create(new Harbora.Infrastructure.Billing.BillingOptions())),
                 Options.Create(new HarboraRuntimeOptions()), clock,
                 NullLogger<ManagedServiceEngine>.Instance),
             protector);

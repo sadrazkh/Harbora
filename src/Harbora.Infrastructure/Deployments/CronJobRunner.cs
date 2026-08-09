@@ -1,4 +1,4 @@
-﻿using Harbora.Application.Abstractions;
+using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
@@ -15,11 +15,19 @@ namespace Harbora.Infrastructure.Deployments;
 /// wanted on demand: a nightly backup nobody can try until tomorrow is a nightly backup nobody
 /// trusts. The schedule and the "run now" button take exactly the same path, so what someone tests
 /// by hand is what will happen at 03:00.
+///
+/// <para>
+/// That is also why the billing gate is asked here rather than in <see cref="CronRunner"/>. The
+/// scheduler decides <i>when</i>; this decides whether it happens at all, and it is reached three
+/// ways — the schedule, the "run now" button, and the durable queue claiming a run made minutes
+/// ago. A check on the scheduler would leave the other two open.
+/// </para>
 /// </summary>
 public sealed class CronJobRunner(
     HarboraDbContext db,
     IServerEngineFactory engines,
     ISecretProtector protector,
+    IBillingGate billing,
     IOptions<HarboraRuntimeOptions> options,
     ISystemClock clock,
     ILogger<CronJobRunner> logger)
@@ -57,6 +65,28 @@ public sealed class CronJobRunner(
         if (await db.CronRuns.AnyAsync(r => r.AppId == job.Id && r.FinishedAt == null, ct))
         {
             logger.LogInformation("Cron job {Slug} is already running; this run was skipped.", job.Slug);
+            return;
+        }
+
+        // Money before the container. Recorded as a finished run rather than logged and dropped:
+        // this history is where somebody looks to find out why last night's job did not happen, and
+        // a schedule that quietly stops firing is the hardest kind of outage to notice. The row is
+        // finished the moment it is written, so it cannot hold the "one at a time" guard above shut.
+        var mayStart = await billing.CanStartAsync(job.WorkspaceId, ct);
+        if (!mayStart.Allowed)
+        {
+            db.CronRuns.Add(new CronRun
+            {
+                WorkspaceId = job.WorkspaceId,
+                AppId = job.Id,
+                StartedAt = clock.UtcNow,
+                FinishedAt = clock.UtcNow,
+                IsManual = manual,
+                Error = mayStart.Reason
+            });
+            await db.SaveChangesAsync(ct);
+            logger.LogInformation(
+                "Cron job {Slug} did not run: {Reason}", job.Slug, mayStart.Reason);
             return;
         }
 

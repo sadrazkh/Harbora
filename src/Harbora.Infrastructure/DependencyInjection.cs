@@ -234,6 +234,11 @@ public static class DependencyInjection
         // what that stop took away. Registered beside the tick and, like it, scheduled by nothing
         // yet; it refuses to suspend anybody at all while Billing:Enabled is false.
         services.AddScoped<Billing.BillingSuspension>();
+        // The gate every start path asks before a container runs. Registered here rather than beside
+        // the deployment engine because the rule it holds is a billing rule, and a second copy of it
+        // living next to the thing it refuses is how a rule quietly stops being one. Like the tick
+        // and the suspension it refuses nothing at all while Billing:Enabled is false.
+        services.AddScoped<Application.Abstractions.IBillingGate, Billing.BillingGate>();
         services.AddScoped<Services.AdminerService>();
         services.AddHostedService<Services.AdminerSweeper>();
 
