@@ -209,6 +209,94 @@ internal static class Harness
 
         return workspace.Id;
     }
+
+    /// <summary>
+    /// A workspace holding one running app and one the customer stopped themselves.
+    ///
+    /// <para>
+    /// Two apps in two different states is the whole fixture for suspension: the difference between
+    /// "bring back what the outage took" and "start everything you can find" is invisible with one.
+    /// </para>
+    /// </summary>
+    public static Guid SeedWorkspaceWithTwoApps(HarboraDbContext db, string running, string stopped)
+    {
+        var plan = new Plan { Name = "two-apps-plan", BaseRatePerHourMinor = 0 };
+        db.Plans.Add(plan);
+
+        var workspace = new Workspace { Name = "two-apps", Slug = "two-apps", PlanId = plan.Id };
+        db.Workspaces.Add(workspace);
+
+        db.Apps.Add(new App
+        {
+            WorkspaceId = workspace.Id,
+            Name = running,
+            Slug = running,
+            Status = AppStatus.Running,
+        });
+
+        db.Apps.Add(new App
+        {
+            WorkspaceId = workspace.Id,
+            Name = stopped,
+            Slug = stopped,
+            Status = AppStatus.Stopped,
+        });
+
+        db.Wallets.Add(new Wallet { WorkspaceId = workspace.Id });
+
+        return workspace.Id;
+    }
+
+    /// <summary>A workspace already suspended, and saying why.</summary>
+    public static Guid SeedSuspendedWorkspace(HarboraDbContext db, SuspensionReason reason)
+    {
+        var workspace = new Workspace
+        {
+            Name = "suspended",
+            Slug = "suspended",
+            IsSuspended = true,
+            SuspendedReason = reason,
+        };
+        db.Workspaces.Add(workspace);
+        db.Wallets.Add(new Wallet { WorkspaceId = workspace.Id });
+
+        return workspace.Id;
+    }
+
+    /// <summary>
+    /// A stand-in for the platform's stop/start route, over the same hostile scope the suspension
+    /// itself is given. Handed in when a test needs to make the route fail, or lie.
+    /// </summary>
+    public static FakeAppOperations Operations(BillingContext db) => new(TickContext(db));
+
+    /// <summary>
+    /// The suspension, wired to a context scoped to <see cref="Guid.Empty"/>.
+    ///
+    /// <para>
+    /// Same reasoning as <see cref="TickContext"/>, and it matters more here than it does for the
+    /// tick. Suspension is sessionless background work; under a request scope the app table reads as
+    /// empty, so a suspension would stop nothing, write down nothing about what had been running, and
+    /// report a clean pass — and the customer would discover months later that a top-up brings back
+    /// none of their services. Giving every test the worst scope makes "reaches the apps regardless"
+    /// a standing property rather than one test somebody remembers to write.
+    /// </para>
+    /// </summary>
+    public static BillingSuspension Suspension(
+        BillingContext db,
+        FakeAppOperations? operations = null,
+        bool enabled = true)
+    {
+        // The suspension writes through a context of its own, so anything this one still tracks is
+        // about to be stale — and EF answers a query from the instance it is already tracking, which
+        // would let an assertion read the app's status as it was BEFORE the stop.
+        db.ChangeTracker.Clear();
+
+        return new BillingSuspension(
+            TickContext(db),
+            operations ?? Operations(db),
+            Options.Create(new BillingOptions { Enabled = enabled }),
+            NullLogger<BillingSuspension>.Instance);
+    }
 }
 
 /// <summary>

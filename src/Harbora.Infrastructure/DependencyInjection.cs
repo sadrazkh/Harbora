@@ -230,6 +230,10 @@ public static class DependencyInjection
         // was a price.
         services.Configure<Billing.BillingOptions>(config.GetSection(Billing.BillingOptions.SectionName));
         services.AddScoped<Billing.BillingTick>();
+        // Stopping what a workspace is running once its balance is gone, and bringing back exactly
+        // what that stop took away. Registered beside the tick and, like it, scheduled by nothing
+        // yet; it refuses to suspend anybody at all while Billing:Enabled is false.
+        services.AddScoped<Billing.BillingSuspension>();
         services.AddScoped<Services.AdminerService>();
         services.AddHostedService<Services.AdminerSweeper>();
 

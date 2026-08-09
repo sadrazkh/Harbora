@@ -86,6 +86,11 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
         if (ws is null) return NotFound();
         if (ws.IsDefault) { TempData["Error"] = "The provider workspace cannot be suspended."; return RedirectToAction(nameof(Index)); }
         ws.IsSuspended = suspended;
+        // Says who. Billing lifts a suspension only when the reason is NoBalance, so recording
+        // Manual here is what stops a customer's payment quietly undoing this decision — and
+        // clearing the reason on the way out stops a stale one being read about a workspace that is
+        // no longer suspended at all.
+        ws.SuspendedReason = suspended ? SuspensionReason.Manual : SuspensionReason.None;
         await db.SaveChangesAsync(ct);
         TempData["Message"] = suspended ? "Tenant suspended." : "Tenant resumed.";
         return RedirectToAction(nameof(Index));
