@@ -61,6 +61,28 @@ public sealed record BillingSuspensionResult(
 /// neither case. The switch guards the act that costs somebody their uptime, and turning billing off
 /// after a suspension must not strand every workspace the hour before had already stopped.
 /// </para>
+///
+/// <para>
+/// <b>Billing stops only what billing can start again.</b> <see cref="ResumeAsync"/> acts on
+/// <see cref="SuspensionReason.NoBalance"/> and on nothing else, so the one fact that decides
+/// whether a pass may claim the reason also decides whether it may stop anything — one condition,
+/// not two that can drift apart. A workspace somebody else already suspended is left entirely alone.
+/// </para>
+///
+/// <para>
+/// <b>What this class assumes about the stop/start route, and when that stops being true.</b> It
+/// calls <c>IAppOperationsService</c>, whose <c>ResolveAsync</c> reads <c>db.Apps</c> <i>through</i>
+/// the tenant filter. That is safe here only because this class is reached from sessionless
+/// background work, where <c>HttpWorkspaceScope.IsUnscoped</c> is true and the filter is inert. Give
+/// <see cref="SuspendAsync"/> a caller running under any other scope — a provider-console button, a
+/// webhook handler that resolves a workspace claim, a test with an <c>HttpContext</c> — and every
+/// stop throws <c>Sequence contains no elements</c> before it reaches a node, while this class still
+/// flags the workspace suspended and writes a marker on each app. The failures are reported rather
+/// than swallowed, so it is loud; it is still wrong. The fix is <c>IgnoreQueryFilters()</c> on that
+/// service's <c>ResolveAsync</c> <b>and</b> on its <c>SetStatusAsync</c> — together, never one
+/// alone, because unfiltering only the read turns a throw into a filtered <c>ExecuteUpdate</c> that
+/// matches no rows and reports success, which is the shape nobody sees.
+/// </para>
 /// </summary>
 public sealed class BillingSuspension(
     HarboraDbContext db,
@@ -73,9 +95,16 @@ public sealed class BillingSuspension(
     /// and stops it.
     ///
     /// <para>
-    /// Safe to call again. An already-suspended workspace is not a finished one — the previous pass
-    /// may have lost a node halfway through — so the apps still running are stopped and the record of
-    /// what was running is rebuilt from what is actually running now.
+    /// Safe to call again. A workspace already suspended <i>for the balance</i> is not a finished
+    /// one — the previous pass may have lost a node halfway through — so the apps still running are
+    /// stopped and the record of what was running is added to.
+    /// </para>
+    ///
+    /// <para>
+    /// Does nothing to a workspace suspended for any other reason, including none. That is not
+    /// politeness about the reason field: <see cref="ResumeAsync"/> is the only thing that reads
+    /// what this method writes down, and it acts on <see cref="SuspensionReason.NoBalance"/> alone,
+    /// so stopping apps this method may not label is stopping them with nobody left to start them.
     /// </para>
     /// </summary>
     public async Task<BillingSuspensionResult> SuspendAsync(Guid workspaceId, CancellationToken ct)
@@ -113,8 +142,46 @@ public sealed class BillingSuspension(
             return report.Result(workspace.IsSuspended);
         }
 
+        // Somebody else already holds this workspace's suspension, so billing does not touch it.
+        //
+        // The reason is one field and the two facts can be true at once — an operator suspended
+        // them AND the money ran out — but stopping the apps under somebody else's reason is not a
+        // half-measure, it is a hole. Each stopped app would carry WasRunningAtSuspension, and the
+        // only path that reads that marker is ResumeAsync, which acts on NoBalance alone. When the
+        // operator lifts their suspension the console sets the reason back to None, and with it the
+        // last route by which those apps could ever be started again. The customer is left with
+        // containers that are down, markers that say somebody owes them a start, and nobody who
+        // does.
+        //
+        // Deferring strands nothing, which is why it is the answer rather than merely the cautious
+        // one: the apps are still running, still recorded as running, and the pass after the
+        // operator lifts their suspension finds them exactly so and does the whole job under a
+        // reason a top-up can lift. The cost is stated plainly in the refusal — a workspace an
+        // operator has suspended keeps spending a balance it does not have until they act.
+        //
+        // The condition is a whitelist, not a list of reasons to skip. Billing may claim the
+        // suspension when nobody holds it (this pass is starting one) or when billing already holds
+        // it (this pass is retrying one). A reason added to the enum later therefore defers by
+        // default instead of being quietly overwritten with NoBalance — which is the same trap
+        // SuspendedReason's own doc-comment describes, arriving through the other door: relabelling
+        // a suspension nobody can explain would make a payment lift it.
+        if (workspace.IsSuspended && workspace.SuspendedReason != SuspensionReason.NoBalance)
+        {
+            var who = workspace.SuspendedReason == SuspensionReason.Manual
+                ? "by an operator"
+                : "by something that did not say why";
+
+            report.Add(
+                $"Workspace \"{workspace.Name}\" is already suspended {who}, so the balance running " +
+                "out did not stop its apps. Billing stops only what lifting a billing suspension " +
+                "would start again, and lifting this one is not billing's to do.");
+            return report.Result(suspended: true);
+        }
+
         // Read before the flag below is set, because it decides whether this pass is starting a
-        // suspension or finishing one.
+        // suspension or finishing one. Past the guard above it is exactly "the reason is already
+        // NoBalance"; it is kept as its own name because that is what the marker rule below is
+        // asking about.
         var alreadySuspended = workspace.IsSuspended;
 
         var all = await AppsOfAsync(workspaceId, ct);
@@ -147,11 +214,10 @@ public sealed class BillingSuspension(
 
         workspace.IsSuspended = true;
 
-        // An operator's suspension is not relabelled by the balance running out underneath it. Both
-        // facts can be true at once, and overwriting the reason would hand the customer a way to undo
-        // an operator's decision by paying.
-        if (workspace.SuspendedReason != SuspensionReason.Manual)
-            workspace.SuspendedReason = SuspensionReason.NoBalance;
+        // Unconditional, and only because the guard above has already established that this reason
+        // is billing's to write. Testing it again here would be a second copy of the rule, free to
+        // disagree with the one that decided whether the apps get stopped.
+        workspace.SuspendedReason = SuspensionReason.NoBalance;
 
         // Written before a single container is touched, which is the node agent's drain rule applied
         // to a workspace. If the panel dies partway through the stops below, this is the only record

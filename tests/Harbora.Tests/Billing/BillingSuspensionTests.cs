@@ -402,6 +402,87 @@ public class BillingSuspensionTests
     }
 
     [Fact]
+    public async Task An_operators_suspension_does_not_leave_apps_stopped_with_nobody_to_start_them()
+    {
+        // The four steps in the order a real week produces them. Step 2 is where the harm would be
+        // done: stopping the apps under a reason billing does not own marks each of them as owed a
+        // start, and then hands them to a resume that only ever acts on NoBalance. Step 3 sets the
+        // reason back to None, closing the last path that could have started them — so the marker
+        // outlives every reader of it and the containers stay down with nobody responsible.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithTwoApps(db, running: "api", stopped: "worker");
+        await db.SaveChangesAsync();
+
+        // 1. An operator suspends the tenant from the console. Nobody's apps are stopped by this.
+        await Console(db).Suspend(ws, suspended: true, default);
+
+        // 2. The balance runs out underneath the operator's decision.
+        var result = await Harness.Suspension(db).SuspendAsync(ws, default);
+
+        var api = await db.Apps.SingleAsync(a => a.Slug == "api");
+        api.Status.Should().Be(AppStatus.Running,
+            "billing stops only what lifting a billing suspension could start again");
+        api.WasRunningAtSuspension.Should().BeFalse(
+            "a marker nothing will read is worse than no marker at all");
+        result.Failures.Should().ContainSingle(f => f.Contains("operator"));
+        result.WorkspaceSuspended.Should().BeTrue(
+            "billing declined to act, which does not make the workspace any less suspended");
+
+        // 3. The operator lifts their own suspension, which clears the reason with it.
+        await Console(db).Suspend(ws, suspended: false, default);
+
+        // 4. A top-up arrives. It has nothing to undo, and the app never stopped.
+        await Harness.Suspension(db).ResumeAsync(ws, default);
+
+        (await db.Apps.SingleAsync(a => a.Slug == "api")).Status.Should().Be(AppStatus.Running);
+    }
+
+    [Fact]
+    public async Task Once_an_operator_lifts_their_suspension_the_balance_stops_and_starts_the_apps_again()
+    {
+        // Why deferring is safe rather than merely cautious: nothing is stranded by it. The next
+        // pass finds the workspace exactly as the operator left it, and does the whole job — stops
+        // what is running, records it, and gives a top-up something to bring back. The operator's
+        // decision only comes first.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithTwoApps(db, running: "api", stopped: "worker");
+        await db.SaveChangesAsync();
+
+        await Console(db).Suspend(ws, suspended: true, default);
+        await Harness.Suspension(db).SuspendAsync(ws, default);
+        await Console(db).Suspend(ws, suspended: false, default);
+
+        await Harness.Suspension(db).SuspendAsync(ws, default);
+        (await db.Apps.SingleAsync(a => a.Slug == "api")).Status.Should().Be(AppStatus.Stopped);
+
+        await Harness.Suspension(db).ResumeAsync(ws, default);
+
+        var apps = await db.Apps.Where(a => a.WorkspaceId == ws).ToListAsync();
+        apps.Single(a => a.Slug == "api").Status.Should().Be(AppStatus.Running);
+        apps.Single(a => a.Slug == "worker").Status.Should().Be(AppStatus.Stopped);
+        (await db.Workspaces.SingleAsync(w => w.Id == ws)).IsSuspended.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_suspension_that_never_said_why_is_not_taken_over_by_the_balance_either()
+    {
+        // The same guard's other half, and the door the reason column's own rule leaves open.
+        // Every workspace suspended before that column existed reads None. Relabelling one
+        // NoBalance would let a payment lift a suspension whose reason nobody knows — which is
+        // precisely what asking whether the reason IS NoBalance was written to prevent.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedSuspendedWorkspace(db, SuspensionReason.None);
+        db.Apps.Add(new App { WorkspaceId = ws, Name = "api", Slug = "api", Status = AppStatus.Running });
+        await db.SaveChangesAsync();
+
+        var result = await Harness.Suspension(db).SuspendAsync(ws, default);
+
+        (await db.Workspaces.SingleAsync(w => w.Id == ws)).SuspendedReason.Should().Be(SuspensionReason.None);
+        (await db.Apps.SingleAsync(a => a.Slug == "api")).Status.Should().Be(AppStatus.Running);
+        result.Failures.Should().ContainSingle(f => f.Contains("did not say why"));
+    }
+
+    [Fact]
     public async Task A_resume_that_could_not_start_everything_keeps_the_suspension_and_says_which_app()
     {
         // Declaring the resume done while an app is still down loses it: the marker is the only
