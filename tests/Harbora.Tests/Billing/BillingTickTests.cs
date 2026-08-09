@@ -211,6 +211,30 @@ internal static class Harness
     }
 
     /// <summary>
+    /// A second running app in the same workspace, on a size that exists but that nobody has priced.
+    ///
+    /// <para>
+    /// This is the shape of a <i>partly</i> known hour, and it is the only shape that can tell the
+    /// two halves of the floor rule apart. With one unpriced app the resource list is empty either
+    /// way, so "the floor was withheld" and "there was nothing to charge" produce the same ledger;
+    /// with one priced app beside it, a rule that dropped the priced line too has somewhere to show.
+    /// </para>
+    /// </summary>
+    public static void AddRunningAppOnAnUnpricedSize(HarboraDbContext db, Guid workspaceId)
+    {
+        db.InstanceSizes.Add(new InstanceSize { Key = "later", Name = "Later" });
+
+        db.Apps.Add(new App
+        {
+            WorkspaceId = workspaceId,
+            Name = "tenant-worker",
+            Slug = "tenant-worker",
+            Status = AppStatus.Running,
+            InstanceSizeKey = "later",
+        });
+    }
+
+    /// <summary>
     /// A workspace holding one running app and one the customer stopped themselves.
     ///
     /// <para>
@@ -607,15 +631,7 @@ public class BillingTickTests
         // against a wallet that no longer matches it.
         await using var db = Harness.SystemContext();
         var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 500);
-        db.InstanceSizes.Add(new InstanceSize { Key = "later", Name = "Later" });
-        db.Apps.Add(new App
-        {
-            WorkspaceId = ws,
-            Name = "tenant-worker",
-            Slug = "tenant-worker",
-            Status = AppStatus.Running,
-            InstanceSizeKey = "later",
-        });
+        Harness.AddRunningAppOnAnUnpricedSize(db, ws);
         await db.SaveChangesAsync();
 
         await Harness.Tick(db).ChargeHourAsync(Hour, default);
@@ -668,6 +684,81 @@ public class BillingTickTests
         (await db.BillingLedger.CountAsync()).Should().Be(0);
         (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(0);
         result.Failures.Should().Contain(f => f.Contains("minimum"));
+    }
+
+    [Fact]
+    public async Task An_hour_that_withholds_its_floor_still_charges_everything_it_could_price()
+    {
+        // The guarantee the rule above is only safe because of — and the one it could quietly break.
+        // Withholding the floor must withhold the FLOOR, not the hour. Today an unknown decides one
+        // argument, the floor handed to BillingHourPlan, while the billable list is built beside it
+        // and never consulted about it; but nothing goes red if somebody couples the two, and the
+        // result would be a workspace losing a charge it genuinely owed because a DIFFERENT resource
+        // was unpriced. Silent, and in the direction of the platform's own pocket.
+        //
+        // One priced app and one unpriced one is the smallest fixture where that is visible, and the
+        // plan's minimum is deliberately non-zero: at zero, "the floor was withheld" and "the floor
+        // was nothing" write exactly the same ledger, which is why the correction test above cannot
+        // stand in for this one.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(
+            db, "tenant", ratePerHour: 500, planBaseRatePerHourMinor: 1000);
+        Harness.AddRunningAppOnAnUnpricedSize(db, ws);
+        await db.SaveChangesAsync();
+
+        var result = await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        // One: the app that HAD a price is charged, at its own rate and under its own name.
+        result.LinesWritten.Should().Be(1);
+        var line = await db.BillingLedger.SingleAsync();
+        line.Kind.Should().Be(LedgerKind.Charge);
+        line.ResourceName.Should().Be("tenant-api");
+        line.AmountMinor.Should().Be(-500);
+        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-500);
+
+        // Two: the floor is not. A top-up of 1000 - 500 written here is the overcharge the rule
+        // exists to prevent — the corrected pass would add the second app's line on top of a floor
+        // that had already covered it, two passes each looking right and billing the hour twice.
+        (await db.BillingLedger.AnyAsync(l => l.Kind == LedgerKind.PlanMinimumTopUp)).Should().BeFalse();
+
+        // Three: and the shortfall nobody paid is said out loud, because an under-charge that
+        // reports nothing is indistinguishable from an hour that was simply cheap.
+        result.Failures.Should().ContainSingle(f => f.Contains("minimum"));
+        result.Failures.Should().ContainSingle(f => f.Contains("later"));
+    }
+
+    [Theory]
+    [InlineData(999L, true)]    // a top-up of 1 was genuinely owed, and genuinely withheld
+    [InlineData(1000L, false)]  // the known charges meet the floor exactly: the shortfall is nothing
+    [InlineData(1500L, false)]  // and past it
+    public async Task The_withheld_floor_is_reported_only_when_a_top_up_could_have_been_due(
+        long ratePerHour, bool reported)
+    {
+        // Withholding is only worth saying when there was something to withhold. Every rate is
+        // non-negative, so an hour whose KNOWN charges already reach the floor would have reached it
+        // with the unpriced ones added too: the shortfall was always going to be nothing and no
+        // top-up was ever due. Announcing one anyway reports a charge that never existed, down the
+        // same channel that carries the real ones — which is precisely what the per-entity
+        // de-duplication in `Pass` was built to stop, arriving by another route.
+        //
+        // The unpriced app is still named in every row. This narrows which warning fires, never
+        // whether the thing that caused it gets mentioned.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(
+            db, "tenant", ratePerHour: ratePerHour, planBaseRatePerHourMinor: 1000);
+        Harness.AddRunningAppOnAnUnpricedSize(db, ws);
+        await db.SaveChangesAsync();
+
+        var result = await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        result.Failures.Any(f => f.Contains("minimum")).Should().Be(reported);
+        result.Failures.Should().ContainSingle(f => f.Contains("later"));
+
+        // Unchanged by the narrowing, and asserted so it stays that way: the floor line is still
+        // withheld in all three rows, and the priced app still pays. This decides what is SAID, not
+        // what is charged.
+        (await db.BillingLedger.AnyAsync(l => l.Kind == LedgerKind.PlanMinimumTopUp)).Should().BeFalse();
+        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-ratePerHour);
     }
 
     [Fact]

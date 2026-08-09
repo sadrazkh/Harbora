@@ -353,13 +353,35 @@ public sealed class BillingTick(
                 "for it. Null is not zero here: set it to 0 if the plan really has no floor.");
         }
 
-        if (unknowns > 0 && plan?.BaseRatePerHourMinor is > 0)
+        // What the hour is known to have cost, counted exactly the way BillingHourPlan counts it: a
+        // rate of zero or less writes no line and adds nothing. Counting it differently here would
+        // make the message below disagree with the ledger it is describing.
+        var known = billable.Sum(r => Math.Max(0L, r.RatePerHourMinor));
+
+        // The floor is withheld above whenever anything is unknown. Saying so is only honest when a
+        // top-up could actually have been due — every rate is non-negative, so an hour whose known
+        // charges already reach the floor would have reached it with the missing ones added too, and
+        // the shortfall was always going to be nothing. Reported there, this announces the loss of a
+        // charge that never existed, in the same channel that carries the real ones. That is the
+        // failure the per-entity de-duplication in `Pass` exists to prevent, arriving by another
+        // route: an operator who is warned about nothing stops reading the warnings.
+        //
+        // Strictly greater, because a shortfall of zero writes no line either. The unpriced resource
+        // itself is still reported by whichever branch above found it — this narrows one warning, it
+        // does not silence the fault.
+        if (unknowns > 0 && plan?.BaseRatePerHourMinor is { } floor && floor > known)
             pass.Report($"withheld-floor:{workspace.Id}",
                 $"Workspace \"{workspace.Name}\" did not pay its plan minimum this pass, because " +
                 $"{unknowns} of the things it held could not be priced and the shortfall is " +
                 "therefore unknown. Fix those and the hours can be backfilled in full.");
 
         var lines = BillingHourPlan.For(
+            // Built without reference to `unknowns`, and that is load-bearing rather than
+            // incidental: an unknown withholds the FLOOR, never a charge that was priced. Coupling
+            // the two would make one unpriced resource cost a workspace the whole hour's real
+            // charges, silently and in the platform's own favour.
+            // `An_hour_that_withholds_its_floor_still_charges_everything_it_could_price` is the
+            // test that goes red if this list ever learns about `unknowns`.
             billable,
             // Null when anything in the hour is unknown, so no floor line is written. Passing the
             // property straight through is the whole point of the nullable parameter: there is no
