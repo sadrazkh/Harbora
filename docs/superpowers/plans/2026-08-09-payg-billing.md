@@ -573,6 +573,52 @@ MSG
 
 ---
 
+### Task 2b: Tell "free" apart from "nobody set a price"
+
+**Added after Task 3, which found the ambiguity. Dispatch before Task 4 — the tick is where it has
+to become loud, so the schema has to change first.**
+
+Task 2 made all seven rate columns non-nullable `long`, defaulting to `0`. Task 3 then asked what a
+zero-value ledger line means and found the honest answer is: nobody can tell. `0` currently says both
+"this resource is deliberately free" and "no human has priced this yet", and those are different
+facts with opposite correct responses.
+
+The failure that follows is this project's own signature, moved up to the business layer: an operator
+adds an instance size, forgets to price it, every workload on that size runs free for ever, and every
+hourly tick reports success. Task 8b will make a free tier a legitimate configuration, which removes
+the last chance to guess from context.
+
+`null` is the answer. It is what nullable is for — `null` means no answer has been given, `0` means
+the answer is zero.
+
+**Files:**
+- Modify: `src/Harbora.Domain/Tenancy/Plan.cs`, `src/Harbora.Domain/Tenancy/InstanceSize.cs`
+- Modify: `src/Harbora.Infrastructure/Billing/BillingRates.cs`
+- Migration: generated, altering the seven columns to nullable
+- Test: `tests/Harbora.Tests/Billing/BillingRatesTests.cs`
+
+- [ ] **Step 1: Write the failing test.** An unpriced rate and a deliberately-free rate must be
+  distinguishable by a caller. A zero rate still yields a zero charge; an unset rate must be
+  reportable as unset rather than silently costing nothing.
+
+- [ ] **Step 2: Make the seven columns `long?`.** Five on `Plan`, two on `InstanceSize`. The
+  migration alters existing columns to nullable, which is additive and safe on live data — but every
+  existing row currently holds `0`, and after this change `0` means *free*. Say in your report
+  whether the migration should rewrite those zeros to `null`, and argue it. My reading: on this
+  branch nothing has ever been priced and no row is deliberately free, so rewriting to `null` is the
+  truthful state — but check whether any seeder or test fixture depends on zero and say so.
+
+- [ ] **Step 3: Give `BillingRates` a way to say "unset".** Do not return `0` for it. Choose the
+  shape — a nullable return, a result record, whatever fits the three existing methods — and justify
+  the choice in your report. Keep money `long`.
+
+- [ ] **Step 4: Update Task 2's tests** so they still pin what they pinned, and add the two cases
+  this distinction creates: unset stays unset, and an explicit zero stays a zero charge.
+
+- [ ] **Step 5:** Task 4 will decide what the tick *does* with an unset rate; that is not yours.
+  Your job is that it can tell. Say in your report what you think the tick should do and why, so
+  Task 4 inherits a reasoned position rather than a blank.
+
 ### Task 3: Planning one hour
 
 **Files:**
