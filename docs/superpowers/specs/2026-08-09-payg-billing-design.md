@@ -77,9 +77,18 @@ check compares `SUM(ledger.AmountMinor)` to `BalanceMinor`.
 
 **Nothing updates or deletes a ledger row.** A correction is a new `Adjustment` line.
 
-**Unique index** on `(WorkspaceId, ResourceType, ResourceId, BillingHour)` where `Kind = Charge`.
-This is what makes a retried tick harmless: the second attempt collides and changes nothing. It must
-be proven in the Postgres lane, because a unique index is behaviour only a real database has.
+**Unique index** on `(WorkspaceId, ResourceType, ResourceId, BillingHour)` over **every line the tick
+writes** — that is, `Kind IN (Charge, PlanMinimumTopUp)`. It deliberately does **not** cover `Credit`
+or `Adjustment`, which are made by a person and may legitimately repeat within an hour.
+
+This is what makes a retried tick harmless: the second attempt collides and changes nothing. Scoping
+it to `Charge` alone would leave the `PlanMinimumTopUp` line free to be written twice — which is the
+same double-charge the index exists to prevent, arriving through the one line that has no resource
+behind it. The top-up line therefore carries `ResourceType = PlanBase` and a null `ResourceId`, so it
+has a stable key to collide on.
+
+It must be proven in the Postgres lane, because a partial unique index is behaviour only a real
+database has.
 
 ### `Plan` gains
 
@@ -106,9 +115,13 @@ A job on the existing durable queue, `ExclusiveWith` keyed to the billing hour.
 5. Decrement the wallet once, under the concurrency token.
 6. If the balance crosses to `≤ 0`, suspend (below).
 
-**Missed hours.** If the panel was down, the tick backfills up to a bounded number of hours and
-**logs loudly** when it hits that bound. Skipping silently would mean free hosting for the outage,
-which is the same class of defect as a sweeper that reports success having swept nothing.
+**Missed hours.** If the panel was down, the tick backfills the hours it missed, oldest first, up to
+`Billing:MaxBackfillHours` (default **72**). Reaching that bound is a `LogWarning` naming the
+workspace and the hours dropped, never a silent skip — skipping quietly would mean free hosting for
+the outage, the same class of defect as a sweeper that reports success having swept nothing.
+
+Backfill uses each hour's own `BillingHour` key, so it is idempotent by the same index and a tick
+that dies halfway resumes where it stopped.
 
 ## Suspension and resumption
 
@@ -147,6 +160,7 @@ the implementation must not survive:
 | the guard from any one start path | a test that enumerates every start path and asserts each calls the gate |
 | the stopped-rate branch | 10 h running + 14 h stopped produces two different rates |
 | the `PlanMinimumTopUp` line | `SUM(ledger)` equals the wallet movement |
+| `PlanMinimumTopUp` from the unique index | running one hour's tick twice writes one top-up line, not two |
 | the `SuspendedReason` check | a top-up does not clear a manual suspension |
 | the running-at-suspension record | resumption starts only what was running |
 
