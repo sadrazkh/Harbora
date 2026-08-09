@@ -612,6 +612,21 @@ storage was never named.
   still pays for disk, because the data is still on the disk. A stopped managed service is the
   clearest case of that.
 
+- [ ] **Step 5: Suspension must stop managed services too.** Task 6 found that
+  `ManagedServiceEngine` was the sixth start path and had no money check at all. Task 5's
+  `BillingSuspension` has the matching hole on the other side: it stops apps and **not** managed
+  databases. Together with steps 1–4 that produces the worst combination on this branch — a suspended
+  workspace whose database keeps running **and** keeps being charged for its disk, with the customer
+  unable to do anything about it because they are suspended.
+
+  Stop them, and mark them the way apps are marked so a top-up brings them back. Read Task 5's
+  starting-vs-retrying rule first (`BillingSuspension`, and the report at
+  `.superpowers/sdd/task-5-report.md`): a suspension that is *starting* rebuilds the set of what was
+  running, one that is *retrying* only adds to it — because by the second pass the workloads are
+  stopped precisely because the first pass stopped them, and rebuilding would erase the only record
+  that they were ever running. Whatever you mark a managed service with has to obey the same rule, or
+  a retried suspension silently loses the customer's database.
+
 ### Task 2b: Tell "free" apart from "nobody set a price"
 
 **Added after Task 3, which found the ambiguity. Dispatch before Task 4 — the tick is where it has
