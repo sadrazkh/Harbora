@@ -1,0 +1,628 @@
+using Harbora.Application.Abstractions;
+using Harbora.Data;
+using Harbora.Domain.Apps;
+using Harbora.Domain.Billing;
+using Harbora.Domain.Common;
+using Harbora.Domain.Identity;
+using Harbora.Domain.Services;
+using Harbora.Domain.Tenancy;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Npgsql;
+
+namespace Harbora.Infrastructure.Billing;
+
+/// <summary>
+/// What one pass did. Returned so a caller can assert on it rather than read a log.
+///
+/// <para>
+/// <see cref="Failures"/> is not only exceptions. It carries everything that made the pass
+/// incomplete — a size nobody priced, a volume nobody measured, hours dropped at the backfill bound
+/// — because those are invisible otherwise: nothing throws, the ledger still adds up, and the run
+/// reports success having quietly hosted somebody for nothing. Each distinct cause appears once per
+/// pass, so a forgotten price on a popular tier is one legible line rather than twenty thousand.
+/// </para>
+/// </summary>
+public sealed record BillingTickResult(
+    int WorkspacesCharged,
+    int LinesWritten,
+    int HoursBackfilled,
+    IReadOnlyList<string> Failures);
+
+/// <summary>
+/// Charges every workspace for one hour that has already ended.
+///
+/// <para>
+/// <b>Runs unscoped, deliberately.</b> The EF tenancy filters are driven by the request's workspace,
+/// so work with no session behind it sees an empty database — it would charge nobody and report
+/// success. Every read here is <c>IgnoreQueryFilters</c>, which is the same call the retention
+/// sweeper makes for the same reason: relying on the ambient scope happening to be unscoped is a bet,
+/// and this codebase has already lost it four times. A test hands this class a context scoped to
+/// <see cref="Guid.Empty"/> — the deny-by-default scope an unauthenticated request resolves to — and
+/// counts the workspaces charged, because that failure is invisible in a log.
+/// </para>
+///
+/// <para>
+/// <b>Two things are never turned into money.</b> A rate nobody has set is null, not zero, and a
+/// volume nobody has measured has no size, not a size of nothing. Neither gets a ledger line: a line
+/// of zero reads on the bill exactly like a deliberately free resource, and — worse — it takes that
+/// resource's slot in the unique index for the hour, so the corrected pass after somebody sets the
+/// price collides with it and is discarded as "already charged". Writing nothing leaves the slot
+/// open, and the hour becomes payable the moment the gap is filled.
+/// </para>
+///
+/// <para>
+/// <b>An hour that could not be priced in full pays no plan minimum.</b> The floor is the difference
+/// between the hour's cost and the plan's minimum, so it cannot be worked out while part of the hour
+/// is unknown. Charging it anyway would let the corrected pass add the missing lines on top of a
+/// top-up that already covered them — two passes, each looking right, adding up to an overcharge.
+/// Under-charging visibly beats over-charging invisibly.
+/// </para>
+/// </summary>
+public sealed class BillingTick(
+    IServiceScopeFactory scopeFactory,
+    IOptions<BillingOptions> options,
+    ISystemClock clock,
+    ILogger<BillingTick> logger)
+{
+    /// <summary>
+    /// How many times the wallet write is re-read and re-applied before the workspace's hour is
+    /// recorded as failed. Small on purpose: a conflict means somebody else moved the balance, which
+    /// is a person crediting an account, not a hot loop.
+    /// </summary>
+    private const int WalletWriteAttempts = 3;
+
+    /// <summary>
+    /// One hour, every workspace. Idempotent twice over: the lines already written for the hour are
+    /// read first and skipped, and the unique index on
+    /// (WorkspaceId, ResourceType, ResourceId, BillingHour) settles the race the read cannot win. A
+    /// retry from the durable queue is therefore harmless.
+    /// </summary>
+    public async Task<BillingTickResult> ChargeHourAsync(DateTimeOffset hour, CancellationToken ct)
+    {
+        var pass = new Pass();
+        if (Off(hour)) return pass.Result();
+
+        await ChargeHourAsync(hour, pass, ct);
+        return pass.Result();
+    }
+
+    /// <summary>
+    /// Pay for every hour between <paramref name="lastChargedHour"/> and now, oldest first, up to
+    /// <c>Billing:MaxBackfillHours</c>. Reaching the bound is a warning naming the hours dropped.
+    ///
+    /// <para>
+    /// Oldest first, and the bound drops the newest: an hour dropped from the far end has not been
+    /// billed yet and the next catch-up reaches it, whereas dropping the oldest loses it for good
+    /// once it falls out of the window.
+    /// </para>
+    /// </summary>
+    public async Task<BillingTickResult> CatchUpAsync(DateTimeOffset lastChargedHour, CancellationToken ct)
+    {
+        var pass = new Pass();
+        if (Off(lastChargedHour)) return pass.Result();
+
+        var bound = Math.Max(0, options.Value.MaxBackfillHours);
+        var next = TopOfHour(lastChargedHour).AddHours(1);
+
+        // How many ended hours are owed, worked out rather than counted. `lastChargedHour` is a
+        // stored value, and one corrupted to a date in 1970 would otherwise spin a loop once for
+        // every hour since — before the pass had charged anybody.
+        var owed = (int)Math.Clamp(Math.Floor((clock.UtcNow - next).TotalHours), 0, int.MaxValue);
+
+        for (var h = next; HasEnded(h) && pass.HoursBackfilled < bound; h = h.AddHours(1))
+        {
+            await ChargeHourAsync(h, pass, ct);
+            pass.HoursBackfilled++;
+        }
+
+        var dropped = owed - pass.HoursBackfilled;
+        if (dropped <= 0) return pass.Result();
+
+        // Named rather than skipped. The whole point of the bound is that the platform does not get
+        // to decide on its own how much free hosting is acceptable, so the hours it declined to pay
+        // for are stated, with the setting that decided it.
+        var from = next.AddHours(pass.HoursBackfilled);
+        var message =
+            $"The backfill stopped at the {bound}-hour bound; {dropped} hour(s) from " +
+            $"{from:yyyy-MM-dd HH:mm}Z onwards were not charged. Raise " +
+            $"{BillingOptions.SectionName}:{nameof(BillingOptions.MaxBackfillHours)}, or run the " +
+            "catch-up again — the oldest hours were paid first, so the rest are still reachable.";
+        pass.Report("backfill-bound", message);
+        logger.LogWarning(
+            "Billing backfill stopped at the {Bound}-hour bound; {Dropped} hour(s) from {From} were not charged.",
+            bound, dropped, from);
+
+        return pass.Result();
+    }
+
+    /// <summary>
+    /// True when billing is switched off. Logged at debug rather than information: on an install
+    /// that never turns billing on this is every hour for ever, and a line nobody needs every hour
+    /// is how the log stops being read.
+    /// </summary>
+    private bool Off(DateTimeOffset hour)
+    {
+        if (options.Value.Enabled) return false;
+
+        logger.LogDebug(
+            "Billing is off ({Setting} is false); nothing was charged for {Hour}.",
+            $"{BillingOptions.SectionName}:{nameof(BillingOptions.Enabled)}", hour);
+        return true;
+    }
+
+    private async Task ChargeHourAsync(DateTimeOffset hour, Pass pass, CancellationToken ct)
+    {
+        var billingHour = TopOfHour(hour);
+
+        // An hour is charged after it is over. Billing forward makes a customer pay for an hour they
+        // might spend stopped, and there is no honest way to give it back except an adjustment line.
+        if (!HasEnded(billingHour)) return;
+
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+
+        var workspaces = await db.Workspaces.IgnoreQueryFilters().AsNoTracking().ToListAsync(ct);
+        if (workspaces.Count == 0) return;
+
+        var plans = await db.Plans.IgnoreQueryFilters().AsNoTracking().ToListAsync(ct);
+        var defaultPlan = plans.FirstOrDefault(p => p.IsDefault);
+
+        // Every size, once, rather than a join per workload. Keyed by Key because that is what an
+        // app and a managed service store — the key is not editable for exactly this reason.
+        var sizes = await db.InstanceSizes.IgnoreQueryFilters().AsNoTracking()
+            .ToDictionaryAsync(s => s.Key, ct);
+
+        foreach (var workspace in workspaces)
+        {
+            var plan = workspace.PlanId is { } id ? plans.FirstOrDefault(p => p.Id == id) : defaultPlan;
+
+            try
+            {
+                await ChargeWorkspaceAsync(db, workspace, plan, sizes, billingHour, pass, ct);
+            }
+            // Shutdown is not a billing failure. Without the guard, stopping the panel mid-pass
+            // records one failure per remaining tenant for a run that was simply asked to stop.
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                // Named, counted and stepped over. One broken tenant must not stop the platform
+                // billing the others — and the hour it lost is recoverable, because nothing was
+                // written for it and the index slot is still free.
+                pass.Report($"workspace:{workspace.Id}",
+                    $"Workspace \"{workspace.Name}\" was not charged for {billingHour:yyyy-MM-dd HH:mm}Z: {ex.Message}");
+                logger.LogError(ex,
+                    "Billing workspace {Workspace} for {Hour} failed; the remaining workspaces were still charged.",
+                    workspace.Id, billingHour);
+
+                // The tracker holds this workspace's rejected lines and a wallet decrement that
+                // never happened. Left there, the next workspace's save would try to write them
+                // again and fail with somebody else's name on it.
+                try
+                {
+                    db.ChangeTracker.Clear();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The context died with the write — a dropped connection, a failover, an
+                    // exhausted pool. Nothing more can be read or written through it, so the pass
+                    // ends here rather than reporting the same dead connection once per remaining
+                    // tenant and burying the one that named the cause. The hour is untouched and
+                    // the next pass will charge it.
+                    logger.LogError(
+                        "The billing pass for {Hour} stopped after the database connection was lost; " +
+                        "{Charged} workspace(s) had been charged.", billingHour, pass.Charged.Count);
+                    return;
+                }
+            }
+        }
+    }
+
+    private async Task ChargeWorkspaceAsync(
+        HarboraDbContext db,
+        Workspace workspace,
+        Plan? plan,
+        IReadOnlyDictionary<string, InstanceSize> sizes,
+        DateTimeOffset hour,
+        Pass pass,
+        CancellationToken ct)
+    {
+        var billable = new List<BillableResource>();
+
+        // Everything the hour holds that could not be turned into a number. One of these is enough
+        // to withhold the plan minimum, because the hour's total is then not known.
+        var unknowns = 0;
+
+        void Workload(BilledResourceType type, Guid id, string name, string? sizeKey, BilledRunState state)
+        {
+            if (sizeKey is null || !sizes.TryGetValue(sizeKey, out var size))
+            {
+                unknowns++;
+                // Per resource, not per size: each of these is a row somebody has to go and look at.
+                pass.Report($"sizeless:{id}",
+                    $"{type} \"{name}\" is on no instance size, so there is no rate to charge it at. " +
+                    "Give it a size, or it holds capacity nobody is billed for.");
+                return;
+            }
+
+            if (BillingRates.ForWorkload(size, state) is not { } rate)
+            {
+                unknowns++;
+                // Per size and state, not per resource. An operator who forgot to price a popular
+                // tier needs one line naming the tier, not one per workload sitting on it.
+                pass.Report($"unpriced-size:{size.Key}:{state}",
+                    $"Instance size \"{size.Key}\" has no price for a {state} workload, so nothing on " +
+                    "it was charged for this hour. Set the rate and the hour can still be backfilled; " +
+                    "set it to 0 if the tier really is free.");
+                return;
+            }
+
+            billable.Add(new BillableResource(type, id, name, state, rate));
+        }
+
+        var apps = await db.Apps.IgnoreQueryFilters().AsNoTracking()
+            .Where(a => a.WorkspaceId == workspace.Id).ToListAsync(ct);
+
+        foreach (var app in apps)
+        {
+            if (!TryRunState(app.Status, out var state))
+            {
+                unknowns++;
+                pass.Report($"app-status:{(int)app.Status}",
+                    $"App \"{app.Name}\" is in status {(int)app.Status}, which this billing code has " +
+                    "never heard of, so it was not charged. A status appended without a rule here " +
+                    "would otherwise be hosted for free.");
+                continue;
+            }
+
+            // Created and Deploying reserve nothing yet: no container, no image on disk, no port.
+            if (state is not { } billedState) continue;
+
+            Workload(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, billedState);
+        }
+
+        var services = await db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
+            .Where(s => s.WorkspaceId == workspace.Id).ToListAsync(ct);
+
+        foreach (var service in services)
+        {
+            if (!TryRunState(service.Status, out var state))
+            {
+                unknowns++;
+                pass.Report($"service-status:{(int)service.Status}",
+                    $"Database \"{service.Name}\" is in status {(int)service.Status}, which this " +
+                    "billing code has never heard of, so it was not charged.");
+                continue;
+            }
+
+            if (state is not { } billedState) continue;
+
+            Workload(BilledResourceType.Service, service.Id, service.Name, service.InstanceSizeKey, billedState);
+        }
+
+        // Volumes carry no WorkspaceId of their own — they are reached through their app, which is
+        // why they are read by app id rather than through a navigation. A navigation predicate would
+        // put the app's own query filter back into the join, which is the thing this pass is unscoped
+        // to avoid.
+        var appIds = apps.Select(a => a.Id).ToList();
+        var volumes = await db.Volumes.IgnoreQueryFilters().AsNoTracking()
+            .Where(v => appIds.Contains(v.AppId)).ToListAsync(ct);
+
+        foreach (var volume in volumes)
+        {
+            if (volume.StorageBytes is not { } bytes)
+            {
+                unknowns++;
+                // "Unmeasured is not zero" is a rule this platform already prints on every metric it
+                // shows. A volume with no reading is not a volume holding nothing, and billing it for
+                // nothing hosts whatever is really on it for free until somebody happens to measure.
+                pass.Report($"unmeasured-volume:{volume.Id}",
+                    $"Volume \"{volume.Name}\" has never been measured, so its disk was not charged " +
+                    "for this hour. It is not empty; it is unread.");
+                continue;
+            }
+
+            if (BillingRates.ForVolume(bytes, plan?.DiskGbHourMinor) is not { } rate)
+            {
+                unknowns++;
+                pass.Report($"unpriced-disk:{plan?.Id}",
+                    $"Plan \"{plan?.Name ?? "(none)"}\" has no price for a gibibyte-hour, so no disk " +
+                    "was charged on it. Set the rate, or set it to 0 if disk really is included.");
+                continue;
+            }
+
+            billable.Add(new BillableResource(
+                BilledResourceType.Volume, volume.Id, volume.Name, BilledRunState.NotApplicable, rate));
+        }
+
+        if (plan is null)
+        {
+            unknowns++;
+            pass.Report($"planless:{workspace.Id}",
+                $"Workspace \"{workspace.Name}\" is on no plan and there is no default plan, so " +
+                "nothing decides its hourly minimum or its disk price.");
+        }
+        else if (plan.BaseRatePerHourMinor is null)
+        {
+            // Reported but NOT counted as an unknown: an unpriced floor withholds only the floor
+            // line, and the resources still have prices of their own. Treating it as an unknown
+            // would stop a workspace being charged for its apps because of a blank on its plan.
+            pass.Report($"unpriced-plan:{plan.Id}",
+                $"Plan \"{plan.Name}\" has no hourly minimum, so no plan-minimum line was written " +
+                "for it. Null is not zero here: set it to 0 if the plan really has no floor.");
+        }
+
+        if (unknowns > 0 && plan?.BaseRatePerHourMinor is > 0)
+            pass.Report($"withheld-floor:{workspace.Id}",
+                $"Workspace \"{workspace.Name}\" did not pay its plan minimum this pass, because " +
+                $"{unknowns} of the things it held could not be priced and the shortfall is " +
+                "therefore unknown. Fix those and the hours can be backfilled in full.");
+
+        var lines = BillingHourPlan.For(
+            billable,
+            // Null when anything in the hour is unknown, so no floor line is written. Passing the
+            // property straight through is the whole point of the nullable parameter: there is no
+            // `?? 0` here to turn "nobody priced it" back into "it is free".
+            unknowns == 0 ? plan?.BaseRatePerHourMinor : null);
+
+        if (lines.Count == 0) return;
+
+        // What this hour already holds. The unique index is the authority, but reaching it means an
+        // exception and a rolled-back transaction, and the ordinary retry is not a race — it is the
+        // same queue message delivered twice.
+        var written = await AlreadyWrittenAsync(db, workspace.Id, hour, ct);
+
+        // `written.Add` returning false means the line is already on the bill. Adding as we go also
+        // drops a duplicate inside this hour's own plan, which the index would refuse anyway.
+        var fresh = lines.Where(l => written.Add((l.Type, l.Id))).ToList();
+        if (fresh.Count == 0) return;
+
+        var wallet = await db.Wallets.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(w => w.WorkspaceId == workspace.Id, ct);
+
+        if (wallet is null)
+        {
+            // Created here rather than at sign-up, and only when there is something to charge: a
+            // wallet row for a workspace that has never been billed says a balance of zero, which is
+            // a claim about money nobody has made.
+            wallet = new Wallet { WorkspaceId = workspace.Id };
+            db.Wallets.Add(wallet);
+        }
+
+        foreach (var line in fresh)
+        {
+            db.BillingLedger.Add(new BillingLedgerEntry
+            {
+                WorkspaceId = workspace.Id,
+                BillingHour = hour,
+                Kind = line.Kind,
+                AmountMinor = line.AmountMinor,
+                ResourceType = line.Type,
+                ResourceId = line.Id,
+                // Copied, never joined: an app deleted next month must still read on this month's
+                // bill.
+                ResourceName = line.Name,
+                RunState = line.State,
+                RatePerHourMinor = line.RatePerHourMinor,
+                Hours = 1,
+                // Left empty on purpose. Description is where a person says why they moved money;
+                // every fact about a tick's line is already in the columns beside it, and an English
+                // sentence stored here could not be rendered on the Persian half of a bilingual bill.
+                Description = string.Empty,
+            });
+        }
+
+        var moved = fresh.Sum(l => l.AmountMinor);
+        Apply(wallet, moved);
+
+        // The lines and the balance go in one SaveChanges, which is one transaction. They are two
+        // halves of one fact — the wallet is a cached total whose truth is SUM(AmountMinor) — and
+        // committing them separately leaves a window where the cache is a lie, plus a crash window
+        // where it stays one until somebody reconciles.
+        if (!await SaveAsync(db, wallet, moved, workspace.Id, hour, fresh, ct)) return;
+
+        pass.LinesWritten += fresh.Count;
+        pass.Charged.Add(workspace.Id);
+    }
+
+    /// <summary>
+    /// The (type, id) of every line already on this workspace's bill for this hour, over the two
+    /// kinds the tick writes. Credits and adjustments are a person's doing and may legitimately
+    /// repeat within an hour, so they are not part of the key.
+    /// </summary>
+    private static async Task<HashSet<(BilledResourceType Type, Guid? Id)>> AlreadyWrittenAsync(
+        HarboraDbContext db, Guid workspaceId, DateTimeOffset hour, CancellationToken ct) =>
+        (await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
+            .Where(l => l.WorkspaceId == workspaceId
+                        && l.BillingHour == hour
+                        && (l.Kind == LedgerKind.Charge || l.Kind == LedgerKind.PlanMinimumTopUp))
+            .Select(l => new { l.ResourceType, l.ResourceId })
+            .ToListAsync(ct))
+        .Select(l => (l.ResourceType, l.ResourceId))
+        .ToHashSet();
+
+    /// <summary>
+    /// Moves the balance and rotates the stamp.
+    ///
+    /// <para>
+    /// The rotation is the load-bearing half. EF checks a concurrency token by comparing the value
+    /// it read against the row it is updating, so a token nothing ever changes always matches: two
+    /// writers both succeed and the second silently overwrites the first. That is last-write-wins on
+    /// a balance, which is the one thing the token exists to prevent, and it looks exactly like a
+    /// working lock from the outside.
+    /// </para>
+    /// </summary>
+    private static void Apply(Wallet wallet, long moved)
+    {
+        wallet.BalanceMinor += moved;
+        wallet.ConcurrencyStamp = Guid.CreateVersion7();
+    }
+
+    /// <summary>
+    /// Writes the hour. False means the hour was already on the bill; an exception means something
+    /// else went wrong and the workspace's hour is recorded as failed.
+    /// </summary>
+    private async Task<bool> SaveAsync(
+        HarboraDbContext db,
+        Wallet wallet,
+        long moved,
+        Guid workspaceId,
+        DateTimeOffset hour,
+        IReadOnlyList<PlannedLine> fresh,
+        CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await db.SaveChangesAsync(ct);
+                return true;
+            }
+            // Somebody moved the balance between the read and the write — an administrator's credit,
+            // most likely. The lines are still worked out and still correct, so the balance is read
+            // again and the same movement re-applied on top of theirs. DbUpdateConcurrencyException
+            // derives from DbUpdateException, so this clause must come first or the unique-violation
+            // catch below would swallow it.
+            catch (DbUpdateConcurrencyException)
+                when (attempt < WalletWriteAttempts && db.Entry(wallet).State != EntityState.Added)
+            {
+                var entry = db.Entry(wallet);
+                await entry.ReloadAsync(ct);
+
+                // Reload detaches an entity whose row has gone. Re-applying to a detached wallet
+                // would change a value nothing is tracking and then report a clean save that wrote
+                // no money at all.
+                if (entry.State == EntityState.Detached) throw;
+
+                Apply(wallet, moved);
+            }
+            catch (DbUpdateException e)
+                when (e.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+            {
+                // Qualified on 23505 and nothing else, and the qualification still earns its place
+                // even though the verification below would rethrow anything else anyway. A unique
+                // violation leaves the connection healthy, so the question below can be asked; a
+                // dropped connection or a failover does not, and asking it there raises a SECOND,
+                // unrelated exception that replaces the first — an operator sent hunting a disposed
+                // object while the real fault goes unrecorded.
+                //
+                // Everything in hand is discarded first, the wallet decrement included: the write
+                // was refused as a whole, so nothing here happened.
+                db.ChangeTracker.Clear();
+
+                // 23505 says A unique index refused this, not WHICH one, and this write touches two.
+                // The other is Wallets.WorkspaceId, which two passes reaching a workspace's first
+                // charge at the same moment will both try to insert — and reading that as "already
+                // charged" would drop an hour nobody has billed while reporting success. So the
+                // question the code actually needs answering is asked directly: is this hour on the
+                // bill now? The connection survives a constraint violation, so it can be asked.
+                var now = await AlreadyWrittenAsync(db, workspaceId, hour, ct);
+                if (fresh.All(l => now.Contains((l.Type, l.Id)))) return false;
+
+                // Some other index refused it, or another pass wrote only part of this hour. Either
+                // way it is not paid for, and saying so is the only honest answer.
+                throw;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The state to bill a workload in, or null when it holds nothing yet. False means the status is
+    /// one this code has never seen.
+    ///
+    /// <para>
+    /// The unknown case is kept apart from "holds nothing yet" on purpose. <see cref="AppStatus"/> is
+    /// append-only, so it will grow an arm one day, and a default case that quietly answered "not
+    /// chargeable" would host every workload in the new state for free for ever while every tick
+    /// reported success. Throwing instead would be worse: one appended value would stop the platform
+    /// billing anybody. It is reported, and everything else in the hour is still charged.
+    /// </para>
+    /// </summary>
+    private static bool TryRunState(AppStatus status, out BilledRunState? state)
+    {
+        switch (status)
+        {
+            case AppStatus.Running:
+                state = BilledRunState.Running;
+                return true;
+            // Stopped but not deleted: the slot, the image and the disk are still the customer's.
+            // Failed and Crashed are the same reservation, held by a workload that is not working.
+            case AppStatus.Stopped or AppStatus.Failed or AppStatus.Crashed:
+                state = BilledRunState.Stopped;
+                return true;
+            case AppStatus.Created or AppStatus.Deploying:
+                state = null;
+                return true;
+            default:
+                state = null;
+                return false;
+        }
+    }
+
+    /// <inheritdoc cref="TryRunState(AppStatus, out BilledRunState?)"/>
+    private static bool TryRunState(ServiceStatus status, out BilledRunState? state)
+    {
+        switch (status)
+        {
+            case ServiceStatus.Running:
+                state = BilledRunState.Running;
+                return true;
+            case ServiceStatus.Stopped or ServiceStatus.Failed:
+                state = BilledRunState.Stopped;
+                return true;
+            case ServiceStatus.Provisioning:
+                state = null;
+                return true;
+            default:
+                state = null;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// The top of the UTC hour the given instant falls in.
+    ///
+    /// <para>
+    /// Every caller is normalised, not trusted. A timer naming an hour as 14:00 and a catch-up naming
+    /// the same hour as 14:37 must land on one row, or the unique index has nothing to collide on and
+    /// the retry it makes harmless becomes a second bill.
+    /// </para>
+    /// </summary>
+    private static DateTimeOffset TopOfHour(DateTimeOffset instant)
+    {
+        var utc = instant.ToUniversalTime();
+        return new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero);
+    }
+
+    /// <summary>True once the hour beginning at <paramref name="hour"/> is over.</summary>
+    private bool HasEnded(DateTimeOffset hour) => hour.AddHours(1) <= clock.UtcNow;
+
+    /// <summary>
+    /// What one pass has done so far, carried across the hours of a catch-up.
+    ///
+    /// <para>
+    /// The reported set is why it is carried: a day of backfill on a size nobody priced is one
+    /// mistake, not twenty-four, and repeating it per hour is how the channel that also carries real
+    /// faults becomes the one nobody reads.
+    /// </para>
+    /// </summary>
+    private sealed class Pass
+    {
+        /// <summary>Distinct workspaces, so one workspace over three hours is still one workspace.</summary>
+        public HashSet<Guid> Charged { get; } = [];
+
+        public int LinesWritten { get; set; }
+        public int HoursBackfilled { get; set; }
+
+        private readonly HashSet<string> _reported = new(StringComparer.Ordinal);
+        private readonly List<string> _failures = [];
+
+        public void Report(string key, string message)
+        {
+            if (_reported.Add(key)) _failures.Add(message);
+        }
+
+        public BillingTickResult Result() => new(Charged.Count, LinesWritten, HoursBackfilled, _failures);
+    }
+}

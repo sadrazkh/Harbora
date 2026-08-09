@@ -223,6 +223,13 @@ public static class DependencyInjection
         services.Configure<Maintenance.RetentionOptions>(
             config.GetSection(Maintenance.RetentionOptions.SectionName));
         services.AddHostedService<Maintenance.DataRetentionSweeper>();
+
+        // The hourly charge. Registered, but nothing schedules it yet and it refuses to move any
+        // money while Billing:Enabled is false — which is the shipped default, because an install
+        // that upgraded into billing unasked would start charging tenants who were never told there
+        // was a price.
+        services.Configure<Billing.BillingOptions>(config.GetSection(Billing.BillingOptions.SectionName));
+        services.AddScoped<Billing.BillingTick>();
         services.AddScoped<Services.AdminerService>();
         services.AddHostedService<Services.AdminerSweeper>();
 

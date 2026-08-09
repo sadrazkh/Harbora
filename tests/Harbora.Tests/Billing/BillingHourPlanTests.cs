@@ -57,6 +57,24 @@ public class BillingHourPlanTests
     }
 
     [Fact]
+    public void A_floor_nobody_has_priced_is_not_a_floor_of_zero()
+    {
+        // Both produce no top-up line, so this pins the arithmetic only weakly. What it really
+        // guards is the parameter's TYPE: `long?` is what stops a caller holding a nullable rate
+        // from writing `?? 0`, which is the one line that turns "nobody priced this plan" back into
+        // "this plan is free" — silently, with every tick reporting success. The signature is the
+        // guard; this is the test that fails if somebody narrows it back to `long`.
+        //
+        // Null also arrives for a second reason the tick relies on: an hour that could not be priced
+        // in full has no knowable shortfall, so it must not be charged a floor it might already have
+        // covered. See BillingTick's note on withholding the plan minimum.
+        BillingHourPlan.For([App("api", 600)], planBaseRatePerHourMinor: null)
+            .Should().OnlyContain(l => l.Kind == LedgerKind.Charge);
+
+        BillingHourPlan.For([], planBaseRatePerHourMinor: null).Should().BeEmpty();
+    }
+
+    [Fact]
     public void A_free_plan_with_nothing_running_produces_no_lines_at_all()
     {
         // Writing a row of zero every hour for every dormant workspace is how a ledger becomes the

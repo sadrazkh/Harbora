@@ -35,10 +35,21 @@ public static class BillingHourPlan
     /// in front of the person paying it: every app shows what it actually cost, and the gap between
     /// that and the floor is labelled as what it is.
     /// </para>
+    ///
+    /// <para>
+    /// <b><paramref name="planBaseRatePerHourMinor"/> is nullable, and null is not zero.</b> It is
+    /// null in two situations that look nothing alike and want the same answer: nobody has priced
+    /// the plan, and this hour could not be priced in full. In both, the shortfall is not a number
+    /// anyone knows — subtracting an incomplete total from a floor produces a top-up that covers a
+    /// gap which may not exist, and a corrected pass would then add the missing resource lines ON
+    /// TOP of it. Passing the property straight through is also what stops the caller writing
+    /// <c>?? 0</c>, which would put back the exact "unpriced reads as free" ambiguity the nullable
+    /// rate columns exist to remove.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<PlannedLine> For(
         IReadOnlyList<BillableResource> resources,
-        long planBaseRatePerHourMinor)
+        long? planBaseRatePerHourMinor)
     {
         var lines = new List<PlannedLine>(resources.Count + 1);
         var total = 0L;
@@ -61,7 +72,12 @@ public static class BillingHourPlan
                 AmountMinor: -r.RatePerHourMinor, LedgerKind.Charge));
         }
 
-        var shortfall = planBaseRatePerHourMinor - total;
+        // No floor known, no floor line. Deliberately not folded into the `> 0` test below: a null
+        // that reached that comparison would evaluate to false and produce the right rows for the
+        // wrong reason, leaving nothing to read when somebody asks what an unpriced plan does.
+        if (planBaseRatePerHourMinor is not { } floor) return lines;
+
+        var shortfall = floor - total;
         if (shortfall > 0)
         {
             lines.Add(new PlannedLine(
@@ -74,7 +90,7 @@ public static class BillingHourPlan
                 // The floor, not the gap — so the ledger records what the plan was that hour. This
                 // is the one line where rate × hours is deliberately not the amount; anything that
                 // reconciles a line by that multiplication has to exclude this kind.
-                RatePerHourMinor: planBaseRatePerHourMinor,
+                RatePerHourMinor: floor,
                 AmountMinor: -shortfall,
                 LedgerKind.PlanMinimumTopUp));
         }
