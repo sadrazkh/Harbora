@@ -79,6 +79,32 @@ internal static class GateHarness
 }
 
 /// <summary>
+/// One assertion, asked of every refusal the gate returns.
+///
+/// <para>
+/// The failure mode this guards against is not "ReasonFa is null" — that is a one-line assertion any
+/// test could make and a lazy fix could dodge by copying the English string into the Fa slot. Checking
+/// for a Persian character is the difference: it fails on null, on empty, and on a translation that
+/// never actually happened, the same way it would fail if somebody pasted the English sentence twice.
+/// </para>
+/// </summary>
+internal static class QuotaCheckAssertions
+{
+    public static void ShouldCarryAPersianReason(this QuotaCheck check)
+    {
+        check.ReasonFa.Should().NotBeNullOrWhiteSpace(
+            "this refusal reaches a customer on a panel that is bilingual everywhere else, and an " +
+            "English-only message is the one thing a customer already locked out should not get");
+
+        // The Arabic-script Unicode block (U+0600-U+06FF), spelled as escapes rather than literal
+        // right-to-left characters so the regex reads the same in every editor and diff tool.
+        check.ReasonFa!.Should().MatchRegex("[\\u0600-\\u06FF]",
+            "a Fa slot holding the English sentence again would pass a null-check and still not be " +
+            "a translation a Persian speaker could read");
+    }
+}
+
+/// <summary>
 /// What the one gate answers. Every start path in the platform asks this and nothing else, so the
 /// whole of "who may start something" is the truth table below.
 /// </summary>
@@ -95,6 +121,7 @@ public class BillingGateTests
 
         check.Allowed.Should().BeFalse();
         check.Reason.Should().NotBeNullOrWhiteSpace("a refusal a customer cannot read is a support ticket");
+        check.ShouldCarryAPersianReason();
     }
 
     [Fact]
@@ -156,6 +183,10 @@ public class BillingGateTests
         check.Reason.Should().NotContain("Top it up",
             "sending somebody to the payment page for a suspension no payment lifts is the refusal " +
             "that generates the support ticket it was written to prevent");
+        check.ShouldCarryAPersianReason();
+        // The Fa side must draw the same distinction the English one does: paying does not undo an
+        // operator's decision, so the Fa text must not point at a top-up either.
+        check.ReasonFa.Should().NotContain("شارژ");
     }
 
     [Fact]
@@ -169,7 +200,10 @@ public class BillingGateTests
         // None on a suspended workspace is every workspace suspended before the column existed. It
         // is not a NoBalance suspension, so money does not lift it — the same asymmetry
         // BillingSuspension.ResumeAsync draws, and for the same rows.
-        (await GateHarness.Gate(db).CanStartAsync(ws, default)).Allowed.Should().BeFalse();
+        var check = await GateHarness.Gate(db).CanStartAsync(ws, default);
+
+        check.Allowed.Should().BeFalse();
+        check.ShouldCarryAPersianReason();
     }
 
     [Fact]
@@ -218,7 +252,10 @@ public class BillingGateTests
     {
         await using var db = GateHarness.SystemContext();
 
-        (await GateHarness.Gate(db).CanStartAsync(Guid.NewGuid(), default)).Allowed.Should().BeFalse();
+        var check = await GateHarness.Gate(db).CanStartAsync(Guid.NewGuid(), default);
+
+        check.Allowed.Should().BeFalse();
+        check.ShouldCarryAPersianReason();
     }
 
     [Fact]

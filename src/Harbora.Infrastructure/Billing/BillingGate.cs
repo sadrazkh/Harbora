@@ -56,7 +56,8 @@ public sealed class BillingGate(HarboraDbContext db, IOptions<BillingOptions> op
 
         if (workspace is null)
             return QuotaCheck.Deny(
-                $"There is no workspace with id {workspaceId}, so nothing can be started for it.");
+                $"There is no workspace with id {workspaceId}, so nothing can be started for it.",
+                $"فضای کاری‌ای با شناسه‌ی {workspaceId} وجود ندارد؛ چیزی برای آن اجرا نخواهد شد.");
 
         if (workspace.IsDefault) return QuotaCheck.Ok;
 
@@ -80,10 +81,15 @@ public sealed class BillingGate(HarboraDbContext db, IOptions<BillingOptions> op
             if (workspace.SuspendedReason == SuspensionReason.NoBalance && balanceMinor > 0)
                 return QuotaCheck.Ok;
 
-            return QuotaCheck.Deny(workspace.SuspendedReason == SuspensionReason.Manual
-                ? "This workspace has been suspended by the provider. Nothing can be started until " +
-                  "that is lifted; paying does not lift it."
-                : "This workspace is suspended, so nothing can be started in it.");
+            return workspace.SuspendedReason == SuspensionReason.Manual
+                ? QuotaCheck.Deny(
+                    "This workspace has been suspended by the provider. Nothing can be started until " +
+                    "that is lifted; paying does not lift it.",
+                    "این فضای کاری توسط مدیر پلتفرم معلق شده است. تا برداشته‌شدن این تعلیق چیزی در آن " +
+                    "اجرا نخواهد شد؛ پرداخت هزینه، تعلیق را برنمی‌دارد.")
+                : QuotaCheck.Deny(
+                    "This workspace is suspended, so nothing can be started in it.",
+                    "این فضای کاری معلق است، بنابراین چیزی در آن اجرا نمی‌شود.");
         }
 
         // Zero is not a balance. The gap between the balance running out and the hourly pass
@@ -92,6 +98,8 @@ public sealed class BillingGate(HarboraDbContext db, IOptions<BillingOptions> op
             ? QuotaCheck.Ok
             : QuotaCheck.Deny(
                 "This workspace has no balance left, so nothing new can be started. " +
-                "Top it up and try again.");
+                "Top it up and try again.",
+                "اعتبار این فضای کاری به پایان رسیده است، بنابراین چیز جدیدی نمی‌تواند اجرا شود. " +
+                "حساب را شارژ کنید و دوباره تلاش کنید.");
     }
 }

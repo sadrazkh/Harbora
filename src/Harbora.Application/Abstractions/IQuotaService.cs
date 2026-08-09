@@ -12,10 +12,33 @@ public interface IQuotaService
     Task<QuotaCheck> CanAddServiceAsync(Guid workspaceId, string? instanceSizeKey, CancellationToken ct);
 }
 
-public sealed record QuotaCheck(bool Allowed, string? Reason)
+/// <param name="Reason">English refusal text. Never null when <paramref name="Allowed"/> is false.</param>
+/// <param name="ReasonFa">
+/// The same refusal in Persian, or null where nobody has translated this call site yet.
+///
+/// <para>
+/// Deliberately optional rather than a second required field, so the plan-limit refusals in
+/// <c>QuotaService</c> — written before this field existed — keep compiling and keep reading as
+/// English-only, which is what they still are. A caller displaying this to a customer decides for
+/// itself what a missing translation means for that surface; this type does not paper over the gap
+/// by inventing text.
+/// </para>
+///
+/// <para>
+/// Deliberately not resolved here from <see cref="System.Globalization.CultureInfo.CurrentUICulture"/>
+/// either, the way a Razor view picks between two inline literals with an <c>isFa</c> switch. Half of
+/// this record's callers — the cron tick, the job worker, the webhook — run with no request and so no
+/// request culture; asking the ambient culture from inside a quota check would answer with whatever
+/// the worker thread happened to inherit, not the customer's language. Carrying both strings and
+/// letting a request-bound caller pick is the same division of labour the views already use, just
+/// moved to whichever layer actually has a request to ask.
+/// </para>
+/// </param>
+public sealed record QuotaCheck(bool Allowed, string? Reason, string? ReasonFa = null)
 {
     public static readonly QuotaCheck Ok = new(true, null);
     public static QuotaCheck Deny(string reason) => new(false, reason);
+    public static QuotaCheck Deny(string reason, string reasonFa) => new(false, reason, reasonFa);
 }
 
 /// <param name="MemoryUsedBytes">
