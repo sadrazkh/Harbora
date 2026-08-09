@@ -573,6 +573,45 @@ MSG
 
 ---
 
+### Task 4b: Bill a managed database for the disk it holds
+
+**Added after Task 4's review found it. Dispatch after Task 5.**
+
+A managed service — Postgres, MySQL, Redis and the rest — carries its own `InstanceSizeKey`,
+`VolumeName` and `StorageBytes` on `ManagedService`, and has **no relation to the `Volume` table**,
+which is keyed by `AppId` alone. `BillingTick` reads volumes by `AppId`, so a managed service's
+storage is structurally unreachable from it.
+
+The consequence: a workspace pays the instance-size rate for its database and then holds unlimited
+storage for nothing. That is the largest revenue hole on the branch, and it is not a bug in Task 4 —
+its brief said "apps and services with their instance sizes, and its volumes", and a service's own
+storage was never named.
+
+**Files:**
+- Modify: `src/Harbora.Infrastructure/Billing/BillingTick.cs`
+- Test: `tests/Harbora.Tests/Billing/BillingTickTests.cs`
+
+- [ ] **Step 1: Write the failing test.** A managed service with storage produces a disk line. Assert
+  the amount, and assert the line's `ResourceType`/`ResourceId` — Task 3 found that charge lines whose
+  identity is never asserted let a hard-coded id pass every test, and Task 1's index is keyed on
+  exactly those columns.
+
+- [ ] **Step 2: Decide the ledger key and say why.** This is the real work. A managed service's disk
+  needs a `(ResourceType, ResourceId)` that (a) cannot collide with an app volume's line for the same
+  hour, and (b) stays stable across ticks so the unique index keeps a retry harmless. Consider whether
+  it deserves its own `BilledResourceType` member — **appended, never renumbered** — rather than
+  reusing `Volume` with a service id, and argue the choice. A reader of the bill has to be able to
+  tell "my database's disk" from "my app's disk".
+
+- [ ] **Step 3: Use `StorageBytes` as reserved, not measured.** Item 18 of the do-not-change list
+  keeps unmeasured disk from being read as zero. Task 4 already treats an unmeasured volume exactly
+  like an unpriced one — no line, reported. Follow that, and say in your report whether
+  `StorageBytes` is reserved or measured, because the bill has to say which.
+
+- [ ] **Step 4: Charge a stopped database too.** The agreed rate model is that a stopped workload
+  still pays for disk, because the data is still on the disk. A stopped managed service is the
+  clearest case of that.
+
 ### Task 2b: Tell "free" apart from "nobody set a price"
 
 **Added after Task 3, which found the ambiguity. Dispatch before Task 4 — the tick is where it has
