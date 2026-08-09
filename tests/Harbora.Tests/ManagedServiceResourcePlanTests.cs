@@ -3,8 +3,10 @@ using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Services;
 using Harbora.Domain.Tenancy;
+using Harbora.Infrastructure.Billing;
 using Harbora.Infrastructure.Tenancy;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -48,7 +50,10 @@ public class ManagedServiceResourcePlanTests
             new InstanceSize { Id = Guid.CreateVersion7(), Key = "large", Name = "Large", CpuCores = 2, MemoryBytes = 2048 * MB, IsEnabled = true, SortOrder = 9 });
 
         db.SaveChanges();
-        return (db, new QuotaService(db), workspace);
+
+        // Billing on, and the plan above leaves AllowsOverage false: every cap in this file is a
+        // wall, and stays one whatever the platform switch says.
+        return (db, new QuotaService(db, Options.Create(new BillingOptions { Enabled = true })), workspace);
     }
 
     private static ManagedService Database(Guid workspace, long memory, double cpu) => new()
