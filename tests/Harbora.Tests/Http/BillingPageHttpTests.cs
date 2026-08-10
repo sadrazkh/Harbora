@@ -305,15 +305,22 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
     public async Task A_negative_amount_typed_into_the_credit_box_takes_nothing_off()
     {
         // The one screen where money moves without a resource, an hour or a unique index behind it.
-        // A charge made through this door would have none of that ceremony, so it is refused — and
-        // refused by name, pointing at the thing that is for.
+        // A charge made through this door would have none of that ceremony, so it is refused.
+        //
+        // The refusal used to send the administrator to write an adjustment instead, and nothing in
+        // the platform writes one — LedgerKind.Adjustment is a member with no writer. So it now says
+        // what is true: money does not come off an account here at all. An assertion on the old
+        // sentence is what would have kept that direction alive after the door it pointed at was
+        // found to be painted on.
         var tenant = GivenTenant("credit-negative", balanceMinor: 50_000);
         Panel.GivenUser(fixture.WorkspaceId, "credit-negative@example.com", SystemRole.Owner);
         var client = await Panel.SignedInAs("203.0.113.161", "credit-negative@example.com");
 
         var response = await SubmitConfirmationPageAsync(client, tenant, "-100", "taking it back");
 
-        (await FollowAsync(client, response)).Should().Contain("write an adjustment against it");
+        var page = await FollowAsync(client, response);
+        page.Should().Contain("not something this panel can do");
+        page.Should().NotContain("write an adjustment against it");
         BalanceOf(tenant).Should().Be(50_000);
     }
 

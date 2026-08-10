@@ -363,8 +363,13 @@ public sealed class PlansController(
         // Says what it does not do. Instances already on this tier keep the figures they were given
         // — they carry their own copy — so a change here is about what happens next, not a resize
         // of everything running.
+        // Limits and price part company here, and the message has to say so. An instance froze its
+        // capacity when it was created, but the meter looks the rate up by size key on every tick —
+        // so a price change reaches everything already running, including hours that have elapsed
+        // and not yet been billed. Mint a new size key rather than repricing one in use.
         TempData["Message"] =
-            $"'{size.Name}' updated. Instances already on it keep their current limits until they are resized.";
+            $"'{size.Name}' updated. Instances already on it keep their current limits until they are " +
+            "resized — but a price change applies to everything running on this size, from the next tick.";
         return RedirectToAction(nameof(Index));
     }
 

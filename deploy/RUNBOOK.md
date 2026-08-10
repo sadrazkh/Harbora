@@ -266,6 +266,12 @@ account from **Tenants → a tenant → Credit**, and your customers get a **Bil
 balance and where it went), and no money moves and nothing stops on its own. **Do not read this
 release as "billing works, just off."** It is off, and it is also not yet plugged in.
 
+**"Sell past the caps" changes what a plan refuses, not just what it charges.** The Plans form gains a
+tick box for it. On a plan with it set, that plan's limits on apps, databases, memory, CPU and disk
+stop refusing — a customer can go past them and is charged for what they use at the ordinary rate.
+Leave it off and the caps behave exactly as they always have. It does nothing at all while
+`Billing:Enabled` is `false`, so it cannot hand out free capacity on an install that is not charging.
+
 **Blank prices are not free prices.** Every rate arrives unset — on plans and on instance sizes — and
 that is deliberately different from a rate of zero. Unset means nobody has decided; the hourly pass
 writes no line for it at all and names it in that run's warnings instead. Zero means you decided it

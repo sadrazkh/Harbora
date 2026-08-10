@@ -24,8 +24,16 @@ public sealed partial class TenantsController(
     Harbora.Infrastructure.Billing.WalletService wallet,
     ICurrentUser currentUser,
     IAuditLogger audit,
-    Harbora.Infrastructure.Billing.BillingSuspension suspension) : Controller
+    Harbora.Infrastructure.Billing.BillingSuspension suspension,
+    Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Billing.BillingOptions> billing) : Controller
 {
+    /// <summary>
+    /// What to label a figure with when the workspace has no wallet to read a code off. The
+    /// install's setting, not the shipped default: a provider selling in something else would
+    /// otherwise be shown the wrong money on every tenant the meter has not reached yet.
+    /// </summary>
+    private string FallbackCurrency => billing.Value.CurrencyOrDefault;
+
     /// <summary>Where the request came from, for the audit trail on a money movement.</summary>
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
@@ -173,9 +181,12 @@ public sealed partial class TenantsController(
     /// A page rather than a box on the details screen, for the reason every destructive action on
     /// this panel already has one: the figure has to be looked at by somebody before the money
     /// moves, and a number typed into a row of other controls is a number nobody re-reads. Money in
-    /// is not destructive, but it is irreversible in the only sense that matters here — nothing in
-    /// this ledger is ever edited or deleted, so undoing a credit means writing an opposing
-    /// adjustment against it and both stay on the customer's bill for ever.
+    /// is not destructive, but it is irreversible in the strongest sense there is here: nothing in
+    /// this ledger is ever edited or deleted, and <b>the panel has no way to write the opposing
+    /// line</b> that would cancel one. <see cref="LedgerKind.Adjustment"/> exists and nothing posts
+    /// it, so a credit that lands on the wrong tenant is settled off the platform. That makes this
+    /// page the last place anybody checks the workspace, the amount and the note, rather than the
+    /// first of two.
     /// </para>
     ///
     /// <para>
@@ -241,7 +252,10 @@ public sealed partial class TenantsController(
             return Again("Enter the amount in figures, for example 250000 or 250000.50.");
 
         if (amountMinor <= 0)
-            return Again("A credit puts money in. To take money off an account, write an adjustment against it.");
+            return Again(
+                "A credit puts money in. Taking money off an account is not something this panel " +
+                "can do: the ledger has a line for a correction and nothing here writes one, so a " +
+                "credit made in error has to be settled outside Harbora.");
 
         if (string.IsNullOrWhiteSpace(note))
             return Again("Say what this credit is for. It is the only thing on the line that explains why the balance moved.");
@@ -344,7 +358,7 @@ public sealed partial class TenantsController(
             CreditId = Guid.CreateVersion7(),
             HasWallet = wallet is not null,
             BalanceMinor = wallet?.BalanceMinor ?? 0,
-            Currency = wallet?.Currency ?? "IRR",
+            Currency = wallet?.Currency ?? FallbackCurrency,
             Suspended = ws.IsSuspended,
             SuspendedForNoBalance = ws.SuspendedReason == SuspensionReason.NoBalance,
             Amount = amount,
@@ -478,7 +492,7 @@ public sealed partial class TenantsController(
             WorkspaceId = ws.Id, Name = ws.Name, Slug = ws.Slug, IsDefault = ws.IsDefault, Suspended = ws.IsSuspended,
             HasWallet = wallet is not null,
             BalanceMinor = wallet?.BalanceMinor ?? 0,
-            Currency = wallet?.Currency ?? "IRR",
+            Currency = wallet?.Currency ?? FallbackCurrency,
             Usage = await quota.GetUsageAsync(ws.Id, ct),
             MemoryGbHours = metered?.MemoryGbHours ?? 0,
             CpuCoreHours = metered?.CpuCoreHours ?? 0,

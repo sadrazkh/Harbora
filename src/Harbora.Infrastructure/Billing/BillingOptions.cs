@@ -33,4 +33,29 @@ public sealed class BillingOptions
     /// </para>
     /// </summary>
     public int MaxBackfillHours { get; set; } = 72;
+
+    /// <summary>What <see cref="Currency"/> falls back to: the currency this platform was built for.</summary>
+    public const string DefaultCurrency = "IRR";
+
+    /// <summary>
+    /// ISO 4217 code for the money on this install. One code, for everybody: a wallet carries a copy
+    /// so an old row goes on saying what it was denominated in, but nothing here converts between two
+    /// currencies and nothing should be read as though it does.
+    ///
+    /// <para>
+    /// It ships as <see cref="DefaultCurrency"/> so an existing install sees no change at all. A
+    /// provider selling in something else sets it <b>before the first charge</b>: every wallet
+    /// already open keeps the code it was created with, because rewriting them would silently
+    /// redenominate balances somebody has already been billed against.
+    /// </para>
+    /// </summary>
+    public string Currency { get; set; } = DefaultCurrency;
+
+    /// <summary>
+    /// The code as it is actually written onto a wallet or printed beside a balance. A key present
+    /// but blank in a configuration file is an operator who has said nothing, not an operator who
+    /// wants a bill with no currency on it.
+    /// </summary>
+    public string CurrencyOrDefault =>
+        string.IsNullOrWhiteSpace(Currency) ? DefaultCurrency : Currency.Trim();
 }

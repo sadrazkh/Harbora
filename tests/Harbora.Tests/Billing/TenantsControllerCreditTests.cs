@@ -107,7 +107,8 @@ public class TenantsControllerCreditTests
         // WalletService, which holds its own. The console's resume button is the only caller that
         // holds one directly, and TenantsControllerResumeTests drives that.
         var controller = new TenantsController(
-            db, new Hasher(), new Quota(), wallet, new Caller(), audit, suspension: null!)
+            db, new Hasher(), new Quota(), wallet, new Caller(), audit, suspension: null!,
+            billing: Microsoft.Extensions.Options.Options.Create(new Harbora.Infrastructure.Billing.BillingOptions()))
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

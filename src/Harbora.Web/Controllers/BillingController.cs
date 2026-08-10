@@ -33,6 +33,7 @@ public sealed class BillingController(
     HarboraDbContext db,
     WalletService wallets,
     ICurrentUser currentUser,
+    Microsoft.Extensions.Options.IOptions<BillingOptions> billing,
     ISystemClock clock) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -73,7 +74,11 @@ public sealed class BillingController(
             WorkspaceName = workspace?.Name ?? string.Empty,
             HasWallet = wallet is not null,
             BalanceMinor = wallet?.BalanceMinor ?? 0,
-            Currency = wallet?.Currency ?? "IRR",
+            // The wallet's own code where there is one, and the install's setting where there is
+            // not. A workspace the meter has never reached has no row to read a currency off, and
+            // printing the shipped default at a provider who sells in something else would label
+            // every figure on the page with the wrong money.
+            Currency = wallet?.Currency ?? billing.Value.CurrencyOrDefault,
             Suspended = workspace?.IsSuspended ?? false,
             SuspendedForNoBalance = workspace?.SuspendedReason == SuspensionReason.NoBalance,
             Period = period,

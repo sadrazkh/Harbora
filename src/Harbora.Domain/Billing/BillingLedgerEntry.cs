@@ -16,7 +16,17 @@ public enum LedgerKind
     /// so the ledger totals exactly what left the wallet and the customer can see why.
     /// </summary>
     PlanMinimumTopUp = 2,
-    /// <summary>A correction. Nothing is ever edited or deleted; a mistake gets an opposing line.</summary>
+    /// <summary>
+    /// A correction: an opposing line, because nothing here is ever edited or deleted.
+    ///
+    /// <para>
+    /// <b>Nothing writes one.</b> No service, screen or command in this platform posts an
+    /// adjustment — the member exists, and the ledger's unique index deliberately leaves room for
+    /// two in one hour, but a credit that landed on the wrong workspace has no remedy in the
+    /// product and has to be settled outside it. Said here rather than left to be discovered,
+    /// because a kind that reads like a working feature is how somebody promises a customer one.
+    /// </para>
+    /// </summary>
     Adjustment = 3
 }
 
@@ -70,9 +80,14 @@ public enum BilledRunState
 }
 
 /// <summary>
-/// One line of one workspace's bill. <b>Append-only.</b> Nothing updates or deletes a row here: a
-/// correction is a new <see cref="LedgerKind.Adjustment"/> line, so "why did my balance move" is a
-/// query rather than a reconstruction.
+/// One line of one workspace's bill. <b>Append-only.</b> Nothing updates or deletes a row here, so
+/// "why did my balance move" is a query rather than a reconstruction.
+///
+/// <para>
+/// The shape a correction would take is a new <see cref="LedgerKind.Adjustment"/> line rather than
+/// an edit — and nothing in the platform writes one. See the note on that member: this is a design
+/// the schema is ready for and the product does not offer.
+/// </para>
 ///
 /// <para>
 /// <see cref="ResourceName"/> is copied rather than joined on purpose. An app deleted next month

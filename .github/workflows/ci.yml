@@ -159,7 +159,7 @@ jobs:
       # unexercised upgrade path.
       - name: The Postgres lane must have actually run
         if: always()
-        run: bash .github/scripts/assert-suite-ran.sh ./trx/postgres.trx 40 'Harbora.Postgres.Tests'
+        run: bash .github/scripts/assert-suite-ran.sh ./trx/postgres.trx 60 'Harbora.Postgres.Tests'
 
       - name: Keep the results
         if: always()

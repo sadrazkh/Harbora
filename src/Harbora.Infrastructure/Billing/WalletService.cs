@@ -3,6 +3,7 @@ using Harbora.Data;
 using Harbora.Domain.Billing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Npgsql;
 
 namespace Harbora.Infrastructure.Billing;
@@ -134,6 +135,7 @@ public sealed class WalletService(
     HarboraDbContext db,
     BillingSuspension suspension,
     ISystemClock clock,
+    IOptions<BillingOptions> options,
     ILogger<WalletService> logger)
 {
     /// <inheritdoc cref="BillingTick"/>
@@ -338,7 +340,16 @@ public sealed class WalletService(
             // The tick opens a wallet the first time it charges somebody, so an account credited
             // before it has ever been billed has no row yet. Refusing here would mean a customer
             // cannot pay in advance.
-            wallet = new Wallet { WorkspaceId = credit.WorkspaceId };
+            //
+            // The currency comes from the setting rather than from the entity's default, and this is
+            // one of exactly two places a wallet is ever opened. A provider selling in something
+            // other than the shipped code has to be able to say so once; a column defaulted in the
+            // domain and settable nowhere is a column that lies on every install but one.
+            wallet = new Wallet
+            {
+                WorkspaceId = credit.WorkspaceId,
+                Currency = options.Value.CurrencyOrDefault
+            };
             db.Wallets.Add(wallet);
         }
 

@@ -73,12 +73,18 @@ internal static class WalletHarness
     /// which is this path with nothing faked between the credit and the daemon.
     /// </para>
     /// </param>
+    /// <param name="currency">
+    /// What <c>Billing:Currency</c> says on this install. Left null it is the shipped default, so
+    /// every test that does not care about money's name reads exactly as it did before the setting
+    /// existed.
+    /// </param>
     public static WalletService Wallets(
         BillingContext db,
         FakeAppOperations? operations = null,
         BillingContext? through = null,
         BillingContext? resumeThrough = null,
-        IManagedServiceEngine? databases = null)
+        IManagedServiceEngine? databases = null,
+        string? currency = null)
     {
         // The service writes through a context of its own, so anything this one still tracks is
         // about to be stale — and EF answers a query from the instance it is already tracking, which
@@ -93,7 +99,13 @@ internal static class WalletHarness
             Options.Create(new BillingOptions { Enabled = true }),
             NullLogger<BillingSuspension>.Instance);
 
-        return new WalletService(context, suspension, Clock, NullLogger<WalletService>.Instance);
+        return new WalletService(
+            context, suspension, Clock,
+            Options.Create(new BillingOptions
+            {
+                Currency = currency ?? BillingOptions.DefaultCurrency
+            }),
+            NullLogger<WalletService>.Instance);
     }
 
     /// <summary>A customer workspace with a wallet, optionally already suspended and saying why.</summary>
@@ -272,6 +284,40 @@ public class WalletServiceTests
         result.BalanceMinor.Should().Be(100_000);
         (await db.Wallets.IgnoreQueryFilters().AsNoTracking().SingleAsync(w => w.WorkspaceId == ws))
             .BalanceMinor.Should().Be(100_000);
+    }
+
+    [Fact]
+    public async Task A_wallet_opened_by_a_credit_is_denominated_in_the_currency_the_install_sells_in()
+    {
+        // Wallet.Currency was hard-defaulted at both of the two places a wallet is ever opened, with
+        // no setting anywhere — so a provider selling in anything but the shipped code had a column
+        // saying otherwise on every customer they had. The code asked for is not the default one, or
+        // the assertion would pass just as well with the setting ignored.
+        await using var db = WalletHarness.SystemContext();
+        var ws = WalletHarness.SeedWorkspace(db, withWallet: false);
+        await db.SaveChangesAsync();
+
+        await WalletHarness.Wallets(db, currency: "EUR")
+            .CreditAsync(WalletHarness.Credit(ws, 100_000), default);
+
+        (await db.Wallets.IgnoreQueryFilters().AsNoTracking().SingleAsync(w => w.WorkspaceId == ws))
+            .Currency.Should().Be("EUR");
+    }
+
+    [Fact]
+    public async Task A_currency_left_blank_in_the_configuration_is_nobody_saying_anything()
+    {
+        // A key present and empty is an operator who has not answered, not one who wants a bill with
+        // no currency printed on it.
+        await using var db = WalletHarness.SystemContext();
+        var ws = WalletHarness.SeedWorkspace(db, withWallet: false);
+        await db.SaveChangesAsync();
+
+        await WalletHarness.Wallets(db, currency: "   ")
+            .CreditAsync(WalletHarness.Credit(ws, 100_000), default);
+
+        (await db.Wallets.IgnoreQueryFilters().AsNoTracking().SingleAsync(w => w.WorkspaceId == ws))
+            .Currency.Should().Be(BillingOptions.DefaultCurrency);
     }
 
     [Fact]

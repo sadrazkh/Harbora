@@ -168,7 +168,8 @@ internal static class Harness
         INotificationService? notifications = null,
         FakeAppOperations? operations = null,
         FakeDatabaseOperations? databases = null,
-        Func<BillingSuspension>? suspension = null)
+        Func<BillingSuspension>? suspension = null,
+        string? currency = null)
     {
         // Handing the database to the tick means giving up your cached copy of it. The tick writes
         // through a context of its own, so anything this one is still tracking is about to be stale
@@ -209,7 +210,12 @@ internal static class Harness
 
         return new BillingTick(
             provider.GetRequiredService<IServiceScopeFactory>(),
-            Options.Create(new BillingOptions { Enabled = enabled, MaxBackfillHours = maxBackfillHours }),
+            Options.Create(new BillingOptions
+            {
+                Enabled = enabled,
+                MaxBackfillHours = maxBackfillHours,
+                Currency = currency ?? BillingOptions.DefaultCurrency
+            }),
             Clock,
             NullLogger<BillingTick>.Instance);
     }
@@ -1198,6 +1204,24 @@ public class BillingTickTests
         await Harness.Tick(db).ChargeHourAsync(Hour, default);
 
         (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-500);
+    }
+
+    [Fact]
+    public async Task The_wallet_the_meter_opens_is_denominated_in_the_currency_the_install_sells_in()
+    {
+        // The tick and a top-up are the only two places a wallet is ever opened, and they have to
+        // agree: a customer whose first contact with billing was the meter would otherwise carry a
+        // different currency from one who paid in advance, on the same install.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 500);
+        await db.SaveChangesAsync();
+
+        db.Wallets.Remove(await db.Wallets.SingleAsync(w => w.WorkspaceId == ws));
+        await db.SaveChangesAsync();
+
+        await Harness.Tick(db, currency: "EUR").ChargeHourAsync(Hour, default);
+
+        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).Currency.Should().Be("EUR");
     }
 
     [Fact]

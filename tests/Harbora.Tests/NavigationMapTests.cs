@@ -101,4 +101,35 @@ public class NavigationMapTests
         // email to support instead of a page somebody reads for themselves.
         Items(NavigationMap.All).Single(i => i.Key == "billing").Capability.Should().BeNull();
     }
+
+    [Fact]
+    public void The_billing_entry_folds_away_where_nobody_has_switched_billing_on()
+    {
+        // Billing:Enabled ships false, so on every upgraded install this is the ordinary case: the
+        // provider has not decided to charge anybody, and a Billing tab offered to all their tenants
+        // regardless is the dead destination the rest of this map's rules already forbid.
+        var folded = BillingNavigation.Fold(NavigationMap.All, billingEnabled: false);
+
+        Items(folded).Should().NotContain(i => i.Key == BillingNavigation.ItemKey);
+    }
+
+    [Fact]
+    public void Switching_billing_on_puts_the_entry_back()
+    {
+        // The other half, and the one that stops "fold it away" being implemented as "delete it".
+        var shown = BillingNavigation.Fold(NavigationMap.All, billingEnabled: true);
+
+        Items(shown).Should().ContainSingle(i => i.Key == BillingNavigation.ItemKey);
+    }
+
+    [Fact]
+    public void Folding_billing_takes_nothing_else_out_of_the_sidebar()
+    {
+        var folded = BillingNavigation.Fold(NavigationMap.All, billingEnabled: false);
+
+        Items(folded).Select(i => i.Key)
+            .Should().BeEquivalentTo(
+                Items(NavigationMap.All).Select(i => i.Key).Where(k => k != BillingNavigation.ItemKey),
+                "one setting being off is not a reason for any other destination to disappear");
+    }
 }

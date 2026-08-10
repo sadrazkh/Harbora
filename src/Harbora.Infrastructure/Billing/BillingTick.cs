@@ -655,7 +655,16 @@ public sealed class BillingTick(
             // Created here rather than at sign-up, and only when there is something to charge: a
             // wallet row for a workspace that has never been billed says a balance of zero, which is
             // a claim about money nobody has made.
-            wallet = new Wallet { WorkspaceId = workspace.Id };
+            //
+            // The currency is the install's setting, not the entity's default — see
+            // BillingOptions.Currency. This and WalletService are the only two places a wallet is
+            // opened, and they have to agree or one customer's bill is denominated differently from
+            // the next depending on whether the meter or a top-up reached them first.
+            wallet = new Wallet
+            {
+                WorkspaceId = workspace.Id,
+                Currency = options.Value.CurrencyOrDefault
+            };
             db.Wallets.Add(wallet);
         }
 

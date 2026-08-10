@@ -1055,7 +1055,7 @@ public class BillingSuspensionTests
     /// </summary>
     private static TenantsController Console(BillingContext db)
     {
-        var controller = new TenantsController(db, null!, null!, null!, null!, null!, null!)
+        var controller = new TenantsController(db, null!, null!, null!, null!, null!, null!, null!)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };
