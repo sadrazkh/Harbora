@@ -256,7 +256,8 @@ public sealed partial class DatabasesController(
             .Where(s => allowed is null || allowed.Contains(s.Key))
             .Select(s => new SelectListItem(
                 Harbora.Infrastructure.Tenancy.InstanceSizeLabel.For(
-                    s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes), s.Key,
+                    s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes,
+                    s.RunningRatePerHourMinor, creationBilling.Currency), s.Key,
                 string.Equals(s.Key, current, StringComparison.OrdinalIgnoreCase)))
             .ToList();
     }

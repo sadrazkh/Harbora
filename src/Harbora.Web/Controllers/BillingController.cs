@@ -2,6 +2,7 @@ using System.Globalization;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Billing;
+using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
 using Harbora.Infrastructure.Billing;
 using Harbora.Web.ViewModels;
@@ -9,6 +10,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 
 namespace Harbora.Web.Controllers;
 
@@ -37,7 +39,9 @@ public sealed class BillingController(
     ICurrentUser currentUser,
     IAuditLogger audit,
     Microsoft.Extensions.Options.IOptions<BillingOptions> billing,
-    ISystemClock clock) : Controller
+    ISystemClock clock,
+    WorkspaceBudgetService budgets,
+    BillingSuspension suspension) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 
@@ -80,6 +84,7 @@ public sealed class BillingController(
 
         var thisMonth = Label(MonthOf(null).From);
         var period = Label(from);
+        var budgetState = await budgets.GetAsync(WorkspaceId, clock.UtcNow, ct);
 
         return View(new BillingPageViewModel
         {
@@ -93,6 +98,14 @@ public sealed class BillingController(
             Currency = wallet?.Currency ?? billing.Value.CurrencyOrDefault,
             Suspended = workspace?.IsSuspended ?? false,
             SuspendedForNoBalance = workspace?.SuspendedReason == SuspensionReason.NoBalance,
+            SuspendedForSpendLimit = workspace?.SuspendedReason == SuspensionReason.SpendLimit,
+            CurrentMonthSpendMinor = budgetState.SpendMinor,
+            MonthlyBudgetMinor = budgetState.BudgetMinor,
+            MonthlySpendLimitMinor = budgetState.SpendLimitMinor,
+            SpendLimitRemainingMinor = budgetState.RemainingMinor,
+            BudgetExceeded = budgetState.BudgetExceeded,
+            CanManageBudget = User.FindFirstValue(Harbora.Web.Infrastructure.HarboraClaims.WorkspaceRole)
+                == WorkspaceRole.Admin.ToString(),
             Period = period,
             PreviousPeriod = Label(from.AddMonths(-1)),
             // No link forward out of the month in progress: there is no bill after it yet, and a
@@ -102,6 +115,43 @@ public sealed class BillingController(
             Credits = credits,
             Adjustments = adjustments
         });
+    }
+
+    [HttpPost("budget")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SaveBudget(string? monthlyBudget, string? monthlySpendLimit, CancellationToken ct)
+    {
+        if (User.FindFirstValue(Harbora.Web.Infrastructure.HarboraClaims.WorkspaceRole)
+            != WorkspaceRole.Admin.ToString()) return Forbid();
+
+        if (!Harbora.Web.Infrastructure.MinorUnits.TryParseRate(monthlyBudget, out var budgetMinor)
+            || !Harbora.Web.Infrastructure.MinorUnits.TryParseRate(monthlySpendLimit, out var limitMinor)
+            || budgetMinor is < 0 || limitMinor is < 0)
+        {
+            TempData["Error"] = "Budget and spend limit must be empty or non-negative money amounts.";
+            return RedirectToAction(nameof(Index));
+        }
+        if (budgetMinor is > 0 && limitMinor is > 0 && budgetMinor > limitMinor)
+        {
+            TempData["Error"] = "The warning budget cannot be higher than the hard spend limit.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var workspace = await db.Workspaces.FirstAsync(w => w.Id == WorkspaceId, ct);
+        workspace.MonthlyBudgetMinor = budgetMinor is > 0 ? budgetMinor : null;
+        workspace.MonthlySpendLimitMinor = limitMinor is > 0 ? limitMinor : null;
+        await db.SaveChangesAsync(ct);
+        var resumed = await suspension.ResumeAsync(workspace.Id, ct);
+        await audit.LogAsync("billing.budget_updated", "workspace", workspace.Id.ToString(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+            {
+                workspace.MonthlyBudgetMinor,
+                workspace.MonthlySpendLimitMinor,
+                resumed.WorkspaceSuspended
+            }), ct: ct);
+        TempData["Message"] = "Monthly budget controls saved.";
+        return RedirectToAction(nameof(Index));
     }
 
     /// <summary>Redeems a single-use voucher into the workspace carried by the signed-in session.</summary>

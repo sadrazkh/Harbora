@@ -33,6 +33,13 @@ public sealed class BillingPageViewModel
     /// and telling a customer to top up would be sending them to spend money on nothing.
     /// </summary>
     public bool SuspendedForNoBalance { get; init; }
+    public bool SuspendedForSpendLimit { get; init; }
+    public long CurrentMonthSpendMinor { get; init; }
+    public long? MonthlyBudgetMinor { get; init; }
+    public long? MonthlySpendLimitMinor { get; init; }
+    public long? SpendLimitRemainingMinor { get; init; }
+    public bool BudgetExceeded { get; init; }
+    public bool CanManageBudget { get; init; }
 
     /// <summary>The month being shown, as <c>yyyy-MM</c>. Also what the links either side carry.</summary>
     public string Period { get; init; } = string.Empty;

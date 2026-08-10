@@ -30,9 +30,11 @@ public sealed class CreationPaymentRequiredException(string reason, string reaso
 public sealed class ResourceCreationBilling(
     HarboraDbContext db,
     ISystemClock clock,
-    IOptions<BillingOptions> options)
+    IOptions<BillingOptions> options,
+    WorkspaceBudgetService? budgets = null)
 {
     private const int SaveAttempts = 3;
+    public string Currency => options.Value.CurrencyOrDefault;
 
     public async Task<long> SaveAsync(
         Guid workspaceId,
@@ -96,6 +98,15 @@ public sealed class ResourceCreationBilling(
         var wallet = await db.Wallets.IgnoreQueryFilters()
             .FirstOrDefaultAsync(w => w.WorkspaceId == workspaceId, ct);
         EnsureAffordable(wallet, total, options.Value.CurrencyOrDefault);
+
+        var budget = budgets ?? new WorkspaceBudgetService(db);
+        if (!await budget.CanSpendAsync(workspaceId, total, clock.UtcNow, ct))
+        {
+            var state = await budget.GetAsync(workspaceId, clock.UtcNow, ct);
+            throw new CreationPaymentRequiredException(
+                $"This would exceed the workspace monthly spend limit of {Money(state.SpendLimitMinor!.Value)} {Currency}. No resource was created.",
+                $"این ساخت از سقف هزینه ماهانهٔ {Money(state.SpendLimitMinor!.Value)} {Currency} عبور می‌کند؛ هیچ منبعی ساخته نشد.");
+        }
 
         var hour = TopOfHour(clock.UtcNow);
         foreach (var (resource, rate) in priced.Where(x => x.Rate > 0))

@@ -25,6 +25,18 @@ public class Workspace : BaseEntity
     /// <summary>When suspended (e.g. overdue), new deploys are blocked.</summary>
     public bool IsSuspended { get; set; }
 
+    /// <summary>Optional soft monthly budget in minor units; crossing it is visible but does not stop workloads.</summary>
+    public long? MonthlyBudgetMinor { get; set; }
+
+    /// <summary>Optional hard monthly spend ceiling in minor units; zero/null disables it.</summary>
+    public long? MonthlySpendLimitMinor { get; set; }
+
+    /// <summary>UTC boundary at which a spend-limit suspension may automatically reset.</summary>
+    public DateTimeOffset? SpendLimitResetsAt { get; set; }
+
+    /// <summary>The hard limit that caused the current suspension, used to detect an explicit raise.</summary>
+    public long? SpendLimitAtSuspensionMinor { get; set; }
+
     /// <summary>
     /// Why this workspace is suspended. Without it a top-up would quietly lift an operator's
     /// deliberate suspension, which is the sort of thing nobody notices until it matters.
@@ -53,7 +65,10 @@ public enum SuspensionReason
     Manual = 1,
 
     /// <summary>The balance reached zero. A payment lifts this.</summary>
-    NoBalance = 2
+    NoBalance = 2,
+
+    /// <summary>The workspace reached its own hard monthly spend ceiling.</summary>
+    SpendLimit = 3
 }
 
 public class WorkspaceMember : BaseEntity

@@ -73,6 +73,8 @@ public sealed class BillingGate(
             .Where(w => w.WorkspaceId == workspaceId)
             .Select(w => (long?)w.BalanceMinor)
             .FirstOrDefaultAsync(ct) ?? 0;
+        var budget = await new WorkspaceBudgetService(db).GetAsync(
+            workspaceId, clock?.UtcNow ?? DateTimeOffset.UtcNow, ct);
 
         if (workspace.IsSuspended)
         {
@@ -89,15 +91,45 @@ public sealed class BillingGate(
             if (workspace.SuspendedReason == SuspensionReason.NoBalance && balanceMinor > 0)
                 return QuotaCheck.Ok;
 
+            // The first request made by automatic monthly resumption must be able to pass through
+            // the same gate it is trying to reopen. Raising/removing the cap has the same effect.
+            if (WorkspaceBudgetService.CanResetSpendLimit(
+                    workspace, clock?.UtcNow ?? DateTimeOffset.UtcNow))
+                return QuotaCheck.Ok;
+
             return workspace.SuspendedReason == SuspensionReason.Manual
                 ? QuotaCheck.Deny(
                     "This workspace has been suspended by the provider. Nothing can be started until " +
                     "that is lifted; paying does not lift it.",
                     "این فضای کاری توسط مدیر پلتفرم معلق شده است. تا برداشته‌شدن این تعلیق چیزی در آن " +
                     "اجرا نخواهد شد؛ پرداخت هزینه، تعلیق را برنمی‌دارد.")
+                : workspace.SuspendedReason == SuspensionReason.SpendLimit
+                ? QuotaCheck.Deny(
+                    "This workspace has reached its monthly spend limit. Raise the limit or wait for the next UTC month.",
+                    "این فضای کاری به سقف هزینهٔ ماهانه رسیده است؛ سقف را افزایش دهید یا تا ماه بعد به وقت UTC صبر کنید.")
                 : QuotaCheck.Deny(
                     "This workspace is suspended, so nothing can be started in it.",
                     "این فضای کاری معلق است، بنابراین چیزی در آن اجرا نمی‌شود.");
+        }
+
+
+        if (budget.SpendLimitReached)
+        {
+            // Reaching the limit by prepaying this resource's current hour does not invalidate the
+            // hour already bought. The identity prevents any other workload piggybacking on it.
+            if (resourceType != BilledResourceType.None && resourceId != Guid.Empty)
+            {
+                var hour = TopOfHour(clock?.UtcNow ?? DateTimeOffset.UtcNow);
+                var prepaidAtLimit = await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
+                    .AnyAsync(l => l.WorkspaceId == workspaceId && l.ResourceType == resourceType
+                        && l.ResourceId == resourceId && l.BillingHour == hour
+                        && l.Kind == LedgerKind.Charge && l.AmountMinor < 0, ct);
+                if (prepaidAtLimit) return QuotaCheck.Ok;
+            }
+
+            return QuotaCheck.Deny(
+                "This workspace has reached its monthly spend limit. Nothing new can be started until the limit is raised or the next UTC month begins.",
+                "این فضای کاری به سقف هزینهٔ ماهانه رسیده است؛ تا افزایش سقف یا شروع ماه بعد به وقت UTC چیزی اجرا نمی‌شود.");
         }
 
         if (balanceMinor > 0) return QuotaCheck.Ok;

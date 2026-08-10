@@ -168,6 +168,57 @@ public sealed class ResourceCreationBillingTests
             .Which.Message.Should().Contain("no running hourly price");
     }
 
+    [Fact]
+    public async Task Creation_that_would_cross_the_monthly_spend_limit_persists_nothing()
+    {
+        await using var db = Harness.SystemContext();
+        var (workspaceId, size) = Seed(db, balance: 500, rate: 125);
+        (await db.Workspaces.SingleAsync(w => w.Id == workspaceId)).MonthlySpendLimitMinor = 200;
+        db.BillingLedger.Add(new BillingLedgerEntry
+        {
+            WorkspaceId = workspaceId,
+            BillingHour = DuringHour.AddHours(-1),
+            Kind = LedgerKind.Charge,
+            AmountMinor = -100,
+            ResourceType = BilledResourceType.App,
+            ResourceId = Guid.NewGuid()
+        });
+        await db.SaveChangesAsync();
+        var app = App(workspaceId, size.Key);
+        db.Apps.Add(app);
+
+        var act = () => Billing(db).SaveAsync(workspaceId,
+            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey)], default);
+
+        (await act.Should().ThrowAsync<CreationPaymentRequiredException>())
+            .Which.Message.Should().Contain("monthly spend limit");
+        db.ChangeTracker.Clear();
+        (await db.Apps.IgnoreQueryFilters().AnyAsync(a => a.Id == app.Id)).Should().BeFalse();
+        (await db.Wallets.IgnoreQueryFilters().SingleAsync()).BalanceMinor.Should().Be(500);
+    }
+
+    [Fact]
+    public async Task Hourly_charge_that_would_cross_the_hard_limit_is_withheld_and_suspends_the_workspace()
+    {
+        await using var db = Harness.SystemContext();
+        var (workspaceId, size) = Seed(db, balance: 500, rate: 125);
+        var workspace = await db.Workspaces.SingleAsync(w => w.Id == workspaceId);
+        workspace.MonthlySpendLimitMinor = 100;
+        var app = App(workspaceId, size.Key);
+        app.Status = AppStatus.Running;
+        db.Apps.Add(app);
+        await db.SaveChangesAsync();
+
+        await Harness.Tick(db).ChargeHourAsync(
+            new DateTimeOffset(2026, 8, 9, 19, 0, 0, TimeSpan.Zero), default);
+
+        db.ChangeTracker.Clear();
+        (await db.BillingLedger.IgnoreQueryFilters().AnyAsync()).Should().BeFalse();
+        var after = await db.Workspaces.IgnoreQueryFilters().SingleAsync(w => w.Id == workspaceId);
+        after.IsSuspended.Should().BeTrue();
+        after.SuspendedReason.Should().Be(SuspensionReason.SpendLimit);
+    }
+
     private static ResourceCreationBilling Billing(Harbora.Data.HarboraDbContext db) =>
         new(db, new FixedClock(DuringHour), Options.Create(new BillingOptions
         {

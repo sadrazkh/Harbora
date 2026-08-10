@@ -116,6 +116,7 @@ public sealed class BillingTick(
 
         await ChargeHourAsync(hour, pass, ct);
         await StopWhoeverIsOutOfMoneyAsync(pass, ct);
+        await ResumeResetSpendLimitsAsync(pass, ct);
         return pass.Result();
     }
 
@@ -170,6 +171,7 @@ public sealed class BillingTick(
         // StopWhoeverIsOutOfMoneyAsync, and it is the difference between billing a day the customer
         // spent running and billing it at the rate of the outage this pass caused halfway through.
         await StopWhoeverIsOutOfMoneyAsync(pass, ct);
+        await ResumeResetSpendLimitsAsync(pass, ct);
 
         return pass.Result();
     }
@@ -395,6 +397,64 @@ public sealed class BillingTick(
                 logger.LogError(ex,
                     "Suspending workspace {Workspace} for an empty balance failed; the remaining workspaces were still suspended.",
                     workspace.Id);
+            }
+        }
+
+        var unpaidIds = unpaid.Select(w => w.Id).ToHashSet();
+        foreach (var workspaceId in pass.SpendLimited.Where(id => !unpaidIds.Contains(id)))
+        {
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+                var suspension = scope.ServiceProvider.GetRequiredService<BillingSuspension>();
+                var outcome = await suspension.SuspendForSpendLimitAsync(workspaceId, ct);
+                foreach (var failure in outcome.Failures)
+                    pass.Report($"spend-limit:{workspaceId}:{failure}", failure, accountingIncomplete: false);
+                if (outcome.WorkspaceSuspended) pass.Suspended.Add(workspaceId);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                pass.Report($"spend-limit:{workspaceId}",
+                    $"Workspace {workspaceId} crossed its monthly spend limit but could not be stopped: {ex.Message}",
+                    accountingIncomplete: false);
+            }
+        }
+    }
+
+    private async Task ResumeResetSpendLimitsAsync(Pass pass, CancellationToken ct)
+    {
+        List<Workspace> candidates;
+        try
+        {
+            using var readScope = scopeFactory.CreateScope();
+            var db = readScope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+            candidates = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
+                .Where(w => w.IsSuspended && w.SuspendedReason == SuspensionReason.SpendLimit)
+                .ToListAsync(ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            pass.Report("spend-limit-resume-read",
+                $"Spend-limit suspensions could not be checked for monthly reset: {ex.Message}",
+                accountingIncomplete: false);
+            return;
+        }
+        foreach (var workspace in candidates)
+        {
+            if (!WorkspaceBudgetService.CanResetSpendLimit(workspace, clock.UtcNow)) continue;
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+                var outcome = await scope.ServiceProvider.GetRequiredService<BillingSuspension>()
+                    .ResumeAsync(workspace.Id, ct);
+                foreach (var failure in outcome.Failures)
+                    pass.Report($"spend-limit-resume:{workspace.Id}:{failure}", failure, accountingIncomplete: false);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                pass.Report($"spend-limit-resume:{workspace.Id}",
+                    $"Workspace {workspace.Id}'s monthly spend-limit suspension could not be reset: {ex.Message}",
+                    accountingIncomplete: false);
             }
         }
     }
@@ -648,6 +708,18 @@ public sealed class BillingTick(
         var fresh = lines.Where(l => written.Add((l.Type, l.Id))).ToList();
         if (fresh.Count == 0) return hourCostMinor;
 
+        var freshCost = checked(-fresh.Sum(l => l.AmountMinor));
+        var budget = await new WorkspaceBudgetService(db).GetAsync(workspace.Id, hour, ct);
+        var projectedSpend = checked(budget.SpendMinor + freshCost);
+        if (budget.SpendLimitMinor is > 0 && projectedSpend > budget.SpendLimitMinor.Value)
+        {
+            pass.SpendLimited.Add(workspace.Id);
+            pass.Report($"spend-limit:{workspace.Id}:{hour:yyyy-MM}",
+                $"Workspace \"{workspace.Name}\" reached its monthly spend limit; the hour was not charged and its workloads will be stopped.",
+                accountingIncomplete: false);
+            return hourCostMinor;
+        }
+
         var wallet = await db.Wallets.IgnoreQueryFilters()
             .FirstOrDefaultAsync(w => w.WorkspaceId == workspace.Id, ct);
 
@@ -703,6 +775,8 @@ public sealed class BillingTick(
 
         pass.LinesWritten += fresh.Count;
         pass.Charged.Add(workspace.Id);
+        if (budget.SpendLimitMinor is > 0 && projectedSpend >= budget.SpendLimitMinor.Value)
+            pass.SpendLimited.Add(workspace.Id);
 
         return hourCostMinor;
     }
@@ -1121,6 +1195,7 @@ public sealed class BillingTick(
         /// and because the sweep that fills it is allowed to be run twice over the same pass.
         /// </summary>
         public HashSet<Guid> Suspended { get; } = [];
+        public HashSet<Guid> SpendLimited { get; } = [];
 
         public int LinesWritten { get; set; }
         public int HoursBackfilled { get; set; }

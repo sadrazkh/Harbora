@@ -87,6 +87,12 @@
                         ? "به‌دلیل تمام‌شدن اعتبار. با شارژ حساب، همان چیزهایی که این تعلیق متوقفشان کرده بود دوباره اجرا می‌شوند."
                         : "Because the balance ran out. Topping the account up starts back exactly what this suspension stopped.")
                 }
+                else if (Model.SuspendedForSpendLimit)
+                {
+                    @(isFa
+                        ? "به سقف هزینهٔ ماهانه رسیده‌اید. سقف را افزایش دهید یا تا شروع ماه بعد به وقت UTC صبر کنید."
+                        : "The monthly spend limit was reached. Raise it or wait for the next UTC month.")
+                }
                 else
                 {
                     @* Said plainly rather than hidden behind a generic "contact support": telling
@@ -98,6 +104,36 @@
                 }
             </p>
         </div>
+    }
+</div>
+
+<div class="rounded-xl border border-line bg-surface p-4 mb-6">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+            <h2 class="font-semibold text-ink">@(isFa ? "کنترل هزینهٔ ماهانه" : "Monthly cost controls")</h2>
+            <p class="text-sm text-ink-muted mt-1">
+                @(isFa ? "بودجه هشدار می‌دهد؛ سقف هزینه جلوی ساخت و اجرای بیشتر را می‌گیرد." : "The budget warns; the spend limit blocks further creation and runtime.")
+            </p>
+        </div>
+        <div class="text-end">
+            <div class="text-xs text-ink-muted">@(isFa ? "هزینهٔ ماه جاری" : "Current month spend")</div>
+            <div class="font-semibold @(Model.BudgetExceeded ? "text-warning" : "text-ink")" dir="ltr">@MinorUnits.Format(Model.CurrentMonthSpendMinor, Model.Currency)</div>
+            @if (Model.SpendLimitRemainingMinor is { } remaining)
+            {
+                <div class="text-xs text-ink-faint" dir="ltr">@(isFa ? "باقی‌مانده: " : "Remaining: ")@MinorUnits.Format(remaining, Model.Currency)</div>
+            }
+        </div>
+    </div>
+    @if (Model.CanManageBudget)
+    {
+        <form method="post" action="/billing/budget" class="grid sm:grid-cols-2 gap-3 mt-4">
+            @Html.AntiForgeryToken()
+            <label class="form-field"><span>@(isFa ? "بودجهٔ هشدار" : "Warning budget")</span>
+                <input name="monthlyBudget" value="@MinorUnits.Box(Model.MonthlyBudgetMinor)" inputmode="decimal" class="form-control" dir="ltr" placeholder="@(isFa ? "خالی = غیرفعال" : "empty = disabled")" /></label>
+            <label class="form-field"><span>@(isFa ? "سقف سخت هزینه" : "Hard spend limit")</span>
+                <input name="monthlySpendLimit" value="@MinorUnits.Box(Model.MonthlySpendLimitMinor)" inputmode="decimal" class="form-control" dir="ltr" placeholder="@(isFa ? "خالی = غیرفعال" : "empty = disabled")" /></label>
+            <button class="btn-primary sm:col-span-2 justify-center">@(isFa ? "ذخیرهٔ کنترل هزینه" : "Save cost controls")</button>
+        </form>
     }
 </div>
 

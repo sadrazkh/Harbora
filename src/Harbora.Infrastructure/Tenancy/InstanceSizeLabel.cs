@@ -18,10 +18,17 @@ public static class InstanceSizeLabel
     /// "unlimited": a tier with no ceiling is the state every tier was in until now, and a picker
     /// that says "unlimited disk" on all five reads as a promise nobody made.
     /// </summary>
-    public static string For(string name, double cpuCores, long memoryBytes, long diskBytes)
+    public static string For(
+        string name, double cpuCores, long memoryBytes, long diskBytes,
+        long? runningRatePerHourMinor = null, string? currency = null)
     {
         var label = $"{name} — {cpuCores:0.##} vCPU / {ByteSize.Format(memoryBytes)}";
 
-        return diskBytes > 0 ? $"{label} / {ByteSize.Format(diskBytes)}" : label;
+        if (diskBytes > 0) label += $" / {ByteSize.Format(diskBytes)}";
+        if (runningRatePerHourMinor is { } rate)
+            label += $" — {(rate / 100m).ToString("#,##0.00", System.Globalization.CultureInfo.InvariantCulture)} {currency ?? ""}/hour";
+        else if (currency is not null)
+            label += " — price not set";
+        return label;
     }
 }

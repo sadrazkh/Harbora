@@ -117,7 +117,8 @@ public sealed class BillingSuspension(
     IAppOperationsService apps,
     IManagedServiceEngine databases,
     IOptions<BillingOptions> options,
-    ILogger<BillingSuspension> logger)
+    ILogger<BillingSuspension> logger,
+    Harbora.Application.Abstractions.ISystemClock? clock = null)
 {
     /// <summary>
     /// Suspends a workspace for an empty balance: blocks its deploys, writes down what was running,
@@ -136,8 +137,17 @@ public sealed class BillingSuspension(
     /// so stopping apps this method may not label is stopping them with nobody left to start them.
     /// </para>
     /// </summary>
-    public async Task<BillingSuspensionResult> SuspendAsync(Guid workspaceId, CancellationToken ct)
+    public Task<BillingSuspensionResult> SuspendAsync(Guid workspaceId, CancellationToken ct) =>
+        SuspendAsync(workspaceId, SuspensionReason.NoBalance, ct);
+
+    public Task<BillingSuspensionResult> SuspendForSpendLimitAsync(Guid workspaceId, CancellationToken ct) =>
+        SuspendAsync(workspaceId, SuspensionReason.SpendLimit, ct);
+
+    private async Task<BillingSuspensionResult> SuspendAsync(
+        Guid workspaceId, SuspensionReason reason, CancellationToken ct)
     {
+        if (reason is not (SuspensionReason.NoBalance or SuspensionReason.SpendLimit))
+            throw new ArgumentOutOfRangeException(nameof(reason));
         var report = new Report();
 
         var workspace = await WorkspaceAsync(workspaceId, ct);
@@ -194,7 +204,7 @@ public sealed class BillingSuspension(
         // default instead of being quietly overwritten with NoBalance — which is the same trap
         // SuspendedReason's own doc-comment describes, arriving through the other door: relabelling
         // a suspension nobody can explain would make a payment lift it.
-        if (workspace.IsSuspended && workspace.SuspendedReason != SuspensionReason.NoBalance)
+        if (workspace.IsSuspended && workspace.SuspendedReason != reason)
         {
             var who = workspace.SuspendedReason == SuspensionReason.Manual
                 ? "by an operator"
@@ -264,7 +274,14 @@ public sealed class BillingSuspension(
         // Unconditional, and only because the guard above has already established that this reason
         // is billing's to write. Testing it again here would be a second copy of the rule, free to
         // disagree with the one that decided whether the apps get stopped.
-        workspace.SuspendedReason = SuspensionReason.NoBalance;
+        workspace.SuspendedReason = reason;
+        if (reason == SuspensionReason.SpendLimit && !alreadySuspended)
+        {
+            var now = (clock?.UtcNow ?? DateTimeOffset.UtcNow).ToUniversalTime();
+            workspace.SpendLimitResetsAt = new DateTimeOffset(
+                now.Year, now.Month, 1, 0, 0, 0, TimeSpan.Zero).AddMonths(1);
+            workspace.SpendLimitAtSuspensionMinor = workspace.MonthlySpendLimitMinor;
+        }
 
         // Written before a single container is touched, which is the node agent's drain rule applied
         // to a workspace. If the panel dies partway through the stops below, this is the only record
@@ -401,8 +418,15 @@ public sealed class BillingSuspension(
         // Not reported as a failure. A payment landing on a workspace an operator suspended, or on
         // one that was never suspended at all, is an ordinary thing that happens; the correct
         // response is to leave it exactly as it is.
-        if (workspace.SuspendedReason != SuspensionReason.NoBalance)
+        if (workspace.SuspendedReason is not (SuspensionReason.NoBalance or SuspensionReason.SpendLimit))
             return report.Result(workspace.IsSuspended);
+
+        if (workspace.SuspendedReason == SuspensionReason.SpendLimit)
+        {
+            if (!WorkspaceBudgetService.CanResetSpendLimit(
+                    workspace, clock?.UtcNow ?? DateTimeOffset.UtcNow))
+                return report.Result(suspended: true);
+        }
 
         var marked = (await AppsOfAsync(workspaceId, ct)).Where(a => a.WasRunningAtSuspension).ToList();
         var refused = new Dictionary<Guid, string>();
@@ -527,6 +551,8 @@ public sealed class BillingSuspension(
         {
             workspace.IsSuspended = false;
             workspace.SuspendedReason = SuspensionReason.None;
+            workspace.SpendLimitResetsAt = null;
+            workspace.SpendLimitAtSuspensionMinor = null;
         }
         else
         {
