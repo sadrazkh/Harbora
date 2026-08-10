@@ -26,9 +26,39 @@ public enum BilledResourceType
     None = 0,
     App = 1,
     Service = 2,
+    /// <summary>An app's volume. <c>ResourceId</c> is the <c>Volume</c> row's own id.</summary>
     Volume = 3,
     /// <summary>The plan-minimum line. Carries a null <c>ResourceId</c>.</summary>
-    PlanBase = 4
+    PlanBase = 4,
+
+    /// <summary>
+    /// The data disk under a managed database. <c>ResourceId</c> is the <b>managed service's</b> own
+    /// id, because the disk has no row of its own: a <c>ManagedService</c> carries its
+    /// <c>VolumeName</c> and <c>StorageBytes</c> on itself and has no relation to the <c>Volume</c>
+    /// table at all, which is keyed by <c>AppId</c>.
+    ///
+    /// <para>
+    /// A member of its own rather than <see cref="Volume"/> with a service id, for three reasons.
+    /// It cannot collide with the database's own <see cref="Service"/> line for the hour, nor with
+    /// an app volume's, and the index that makes a retried tick harmless is keyed on exactly
+    /// <c>(WorkspaceId, ResourceType, ResourceId, BillingHour)</c> — reusing <see cref="Volume"/>
+    /// would leave that index correct only because two tables happen never to mint the same
+    /// <c>Guid</c>, which is an accident rather than a decision. It keeps
+    /// <c>(ResourceType, ResourceId)</c> a key to exactly one table, so a bill screen or a support
+    /// query resolving a line has one place to look instead of two — a reader that joined every
+    /// <see cref="Volume"/> row to <c>Volumes</c> would find nothing for half of them and render a
+    /// blank, which is the failure copying <c>ResourceName</c> exists to prevent, arriving through
+    /// the id instead. And the customer can tell their database's disk from their app's disk by
+    /// category rather than by reading a name they chose themselves.
+    /// </para>
+    ///
+    /// <para>
+    /// One line per service per hour, because a managed service has exactly one
+    /// <c>VolumeName</c>. A second data volume on a database would need its own key, and the row it
+    /// gained would supply one.
+    /// </para>
+    /// </summary>
+    ServiceVolume = 5
 }
 
 /// <summary>Whether the resource was running for the hour being charged.</summary>

@@ -297,10 +297,42 @@ internal static class Harness
     }
 
     /// <summary>
+    /// A running managed database in an existing workspace, with the disk figure the tick needs.
+    ///
+    /// <para>
+    /// <c>VolumeName</c> is set because every path in the product that creates one sets it — the
+    /// database form, a template stack, an environment clone — so a fixture that left it blank would
+    /// be a state the platform cannot produce.
+    /// </para>
+    /// </summary>
+    public static Guid AddDatabase(
+        HarboraDbContext db,
+        Guid workspaceId,
+        string name,
+        ServiceStatus status = ServiceStatus.Running,
+        long? storageBytes = null)
+    {
+        var service = new ManagedService
+        {
+            WorkspaceId = workspaceId,
+            Name = name,
+            Status = status,
+            VolumeName = $"harbora-svc-{name}-data",
+            StorageBytes = storageBytes,
+        };
+
+        db.ManagedServices.Add(service);
+        return service.Id;
+    }
+
+    /// <summary>
     /// A stand-in for the platform's stop/start route, over the same hostile scope the suspension
     /// itself is given. Handed in when a test needs to make the route fail, or lie.
     /// </summary>
     public static FakeAppOperations Operations(BillingContext db) => new(TickContext(db));
+
+    /// <inheritdoc cref="Operations"/>
+    public static FakeDatabaseOperations Databases(BillingContext db) => new(TickContext(db));
 
     /// <summary>
     /// The suspension, wired to a context scoped to <see cref="Guid.Empty"/>.
@@ -317,7 +349,8 @@ internal static class Harness
     public static BillingSuspension Suspension(
         BillingContext db,
         FakeAppOperations? operations = null,
-        bool enabled = true)
+        bool enabled = true,
+        FakeDatabaseOperations? databases = null)
     {
         // The suspension writes through a context of its own, so anything this one still tracks is
         // about to be stale — and EF answers a query from the instance it is already tracking, which
@@ -327,6 +360,7 @@ internal static class Harness
         return new BillingSuspension(
             TickContext(db),
             operations ?? Operations(db),
+            databases ?? Databases(db),
             Options.Create(new BillingOptions { Enabled = enabled }),
             NullLogger<BillingSuspension>.Instance);
     }
@@ -587,6 +621,277 @@ public class BillingTickTests
         (await db.BillingLedger.AnyAsync(l => l.ResourceType == BilledResourceType.Volume)).Should().BeFalse();
         result.Failures.Should().ContainSingle(f => f.Contains("uploads"));
         (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-500);
+    }
+
+    // --- the disk a managed database holds ----------------------------------------------------
+    //
+    // A managed service carries its own VolumeName and StorageBytes and has no row in the Volumes
+    // table at all, which is keyed by AppId alone. The disk loop above therefore cannot reach a
+    // database's storage by any route, and a workspace paid for its database's size and then held as
+    // much data on it as it liked, for nothing.
+
+    /// <summary>A running database with a measured disk, in the workspace the harness seeded.</summary>
+    private static ManagedService Database(
+        Guid workspaceId,
+        string name = "tenant-db",
+        long? storageBytes = null,
+        ServiceStatus status = ServiceStatus.Running,
+        DateTimeOffset? measuredAt = null) =>
+        new()
+        {
+            WorkspaceId = workspaceId,
+            Name = name,
+            Status = status,
+            InstanceSizeKey = "tenant-size",
+            // Always set by every path that creates one — the database form, a template stack, an
+            // environment clone — so a fixture that left it blank would be a state the product
+            // cannot produce.
+            VolumeName = $"harbora-svc-{name}-data",
+            StorageBytes = storageBytes,
+            StorageMeasuredAt = measuredAt,
+        };
+
+    [Fact]
+    public async Task A_managed_databases_disk_is_charged_by_the_gibibyte_it_holds()
+    {
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 500);
+        await db.SaveChangesAsync();
+
+        (await db.Plans.SingleAsync()).DiskGbHourMinor = 20;
+        db.ManagedServices.Add(Database(ws, storageBytes: 3L * 1024 * 1024 * 1024 + 1));
+        await db.SaveChangesAsync();
+
+        var service = await db.ManagedServices.AsNoTracking().SingleAsync();
+
+        await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        var line = await db.BillingLedger.SingleAsync(l => l.ResourceType == BilledResourceType.ServiceVolume);
+
+        // One byte into the fourth gibibyte, at 20 a gibibyte-hour.
+        line.AmountMinor.Should().Be(-80);
+        line.RunState.Should().Be(BilledRunState.NotApplicable);
+
+        // Asserted rather than assumed. Task 3 found that a charge line whose identity nothing checks
+        // lets a hard-coded id pass every test, and these are the two columns the unique index that
+        // makes a retry harmless is keyed on.
+        line.ResourceId.Should().Be(service.Id);
+        line.ResourceName.Should().Be("tenant-db");
+
+        // 500 for the app, 500 for the database's size, 80 for the disk under it.
+        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-1080);
+    }
+
+    [Fact]
+    public async Task A_databases_disk_and_an_app_volume_are_two_lines_a_customer_can_tell_apart()
+    {
+        // The whole of the ledger-key decision, in one assertion. The two disks must not share a
+        // (ResourceType, ResourceId) — that pair is the unique index's key for the hour — and a
+        // reader of the bill has to be able to say which of them is the database's without parsing
+        // a name the customer chose.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 500);
+        await db.SaveChangesAsync();
+
+        (await db.Plans.SingleAsync()).DiskGbHourMinor = 20;
+        db.Volumes.Add(new Volume
+        {
+            AppId = (await db.Apps.SingleAsync()).Id,
+            Name = "uploads",
+            StorageBytes = 1L * 1024 * 1024 * 1024,
+        });
+        db.ManagedServices.Add(Database(ws, storageBytes: 2L * 1024 * 1024 * 1024));
+        await db.SaveChangesAsync();
+
+        var volume = await db.Volumes.AsNoTracking().SingleAsync();
+        var service = await db.ManagedServices.AsNoTracking().SingleAsync();
+
+        await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        var appDisk = await db.BillingLedger.SingleAsync(l => l.ResourceType == BilledResourceType.Volume);
+        var dbDisk = await db.BillingLedger.SingleAsync(l => l.ResourceType == BilledResourceType.ServiceVolume);
+
+        appDisk.ResourceId.Should().Be(volume.Id);
+        appDisk.AmountMinor.Should().Be(-20);
+
+        dbDisk.ResourceId.Should().Be(service.Id);
+        dbDisk.AmountMinor.Should().Be(-40);
+
+        // Said out loud rather than left to follow from the two ids above: reusing Volume with a
+        // service id would leave the bill unable to tell them apart, and would make the index's
+        // correctness rest on two tables happening never to mint the same Guid.
+        appDisk.ResourceType.Should().NotBe(dbDisk.ResourceType);
+    }
+
+    [Fact]
+    public async Task A_databases_disk_is_charged_once_however_often_the_hour_is_retried()
+    {
+        // The key has to be stable across passes or the durable queue's retry is a second bill for
+        // the same gibibytes.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 500);
+        await db.SaveChangesAsync();
+
+        (await db.Plans.SingleAsync()).DiskGbHourMinor = 20;
+        db.ManagedServices.Add(Database(ws, storageBytes: 2L * 1024 * 1024 * 1024));
+        await db.SaveChangesAsync();
+
+        await Harness.Tick(db).ChargeHourAsync(Hour, default);
+        await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        (await db.BillingLedger.CountAsync(l => l.ResourceType == BilledResourceType.ServiceVolume))
+            .Should().Be(1);
+        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-1040);
+    }
+
+    [Fact]
+    public async Task A_stopped_database_still_pays_for_the_disk_its_data_is_sitting_on()
+    {
+        // The clearest case of the agreed rate model. The container is down, so the size is charged
+        // at the reserved rate — but the data has not gone anywhere, and the bytes are still held.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(
+            db, "tenant", ratePerHour: 500, stoppedRatePerHour: 100);
+        await db.SaveChangesAsync();
+
+        (await db.Plans.SingleAsync()).DiskGbHourMinor = 20;
+        db.ManagedServices.Add(Database(
+            ws, storageBytes: 2L * 1024 * 1024 * 1024, status: ServiceStatus.Stopped));
+        await db.SaveChangesAsync();
+
+        await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        var disk = await db.BillingLedger.SingleAsync(l => l.ResourceType == BilledResourceType.ServiceVolume);
+        disk.AmountMinor.Should().Be(-40, "the disk is charged whatever the container is doing");
+
+        var size = await db.BillingLedger.SingleAsync(l => l.ResourceType == BilledResourceType.Service);
+        size.AmountMinor.Should().Be(-100);
+        size.RunState.Should().Be(BilledRunState.Stopped);
+    }
+
+    [Fact]
+    public async Task A_database_nobody_has_measured_is_not_billed_as_holding_nothing()
+    {
+        // Item 18 of the do-not-change list, arriving on a bill. A database with no reading is not a
+        // database holding nothing, and a zero line would take its slot in the unique index for the
+        // hour — so the corrected pass after somebody measures it would collide and be discarded as
+        // "already charged". No line leaves the slot open and the hour still payable.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 500);
+        await db.SaveChangesAsync();
+
+        (await db.Plans.SingleAsync()).DiskGbHourMinor = 20;
+        db.ManagedServices.Add(Database(ws));
+        await db.SaveChangesAsync();
+
+        var result = await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        (await db.BillingLedger.AnyAsync(l => l.ResourceType == BilledResourceType.ServiceVolume))
+            .Should().BeFalse();
+        result.Failures.Should().ContainSingle(f => f.Contains("tenant-db") && f.Contains("never"));
+
+        // The size is still charged. An unknown withholds the thing it could not price, never a
+        // charge that was priced.
+        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-1000);
+    }
+
+    [Fact]
+    public async Task A_database_nobody_measured_withholds_the_hours_plan_minimum()
+    {
+        // An unmeasured disk is not merely a missing line — it makes the hour's total unknown, and
+        // the floor is the difference between that total and the plan's minimum. Charging the floor
+        // anyway would let the corrected pass, once somebody measures the database, add its disk line
+        // on top of a top-up that had already covered it: two passes, each looking right, adding up
+        // to an overcharge. Reporting the disk without counting it as an unknown is exactly that bug.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(
+            db, "tenant", ratePerHour: 500, planBaseRatePerHourMinor: 2_000);
+        await db.SaveChangesAsync();
+
+        (await db.Plans.SingleAsync()).DiskGbHourMinor = 20;
+        db.ManagedServices.Add(Database(ws));
+        await db.SaveChangesAsync();
+
+        var result = await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        (await db.BillingLedger.AnyAsync(l => l.Kind == LedgerKind.PlanMinimumTopUp)).Should().BeFalse();
+        result.Failures.Should().Contain(f => f.Contains("plan minimum"));
+
+        // And the floor is all that is withheld: the app and the database's size were priced, so
+        // they are still charged. 500 + 500, and no top-up to 2,000.
+        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-1_000);
+    }
+
+    [Fact]
+    public async Task A_measurement_that_ran_and_came_back_empty_handed_says_so_rather_than_never_measured()
+    {
+        // Two different states with two different things for an operator to do. "Nobody has measured
+        // it" is a button somebody has to press; "the measurement ran and returned nothing" is a
+        // broken measuring path, and telling them to go and press the button again wastes the one
+        // warning they were going to read. ManagedService writes the timestamp even when the figure
+        // is null precisely so the two can be told apart.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 500);
+        await db.SaveChangesAsync();
+
+        (await db.Plans.SingleAsync()).DiskGbHourMinor = 20;
+        db.ManagedServices.Add(Database(ws, measuredAt: Hour.AddHours(-3)));
+        await db.SaveChangesAsync();
+
+        var result = await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        result.Failures.Should().ContainSingle(f =>
+            f.Contains("tenant-db") && f.Contains("did not come back with a figure"));
+        result.Failures.Should().NotContain(f => f.Contains("never"));
+    }
+
+    [Fact]
+    public async Task A_plan_with_no_gibibyte_price_writes_no_line_for_a_databases_disk_either()
+    {
+        // Null is not zero here as it is everywhere else on this branch, and the refusal is keyed on
+        // the plan rather than on the disk: an operator who forgot to price a gibibyte needs one line
+        // naming the plan, not one per thing sitting on it.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 500);
+        await db.SaveChangesAsync();
+
+        db.Volumes.Add(new Volume
+        {
+            AppId = (await db.Apps.SingleAsync()).Id,
+            Name = "uploads",
+            StorageBytes = 1L * 1024 * 1024 * 1024,
+        });
+        db.ManagedServices.Add(Database(ws, storageBytes: 2L * 1024 * 1024 * 1024));
+        await db.SaveChangesAsync();
+
+        var result = await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        (await db.BillingLedger.AnyAsync(l => l.ResourceType == BilledResourceType.ServiceVolume))
+            .Should().BeFalse();
+        result.Failures.Should().ContainSingle(f => f.Contains("gibibyte-hour"));
+    }
+
+    [Fact]
+    public async Task A_database_still_being_provisioned_is_not_reported_as_an_unmeasured_disk()
+    {
+        // One rule about whether the hour reserved anything, not two free to drift apart. A
+        // provisioning service is not charged for its size because nothing is reserved yet, and its
+        // disk — being created as the pass runs, and never measured — must not be reported either:
+        // that report would count as an unknown and cost the whole workspace its plan minimum for
+        // the hour somebody happened to create a database.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 500);
+        await db.SaveChangesAsync();
+
+        (await db.Plans.SingleAsync()).DiskGbHourMinor = 20;
+        db.ManagedServices.Add(Database(ws, status: ServiceStatus.Provisioning));
+        await db.SaveChangesAsync();
+
+        var result = await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        result.Failures.Should().BeEmpty();
+        (await db.BillingLedger.AnyAsync(l => l.ResourceType == BilledResourceType.ServiceVolume))
+            .Should().BeFalse();
     }
 
     // --- an unset price ---------------------------------------------------------------------

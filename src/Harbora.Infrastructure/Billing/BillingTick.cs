@@ -291,6 +291,21 @@ public sealed class BillingTick(
             billable.Add(new BillableResource(type, id, name, state, rate));
         }
 
+        // What a gibibyte-hour costs on this workspace's plan, or null having said why. Shared by
+        // an app's volume and a database's data disk on purpose: both are priced by the same column,
+        // so an operator who has not set it needs one line naming the plan rather than one per thing
+        // sitting on it — and two copies of that message would be free to drift apart.
+        long? DiskRate(long bytes)
+        {
+            if (BillingRates.ForVolume(bytes, plan?.DiskGbHourMinor) is { } rate) return rate;
+
+            unknowns++;
+            pass.Report($"unpriced-disk:{plan?.Id}",
+                $"Plan \"{plan?.Name ?? "(none)"}\" has no price for a gibibyte-hour, so no disk " +
+                "was charged on it. Set the rate, or set it to 0 if disk really is included.");
+            return null;
+        }
+
         var apps = await db.Apps.IgnoreQueryFilters().AsNoTracking()
             .Where(a => a.WorkspaceId == workspace.Id).ToListAsync(ct);
 
@@ -326,9 +341,46 @@ public sealed class BillingTick(
                 continue;
             }
 
+            // Provisioning reserves nothing yet, and the disk below is governed by the same answer
+            // rather than by a second rule of its own. A service in this state has a data volume
+            // being created as this pass runs and no measurement of it, so reporting one would be a
+            // warning about a database somebody created ten minutes ago — and, because a report
+            // counts as an unknown, it would cost the whole workspace its plan minimum for the hour.
             if (state is not { } billedState) continue;
 
             Workload(BilledResourceType.Service, service.Id, service.Name, service.InstanceSizeKey, billedState);
+
+            // The disk the database is sitting on, which nothing else in this pass can reach: a
+            // ManagedService carries its own VolumeName and StorageBytes and has no relation to the
+            // Volume table, which is read below by AppId. Without this a workspace paid for its
+            // database's size and then held as much data as it liked for nothing.
+            //
+            // Charged whatever the container is doing — a stopped database is the clearest case of
+            // the rate model this branch settled on, because the data has not gone anywhere.
+            if (service.StorageBytes is not { } storedBytes)
+            {
+                unknowns++;
+
+                // Two states, two different things for an operator to do, and ManagedService writes
+                // the timestamp even when the figure is null exactly so they can be told apart.
+                // Telling somebody to go and measure a database whose measurement is broken wastes
+                // the one warning they were going to read.
+                var why = service.StorageMeasuredAt is { } measuredAt
+                    ? $"was last measured at {measuredAt:yyyy-MM-dd HH:mm}Z and that measurement did " +
+                      "not come back with a figure"
+                    : "has never been measured";
+
+                pass.Report($"unmeasured-database:{service.Id}",
+                    $"Database \"{service.Name}\"'s disk {why}, so its storage was not charged for " +
+                    "this hour. It is not empty; it is unread.");
+                continue;
+            }
+
+            if (DiskRate(storedBytes) is not { } diskRate) continue;
+
+            billable.Add(new BillableResource(
+                BilledResourceType.ServiceVolume, service.Id, service.Name,
+                BilledRunState.NotApplicable, diskRate));
         }
 
         // Volumes carry no WorkspaceId of their own — they are reached through their app, which is
@@ -353,14 +405,7 @@ public sealed class BillingTick(
                 continue;
             }
 
-            if (BillingRates.ForVolume(bytes, plan?.DiskGbHourMinor) is not { } rate)
-            {
-                unknowns++;
-                pass.Report($"unpriced-disk:{plan?.Id}",
-                    $"Plan \"{plan?.Name ?? "(none)"}\" has no price for a gibibyte-hour, so no disk " +
-                    "was charged on it. Set the rate, or set it to 0 if disk really is included.");
-                continue;
-            }
+            if (DiskRate(bytes) is not { } rate) continue;
 
             billable.Add(new BillableResource(
                 BilledResourceType.Volume, volume.Id, volume.Name, BilledRunState.NotApplicable, rate));

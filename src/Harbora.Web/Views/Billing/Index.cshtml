@@ -18,6 +18,17 @@
         (BilledResourceType.Service, true) => "دیتابیس",     (BilledResourceType.Service, false) => "Database",
         (BilledResourceType.Volume, true) => "دیسک",         (BilledResourceType.Volume, false) => "Disk",
         (BilledResourceType.PlanBase, true) => "حداقل پلن",  (BilledResourceType.PlanBase, false) => "Plan minimum",
+
+        // A database's disk is a line of its own because it is charged by its own key — the managed
+        // service's id, not a Volume row's — and the whole point of that key was that a customer can
+        // tell "my database's disk" from "my app's disk". Dropped into the arm below, both would read
+        // as one word naming neither, and the split would have bought nothing they can see.
+        (BilledResourceType.ServiceVolume, true) => "دیسک دیتابیس",
+        (BilledResourceType.ServiceVolume, false) => "Database disk",
+
+        // Appending to BilledResourceType and forgetting this switch is a silent loss: the line is
+        // still charged and still totalled, and only its label goes vague. `A_bill_calls_a_databases_
+        // disk_a_databases_disk_rather_than_other` is the test that goes red when it happens.
         _ => isFa ? "سایر" : "Other"
     };
 }

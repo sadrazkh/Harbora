@@ -58,9 +58,15 @@ public sealed record CreditRequest(Guid Id, Guid WorkspaceId, long AmountMinor, 
 /// is the correct answer to the same decision arriving twice, and the balance beside it is real.
 /// </param>
 /// <param name="StillSuspended">The workspace's state after the call, not before it.</param>
+/// <param name="DatabasesStarted">
+/// Counted apart from <paramref name="AppsStarted"/> rather than folded into one total, because they
+/// are two different pieces of news for the person reading them. An administrator told "3 workloads
+/// came back" cannot tell whether the data layer is among them, and a database that did not is the
+/// one absence that makes the other two useless.
+/// </param>
 /// <param name="Failures">
-/// Every app the top-up was meant to bring back and did not, plus anything that went wrong reaching
-/// them. Empty is the only clean answer; nothing here throws, so this is the only place an
+/// Every workload the top-up was meant to bring back and did not, plus anything that went wrong
+/// reaching them. Empty is the only clean answer; nothing here throws, so this is the only place an
 /// unfinished resume is visible.
 /// </param>
 public sealed record CreditResult(
@@ -68,6 +74,7 @@ public sealed record CreditResult(
     bool Applied,
     bool StillSuspended,
     int AppsStarted,
+    int DatabasesStarted,
     IReadOnlyList<string> Failures);
 
 /// <summary>
@@ -198,6 +205,7 @@ public sealed class WalletService(
         var (applied, balanceMinor) = await WriteAsync(credit, note, ct);
 
         var startedApps = 0;
+        var startedDatabases = 0;
         var stillSuspended = workspace.IsSuspended;
         var failures = new List<string>();
 
@@ -216,6 +224,7 @@ public sealed class WalletService(
                 var resumed = await suspension.ResumeAsync(credit.WorkspaceId, ct);
                 stillSuspended = resumed.WorkspaceSuspended;
                 startedApps = resumed.AppsStarted;
+                startedDatabases = resumed.DatabasesStarted;
                 failures.AddRange(resumed.Failures);
             }
             // Caught, named and kept — never rethrown. The money is already committed, and an
@@ -233,7 +242,8 @@ public sealed class WalletService(
             }
         }
 
-        return new CreditResult(balanceMinor, applied, stillSuspended, startedApps, failures);
+        return new CreditResult(
+            balanceMinor, applied, stillSuspended, startedApps, startedDatabases, failures);
     }
 
     /// <summary>

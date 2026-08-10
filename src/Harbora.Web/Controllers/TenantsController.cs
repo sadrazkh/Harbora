@@ -245,7 +245,13 @@ public sealed partial class TenantsController(
         TempData["Message"] = result.Applied
             ? $"Credited {Harbora.Web.Infrastructure.MinorUnits.Format(amountMinor)}. " +
               $"{ws.Name}'s balance is now {Harbora.Web.Infrastructure.MinorUnits.Format(result.BalanceMinor)}." +
-              (result.AppsStarted > 0 ? $" {result.AppsStarted} app(s) were started again." : "")
+              // Named separately rather than added together. An administrator has usually just told
+              // the customer their services are coming back, and "2 workload(s)" does not answer the
+              // only question that matters next, which is whether the database is one of them.
+              (result.AppsStarted > 0 ? $" {result.AppsStarted} app(s) were started again." : "") +
+              (result.DatabasesStarted > 0
+                  ? $" {result.DatabasesStarted} database(s) were started again."
+                  : "")
             : $"That credit had already been applied. {ws.Name}'s balance is " +
               $"{Harbora.Web.Infrastructure.MinorUnits.Format(result.BalanceMinor)} and no second line was written.";
 

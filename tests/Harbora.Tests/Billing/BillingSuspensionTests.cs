@@ -94,6 +94,84 @@ internal sealed class FakeAppOperations(BillingContext own) : IAppOperationsServ
 }
 
 /// <summary>
+/// The platform's database stop/start route, stood in for, on exactly the terms
+/// <see cref="FakeAppOperations"/> is.
+///
+/// <para>
+/// The real <c>ManagedServiceEngine</c> cannot be driven here: <c>StartAsync</c> and
+/// <c>StopAsync</c> resolve a Docker engine for the service's server before they write anything, and
+/// there is no daemon on this machine. So this records what it was asked to do and applies the one
+/// effect the contract promises — the service ends <see cref="ServiceStatus.Stopped"/> or
+/// <see cref="ServiceStatus.Running"/>.
+/// </para>
+///
+/// <para>
+/// It writes through its <b>own</b> context for the same reason the app fake does, and the reason is
+/// sharper here: the real engine's reads go <i>through</i> the tenant filter
+/// (<c>db.ManagedServices.FirstAsync</c>), so a fake sharing the caller's context would hide the
+/// staleness the verification read exists to catch.
+/// </para>
+///
+/// <para>
+/// Everything <see cref="BillingSuspension"/> never calls throws rather than returning a plausible
+/// empty answer, following <c>FakeManagedServiceEngine</c>'s own rule: a test that reaches one of
+/// those has wandered somewhere it did not mean to and should say so.
+/// </para>
+/// </summary>
+internal sealed class FakeDatabaseOperations(BillingContext own) : IManagedServiceEngine
+{
+    /// <summary>Every database the code under test asked to stop, in order.</summary>
+    public List<Guid> Stopped { get; } = [];
+
+    /// <summary>Every database the code under test asked to start, in order.</summary>
+    public List<Guid> Started { get; } = [];
+
+    /// <summary>Databases whose stop or start throws — an unreachable node, most often.</summary>
+    public Dictionary<Guid, string> Refuses { get; } = [];
+
+    /// <summary>Databases the route accepts, records and then leaves exactly as they were.</summary>
+    public HashSet<Guid> ReportsSuccessWithoutDoingAnything { get; } = [];
+
+    /// <summary>What the table said about each service's marker at the instant the route was called.</summary>
+    public Dictionary<Guid, bool> MarkedWhenCalled { get; } = [];
+
+    public Task StopAsync(Guid serviceId, CancellationToken ct)
+    {
+        Stopped.Add(serviceId);
+        return ApplyAsync(serviceId, ServiceStatus.Stopped, ct);
+    }
+
+    public Task StartAsync(Guid serviceId, CancellationToken ct)
+    {
+        Started.Add(serviceId);
+        return ApplyAsync(serviceId, ServiceStatus.Running, ct);
+    }
+
+    private async Task ApplyAsync(Guid serviceId, ServiceStatus status, CancellationToken ct)
+    {
+        var svc = await own.ManagedServices.IgnoreQueryFilters().AsNoTracking()
+            .FirstAsync(s => s.Id == serviceId, ct);
+        MarkedWhenCalled[serviceId] = svc.WasRunningAtSuspension;
+
+        if (Refuses.TryGetValue(serviceId, out var reason)) throw new InvalidOperationException(reason);
+        if (ReportsSuccessWithoutDoingAnything.Contains(serviceId)) return;
+
+        var tracked = await own.ManagedServices.IgnoreQueryFilters().FirstAsync(s => s.Id == serviceId, ct);
+        tracked.Status = status;
+        await own.SaveChangesAsync(ct);
+    }
+
+    public IReadOnlyList<ServiceCatalogEntry> Catalog => throw new NotSupportedException();
+    public Task QueueProvisionAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
+    public Task RemoveAsync(Guid serviceId, bool deleteData, CancellationToken ct) => throw new NotSupportedException();
+    public Task<long?> MeasureStorageAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
+    public Task<IReadOnlyList<string>> RotatePasswordAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
+    public Task<string?> TestConnectionAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
+    public Task<ServiceConnectionInfo> GetConnectionInfoAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
+    public Task<IReadOnlyDictionary<string, string>> BuildAttachEnvAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
+}
+
+/// <summary>
 /// Stopping a customer's workloads because their balance ran out, and bringing back exactly what the
 /// outage took away.
 ///
@@ -314,6 +392,296 @@ public class BillingSuspensionTests
 
         ops.Stopped.Should().BeEmpty();
         (await db.Apps.SingleAsync(a => a.WorkspaceId == ws)).Status.Should().Be(AppStatus.Deploying);
+    }
+
+    // --- the database, which the suspension used not to touch at all --------------------------
+    //
+    // The worst combination this branch could produce, and until now it did: the hourly pass charges
+    // a managed database for its size and its disk, and the suspension stopped only apps. So a
+    // workspace with no balance had its site taken down, its database left running, and the running
+    // database still billed — while the customer could not stop it themselves, because being
+    // suspended is what blocks them.
+
+    [Fact]
+    public async Task Suspending_for_no_balance_stops_the_running_databases_too()
+    {
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var database = Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        var result = await Harness.Suspension(db).SuspendAsync(ws, default);
+
+        (await db.ManagedServices.SingleAsync(s => s.Id == database)).Status
+            .Should().Be(ServiceStatus.Stopped);
+        result.DatabasesStopped.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Suspending_goes_through_the_platforms_own_database_stop_route()
+    {
+        // Not `docker stop`, for the reason the app half gives: the route resolves the service's
+        // server engine, so it works for a remote node, and it is the single place ServiceStatus is
+        // written.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var database = Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        var databases = Harness.Databases(db);
+        await Harness.Suspension(db, databases: databases).SuspendAsync(ws, default);
+
+        databases.Stopped.Should().Equal(database);
+    }
+
+    [Fact]
+    public async Task What_was_running_is_written_down_before_a_database_is_stopped()
+    {
+        // The node agent's drain rule, applied to a database. A panel that dies between the stop and
+        // the write has lost the only record that this database was ever running, and a top-up then
+        // brings back everything except the data layer everything else needs.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var database = Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        var databases = Harness.Databases(db);
+        await Harness.Suspension(db, databases: databases).SuspendAsync(ws, default);
+
+        databases.MarkedWhenCalled[database].Should().BeTrue(
+            "a stop issued before the record is durable is a stop nothing can undo");
+    }
+
+    [Fact]
+    public async Task A_database_stop_that_reports_success_without_stopping_anything_is_not_believed()
+    {
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var database = Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        var databases = Harness.Databases(db);
+        databases.ReportsSuccessWithoutDoingAnything.Add(database);
+
+        var result = await Harness.Suspension(db, databases: databases).SuspendAsync(ws, default);
+
+        result.DatabasesStopped.Should().Be(0);
+        result.Failures.Should().ContainSingle(f => f.Contains("tenant-db") && f.Contains("still running"));
+    }
+
+    [Fact]
+    public async Task A_database_stop_the_node_refused_leaves_what_was_running_written_down()
+    {
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var database = Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        var databases = Harness.Databases(db);
+        databases.Refuses[database] = "the node is unreachable";
+
+        var result = await Harness.Suspension(db, databases: databases).SuspendAsync(ws, default);
+
+        (await db.ManagedServices.SingleAsync(s => s.Id == database)).WasRunningAtSuspension
+            .Should().BeTrue("the stop failed, and what was running is exactly what a retry needs");
+        result.Failures.Should().ContainSingle(f => f.Contains("unreachable"));
+    }
+
+    [Fact]
+    public async Task A_database_still_being_provisioned_is_left_to_the_job_that_is_provisioning_it()
+    {
+        // The counterpart of leaving a Deploying app alone. A provision is mid-flight on the job
+        // queue and writes ServiceStatus itself; stopping the container underneath it would make the
+        // suspension a second writer on that path, and the provision would finish into a workspace
+        // that already refuses to start anything.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        Harness.AddDatabase(db, ws, "tenant-db", status: ServiceStatus.Provisioning);
+        await db.SaveChangesAsync();
+
+        var databases = Harness.Databases(db);
+        await Harness.Suspension(db, databases: databases).SuspendAsync(ws, default);
+
+        databases.Stopped.Should().BeEmpty();
+        (await db.ManagedServices.SingleAsync()).Status.Should().Be(ServiceStatus.Provisioning);
+    }
+
+    [Fact]
+    public async Task Resuming_starts_only_the_databases_that_were_running_when_it_was_suspended()
+    {
+        // The rule that matters to a customer, on the resource they can least afford to have started
+        // by accident: a database they stopped themselves must not come back and start spending the
+        // money they just put in.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var live = Harness.AddDatabase(db, ws, "orders");
+        var parked = Harness.AddDatabase(db, ws, "archive", status: ServiceStatus.Stopped);
+        await db.SaveChangesAsync();
+
+        await Harness.Suspension(db).SuspendAsync(ws, default);
+        var result = await Harness.Suspension(db).ResumeAsync(ws, default);
+
+        (await db.ManagedServices.SingleAsync(s => s.Id == live)).Status
+            .Should().Be(ServiceStatus.Running);
+        (await db.ManagedServices.SingleAsync(s => s.Id == parked)).Status
+            .Should().Be(ServiceStatus.Stopped,
+                "the customer stopped this one themselves, and a top-up is not a request to start it");
+        result.DatabasesStarted.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_suspension_that_is_retrying_does_not_forget_which_databases_the_first_pass_stopped()
+    {
+        // Task 5's rule, and the reason it exists, arriving on the database. By the second pass the
+        // database is Stopped precisely BECAUSE the first pass stopped it. A marker set rebuilt from
+        // what is running now would clear it, the top-up would bring back the apps and not the data
+        // layer under them, and every pass would report success.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var database = Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        await Harness.Suspension(db).SuspendAsync(ws, default);
+        await Harness.Suspension(db).SuspendAsync(ws, default);
+        await Harness.Suspension(db).ResumeAsync(ws, default);
+
+        (await db.ManagedServices.SingleAsync(s => s.Id == database)).Status
+            .Should().Be(ServiceStatus.Running, "the retry must not erase what the first pass recorded");
+    }
+
+    [Fact]
+    public async Task A_suspension_that_is_starting_forgets_a_database_mark_stranded_by_an_earlier_one()
+    {
+        // The other half of the same rule. A marker outlives its suspension whenever the resumption
+        // never finished — an operator clearing the flag from the console is the everyday way — and
+        // left in place it would make a later top-up start a database the customer stopped months
+        // ago and bill them for it.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var database = Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        await Harness.Suspension(db).SuspendAsync(ws, default);
+
+        // The operator lifts it from the console, which clears the flags and not the markers.
+        var workspace = await db.Workspaces.SingleAsync(w => w.Id == ws);
+        workspace.IsSuspended = false;
+        workspace.SuspendedReason = SuspensionReason.None;
+        await db.SaveChangesAsync();
+
+        // A fresh suspension months later, with the database still stopped by the customer's choice.
+        await Harness.Suspension(db).SuspendAsync(ws, default);
+        await Harness.Suspension(db).ResumeAsync(ws, default);
+
+        (await db.ManagedServices.SingleAsync(s => s.Id == database)).Status
+            .Should().Be(ServiceStatus.Stopped,
+                "it was not running when this suspension started, so nothing owes it a start");
+    }
+
+    [Fact]
+    public async Task A_database_that_did_not_come_back_keeps_the_workspace_suspended()
+    {
+        // Clearing the flags anyway would throw away the marker, which is the only record that this
+        // database was ever running — and the next suspension, starting rather than retrying, would
+        // then never write it again.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var database = Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        await Harness.Suspension(db).SuspendAsync(ws, default);
+
+        var broken = Harness.Databases(db);
+        broken.Refuses[database] = "the node is unreachable";
+        var result = await Harness.Suspension(db, databases: broken).ResumeAsync(ws, default);
+
+        result.WorkspaceSuspended.Should().BeTrue();
+        result.Failures.Should().Contain(f => f.Contains("tenant-db") && f.Contains("did not come back"));
+        (await db.ManagedServices.SingleAsync(s => s.Id == database)).WasRunningAtSuspension
+            .Should().BeTrue("the marker is the only record there is, and a retry needs it");
+    }
+
+    [Fact]
+    public async Task A_second_resume_finishes_a_database_the_first_one_could_not_start()
+    {
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var database = Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        await Harness.Suspension(db).SuspendAsync(ws, default);
+
+        var broken = Harness.Databases(db);
+        broken.Refuses[database] = "the node is unreachable";
+        await Harness.Suspension(db, databases: broken).ResumeAsync(ws, default);
+
+        var result = await Harness.Suspension(db).ResumeAsync(ws, default);
+
+        result.WorkspaceSuspended.Should().BeFalse();
+        result.DatabasesStarted.Should().Be(1);
+        (await db.ManagedServices.SingleAsync(s => s.Id == database)).Status
+            .Should().Be(ServiceStatus.Running);
+    }
+
+    [Fact]
+    public async Task Billing_that_is_switched_off_stops_no_databases_either()
+    {
+        // The switch guards the act that costs somebody their uptime, and a database is the thing on
+        // this list a tenant can least afford to lose over a price nobody told them about.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        await Harness.Suspension(db, enabled: false).SuspendAsync(ws, default);
+
+        (await db.ManagedServices.SingleAsync()).Status.Should().Be(ServiceStatus.Running);
+    }
+
+    [Fact]
+    public async Task A_workspace_an_operator_suspended_keeps_its_databases_running_too()
+    {
+        // The whitelist covers the database for the same reason it covers the apps: ResumeAsync acts
+        // on NoBalance alone, so stopping a database under somebody else's reason leaves it down
+        // with nobody who can start it again.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        var workspace = await db.Workspaces.SingleAsync(w => w.Id == ws);
+        workspace.IsSuspended = true;
+        workspace.SuspendedReason = SuspensionReason.Manual;
+        await db.SaveChangesAsync();
+
+        await Harness.Suspension(db).SuspendAsync(ws, default);
+
+        (await db.ManagedServices.SingleAsync()).Status.Should().Be(ServiceStatus.Running);
+        (await db.ManagedServices.SingleAsync()).WasRunningAtSuspension.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_databases_marker_survives_a_pass_that_could_not_reach_the_node()
+    {
+        // The app half of this is already pinned; the database half is what a customer's data sits
+        // on. A marker written and then lost because the stop failed is a database nothing will ever
+        // bring back.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var database = Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        var broken = Harness.Databases(db);
+        broken.Refuses[database] = "the node is unreachable";
+        await Harness.Suspension(db, databases: broken).SuspendAsync(ws, default);
+
+        // The retry reaches it.
+        var result = await Harness.Suspension(db).SuspendAsync(ws, default);
+
+        result.DatabasesStopped.Should().Be(1);
+        result.Failures.Should().BeEmpty();
+        (await db.ManagedServices.SingleAsync(s => s.Id == database)).Status
+            .Should().Be(ServiceStatus.Stopped);
     }
 
     // --- coming back ------------------------------------------------------------------------
@@ -566,6 +934,35 @@ public class BillingSuspensionTests
         ops.Started.Should().BeEmpty();
         result.AppsStarted.Should().Be(0, "nothing was started, so nothing may be counted as started");
         (await db.Apps.SingleAsync(a => a.Id == api.Id)).WasRunningAtSuspension.Should().BeFalse();
+        (await db.Workspaces.SingleAsync(w => w.Id == ws)).IsSuspended.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Resuming_does_not_restart_a_database_that_is_already_back()
+    {
+        // A start on a running database is a restart, and a database's restart is an outage handed
+        // to every app attached to it — given to a customer who has just paid. Three things are
+        // asserted together because they are one fact: nothing was asked, nothing is counted, and
+        // the marker is cleared anyway, because the database is where the resume wanted it.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 100);
+        var database = Harness.AddDatabase(db, ws, "tenant-db");
+        await db.SaveChangesAsync();
+
+        await Harness.Suspension(db).SuspendAsync(ws, default);
+
+        // The node came back on its own, or somebody started it by hand.
+        var service = await db.ManagedServices.SingleAsync(s => s.Id == database);
+        service.Status = ServiceStatus.Running;
+        await db.SaveChangesAsync();
+
+        var databases = Harness.Databases(db);
+        var result = await Harness.Suspension(db, databases: databases).ResumeAsync(ws, default);
+
+        databases.Started.Should().BeEmpty();
+        result.DatabasesStarted.Should().Be(0, "nothing was started, so nothing may be counted as started");
+        (await db.ManagedServices.SingleAsync(s => s.Id == database)).WasRunningAtSuspension
+            .Should().BeFalse("a marker left set would start it again after the next suspension is lifted");
         (await db.Workspaces.SingleAsync(w => w.Id == ws)).IsSuspended.Should().BeFalse();
     }
 

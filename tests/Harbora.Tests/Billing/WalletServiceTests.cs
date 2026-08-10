@@ -59,11 +59,16 @@ internal static class WalletHarness
     /// credit's own write succeeds. They share one context in production; separating them here is
     /// the only way to stage the case where the money lands and the containers do not.
     /// </param>
+    /// <param name="databases">
+    /// The database stop/start route. A credit that lifts a suspension starts back the managed
+    /// databases the suspension stopped, exactly as it does the apps.
+    /// </param>
     public static WalletService Wallets(
         BillingContext db,
         FakeAppOperations? operations = null,
         BillingContext? through = null,
-        BillingContext? resumeThrough = null)
+        BillingContext? resumeThrough = null,
+        FakeDatabaseOperations? databases = null)
     {
         // The service writes through a context of its own, so anything this one still tracks is
         // about to be stale — and EF answers a query from the instance it is already tracking, which
@@ -74,6 +79,7 @@ internal static class WalletHarness
         var suspension = new BillingSuspension(
             resumeThrough ?? context,
             operations ?? new FakeAppOperations(ProviderContext(db)),
+            databases ?? new FakeDatabaseOperations(ProviderContext(db)),
             Options.Create(new BillingOptions { Enabled = true }),
             NullLogger<BillingSuspension>.Instance);
 
@@ -116,6 +122,21 @@ internal static class WalletHarness
         };
         db.Apps.Add(app);
         return app.Id;
+    }
+
+    /// <summary>A managed database the suspension stopped and therefore owes a start.</summary>
+    public static Guid SeedStoppedDatabaseOwedAStart(BillingContext db, Guid workspaceId, string name)
+    {
+        var service = new Harbora.Domain.Services.ManagedService
+        {
+            WorkspaceId = workspaceId,
+            Name = name,
+            Status = ServiceStatus.Stopped,
+            VolumeName = $"harbora-svc-{name}-data",
+            WasRunningAtSuspension = true
+        };
+        db.ManagedServices.Add(service);
+        return service.Id;
     }
 
     /// <summary>One line of one workspace's bill, written by hand so a breakdown has something to group.</summary>
@@ -495,6 +516,60 @@ public class WalletServiceTests
         var workspace = await db.Workspaces.IgnoreQueryFilters().AsNoTracking().SingleAsync(w => w.Id == ws);
         workspace.IsSuspended.Should().BeFalse();
         workspace.SuspendedReason.Should().Be(SuspensionReason.None);
+    }
+
+    [Fact]
+    public async Task A_credit_brings_back_the_database_the_suspension_stopped_and_counts_it_apart()
+    {
+        // The database is the workload a top-up most needs to bring back, because every app the same
+        // credit just restarted is talking to it. Counted apart from the apps rather than added to
+        // them: an administrator told "2 workloads came back" has been told nothing about the only
+        // one whose absence makes the other useless.
+        await using var db = WalletHarness.SystemContext();
+        var ws = WalletHarness.SeedWorkspace(
+            db, balanceMinor: -5_000, suspended: true, reason: SuspensionReason.NoBalance);
+        var app = WalletHarness.SeedStoppedAppOwedAStart(db, ws, "api");
+        var database = WalletHarness.SeedStoppedDatabaseOwedAStart(db, ws, "orders-db");
+        await db.SaveChangesAsync();
+
+        var operations = new FakeAppOperations(WalletHarness.ProviderContext(db));
+        var databases = new FakeDatabaseOperations(WalletHarness.ProviderContext(db));
+        var result = await WalletHarness.Wallets(db, operations, databases: databases)
+            .CreditAsync(WalletHarness.Credit(ws, 100_000), default);
+
+        result.AppsStarted.Should().Be(1);
+        result.DatabasesStarted.Should().Be(1);
+        result.StillSuspended.Should().BeFalse();
+        result.Failures.Should().BeEmpty();
+
+        operations.Started.Should().Equal(app);
+        databases.Started.Should().Equal(database);
+        (await db.ManagedServices.IgnoreQueryFilters().AsNoTracking().SingleAsync(s => s.Id == database))
+            .Status.Should().Be(ServiceStatus.Running);
+    }
+
+    [Fact]
+    public async Task A_credit_that_could_not_start_the_database_leaves_the_workspace_suspended()
+    {
+        // The money lands and is kept — that is settled elsewhere — but the suspension stays up,
+        // because lifting it would discard the marker that is the only record this database was ever
+        // running. The administrator is told, in the same breath as the balance.
+        await using var db = WalletHarness.SystemContext();
+        var ws = WalletHarness.SeedWorkspace(
+            db, balanceMinor: -5_000, suspended: true, reason: SuspensionReason.NoBalance);
+        var database = WalletHarness.SeedStoppedDatabaseOwedAStart(db, ws, "orders-db");
+        await db.SaveChangesAsync();
+
+        var databases = new FakeDatabaseOperations(WalletHarness.ProviderContext(db));
+        databases.Refuses[database] = "the node is unreachable";
+
+        var result = await WalletHarness.Wallets(db, databases: databases)
+            .CreditAsync(WalletHarness.Credit(ws, 100_000), default);
+
+        result.BalanceMinor.Should().Be(95_000, "the money is committed whatever the containers do");
+        result.DatabasesStarted.Should().Be(0);
+        result.StillSuspended.Should().BeTrue();
+        result.Failures.Should().Contain(f => f.Contains("orders-db") && f.Contains("unreachable"));
     }
 
     [Fact]

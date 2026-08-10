@@ -102,6 +102,49 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task A_bill_calls_a_databases_disk_a_databases_disk_rather_than_other()
+    {
+        // The half of the ledger-key decision that only the customer sees. Giving a database's disk
+        // its own BilledResourceType is pointless if the page's kind switch drops it into its
+        // catch-all arm: the two lines the key was split to distinguish would both read as one word
+        // that names neither. This branch has already been bitten once by a `_ =>` default quietly
+        // absorbing an appended enum member while reporting success.
+        var hour = new DateTimeOffset(2026, 9, 5, 0, 0, 0, TimeSpan.Zero);
+        var database = Guid.CreateVersion7();
+
+        Panel.Seed(db => db.BillingLedger.Add(new BillingLedgerEntry
+        {
+            WorkspaceId = fixture.WorkspaceId,
+            BillingHour = hour,
+            Kind = LedgerKind.Charge,
+            AmountMinor = -400,
+            ResourceType = BilledResourceType.ServiceVolume,
+            ResourceId = database,
+            ResourceName = "bill-me-db",
+            RunState = BilledRunState.NotApplicable,
+            Hours = 1,
+        }));
+
+        Panel.GivenUser(fixture.WorkspaceId, "bill-disk@example.com", SystemRole.Member);
+
+        var english = await Panel.SignedInAs("203.0.113.171", "bill-disk@example.com");
+        english.DefaultRequestHeaders.AcceptLanguage.Add(
+            new System.Net.Http.Headers.StringWithQualityHeaderValue("en"));
+        var persian = await Panel.SignedInAs("203.0.113.172", "bill-disk@example.com");
+
+        var inEnglish = await (await english.GetAsync("/billing?month=2026-09")).Content.ReadAsStringAsync();
+        var inPersian = await (await persian.GetAsync("/billing?month=2026-09")).Content.ReadAsStringAsync();
+
+        inEnglish.Should().Contain("bill-me-db").And.Contain("Database disk")
+            .And.NotContain(">Other<", "the catch-all arm names nothing the customer can act on");
+
+        // "دیسک دیتابیس" — the Persian counterpart, as the razor encoder emits it.
+        inPersian.Should().Contain(
+            "&#x62F;&#x6CC;&#x633;&#x6A9; &#x62F;&#x6CC;&#x62A;&#x627;&#x628;&#x6CC;&#x633;",
+            "the panel's default language is Persian and this is the screen the bill is read on");
+    }
+
+    [Fact]
     public async Task A_bill_for_a_workspace_nothing_has_ever_charged_does_not_claim_a_balance_of_zero()
     {
         // "Nobody has billed you" and "you have nothing left" are opposite situations, and the panel

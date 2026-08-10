@@ -1,5 +1,6 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Application.Abstractions;
+using Harbora.Domain.Identity;
 using Harbora.Web.Controllers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -86,6 +87,9 @@ public class TenantsControllerCreditTests
     private sealed record Fixture(BillingContext Db, TenantsController Controller, RecordingAudit Audit)
     {
         public string? Error => Controller.TempData["Error"] as string;
+
+        /// <summary>What the administrator is told went right, as opposed to what went wrong.</summary>
+        public string? Message => Controller.TempData["Message"] as string;
     }
 
     /// <summary>
@@ -217,5 +221,30 @@ public class TenantsControllerCreditTests
 
         f.Error.Should().Contain("Enter the amount in figures");
         f.Audit.Entries.Should().BeEmpty();
+    }
+
+    // --- what the administrator is actually told ----------------------------------------------
+
+    [Fact]
+    public async Task The_screen_names_the_database_that_came_back_as_well_as_the_apps()
+    {
+        // An administrator crediting an account has, by this point, usually just told the customer
+        // their services are coming back. "1 app(s) were started again" on a workspace whose database
+        // also came back is an answer that leaves out the half they will be asked about first — and
+        // if the database had NOT come back, the same sentence would read exactly the same way.
+        await using var db = WalletHarness.SystemContext();
+        var ws = WalletHarness.SeedWorkspace(
+            db, balanceMinor: -5_000, suspended: true, reason: SuspensionReason.NoBalance);
+        WalletHarness.SeedStoppedAppOwedAStart(db, ws, "api");
+        WalletHarness.SeedStoppedDatabaseOwedAStart(db, ws, "orders-db");
+        await db.SaveChangesAsync();
+
+        var f = Build(db);
+
+        await f.Controller.Credit(ws, Guid.CreateVersion7(), "1000", "card payment", default);
+
+        f.Message.Should().Contain("1 app(s) were started again")
+            .And.Contain("1 database(s) were started again");
+        f.Error.Should().BeNull();
     }
 }

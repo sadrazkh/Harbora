@@ -3,6 +3,7 @@ using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
+using Harbora.Domain.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -24,10 +25,14 @@ namespace Harbora.Infrastructure.Billing;
 /// <param name="WorkspaceSuspended">The workspace's state after the call, not before it.</param>
 /// <param name="AppsStopped">Apps confirmed no longer running, by reading them again.</param>
 /// <param name="AppsStarted">Apps confirmed running again, by reading them again.</param>
+/// <param name="DatabasesStopped">Managed databases confirmed no longer running, likewise.</param>
+/// <param name="DatabasesStarted">Managed databases confirmed running again, likewise.</param>
 public sealed record BillingSuspensionResult(
     bool WorkspaceSuspended,
     int AppsStopped,
     int AppsStarted,
+    int DatabasesStopped,
+    int DatabasesStarted,
     IReadOnlyList<string> Failures);
 
 /// <summary>
@@ -70,23 +75,47 @@ public sealed record BillingSuspensionResult(
 /// </para>
 ///
 /// <para>
-/// <b>What this class assumes about the stop/start route, and when that stops being true.</b> It
-/// calls <c>IAppOperationsService</c>, whose <c>ResolveAsync</c> reads <c>db.Apps</c> <i>through</i>
-/// the tenant filter. That is safe here only because this class is reached from sessionless
-/// background work, where <c>HttpWorkspaceScope.IsUnscoped</c> is true and the filter is inert. Give
+/// <b>Databases are stopped as well as apps, and for a harder reason.</b> The hourly pass charges a
+/// managed database for its instance size and for the gibibytes on its disk. A suspension that
+/// stopped only apps therefore produced the worst state on this feature: the customer's site down,
+/// their database still running, the running database still billed against a balance of nothing —
+/// and no way for them to stop it themselves, because being suspended is exactly what blocks them.
+/// A database is also the one workload whose loss is not recoverable by redeploying, which is why
+/// <c>ManagedService.WasRunningAtSuspension</c> is written before any container is touched and is
+/// kept when a start fails.
+/// </para>
+///
+/// <para>
+/// <b>What this class assumes about the two stop/start routes, and when that stops being true.</b>
+/// It calls <c>IAppOperationsService</c>, whose <c>ResolveAsync</c> reads <c>db.Apps</c>
+/// <i>through</i> the tenant filter, and <c>IManagedServiceEngine</c>, whose <c>StartAsync</c> and
+/// <c>StopAsync</c> read <c>db.ManagedServices</c> through it in exactly the same way. That is safe
+/// here only because this class is reached from sessionless background work, where
+/// <c>HttpWorkspaceScope.IsUnscoped</c> is true and the filters are inert. Give
 /// <see cref="SuspendAsync"/> a caller running under any other scope — a provider-console button, a
 /// webhook handler that resolves a workspace claim, a test with an <c>HttpContext</c> — and every
 /// stop throws <c>Sequence contains no elements</c> before it reaches a node, while this class still
-/// flags the workspace suspended and writes a marker on each app. The failures are reported rather
-/// than swallowed, so it is loud; it is still wrong. The fix is <c>IgnoreQueryFilters()</c> on that
-/// service's <c>ResolveAsync</c> <b>and</b> on its <c>SetStatusAsync</c> — together, never one
-/// alone, because unfiltering only the read turns a throw into a filtered <c>ExecuteUpdate</c> that
-/// matches no rows and reports success, which is the shape nobody sees.
+/// flags the workspace suspended and writes a marker on each workload. The failures are reported
+/// rather than swallowed, so it is loud; it is still wrong. The fix is <c>IgnoreQueryFilters()</c> on
+/// <c>AppOperationsService.ResolveAsync</c> <b>and</b> on its <c>SetStatusAsync</c> — together, never
+/// one alone, because unfiltering only the read turns a throw into a filtered <c>ExecuteUpdate</c>
+/// that matches no rows and reports success, which is the shape nobody sees — and the same call on
+/// the two reads in <c>ManagedServiceEngine</c>.
+/// </para>
+///
+/// <para>
+/// <b>Resuming a database goes back through the gate, and that is deliberate.</b>
+/// <c>ManagedServiceEngine.StartAsync</c> asks <c>IBillingGate</c> and throws if refused, so a
+/// resumption only works inside the window the gate opens: suspended for <c>NoBalance</c> with money
+/// on the account. That is the same window <c>WalletService</c> credits into before calling here,
+/// and it is a feature rather than an obstacle — nothing can bring a database back onto a balance
+/// that is still empty.
 /// </para>
 /// </summary>
 public sealed class BillingSuspension(
     HarboraDbContext db,
     IAppOperationsService apps,
+    IManagedServiceEngine databases,
     IOptions<BillingOptions> options,
     ILogger<BillingSuspension> logger)
 {
@@ -212,6 +241,24 @@ public sealed class BillingSuspension(
             }
         }
 
+        var allDatabases = await DatabasesOfAsync(workspaceId, ct);
+
+        // Provisioning is the database's Deploying: a queued job owns that row's status and writes
+        // it itself, so stopping the container underneath it would make this a second writer on that
+        // path. Failed and Stopped are already not running.
+        var runningDatabases = allDatabases.Where(s => s.Status == ServiceStatus.Running).ToList();
+
+        foreach (var service in allDatabases)
+        {
+            // The identical rule, and it has to be the identical rule. By the second pass a database
+            // is Stopped precisely because the first pass stopped it, so a set rebuilt from what is
+            // running now would clear the only record that it was ever up — and a top-up would then
+            // bring back every app and not the data layer they all need, while every pass reported
+            // success.
+            if (service.Status == ServiceStatus.Running) service.WasRunningAtSuspension = true;
+            else if (!alreadySuspended) service.WasRunningAtSuspension = false;
+        }
+
         workspace.IsSuspended = true;
 
         // Unconditional, and only because the guard above has already established that this reason
@@ -274,7 +321,53 @@ public sealed class BillingSuspension(
                 "does not have; suspending again will try it once more.");
         }
 
-        return report.Result(suspended: true, appsStopped: stopped);
+        var refusedDatabases = new Dictionary<Guid, string>();
+
+        foreach (var service in runningDatabases)
+        {
+            try
+            {
+                // The platform's own route, not the daemon — it resolves the service's server engine,
+                // so this reaches a remote node, and it is the single writer of ServiceStatus.
+                await databases.StopAsync(service.Id, ct);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                refusedDatabases[service.Id] = ex.Message;
+                logger.LogError(ex,
+                    "Stopping database {Database} while suspending workspace {Workspace} failed; the remaining databases were still stopped.",
+                    service.Id, workspaceId);
+            }
+        }
+
+        var databasesAfter = await DatabaseStatusesAsync(workspaceId, ct);
+        var databasesStopped = 0;
+
+        foreach (var service in runningDatabases)
+        {
+            // Deleted between the two reads. Nothing of theirs is running, which is what this pass
+            // was for.
+            if (!databasesAfter.TryGetValue(service.Id, out var status)) continue;
+
+            if (status != ServiceStatus.Running)
+            {
+                databasesStopped++;
+                continue;
+            }
+
+            var because = refusedDatabases.TryGetValue(service.Id, out var message)
+                ? $": {message}"
+                : ", although the stop route reported no error";
+
+            report.Add(
+                $"Database \"{service.Name}\" in workspace \"{workspace.Name}\" is still running " +
+                $"after the workspace was suspended{because}. It is still spending a balance the " +
+                "workspace does not have — on its size and on every gibibyte of its disk — and the " +
+                "customer cannot stop it themselves while they are suspended. Suspending again will " +
+                "try it once more.");
+        }
+
+        return report.Result(suspended: true, appsStopped: stopped, databasesStopped: databasesStopped);
     }
 
     /// <summary>
@@ -370,6 +463,66 @@ public sealed class BillingSuspension(
                 "start, so resuming again will try it once more.");
         }
 
+        var markedDatabases = (await DatabasesOfAsync(workspaceId, ct))
+            .Where(s => s.WasRunningAtSuspension).ToList();
+        var refusedDatabases = new Dictionary<Guid, string>();
+        var askedDatabases = new HashSet<Guid>();
+
+        foreach (var service in markedDatabases)
+        {
+            // Already back. Starting a running database is a restart, which is a visible outage —
+            // and on a database, an outage handed to every app attached to it — given to a customer
+            // who has just paid.
+            if (service.Status == ServiceStatus.Running) continue;
+
+            askedDatabases.Add(service.Id);
+
+            try
+            {
+                await databases.StartAsync(service.Id, ct);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                refusedDatabases[service.Id] = ex.Message;
+                logger.LogError(ex,
+                    "Starting database {Database} while resuming workspace {Workspace} failed; the remaining databases were still started.",
+                    service.Id, workspaceId);
+            }
+        }
+
+        var databasesAfter = await DatabaseStatusesAsync(workspaceId, ct);
+        var databasesStarted = 0;
+
+        foreach (var service in markedDatabases)
+        {
+            // Deleted while the workspace was suspended: nothing to bring back, nothing to keep
+            // remembering.
+            if (!databasesAfter.TryGetValue(service.Id, out var status))
+            {
+                service.WasRunningAtSuspension = false;
+                continue;
+            }
+
+            if (status == ServiceStatus.Running)
+            {
+                service.WasRunningAtSuspension = false;
+                if (askedDatabases.Contains(service.Id)) databasesStarted++;
+                continue;
+            }
+
+            stranded++;
+
+            var because = refusedDatabases.TryGetValue(service.Id, out var message)
+                ? $": {message}"
+                : ", although the start route reported no error";
+
+            report.Add(
+                $"Database \"{service.Name}\" in workspace \"{workspace.Name}\" did not come back " +
+                $"when the suspension was lifted{because}. It is still marked as one this workspace " +
+                "owes a start, so resuming again will try it once more — and every app attached to " +
+                "it will fail to reach it until then.");
+        }
+
         if (stranded == 0)
         {
             workspace.IsSuspended = false;
@@ -378,14 +531,15 @@ public sealed class BillingSuspension(
         else
         {
             report.Add(
-                $"Workspace \"{workspace.Name}\" is still suspended because {stranded} of the apps " +
-                "the suspension stopped are not running again. Lifting it here would throw away the " +
-                "only record that they were ever running.");
+                $"Workspace \"{workspace.Name}\" is still suspended because {stranded} of the " +
+                "workloads the suspension stopped are not running again. Lifting it here would " +
+                "throw away the only record that they were ever running.");
         }
 
         await db.SaveChangesAsync(ct);
 
-        return report.Result(workspace.IsSuspended, appsStarted: started);
+        return report.Result(
+            workspace.IsSuspended, appsStarted: started, databasesStarted: databasesStarted);
     }
 
     /// <summary>
@@ -425,6 +579,18 @@ public sealed class BillingSuspension(
             .Select(a => new { a.Id, a.Status })
             .ToDictionaryAsync(a => a.Id, a => a.Status, ct);
 
+    /// <summary>Every managed database in the workspace, tracked, unfiltered.</summary>
+    private Task<List<ManagedService>> DatabasesOfAsync(Guid workspaceId, CancellationToken ct) =>
+        db.ManagedServices.IgnoreQueryFilters().Where(s => s.WorkspaceId == workspaceId).ToListAsync(ct);
+
+    /// <inheritdoc cref="StatusesAsync"/>
+    private async Task<Dictionary<Guid, ServiceStatus>> DatabaseStatusesAsync(
+        Guid workspaceId, CancellationToken ct) =>
+        await db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
+            .Where(s => s.WorkspaceId == workspaceId)
+            .Select(s => new { s.Id, s.Status })
+            .ToDictionaryAsync(s => s.Id, s => s.Status, ct);
+
     /// <summary>What one call has to say for itself.</summary>
     private sealed class Report
     {
@@ -432,7 +598,12 @@ public sealed class BillingSuspension(
 
         public void Add(string message) => _failures.Add(message);
 
-        public BillingSuspensionResult Result(bool suspended, int appsStopped = 0, int appsStarted = 0) =>
-            new(suspended, appsStopped, appsStarted, _failures);
+        public BillingSuspensionResult Result(
+            bool suspended,
+            int appsStopped = 0,
+            int appsStarted = 0,
+            int databasesStopped = 0,
+            int databasesStarted = 0) =>
+            new(suspended, appsStopped, appsStarted, databasesStopped, databasesStarted, _failures);
     }
 }
