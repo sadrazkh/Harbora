@@ -10,9 +10,9 @@ namespace Harbora.Web.Infrastructure;
 /// silently defeats both the per-IP rate limits (one global bucket for the whole platform) and the
 /// audit trail (every row records the proxy).
 ///
-/// Trust is deliberately narrow: headers are honoured only when the immediate peer is inside a
-/// configured proxy network, and only one hop is unwound, so a client cannot prepend a forged
-/// <c>X-Forwarded-For</c> entry and be believed.
+/// Trust is deliberately narrow: headers are honoured only while each peer is inside a configured
+/// proxy network. Two hops are available for Cloudflare + Traefik; on a direct request the second
+/// hop is the untrusted public client, so unwinding stops before a prepended forged value.
 /// </summary>
 public static class TrustedProxySetup
 {
@@ -22,7 +22,13 @@ public static class TrustedProxySetup
     /// </summary>
     public static readonly string[] DefaultProxyNetworks =
     [
-        "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7"
+        "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7",
+        "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+        "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+        "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+        "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22", "2400:cb00::/32",
+        "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32",
+        "2a06:98c0::/29", "2c0f:f248::/32"
     ];
 
     /// <summary>
@@ -30,7 +36,7 @@ public static class TrustedProxySetup
     /// can log them; unparseable entries are skipped rather than crashing startup.
     /// </summary>
     public static IReadOnlyList<string> Configure(
-        ForwardedHeadersOptions options, IEnumerable<string> cidrs, int forwardLimit = 1)
+        ForwardedHeadersOptions options, IEnumerable<string> cidrs, int forwardLimit = 2)
     {
         options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
 
@@ -38,9 +44,8 @@ public static class TrustedProxySetup
         options.KnownIPNetworks.Clear();
         options.KnownProxies.Clear();
 
-        // One hop is the shipped Traefik-only topology. Cloudflare mode explicitly raises this to
-        // two and adds Cloudflare's published networks, so the second unwind reaches the visitor
-        // without trusting a header sent by a direct, untrusted peer.
+        // Two covers Cloudflare + Traefik. A direct request still unwinds only Traefik: the next peer
+        // is the public client, which is not in a trusted network, and processing stops there.
         options.ForwardLimit = Math.Clamp(forwardLimit, 1, 5);
 
         var accepted = new List<string>();
@@ -76,5 +81,5 @@ public static class TrustedProxySetup
     public static int HopsFromConfiguration(IConfiguration config) =>
         int.TryParse(config["Harbora:TrustedProxyHops"], out var hops)
             ? Math.Clamp(hops, 1, 5)
-            : 1;
+            : 2;
 }

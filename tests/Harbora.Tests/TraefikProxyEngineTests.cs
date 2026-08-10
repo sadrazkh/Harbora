@@ -78,6 +78,33 @@ public class TraefikProxyEngineTests
     }
 
     [Fact]
+    public void Panel_marker_switches_certificates_and_ip_allowlists_without_a_restart()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "harbora-cloudflare-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var marker = Path.Combine(root, "cloudflare.enabled");
+        File.WriteAllText(marker, "enabled");
+        try
+        {
+            var route = HostRoute();
+            route.IpAllowlist = "203.0.113.0/24";
+            var content = Engine(new TraefikOptions
+            {
+                CertResolver = "letsencrypt",
+                ForwardedClientIpDepth = 0,
+                CloudflareEnabledMarkerPath = marker
+            }).Preview([route]).Content;
+
+            content.Should().Contain("certResolver: cloudflare");
+            content.Should().Contain("depth: 1");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Validate_passes_for_a_well_formed_route()
     {
         var result = Engine().Validate(new[] { HostRoute() });

@@ -82,8 +82,8 @@ And one you should not normally touch:
 |---|---|---|
 | `ACME_CA_SERVER` | `https://acme-v02.api.letsencrypt.org/directory` | Which ACME directory issues certificates. The default is Let's Encrypt production and is exactly what Traefik does when the setting is absent. It exists for the automated live-host proof, which would otherwise burn the duplicate-certificate rate limit every run. **A staging certificate is not trusted by browsers** |
 | `ACME_CERT_RESOLVER` | `letsencrypt` | Resolver used by panel, S3 and generated app routers. Cloudflare mode sets it to `cloudflare` |
-| `TRUSTED_PROXY_NETWORKS` | Docker/private networks | Comma-separated CIDRs whose forwarded headers the panel trusts. Cloudflare mode includes Cloudflare's published ranges |
-| `TRUSTED_PROXY_HOPS` | `1` | Trusted hops the panel unwinds. Cloudflare mode uses `2` for Cloudflare -> Traefik -> panel |
+| `TRUSTED_PROXY_NETWORKS` | Docker/private + Cloudflare networks | Comma-separated CIDRs whose forwarded headers the panel trusts. Processing stops at the first untrusted peer, so direct traffic cannot add a forged hop |
+| `TRUSTED_PROXY_HOPS` | `2` | Maximum trusted hops for Cloudflare -> Traefik -> panel. Direct traffic still unwinds only Traefik because the next peer is not trusted |
 | `FORWARDED_CLIENT_IP_DEPTH` | `0` | Forwarded address used by route IP allowlists. Cloudflare mode uses `1`; restrict direct origin access before relying on it |
 
 > Changing `HARBORA_MASTER_KEY` later makes every stored secret permanently unreadable. `harbora
@@ -91,9 +91,14 @@ And one you should not normally touch:
 
 ### Cloudflare Proxied mode
 
+An Owner can now configure this from **Platform -> Cloudflare** in the panel: enter the zone and a
+zone-scoped token, test it, then enable. The panel encrypts the stored token, sets Full (strict), can
+turn the existing Harbora DNS records Proxied, and hot-switches panel/S3/app certificates to DNS-01.
+The command below remains the recovery path when the panel itself cannot be reached.
+
 Keep the panel, app wildcard and S3 DNS records **Proxied** (orange cloud). Create a Cloudflare API
-token limited to the zones Harbora serves, with `Zone:Read` and `DNS:Edit`, then activate the shipped
-overlay:
+token limited to the zones Harbora serves, with `Zone:Read`, `DNS:Edit`, and `Zone Settings:Edit`,
+then activate the shipped overlay:
 
 ```bash
 read -rsp 'Cloudflare API token: ' CF_TOKEN; echo

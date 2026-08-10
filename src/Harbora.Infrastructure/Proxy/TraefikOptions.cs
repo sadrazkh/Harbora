@@ -23,4 +23,10 @@ public sealed class TraefikOptions
     /// Safe only when the origin accepts traffic from the proxy network, as the runbook requires.
     /// </summary>
     public int ForwardedClientIpDepth { get; set; }
+
+    /// <summary>
+    /// Marker written by the panel when Cloudflare mode is active. It switches generated routes to
+    /// the DNS-01 resolver without restarting the panel that is performing the change.
+    /// </summary>
+    public string CloudflareEnabledMarkerPath { get; set; } = "/dynamic/cloudflare.enabled";
 }

@@ -265,6 +265,7 @@ public static class DependencyInjection
 
         // Tells the truth about custom domains: where DNS points and what certificate is live.
         services.AddScoped<IDomainInspector, Networking.DomainInspector>();
+        services.AddScoped<Networking.CloudflarePlatformService>();
 
         // Monitoring + notifications.
         services.AddHttpClient();

@@ -42,6 +42,11 @@ public sealed class TraefikProxyEngine(
 
     private readonly TraefikOptions _opt = options.Value;
 
+    private bool CloudflareEnabled => File.Exists(_opt.CloudflareEnabledMarkerPath);
+    private string ActiveCertResolver => CloudflareEnabled ? "cloudflare" : _opt.CertResolver;
+    private int ActiveForwardedClientIpDepth =>
+        CloudflareEnabled ? 1 : _opt.ForwardedClientIpDepth;
+
     /// <summary>
     /// One writer at a time. The engine is a singleton, and since jobs began running several at a
     /// time two applies overlapping is ordinary rather than rare: interleaved, one attempt's backup
@@ -303,7 +308,7 @@ public sealed class TraefikProxyEngine(
         if (r.SslEnabled)
         {
             sb.AppendLine("      tls:");
-            sb.AppendLine($"        certResolver: {_opt.CertResolver}");
+            sb.AppendLine($"        certResolver: {ActiveCertResolver}");
         }
     }
 
@@ -358,10 +363,10 @@ public sealed class TraefikProxyEngine(
         {
             sb.AppendLine($"    {name}-ips:");
             sb.AppendLine("      ipAllowList:");
-            if (_opt.ForwardedClientIpDepth > 0)
+            if (ActiveForwardedClientIpDepth > 0)
             {
                 sb.AppendLine("        ipStrategy:");
-                sb.AppendLine($"          depth: {_opt.ForwardedClientIpDepth}");
+                sb.AppendLine($"          depth: {ActiveForwardedClientIpDepth}");
             }
             sb.AppendLine("        sourceRange:");
             foreach (var entry in allowed)

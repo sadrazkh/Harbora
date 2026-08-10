@@ -93,6 +93,7 @@ public static class NavigationMap
         ]),
         new("platform", [
             new("users", "Users", "Index", "users", Capabilities.TenantsManage),
+            new("cloudflare", "Cloudflare", "Index", "shield-check", Capabilities.PlatformManage),
             new("servers", "Servers", "Index", "server", Capabilities.ServersManage),
             new("nodes", "Nodes", "Index", "cpu", Capabilities.ServersManage),
             new("plans", "Plans", "Index", "credit-card", Capabilities.PlansManage),

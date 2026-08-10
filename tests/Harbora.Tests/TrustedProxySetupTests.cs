@@ -130,16 +130,32 @@ public class TrustedProxySetupTests
     }
 
     [Theory]
-    [InlineData(null, 1)]
+    [InlineData(null, 2)]
     [InlineData("2", 2)]
     [InlineData("99", 5)]
-    [InlineData("invalid", 1)]
+    [InlineData("invalid", 2)]
     public void Proxy_hop_count_is_read_safely_from_configuration(string? value, int expected)
     {
         var values = new Dictionary<string, string?> { ["Harbora:TrustedProxyHops"] = value };
         var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
 
         TrustedProxySetup.HopsFromConfiguration(config).Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task Two_hop_default_still_rejects_a_forged_header_on_direct_traffic()
+    {
+        var options = new ForwardedHeadersOptions();
+        TrustedProxySetup.Configure(options, TrustedProxySetup.DefaultProxyNetworks, 2);
+        var middleware = new ForwardedHeadersMiddleware(
+            _ => Task.CompletedTask, NullLoggerFactory.Instance, Options.Create(options));
+        var context = new DefaultHttpContext();
+        context.Connection.RemoteIpAddress = IPAddress.Parse("172.18.0.2");
+        context.Request.Headers["X-Forwarded-For"] = "1.1.1.1, 203.0.113.9";
+
+        await middleware.Invoke(context);
+
+        context.Connection.RemoteIpAddress.Should().Be(IPAddress.Parse("203.0.113.9"));
     }
 
     [Theory]

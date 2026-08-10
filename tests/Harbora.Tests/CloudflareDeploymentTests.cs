@@ -85,4 +85,29 @@ public class CloudflareDeploymentTests
         doctor.Should().Contain("cloudflare.compose.yml");
         doctor.Should().Contain("API token hidden");
     }
+
+    [Fact]
+    public void Base_stack_allows_the_panel_to_activate_dns01_without_recreating_itself()
+    {
+        var compose = Read("deploy", "docker-compose.yml");
+        var navigation = Read("src", "Harbora.Infrastructure", "Navigation", "NavigationMap.cs");
+        var controller = Read("src", "Harbora.Web", "Controllers", "CloudflareController.cs");
+
+        compose.Should().Contain("certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare");
+        compose.Should().Contain("CF_DNS_API_TOKEN_FILE: /dynamic/secrets/cloudflare-token");
+        compose.Should().Contain("Cloudflare__DynamicConfigPath: /dynamic/cloudflare.yml");
+        navigation.Should().Contain("new(\"cloudflare\", \"Cloudflare\"");
+        controller.Should().Contain("[Authorize(Policy = Capabilities.PlatformManage)]");
+    }
+
+    [Fact]
+    public void User_administration_remains_a_visible_platform_destination()
+    {
+        var navigation = Read("src", "Harbora.Infrastructure", "Navigation", "NavigationMap.cs");
+        var sidebar = Read("src", "Harbora.Web", "Views", "Shared", "Design", "_Sidebar.cshtml");
+
+        navigation.Should().Contain("new(\"users\", \"Users\", \"Index\"");
+        navigation.Should().NotContain("new(\"users\", \"Users\", \"Index\", \"users\", Capabilities.TenantsManage, Advanced: true)");
+        sidebar.Should().Contain("کاربران و تیم");
+    }
 }

@@ -1,0 +1,112 @@
+@model CloudflareSettingsViewModel
+@using Harbora.Infrastructure.Monitoring
+@using Harbora.Web.ViewModels
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var message = TempData["Message"] as string;
+    var error = TempData["Error"] as string;
+    var warnings = (TempData["Warnings"] as string)?.Split('\n', StringSplitOptions.RemoveEmptyEntries) ?? [];
+    var statePill = Model.Enabled
+        ? new StatusPillModel(isFa ? "فعال" : "active", Tone.Ok)
+        : new StatusPillModel(isFa ? "غیرفعال" : "inactive", Tone.Idle);
+}
+
+<partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+    "Cloudflare",
+    isFa
+        ? "پروکسی، SSL سخت‌گیرانه و تمدید DNS-01 را از همین‌جا فعال کنید."
+        : "Enable proxying, strict SSL and DNS-01 renewal from the panel."))" />
+
+@if (message is not null) { <div class="alert-success mb-4">@message</div> }
+@if (error is not null) { <div class="alert-danger mb-4">@error</div> }
+@foreach (var warning in warnings) { <div class="alert-warning mb-2">@warning</div> }
+
+<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+    <div class="space-y-6">
+        <partial name="Design/_PanelStart" model="@(new PanelModel(isFa ? "اتصال Cloudflare" : "Cloudflare connection"))" />
+        <div class="mb-4 flex items-center justify-between gap-3">
+            <div>
+                <strong class="block text-sm text-ink">@(isFa ? "وضعیت Harbora" : "Harbora mode")</strong>
+                <small class="text-xs text-ink-faint">
+                    @(Model.HasToken ? (isFa ? "توکن رمزنگاری‌شده ذخیره است" : "an encrypted token is stored") : (isFa ? "توکنی ذخیره نشده" : "no token stored"))
+                </small>
+            </div>
+            <partial name="Design/_StatusPill" model="statePill" />
+        </div>
+
+        <form asp-action="Enable" method="post" class="space-y-4">
+            @Html.AntiForgeryToken()
+            <div>
+                <label class="form-label" for="cf-zone">@(isFa ? "Zone اصلی" : "Cloudflare zone")</label>
+                <input id="cf-zone" name="zone" value="@Model.Zone" placeholder="example.com" required class="form-control" dir="ltr" />
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa ? "نام Zone، نه آدرس پنل؛ مثلاً example.com" : "The zone name, not the panel hostname; for example example.com.")
+                </p>
+            </div>
+            <div>
+                <label class="form-label" for="cf-token">Cloudflare API token</label>
+                <input id="cf-token" name="token" type="password" autocomplete="new-password" class="form-control" dir="ltr"
+                       placeholder="@(Model.HasToken ? (isFa ? "ذخیره شده — برای تعویض وارد کنید" : "stored — enter only to rotate") : "Zone:Read + DNS:Edit + Zone Settings:Edit")" />
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa
+                        ? "توکن هرگز دوباره نمایش داده نمی‌شود. برای Full (strict) دسترسی Zone Settings:Edit هم لازم است."
+                        : "The token is never shown again. Zone Settings:Edit is also required to enforce Full (strict).")
+                </p>
+            </div>
+            <label class="flex items-start gap-3 rounded-xl border border-line bg-surface-2 p-3">
+                <input type="checkbox" name="proxyRecords" value="true" checked class="mt-0.5 h-4 w-4" />
+                <span>
+                    <strong class="block text-sm text-ink">@(isFa ? "رکوردهای Harbora را Proxied کن" : "Proxy Harbora DNS records")</strong>
+                    <small class="mt-1 block text-xs leading-5 text-ink-faint">
+                        @(isFa
+                            ? $"رکوردهای موجود {Model.PanelDomain}، {Model.S3Domain ?? "S3"} و *.{Model.RootDomain} نارنجی می‌شوند؛ رکورد کانال نودها دست‌نخورده می‌ماند."
+                            : $"Existing records for {Model.PanelDomain}, {Model.S3Domain ?? "S3"} and *.{Model.RootDomain} become orange-cloud; the node mTLS record is never touched.")
+                    </small>
+                </span>
+            </label>
+            <div class="flex flex-wrap gap-2">
+                <button class="btn-primary">@(Model.Enabled ? (isFa ? "اعتبارسنجی و اعمال دوباره" : "Verify and re-apply") : (isFa ? "اعتبارسنجی و فعال‌سازی" : "Verify and enable"))</button>
+                <button type="submit" formaction="/admin/cloudflare/test" class="rounded-lg border border-line px-4 py-2 text-sm text-ink-muted hover:bg-surface-2">
+                    @(isFa ? "فقط تست اتصال" : "Test connection only")
+                </button>
+            </div>
+        </form>
+        <partial name="Design/_PanelEnd" />
+
+        <partial name="Design/_PanelStart" model="@(new PanelModel(isFa ? "کاری که فعال‌سازی انجام می‌دهد" : "What activation changes"))" />
+        <ul class="space-y-2 text-sm leading-6 text-ink-muted">
+            <li>✓ @(isFa ? "توکن را رمزنگاری و برای Traefik به فایل secret محدود می‌کند." : "Encrypts the token and materializes only Traefik's restricted secret file.")</li>
+            <li>✓ @(isFa ? "حالت SSL همان Zone را روی Full (strict) می‌گذارد." : "Sets the zone's SSL mode to Full (strict).")</li>
+            <li>✓ @(isFa ? "پنل، S3 و routeهای اپ‌ها را به DNS-01 می‌برد؛ تمدید به پورت ۸۰ وابسته نیست." : "Moves panel, S3 and app routes to DNS-01; renewal no longer depends on port 80.")</li>
+            <li>✓ @(isFa ? "IP واقعی بازدیدکننده را از زنجیره Cloudflare و Traefik نگه می‌دارد." : "Preserves the real visitor IP through Cloudflare and Traefik.")</li>
+        </ul>
+        <partial name="Design/_PanelEnd" />
+    </div>
+
+    <aside class="space-y-6">
+        <partial name="Design/_PanelStart" model="@(new PanelModel(isFa ? "سلامت زنده" : "Live health"))" />
+        @if (Model.PanelStatus is { } status)
+        {
+            <div class="text-sm text-ink">@status.Summary</div>
+            @if (status.Action is { Length: > 0 }) { <p class="mt-2 text-xs leading-5 text-ink-faint">@status.Action</p> }
+        }
+        <dl class="mt-4 space-y-2 text-xs">
+            <div class="flex justify-between gap-3"><dt class="text-ink-faint">Zone</dt><dd dir="ltr" class="font-mono text-ink">@(Model.Zone ?? "—")</dd></div>
+            <div class="flex justify-between gap-3"><dt class="text-ink-faint">@(isFa ? "آخرین تأیید" : "Last verified")</dt><dd dir="ltr" class="text-ink">@(Model.LastVerifiedAt?.LocalDateTime.ToString(Dates.Stamp) ?? "—")</dd></div>
+        </dl>
+        <partial name="Design/_PanelEnd" />
+
+        <partial name="Design/_PanelStart" model="@(new PanelModel(isFa ? "مدیریت دسترسی" : "Access management"))" />
+        <a href="/users" class="block rounded-lg border border-line bg-surface-2 p-3 hover:border-accent/40">
+            <strong class="block text-sm text-ink">@(isFa ? "کاربران و تیم" : "Users & Team")</strong>
+            <small class="mt-1 block text-xs text-ink-faint">@(isFa ? "ساخت کاربر، دعوت، نقش، تعلیق و بازنشانی رمز" : "Create, invite, assign roles, suspend and reset passwords")</small>
+        </a>
+        <partial name="Design/_PanelEnd" />
+
+        <div class="rounded-xl border border-warn/30 bg-warn-soft p-4 text-xs leading-6 text-warn">
+            @(isFa
+                ? "اگر Worker Node دارید، رکورد NODE_DOMAIN باید DNS-only بماند؛ پروکسی عادی Cloudflare گواهی کلاینت mTLS را عبور نمی‌دهد."
+                : "If worker nodes are enabled, NODE_DOMAIN must remain DNS-only; ordinary Cloudflare proxying cannot pass the mTLS client certificate.")
+        </div>
+    </aside>
+</div>

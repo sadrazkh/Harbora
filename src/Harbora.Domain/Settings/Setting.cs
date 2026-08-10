@@ -39,6 +39,13 @@ public static class SettingKeys
     public const string DefaultCulture = "ui.default_culture";
     public const string TelemetryEnabled = "telemetry.enabled";
 
+    // Cloudflare is configured from the platform panel. The API token is encrypted and marked
+    // secret; Traefik receives a materialized copy through its mounted secret file.
+    public const string CloudflareEnabled = "cloudflare.enabled";
+    public const string CloudflareZone = "cloudflare.zone";
+    public const string CloudflareToken = "cloudflare.api_token";
+    public const string CloudflareLastVerifiedAt = "cloudflare.last_verified_at";
+
     /// <summary>
     /// Whether Harbora may ask public container registries about newer versions of the ready-made
     /// apps. Off unless set: it means outbound requests to a third party from this server, spending

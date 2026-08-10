@@ -34,6 +34,15 @@ services:
       # the issuer is checkable, which is what the proof actually asserts. Operators should leave it
       # alone — a staging certificate is not trusted by browsers.
       - --certificatesresolvers.letsencrypt.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+      # Kept available even in direct-DNS mode so an Owner can activate Cloudflare from the panel
+      # without rebuilding containers. The provider reads its token from the mounted secret file.
+      - --certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.cloudflare.acme.storage=/acme/cloudflare.json
+      - --certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.cloudflare.acme.dnschallenge.resolvers=1.1.1.1:53,1.0.0.1:53
+      - --certificatesresolvers.cloudflare.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+    environment:
+      CF_DNS_API_TOKEN_FILE: /dynamic/secrets/cloudflare-token
     ports:
       - "80:80"
       - "443:443"
@@ -126,8 +135,12 @@ services:
       # switch managed routes to DNS-01 and recover the visitor through Cloudflare + Traefik.
       Traefik__CertResolver: ${ACME_CERT_RESOLVER:-letsencrypt}
       Traefik__ForwardedClientIpDepth: ${FORWARDED_CLIENT_IP_DEPTH:-0}
+      Traefik__CloudflareEnabledMarkerPath: /dynamic/cloudflare.enabled
       Harbora__TrustedProxyNetworks: ${TRUSTED_PROXY_NETWORKS:-}
-      Harbora__TrustedProxyHops: ${TRUSTED_PROXY_HOPS:-1}
+      Harbora__TrustedProxyHops: ${TRUSTED_PROXY_HOPS:-2}
+      Cloudflare__TokenFilePath: /dynamic/secrets/cloudflare-token
+      Cloudflare__DynamicConfigPath: /dynamic/cloudflare.yml
+      Cloudflare__EnabledMarkerPath: /dynamic/cloudflare.enabled
       # Billing stays opt-in. These defaults also make an older .env safe after an upgrade; an
       # operator can set the three friendly keys without maintaining a compose override.
       Billing__Enabled: ${BILLING_ENABLED:-false}
