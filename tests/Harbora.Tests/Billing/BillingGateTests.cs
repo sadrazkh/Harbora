@@ -339,17 +339,29 @@ public class BillingGateEnforcementTests
     /// The refusal, told apart from the node falling over.
     ///
     /// <para>
-    /// Both arrive as <see cref="InvalidOperationException"/>, so a test that only asserts the type
+    /// Asserted as <see cref="QuotaRefusedException"/> specifically rather than the plain
+    /// <see cref="InvalidOperationException"/> it used to be: a test that only asserted the base type
     /// passes just as happily when the gate has been deleted and the message is really
     /// <see cref="NoServerShouldBeAsked"/> saying a server was asked. Mutation testing found exactly
-    /// that: removing the gate from <c>RestartAsync</c> killed no test at all.
+    /// that: removing the gate from <c>RestartAsync</c> killed no test at all. Requiring the specific
+    /// type additionally pins that the refusal still carries <see cref="QuotaCheck.ReasonFa"/> through
+    /// to the request-scoped caller — every use of this helper is one of the four request-scoped
+    /// starts that throw it (<c>AppOperationsService.StartAsync</c>/<c>RestartAsync</c> and
+    /// <c>ManagedServiceEngine.StartAsync</c>, sessioned or not).
     /// </para>
     /// </summary>
     private static async Task<string> RefusalFrom(Func<Task> act)
     {
-        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(act);
+        var thrown = await Assert.ThrowsAsync<QuotaRefusedException>(act);
         thrown.Message.Should().Contain("balance",
             "this must be the gate refusing, not the container engine being reached and failing");
+        thrown.ReasonFa.Should().NotBeNullOrWhiteSpace(
+            "a request-scoped refusal is exactly the case QuotaRefusedException exists to carry both " +
+            "languages through — losing ReasonFa here is the same gap the Fa slot was added to close, " +
+            "one layer further out");
+        thrown.ReasonFa!.Should().MatchRegex("[\\u0600-\\u06FF]",
+            "a Fa slot holding the English sentence again would pass a null-check and still not be a " +
+            "translation a Persian speaker could read");
         return thrown.Message;
     }
 

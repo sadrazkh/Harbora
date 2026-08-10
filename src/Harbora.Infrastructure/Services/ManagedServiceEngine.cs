@@ -60,6 +60,10 @@ public sealed class ManagedServiceEngine(
         var mayStart = await billing.CanStartAsync(svc.WorkspaceId, ct);
         if (!mayStart.Allowed)
         {
+            // Nothing bilingual to decide here: ManagedService has no stored reason field, only the
+            // Status enum the screen already reads Failed off. mayStart.Reason reaches nothing but
+            // the host's own operator log, which — like every other logger call in this codebase — is
+            // English by convention and not a customer-facing surface at all.
             svc.Status = ServiceStatus.Failed;
             await db.SaveChangesAsync(CancellationToken.None);
             logger.LogWarning("{Svc} was not provisioned: {Reason}", svc.Name, mayStart.Reason);
@@ -206,7 +210,9 @@ public sealed class ManagedServiceEngine(
         // two lines below write Running, and a start that reports success without starting anything
         // hands the hourly tick an hour to bill for a container that is not there.
         var mayStart = await billing.CanStartAsync(svc.WorkspaceId, ct);
-        if (!mayStart.Allowed) throw new InvalidOperationException(mayStart.Reason);
+        // QuotaRefusedException carries mayStart.ReasonFa along, so the controller that catches it —
+        // reached from a request, and so with a culture to pick with — need not show English only.
+        if (!mayStart.Allowed) throw new QuotaRefusedException(mayStart);
 
         var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
         var id = await FindContainerIdAsync(docker, svc.ContainerName, ct);

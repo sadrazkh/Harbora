@@ -414,9 +414,10 @@ public sealed partial class DatabasesController(
     {
         await Guard(id, ct);
         // The billing gate refusing a workspace with no balance. Surfaced where this controller
-        // already surfaces a quota refusal, rather than as a 500 for a deliberate decision.
+        // already surfaces a quota refusal, rather than as a 500 for a deliberate decision — and in
+        // the reader's own language, since this is a customer already locked out of their database.
         try { await engine.StartAsync(id, ct); }
-        catch (InvalidOperationException ex) { TempData["Error"] = ex.Message; }
+        catch (QuotaRefusedException ex) { TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message; }
         return RedirectToAction(nameof(Details), new { id });
     }
 

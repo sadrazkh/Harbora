@@ -41,6 +41,27 @@ public sealed record QuotaCheck(bool Allowed, string? Reason, string? ReasonFa =
     public static QuotaCheck Deny(string reason, string reasonFa) => new(false, reason, reasonFa);
 }
 
+/// <summary>
+/// Thrown by a request-scoped caller — a start, a restart, anything a person just clicked — when
+/// <see cref="QuotaCheck.Allowed"/> came back false. Carries both of <see cref="QuotaCheck"/>'s
+/// strings instead of flattening the refusal into a plain <see cref="Exception.Message"/>, because
+/// flattening is exactly how the Persian half went missing the first time: the exception held one
+/// string, so the controller catching it could only ever show one string, no matter how many
+/// languages the check itself was built with.
+///
+/// <para>
+/// Reserved for callers that have a request, and therefore a culture, to choose with — the same
+/// half of <see cref="IBillingGate"/>'s callers <see cref="QuotaCheck.ReasonFa"/>'s own remarks call
+/// out as having one. A sessionless caller (the cron tick, the job worker, a webhook) has nothing to
+/// choose with and reads <see cref="QuotaCheck"/> directly instead of throwing this.
+/// </para>
+/// </summary>
+public sealed class QuotaRefusedException(QuotaCheck check) : InvalidOperationException(check.Reason)
+{
+    /// <summary>The same refusal in Persian, or null where the check itself carried none.</summary>
+    public string? ReasonFa { get; } = check.ReasonFa;
+}
+
 /// <param name="MemoryUsedBytes">
 /// Memory <em>reserved</em> — the sum of what every app and database was allotted, not what they
 /// are measured to be using. The two differ by a lot, and the screen has to say which one it is.

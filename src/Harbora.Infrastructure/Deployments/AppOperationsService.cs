@@ -73,7 +73,11 @@ public sealed class AppOperationsService(
         if (workspaceId == Guid.Empty) return; // No such app; ResolveAsync below says so properly.
 
         var mayStart = await billing.CanStartAsync(workspaceId, ct);
-        if (!mayStart.Allowed) throw new InvalidOperationException(mayStart.Reason);
+        // QuotaRefusedException, not a plain InvalidOperationException built from mayStart.Reason:
+        // both callers of Start/Restart have a request in hand, and this is the shape that lets them
+        // pick mayStart.ReasonFa for it instead of always showing English on a panel that is
+        // bilingual everywhere else.
+        if (!mayStart.Allowed) throw new QuotaRefusedException(mayStart);
     }
 
     public async Task StopAsync(Guid appId, CancellationToken ct)

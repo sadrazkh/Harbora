@@ -204,6 +204,17 @@ public sealed class DeploymentPipeline(
         var mayStart = await billing.CanStartAsync(app.WorkspaceId, ct);
         if (!mayStart.Allowed)
         {
+            // English only, on purpose — this is a decision, not the gap QuotaCheck.ReasonFa was
+            // added to close. deployment.ErrorMessage and the line below land in the deploy log
+            // alongside git checkout output, Docker build errors and health-check diagnosis, none of
+            // which is ever translated; the log is exactly the "deliberate LTR island" the panel's
+            // RTL rules already carve out for code, IDs and terminals (see
+            // docs/product-audit/19-do-not-change-list.md, item 21). Splicing Persian into one line
+            // of that stream would not make the log readable to a Persian speaker — everything around
+            // it would still be English — it would just make this one line look like a rendering bug.
+            // And unlike Start/Restart, nobody reading it is necessarily the person the refusal
+            // happened to: the queue is durable, so this may be read an hour later by whoever is
+            // debugging the deploy, in whatever language that happens to be.
             deployment.ErrorMessage = mayStart.Reason;
             await SetStatus(DeploymentStatus.Failed);
             await Record(LogStream.System, $"❌ Deployment refused: {mayStart.Reason}");

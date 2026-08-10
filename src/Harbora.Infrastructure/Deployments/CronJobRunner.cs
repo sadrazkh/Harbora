@@ -75,6 +75,13 @@ public sealed class CronJobRunner(
         var mayStart = await billing.CanStartAsync(job.WorkspaceId, ct);
         if (!mayStart.Allowed)
         {
+            // English only, and a decision rather than the gap ReasonFa exists to close: CronRun.Error
+            // sits beside Output and ExitCode, the job's own stdout/stderr and exit status, which are
+            // never translated because they are not the panel's words to translate. This run may also
+            // be read long after the fact and by someone other than whoever the balance ran out on —
+            // "run now" is one of three ways in (schedule, button, durable queue) — so there is no
+            // request culture to have picked between at write time even if the field's neighbours
+            // were bilingual, which they are not.
             db.CronRuns.Add(new CronRun
             {
                 WorkspaceId = job.WorkspaceId,
