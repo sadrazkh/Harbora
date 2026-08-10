@@ -74,8 +74,14 @@ install_docker() {
 fetch_source() {
   if [ -d "$APP_DIR/.git" ]; then
     log "Updating source… / به‌روزرسانی سورس…"
-    git -C "$APP_DIR" fetch --depth 1 origin "$REPO_BRANCH" -q
-    git -C "$APP_DIR" reset --hard "origin/$REPO_BRANCH" -q
+    # Both checked. A fetch that fails leaves the old source in place, and everything after this
+    # rebuilds it, restarts it and reports a successful update that changed nothing. The common
+    # cause is running without sudo: the checkout belongs to root, so git refuses it as "dubious
+    # ownership" and exits non-zero while printing something that reads like advice.
+    git -C "$APP_DIR" fetch --depth 1 origin "$REPO_BRANCH" -q \
+      || die "Could not fetch $REPO_BRANCH into $APP_DIR. If that mentioned dubious ownership, this needs to run as root: sudo bash install.sh update"
+    git -C "$APP_DIR" reset --hard "origin/$REPO_BRANCH" -q \
+      || die "Fetched $REPO_BRANCH but could not check it out in $APP_DIR."
   else
     log "Cloning $REPO_URL…"
     mkdir -p "$HARBORA_DIR"
@@ -355,7 +361,12 @@ preflight_ports() {
 start() {
   cd "$COMPOSE_DIR"
   log "Building and starting Harbora (first build takes a few minutes)… / ساخت و اجرای Harbora…"
-  docker compose up -d --build
+  # Checked, because the failure is silent otherwise. If the build cannot run — no permission on the
+  # docker socket, a compile error, a full disk — the OLD container keeps running and keeps being
+  # healthy, so wait_panel and verify_install both pass and the update announces success having
+  # changed nothing. That is the one outcome an operator cannot see from the outside.
+  docker compose up -d --build \
+    || die "Build or start failed, so the previous version is still running and nothing was updated. If that mentioned permission denied on the Docker socket, this needs to run as root: sudo bash install.sh update"
   ok "Containers started."
 }
 

@@ -21,7 +21,7 @@ PWA، به‌همراه CLI.
 روی یک **VPS لینوکسی** تازه (اوبونتو/دبیان/فدورا/آلپاین)، به‌عنوان root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | sudo bash
 ```
 
 همین. نصاب **کاملاً خودبسنده و تعاملی (فارسی/English)** است:
@@ -56,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/inst
 PANEL_DOMAIN=panel.example.com \
 ROOT_DOMAIN=apps.example.com \
 ACME_EMAIL=you@example.com \
-  curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | sudo bash
 ```
 
 اگر در ترمینال (نه با pipe) اجرایش کنید، همین‌ها را با نمایش پیش‌فرض **می‌پرسد**.

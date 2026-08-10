@@ -238,7 +238,7 @@ If the node is on a home connection or otherwise unreachable, open it in **Nodes
 cd /opt/harbora/app && git pull && cd deploy && docker compose up -d --build
 ```
 
-Or `curl -fsSL …/deploy/install.sh | bash -s -- update`, which additionally backfills any `.env`
+Or `curl -fsSL …/deploy/install.sh | sudo bash -s -- update`, which additionally backfills any `.env`
 setting a newer version needs and your file predates.
 
 Before applying any schema migration the panel dumps the database and **refuses to migrate if the

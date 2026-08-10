@@ -19,7 +19,7 @@ workspaces across your primary and helper servers. Bilingual (فارسی/English
 On a fresh **Linux VPS** (Ubuntu/Debian/Fedora/Alpine), as root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | sudo bash
 ```
 
 That's it. The installer is **fully self-contained and interactive (فارسی/English)** — it:
@@ -55,7 +55,7 @@ Then install non-interactively with your domains:
 PANEL_DOMAIN=panel.example.com \
 ROOT_DOMAIN=apps.example.com \
 ACME_EMAIL=you@example.com \
-  curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | sudo bash
 ```
 
 Run it in a terminal (not piped) and it will **prompt** for these, showing the defaults.
@@ -80,10 +80,10 @@ You don't need to install anything by hand. For reference, the installer ensures
 
 ```bash
 # Update to the latest source and rebuild:
-curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash -s -- update
+curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | sudo bash -s -- update
 
 # Uninstall (prompts before deleting data volumes):
-curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | bash -s -- uninstall
+curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | sudo bash -s -- uninstall
 ```
 
 Or from the checkout: `cd /opt/harbora/app/deploy && docker compose up -d --build` (update),
