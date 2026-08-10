@@ -26,7 +26,8 @@ public sealed class AccountController(
     Harbora.Application.Abstractions.ISecretProtector protector,
     IDataProtectionProvider dataProtection,
     Harbora.Web.Infrastructure.PanelModeProvider panelModes,
-    WorkspaceAccountService workspaceAccounts) : Controller
+    WorkspaceAccountService workspaceAccounts,
+    AccountSessionService sessions) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
@@ -92,12 +93,25 @@ public sealed class AccountController(
             PasswordHash = hasher.Hash(model.Password),
             Role = SystemRole.Member,
             PreferredCulture = IsFa ? "fa" : "en",
-            LastLoginAt = clock.UtcNow
+            LastLoginAt = clock.UtcNow,
+            // Following a workspace invitation proves control of the address the invitation was
+            // bound to. A public registration must prove it with the separate email link below.
+            EmailVerifiedAt = invitation is null ? null : clock.UtcNow
         };
         db.Users.Add(user);
         await db.SaveChangesAsync(ct);
 
         var personal = await workspaceAccounts.EnsurePersonalWorkspaceAsync(user, ct);
+
+        if (invitation is null)
+        {
+            await SendVerificationAsync(user, ct);
+            TempData["VerificationEmail"] = user.Email;
+            await audit.LogAsync("user.registered_pending_verification", "user", user.Id.ToString(), ClientIp,
+                actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
+            return Redirect("/account/verify-pending");
+        }
+
         var destination = personal;
         if (invitation is not null)
         {
@@ -222,7 +236,7 @@ public sealed class AccountController(
         // somebody's inbox.
         row!.UsedAt = clock.UtcNow;
         row.User!.PasswordHash = hasher.Hash(model.Password);
-        await db.SaveChangesAsync(ct);
+        await sessions.RevokeAllAsync(row.UserId, exceptSessionId: null, ct);
 
         await audit.LogAsync("user.password_reset_completed", "user", row.UserId.ToString(), ClientIp,
             actorEmailOverride: row.User.Email, userIdOverride: row.UserId, ct: ct);
@@ -249,6 +263,13 @@ public sealed class AccountController(
             ModelState.AddModelError(string.Empty,
                 IsFa ? "ایمیل یا رمز نادرست است." : "Invalid email or password.");
             return View(model);
+        }
+
+        if (user.EmailVerifiedAt is null)
+        {
+            await SendVerificationAsync(user, HttpContext.RequestAborted);
+            TempData["VerificationEmail"] = user.Email;
+            return Redirect("/account/verify-pending");
         }
 
         // The password alone is not the door when two-factor is on. Nothing is signed in here: the
@@ -289,10 +310,78 @@ public sealed class AccountController(
         return LocalRedirect(returnUrl ?? "/");
     }
 
-    private Task SignInAsync(User user, Guid workspaceId, WorkspaceRole workspaceRole) =>
-        HttpContext.SignInAsync(
+    private async Task SignInAsync(User user, Guid workspaceId, WorkspaceRole workspaceRole)
+    {
+        var session = await sessions.CreateAsync(user.Id, ClientIp,
+            Request.Headers.UserAgent.ToString(), HttpContext.RequestAborted);
+        await HttpContext.SignInAsync(
             CookieAuthenticationDefaults.AuthenticationScheme,
-            SessionPrincipalFactory.Create(user, workspaceId, workspaceRole));
+            SessionPrincipalFactory.Create(user, workspaceId, workspaceRole, sessionId: session.Id));
+    }
+
+    [HttpGet("/account/verify-pending")]
+    public IActionResult VerifyPending() => View();
+
+    [HttpGet("/account/verify")]
+    public async Task<IActionResult> VerifyEmail(string? token, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return NotFound();
+        var hash = AccountSessionService.Hash(token);
+        var row = await db.EmailVerificationTokens.Include(t => t.User)
+            .FirstOrDefaultAsync(t => t.TokenHash == hash, ct);
+        if (row?.User is null || row.UsedAt is not null || row.ExpiresAt <= clock.UtcNow)
+        {
+            TempData["Error"] = IsFa ? "لینک تأیید معتبر نیست یا منقضی شده است." : "The verification link is invalid or expired.";
+            return Redirect("/account/verify-pending");
+        }
+
+        row.UsedAt = clock.UtcNow;
+        row.User.EmailVerifiedAt = clock.UtcNow;
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("user.email_verified", "user", row.UserId.ToString(), ClientIp,
+            actorEmailOverride: row.User.Email, userIdOverride: row.UserId, ct: ct);
+        TempData["Message"] = IsFa ? "ایمیل تأیید شد؛ حالا وارد شوید." : "Email verified. You can sign in now.";
+        return Redirect("/account/login");
+    }
+
+    [HttpPost("/account/verify/resend")]
+    [ValidateAntiForgeryToken]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> ResendVerification(string? email, CancellationToken ct)
+    {
+        var normalised = (email ?? "").Trim().ToLowerInvariant();
+        var user = await db.Users.FirstOrDefaultAsync(
+            u => u.Email == normalised && u.IsActive && u.EmailVerifiedAt == null, ct);
+        if (user is not null) await SendVerificationAsync(user, ct);
+        TempData["Message"] = IsFa
+            ? "اگر این ایمیل حساب تأییدنشده داشته باشد، لینک تازه ارسال شد."
+            : "If that address has an unverified account, a new link has been sent.";
+        return Redirect("/account/verify-pending");
+    }
+
+    private async Task<bool> SendVerificationAsync(User user, CancellationToken ct)
+    {
+        if (!await mailer.IsConfiguredAsync(ct)) return false;
+        var (token, row) = sessions.IssueVerification(user.Id);
+        db.EmailVerificationTokens.Add(row);
+        await db.SaveChangesAsync(ct);
+        var link = $"{Request.Scheme}://{Request.Host}/account/verify?token={token}";
+        try
+        {
+            await mailer.SendAsync(user.Email,
+                IsFa ? "تأیید ایمیل Harbora" : "Verify your Harbora email",
+                IsFa
+                    ? $"برای تأیید ایمیل این لینک را باز کنید (تا ۲۴ ساعت معتبر است):\n{link}"
+                    : $"Open this link to verify your email (valid for 24 hours):\n{link}", ct);
+            return true;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            HttpContext.RequestServices.GetRequiredService<ILogger<AccountController>>()
+                .LogWarning(e, "Email-verification message could not be sent.");
+            return false;
+        }
+    }
 
     // ---- The second step ----
 
@@ -364,6 +453,9 @@ public sealed class AccountController(
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Logout()
     {
+        if (Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)
+            && Guid.TryParse(User.FindFirstValue(HarboraClaims.Session), out var sessionId))
+            await sessions.RevokeAsync(userId, sessionId, HttpContext.RequestAborted);
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         return Redirect("/account/login");
     }

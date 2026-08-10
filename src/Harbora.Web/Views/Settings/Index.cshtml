@@ -5,6 +5,8 @@
     var tokens = ViewBag.Tokens as List<Harbora.Domain.Identity.ApiToken> ?? new();
     var newToken = TempData["NewToken"] as string;
     var msg = TempData["Message"] as string;
+    var sessions = ViewBag.Sessions as List<Harbora.Domain.Identity.UserSession> ?? new();
+    var currentSession = ViewBag.CurrentSessionId as string;
 }
 <h1 class="text-2xl font-bold tracking-tight text-ink mb-6">@T["Settings"]</h1>
 
@@ -215,6 +217,43 @@
                 <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm">@(isFa ? "فعال‌سازی" : "Turn on")</button>
             </form>
         }
+    </section>
+
+    @* ---- Account sessions ---- *@
+    <section class="rounded-xl border border-line bg-surface p-5 lg:col-span-2">
+        <div class="flex items-start justify-between gap-4 mb-3">
+            <div>
+                <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "امنیت حساب و دستگاه‌ها" : "Account security & devices")</h2>
+                <p class="text-xs text-ink-muted mt-1">
+                    @(ViewBag.EmailVerified == true
+                        ? (isFa ? $"ایمیل تأییدشده: {ViewBag.AccountEmail}" : $"Verified email: {ViewBag.AccountEmail}")
+                        : (isFa ? "ایمیل هنوز تأیید نشده است." : "Email is not verified yet."))
+                </p>
+            </div>
+            <form method="post" action="/settings/sessions/revoke-others">
+                @Html.AntiForgeryToken()
+                <button class="btn-secondary text-sm">@(isFa ? "خروج از دستگاه‌های دیگر" : "Sign out other devices")</button>
+            </form>
+        </div>
+        <div class="divide-y divide-line">
+            @foreach (var session in sessions)
+            {
+                var current = session.Id.ToString().Equals(currentSession, StringComparison.OrdinalIgnoreCase);
+                <div class="flex items-center justify-between gap-4 py-3 text-sm">
+                    <div class="min-w-0">
+                        <div class="font-medium text-ink truncate">
+                            @(string.IsNullOrWhiteSpace(session.UserAgent) ? (isFa ? "دستگاه ناشناس" : "Unknown device") : session.UserAgent)
+                            @if (current){<span class="ms-2 text-xs text-ok">@(isFa ? "این دستگاه" : "this device")</span>}
+                        </div>
+                        <div class="text-xs text-ink-faint" dir="ltr">@session.IpAddress · @session.LastSeenAt.LocalDateTime.ToString(Dates.Stamp)</div>
+                    </div>
+                    <form method="post" action="/settings/sessions/@session.Id/revoke">
+                        @Html.AntiForgeryToken()
+                        <button class="text-danger text-xs">@(isFa ? "بستن نشست" : "Revoke")</button>
+                    </form>
+                </div>
+            }
+        </div>
     </section>
 
     @* ---- API tokens ---- *@

@@ -1,0 +1,25 @@
+@{
+    ViewData["Title"] = "Verify email";
+    Layout = "_Auth";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var email = TempData["VerificationEmail"] as string;
+}
+<h1 class="title">@(isFa ? "تأیید ایمیل" : "Verify your email")</h1>
+<p class="subtitle">
+    @(isFa
+        ? "برای ورود، لینک یک‌بارمصرفی که به ایمیل شما فرستاده شده را باز کنید."
+        : "Open the one-time link sent to your address before signing in.")
+</p>
+
+@if (TempData["Message"] is string message){<div class="success">@message</div>}
+@if (TempData["Error"] is string error){<div class="error">@error</div>}
+
+<form method="post" action="/account/verify/resend">
+    @Html.AntiForgeryToken()
+    <div class="field">
+        <label>@T["Email"]</label>
+        <input name="email" type="email" value="@email" autocomplete="email" required autofocus />
+    </div>
+    <button type="submit" class="btn btn-primary">@(isFa ? "ارسال دوباره لینک" : "Send another link")</button>
+    <p class="subtitle" style="margin-top:.75rem"><a href="/account/login">@(isFa ? "بازگشت به ورود" : "Back to sign in")</a></p>
+</form>

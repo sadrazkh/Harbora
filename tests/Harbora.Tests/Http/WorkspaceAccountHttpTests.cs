@@ -24,7 +24,10 @@ public sealed class WorkspaceAccountHttpTests(HarboraHttpFixture fixture)
             ("ConfirmPassword", HarboraWebFactory.TestPassword));
 
         response.StatusCode.Should().Be(HttpStatusCode.Found);
+        response.RedirectPath().Should().Be("/account/verify-pending");
         var user = Panel.Read(db => db.Users.IgnoreQueryFilters().Single(u => u.Email == email));
+        user.EmailVerifiedAt.Should().BeNull();
+        Panel.Read(db => db.UserSessions.Any(s => s.UserId == user.Id)).Should().BeFalse();
         var workspace = Panel.Read(db => db.Workspaces.IgnoreQueryFilters()
             .Single(w => w.OwnerUserId == user.Id && w.IsPersonal));
         Panel.Read(db => db.WorkspaceMembers.IgnoreQueryFilters()
@@ -58,6 +61,36 @@ public sealed class WorkspaceAccountHttpTests(HarboraHttpFixture fixture)
         var page = await (await Panel.ClientFrom("203.0.113.183").GetAsync("/account/login"))
             .Content.ReadAsStringAsync();
         page.Should().Contain("/account/register");
+    }
+
+    [Fact]
+    public async Task Unverified_account_cannot_create_a_browser_session()
+    {
+        var email = $"unverified-{Guid.NewGuid():N}@example.com";
+        var user = Panel.GivenUser(fixture.WorkspaceId, email, SystemRole.Member);
+        Panel.Seed(db => db.Users.IgnoreQueryFilters().Single(u => u.Id == user.Id).EmailVerifiedAt = null);
+        var client = Panel.ClientFrom("203.0.113.187");
+        var token = await client.AntiforgeryTokenFrom("/account/login");
+
+        var response = await client.PostFormAsync("/account/login", token,
+            ("Email", email), ("Password", HarboraWebFactory.TestPassword));
+
+        response.RedirectPath().Should().Be("/account/verify-pending");
+        Panel.Read(db => db.UserSessions.Any(s => s.UserId == user.Id)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Revoking_the_server_session_invalidates_an_existing_cookie()
+    {
+        var email = $"revoked-session-{Guid.NewGuid():N}@example.com";
+        var user = Panel.GivenUser(fixture.WorkspaceId, email, SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.188", email);
+        Panel.Seed(db => db.UserSessions.Single(s => s.UserId == user.Id).RevokedAt = DateTimeOffset.UtcNow);
+
+        var response = await client.GetAsync("/");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        response.RedirectPath().Should().Be("/account/login");
     }
 
     [Fact]

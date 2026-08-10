@@ -87,6 +87,11 @@ else
                     <td class="px-5 py-3">
                         <div class="font-medium text-ink">@u.DisplayName</div>
                         <div dir="ltr" class="text-xs text-ink-faint">@u.Email</div>
+                        <div class="mt-1 text-[10px] @(u.EmailVerifiedAt is null ? "text-warning" : "text-ok")">
+                            @(u.EmailVerifiedAt is null
+                                ? (isFa ? "ایمیل تأیید نشده" : "email not verified")
+                                : (isFa ? "ایمیل تأیید شده" : "email verified"))
+                        </div>
                         <div class="mt-1 text-[10px] text-ink-faint">@(isFa ? $"عضو {u.WorkspaceCount} ورک‌اسپیس" : $"{u.WorkspaceCount} workspace membership(s)")</div>
                         @if (u.Id == actorId)
                         {
@@ -141,6 +146,16 @@ else
                                 <a href="/tenants/@personalWorkspaceId/credit" class="rounded-lg border border-line px-2.5 py-1 text-xs text-accent-text hover:bg-surface-2">
                                     @(isFa ? "شارژ حساب" : "Credit account")
                                 </a>
+                            }
+                            @if (u.EmailVerifiedAt is null)
+                            {
+                                <form asp-action="VerifyEmail" asp-route-id="@u.Id" method="post"
+                                      onsubmit="return confirm('@(isFa ? "این ایمیل به‌صورت دستی تأیید شود؟" : "Verify this email manually?")');">
+                                    @Html.AntiForgeryToken()
+                                    <button class="rounded-lg border border-line px-2.5 py-1 text-xs text-warning hover:bg-surface-2">
+                                        @(isFa ? "تأیید ایمیل" : "Verify email")
+                                    </button>
+                                </form>
                             }
                             @if (u.IsActive && maySuspend)
                             {

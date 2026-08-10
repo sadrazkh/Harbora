@@ -17,7 +17,8 @@ namespace Harbora.Web.Controllers;
 public sealed class SetupController(
     HarboraDbContext db,
     IPasswordHasher hasher,
-    Harbora.Application.Abstractions.ISystemClock clock) : Controller
+    Harbora.Application.Abstractions.ISystemClock clock,
+    Harbora.Infrastructure.Security.AccountSessionService sessions) : Controller
 {
     [HttpGet("/setup")]
     public async Task<IActionResult> Index()
@@ -44,7 +45,8 @@ public sealed class SetupController(
             PasswordHash = hasher.Hash(model.Password),
             Role = SystemRole.Owner,
             PreferredCulture = model.Culture,
-            LastLoginAt = clock.UtcNow
+            LastLoginAt = clock.UtcNow,
+            EmailVerifiedAt = clock.UtcNow
         };
         var workspace = new Workspace
         {
@@ -77,9 +79,12 @@ public sealed class SetupController(
 
     private async Task SignInAsync(User user, Guid workspaceId)
     {
+        var session = await sessions.CreateAsync(user.Id,
+            HttpContext.Connection.RemoteIpAddress?.ToString(), Request.Headers.UserAgent.ToString(),
+            HttpContext.RequestAborted);
         await HttpContext.SignInAsync(
             CookieAuthenticationDefaults.AuthenticationScheme,
-            SessionPrincipalFactory.Create(user, workspaceId, WorkspaceRole.Admin));
+            SessionPrincipalFactory.Create(user, workspaceId, WorkspaceRole.Admin, sessionId: session.Id));
 
         Response.Cookies.Append(".AspNetCore.Culture",
             Microsoft.AspNetCore.Localization.CookieRequestCultureProvider.MakeCookieValue(

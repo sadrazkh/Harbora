@@ -338,4 +338,18 @@ public class RetentionRuleTests
 
         Selected(RetentionRule.PasswordResetTokensToDelete(cutoff), live).Should().BeEmpty();
     }
+
+    [Fact]
+    public void Expired_sessions_and_email_verification_tokens_go_but_live_ones_remain()
+    {
+        var oldSession = new UserSession { ExpiresAt = Now.AddSeconds(-1) };
+        var liveSession = new UserSession { ExpiresAt = Now.AddSeconds(1) };
+        Selected(RetentionRule.UserSessionsToDelete(Now), oldSession, liveSession)
+            .Should().ContainSingle().Which.Should().BeSameAs(oldSession);
+
+        var oldToken = new EmailVerificationToken { ExpiresAt = Now.AddSeconds(-1) };
+        var liveToken = new EmailVerificationToken { ExpiresAt = Now.AddSeconds(1) };
+        Selected(RetentionRule.EmailVerificationTokensToDelete(Now), oldToken, liveToken)
+            .Should().ContainSingle().Which.Should().BeSameAs(oldToken);
+    }
 }

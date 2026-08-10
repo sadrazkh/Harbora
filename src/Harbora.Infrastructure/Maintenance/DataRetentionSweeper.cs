@@ -21,6 +21,8 @@ public static class RetentionTables
     public const string NodeEvents = "NodeEvents";
     public const string IdempotencyRecords = "IdempotencyRecords";
     public const string PasswordResetTokens = "PasswordResetTokens";
+    public const string UserSessions = "UserSessions";
+    public const string EmailVerificationTokens = "EmailVerificationTokens";
 }
 
 /// <summary>
@@ -45,8 +47,9 @@ public sealed record RetentionSweepResult(
 /// Keeps the platform's append-only tables from growing without end (HARBORA-0012).
 ///
 /// <para>
-/// Seven tables had no retention at all: build logs, the audit trail, cron-run history, the node
-/// command and event records, idempotency keys and password-reset tokens. On an install running for
+/// Nine tables need bounded retention: build logs, the audit trail, cron-run history, the node
+/// command and event records, idempotency keys, password-reset tokens, browser sessions, and email
+/// verification tokens. On an install running for
 /// a year the first of those alone is every line of every build ever made. The platform already did
 /// this properly for metrics — <c>MetricsCollector</c> trims raw samples at 24 h, <c>MetricsRollupService</c>
 /// trims summaries at 31 and 365 days — and this is the same idea applied to the rest.
@@ -70,8 +73,8 @@ public sealed record RetentionSweepResult(
 ///
 /// <para>
 /// <b>One failure does not end the sweep.</b> Each table is swept inside its own try/catch, because
-/// a single locked or damaged table ending the pass would leave the other six growing for ever while
-/// the logs mentioned only the seventh. The same goes for a value that cannot be a cutoff: a span of
+/// a single locked or damaged table ending the pass would leave the other eight growing for ever while
+/// the logs mentioned only the ninth. The same goes for a value that cannot be a cutoff: a span of
 /// days too long to be a date is read as "keep for ever" by <see cref="RetentionRule.CutoffFor"/>
 /// rather than thrown, because that arithmetic happens before the per-table guard is entered.
 /// </para>
@@ -143,7 +146,7 @@ public sealed class DataRetentionSweeper(
                 deleted[table] = await DeleteAsync(db, await ruleFor(), ct);
             }
             // Shutdown is not a table failure. Without the guard, stopping the panel mid-sweep would
-            // record seven "failures" and log seven errors about a sweep that was simply asked to stop.
+            // record nine "failures" and log nine errors about a sweep that was simply asked to stop.
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
                 // Named, counted and stepped over. The next table is the one that matters now.
@@ -213,6 +216,13 @@ public sealed class DataRetentionSweeper(
             RetentionTables.PasswordResetTokens, nameof(RetentionOptions.PasswordResetTokenDays),
             config.PasswordResetTokenDays,
             cutoff => Task.FromResult(RetentionRule.PasswordResetTokensToDelete(cutoff)));
+
+        // Both records carry a short, authoritative expiry of their own. Live rows are required for
+        // authentication; expired rows are already unusable and must not grow these tables forever.
+        await SweepTableAsync<Domain.Identity.UserSession>(RetentionTables.UserSessions,
+            () => Task.FromResult(RetentionRule.UserSessionsToDelete(now)));
+        await SweepTableAsync<Domain.Identity.EmailVerificationToken>(RetentionTables.EmailVerificationTokens,
+            () => Task.FromResult(RetentionRule.EmailVerificationTokensToDelete(now)));
 
         var result = new RetentionSweepResult(deleted, keptForever, failures);
 

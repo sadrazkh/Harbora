@@ -45,6 +45,12 @@ public class User : BaseEntity
     public DateTimeOffset? LastLoginAt { get; set; }
 
     /// <summary>
+    /// When ownership of the address was proven. Existing accounts are backfilled during upgrade;
+    /// new public registrations remain null until the one-time link is used.
+    /// </summary>
+    public DateTimeOffset? EmailVerifiedAt { get; set; }
+
+    /// <summary>
     /// The TOTP secret, encrypted at rest — set while enrolment is underway, active only once
     /// <see cref="TotpEnabledAt"/> is stamped. Null for everyone who has never turned this on,
     /// which keeps their sign-in byte-identical to what it always was.
@@ -61,6 +67,7 @@ public class User : BaseEntity
     public string? RecoveryCodesHash { get; set; }
 
     public ICollection<ApiToken> Tokens { get; set; } = new List<ApiToken>();
+    public ICollection<UserSession> Sessions { get; set; } = new List<UserSession>();
     public ICollection<WorkspaceMember> Memberships { get; set; } = new List<WorkspaceMember>();
     public ICollection<Workspace> OwnedWorkspaces { get; set; } = new List<Workspace>();
 }

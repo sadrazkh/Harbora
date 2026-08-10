@@ -6,6 +6,9 @@
 <h1 class="title">@T["Welcome to Harbora"]</h1>
 <p class="subtitle">@T["Sign in"]</p>
 
+@if (TempData["Message"] is string message){<div class="success">@message</div>}
+@if (TempData["Error"] is string error){<div class="error">@error</div>}
+
 <form asp-controller="Account" asp-action="Login" method="post">
     @Html.AntiForgeryToken()
     <input type="hidden" asp-for="ReturnUrl" />

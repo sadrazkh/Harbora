@@ -173,7 +173,8 @@ public sealed class HarboraWebFactory : WebApplicationFactory<Program>
             PasswordHash = hasher.Hash(password),
             Role = role,
             ScopedToProjects = scopedToProjects,
-            IsActive = true
+            IsActive = true,
+            EmailVerifiedAt = DateTimeOffset.UtcNow
         };
 
         Seed(db =>

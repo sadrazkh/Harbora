@@ -1,9 +1,11 @@
 ﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
+using System.Security.Claims;
 using Harbora.Domain.Authorization;
 using Harbora.Web.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Web.Controllers;
@@ -359,7 +361,8 @@ public sealed class SettingsController(
     Harbora.Application.Abstractions.ISecretProtector protector,
     Harbora.Application.Abstractions.ISystemClock clock,
     IAuditLogger audit,
-    ICurrentUser currentUser) : Controller
+    ICurrentUser currentUser,
+    Harbora.Infrastructure.Security.AccountSessionService accountSessions) : Controller
 {
     private bool IsProvider => User.IsInRole("Owner") || User.IsInRole("Admin");
 
@@ -398,12 +401,18 @@ public sealed class SettingsController(
 
         var me = await db.Users.IgnoreQueryFilters()
             .Where(u => u.Id == currentUser.UserId)
-            .Select(u => new { u.TotpEnabledAt, u.TotpSecretEncrypted })
+            .Select(u => new { u.TotpEnabledAt, u.TotpSecretEncrypted, u.Email, u.EmailVerifiedAt })
             .FirstOrDefaultAsync(ct);
         ViewBag.TotpEnabled = me?.TotpEnabledAt is not null;
         // A draft secret exists when enrolment began but was never confirmed; the page offers to
         // start over rather than showing a code prompt for a secret the person no longer has.
         ViewBag.TotpDraft = me?.TotpEnabledAt is null && me?.TotpSecretEncrypted is not null;
+        ViewBag.AccountEmail = me?.Email;
+        ViewBag.EmailVerified = me?.EmailVerifiedAt is not null;
+        ViewBag.CurrentSessionId = User.FindFirstValue(Harbora.Web.Infrastructure.HarboraClaims.Session);
+        ViewBag.Sessions = await db.UserSessions.AsNoTracking()
+            .Where(s => s.UserId == currentUser.UserId && s.RevokedAt == null && s.ExpiresAt > clock.UtcNow)
+            .OrderByDescending(s => s.LastSeenAt).ToListAsync(ct);
 
         return View();
     }
@@ -469,7 +478,7 @@ public sealed class SettingsController(
         var recovery = Harbora.Infrastructure.Security.Totp.IssueRecoveryCodes();
         me.RecoveryCodesHash = Harbora.Infrastructure.Security.Totp.StoreRecoveryCodes(recovery);
         me.TotpEnabledAt = clock.UtcNow;
-        await db.SaveChangesAsync(ct);
+        await accountSessions.RevokeAllAsync(me.Id, CurrentSessionId(), ct);
 
         await audit.LogAsync("user.totp_enabled", "user", me.Id.ToString(),
             HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
@@ -510,7 +519,7 @@ public sealed class SettingsController(
         me.TotpSecretEncrypted = null;
         me.TotpEnabledAt = null;
         me.RecoveryCodesHash = null;
-        await db.SaveChangesAsync(ct);
+        await accountSessions.RevokeAllAsync(me.Id, CurrentSessionId(), ct);
 
         await audit.LogAsync("user.totp_disabled", "user", me.Id.ToString(),
             HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
@@ -518,6 +527,32 @@ public sealed class SettingsController(
         TempData["Message"] = IsFa ? "ورود دومرحله‌ای خاموش شد." : "Two-factor is off.";
         return RedirectToAction(nameof(Index));
     }
+
+    [HttpPost("/settings/sessions/{id:guid}/revoke")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RevokeSession(Guid id, CancellationToken ct)
+    {
+        await accountSessions.RevokeAsync(currentUser.UserId!.Value, id, ct);
+        if (CurrentSessionId() == id)
+        {
+            await HttpContext.SignOutAsync(Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme);
+            return Redirect("/account/login");
+        }
+        TempData["Message"] = IsFa ? "نشست بسته شد." : "Session revoked.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost("/settings/sessions/revoke-others")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RevokeOtherSessions(CancellationToken ct)
+    {
+        await accountSessions.RevokeAllAsync(currentUser.UserId!.Value, CurrentSessionId(), ct);
+        TempData["Message"] = IsFa ? "از همه دستگاه‌های دیگر خارج شدید." : "Signed out on every other device.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    private Guid? CurrentSessionId() =>
+        Guid.TryParse(User.FindFirstValue(Harbora.Web.Infrastructure.HarboraClaims.Session), out var id) ? id : null;
 
     [HttpPost("/settings/assistant")]
     [ValidateAntiForgeryToken]

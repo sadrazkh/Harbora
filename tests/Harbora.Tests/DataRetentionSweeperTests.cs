@@ -24,7 +24,7 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 namespace Harbora.Tests;
 
 /// <summary>
-/// The nightly sweeper that keeps the seven unbounded tables bounded (HARBORA-0012).
+/// The nightly sweeper that keeps the nine unbounded tables bounded (HARBORA-0012).
 ///
 /// <para>
 /// Every clock here is fixed. A retention test that slept would be testing the scheduler, which is
@@ -37,7 +37,7 @@ public class DataRetentionSweeperTests
 
     /// <summary>
     /// Throws for exactly one entity type, the way a table with a lock or a broken index would.
-    /// Everything else behaves normally, which is the point: the other six tables must still be
+    /// Everything else behaves normally, which is the point: the other eight tables must still be
     /// swept. Armed after seeding, so the fixture itself can still be written.
     /// </summary>
     private sealed class OneBadTableDbContext(DbContextOptions<HarboraDbContext> options, Type broken)
@@ -160,6 +160,13 @@ public class DataRetentionSweeperTests
             new PasswordResetToken { UserId = Guid.NewGuid(), TokenHash = "old", ExpiresAt = Now.AddDays(-8) },
             new PasswordResetToken { UserId = Guid.NewGuid(), TokenHash = "new", ExpiresAt = Now.AddMinutes(30) });
 
+        db.UserSessions.AddRange(
+            new UserSession { UserId = Guid.NewGuid(), LastSeenAt = Now.AddDays(-8), ExpiresAt = Now.AddMinutes(-1) },
+            new UserSession { UserId = Guid.NewGuid(), LastSeenAt = Now, ExpiresAt = Now.AddMinutes(1) });
+        db.EmailVerificationTokens.AddRange(
+            new EmailVerificationToken { UserId = Guid.NewGuid(), TokenHash = "verify-old", ExpiresAt = Now.AddMinutes(-1) },
+            new EmailVerificationToken { UserId = Guid.NewGuid(), TokenHash = "verify-new", ExpiresAt = Now.AddMinutes(1) });
+
         await db.SaveChangesAsync();
     }
 
@@ -181,19 +188,21 @@ public class DataRetentionSweeperTests
         db.NodeEvents.Should().ContainSingle().Which.At.Should().Be(Now.AddDays(-89));
         db.IdempotencyRecords.IgnoreQueryFilters().Should().ContainSingle().Which.Key.Should().Be("new");
         db.PasswordResetTokens.Should().ContainSingle().Which.TokenHash.Should().Be("new");
+        db.UserSessions.Should().ContainSingle().Which.ExpiresAt.Should().Be(Now.AddMinutes(1));
+        db.EmailVerificationTokens.Should().ContainSingle().Which.TokenHash.Should().Be("verify-new");
 
-        // Seven tables, one row each — and the sweep says so, rather than reporting a bare total
+        // Nine tables, one row each — and the sweep says so, rather than reporting a bare total
         // that could hide a table it never reached.
-        result.Deleted.Should().HaveCount(7);
+        result.Deleted.Should().HaveCount(9);
         result.Deleted.Values.Should().AllSatisfy(n => n.Should().Be(1));
-        result.TotalDeleted.Should().Be(7);
+        result.TotalDeleted.Should().Be(9);
     }
 
     [Fact]
     public async Task A_table_that_throws_does_not_stop_the_others()
     {
         // The failure this is really about: one locked or corrupt table silently ending the sweep,
-        // so six tables grow forever and the logs mention only the seventh.
+        // so eight tables grow forever and the logs mention only the ninth.
         using var db = new OneBadTableDbContext(NewOptions(), typeof(NodeEventRecord));
         await SeedBothSidesAsync(db, Guid.NewGuid());
         db.Armed = true;
@@ -204,8 +213,8 @@ public class DataRetentionSweeperTests
         result.Failures.Should().ContainKey(RetentionTables.NodeEvents);
         result.Failures[RetentionTables.NodeEvents].Should().Contain("relation is locked");
 
-        // The other six still ran.
-        result.Deleted.Should().HaveCount(6);
+        // The other eight still ran.
+        result.Deleted.Should().HaveCount(8);
         result.Deleted.Should().NotContainKey(RetentionTables.NodeEvents);
         db.DeploymentLogs.Should().ContainSingle();
         db.AuditLogs.Should().ContainSingle();
@@ -231,7 +240,7 @@ public class DataRetentionSweeperTests
         result.Failures.Should().BeEmpty();
         result.KeptForever.Should().Contain(RetentionTables.DeploymentLogs);
         db.DeploymentLogs.Should().HaveCount(2, "a span too long to be a date means keep, not delete");
-        result.Deleted.Should().HaveCount(6, "every other table was still swept");
+        result.Deleted.Should().HaveCount(8, "every other table was still swept");
     }
 
     [Fact]
@@ -279,7 +288,7 @@ public class DataRetentionSweeperTests
     [Fact]
     public async Task Being_asked_to_stop_mid_sweep_is_not_a_table_failure()
     {
-        // Shutdown must not be recorded as seven broken tables, and must not be swallowed either:
+        // Shutdown must not be recorded as nine broken tables, and must not be swallowed either:
         // the tables after the stop are simply not swept, and the caller learns the pass ended.
         using var stopping = new CancellationTokenSource();
         using var db = new StopsMidSweepDbContext(NewOptions(), typeof(AuditLog), stopping);

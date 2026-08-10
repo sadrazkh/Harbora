@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
@@ -395,8 +396,11 @@ public sealed class WorkspacesController(
     private async Task SwitchSessionAsync(Guid workspaceId, WorkspaceRole role, CancellationToken ct)
     {
         var user = await db.Users.IgnoreQueryFilters().AsNoTracking().SingleAsync(u => u.Id == UserId, ct);
+        var sessionId = Guid.TryParse(User.FindFirstValue(HarboraClaims.Session), out var parsed)
+            ? parsed
+            : throw new InvalidOperationException("The browser session is no longer valid.");
         await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme,
-            SessionPrincipalFactory.Create(user, workspaceId, role));
+            SessionPrincipalFactory.Create(user, workspaceId, role, sessionId: sessionId));
     }
 
     private IActionResult Back(string message, bool error = false)

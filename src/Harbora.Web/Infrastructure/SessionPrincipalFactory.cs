@@ -9,7 +9,8 @@ public static class SessionPrincipalFactory
 {
     public static ClaimsPrincipal Create(
         User user, Guid workspaceId, WorkspaceRole workspaceRole,
-        string authenticationType = CookieAuthenticationDefaults.AuthenticationScheme)
+        string authenticationType = CookieAuthenticationDefaults.AuthenticationScheme,
+        Guid? sessionId = null)
     {
         var claims = new List<Claim>
         {
@@ -20,6 +21,7 @@ public static class SessionPrincipalFactory
             new(HarboraClaims.Workspace, workspaceId.ToString()),
             new(HarboraClaims.WorkspaceRole, workspaceRole.ToString())
         };
+        if (sessionId is { } id) claims.Add(new Claim(HarboraClaims.Session, id.ToString()));
         return new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType));
     }
 }

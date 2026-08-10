@@ -29,6 +29,35 @@ public sealed class WorkspaceMembershipValidationMiddleware(RequestDelegate next
             return;
         }
 
+        // Bearer tokens have their own expiry/revocation record. Browser cookies must name a live
+        // server-side session so password changes and "sign out all devices" take effect now.
+        if (context.User.Identity?.AuthenticationType == CookieAuthenticationDefaults.AuthenticationScheme)
+        {
+            var sessionValue = context.User.FindFirstValue(HarboraClaims.Session);
+            if (!Guid.TryParse(sessionValue, out var sessionId))
+            {
+                await RejectAsync(context, "session");
+                return;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var session = await db.UserSessions.IgnoreQueryFilters().FirstOrDefaultAsync(
+                s => s.Id == sessionId && s.UserId == userId && s.RevokedAt == null && s.ExpiresAt > now,
+                context.RequestAborted);
+            if (session is null)
+            {
+                await RejectAsync(context, "session");
+                return;
+            }
+
+            if (session.LastSeenAt < now.AddMinutes(-5))
+            {
+                session.LastSeenAt = now;
+                session.ExpiresAt = now + Harbora.Infrastructure.Security.AccountSessionService.Lifetime;
+                await db.SaveChangesAsync(context.RequestAborted);
+            }
+        }
+
         var user = await db.Users.IgnoreQueryFilters().AsNoTracking()
             .Where(u => u.Id == userId && u.IsActive)
             .Select(u => new { u.Role })
@@ -57,7 +86,7 @@ public sealed class WorkspaceMembershipValidationMiddleware(RequestDelegate next
         identity.AddClaim(new Claim(type, value));
     }
 
-    private static async Task RejectAsync(HttpContext context)
+    private static async Task RejectAsync(HttpContext context, string reason = "workspace-membership")
     {
         if (context.Request.Path.StartsWithSegments("/api"))
         {
@@ -67,6 +96,6 @@ public sealed class WorkspaceMembershipValidationMiddleware(RequestDelegate next
         }
 
         await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        context.Response.Redirect("/account/login?reason=workspace-membership");
+        context.Response.Redirect("/account/login?reason=" + reason);
     }
 }

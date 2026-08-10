@@ -107,7 +107,8 @@ public sealed class ApiV1Controller(
         var password = body?.Password ?? "";
 
         var user = await db.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Email == email && u.IsActive, ct);
-        var ok = user is not null && passwordHasher.Verify(password, user.PasswordHash);
+        var ok = user is not null && user.EmailVerifiedAt is not null
+            && passwordHasher.Verify(password, user.PasswordHash);
 
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         if (!ok || user is null)

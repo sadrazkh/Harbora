@@ -65,5 +65,6 @@ public sealed record UserRow(
     bool IsActive,
     bool ScopedToProjects,
     DateTimeOffset? LastLoginAt,
+    DateTimeOffset? EmailVerifiedAt = null,
     Guid? PersonalWorkspaceId = null,
     int WorkspaceCount = 0);

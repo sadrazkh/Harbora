@@ -27,7 +27,8 @@ public sealed class UsersController(
     ICurrentUser currentUser,
     Harbora.Application.Abstractions.ISystemClock clock,
     Harbora.Infrastructure.Notifications.PlatformMailer mailer,
-    IQuotaService quota) : Controller
+    IQuotaService quota,
+    Harbora.Infrastructure.Security.AccountSessionService sessions) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
@@ -44,7 +45,8 @@ public sealed class UsersController(
         var users = await db.Users.IgnoreQueryFilters()
             .OrderBy(u => u.Role).ThenBy(u => u.Email)
             .Select(u => new UserRow(
-                u.Id, u.Email, u.DisplayName, u.Role, u.IsActive, u.ScopedToProjects, u.LastLoginAt))
+                u.Id, u.Email, u.DisplayName, u.Role, u.IsActive, u.ScopedToProjects,
+                u.LastLoginAt, u.EmailVerifiedAt))
             .ToListAsync(ct);
         var personal = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
             .Where(w => w.IsPersonal && w.OwnerUserId != null)
@@ -92,7 +94,8 @@ public sealed class UsersController(
             Email = email,
             DisplayName = string.IsNullOrWhiteSpace(displayName) ? email : displayName.Trim(),
             PasswordHash = hasher.Hash(password),
-            Role = role
+            Role = role,
+            EmailVerifiedAt = clock.UtcNow
         };
         db.Users.Add(created);
 
@@ -151,7 +154,9 @@ public sealed class UsersController(
             DisplayName = string.IsNullOrWhiteSpace(displayName) ? email : displayName.Trim(),
             // Random and unrecorded: until the person follows their link, there is nothing to leak.
             PasswordHash = hasher.Hash(Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24))),
-            Role = role
+            Role = role,
+            // The set-password message is itself delivered to this address.
+            EmailVerifiedAt = clock.UtcNow
         };
         db.Users.Add(created);
 
@@ -236,10 +241,30 @@ public sealed class UsersController(
         if (refusal is { } reason) return Back(reason, error: true);
 
         user.IsActive = active;
-        await db.SaveChangesAsync(ct);
+        if (active)
+            await db.SaveChangesAsync(ct);
+        else
+            await sessions.RevokeAllAsync(user.Id, exceptSessionId: null, ct);
 
         await audit.LogAsync(active ? "user.reactivated" : "user.suspended", "user", user.Email, ClientIp, ct: ct);
         return Back(active ? $"{user.Email} can sign in again." : $"{user.Email} is suspended.");
+    }
+
+    [HttpPost("{id:guid}/email/verify")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> VerifyEmail(Guid id, CancellationToken ct)
+    {
+        var user = await db.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Id == id, ct);
+        if (user is null) return NotFound();
+
+        if (user.EmailVerifiedAt is null)
+        {
+            user.EmailVerifiedAt = clock.UtcNow;
+            await db.SaveChangesAsync(ct);
+            await audit.LogAsync("user.email_verified_by_admin", "user", user.Email, ClientIp, ct: ct);
+        }
+
+        return Back(IsFa ? $"ایمیل {user.Email} تأیید شد." : $"{user.Email} is verified.");
     }
 
     /// <summary>
@@ -257,7 +282,7 @@ public sealed class UsersController(
         user.TotpSecretEncrypted = null;
         user.TotpEnabledAt = null;
         user.RecoveryCodesHash = null;
-        await db.SaveChangesAsync(ct);
+        await sessions.RevokeAllAsync(user.Id, exceptSessionId: null, ct);
 
         await audit.LogAsync("user.totp_reset_by_admin", "user", user.Email, ClientIp, ct: ct);
         return Back(IsFa ? $"ورود دومرحله‌ای {user.Email} برداشته شد." : $"Two-factor was removed from {user.Email}.");
@@ -277,7 +302,7 @@ public sealed class UsersController(
             return Back("A password of at least 8 characters is required.", error: true);
 
         user.PasswordHash = hasher.Hash(password);
-        await db.SaveChangesAsync(ct);
+        await sessions.RevokeAllAsync(user.Id, exceptSessionId: null, ct);
 
         // The password itself is never logged, only that it was replaced and by whom.
         await audit.LogAsync("user.password_reset", "user", user.Email, ClientIp, ct: ct);

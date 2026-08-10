@@ -23,4 +23,5 @@ public static class HarboraClaims
 {
     public const string Workspace = "workspace";
     public const string WorkspaceRole = "workspace_role";
+    public const string Session = "session_id";
 }

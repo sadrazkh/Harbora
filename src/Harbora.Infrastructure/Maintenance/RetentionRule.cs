@@ -231,4 +231,10 @@ public static class RetentionRule
     /// </summary>
     public static Expression<Func<PasswordResetToken, bool>> PasswordResetTokensToDelete(DateTimeOffset cutoff) =>
         token => (token.UsedAt != null && token.UsedAt < cutoff) || token.ExpiresAt < cutoff;
+
+    public static Expression<Func<UserSession, bool>> UserSessionsToDelete(DateTimeOffset now) =>
+        session => session.ExpiresAt < now;
+
+    public static Expression<Func<EmailVerificationToken, bool>> EmailVerificationTokensToDelete(DateTimeOffset now) =>
+        token => token.ExpiresAt < now;
 }

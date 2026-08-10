@@ -39,6 +39,8 @@ public class HarboraDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
     public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
+    public DbSet<UserSession> UserSessions => Set<UserSession>();
+    public DbSet<EmailVerificationToken> EmailVerificationTokens => Set<EmailVerificationToken>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<WorkspaceMember> WorkspaceMembers => Set<WorkspaceMember>();
     public DbSet<WorkspaceInvitation> WorkspaceInvitations => Set<WorkspaceInvitation>();
@@ -140,6 +142,24 @@ public class HarboraDbContext : DbContext
         {
             e.HasIndex(x => x.Prefix).IsUnique();
             e.HasOne(x => x.User).WithMany(u => u.Tokens).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<UserSession>(e =>
+        {
+            e.HasIndex(x => new { x.UserId, x.RevokedAt, x.ExpiresAt });
+            e.Property(x => x.IpAddress).HasMaxLength(64);
+            e.Property(x => x.UserAgent).HasMaxLength(512);
+            e.HasOne(x => x.User).WithMany(u => u.Sessions).HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<EmailVerificationToken>(e =>
+        {
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.HasIndex(x => new { x.UserId, x.UsedAt, x.ExpiresAt });
+            e.Property(x => x.TokenHash).HasMaxLength(64).IsRequired();
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         b.Entity<Workspace>(e =>

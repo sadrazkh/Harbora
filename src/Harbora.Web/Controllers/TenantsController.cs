@@ -636,7 +636,8 @@ public sealed partial class TenantsController(
                 Email = email,
                 DisplayName = string.IsNullOrWhiteSpace(displayName) ? email : displayName,
                 PasswordHash = hasher.Hash(password),
-                Role = SystemRole.Member // a tenant user, not a platform admin
+                Role = SystemRole.Member, // a tenant user, not a platform admin
+                EmailVerifiedAt = DateTimeOffset.UtcNow
             };
             db.Users.Add(user);
         }

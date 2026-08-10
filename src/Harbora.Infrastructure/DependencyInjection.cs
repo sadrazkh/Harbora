@@ -169,6 +169,7 @@ public static class DependencyInjection
         // Projects + environments: the grouping every screen and the private network hang off.
         services.AddScoped<Projects.ProjectService>();
         services.AddScoped<Security.WorkspaceAccountService>();
+        services.AddScoped<Security.AccountSessionService>();
         services.AddScoped<Templates.TemplateDeploymentService>();
         // A branch gets an environment of its own, and loses it again when the branch goes.
         services.AddScoped<Projects.PreviewEnvironmentService>();
