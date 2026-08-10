@@ -16,7 +16,9 @@ public enum WorkspaceRole
 {
     Admin = 0,
     Member = 1,
-    Viewer = 2
+    Viewer = 2,
+    // Appended so persisted roles keep their meaning. Day-2 operations without deploy/create.
+    Operator = 3
 }
 
 /// <summary>How an application is built/sourced.</summary>

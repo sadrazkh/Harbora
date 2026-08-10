@@ -328,6 +328,20 @@ or deleted. Customers see those signed corrections in a separate **Balance adjus
 their bill rather than mixed into resource costs. The voucher console can filter by text, state,
 expiry window and redeeming workspace.
 
+### Accounts, personal workspaces and teams
+
+`/account/register` is the public account entry point. A registration creates a private workspace,
+zero-balance wallet, owner membership, default project and Production environment. A person may
+then create more shared workspaces under **Workspaces & members**, switch the active workspace from
+the topbar, and invite Admin, Member, Operator or Viewer members. Invitations expire after seven
+days, are single-use and email-bound; Harbora persists only a SHA-256 digest. With SMTP configured
+the link is mailed, otherwise it is shown once for manual delivery.
+
+Workspace roles authorize only resources inside the selected workspace. They never grant Servers,
+Plans, Tenants, Users or platform settings. Provider Owners/Admins retain those global operations.
+The provider credits a personal or shared workspace from **Tenants → workspace → Credit**; the
+platform **Users** table links directly to each user's personal wallet when it exists.
+
 The provider can inspect the latest hourly accounting history under **Platform → Billing runs**.
 Incomplete runs show their counters and failure summary and can be retried there while billing is
 enabled. A retry uses the durable queue and its live-job uniqueness guard, so repeated or concurrent

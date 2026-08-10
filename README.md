@@ -204,6 +204,12 @@ Harbora is multi-tenant. As the provider you:
    runs on its **own isolated docker network**, and usage is **metered** (GB-hours / vCPU-hours) as a
    billing basis — all visible to you per tenant.
 
+Customers can also register themselves. Every account receives one personal workspace and may own
+or join additional shared workspaces. The topbar switcher changes the active tenant boundary;
+workspace admins invite existing or new users with single-use, seven-day links and manage roles
+without receiving platform-admin access. Balances belong to workspaces, so the provider can fund a
+person's private workspace or any team workspace independently.
+
 Instance sizes (nano → large) map to real CPU/memory limits, so customers only consume what their plan allows.
 
 ---

@@ -32,6 +32,7 @@ public static class NavigationMap
     [
         new("overview", [
             new("dashboard", "Home", "Index", "layout-dashboard"),
+            new("workspaces", "Workspaces", "Index", "building-2"),
             // No capability, and that is the decision rather than an oversight: this is the page
             // somebody opens when their app has stopped and they want to know why. A bill only a
             // Workspace Admin can read is a bill that gets asked for by email instead, and it shows

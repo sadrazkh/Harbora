@@ -183,7 +183,13 @@ public sealed class HarboraWebFactory : WebApplicationFactory<Program>
             {
                 WorkspaceId = workspaceId,
                 UserId = user.Id,
-                Role = role is SystemRole.Owner or SystemRole.Admin ? WorkspaceRole.Admin : WorkspaceRole.Member
+                Role = role switch
+                {
+                    SystemRole.Owner or SystemRole.Admin => WorkspaceRole.Admin,
+                    SystemRole.Operator => WorkspaceRole.Operator,
+                    SystemRole.Viewer => WorkspaceRole.Viewer,
+                    _ => WorkspaceRole.Member
+                }
             });
         });
 

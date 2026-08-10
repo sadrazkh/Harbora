@@ -11,6 +11,7 @@
     string ItemLabel(string key) => (key, isFa) switch
     {
         ("dashboard", true) => "داشبورد", ("dashboard", false) => "Dashboard",
+        ("workspaces", true) => "ورک‌اسپیس‌ها و اعضا", ("workspaces", false) => "Workspaces & members",
         ("applications", true) => "برنامه‌ها", ("applications", false) => "Applications",
         ("services", true) => "دیتابیس‌ها", ("services", false) => "Databases",
         ("deployments", true) => "استقرارها", ("deployments", false) => "Deployments",
@@ -39,7 +40,8 @@
         <i data-lucide="menu" class="h-5 w-5"></i>
     </button>
 
-    <div class="hidden sm:block">@await Component.InvokeAsync("EnvironmentSwitcher")</div>
+    <div class="hidden sm:block">@await Component.InvokeAsync("WorkspaceSwitcher")</div>
+    <div class="hidden xl:block">@await Component.InvokeAsync("EnvironmentSwitcher")</div>
 
     <div class="flex min-w-0 flex-1 justify-center px-1 md:px-3">
         <button type="button" data-command-open class="group flex w-full max-w-lg items-center gap-2 rounded-xl border border-line-strong bg-surface-2 px-3 py-2 text-start text-sm text-ink-faint hover:border-accent/30 hover:bg-surface">

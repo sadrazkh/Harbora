@@ -1,0 +1,18 @@
+@model IReadOnlyList<Harbora.Web.Components.WorkspaceSwitcherViewComponent.Option>
+@{
+    var current = Model.FirstOrDefault(w => w.IsCurrent) ?? Model.FirstOrDefault();
+}
+@if (current is not null)
+{
+    <form method="post" action="/workspaces/switch" class="flex items-center">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="returnUrl" value="@Context.Request.Path@Context.Request.QueryString" />
+        <select name="workspaceId" onchange="this.form.submit()" aria-label="Workspace"
+                class="max-w-[12rem] rounded-lg border border-line bg-surface px-2 py-1.5 text-sm text-ink">
+            @foreach (var workspace in Model)
+            {
+                <option value="@workspace.Id" selected="@workspace.IsCurrent">@(workspace.IsPersonal ? "⌂ " : "")@workspace.Name</option>
+            }
+        </select>
+    </form>
+}

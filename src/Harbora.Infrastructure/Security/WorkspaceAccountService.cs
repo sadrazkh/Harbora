@@ -1,0 +1,194 @@
+using System.Net.Mail;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using Harbora.Application.Abstractions;
+using Harbora.Data;
+using Harbora.Domain.Billing;
+using Harbora.Domain.Common;
+using Harbora.Domain.Identity;
+using Harbora.Infrastructure.Billing;
+using Harbora.Infrastructure.Projects;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+
+namespace Harbora.Infrastructure.Security;
+
+public sealed record IssuedWorkspaceInvitation(WorkspaceInvitation Invitation, string Token);
+
+/// <summary>Creates personal/team workspaces and owns the single-use invitation lifecycle.</summary>
+public sealed partial class WorkspaceAccountService(
+    HarboraDbContext db,
+    ProjectService projects,
+    ISystemClock clock,
+    IOptions<BillingOptions> billing)
+{
+    public async Task<Workspace> EnsurePersonalWorkspaceAsync(User user, CancellationToken ct)
+    {
+        var existing = await db.Workspaces.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(w => w.OwnerUserId == user.Id && w.IsPersonal, ct);
+        if (existing is not null) return existing;
+
+        // The setup owner's original provider workspace is already their home. Claim it instead of
+        // surprising an upgraded single-user installation with a second, empty workspace.
+        if (user.Role == SystemRole.Owner)
+        {
+            var provider = await db.WorkspaceMembers.IgnoreQueryFilters()
+                .Where(m => m.UserId == user.Id && m.Workspace!.IsDefault)
+                .Select(m => m.Workspace!)
+                .FirstOrDefaultAsync(ct);
+            if (provider is not null)
+            {
+                provider.OwnerUserId = user.Id;
+                provider.IsPersonal = true;
+                await db.SaveChangesAsync(ct);
+                return provider;
+            }
+        }
+
+        var label = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email.Split('@')[0] : user.DisplayName.Trim();
+        return await CreateAsync(user.Id, $"{label}'s workspace", label, personal: true, ct);
+    }
+
+    public Task<Workspace> CreateTeamWorkspaceAsync(Guid ownerUserId, string name, CancellationToken ct) =>
+        CreateAsync(ownerUserId, name, name, personal: false, ct);
+
+    private async Task<Workspace> CreateAsync(
+        Guid ownerUserId, string name, string slugSource, bool personal, CancellationToken ct)
+    {
+        var owner = await db.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Id == ownerUserId, ct)
+            ?? throw new InvalidOperationException("The workspace owner account no longer exists.");
+
+        var slug = await UniqueSlugAsync(slugSource, ct);
+        // Public accounts must not silently inherit the provider's unlimited plan. Prefer the
+        // least expensive enabled customer plan; null keeps installations with custom/no plans
+        // working and follows the same fallback as the existing tenant console.
+        var planId = await db.Plans.IgnoreQueryFilters()
+            .Where(p => p.IsEnabled && !p.IsDefault)
+            .OrderBy(p => p.MonthlyPrice).ThenBy(p => p.Name)
+            .Select(p => (Guid?)p.Id).FirstOrDefaultAsync(ct);
+        var workspace = new Workspace
+        {
+            Name = string.IsNullOrWhiteSpace(name) ? slug : name.Trim(),
+            Slug = slug,
+            OwnerUserId = owner.Id,
+            IsPersonal = personal,
+            IsDefault = false,
+            PlanId = planId,
+            CreatedAt = clock.UtcNow
+        };
+        db.Workspaces.Add(workspace);
+        db.WorkspaceMembers.Add(new WorkspaceMember
+        {
+            Workspace = workspace,
+            User = owner,
+            Role = WorkspaceRole.Admin,
+            CreatedAt = clock.UtcNow
+        });
+        db.Wallets.Add(new Wallet
+        {
+            WorkspaceId = workspace.Id,
+            Currency = billing.Value.CurrencyOrDefault,
+            CreatedAt = clock.UtcNow
+        });
+        await db.SaveChangesAsync(ct);
+        await projects.EnsureDefaultEnvironmentAsync(workspace.Id, ct);
+        return workspace;
+    }
+
+    public async Task<IssuedWorkspaceInvitation> InviteAsync(
+        Guid workspaceId, Guid invitedBy, string email, WorkspaceRole role, CancellationToken ct)
+    {
+        email = NormalizeEmail(email);
+        if (role is not (WorkspaceRole.Admin or WorkspaceRole.Member or WorkspaceRole.Viewer or WorkspaceRole.Operator))
+            throw new ArgumentException("Choose a valid workspace role.", nameof(role));
+        if (await db.WorkspaceMembers.IgnoreQueryFilters()
+            .AnyAsync(m => m.WorkspaceId == workspaceId && m.User!.Email == email, ct))
+            throw new InvalidOperationException("That account is already a member of this workspace.");
+
+        var token = Base64Url(RandomNumberGenerator.GetBytes(32));
+        var now = clock.UtcNow;
+        var old = await db.WorkspaceInvitations.IgnoreQueryFilters()
+            .Where(i => i.WorkspaceId == workspaceId && i.Email == email && i.AcceptedAt == null && !i.IsRevoked)
+            .ToListAsync(ct);
+        foreach (var invitation in old) invitation.IsRevoked = true;
+
+        var row = new WorkspaceInvitation
+        {
+            WorkspaceId = workspaceId,
+            Email = email,
+            Role = role,
+            TokenHash = Hash(token),
+            TokenHint = token[..6],
+            CreatedByUserId = invitedBy,
+            CreatedAt = now,
+            ExpiresAt = now.AddDays(7)
+        };
+        db.WorkspaceInvitations.Add(row);
+        await db.SaveChangesAsync(ct);
+        return new(row, token);
+    }
+
+    public async Task<WorkspaceInvitation?> FindInvitationAsync(string? token, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return null;
+        var hash = Hash(token.Trim());
+        return await db.WorkspaceInvitations.IgnoreQueryFilters().Include(i => i.Workspace)
+            .FirstOrDefaultAsync(i => i.TokenHash == hash, ct);
+    }
+
+    public async Task<Workspace> AcceptInvitationAsync(string token, User user, CancellationToken ct)
+    {
+        var invitation = await FindInvitationAsync(token, ct)
+            ?? throw new InvalidOperationException("This invitation is not valid.");
+        if (invitation.IsRevoked) throw new InvalidOperationException("This invitation was revoked.");
+        if (invitation.AcceptedAt is not null) throw new InvalidOperationException("This invitation was already used.");
+        if (invitation.ExpiresAt <= clock.UtcNow) throw new InvalidOperationException("This invitation has expired.");
+        if (!string.Equals(invitation.Email, NormalizeEmail(user.Email), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("This invitation belongs to a different email address.");
+
+        if (!await db.WorkspaceMembers.IgnoreQueryFilters()
+                .AnyAsync(m => m.WorkspaceId == invitation.WorkspaceId && m.UserId == user.Id, ct))
+            db.WorkspaceMembers.Add(new WorkspaceMember
+            {
+                WorkspaceId = invitation.WorkspaceId,
+                UserId = user.Id,
+                Role = invitation.Role,
+                CreatedAt = clock.UtcNow
+            });
+        invitation.AcceptedAt = clock.UtcNow;
+        invitation.AcceptedByUserId = user.Id;
+        await db.SaveChangesAsync(ct);
+        return invitation.Workspace!;
+    }
+
+    public static string NormalizeEmail(string? email)
+    {
+        var value = (email ?? "").Trim().ToLowerInvariant();
+        if (value.Length is 0 or > 256 ||
+            !MailAddress.TryCreate(value, out var parsed) ||
+            !string.Equals(parsed.Address, value, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Enter a valid email address.", nameof(email));
+        return value;
+    }
+
+    private async Task<string> UniqueSlugAsync(string source, CancellationToken ct)
+    {
+        var stem = NonSlug().Replace((source ?? "").Trim().ToLowerInvariant(), "-").Trim('-');
+        if (stem.Length == 0) stem = "workspace";
+        if (stem.Length > 45) stem = stem[..45].Trim('-');
+        var candidate = stem;
+        for (var n = 2; await db.Workspaces.IgnoreQueryFilters().AnyAsync(w => w.Slug == candidate, ct); n++)
+            candidate = $"{stem}-{n}";
+        return candidate;
+    }
+
+    private static string Hash(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
+    private static string Base64Url(byte[] bytes) =>
+        Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    [GeneratedRegex("[^a-z0-9]+")]
+    private static partial Regex NonSlug();
+}

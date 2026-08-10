@@ -64,4 +64,6 @@ public sealed record UserRow(
     Harbora.Domain.Common.SystemRole Role,
     bool IsActive,
     bool ScopedToProjects,
-    DateTimeOffset? LastLoginAt);
+    DateTimeOffset? LastLoginAt,
+    Guid? PersonalWorkspaceId = null,
+    int WorkspaceCount = 0);

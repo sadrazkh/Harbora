@@ -35,6 +35,7 @@
     string ItemLabel(string key) => (key, isFa) switch
     {
         ("dashboard",    true) => "داشبورد",       ("dashboard",    false) => "Dashboard",
+        ("workspaces",   true) => "ورک‌اسپیس‌ها و اعضا", ("workspaces", false) => "Workspaces & members",
         ("billing",      true) => "صورت‌حساب",     ("billing",      false) => "Billing",
         ("applications", true) => "برنامه‌ها",      ("applications", false) => "Applications",
         ("services",     true) => "دیتابیس‌ها",      ("services",     false) => "Databases",

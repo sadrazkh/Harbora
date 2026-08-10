@@ -40,18 +40,16 @@ public sealed class TokenAuthenticationHandler(
 
         // Same bootstrap as cookie login: establishes the caller's workspace, so it must bypass the
         // workspace filter.
-        var workspace = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
-            .Where(m => m.UserId == user.Id).Select(m => m.WorkspaceId).FirstOrDefaultAsync(Context.RequestAborted);
+        var membership = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
+            .Where(m => m.UserId == user.Id)
+            .OrderByDescending(m => m.Workspace!.IsPersonal)
+            .Select(m => new { m.WorkspaceId, m.Role })
+            .FirstOrDefaultAsync(Context.RequestAborted);
+        if (membership is null)
+            return AuthenticateResult.Fail("This account is not a member of any workspace.");
 
-        var claims = new List<Claim>
-        {
-            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new(ClaimTypes.Email, user.Email),
-            new(ClaimTypes.Role, user.Role.ToString()),
-            new(HarboraClaims.Workspace, workspace.ToString())
-        };
-        var identity = new ClaimsIdentity(claims, SchemeName);
-        var ticket = new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName);
+        var principal = SessionPrincipalFactory.Create(user, membership.WorkspaceId, membership.Role, SchemeName);
+        var ticket = new AuthenticationTicket(principal, SchemeName);
         return AuthenticateResult.Success(ticket);
     }
 }

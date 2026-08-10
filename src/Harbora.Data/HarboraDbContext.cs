@@ -41,6 +41,7 @@ public class HarboraDbContext : DbContext
     public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<WorkspaceMember> WorkspaceMembers => Set<WorkspaceMember>();
+    public DbSet<WorkspaceInvitation> WorkspaceInvitations => Set<WorkspaceInvitation>();
     public DbSet<Harbora.Domain.Authorization.ProjectGrant> ProjectGrants => Set<Harbora.Domain.Authorization.ProjectGrant>();
     public DbSet<Harbora.Domain.Projects.Project> Projects => Set<Harbora.Domain.Projects.Project>();
     public DbSet<Harbora.Domain.Projects.Environment> Environments => Set<Harbora.Domain.Projects.Environment>();
@@ -141,13 +142,30 @@ public class HarboraDbContext : DbContext
             e.HasOne(x => x.User).WithMany(u => u.Tokens).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
-        b.Entity<Workspace>(e => e.HasIndex(x => x.Slug).IsUnique());
+        b.Entity<Workspace>(e =>
+        {
+            e.HasIndex(x => x.Slug).IsUnique();
+            e.HasIndex(x => x.OwnerUserId).HasFilter("\"IsPersonal\" = TRUE").IsUnique();
+            e.HasOne(x => x.OwnerUser).WithMany(u => u.OwnedWorkspaces)
+                .HasForeignKey(x => x.OwnerUserId).OnDelete(DeleteBehavior.SetNull);
+        });
 
         b.Entity<WorkspaceMember>(e =>
         {
             e.HasIndex(x => new { x.WorkspaceId, x.UserId }).IsUnique();
             e.HasOne(x => x.Workspace).WithMany(w => w.Members).HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.User).WithMany(u => u.Memberships).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<WorkspaceInvitation>(e =>
+        {
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.HasIndex(x => new { x.WorkspaceId, x.Email });
+            e.Property(x => x.Email).HasMaxLength(256).IsRequired();
+            e.Property(x => x.TokenHash).HasMaxLength(128).IsRequired();
+            e.Property(x => x.TokenHint).HasMaxLength(16).IsRequired();
+            e.HasOne(x => x.Workspace).WithMany(w => w.Invitations)
+                .HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
         });
 
         b.Entity<GitProvider>(e =>
@@ -751,6 +769,7 @@ public class HarboraDbContext : DbContext
         b.Entity<Alert>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<GitProvider>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<WorkspaceMember>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<WorkspaceInvitation>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Harbora.Domain.Tenancy.UsageRecord>()
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Harbora.Domain.Projects.Project>()

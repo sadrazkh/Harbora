@@ -9,6 +9,16 @@ public class Workspace : BaseEntity
     public string Slug { get; set; } = string.Empty;
     public bool IsDefault { get; set; }
 
+    /// <summary>The account that owns this workspace and may manage its team.</summary>
+    public Guid? OwnerUserId { get; set; }
+    public User? OwnerUser { get; set; }
+
+    /// <summary>
+    /// True for the private workspace every account receives. A user may additionally own or join
+    /// any number of shared workspaces, but has at most one personal workspace.
+    /// </summary>
+    public bool IsPersonal { get; set; }
+
     /// <summary>Tenancy plan governing this workspace's quotas (null = platform default plan).</summary>
     public Guid? PlanId { get; set; }
 
@@ -30,6 +40,7 @@ public class Workspace : BaseEntity
     public SuspensionReason SuspendedReason { get; set; } = SuspensionReason.None;
 
     public ICollection<WorkspaceMember> Members { get; set; } = new List<WorkspaceMember>();
+    public ICollection<WorkspaceInvitation> Invitations { get; set; } = new List<WorkspaceInvitation>();
 }
 
 /// <summary>Why a workspace is suspended. Appended, never renumbered.</summary>
@@ -54,4 +65,20 @@ public class WorkspaceMember : BaseEntity
     public User? User { get; set; }
 
     public WorkspaceRole Role { get; set; } = WorkspaceRole.Member;
+}
+
+/// <summary>A single-use invitation to one workspace. Only the token digest is persisted.</summary>
+public class WorkspaceInvitation : BaseEntity
+{
+    public Guid WorkspaceId { get; set; }
+    public Workspace? Workspace { get; set; }
+    public string Email { get; set; } = string.Empty;
+    public WorkspaceRole Role { get; set; } = WorkspaceRole.Member;
+    public string TokenHash { get; set; } = string.Empty;
+    public string TokenHint { get; set; } = string.Empty;
+    public Guid CreatedByUserId { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? AcceptedAt { get; set; }
+    public Guid? AcceptedByUserId { get; set; }
+    public bool IsRevoked { get; set; }
 }

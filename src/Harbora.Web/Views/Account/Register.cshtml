@@ -1,0 +1,43 @@
+@model RegisterViewModel
+@{
+    ViewData["Title"] = "Register";
+    Layout = "_Auth";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<h1 class="title">@(isFa ? "ساخت حساب Harbora" : "Create your Harbora account")</h1>
+<p class="subtitle">
+    @if (ViewBag.InvitedWorkspace is string workspace)
+    {
+        <span>@(isFa ? $"دعوت به {workspace}" : $"Invitation to {workspace}")</span>
+    }
+    else
+    {
+        <span>@(isFa ? "با ورک‌اسپیس شخصی رایگان شروع کنید" : "Start with your own personal workspace")</span>
+    }
+</p>
+
+<form asp-controller="Account" asp-action="Register" method="post">
+    @Html.AntiForgeryToken()
+    <input type="hidden" asp-for="InvitationToken" />
+    <div asp-validation-summary="All" class="error"></div>
+    <div class="field">
+        <label>@(isFa ? "نام" : "Display name")</label>
+        <input asp-for="DisplayName" autocomplete="name" required autofocus />
+    </div>
+    <div class="field">
+        <label>@T["Email"]</label>
+        <input asp-for="Email" type="email" autocomplete="username" required readonly="@(Model.InvitationToken is not null ? "readonly" : null)" />
+    </div>
+    <div class="field">
+        <label>@T["Password"]</label>
+        <input asp-for="Password" type="password" autocomplete="new-password" minlength="8" required />
+    </div>
+    <div class="field">
+        <label>@(isFa ? "تکرار رمز" : "Repeat password")</label>
+        <input asp-for="ConfirmPassword" type="password" autocomplete="new-password" minlength="8" required />
+    </div>
+    <button type="submit" class="btn btn-primary">@(isFa ? "ساخت حساب" : "Create account")</button>
+    <p class="subtitle" style="margin-top:.75rem">
+        <a href="/account/login">@(isFa ? "حساب دارید؟ وارد شوید" : "Already have an account? Sign in")</a>
+    </p>
+</form>

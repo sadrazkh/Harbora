@@ -23,8 +23,17 @@ public sealed class CapabilityAuthorizationHandler : AuthorizationHandler<Capabi
         AuthorizationHandlerContext context, CapabilityRequirement requirement)
     {
         var roleValue = context.User.FindFirstValue(ClaimTypes.Role);
-        if (Enum.TryParse<SystemRole>(roleValue, ignoreCase: true, out var role) &&
-            RolePermissions.Allows(role, requirement.Capability))
+        var hasSystemRole = Enum.TryParse<SystemRole>(roleValue, ignoreCase: true, out var role);
+        var hasWorkspaceRole = Enum.TryParse<WorkspaceRole>(
+            context.User.FindFirstValue(HarboraClaims.WorkspaceRole), ignoreCase: true, out var workspaceRole);
+        // Owner/Admin are platform operators. For ordinary accounts the selected workspace role is
+        // authoritative; the system Member value is only a legacy fallback for old cookies/tokens.
+        var systemAllowed = hasSystemRole &&
+            (role is SystemRole.Owner or SystemRole.Admin || !hasWorkspaceRole || role is not SystemRole.Member) &&
+            RolePermissions.Allows(role, requirement.Capability);
+        var workspaceAllowed = hasSystemRole && role == SystemRole.Member && hasWorkspaceRole &&
+            WorkspaceRolePermissions.Allows(workspaceRole, requirement.Capability);
+        if (systemAllowed || workspaceAllowed)
         {
             context.Succeed(requirement);
         }

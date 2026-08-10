@@ -45,6 +45,16 @@ public sealed class UsersController(
             .Select(u => new UserRow(
                 u.Id, u.Email, u.DisplayName, u.Role, u.IsActive, u.ScopedToProjects, u.LastLoginAt))
             .ToListAsync(ct);
+        var personal = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
+            .Where(w => w.IsPersonal && w.OwnerUserId != null)
+            .ToDictionaryAsync(w => w.OwnerUserId!.Value, w => w.Id, ct);
+        var membershipCounts = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
+            .GroupBy(m => m.UserId).ToDictionaryAsync(g => g.Key, g => g.Count(), ct);
+        users = users.Select(u => u with
+        {
+            PersonalWorkspaceId = personal.GetValueOrDefault(u.Id),
+            WorkspaceCount = membershipCounts.GetValueOrDefault(u.Id)
+        }).ToList();
 
         ViewBag.ActorRole = await ActorRoleAsync(ct);
         ViewBag.ActorId = currentUser.UserId ?? Guid.Empty;

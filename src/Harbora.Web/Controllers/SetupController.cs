@@ -37,7 +37,6 @@ public sealed class SetupController(
         if (await db.Users.AnyAsync())
             return Redirect("/account/login");
 
-        var workspace = new Workspace { Name = model.PlatformName, Slug = "default", IsDefault = true };
         var user = new User
         {
             Email = model.Email.Trim().ToLowerInvariant(),
@@ -46,6 +45,14 @@ public sealed class SetupController(
             Role = SystemRole.Owner,
             PreferredCulture = model.Culture,
             LastLoginAt = clock.UtcNow
+        };
+        var workspace = new Workspace
+        {
+            Name = model.PlatformName,
+            Slug = "default",
+            IsDefault = true,
+            IsPersonal = true,
+            OwnerUser = user
         };
         db.Workspaces.Add(workspace);
         db.Users.Add(user);
@@ -70,16 +77,9 @@ public sealed class SetupController(
 
     private async Task SignInAsync(User user, Guid workspaceId)
     {
-        var claims = new List<Claim>
-        {
-            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new(ClaimTypes.Email, user.Email),
-            new(ClaimTypes.Name, user.DisplayName),
-            new(ClaimTypes.Role, user.Role.ToString()),
-            new(HarboraClaims.Workspace, workspaceId.ToString())
-        };
-        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-        await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+        await HttpContext.SignInAsync(
+            CookieAuthenticationDefaults.AuthenticationScheme,
+            SessionPrincipalFactory.Create(user, workspaceId, WorkspaceRole.Admin));
 
         Response.Cookies.Append(".AspNetCore.Culture",
             Microsoft.AspNetCore.Localization.CookieRequestCultureProvider.MakeCookieValue(

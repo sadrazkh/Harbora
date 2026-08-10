@@ -62,4 +62,5 @@ public class User : BaseEntity
 
     public ICollection<ApiToken> Tokens { get; set; } = new List<ApiToken>();
     public ICollection<WorkspaceMember> Memberships { get; set; } = new List<WorkspaceMember>();
+    public ICollection<Workspace> OwnedWorkspaces { get; set; } = new List<Workspace>();
 }

@@ -90,7 +90,7 @@ public class WorkspaceMembershipTests
     [InlineData(SystemRole.Owner, WorkspaceRole.Admin)]
     [InlineData(SystemRole.Admin, WorkspaceRole.Admin)]
     [InlineData(SystemRole.Member, WorkspaceRole.Member)]
-    [InlineData(SystemRole.Operator, WorkspaceRole.Member)]
+    [InlineData(SystemRole.Operator, WorkspaceRole.Operator)]
     [InlineData(SystemRole.Viewer, WorkspaceRole.Viewer)]
     public void The_membership_mirrors_the_system_role(SystemRole role, WorkspaceRole expected)
     {

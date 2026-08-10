@@ -1,6 +1,9 @@
 ﻿using System.Security.Claims;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Common;
+using Harbora.Domain.Identity;
+using Harbora.Infrastructure.Security;
 using Harbora.Web.Infrastructure;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authentication;
@@ -22,7 +25,8 @@ public sealed class AccountController(
     Harbora.Infrastructure.Notifications.PlatformMailer mailer,
     Harbora.Application.Abstractions.ISecretProtector protector,
     IDataProtectionProvider dataProtection,
-    Harbora.Web.Infrastructure.PanelModeProvider panelModes) : Controller
+    Harbora.Web.Infrastructure.PanelModeProvider panelModes,
+    WorkspaceAccountService workspaceAccounts) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
@@ -36,6 +40,75 @@ public sealed class AccountController(
         // A link that leads to "ask your administrator" is a support ticket with extra steps.
         ViewBag.CanResetPassword = await mailer.IsConfiguredAsync(ct);
         return View(new LoginViewModel { ReturnUrl = returnUrl });
+    }
+
+    [HttpGet("/account/register")]
+    public async Task<IActionResult> Register(string? invitation, CancellationToken ct)
+    {
+        if (User.Identity?.IsAuthenticated == true) return Redirect("/workspaces");
+        var model = new RegisterViewModel { InvitationToken = invitation };
+        if (!string.IsNullOrWhiteSpace(invitation))
+        {
+            var row = await workspaceAccounts.FindInvitationAsync(invitation, ct);
+            if (row is null || row.IsRevoked || row.AcceptedAt is not null || row.ExpiresAt <= clock.UtcNow)
+                ModelState.AddModelError(string.Empty, IsFa ? "این دعوت‌نامه معتبر نیست یا منقضی شده است." : "This invitation is invalid or expired.");
+            else
+            {
+                model.Email = row.Email;
+                ViewBag.InvitedWorkspace = row.Workspace?.Name;
+            }
+        }
+        return View(model);
+    }
+
+    [HttpPost("/account/register")]
+    [ValidateAntiForgeryToken]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> Register(RegisterViewModel model, CancellationToken ct)
+    {
+        WorkspaceInvitation? invitation = null;
+        if (!string.IsNullOrWhiteSpace(model.InvitationToken))
+        {
+            invitation = await workspaceAccounts.FindInvitationAsync(model.InvitationToken, ct);
+            if (invitation is null || invitation.IsRevoked || invitation.AcceptedAt is not null || invitation.ExpiresAt <= clock.UtcNow)
+                ModelState.AddModelError(string.Empty, IsFa ? "این دعوت‌نامه معتبر نیست یا منقضی شده است." : "This invitation is invalid or expired.");
+            else if (!string.Equals(invitation.Email, model.Email?.Trim(), StringComparison.OrdinalIgnoreCase))
+                ModelState.AddModelError(nameof(model.Email), IsFa ? "ثبت‌نام باید با ایمیل روی دعوت‌نامه انجام شود." : "Register with the email address on the invitation.");
+        }
+        if (!ModelState.IsValid) return View(model);
+
+        var email = WorkspaceAccountService.NormalizeEmail(model.Email);
+        if (await db.Users.IgnoreQueryFilters().AnyAsync(u => u.Email == email, ct))
+        {
+            ModelState.AddModelError(nameof(model.Email),
+                IsFa ? "این ایمیل حساب دارد؛ وارد شوید و دعوت را بپذیرید." : "This email already has an account. Sign in to accept the invitation.");
+            return View(model);
+        }
+
+        var user = new User
+        {
+            Email = email,
+            DisplayName = model.DisplayName.Trim(),
+            PasswordHash = hasher.Hash(model.Password),
+            Role = SystemRole.Member,
+            PreferredCulture = IsFa ? "fa" : "en",
+            LastLoginAt = clock.UtcNow
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync(ct);
+
+        var personal = await workspaceAccounts.EnsurePersonalWorkspaceAsync(user, ct);
+        var destination = personal;
+        if (invitation is not null)
+            destination = await workspaceAccounts.AcceptInvitationAsync(model.InvitationToken!, user, ct);
+
+        var membershipRole = await db.WorkspaceMembers.IgnoreQueryFilters()
+            .Where(m => m.WorkspaceId == destination.Id && m.UserId == user.Id)
+            .Select(m => m.Role).SingleAsync(ct);
+        await SignInAsync(user, destination.Id, membershipRole);
+        await audit.LogAsync("user.registered", "user", user.Id.ToString(), ClientIp,
+            actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
+        return Redirect("/");
     }
 
     // ---- Forgotten password ----
@@ -184,51 +257,29 @@ public sealed class AccountController(
         Harbora.Domain.Identity.User user, string? returnUrl, object viewModel)
     {
         user.LastLoginAt = clock.UtcNow;
-        // Bootstrap query: this is what DECIDES the caller's workspace, so it must not be filtered by
-        // it. At this point the request has no workspace claim, so the global filter would match
-        // nothing and every user would sign in scoped to an empty workspace — an empty dashboard,
-        // and any app they create stamped with Guid.Empty.
-        var memberships = await db.WorkspaceMembers.IgnoreQueryFilters()
+        var previousMembership = await db.WorkspaceMembers.IgnoreQueryFilters()
             .Where(m => m.UserId == user.Id)
-            .Select(m => m.WorkspaceId).ToListAsync();
-
-        // FirstOrDefaultAsync used to stand here. Over an empty set it returns Guid.Empty — not
-        // null, not an error, an ordinary-looking id — which went straight into the workspace claim
-        // and scoped the person to a workspace that does not exist.
-        var resolution = Harbora.Infrastructure.Security.WorkspaceMembership.Resolve(
-            memberships, await db.Workspaces.IgnoreQueryFilters().Select(w => w.Id).ToListAsync());
-
-        if (resolution.WorkspaceId is not { } workspaceId)
-        {
-            await audit.LogAsync("user.login_no_workspace", "user", user.Id.ToString(), ClientIp,
-                actorEmailOverride: user.Email, userIdOverride: user.Id);
-            ModelState.AddModelError(string.Empty, (IsFa ? resolution.ReasonFa : null) ?? resolution.Reason!);
-            return View("Login", viewModel is LoginViewModel login ? login : new LoginViewModel());
-        }
-
-        // Repairs an account that predates the fix, on the way through, so nobody has to be found
-        // and mended by hand.
-        if (memberships.Count == 0)
-            db.WorkspaceMembers.Add(
-                Harbora.Infrastructure.Security.WorkspaceMembership.For(workspaceId, user.Id, user.Role));
-
+            .OrderBy(m => m.CreatedAt)
+            .Select(m => new { m.WorkspaceId, m.Role })
+            .FirstOrDefaultAsync();
+        // Every account owns one private workspace. Existing accounts receive it lazily on their
+        // next successful sign-in, which upgrades old installations without an offline backfill.
+        var personal = await workspaceAccounts.EnsurePersonalWorkspaceAsync(user, HttpContext.RequestAborted);
+        var membership = previousMembership ?? await db.WorkspaceMembers.IgnoreQueryFilters()
+            .Where(m => m.UserId == user.Id && m.WorkspaceId == personal.Id)
+            .Select(m => new { m.WorkspaceId, m.Role }).SingleAsync();
         await db.SaveChangesAsync();
-
-        var claims = new List<Claim>
-        {
-            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new(ClaimTypes.Email, user.Email),
-            new(ClaimTypes.Name, user.DisplayName),
-            new(ClaimTypes.Role, user.Role.ToString()),
-            new(HarboraClaims.Workspace, workspaceId.ToString())
-        };
-        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-        await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+        await SignInAsync(user, membership.WorkspaceId, membership.Role);
 
         await audit.LogAsync("user.login", "user", user.Id.ToString(), ClientIp,
             actorEmailOverride: user.Email, userIdOverride: user.Id);
         return LocalRedirect(returnUrl ?? "/");
     }
+
+    private Task SignInAsync(User user, Guid workspaceId, WorkspaceRole workspaceRole) =>
+        HttpContext.SignInAsync(
+            CookieAuthenticationDefaults.AuthenticationScheme,
+            SessionPrincipalFactory.Create(user, workspaceId, workspaceRole));
 
     // ---- The second step ----
 

@@ -22,4 +22,5 @@ public sealed class HttpCurrentUser(IHttpContextAccessor accessor) : ICurrentUse
 public static class HarboraClaims
 {
     public const string Workspace = "workspace";
+    public const string WorkspaceRole = "workspace_role";
 }

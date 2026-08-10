@@ -87,6 +87,7 @@ else
                     <td class="px-5 py-3">
                         <div class="font-medium text-ink">@u.DisplayName</div>
                         <div dir="ltr" class="text-xs text-ink-faint">@u.Email</div>
+                        <div class="mt-1 text-[10px] text-ink-faint">@(isFa ? $"عضو {u.WorkspaceCount} ورک‌اسپیس" : $"{u.WorkspaceCount} workspace membership(s)")</div>
                         @if (u.Id == actorId)
                         {
                             <span class="mt-1 inline-block rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink-muted">@(isFa ? "شما" : "you")</span>
@@ -135,6 +136,12 @@ else
                     </td>
                     <td class="px-5 py-3">
                         <div class="flex flex-wrap justify-end gap-1.5">
+                            @if (u.PersonalWorkspaceId is { } personalWorkspaceId)
+                            {
+                                <a href="/tenants/@personalWorkspaceId/credit" class="rounded-lg border border-line px-2.5 py-1 text-xs text-accent-text hover:bg-surface-2">
+                                    @(isFa ? "شارژ حساب" : "Credit account")
+                                </a>
+                            }
                             @if (u.IsActive && maySuspend)
                             {
                                 <form asp-action="SetActive" asp-route-id="@u.Id" method="post">

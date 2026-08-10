@@ -14,11 +14,13 @@ namespace Harbora.Tests;
 /// </summary>
 public class CapabilityAuthorizationHandlerTests
 {
-    private static async Task<bool> Evaluate(string? roleClaim, string capability)
+    private static async Task<bool> Evaluate(string? roleClaim, string capability, string? workspaceRole = null)
     {
         var handler = new CapabilityAuthorizationHandler();
         var requirement = new CapabilityRequirement(capability);
-        var claims = roleClaim is null ? [] : new[] { new Claim(ClaimTypes.Role, roleClaim) };
+        var claims = new List<Claim>();
+        if (roleClaim is not null) claims.Add(new Claim(ClaimTypes.Role, roleClaim));
+        if (workspaceRole is not null) claims.Add(new Claim(HarboraClaims.WorkspaceRole, workspaceRole));
         // A non-null authenticationType marks the identity authenticated.
         var user = new ClaimsPrincipal(new ClaimsIdentity(claims, roleClaim is null ? null : "test"));
         var context = new AuthorizationHandlerContext([requirement], user, resource: null);
@@ -56,5 +58,21 @@ public class CapabilityAuthorizationHandlerTests
     {
         (await Evaluate(null, Capabilities.AppsOperate)).Should().BeFalse();
         (await Evaluate("Bogus", Capabilities.AppsOperate)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Workspace_admin_can_manage_their_resources_but_not_the_platform()
+    {
+        (await Evaluate(nameof(SystemRole.Member), Capabilities.BackupsManage, nameof(WorkspaceRole.Admin))).Should().BeTrue();
+        (await Evaluate(nameof(SystemRole.Member), Capabilities.PlatformManage, nameof(WorkspaceRole.Admin))).Should().BeFalse();
+        (await Evaluate(nameof(SystemRole.Member), Capabilities.TenantsManage, nameof(WorkspaceRole.Admin))).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Selected_workspace_viewer_and_operator_roles_override_the_legacy_member_role()
+    {
+        (await Evaluate(nameof(SystemRole.Member), Capabilities.AppsDeploy, nameof(WorkspaceRole.Viewer))).Should().BeFalse();
+        (await Evaluate(nameof(SystemRole.Member), Capabilities.AppsOperate, nameof(WorkspaceRole.Operator))).Should().BeTrue();
+        (await Evaluate(nameof(SystemRole.Member), Capabilities.AppsDeploy, nameof(WorkspaceRole.Operator))).Should().BeFalse();
     }
 }

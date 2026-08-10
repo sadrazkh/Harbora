@@ -24,6 +24,19 @@ public sealed class LoginViewModel
     public string? ReturnUrl { get; set; }
 }
 
+public sealed class RegisterViewModel
+{
+    [Required(ErrorMessage = "Email is required."), EmailAddress(ErrorMessage = "This is not an email address.")]
+    public string Email { get; set; } = string.Empty;
+    [Required(ErrorMessage = "A display name is required."), MaxLength(128)]
+    public string DisplayName { get; set; } = string.Empty;
+    [Required(ErrorMessage = "A password is required."), MinLength(8, ErrorMessage = "The password needs at least 8 characters.")]
+    public string Password { get; set; } = string.Empty;
+    [Required(ErrorMessage = "Repeat the password."), Compare(nameof(Password), ErrorMessage = "The two passwords do not match.")]
+    public string ConfirmPassword { get; set; } = string.Empty;
+    public string? InvitationToken { get; set; }
+}
+
 public sealed class TotpViewModel
 {
     [Required(ErrorMessage = "A code is required.")] public string Code { get; set; } = string.Empty;

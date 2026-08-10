@@ -73,6 +73,7 @@ public static class WorkspaceMembership
         {
             SystemRole.Owner or SystemRole.Admin => WorkspaceRole.Admin,
             SystemRole.Viewer => WorkspaceRole.Viewer,
+            SystemRole.Operator => WorkspaceRole.Operator,
             _ => WorkspaceRole.Member
         }
     };

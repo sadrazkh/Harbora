@@ -1,0 +1,34 @@
+@model AcceptWorkspaceInvitationViewModel
+@using Harbora.Web.ViewModels
+@{
+    ViewData["Title"] = "Workspace invitation";
+    Layout = "_Auth";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var tempError = TempData["Error"] as string;
+}
+<h1 class="title">@(isFa ? "دعوت به ورک‌اسپیس" : "Workspace invitation")</h1>
+@if (Model.Error is not null || tempError is not null)
+{
+    <div class="error">@(Model.Error ?? tempError)</div>
+}
+else
+{
+    <p class="subtitle">@(isFa ? $"برای پیوستن به {Model.WorkspaceName} با نقش {Model.Role}" : $"Join {Model.WorkspaceName} as {Model.Role}")</p>
+    @if (Model.IsAuthenticated && Model.EmailMatches)
+    {
+        <form method="post" action="/invitations/accept">
+            @Html.AntiForgeryToken()<input type="hidden" name="token" value="@Model.Token" />
+            <button class="btn btn-primary">@(isFa ? "پذیرش و ورود به ورک‌اسپیس" : "Accept and open workspace")</button>
+        </form>
+    }
+    else if (Model.IsAuthenticated)
+    {
+        <div class="error">@(isFa ? $"این دعوت برای {Model.Email} است. با همان حساب وارد شوید." : $"This invitation is for {Model.Email}. Sign in with that account.")</div>
+        <form method="post" action="/account/logout">@Html.AntiForgeryToken()<button class="btn">@(isFa ? "خروج" : "Sign out")</button></form>
+    }
+    else
+    {
+        <a class="btn btn-primary" href="/account/register?invitation=@Uri.EscapeDataString(Model.Token)">@(isFa ? "ساخت حساب و پذیرش" : "Create account & accept")</a>
+        <p class="subtitle" style="margin-top:.75rem"><a href="/account/login?returnUrl=@Uri.EscapeDataString($"/invitations/accept?token={Model.Token}")">@(isFa ? "حساب دارید؟ وارد شوید" : "Already registered? Sign in")</a></p>
+    }
+}

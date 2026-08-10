@@ -245,6 +245,7 @@ app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSecond
 app.UseRouting();
 app.UseRateLimiter();
 app.UseAuthentication();
+app.UseMiddleware<WorkspaceMembershipValidationMiddleware>();
 app.UseAuthorization();
 
 // Redirect everything to the setup wizard until the platform is initialised.
