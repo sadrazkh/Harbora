@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Claims;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
@@ -162,7 +163,7 @@ public class RateAdminTests
             allowedSizeKeys: "small", monthlyPrice: 25m,
             baseRatePerHour: "1.50",
             diskGbHour: "0.25",
-            allowsOverage: false, ct: default);
+            allowsOverage: true, ct: default);
 
         var plan = await f.Db.Plans.SingleAsync();
 
@@ -170,6 +171,13 @@ public class RateAdminTests
         // whole gap was created, and a loop would be driven by that same list.
         plan.BaseRatePerHourMinor.Should().Be(150);
         plan.DiskGbHourMinor.Should().Be(25);
+
+        // Asserted on the create path as well as the edit one, because they are two parameter
+        // lists and two object initialisers. A mutation run found this exact hole: every rate
+        // assertion here was duplicated across create and update, and the flag was only checked on
+        // update — so CreatePlan could have dropped it and a new plan sold as "may burst past its
+        // caps" would have been a wall from the moment it was offered, with nothing red.
+        plan.AllowsOverage.Should().BeTrue();
 
         // MonthlyPrice is the pre-existing display figure on the plan card, not a rate. It is
         // asserted here so a refactor that "tidied" the two into one path is caught: a decimal
@@ -398,8 +406,11 @@ public class RateAdminTests
         f.Error.Should().NotBeNull();
     }
 
-    [Fact]
-    public async Task A_refused_price_leaves_every_other_field_of_the_plan_as_it_was()
+    [Theory]
+    [InlineData("not a price", null)]
+    [InlineData(null, "not a price")]
+    public async Task A_refused_price_leaves_every_other_field_of_the_plan_as_it_was(
+        string? baseRate, string? diskRate)
     {
         var f = Build();
         var plan = Existing(f.Db);
@@ -409,15 +420,40 @@ public class RateAdminTests
         await f.Controller.UpdatePlan(
             plan.Id, "Renamed", maxApps: 99, maxServices: 99, maxMemoryMb: 1, maxCpu: 99,
             maxDiskGb: 99, allowedSizeKeys: "nano", monthlyPrice: 999m,
-            baseRatePerHour: "not a price", diskGbHour: null, allowsOverage: false, ct: default);
+            baseRatePerHour: baseRate, diskGbHour: diskRate, allowsOverage: false, ct: default);
 
         var saved = await f.Db.Plans.AsNoTracking().SingleAsync();
 
         // The refusal is the whole action, not the price field on its own. Saving the caps and
         // dropping the price would leave a plan half-edited by a form that said it had refused.
+        //
+        // Both boxes get a row. Each is guarded by its own statement, and a mutation run showed
+        // that covering only the first left the second free to fall through and save: the box an
+        // operator got wrong decided whether the refusal was real.
         saved.Name.Should().Be("Standard");
         saved.MaxApps.Should().Be(3);
         saved.BaseRatePerHourMinor.Should().Be(500);
+    }
+
+    [Theory]
+    [InlineData("not a price", null)]
+    [InlineData(null, "not a price")]
+    public async Task A_refused_price_leaves_every_other_field_of_the_size_as_it_was(
+        string? running, string? stopped)
+    {
+        var f = Build();
+        var size = ExistingSize(f.Db);
+        size.RunningRatePerHourMinor = 500;
+        await f.Db.SaveChangesAsync();
+
+        await f.Controller.UpdateSize(size.Id, "Renamed", cpuCores: 99, memoryMb: 1, diskGb: 99,
+            sortOrder: 99, runningRate: running, stoppedRate: stopped, ct: default);
+
+        var saved = await f.Db.InstanceSizes.AsNoTracking().SingleAsync();
+
+        saved.Name.Should().Be("Small");
+        saved.CpuCores.Should().Be(1);
+        saved.RunningRatePerHourMinor.Should().Be(500);
     }
 
     [Fact]
@@ -589,15 +625,36 @@ public class RateAdminTests
     }
 
     [Fact]
-    public void A_price_box_is_labelled_in_both_languages()
+    public void Every_price_box_is_labelled_in_both_languages()
     {
         var markup = Markup;
+        var priceNames = new[] { "baseRatePerHour", "diskGbHour", "runningRate", "stoppedRate" };
 
         // Item 21 of the do-not-change list. A price box labelled only in English on a bilingual
         // panel is a box a Persian-reading operator guesses at, and guessing at a price box is how
         // an hourly rate gets typed into a per-gibibyte one.
-        markup.Should().Contain("هر ساعت");
-        markup.Should().Contain("قیمت‌گذاری‌نشده");
-        markup.Should().Contain("not priced");
+        //
+        // Walked box by box rather than asserted as "the file contains some Persian somewhere".
+        // A mutation run took the Persian off one label and the file-wide search stayed green,
+        // which is the failure this whole task is about wearing a different hat: a check that
+        // reports success for work it never did.
+        var boxes = Regex.Matches(markup, "<input\\s+id=\"(?<id>[^\"]+)\"\\s+name=\"(?<name>[^\"]+)\"")
+            .Where(m => priceNames.Contains(m.Groups["name"].Value))
+            .Select(m => m.Groups["id"].Value)
+            .ToList();
+
+        boxes.Should().HaveCount(8,
+            "two price boxes on each of the four forms — a new one must be labelled too, so it has "
+            + "to change this number rather than slip past it");
+
+        foreach (var id in boxes)
+        {
+            var at = markup.IndexOf($"for=\"{id}\"", StringComparison.Ordinal);
+            at.Should().BeGreaterThan(-1, $"the box '{id}' must have a label pointing at it");
+
+            var start = markup.LastIndexOf("<label", at, StringComparison.Ordinal);
+            var end = markup.IndexOf("</label>", at, StringComparison.Ordinal);
+            markup[start..end].Should().Contain("isFa ?", $"the label for '{id}' must read in both languages");
+        }
     }
 }
