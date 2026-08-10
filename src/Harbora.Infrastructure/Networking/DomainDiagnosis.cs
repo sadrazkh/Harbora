@@ -38,6 +38,18 @@ public static class DomainDiagnosis
         var pointsHere = probe.ExpectedIps.Count == 0 ||
                          probe.ResolvedIps.Intersect(probe.ExpectedIps, StringComparer.OrdinalIgnoreCase).Any();
 
+        if (!pointsHere && probe.HttpsAnswered && probe.CertificateValid
+                        && probe.CertificateExpiresAt > now)
+        {
+            var daysLeftAtEdge = (int)(probe.CertificateExpiresAt.Value - now).TotalDays;
+            return new(host, DomainReadiness.Ready,
+                $"Serving through a reverse proxy or CDN. Edge certificate is valid for " +
+                $"{daysLeftAtEdge} more days" +
+                (probe.CertificateIssuer is { Length: > 0 } ? $" ({probe.CertificateIssuer})." : "."),
+                "Public DNS intentionally hides the origin. Keep the origin certificate renewable " +
+                "with DNS-01 and use Full (strict) encryption at the proxy.", probe);
+        }
+
         if (!pointsHere)
             return new(host, DomainReadiness.DnsNotPointingHere,
                 $"{host} resolves to {string.Join(", ", probe.ResolvedIps)}, which isn't this server.",
@@ -63,6 +75,13 @@ public static class DomainDiagnosis
             return new(host, DomainReadiness.AwaitingCertificate,
                 $"The certificate expired on {Day(probe.CertificateExpiresAt.Value)}.",
                 "Renewal is automatic; if it hasn't happened, check that port 80 is still reachable.",
+                probe);
+
+        if (!probe.CertificateValid)
+            return new(host, DomainReadiness.AwaitingCertificate,
+                "HTTPS answered, but the certificate is not trusted for this host.",
+                "Check the certificate name and chain. Behind Cloudflare, use Full (strict) and " +
+                "keep the origin certificate renewable with DNS-01.",
                 probe);
 
         var daysLeft = (int)(probe.CertificateExpiresAt.Value - now).TotalDays;

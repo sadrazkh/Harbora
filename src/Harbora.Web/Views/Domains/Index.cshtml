@@ -37,8 +37,8 @@
     var header = new PageHeaderModel(
         isFa ? "دامنه‌ها و SSL" : "Domains & SSL",
         isFa
-            ? $"برای هر دامنه یک رکورد A بسازید که به {serverIp} اشاره کند."
-            : $"Point an A record for each domain at {serverIp}.");
+            ? $"مبدأ دامنه‌ها {serverIp} است؛ رکوردهای Cloudflare می‌توانند Proxied باقی بمانند."
+            : $"The origin is {serverIp}; Cloudflare records may remain Proxied.");
 }
 
 <div class="mb-6">
@@ -81,7 +81,7 @@ else
                             {
                                 <span class="ms-2 rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink-muted">primary</span>
                             }
-                            <div dir="ltr" class="mt-1 font-mono text-[11px] text-ink-faint">A @d.Host → @serverIp</div>
+                            <div dir="ltr" class="mt-1 font-mono text-[11px] text-ink-faint">Origin @d.Host → @serverIp</div>
                             <div data-result class="mt-1 text-xs"></div>
                         </td>
                         <td class="px-5 py-3">
@@ -185,7 +185,7 @@ else
     }
     <partial name="Design/_PanelStart" model="dnsPanel" />
     <p class="text-xs text-ink-muted">
-        @(isFa ? "هر دامنه به این IP اشاره کند:" : "Every domain points here:")
+        @(isFa ? "IP مبدأ (در Cloudflare Proxied پنهان می‌ماند):" : "Origin IP (hidden by Cloudflare Proxied DNS):")
     </p>
     <code dir="ltr" class="mt-2 block break-all rounded bg-code px-2 py-1.5 text-xs text-code-ink">A @@ → @serverIp</code>
     <partial name="Design/_PanelEnd" />
@@ -210,7 +210,10 @@ else
                     const j = await r.json();
                     if (kind === 'dns') {
                         const resolved = (j.resolved || []).join(', ') || (fa ? 'رزولوو نشد' : 'not resolvable');
-                        out.innerHTML = tag(j.ok, 'DNS → ' + resolved) +
+                        const label = j.proxied
+                            ? (fa ? 'Cloudflare Proxied · گواهی لبه معتبر' : 'Cloudflare Proxied · valid edge certificate')
+                            : 'DNS → ' + resolved;
+                        out.innerHTML = tag(j.ok, label) +
                             (j.ok ? '' : ` <span class="text-ink-faint">(${fa ? 'انتظار' : 'expected'} ${j.expected})</span>`);
                     } else {
                         out.innerHTML = j.ok

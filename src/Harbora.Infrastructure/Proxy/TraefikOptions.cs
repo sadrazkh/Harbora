@@ -16,4 +16,11 @@ public sealed class TraefikOptions
 
     public string EntryPointWeb { get; set; } = "web";
     public string EntryPointWebSecure { get; set; } = "websecure";
+
+    /// <summary>
+    /// Which incoming X-Forwarded-For address an IP allowlist uses. Zero keeps Traefik's direct peer;
+    /// Cloudflare mode uses one because Cloudflare supplies the visitor as the rightmost address.
+    /// Safe only when the origin accepts traffic from the proxy network, as the runbook requires.
+    /// </summary>
+    public int ForwardedClientIpDepth { get; set; }
 }

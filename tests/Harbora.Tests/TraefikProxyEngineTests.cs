@@ -57,6 +57,27 @@ public class TraefikProxyEngineTests
     }
 
     [Fact]
+    public void Cloudflare_mode_uses_the_forwarded_visitor_for_ip_allowlists()
+    {
+        var route = HostRoute();
+        route.IpAllowlist = "203.0.113.0/24";
+
+        var content = Engine(new TraefikOptions { ForwardedClientIpDepth = 1 }).Preview([route]).Content;
+
+        content.Should().Contain("ipStrategy:").And.Contain("depth: 1");
+        content.Should().Contain("203.0.113.0/24");
+    }
+
+    [Fact]
+    public void Direct_mode_does_not_trust_a_forwarded_ip_for_allowlists()
+    {
+        var route = HostRoute();
+        route.IpAllowlist = "203.0.113.0/24";
+
+        Engine().Preview([route]).Content.Should().NotContain("ipStrategy:");
+    }
+
+    [Fact]
     public void Validate_passes_for_a_well_formed_route()
     {
         var result = Engine().Validate(new[] { HostRoute() });

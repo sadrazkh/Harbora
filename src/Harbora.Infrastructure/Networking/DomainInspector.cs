@@ -44,11 +44,12 @@ public sealed class DomainInspector(ISystemClock clock, ILogger<DomainInspector>
             error = ex.Message;
         }
 
-        var (answered, subject, issuer, expires, probeError) = error is null && resolved.Count > 0
+        var (answered, subject, issuer, expires, probeError, certificateValid) = error is null && resolved.Count > 0
             ? await ProbeTlsAsync(host, ct)
-            : (false, null, null, (DateTimeOffset?)null, null);
+            : (false, null, null, (DateTimeOffset?)null, null, false);
 
-        var probe = new DomainProbe(resolved, expected, answered, subject, issuer, expires, error ?? probeError);
+        var probe = new DomainProbe(
+            resolved, expected, answered, subject, issuer, expires, error ?? probeError, certificateValid);
         return DomainDiagnosis.Diagnose(host, probe, clock.UtcNow);
     }
 
@@ -81,7 +82,8 @@ public sealed class DomainInspector(ISystemClock clock, ILogger<DomainInspector>
         }
     }
 
-    private async Task<(bool Answered, string? Subject, string? Issuer, DateTimeOffset? Expires, string? Error)>
+    private async Task<(bool Answered, string? Subject, string? Issuer, DateTimeOffset? Expires,
+        string? Error, bool CertificateValid)>
         ProbeTlsAsync(string host, CancellationToken ct)
     {
         try
@@ -93,14 +95,16 @@ public sealed class DomainInspector(ISystemClock clock, ILogger<DomainInspector>
             await tcp.ConnectAsync(host, 443, timeout.Token);
 
             X509Certificate2? presented = null;
+            var certificateValid = false;
             // The callback belongs in exactly one place: supplying it both here and in the
             // authentication options makes SslStream throw. Accept whatever is presented so it can be
             // reported — refusing would turn "your certificate expired", the thing this exists to say,
             // into a bare connection error.
             await using var tls = new SslStream(tcp.GetStream(), leaveInnerStreamOpen: false,
-                (_, cert, _, _) =>
+                (_, cert, _, errors) =>
                 {
                     if (cert is not null) presented = new X509Certificate2(cert);
+                    certificateValid = errors == SslPolicyErrors.None;
                     return true;
                 });
 
@@ -109,28 +113,28 @@ public sealed class DomainInspector(ISystemClock clock, ILogger<DomainInspector>
                 TargetHost = host   // SNI: without it Traefik serves its default certificate
             }, timeout.Token);
 
-            if (presented is null) return (true, null, null, null, null);
+            if (presented is null) return (true, null, null, null, null, false);
 
             using (presented)
             {
                 var (subject, issuer, expires) = Interpret(
                     presented.Subject, presented.Issuer,
                     new DateTimeOffset(presented.NotAfter.ToUniversalTime(), TimeSpan.Zero));
-                return (true, subject, issuer, expires, null);
+                return (true, subject, issuer, expires, null, certificateValid && expires is not null);
             }
         }
         catch (Exception ex) when (ProbeFailures.IsConnectionFailure(ex))
         {
             // The domain genuinely didn't answer. That is a verdict, not an error.
             logger.LogDebug(ex, "TLS probe found nothing answering for {Host}.", host);
-            return (false, null, null, null, null);
+            return (false, null, null, null, null, false);
         }
         catch (Exception ex)
         {
             // Anything else is our bug, not the user's domain. Reporting it as "nothing answered"
             // is how a broken probe spent a day looking like a broken deployment.
             logger.LogWarning(ex, "The TLS probe for {Host} failed unexpectedly.", host);
-            return (false, null, null, null, $"The certificate check failed: {ex.Message}");
+            return (false, null, null, null, $"The certificate check failed: {ex.Message}", false);
         }
     }
 

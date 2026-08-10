@@ -1,0 +1,40 @@
+# Optional Cloudflare-proxied mode. Activate by putting this in deploy/.env:
+#
+#   COMPOSE_FILE=docker-compose.yml:cloudflare.compose.yml
+#   CF_DNS_API_TOKEN=...              # Zone:Read + DNS:Edit, limited to the hosted zones
+#   ACME_CERT_RESOLVER=cloudflare
+#
+# The ordinary letsencrypt resolver remains configured for an old generated node router during a
+# rolling update. All panel, S3 and Harbora-managed app routes use the cloudflare resolver.
+services:
+  traefik:
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.directory=/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.letsencrypt.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+      - --certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.cloudflare.acme.storage=/acme/cloudflare.json
+      - --certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.cloudflare.acme.dnschallenge.resolvers=1.1.1.1:53,1.0.0.1:53
+      - --certificatesresolvers.cloudflare.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+    environment:
+      CF_DNS_API_TOKEN: ${CF_DNS_API_TOKEN:?Set CF_DNS_API_TOKEN in deploy/.env}
+      CF_ZONE_API_TOKEN: ${CF_ZONE_API_TOKEN:-}
+
+  panel:
+    environment:
+      Traefik__CertResolver: cloudflare
+      Traefik__ForwardedClientIpDepth: 1
+      Harbora__TrustedProxyHops: 2
+      # Docker/loopback peers plus Cloudflare's published origin-facing IPv4 and IPv6 networks.
+      # Override only if Cloudflare publishes a changed list before Harbora is updated.
+      Harbora__TrustedProxyNetworks: ${CLOUDFLARE_TRUSTED_PROXY_NETWORKS:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7,173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22,2400:cb00::/32,2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,2a06:98c0::/29,2c0f:f248::/32}

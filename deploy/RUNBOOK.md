@@ -81,9 +81,57 @@ And one you should not normally touch:
 | Variable | Default | What it is |
 |---|---|---|
 | `ACME_CA_SERVER` | `https://acme-v02.api.letsencrypt.org/directory` | Which ACME directory issues certificates. The default is Let's Encrypt production and is exactly what Traefik does when the setting is absent. It exists for the automated live-host proof, which would otherwise burn the duplicate-certificate rate limit every run. **A staging certificate is not trusted by browsers** |
+| `ACME_CERT_RESOLVER` | `letsencrypt` | Resolver used by panel, S3 and generated app routers. Cloudflare mode sets it to `cloudflare` |
+| `TRUSTED_PROXY_NETWORKS` | Docker/private networks | Comma-separated CIDRs whose forwarded headers the panel trusts. Cloudflare mode includes Cloudflare's published ranges |
+| `TRUSTED_PROXY_HOPS` | `1` | Trusted hops the panel unwinds. Cloudflare mode uses `2` for Cloudflare -> Traefik -> panel |
+| `FORWARDED_CLIENT_IP_DEPTH` | `0` | Forwarded address used by route IP allowlists. Cloudflare mode uses `1`; restrict direct origin access before relying on it |
 
 > Changing `HARBORA_MASTER_KEY` later makes every stored secret permanently unreadable. `harbora
 > fix-key` only replaces an existing key if you type `REPLACE` when it asks.
+
+### Cloudflare Proxied mode
+
+Keep the panel, app wildcard and S3 DNS records **Proxied** (orange cloud). Create a Cloudflare API
+token limited to the zones Harbora serves, with `Zone:Read` and `DNS:Edit`, then activate the shipped
+overlay:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | \
+  sudo env CF_DNS_API_TOKEN='paste-the-zone-scoped-token' bash -s -- update
+```
+
+The installer stores the token in the mode-600 `deploy/.env` and sets:
+
+```dotenv
+COMPOSE_FILE=docker-compose.yml:cloudflare.compose.yml
+ACME_CERT_RESOLVER=cloudflare
+TRUSTED_PROXY_HOPS=2
+FORWARDED_CLIENT_IP_DEPTH=1
+```
+
+`cloudflare.compose.yml` configures Traefik DNS-01, so certificate issue and renewal do not depend
+on exposing the origin for HTTP-01. Optional `CF_ZONE_API_TOKEN` supports a separately-scoped zone
+lookup token. Override `CLOUDFLARE_TRUSTED_PROXY_NETWORKS` only when Cloudflare changes its published
+address list before a Harbora update.
+
+In Cloudflare set **SSL/TLS encryption mode to Full (strict)**. Flexible mode sends HTTP to an origin
+that redirects to HTTPS and commonly creates redirect loops. Once working, restrict origin ports
+80/443 to Cloudflare's published IP ranges (plus your explicit administration path). That restriction
+also prevents a direct caller from spoofing forwarded visitor IPs used by rate limits and route IP
+allowlists.
+
+> **Node-channel exception:** if worker nodes are enabled, `NODE_DOMAIN` (normally
+> `nodes.panel.example.com`) must remain **DNS-only / grey cloud**. The ordinary Cloudflare proxy
+> terminates TLS and cannot pass the node's client certificate to Harbora's mTLS router. Panel, apps
+> and S3 remain Proxied. If no worker nodes are used, do not publish this record.
+
+Troubleshooting:
+
+```bash
+docker compose config
+docker compose logs traefik | grep -iE 'acme|cloudflare|certificate'
+harbora doctor
+```
 
 ## 4) Build & start
 

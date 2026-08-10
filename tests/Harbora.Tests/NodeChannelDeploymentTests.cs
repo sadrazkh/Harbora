@@ -41,8 +41,10 @@ public class NodeChannelDeploymentTests
     /// The substitution <c>install.sh</c> performs, applied to the same source with the same
     /// placeholder. It proves the template is fully parameterised — not that the installer runs.
     /// </summary>
-    private static string Render(string nodeDomain) =>
-        Template().Replace("{{NODE_DOMAIN}}", nodeDomain, StringComparison.Ordinal);
+    private static string Render(string nodeDomain, string resolver = "letsencrypt") =>
+        Template()
+            .Replace("{{NODE_DOMAIN}}", nodeDomain, StringComparison.Ordinal)
+            .Replace("{{ACME_CERT_RESOLVER}}", resolver, StringComparison.Ordinal);
 
     /// <summary>
     /// Just the <c>routers:</c> block of the rendered file. The comments above it discuss the hosts

@@ -29,7 +29,8 @@ public static class TrustedProxySetup
     /// Applies the trusted-proxy configuration. Returns the CIDRs that were accepted so the caller
     /// can log them; unparseable entries are skipped rather than crashing startup.
     /// </summary>
-    public static IReadOnlyList<string> Configure(ForwardedHeadersOptions options, IEnumerable<string> cidrs)
+    public static IReadOnlyList<string> Configure(
+        ForwardedHeadersOptions options, IEnumerable<string> cidrs, int forwardLimit = 1)
     {
         options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
 
@@ -37,9 +38,10 @@ public static class TrustedProxySetup
         options.KnownIPNetworks.Clear();
         options.KnownProxies.Clear();
 
-        // Exactly one proxy hop (Traefik). With ForwardLimit = 1 the rightmost X-Forwarded-For entry
-        // wins — the one Traefik appended — so entries a client injected are never trusted.
-        options.ForwardLimit = 1;
+        // One hop is the shipped Traefik-only topology. Cloudflare mode explicitly raises this to
+        // two and adds Cloudflare's published networks, so the second unwind reaches the visitor
+        // without trusting a header sent by a direct, untrusted peer.
+        options.ForwardLimit = Math.Clamp(forwardLimit, 1, 5);
 
         var accepted = new List<string>();
         foreach (var cidr in cidrs)
@@ -70,4 +72,9 @@ public static class TrustedProxySetup
 
         return configured.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
+
+    public static int HopsFromConfiguration(IConfiguration config) =>
+        int.TryParse(config["Harbora:TrustedProxyHops"], out var hops)
+            ? Math.Clamp(hops, 1, 5)
+            : 1;
 }

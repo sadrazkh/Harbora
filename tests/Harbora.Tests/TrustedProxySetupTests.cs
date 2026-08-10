@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -17,10 +18,10 @@ namespace Harbora.Tests;
 /// </summary>
 public class TrustedProxySetupTests
 {
-    private static ForwardedHeadersOptions Configured(params string[] cidrs)
+    private static ForwardedHeadersOptions Configured(int hops = 1, params string[] cidrs)
     {
         var options = new ForwardedHeadersOptions();
-        TrustedProxySetup.Configure(options, cidrs.Length > 0 ? cidrs : TrustedProxySetup.DefaultProxyNetworks);
+        TrustedProxySetup.Configure(options, cidrs.Length > 0 ? cidrs : TrustedProxySetup.DefaultProxyNetworks, hops);
         return options;
     }
 
@@ -42,7 +43,7 @@ public class TrustedProxySetupTests
     [Fact]
     public void Configure_replaces_the_framework_defaults_with_the_configured_networks()
     {
-        var options = Configured("10.0.0.0/8");
+        var options = Configured(1, "10.0.0.0/8");
 
         options.KnownProxies.Should().BeEmpty("only network ranges are trusted, not individual hosts");
         options.KnownIPNetworks.Should().ContainSingle();
@@ -109,6 +110,36 @@ public class TrustedProxySetupTests
         var ip = await RemoteIpAfterMiddlewareAsync(
             peerIp: "172.18.0.2", forwardedFor: "1.1.1.1, 203.0.113.9");
         ip.Should().Be("203.0.113.9");
+    }
+
+    [Fact]
+    public async Task Cloudflare_mode_unwinds_cloudflare_and_traefik_to_the_visitor()
+    {
+        var options = new ForwardedHeadersOptions();
+        TrustedProxySetup.Configure(options,
+            [.. TrustedProxySetup.DefaultProxyNetworks, "173.245.48.0/20"], 2);
+        var middleware = new ForwardedHeadersMiddleware(
+            _ => Task.CompletedTask, NullLoggerFactory.Instance, Options.Create(options));
+        var context = new DefaultHttpContext();
+        context.Connection.RemoteIpAddress = IPAddress.Parse("172.18.0.2");
+        context.Request.Headers["X-Forwarded-For"] = "203.0.113.9, 173.245.48.8";
+
+        await middleware.Invoke(context);
+
+        context.Connection.RemoteIpAddress.Should().Be(IPAddress.Parse("203.0.113.9"));
+    }
+
+    [Theory]
+    [InlineData(null, 1)]
+    [InlineData("2", 2)]
+    [InlineData("99", 5)]
+    [InlineData("invalid", 1)]
+    public void Proxy_hop_count_is_read_safely_from_configuration(string? value, int expected)
+    {
+        var values = new Dictionary<string, string?> { ["Harbora:TrustedProxyHops"] = value };
+        var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+
+        TrustedProxySetup.HopsFromConfiguration(config).Should().Be(expected);
     }
 
     [Theory]

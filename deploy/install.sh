@@ -12,9 +12,10 @@
 #   ... | bash -s -- update         # pull latest + rebuild (keeps your .env)
 #   ... | bash -s -- uninstall      # stop & remove (prompts before deleting data)
 #
-# Non-interactive override:
-#   PANEL_DOMAIN=panel.example.com ROOT_DOMAIN=apps.example.com ACME_EMAIL=you@example.com \
-#     curl -fsSL .../install.sh | bash
+# Non-interactive override (variables must be passed to bash, not to curl):
+#   curl -fsSL .../install.sh | sudo env PANEL_DOMAIN=panel.example.com \
+#     ROOT_DOMAIN=apps.example.com ACME_EMAIL=you@example.com \
+#     CF_DNS_API_TOKEN=your-zone-scoped-token bash
 #
 # Idempotent: safe to re-run; an existing .env (your secrets) is never overwritten.
 set -euo pipefail
@@ -94,13 +95,21 @@ resolve_ip() { # best-effort A-record lookup
   getent hosts "$1" 2>/dev/null | awk '{print $1}' | head -1
 }
 
-check_dns() { # check_dns <domain> <server-ip>
-  local domain="$1" ip="$2" resolved
+cloudflare_mode() {
+  [ -n "${CF_DNS_API_TOKEN:-}" ] || [ "${ACME_CERT_RESOLVER:-}" = "cloudflare" ] ||
+    { [ -f "$COMPOSE_DIR/.env" ] && grep -q '^ACME_CERT_RESOLVER=cloudflare$' "$COMPOSE_DIR/.env"; }
+}
+
+check_dns() { # check_dns <domain> <server-ip> [allow-cloudflare-proxy=1]
+  local domain="$1" ip="$2" allow_proxy="${3:-1}" resolved
   resolved="$(resolve_ip "$domain")"
   if [ -z "$resolved" ]; then
     warn "DNS: '$domain' resolve نمی‌شود. / '$domain' does not resolve yet."
     warn "     یک رکورد A برای آن به $ip اضافه کنید. / Add an A record pointing to $ip."
     return 1
+  elif [ "$resolved" != "$ip" ] && [ "$allow_proxy" = "1" ] && cloudflare_mode; then
+    ok "DNS: $domain → $resolved (Cloudflare proxied; origin $ip is intentionally hidden)"
+    return 0
   elif [ "$resolved" != "$ip" ]; then
     warn "DNS: '$domain' به $resolved اشاره می‌کند، نه $ip. / points to $resolved, not this server ($ip)."
     return 1
@@ -121,10 +130,11 @@ check_node_dns() {
 
   ip="$(public_ip)"
   log "بررسی DNS کانال نودها… / Checking the node channel's DNS…"
-  check_dns "$node" "$ip" || {
+  check_dns "$node" "$ip" 0 || {
     warn "     این میزبان تازه است: کانال نودها حالا نام خودش را دارد. / This host is new: the node channel now has a name of its own."
     warn "     بدون این رکورد نودها ثبت می‌شوند ولی هرگز وصل نمی‌شوند. / Without this record nodes enrol and then never connect."
   }
+  cloudflare_mode && warn "Node channel exception: keep $node DNS-only (grey cloud); ordinary Cloudflare proxying terminates the client-certificate TLS session."
 }
 
 # ---------------------------------------------------------------------------
@@ -173,6 +183,18 @@ configure_domains() {
     fi
   fi
 
+  # Cloudflare-proxied domains keep their orange cloud on during issue and renewal. A narrowly
+  # scoped token lets Traefik use DNS-01, so port 80 and the public origin address are no longer the
+  # certificate's single point of failure.
+  if [ -z "${CF_DNS_API_TOKEN:-}" ] && [ -t 0 ] && [[ "$PANEL_DOMAIN" != *.nip.io ]]; then
+    read -rp "Cloudflare Proxy (orange cloud) استفاده می‌کنید؟ Use Cloudflare proxy? [y/N] " _cf
+    if [[ "${_cf:-N}" =~ ^[Yy] ]]; then
+      read -rsp "Cloudflare API token (Zone:Read + DNS:Edit): " CF_DNS_API_TOKEN
+      echo
+      [ -n "$CF_DNS_API_TOKEN" ] || die "Cloudflare mode needs a non-empty API token."
+    fi
+  fi
+
   # DNS sanity check — warn loudly, but let the user continue (they may fix DNS later).
   echo
   log "بررسی DNS… / Checking DNS…"
@@ -182,10 +204,11 @@ configure_domains() {
   # The node channel's own host. It needs a record of its own on a real domain (nip.io answers for
   # it already), and without one no node can ever open its channel — so it is asked for here, with
   # the others, rather than discovered when the first node fails to connect.
-  check_dns "nodes.$PANEL_DOMAIN" "$SERVER_IP" || {
+  check_dns "nodes.$PANEL_DOMAIN" "$SERVER_IP" 0 || {
     dns_ok=0
     warn "     nodes.$PANEL_DOMAIN فقط برای کانال نودهاست. / used only by the node channel (mTLS)."
   }
+  cloudflare_mode && warn "Node channel exception: keep nodes.$PANEL_DOMAIN DNS-only (grey cloud); panel/apps/S3 stay Proxied."
   if [ "$dns_ok" -eq 0 ]; then
     warn "DNS کامل نیست؛ نصب ادامه می‌یابد ولی SSL تا اصلاح DNS صادر نمی‌شود."
     warn "DNS is incomplete; install continues, but SSL won't issue until DNS points here."
@@ -210,6 +233,29 @@ backfill_env() {
   mv .env.tmp .env
   chmod 600 .env
   return 0
+}
+
+# Explicit opt-in settings may replace their old defaults. Unlike backfill_env, this is only called
+# when a Cloudflare token was deliberately supplied or already exists in the protected .env.
+set_env() {
+  local key="$1" value="$2"
+  grep -v "^${key}=" .env > .env.tmp 2>/dev/null || true
+  printf '%s=%s\n' "$key" "$value" >> .env.tmp
+  mv .env.tmp .env
+  chmod 600 .env
+}
+
+activate_cloudflare_mode() {
+  local token="${CF_DNS_API_TOKEN:-}"
+  [ -n "$token" ] || token="$(sed -n 's/^CF_DNS_API_TOKEN=//p' .env 2>/dev/null | head -1)"
+  [ -n "$token" ] || return 0
+
+  set_env CF_DNS_API_TOKEN "$token"
+  set_env COMPOSE_FILE "docker-compose.yml:cloudflare.compose.yml"
+  set_env ACME_CERT_RESOLVER "cloudflare"
+  set_env TRUSTED_PROXY_HOPS "2"
+  set_env FORWARDED_CLIENT_IP_DEPTH "1"
+  ok "Cloudflare proxied mode enabled (DNS-01 + real visitor IP)."
 }
 
 repair_env() {
@@ -250,6 +296,8 @@ repair_env() {
   # What an enrolled node keeps calling: the mTLS host, not the panel's. Enrollment itself happens on
   # the panel's host — a node has no certificate yet — and the enrollment response hands this back.
   backfill_env NodeAgent__PublicUrl "https://${_node}" && repaired=1
+
+  activate_cloudflare_mode
 
   # NodeAgent__TrustForwardedClientCertificate is deliberately NOT written here. It is the operator
   # asserting that Traefik requires and overwrites the certificate header, and repair_env runs before
@@ -392,13 +440,15 @@ export_node_ca() {
 # Substitution in bash rather than sed or envsubst: a domain needs no escaping this way, and envsubst
 # is not installed on a minimal server. The pattern is quoted so it is matched literally.
 NODE_DOMAIN_PLACEHOLDER='{{NODE_DOMAIN}}'
+ACME_RESOLVER_PLACEHOLDER='{{ACME_CERT_RESOLVER}}'
 
 render_node_router() {
-  local domain="$1" template rendered tmp line
+  local domain="$1" resolver="${2:-letsencrypt}" template rendered tmp line
   template="$(node_template)"; rendered="$(node_rendered)"; tmp="$(mktemp)"
 
   while IFS= read -r line || [ -n "$line" ]; do
-    printf '%s\n' "${line//"$NODE_DOMAIN_PLACEHOLDER"/$domain}"
+    line="${line//"$NODE_DOMAIN_PLACEHOLDER"/$domain}"
+    printf '%s\n' "${line//"$ACME_RESOLVER_PLACEHOLDER"/$resolver}"
   done < "$template" > "$tmp"
 
   if cmp -s "$tmp" "$rendered" 2>/dev/null; then rm -f "$tmp"; return 1; fi
@@ -438,7 +488,7 @@ enable_node_channel() {
   fi
 
   local node_domain="${NODE_DOMAIN:-nodes.$PANEL_DOMAIN}"
-  if render_node_router "$node_domain"; then
+  if render_node_router "$node_domain" "${ACME_CERT_RESOLVER:-letsencrypt}"; then
     ok "کانال نودها آماده است ($node_domain). / Node channel configured for $node_domain."
   else
     ok "کانال نودها از قبل به‌روز بود. / Node channel already up to date."
@@ -647,8 +697,13 @@ verify_install() {
   else
     warn "گواهی SSL پنل هنوز صادر نشده. / The panel's SSL certificate is not issued yet."
     warn "  دلایل رایج / Common causes:"
-    warn "   - DNS هنوز به IP این سرور اشاره نمی‌کند / DNS not pointing at this server"
-    warn "   - پورت 80 از اینترنت باز نیست (برای HTTP challenge لازم است) / Port 80 not reachable"
+    if cloudflare_mode; then
+      warn "   - Cloudflare API token/permissions or DNS-01 propagation failed"
+      warn "   - Cloudflare SSL/TLS mode must be Full (strict), never Flexible"
+    else
+      warn "   - DNS هنوز به IP این سرور اشاره نمی‌کند / DNS not pointing at this server"
+      warn "   - پورت 80 از اینترنت باز نیست (برای HTTP challenge لازم است) / Port 80 not reachable"
+    fi
     warn "  لاگ ACME:  docker logs harbora-traefik 2>&1 | grep -i acme | tail -20"
     docker logs harbora-traefik 2>&1 | grep -i "acme\|certificate" | tail -5 || true
   fi

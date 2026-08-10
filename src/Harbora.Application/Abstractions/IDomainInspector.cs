@@ -25,7 +25,8 @@ public sealed record DomainProbe(
     string? CertificateSubject,
     string? CertificateIssuer,
     DateTimeOffset? CertificateExpiresAt,
-    string? Error = null);
+    string? Error = null,
+    bool CertificateValid = true);
 
 /// <summary>A verdict plus the one thing the user should do about it.</summary>
 public sealed record DomainStatus(

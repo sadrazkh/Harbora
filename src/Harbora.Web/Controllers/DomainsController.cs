@@ -19,7 +19,8 @@ namespace Harbora.Web.Controllers;
 public sealed class DomainsController(
     HarboraDbContext db,
     ICurrentUser currentUser,
-    IHttpClientFactory httpFactory) : Controller
+    IHttpClientFactory httpFactory,
+    IDomainInspector domainInspector) : Controller
 {
     private static string? _publicIp;
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -48,13 +49,23 @@ public sealed class DomainsController(
         var expected = await PublicIpAsync(ct);
         try
         {
-            var addrs = await Dns.GetHostAddressesAsync(host, ct);
-            var ips = addrs.Select(a => a.ToString()).Distinct().ToList();
-            return Json(new { resolved = ips, expected, ok = ips.Contains(expected) });
+            var status = await domainInspector.InspectAsync(host, ct);
+            var ips = status.Probe.ResolvedIps;
+            var direct = ips.Contains(expected, StringComparer.OrdinalIgnoreCase);
+            var proxied = IPAddress.TryParse(expected, out _) && !direct && status.IsReady;
+            return Json(new
+            {
+                resolved = ips,
+                expected,
+                ok = direct || status.IsReady,
+                proxied,
+                summary = status.Summary,
+                error = status.Readiness == DomainReadiness.Unknown ? status.Action : null
+            });
         }
         catch
         {
-            return Json(new { resolved = Array.Empty<string>(), expected, ok = false, error = "not resolvable" });
+            return Json(new { resolved = Array.Empty<string>(), expected, ok = false, error = "check failed" });
         }
     }
 

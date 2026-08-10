@@ -101,7 +101,7 @@ http:
       service: harbora-panel
       middlewares: [harbora-node-client-cert]
       tls:
-        certResolver: letsencrypt
+        certResolver: {{ACME_CERT_RESOLVER}}
         options: harbora-node-mtls
 
   services:

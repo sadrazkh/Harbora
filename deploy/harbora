@@ -88,6 +88,31 @@ cmd_doctor() {
   [ -n "$(env_get POSTGRES_PASSWORD)" ] && ok "Database password is set" || {
     err "POSTGRES_PASSWORD is not set"; problems=$((problems+1)); }
 
+  local resolver compose_files
+  resolver="$(env_get ACME_CERT_RESOLVER)"
+  compose_files="$(env_get COMPOSE_FILE)"
+  if [ "$resolver" = "cloudflare" ]; then
+    if [ -z "$(env_get CF_DNS_API_TOKEN)" ]; then
+      err "Cloudflare DNS-01 is selected but CF_DNS_API_TOKEN is missing"
+      problems=$((problems+1))
+    elif [[ "$compose_files" != *cloudflare.compose.yml* ]]; then
+      err "Cloudflare DNS-01 is selected but COMPOSE_FILE does not load cloudflare.compose.yml"
+      problems=$((problems+1))
+    else
+      ok "Cloudflare Proxied mode: DNS-01 configured (API token hidden)"
+    fi
+    [ "$(env_get TRUSTED_PROXY_HOPS)" = "2" ] || {
+      err "Cloudflare mode needs TRUSTED_PROXY_HOPS=2 for the real visitor IP"
+      problems=$((problems+1))
+    }
+    [ "$(env_get FORWARDED_CLIENT_IP_DEPTH)" = "1" ] || {
+      err "Cloudflare mode needs FORWARDED_CLIENT_IP_DEPTH=1 for route IP allowlists"
+      problems=$((problems+1))
+    }
+  else
+    ok "Certificate mode: HTTP-01 (direct DNS)"
+  fi
+
   # 3. Containers.
   echo
   echo "Containers:"

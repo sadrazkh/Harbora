@@ -358,6 +358,11 @@ public sealed class TraefikProxyEngine(
         {
             sb.AppendLine($"    {name}-ips:");
             sb.AppendLine("      ipAllowList:");
+            if (_opt.ForwardedClientIpDepth > 0)
+            {
+                sb.AppendLine("        ipStrategy:");
+                sb.AppendLine($"          depth: {_opt.ForwardedClientIpDepth}");
+            }
             sb.AppendLine("        sourceRange:");
             foreach (var entry in allowed)
                 sb.AppendLine($"          - \"{entry}\"");

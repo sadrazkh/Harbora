@@ -103,7 +103,7 @@ services:
       - traefik.docker.network=harbora
       - traefik.http.routers.harbora-s3.rule=Host(`${S3_DOMAIN}`)
       - traefik.http.routers.harbora-s3.entrypoints=websecure
-      - traefik.http.routers.harbora-s3.tls.certresolver=letsencrypt
+      - traefik.http.routers.harbora-s3.tls.certresolver=${ACME_CERT_RESOLVER:-letsencrypt}
       - traefik.http.services.harbora-s3.loadbalancer.server.port=9000
 
   panel:
@@ -122,6 +122,12 @@ services:
       Harbora__MasterKey: ${HARBORA_MASTER_KEY}
       Traefik__DynamicConfigPath: "/dynamic/harbora.yml"
       Runtime__RootDomain: ${ROOT_DOMAIN}
+      # Resolver and trusted-hop settings are parameterised so the optional Cloudflare overlay can
+      # switch managed routes to DNS-01 and recover the visitor through Cloudflare + Traefik.
+      Traefik__CertResolver: ${ACME_CERT_RESOLVER:-letsencrypt}
+      Traefik__ForwardedClientIpDepth: ${FORWARDED_CLIENT_IP_DEPTH:-0}
+      Harbora__TrustedProxyNetworks: ${TRUSTED_PROXY_NETWORKS:-}
+      Harbora__TrustedProxyHops: ${TRUSTED_PROXY_HOPS:-1}
       # Billing stays opt-in. These defaults also make an older .env safe after an upgrade; an
       # operator can set the three friendly keys without maintaining a compose override.
       Billing__Enabled: ${BILLING_ENABLED:-false}
@@ -180,7 +186,7 @@ services:
       - traefik.docker.network=harbora
       - traefik.http.routers.harbora.rule=Host(`${PANEL_DOMAIN}`)
       - traefik.http.routers.harbora.entrypoints=websecure
-      - traefik.http.routers.harbora.tls.certresolver=letsencrypt
+      - traefik.http.routers.harbora.tls.certresolver=${ACME_CERT_RESOLVER:-letsencrypt}
       - traefik.http.services.harbora.loadbalancer.server.port=8080
     networks:
       - harbora

@@ -138,7 +138,10 @@ catch (Exception ex)
 // trusted proxy networks only — otherwise the per-IP rate limits below collapse into a single
 // platform-wide bucket and every audit row records the proxy's IP.
 builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(o =>
-    TrustedProxySetup.Configure(o, TrustedProxySetup.NetworksFromConfiguration(builder.Configuration)));
+    TrustedProxySetup.Configure(
+        o,
+        TrustedProxySetup.NetworksFromConfiguration(builder.Configuration),
+        TrustedProxySetup.HopsFromConfiguration(builder.Configuration)));
 
 // Per-IP rate limits (doc 10 §2.18): throttle login brute-force and webhook floods. Other traffic
 // is unaffected. 429 on rejection.

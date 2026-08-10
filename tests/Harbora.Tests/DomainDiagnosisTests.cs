@@ -24,9 +24,9 @@ public class DomainDiagnosisTests
 
     private static DomainProbe Probe(
         string[]? resolved = null, bool https = true, int expiresInDays = 60,
-        string? issuer = "Let's Encrypt", string? error = null)
+        string? issuer = "Let's Encrypt", string? error = null, bool certificateValid = true)
         => new(resolved ?? ServerIps, ServerIps, https, "CN=app.example.com", issuer,
-               expiresInDays == NoCertificate ? null : Now.AddDays(expiresInDays), error);
+               expiresInDays == NoCertificate ? null : Now.AddDays(expiresInDays), error, certificateValid);
 
     private static DomainStatus Diagnose(DomainProbe probe) =>
         DomainDiagnosis.Diagnose("app.example.com", probe, Now);
@@ -54,12 +54,30 @@ public class DomainDiagnosisTests
     [Fact]
     public void A_domain_pointing_elsewhere_says_where_it_points_and_why_it_matters()
     {
-        var status = Diagnose(Probe(resolved: ["203.0.113.10"]));
+        var status = Diagnose(Probe(resolved: ["203.0.113.10"], https: false));
 
         status.Readiness.Should().Be(DomainReadiness.DnsNotPointingHere);
         status.Summary.Should().Contain("203.0.113.10");
         status.Action.Should().Contain("no certificate can be issued",
             "this is the part users don't work out for themselves");
+    }
+
+    [Fact]
+    public void A_proxied_domain_with_a_valid_edge_certificate_is_ready()
+    {
+        var status = Diagnose(Probe(resolved: ["104.16.1.2", "2606:4700::1"]));
+
+        status.IsReady.Should().BeTrue();
+        status.Summary.Should().Contain("proxy or CDN");
+        status.Action.Should().Contain("DNS-01").And.Contain("Full (strict)");
+    }
+
+    [Fact]
+    public void A_different_ip_with_an_invalid_certificate_is_not_mistaken_for_a_proxy()
+    {
+        var status = Diagnose(Probe(resolved: ["203.0.113.10"], certificateValid: false));
+
+        status.Readiness.Should().Be(DomainReadiness.DnsNotPointingHere);
     }
 
     [Fact]
@@ -97,6 +115,15 @@ public class DomainDiagnosisTests
 
         status.Readiness.Should().Be(DomainReadiness.AwaitingCertificate);
         status.Summary.Should().Contain("expired").And.Contain("2026-07-27");
+    }
+
+    [Fact]
+    public void A_direct_domain_with_an_untrusted_certificate_is_not_ready()
+    {
+        var status = Diagnose(Probe(certificateValid: false));
+
+        status.Readiness.Should().Be(DomainReadiness.AwaitingCertificate);
+        status.Summary.Should().Contain("not trusted");
     }
 
     [Fact]
