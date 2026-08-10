@@ -103,33 +103,24 @@ public class NavigationMapTests
     }
 
     [Fact]
-    public void The_billing_entry_folds_away_where_nobody_has_switched_billing_on()
+    public void Provider_billing_operations_are_first_class_navigation_destinations()
     {
-        // Billing:Enabled ships false, so on every upgraded install this is the ordinary case: the
-        // provider has not decided to charge anybody, and a Billing tab offered to all their tenants
-        // regardless is the dead destination the rest of this map's rules already forbid.
-        var folded = BillingNavigation.Fold(NavigationMap.All, billingEnabled: false);
+        var operations = Items(NavigationMap.All)
+            .Where(i => i.Key is "vouchers" or "billing-runs")
+            .ToList();
 
-        Items(folded).Should().NotContain(i => i.Key == BillingNavigation.ItemKey);
+        operations.Select(i => i.Controller).Should().BeEquivalentTo("Vouchers", "BillingRuns");
+        operations.Should().OnlyContain(i => i.Capability == Capabilities.TenantsManage,
+            "issuing money and retrying accounting are provider operations");
     }
 
     [Fact]
-    public void Switching_billing_on_puts_the_entry_back()
+    public void Account_pages_do_not_depend_on_the_automatic_charging_switch()
     {
-        // The other half, and the one that stops "fold it away" being implemented as "delete it".
-        var shown = BillingNavigation.Fold(NavigationMap.All, billingEnabled: true);
-
-        Items(shown).Should().ContainSingle(i => i.Key == BillingNavigation.ItemKey);
-    }
-
-    [Fact]
-    public void Folding_billing_takes_nothing_else_out_of_the_sidebar()
-    {
-        var folded = BillingNavigation.Fold(NavigationMap.All, billingEnabled: false);
-
-        Items(folded).Select(i => i.Key)
-            .Should().BeEquivalentTo(
-                Items(NavigationMap.All).Select(i => i.Key).Where(k => k != BillingNavigation.ItemKey),
-                "one setting being off is not a reason for any other destination to disappear");
+        // Billing:Enabled controls charging and suspension, not account visibility. Manual credit,
+        // voucher redemption and ledger history remain useful while the automatic meter is off.
+        Items(NavigationMap.All).Should().Contain(i => i.Key == "billing");
+        typeof(NavigationMap).Assembly.GetType("Harbora.Infrastructure.Navigation.BillingNavigation")
+            .Should().BeNull("there must be no feature-flag filter left to hide account management");
     }
 }

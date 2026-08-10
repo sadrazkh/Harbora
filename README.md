@@ -491,8 +491,8 @@ dotnet run --project src/Harbora.Web                             # auto-migrates
   from this codebase, so nothing has proven the last hop. It is labelled *Preview* in the panel and
   hidden from the sidebar in Simple mode until one has.
 - Git OAuth requires registering an OAuth app (client id/secret); token connection needs no setup.
-- Usage metering records the billing *basis* (GB-hours / vCPU-hours from committed size); there's no
-  invoicing/payment engine yet.
+- Billing includes balances, manual operator credit/adjustment, single-use vouchers, hourly PAYG
+  ledger lines and per-resource statements. There is deliberately no online payment gateway.
 - Health checks HTTP-probe the app's health path (falling back to container-liveness when none is set).
 
 ## License

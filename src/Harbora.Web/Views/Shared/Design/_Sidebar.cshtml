@@ -2,7 +2,6 @@
 @inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @inject Microsoft.Extensions.Options.IOptions<Harbora.Modules.Backup.Infrastructure.BackupFeatureOptions> BackupFeatures
 @inject Microsoft.Extensions.Options.IOptions<Harbora.Modules.Sync.Infrastructure.SyncFeatureOptions> SyncFeatures
-@inject Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Billing.BillingOptions> Billing
 @using Harbora.Web.Infrastructure
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -15,10 +14,8 @@
         NavigationMap.All, BackupFeatures.Value.Backup);
     navSource = Harbora.Modules.Sync.Infrastructure.SyncNavigation.Augment(
         navSource, SyncFeatures.Value.Sync);
-    // Billing ships switched off, so the tab folds away until a provider decides to charge for
-    // something. The route stays live either way — a workspace that was billed before the switch
-    // went off keeps its history at /billing, and anybody holding the link still reads it.
-    navSource = BillingNavigation.Fold(navSource, Billing.Value.Enabled);
+    // Account visibility is independent from automatic hourly charging. Even with the meter off,
+    // customers can inspect their balance and redeem vouchers, while operators can fund accounts.
     var groups = NavigationMap.VisibleTo(navSource, NavigationCapabilities.For(User), panelMode);
     var currentController = (string?)ViewContext.RouteData.Values["controller"];
 
@@ -57,6 +54,8 @@
         ("template-versions", true) => "نسخه‌های قالب", ("template-versions", false) => "Template versions",
         ("git",          _)    => "Git",
         ("users",        true) => "کاربران و تیم", ("users",        false) => "Users & Team",
+        ("vouchers",     true) => "ووچرهای اعتبار", ("vouchers",     false) => "Billing vouchers",
+        ("billing-runs", true) => "اجرای حسابداری", ("billing-runs", false) => "Billing runs",
         ("cloudflare",   _) => "Cloudflare",
         ("servers",      true) => "سرورها",         ("servers",      false) => "Servers",
         ("nodes",        true) => "نودها",          ("nodes",        false) => "Nodes",

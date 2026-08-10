@@ -307,7 +307,10 @@ update` writes the router and the settings; a hand-built install needs §8.
 new screens and a new setting — and after you upgrade, no customer of yours is billed a single unit
 and nothing of theirs stops. `Billing:Enabled` ships as `false`. Charging people is a commercial
 decision and an install that upgraded into it unasked would start billing tenants who were never told
-there was a price, so you have to say yes on purpose.
+there was a price, so you have to say yes on purpose. The switch controls only automatic hourly
+charging, overage and balance-based suspension: **Billing**, **Billing vouchers**, manual tenant
+credit/adjustment, and **Billing runs** history remain visible and usable from the panel while it is
+off.
 
 Read the rest of this item before you say yes. Billing is connected to the durable job queue: one
 `BillingRun` is persisted for every ended UTC hour, missing hours are discovered oldest-first after
@@ -317,7 +320,7 @@ period in which billing was deliberately disabled.
 
 There is deliberately **no online payment gateway**. Money enters an account in either of two ways:
 an administrator credits a tenant from **Tenants → tenant → Credit**, or creates a single-use code
-under **Tenants → Billing vouchers**. The plaintext voucher is shown once; only its SHA-256 hash is
+under **Platform → Billing vouchers**. The plaintext voucher is shown once; only its SHA-256 hash is
 stored. Any member of a workspace can redeem it on their own **Billing** page. Both routes append one
 idempotent credit line, and a replay cannot move the balance twice. An administrator can also append
 an Adjustment from the tenant page to reverse a mistaken credit; the original line is never edited
@@ -325,7 +328,7 @@ or deleted. Customers see those signed corrections in a separate **Balance adjus
 their bill rather than mixed into resource costs. The voucher console can filter by text, state,
 expiry window and redeeming workspace.
 
-The provider can inspect the latest hourly accounting history under **Tenants → Billing runs**.
+The provider can inspect the latest hourly accounting history under **Platform → Billing runs**.
 Incomplete runs show their counters and failure summary and can be retried there while billing is
 enabled. A retry uses the durable queue and its live-job uniqueness guard, so repeated or concurrent
 clicks do not create two live executions. When `Billing:Enabled` is `false`, history remains visible
