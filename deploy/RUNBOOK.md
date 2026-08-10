@@ -197,7 +197,8 @@ dump fails**. `harbora backups` lists the restore points; the automatic ones are
 
 ### What changes for you in this release
 
-Four behaviour changes that need no action from you but will look like faults if nobody said so.
+Four behaviour changes that need no action from you but will look like faults if nobody said so —
+and one new feature that does nothing at all until you turn it on.
 
 **1. Backups of anything on a second server now fail, loudly.** If you run any server other than the
 panel's own host — a v1 node or a legacy agent — its volumes and managed databases can no longer be
@@ -246,6 +247,79 @@ first-class setting for it yet (HARBORA-0065).
 **4. A node needs a second DNS record.** `nodes.<panel domain>` — see §0. Only if you use nodes, and
 only on a real domain; a `nip.io` install needs no new record. No new port is opened. `install.sh
 update` writes the router and the settings; a hand-built install needs §8.
+
+**5. Pay-as-you-go billing has arrived, switched off, and nothing is charging anybody.** New tables,
+new screens and a new setting — and after you upgrade, no customer of yours is billed a single unit
+and nothing of theirs stops. `Billing:Enabled` ships as `false`. Charging people is a commercial
+decision and an install that upgraded into it unasked would start billing tenants who were never told
+there was a price, so you have to say yes on purpose.
+
+Read the rest of this item before you say yes. Parts of it are not finished, and one of those means
+that turning the switch on today changes almost nothing.
+
+**Nothing runs the hourly charge yet.** The hourly pass itself is whole: it charges every workspace
+for the hour that has just ended, sends the low-balance warning, and then stops the apps and managed
+databases of every workspace the hour left at or below zero. What is missing is the thing that calls
+it — no timer, scheduler or background service does. It is registered and waiting. Until that lands
+in a later release, switching billing on gives you the *screens* (set prices on **Plans**, credit an
+account from **Tenants → a tenant → Credit**, and your customers get a **Billing** page showing their
+balance and where it went), and no money moves and nothing stops on its own. **Do not read this
+release as "billing works, just off."** It is off, and it is also not yet plugged in.
+
+**Blank prices are not free prices.** Every rate arrives unset — on plans and on instance sizes — and
+that is deliberately different from a rate of zero. Unset means nobody has decided; the hourly pass
+writes no line for it at all and names it in that run's warnings instead. Zero means you decided it
+is free. If you enable billing and set no prices, you get a system that runs, reports success and
+bills nothing. Type a `0` where you mean free.
+
+**`.env` will not switch it on.** Same trap as item 3: the compose file names the panel's environment
+variables one by one and this is not among them, so a line in `.env` is read by nothing. Use an
+override file, which Compose merges automatically and `git pull` will never overwrite:
+
+```bash
+cat > /opt/harbora/app/deploy/docker-compose.override.yml <<'YAML'
+services:
+  panel:
+    environment:
+      Billing__Enabled: "true"
+YAML
+cd /opt/harbora/app/deploy && docker compose up -d panel
+```
+
+**What your customers will experience once it is both switched on and scheduled.** Every workspace is
+charged once an hour for what it held during the hour that just ended — apps and databases at their
+instance size's rate, running or stopped, plus disk, plus the plan's hourly minimum if the hour came
+to less than that. They get one warning when the balance is worth fewer hours than they asked to be
+warned at. **At zero, their apps and their managed databases are stopped, and starting anything is
+refused until somebody credits the account.** Their data is untouched and a credit brings back
+exactly what the suspension stopped — but their site goes down, and it goes down without a human
+deciding it should. Tell them the terms before you enable this, not afterwards.
+
+Two exceptions, both deliberate: **your own workspace is never stopped for money** (the panel lives
+in it, so collecting that debt would take down the screen you would fix it from), and **a tenant an
+operator has suspended by hand is left exactly as they are** — their balance goes on falling and
+their workloads go on running, because lifting that suspension is not billing's to do. The pass names
+that tenant in its warnings every run until somebody acts.
+
+**A tenant with no alert channel gets no warning at all.** The low-balance warning goes to that
+workspace's alert rules, and nothing creates one for them — somebody has to add a channel on that
+tenant's **Alerts** page. A workspace with none is told nothing, and the first they know of it is
+their site stopping. The pass names every workspace it could not warn in that run's warnings, so it
+is at least visible — to you, not to them.
+
+**Two things it will not charge for as things stand, so do not price as though it will.**
+
+- *A managed database's disk.* The hourly pass does charge it — but only against a measurement, and
+  nothing measures a database's volume on a schedule. It is measured when somebody presses the
+  measure button on that database's page, and at no other time, so on a live install every database
+  reads as unmeasured and its storage is free. An app's volumes are different: those are measured on
+  a timer. Each unmeasured database is named in that run's warnings, and it is a real hole rather
+  than noise — a customer can hold as much data as they like on a database and pay for the size of
+  the machine only.
+- *Traffic.* Nothing anywhere in Harbora measures bandwidth. A plan can be sold with a traffic
+  allowance printed on it and the platform will neither count it nor enforce it, so plan copy that
+  implies a metered allowance is a promise you cannot keep. Metering it is a project of its own, not
+  a setting somebody forgot to switch on.
 
 ## Troubleshooting
 

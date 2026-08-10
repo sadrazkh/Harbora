@@ -1,15 +1,24 @@
 ﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Tenancy;
+using Harbora.Infrastructure.Billing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Harbora.Infrastructure.Tenancy;
 
 /// <summary>
 /// Computes workspace usage and answers "can this workspace take on more?" against its plan
 /// (or the platform default plan). Committed CPU/memory come from apps' instance-size limits.
+///
+/// <para>
+/// A cap is either a wall or a price line, and <see cref="Plan.AllowsOverage"/> decides which for
+/// that plan rather than the platform deciding for all of them: a free tier's cap is the whole
+/// product, and a pay-as-you-go tier's cap is a figure the customer may buy past. See
+/// <see cref="SellsPastItsCaps"/> for what that does and does not lift.
+/// </para>
 /// </summary>
-public sealed class QuotaService(HarboraDbContext db) : IQuotaService
+public sealed class QuotaService(HarboraDbContext db, IOptions<BillingOptions> billing) : IQuotaService
 {
     public async Task<WorkspaceUsage> GetUsageAsync(Guid workspaceId, CancellationToken ct)
     {
@@ -36,9 +45,16 @@ public sealed class QuotaService(HarboraDbContext db) : IQuotaService
         if (suspended) return QuotaCheck.Deny("This workspace is suspended.");
         if (plan is null) return QuotaCheck.Ok;
 
-        if (plan.MaxApps > 0 && apps >= plan.MaxApps)
+        // Asked once for the whole check. A plan that sold past one cap and walled at the next would
+        // be a plan nobody chose: the caps arrive as one list, on one screen, under one flag.
+        var sells = SellsPastItsCaps(plan);
+
+        if (!sells && plan.MaxApps > 0 && apps >= plan.MaxApps)
             return QuotaCheck.Deny($"App limit reached ({plan.MaxApps}).");
 
+        // Deliberately not conditional. A cap is a quantity and this is an entitlement — the sizes
+        // the provider offers on this tier, which may be all the hardware there is. Selling more of
+        // what somebody already has is not the same as selling them something never on the menu.
         var size = await SizeAsync(instanceSizeKey, ct);
         if (size is not null && !IsSizeAllowed(plan, size.Key))
             return QuotaCheck.Deny($"Instance size '{size.Key}' is not allowed on the {plan.Name} plan.");
@@ -46,15 +62,15 @@ public sealed class QuotaService(HarboraDbContext db) : IQuotaService
         var addMem = size?.MemoryBytes ?? 0;
         var addCpu = size?.CpuCores ?? 0;
 
-        if (plan.MaxMemoryBytes > 0 && mem + addMem > plan.MaxMemoryBytes)
+        if (!sells && plan.MaxMemoryBytes > 0 && mem + addMem > plan.MaxMemoryBytes)
             return QuotaCheck.Deny("Memory quota exceeded for this plan.");
-        if (plan.MaxCpuCores > 0 && cpu + addCpu > plan.MaxCpuCores)
+        if (!sells && plan.MaxCpuCores > 0 && cpu + addCpu > plan.MaxCpuCores)
             return QuotaCheck.Deny("CPU quota exceeded for this plan.");
 
         // The disk limit used to sit on the plan, appear on the pricing screen, and be checked
         // nowhere at all.
         var disk = await DiskUsageAsync(workspaceId, ct);
-        if (!DiskQuota.Allows(plan.MaxDiskBytes, disk))
+        if (!sells && !DiskQuota.Allows(plan.MaxDiskBytes, disk))
             return QuotaCheck.Deny(DiskQuota.Explain(plan.MaxDiskBytes, disk));
 
         return QuotaCheck.Ok;
@@ -66,26 +82,69 @@ public sealed class QuotaService(HarboraDbContext db) : IQuotaService
         var (plan, _, services, mem, cpu, suspended) = await SnapshotAsync(workspaceId, ct);
         if (suspended) return QuotaCheck.Deny("This workspace is suspended.");
         if (plan is null) return QuotaCheck.Ok;
-        if (plan.MaxServices > 0 && services >= plan.MaxServices)
+
+        // The same answer an app gets, and asked here for the same reason the caps below are checked
+        // here: a plan that sold applications past its cap and walled databases at theirs would let
+        // the same tenant buy the excess on one screen and be refused it on the next.
+        var sells = SellsPastItsCaps(plan);
+
+        if (!sells && plan.MaxServices > 0 && services >= plan.MaxServices)
             return QuotaCheck.Deny($"Service limit reached ({plan.MaxServices}).");
 
         // The same check an app gets. Without it a plan could cap applications precisely and let a
-        // database of any size sit next to them.
+        // database of any size sit next to them. Not lifted by overage, for the reason given there.
         var size = await SizeAsync(instanceSizeKey, ct);
         if (size is not null && !IsSizeAllowed(plan, size.Key))
             return QuotaCheck.Deny($"Instance size '{size.Key}' is not allowed on the {plan.Name} plan.");
 
-        if (plan.MaxMemoryBytes > 0 && mem + (size?.MemoryBytes ?? 0) > plan.MaxMemoryBytes)
+        if (!sells && plan.MaxMemoryBytes > 0 && mem + (size?.MemoryBytes ?? 0) > plan.MaxMemoryBytes)
             return QuotaCheck.Deny("Memory quota exceeded for this plan.");
-        if (plan.MaxCpuCores > 0 && cpu + (size?.CpuCores ?? 0) > plan.MaxCpuCores)
+        if (!sells && plan.MaxCpuCores > 0 && cpu + (size?.CpuCores ?? 0) > plan.MaxCpuCores)
             return QuotaCheck.Deny("CPU quota exceeded for this plan.");
 
         var disk = await DiskUsageAsync(workspaceId, ct);
-        if (!DiskQuota.Allows(plan.MaxDiskBytes, disk))
+        if (!sells && !DiskQuota.Allows(plan.MaxDiskBytes, disk))
             return QuotaCheck.Deny(DiskQuota.Explain(plan.MaxDiskBytes, disk));
 
         return QuotaCheck.Ok;
     }
+
+    /// <summary>
+    /// Whether this plan's caps are walls or price lines.
+    ///
+    /// <para>
+    /// <b>Both halves are required, and the second is not in the flag's name.</b> A cap lifted for a
+    /// customer is capacity somebody has to be paying for by the hour, and <c>Billing:Enabled</c> is
+    /// false on every install that has not opted in — <see cref="BillingTick"/> returns without
+    /// charging anybody. Lifting a published limit there would hand out capacity for nothing while
+    /// this method reported success, which is the shape the rest of this feature is built to avoid.
+    /// The consequence, now carried out: the screen that offers this tick box says it does nothing
+    /// until billing is switched on, because the tenant's refusal cannot say it for them — the
+    /// wording they see is the ordinary cap message, unchanged.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What the excess costs is the ordinary meter.</b> An application past the cap is charged its
+    /// instance size's hourly rate like every other application, and a volume past it is charged the
+    /// plan's gibibyte-hour. There is no surcharge, and no column for one: <c>Plan</c> carried
+    /// <c>OverageCpuCoreHourMinor</c> and two neighbours that nothing read, and they were dropped
+    /// rather than surfaced on the plan form, because an operator who sets a burst rate and is
+    /// charged nothing extra for ever is the failure this whole feature was written against.
+    /// Adding one back starts at the tick, not at the column: the compute meter is priced per
+    /// size-hour, so there is no per-core figure to charge an over-cap fraction of an hour at, and
+    /// whatever is added has to be told apart from the rate already being charged or the hour is
+    /// billed twice.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What it does not lift:</b> a suspension, which is checked before this and is about whether
+    /// the customer is paying at all rather than how much; the plan's allowed-size list, which is an
+    /// entitlement and not a quantity; and nothing in <see cref="GetUsageAsync"/> — a workspace that
+    /// was allowed past its cap still reads as over it, so the operator's list of who a limit is
+    /// biting still names them.
+    /// </para>
+    /// </summary>
+    private bool SellsPastItsCaps(Plan plan) => plan.AllowsOverage && billing.Value.Enabled;
 
     /// <summary>
     /// What this workspace is measured to be using, and how much has never been measured.

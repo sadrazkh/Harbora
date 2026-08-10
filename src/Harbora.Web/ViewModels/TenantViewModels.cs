@@ -18,7 +18,19 @@ public sealed record TenantRow(
     int Members,
     int Apps,
     int Services,
-    bool Suspended);
+    bool Suspended,
+    /// <summary>
+    /// Whether the suspension on this row is <see cref="Harbora.Domain.Identity.SuspensionReason.NoBalance"/>.
+    ///
+    /// <para>
+    /// The list showed "suspended" and offered "resume", and the two kinds of suspension are not the
+    /// same act to lift. An operator's own is two field writes. Billing's runs the workloads the
+    /// suspension stopped back through the platform's start routes, each of which asks the billing
+    /// gate — so on an empty balance it correctly refuses and the row stays suspended. An operator
+    /// who cannot see which one they are looking at cannot tell a refusal from a bug.
+    /// </para>
+    /// </summary>
+    bool SuspendedForNoBalance);
 
 public sealed class TenantDetailsViewModel
 {
@@ -28,6 +40,18 @@ public sealed class TenantDetailsViewModel
     public bool IsDefault { get; set; }
     public bool Suspended { get; set; }
     public Application.Abstractions.WorkspaceUsage Usage { get; set; } = null!;
+
+    /// <summary>
+    /// False when this tenant has no wallet row — no hourly pass has ever reached them. Kept apart
+    /// from a balance of zero: "never billed" and "nothing left" want opposite responses, and the
+    /// screen prints a dash for the first rather than a nought.
+    /// </summary>
+    public bool HasWallet { get; set; }
+
+    /// <summary>Minor units, as the ledger stores them. Converted once, in the view.</summary>
+    public long BalanceMinor { get; set; }
+
+    public string Currency { get; set; } = "IRR";
 
     // Metered usage for the current billing month.
     public double MemoryGbHours { get; set; }

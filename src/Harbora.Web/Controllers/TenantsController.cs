@@ -1,4 +1,4 @@
-﻿using System.Text.RegularExpressions;
+using System.Text.RegularExpressions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
@@ -17,8 +17,18 @@ namespace Harbora.Web.Controllers;
 /// </summary>
 [Authorize(Policy = Capabilities.TenantsManage)]
 [Route("tenants")]
-public sealed partial class TenantsController(HarboraDbContext db, IPasswordHasher hasher, IQuotaService quota) : Controller
+public sealed partial class TenantsController(
+    HarboraDbContext db,
+    IPasswordHasher hasher,
+    IQuotaService quota,
+    Harbora.Infrastructure.Billing.WalletService wallet,
+    ICurrentUser currentUser,
+    IAuditLogger audit,
+    Harbora.Infrastructure.Billing.BillingSuspension suspension) : Controller
 {
+    /// <summary>Where the request came from, for the audit trail on a money movement.</summary>
+    private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
+
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -40,7 +50,8 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
                 w.Id, w.Name, w.Slug, w.IsDefault, w.PlanId,
                 w.PlanId is { } pid && planName.TryGetValue(pid, out var n) ? n : "Default",
                 memCounts.GetValueOrDefault(w.Id), appCounts.GetValueOrDefault(w.Id), svcCounts.GetValueOrDefault(w.Id),
-                w.IsSuspended));
+                w.IsSuspended,
+                w.SuspendedReason == SuspensionReason.NoBalance));
         }
         return View(vm);
     }
@@ -85,10 +96,260 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
         var ws = await db.Workspaces.FirstOrDefaultAsync(w => w.Id == id, ct);
         if (ws is null) return NotFound();
         if (ws.IsDefault) { TempData["Error"] = "The provider workspace cannot be suspended."; return RedirectToAction(nameof(Index)); }
+
+        // A billing suspension is not this action's to lift by hand, and the two field writes below
+        // are exactly how it used to try. They clear the reason, and the reason is the only thing
+        // BillingSuspension.ResumeAsync will act on — so every app and database the suspension
+        // stopped kept WasRunningAtSuspension set with nothing left in the platform that reads it.
+        // Down containers, markers saying somebody owes them a start, and nobody who does: the
+        // stranding BillingSuspension refuses to cause when it defers to an operator's suspension,
+        // caused here instead by the operator lifting billing's.
+        if (!suspended && ws.SuspendedReason == SuspensionReason.NoBalance)
+            return await LiftBillingSuspensionAsync(ws, ct);
+
         ws.IsSuspended = suspended;
+        // Says who. Billing lifts a suspension only when the reason is NoBalance, so recording
+        // Manual here is what stops a customer's payment quietly undoing this decision — and
+        // clearing the reason on the way out stops a stale one being read about a workspace that is
+        // no longer suspended at all.
+        ws.SuspendedReason = suspended ? SuspensionReason.Manual : SuspensionReason.None;
         await db.SaveChangesAsync(ct);
         TempData["Message"] = suspended ? "Tenant suspended." : "Tenant resumed.";
         return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Hands a NoBalance resume to the code that made the suspension, and reports what came back.
+    ///
+    /// <para>
+    /// <b>Routed rather than refused</b>, and the refusal is the tempting answer. "Only a top-up
+    /// lifts this" is true of the ordinary case and leaves nothing at all for the workspaces that
+    /// are actually stuck: one whose credit landed while a node was down, one reconciled by hand
+    /// outside the ledger, one suspended before billing was switched off. Every one of those is in
+    /// credit, still flagged, and has no button.
+    /// </para>
+    ///
+    /// <para>
+    /// Routing loses nothing, because the refusal still happens where it is true. Each start goes
+    /// through <c>IBillingGate</c>; on an empty balance every one is refused, nothing is stranded,
+    /// no marker is cleared, the reason stays <see cref="SuspensionReason.NoBalance"/> so a later
+    /// top-up still recognises this suspension as its own — and the operator is shown, per workload,
+    /// what did not come back. The platform works out which of the two answers is honest today
+    /// instead of the operator guessing from a button that looks the same either way.
+    /// </para>
+    /// </summary>
+    private async Task<IActionResult> LiftBillingSuspensionAsync(Workspace ws, CancellationToken ct)
+    {
+        var result = await suspension.ResumeAsync(ws.Id, ct);
+
+        if (result.WorkspaceSuspended)
+        {
+            // Never dressed up as a partial success. The operator pressed a button labelled "resume"
+            // and the workspace is still suspended; anything short of saying so plainly is how a
+            // customer gets told their services are back while they are not.
+            TempData["Error"] = string.Join(" ", result.Failures.Prepend(
+                $"{ws.Name} is still suspended: it was suspended for an empty balance, and the " +
+                "workloads it stopped could not all be started again. They are still recorded as " +
+                "owed a start, so a top-up — or this button again — will try them once more."));
+
+            return RedirectToAction(nameof(Index));
+        }
+
+        // Named apart rather than added together, as the credit screen names them: an administrator
+        // told "2 workloads came back" has not been told whether the database is one of them, and
+        // that is the half every app beside it depends on.
+        TempData["Message"] =
+            $"{ws.Name} resumed."
+            + (result.AppsStarted > 0 ? $" {result.AppsStarted} app(s) were started again." : "")
+            + (result.DatabasesStarted > 0 ? $" {result.DatabasesStarted} database(s) were started again." : "");
+
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// What crediting this tenant would do, before it does it.
+    ///
+    /// <para>
+    /// A page rather than a box on the details screen, for the reason every destructive action on
+    /// this panel already has one: the figure has to be looked at by somebody before the money
+    /// moves, and a number typed into a row of other controls is a number nobody re-reads. Money in
+    /// is not destructive, but it is irreversible in the only sense that matters here — nothing in
+    /// this ledger is ever edited or deleted, so undoing a credit means writing an opposing
+    /// adjustment against it and both stay on the customer's bill for ever.
+    /// </para>
+    ///
+    /// <para>
+    /// It also mints the credit's id, which is what makes the whole thing idempotent. One rendering
+    /// of this page is one decision: a double-click, a browser's back button and a retried POST all
+    /// carry the id it was rendered with and apply once, while an administrator who really means to
+    /// credit the same customer twice loads the page again and gets a new one.
+    /// </para>
+    /// </summary>
+    [HttpGet("{id:guid}/credit")]
+    public async Task<IActionResult> ConfirmCredit(Guid id, CancellationToken ct)
+    {
+        // Carried in TempData rather than in the query string. A refused attempt has to come back
+        // with what was typed still in the boxes — otherwise the second go is a retype rather than a
+        // correction — but an amount and somebody's note about a customer's payment have no business
+        // in a URL, where they land in browser history and in every access log on the way.
+        var vm = await CreditPageAsync(
+            id, TempData["CreditAmount"] as string, TempData["CreditNote"] as string, ct);
+        if (vm is null) return NotFound();
+
+        ViewData["Title"] = $"Credit {vm.Name}";
+        return View(vm);
+    }
+
+    /// <summary>
+    /// Puts money on a tenant's account, and brings back whatever an empty balance had stopped.
+    ///
+    /// <para>
+    /// Everything about the money is <see cref="Harbora.Infrastructure.Billing.WalletService"/>'s:
+    /// this action parses what a person typed, names who they are, and reports back what happened —
+    /// including the half that can fail on its own. A credit that landed while the customer's apps
+    /// stayed down is the outcome this screen must not describe as success, because the
+    /// administrator has usually just told them otherwise.
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/credit")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Credit(
+        Guid id, Guid creditId, string? amount, string? note, CancellationToken ct)
+    {
+        var ws = await db.Workspaces.FirstOrDefaultAsync(w => w.Id == id, ct);
+        if (ws is null) return NotFound();
+
+        // Back to the confirmation page rather than to the tenant, and carrying what was typed: a
+        // refusal that empties the form makes the second attempt a retype rather than a correction.
+        // Each of these says a different thing on purpose — "that is not a number" and "a credit
+        // puts money in" send an administrator to two different fixes, and one generic refusal
+        // covering both is the shape that makes somebody guess.
+        IActionResult Again(string error)
+        {
+            TempData["Error"] = error;
+            TempData["CreditAmount"] = amount;
+            TempData["CreditNote"] = note;
+            return RedirectToAction(nameof(ConfirmCredit), new { id });
+        }
+
+        // A fresh id here would mean every POST is a new decision, which is the whole failure this
+        // is built to prevent. It comes from the page the administrator confirmed on.
+        if (creditId == Guid.Empty)
+            return Again("That form did not carry a credit id, so it was not applied. Open the page again.");
+
+        if (!Harbora.Web.Infrastructure.MinorUnits.TryParseMajor(amount, out var amountMinor))
+            return Again("Enter the amount in figures, for example 250000 or 250000.50.");
+
+        if (amountMinor <= 0)
+            return Again("A credit puts money in. To take money off an account, write an adjustment against it.");
+
+        if (string.IsNullOrWhiteSpace(note))
+            return Again("Say what this credit is for. It is the only thing on the line that explains why the balance moved.");
+
+        if (currentUser.UserId is not { } byUserId)
+            return Again("Sign in again — this credit could not be attributed to anybody.");
+
+        Harbora.Infrastructure.Billing.CreditResult result;
+        try
+        {
+            result = await wallet.CreditAsync(
+                new Harbora.Infrastructure.Billing.CreditRequest(creditId, id, amountMinor, note.Trim(), byUserId),
+                ct);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            // The service's own refusals, shown rather than turned into a 500. It is the last line
+            // of defence behind the checks above and behind any other caller, so reaching it means a
+            // real disagreement worth reading.
+            //
+            // Audited before it is shown, and this is the one attempt on this whole screen that is
+            // worth auditing. A double-click or a second confirmation page produces a normal "already
+            // applied" or a normal second credit, both logged below like any other; reaching THIS
+            // catch means an id was reused for a workspace, an amount or a note that does not match
+            // what it was first used for — the exact "expensive mistake nobody reports" this design
+            // exists to refuse. The administrator who typed it sees the message once and moves on;
+            // without a row here, that is the only place it would ever have been written down. The
+            // full text goes in rather than a category, because a category would say a refusal
+            // happened and nothing about which decision it was or what it collided with — and that is
+            // exactly what somebody reading this audit log months later would need.
+            await audit.LogAsync("billing.credit.refused", "workspace", id.ToString(), ClientIp,
+                metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    creditId, amountMinor, note = note.Trim(), reason = ex.Message
+                }), ct: ct);
+            return Again(ex.Message);
+        }
+        catch (DbUpdateException)
+        {
+            // Not the service's own refusal — the database's. WalletService.WriteAsync's remarks say
+            // why: 23505 names a unique index refused the write, not which one, and this write can
+            // collide on either the ledger's primary key or Wallets.WorkspaceId. Losing the first
+            // race is answered by re-reading and reporting "already applied"; losing the SECOND is
+            // what reaches here, because a genuine collision on the wallet row alone means no ledger
+            // line was ever written under this id — nothing to find, so WriteAsync correctly throws
+            // rather than guesses. No money moved either way, so unlike the catch above there is
+            // nothing to name and nothing to audit: the honest answer is "try again", not "here is
+            // what went wrong", because nothing did — two legitimate writes just arrived together.
+            return Again(
+                "Another write reached this account's balance at the same moment as this one, and " +
+                "this one was refused rather than guessed at. Nothing was credited — retry it.");
+        }
+
+        // Written whether or not this POST was the one that moved the money. An audit trail that
+        // only recorded the winning submission would show one line where two people pressed the
+        // button, and "who tried" is half of what an audit of money is for.
+        await audit.LogAsync("billing.credit", "workspace", id.ToString(), ClientIp,
+            metadataJson:
+            $"{{\"creditId\":\"{creditId}\",\"amountMinor\":{amountMinor},\"applied\":" +
+            $"{result.Applied.ToString().ToLowerInvariant()}}}", ct: ct);
+
+        TempData["Message"] = result.Applied
+            ? $"Credited {Harbora.Web.Infrastructure.MinorUnits.Format(amountMinor)}. " +
+              $"{ws.Name}'s balance is now {Harbora.Web.Infrastructure.MinorUnits.Format(result.BalanceMinor)}." +
+              // Named separately rather than added together. An administrator has usually just told
+              // the customer their services are coming back, and "2 workload(s)" does not answer the
+              // only question that matters next, which is whether the database is one of them.
+              (result.AppsStarted > 0 ? $" {result.AppsStarted} app(s) were started again." : "") +
+              (result.DatabasesStarted > 0
+                  ? $" {result.DatabasesStarted} database(s) were started again."
+                  : "")
+            : $"That credit had already been applied. {ws.Name}'s balance is " +
+              $"{Harbora.Web.Infrastructure.MinorUnits.Format(result.BalanceMinor)} and no second line was written.";
+
+        // Never folded into the message above. "Credited 500,000" and "their apps are still down"
+        // are two different things to have to tell a customer.
+        if (result.Failures.Count > 0)
+            TempData["Error"] = string.Join(" ", result.Failures);
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>The tenant, their balance, and a freshly minted id for the credit being considered.</summary>
+    private async Task<TenantCreditViewModel?> CreditPageAsync(
+        Guid id, string? amount, string? note, CancellationToken ct)
+    {
+        var ws = await db.Workspaces.AsNoTracking().FirstOrDefaultAsync(w => w.Id == id, ct);
+        if (ws is null) return null;
+
+        // Unfiltered: this is the provider console, so the administrator's own session belongs to
+        // the provider's workspace and a filtered read would report every tenant's balance as zero.
+        var wallet = await db.Wallets.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(w => w.WorkspaceId == id, ct);
+
+        return new TenantCreditViewModel
+        {
+            WorkspaceId = ws.Id,
+            Name = ws.Name,
+            Slug = ws.Slug,
+            CreditId = Guid.CreateVersion7(),
+            HasWallet = wallet is not null,
+            BalanceMinor = wallet?.BalanceMinor ?? 0,
+            Currency = wallet?.Currency ?? "IRR",
+            Suspended = ws.IsSuspended,
+            SuspendedForNoBalance = ws.SuspendedReason == SuspensionReason.NoBalance,
+            Amount = amount,
+            Note = note
+        };
     }
 
     /// <summary>
@@ -207,9 +468,17 @@ public sealed partial class TenantsController(HarboraDbContext db, IPasswordHash
         var period = new DateOnly(now.Year, now.Month, 1);
         var metered = await db.UsageRecords.AsNoTracking().FirstOrDefaultAsync(r => r.WorkspaceId == ws.Id && r.Period == period, ct);
 
+        // Unfiltered, because this is the provider console: the administrator's own session belongs
+        // to the provider's workspace, and a filtered read would show every tenant a balance of zero.
+        var wallet = await db.Wallets.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(w => w.WorkspaceId == ws.Id, ct);
+
         return View(new TenantDetailsViewModel
         {
             WorkspaceId = ws.Id, Name = ws.Name, Slug = ws.Slug, IsDefault = ws.IsDefault, Suspended = ws.IsSuspended,
+            HasWallet = wallet is not null,
+            BalanceMinor = wallet?.BalanceMinor ?? 0,
+            Currency = wallet?.Currency ?? "IRR",
             Usage = await quota.GetUsageAsync(ws.Id, ct),
             MemoryGbHours = metered?.MemoryGbHours ?? 0,
             CpuCoreHours = metered?.CpuCoreHours ?? 0,

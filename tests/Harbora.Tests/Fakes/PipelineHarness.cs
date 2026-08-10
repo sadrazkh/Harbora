@@ -61,6 +61,8 @@ public sealed class PipelineHarness : IDisposable
         // Reads the platform's stored routes, unfiltered, exactly as the real engine does — a test
         // asserting on Applications is then looking at the config that would have been published.
         Proxy = new RecordingProxyEngine(() => Db.Routes.IgnoreQueryFilters().AsNoTracking().ToList());
+        Gate = new Harbora.Infrastructure.Billing.BillingGate(
+            Db, Microsoft.Extensions.Options.Options.Create(new Harbora.Infrastructure.Billing.BillingOptions()));
 
         Workspace = new Workspace { Id = Guid.NewGuid(), Name = "Acme", Slug = "acme" };
         Server = new Server
@@ -217,6 +219,19 @@ public sealed class PipelineHarness : IDisposable
     /// </summary>
     public Harbora.Application.Abstractions.IProxyEngine? ProxyOverride { get; set; }
 
+    /// <summary>
+    /// The billing gate the pipeline asks before it builds anything.
+    ///
+    /// <para>
+    /// The real one over this harness's own context, with <c>Billing:Enabled</c> false — which is
+    /// the shipped default and the reason every deployment test in this project still deploys. A
+    /// fake that always allowed would prove the pipeline works when nothing refuses; this proves it
+    /// works when the real gate is asked and has nothing to say. Replace it with one configured
+    /// <c>Enabled = true</c> to watch the pipeline refuse.
+    /// </para>
+    /// </summary>
+    public Harbora.Application.Abstractions.IBillingGate Gate { get; set; }
+
     public DeploymentPipeline BuildPipeline() => new(
         Db,
         new SingleEngineFactory(Docker),
@@ -228,6 +243,7 @@ public sealed class PipelineHarness : IDisposable
         // guarantee about secrets, and a fake that redacts nothing cannot show it holding.
         new Harbora.Infrastructure.Security.SecretRedactor(),
         Notifications,
+        Gate,
         Http,
         Clock,
         Microsoft.Extensions.Options.Options.Create(Options),

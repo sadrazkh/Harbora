@@ -1061,7 +1061,17 @@ public sealed class AppsController(
     public async Task<IActionResult> Restart(Guid id, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
-        await ops.RestartAsync(id, ct);
+        try { await ops.RestartAsync(id, ct); }
+        catch (QuotaRefusedException ex)
+        {
+            // The billing gate refusing a workspace with no balance, in the same shape this
+            // controller already uses for a rollback that cannot be coalesced: the reason where a
+            // quota refusal appears, rather than a 500 for a decision the platform made on purpose.
+            // Shown in the reader's own language — this is a customer already locked out of their
+            // app, the one place on this panel that must not read English-only.
+            TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
         TempData["Message"] = "Restarted.";
         return RedirectToAction(nameof(Details), new { id });
     }
@@ -1083,7 +1093,14 @@ public sealed class AppsController(
     public async Task<IActionResult> Start(Guid id, CancellationToken ct)
     {
         if (!await OwnsAsync(id, ct)) return NotFound();
-        await ops.StartAsync(id, ct);
+        try { await ops.StartAsync(id, ct); }
+        catch (QuotaRefusedException ex)
+        {
+            // Same shape as Restart, just above: shown in the reader's own language rather than the
+            // provider's, because this is the message a customer sees on their way to fixing it.
+            TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
         TempData["Message"] = "Started.";
         return RedirectToAction(nameof(Details), new { id });
     }

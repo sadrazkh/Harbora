@@ -12,12 +12,28 @@ public sealed record UpgradedInstall(string ConnectionString);
 /// install could be carrying, migrated the rest of the way.
 ///
 /// <para>
-/// Three of the four migrations on these branches contain hand-written SQL, and until this lane
-/// existed none of it had been executed anywhere. Two of them are not additive in the way a column
-/// is: they <b>change rows</b>, and one of them has to, because the <c>CREATE UNIQUE INDEX</c> that
-/// follows would otherwise fail and leave the panel unable to boot. What follows is the set of rows
-/// that reaches every branch of every one of those statements — the ones that must be changed, and,
-/// just as importantly, the ones that must be left alone.
+/// Five migrations sit on these branches and two of them contain hand-written SQL, which until this
+/// lane existed had never been executed anywhere. Both <b>change rows</b> rather than being additive
+/// in the way a column is, and one has to, because the <c>CREATE UNIQUE INDEX</c> that follows would
+/// otherwise fail and leave the panel unable to boot. What follows is the set of rows that reaches
+/// every branch of every one of those statements — the ones that must be changed, and, just as
+/// importantly, the ones that must be left alone.
+/// </para>
+///
+/// <para>
+/// It was eleven until billing's seven were squashed into one, and the third hand-written statement
+/// went with them: one of those seven existed only to undo a zero that the one before it had been
+/// forced to write into every plan and every tier. A migration generated once from the final model
+/// adds those columns nullable and writes nothing, so there is nothing left to undo. The plan and
+/// the size are still seeded below — "arrives unpriced" is the claim, and it is worth asking of a
+/// real upgrade whatever happens to make it true.
+/// </para>
+///
+/// <para>
+/// The other three are additive — two new tables, new columns, one new index — and are exercised by
+/// being applied at all: <c>An_install_at_the_previous_release_can_be_carried_across</c> migrates
+/// this database the whole way, so any of them that cannot run over a populated install fails there.
+/// Nothing needs seeding for them, which is why they are absent below rather than forgotten.
 /// </para>
 ///
 /// <para>
@@ -35,7 +51,19 @@ internal static class UpgradeFromPreviousRelease
     /// </summary>
     public const string PreviousRelease = "20260806145158_AlertThresholds";
 
-    /// <summary>What this upgrade applies, in order. <see cref="MigrationTests"/> pins that they are these.</summary>
+    /// <summary>
+    /// The migrations that follow <see cref="PreviousRelease"/>, in order.
+    /// <see cref="MigrationTests"/> pins that they are still these.
+    ///
+    /// <para>
+    /// A prefix, not the whole upgrade: the run itself applies every migration to head, and this
+    /// list only fixes where the boundary is. It is deliberately the four that were here before
+    /// billing, because those are the ones the seed below is written against — extending it every
+    /// time a branch appends a migration would turn a tripwire on the boundary into a second copy of
+    /// the migrations folder, and the "can it be carried across" fact already covers the rest by
+    /// running them.
+    /// </para>
+    /// </summary>
     public static readonly string[] Applied =
     [
         "20260807090816_JobNextAttemptAt",
@@ -77,6 +105,42 @@ internal static class UpgradeFromPreviousRelease
         await SeedDeploymentQueueAsync(seed);
         await SeedBackupSnapshotsAsync(seed);
         await SeedRestoreJobsAsync(seed);
+        await SeedTenancyPricingAsync(seed);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // PayAsYouGoBilling — ADD COLUMN "…Minor" bigint NULL, over rows that predate the price
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A plan and a size that were on the install before billing existed, so neither can carry a
+    /// price. What makes them worth seeding is what the upgrade must leave them holding: nothing.
+    ///
+    /// <para>
+    /// <c>PayAsYouGoBilling</c> adds the rate columns nullable and with no default, so both of these
+    /// rows come across null and no statement has to put them right. That is the whole reason the
+    /// squash was worth doing: the two migrations it replaced added the columns
+    /// <c>NOT NULL DEFAULT 0</c> — the only way to add a required column to a table that already has
+    /// rows — and then spent a hand-written <c>UPDATE</c> turning those zeros back into nulls.
+    /// </para>
+    ///
+    /// <para>
+    /// Still seeded, because the claim is about the rows rather than about the statement: an
+    /// upgraded install must arrive with every price <i>unset</i> rather than at zero, which now
+    /// reads as <i>deliberately free</i>, and nothing downstream has any way to know it was never
+    /// asked. A migration that declared one of these columns required would put the zeros back, and
+    /// this is the pair of rows that would be holding them.
+    /// </para>
+    /// </summary>
+    private static async Task SeedTenancyPricingAsync(SchemaSeed seed)
+    {
+        await seed.InsertAsync("Plans",
+            ("Id", Seeded.PlanCarriedAcross), ("Name", "carried"), ("NameFa", "carried"),
+            ("CreatedAt", BeforeTheUpgrade), ("UpdatedAt", BeforeTheUpgrade));
+
+        await seed.InsertAsync("InstanceSizes",
+            ("Id", Seeded.SizeCarriedAcross), ("Key", "carried"), ("Name", "carried"), ("NameFa", "carried"),
+            ("CreatedAt", BeforeTheUpgrade), ("UpdatedAt", BeforeTheUpgrade));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -364,6 +428,9 @@ internal static class UpgradeFromPreviousRelease
         public static readonly Guid CompletedRestoreWithAnOverLongDestination = new("60000000-0000-0000-0000-000000000052");
         public static readonly Guid RestoreAtExactlyTheBound = new("60000000-0000-0000-0000-000000000053");
         public static readonly Guid RestoreOneCharacterPastTheBound = new("60000000-0000-0000-0000-000000000054");
+
+        public static readonly Guid PlanCarriedAcross = new("70000000-0000-0000-0000-000000000001");
+        public static readonly Guid SizeCarriedAcross = new("70000000-0000-0000-0000-000000000002");
     }
 }
 

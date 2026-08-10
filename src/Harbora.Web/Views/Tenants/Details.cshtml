@@ -72,6 +72,35 @@
     }
 </div>
 
+@* ---- the account ----
+   The balance and the way to move it, on the screen an administrator is already on when a customer
+   rings up about one. Crediting goes through a confirmation page rather than a box here: it is money
+   moving, and a figure typed in a row of other controls is a figure nobody re-reads. *@
+<div class="rounded-xl border border-line bg-surface p-5 mb-6">
+    <div class="flex items-center justify-between">
+        <div>
+            <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "حساب" : "Account")</h2>
+            @if (Model.HasWallet)
+            {
+                <div class="mt-1 text-2xl font-bold @(Model.BalanceMinor > 0 ? "text-ink" : "text-danger")" dir="ltr">
+                    @MinorUnits.Format(Model.BalanceMinor, Model.Currency)
+                </div>
+            }
+            else
+            {
+                @* A dash, not a nought: nobody has billed this tenant yet, which is not the same
+                   fact as their having nothing left. *@
+                <div class="mt-1 text-2xl font-bold text-ink-faint" dir="ltr">—</div>
+                <div class="mt-0.5 text-[11px] text-ink-faint">@(isFa ? "هنوز صورت‌حسابی صادر نشده" : "never billed")</div>
+            }
+        </div>
+        <a href="/tenants/@Model.WorkspaceId/credit"
+           class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+            @(isFa ? "شارژ حساب" : "Credit the account")
+        </a>
+    </div>
+</div>
+
 <div class="rounded-xl border border-line bg-surface p-5 mb-6">
     <div class="mb-3 flex items-center justify-between">
         <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "مصرف متری این ماه" : "Metered usage this month") <span class="text-ink-faint text-sm">· @Model.PeriodLabel</span></h2>

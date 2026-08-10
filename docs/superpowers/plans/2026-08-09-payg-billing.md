@@ -290,8 +290,15 @@ And in `OnModelCreating`, beside the other entity blocks:
             // same double-charge this index exists to prevent, arriving through the one line with no
             // resource behind it. Credit and Adjustment are made by a person and may legitimately
             // repeat within an hour, so they are outside the filter.
+            //
+            // PlanMinimumTopUp rows carry a null ResourceId by design (BilledResourceType.PlanBase's
+            // doc comment) — there is no resource behind that line. Postgres's default treats two
+            // NULLs as distinct, which would let a retried tick write the plan-minimum line twice
+            // right through this index. AreNullsDistinct(false) closes that: NULLS NOT DISTINCT
+            // (PG15+) makes the two NULL ResourceIds collide like any other equal value.
             e.HasIndex(x => new { x.WorkspaceId, x.ResourceType, x.ResourceId, x.BillingHour })
                 .IsUnique()
+                .AreNullsDistinct(false)
                 .HasFilter("\"Kind\" IN (0, 2)");
         });
 ```
@@ -565,6 +572,106 @@ MSG
 ```
 
 ---
+
+### Task 4b: Bill a managed database for the disk it holds
+
+**Added after Task 4's review found it. Dispatch after Task 5.**
+
+A managed service — Postgres, MySQL, Redis and the rest — carries its own `InstanceSizeKey`,
+`VolumeName` and `StorageBytes` on `ManagedService`, and has **no relation to the `Volume` table**,
+which is keyed by `AppId` alone. `BillingTick` reads volumes by `AppId`, so a managed service's
+storage is structurally unreachable from it.
+
+The consequence: a workspace pays the instance-size rate for its database and then holds unlimited
+storage for nothing. That is the largest revenue hole on the branch, and it is not a bug in Task 4 —
+its brief said "apps and services with their instance sizes, and its volumes", and a service's own
+storage was never named.
+
+**Files:**
+- Modify: `src/Harbora.Infrastructure/Billing/BillingTick.cs`
+- Test: `tests/Harbora.Tests/Billing/BillingTickTests.cs`
+
+- [ ] **Step 1: Write the failing test.** A managed service with storage produces a disk line. Assert
+  the amount, and assert the line's `ResourceType`/`ResourceId` — Task 3 found that charge lines whose
+  identity is never asserted let a hard-coded id pass every test, and Task 1's index is keyed on
+  exactly those columns.
+
+- [ ] **Step 2: Decide the ledger key and say why.** This is the real work. A managed service's disk
+  needs a `(ResourceType, ResourceId)` that (a) cannot collide with an app volume's line for the same
+  hour, and (b) stays stable across ticks so the unique index keeps a retry harmless. Consider whether
+  it deserves its own `BilledResourceType` member — **appended, never renumbered** — rather than
+  reusing `Volume` with a service id, and argue the choice. A reader of the bill has to be able to
+  tell "my database's disk" from "my app's disk".
+
+- [ ] **Step 3: Use `StorageBytes` as reserved, not measured.** Item 18 of the do-not-change list
+  keeps unmeasured disk from being read as zero. Task 4 already treats an unmeasured volume exactly
+  like an unpriced one — no line, reported. Follow that, and say in your report whether
+  `StorageBytes` is reserved or measured, because the bill has to say which.
+
+- [ ] **Step 4: Charge a stopped database too.** The agreed rate model is that a stopped workload
+  still pays for disk, because the data is still on the disk. A stopped managed service is the
+  clearest case of that.
+
+- [ ] **Step 5: Suspension must stop managed services too.** Task 6 found that
+  `ManagedServiceEngine` was the sixth start path and had no money check at all. Task 5's
+  `BillingSuspension` has the matching hole on the other side: it stops apps and **not** managed
+  databases. Together with steps 1–4 that produces the worst combination on this branch — a suspended
+  workspace whose database keeps running **and** keeps being charged for its disk, with the customer
+  unable to do anything about it because they are suspended.
+
+  Stop them, and mark them the way apps are marked so a top-up brings them back. Read Task 5's
+  starting-vs-retrying rule first (`BillingSuspension`, and the report at
+  `.superpowers/sdd/task-5-report.md`): a suspension that is *starting* rebuilds the set of what was
+  running, one that is *retrying* only adds to it — because by the second pass the workloads are
+  stopped precisely because the first pass stopped them, and rebuilding would erase the only record
+  that they were ever running. Whatever you mark a managed service with has to obey the same rule, or
+  a retried suspension silently loses the customer's database.
+
+### Task 2b: Tell "free" apart from "nobody set a price"
+
+**Added after Task 3, which found the ambiguity. Dispatch before Task 4 — the tick is where it has
+to become loud, so the schema has to change first.**
+
+Task 2 made all seven rate columns non-nullable `long`, defaulting to `0`. Task 3 then asked what a
+zero-value ledger line means and found the honest answer is: nobody can tell. `0` currently says both
+"this resource is deliberately free" and "no human has priced this yet", and those are different
+facts with opposite correct responses.
+
+The failure that follows is this project's own signature, moved up to the business layer: an operator
+adds an instance size, forgets to price it, every workload on that size runs free for ever, and every
+hourly tick reports success. Task 8b will make a free tier a legitimate configuration, which removes
+the last chance to guess from context.
+
+`null` is the answer. It is what nullable is for — `null` means no answer has been given, `0` means
+the answer is zero.
+
+**Files:**
+- Modify: `src/Harbora.Domain/Tenancy/Plan.cs`, `src/Harbora.Domain/Tenancy/InstanceSize.cs`
+- Modify: `src/Harbora.Infrastructure/Billing/BillingRates.cs`
+- Migration: generated, altering the seven columns to nullable
+- Test: `tests/Harbora.Tests/Billing/BillingRatesTests.cs`
+
+- [ ] **Step 1: Write the failing test.** An unpriced rate and a deliberately-free rate must be
+  distinguishable by a caller. A zero rate still yields a zero charge; an unset rate must be
+  reportable as unset rather than silently costing nothing.
+
+- [ ] **Step 2: Make the seven columns `long?`.** Five on `Plan`, two on `InstanceSize`. The
+  migration alters existing columns to nullable, which is additive and safe on live data — but every
+  existing row currently holds `0`, and after this change `0` means *free*. Say in your report
+  whether the migration should rewrite those zeros to `null`, and argue it. My reading: on this
+  branch nothing has ever been priced and no row is deliberately free, so rewriting to `null` is the
+  truthful state — but check whether any seeder or test fixture depends on zero and say so.
+
+- [ ] **Step 3: Give `BillingRates` a way to say "unset".** Do not return `0` for it. Choose the
+  shape — a nullable return, a result record, whatever fits the three existing methods — and justify
+  the choice in your report. Keep money `long`.
+
+- [ ] **Step 4: Update Task 2's tests** so they still pin what they pinned, and add the two cases
+  this distinction creates: unset stays unset, and an explicit zero stays a zero charge.
+
+- [ ] **Step 5:** Task 4 will decide what the tick *does* with an unset rate; that is not yours.
+  Your job is that it can tell. Say in your report what you think the tick should do and why, so
+  Task 4 inherits a reasoned position rather than a blank.
 
 ### Task 3: Planning one hour
 
@@ -1512,6 +1619,69 @@ MSG
 ```
 
 ---
+
+### Task 8b: An admin can actually set the prices
+
+**Added after Task 2, which found the gap. Dispatch after Task 8 and before Task 9.**
+
+Task 2 gave `Plan` five rate columns and `InstanceSize` two. Nothing in Tasks 1–10 as originally
+written ever sets one. `PlansController.CreatePlan` and `CreateSize` take explicit scalar parameter
+lists — not model binding — and neither list mentions a rate, so the columns are unreachable from
+the admin UI and every one of them stays `0`.
+
+Follow that through: the tick runs hourly, every rate resolves to zero, Task 3 drops zero-value
+lines, the ledger stays empty, no balance ever moves, nobody is ever suspended, and every run
+reports success. The feature would ship charging nobody and saying it worked — the failure this
+whole codebase has spent two phases learning to recognise, arrived at through the plan rather than
+through the code.
+
+**Files:**
+- Modify: `src/Harbora.Web/Controllers/PlansController.cs`
+- Modify: the plan and size forms under `src/Harbora.Web/Views/Plans/`
+- Test: `tests/Harbora.Tests/Billing/RateAdminTests.cs`
+
+- [ ] **Step 1: Write the failing test.** A rate set through the controller action must come back
+  from the database. Assert on all seven columns — five on `Plan`, two on `InstanceSize` — because a
+  parameter list that silently omits one is exactly how this gap was created. The test must name the
+  columns explicitly rather than looping over reflection, so adding an eighth rate later fails loudly
+  instead of being quietly uncovered.
+
+- [ ] **Step 2: Extend both parameter lists and both forms.** Money is entered by a person, so accept
+  it in major units in the form and convert once at the boundary to `long` minor units; do not put a
+  `decimal` on the entity. Note `CreatePlan` already takes a `decimal monthlyPrice` — that is
+  pre-existing display pricing, unrelated to these rates. Leave it alone and do not follow its
+  pattern.
+
+- [ ] **Step 3: Refuse a negative rate**, and say so in the form rather than storing it. A negative
+  rate is a machine that pays customers to run workloads.
+
+- [ ] **Step 4: A rate of zero must remain expressible and must mean free**, not "unset" — an
+  operator may legitimately want a free tier. Confirm Task 3's zero-line dropping still reads as
+  "this line costs nothing" and not as "this rate is missing", and say in your report which it is.
+
+- [ ] **Step 5: Audit the change.** Price changes are the most disputable thing an admin does. Follow
+  the auditing pattern already used by the surrounding admin actions.
+
+- [ ] **Step 6: Decide what to do about the three overage rate columns, and do it.** Task 7 found
+  that `Plan.OverageCpuCoreHourMinor`, `OverageMemoryGbHourMinor` and `OverageDiskGbHourMinor` are
+  read by **nothing**. When a workspace exceeds a cap with `AllowsOverage` on, the excess is charged
+  at the ordinary per-resource meter, so a plan with all three blank still bills correctly.
+
+  That leaves three columns that look like prices and set none. Putting them on your admin form as
+  if they worked would be the worst outcome available — an operator would set a burst price, see it
+  saved, and be charged nothing extra for ever, with every tick reporting success.
+
+  You own the rate surface, so you decide. Either:
+  - **wire them**, so the excess above a cap is charged at the overage rate rather than the ordinary
+    one — a real feature, and more than a form field, because the tick has to know which portion of a
+    resource's hour is over the cap; or
+  - **remove them.** They have never shipped: this branch is unmerged and no database has them. The
+    agreed model is that a customer pays the ordinary meter for what they run, which does not need a
+    second rate. Removing them is the smaller, more honest change.
+
+  My leaning is removal, on YAGNI — but you have read the surrounding code more recently than I have.
+  Argue whichever you pick. What is not acceptable is leaving them present and unread, or surfacing
+  them in the UI without wiring them.
 
 ### Task 9: Warn before the lights go out
 

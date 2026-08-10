@@ -131,7 +131,17 @@ public sealed class PassthroughRedactor : ISecretRedactor
 /// <summary>Records the notifications raised so failure paths can be asserted.</summary>
 public sealed class RecordingNotificationService : INotificationService
 {
-    public sealed record Sent(AlertEvent Event, AlertSeverity Severity, string Title, string Body);
+    /// <summary>
+    /// <paramref name="Workspace"/> is <see cref="Guid.Empty"/> for a notification raised against one
+    /// rule by id, which carries its own workspace and is never told one.
+    ///
+    /// <para>
+    /// It is recorded at all because "a notification was sent" and "the right customer was told" are
+    /// different facts, and a caller that looks up the wrong workspace raises exactly the right
+    /// number of notifications to the wrong people.
+    /// </para>
+    /// </summary>
+    public sealed record Sent(Guid Workspace, AlertEvent Event, AlertSeverity Severity, string Title, string Body);
 
     public List<Sent> Notifications { get; } = [];
 
@@ -140,12 +150,21 @@ public sealed class RecordingNotificationService : INotificationService
     /// workspace's alert rules and posts to Discord/Telegram/a webhook with the token it was given,
     /// so a dead one delivers nothing. A fake that recorded the alert anyway would report a
     /// notification nobody received.
+    ///
+    /// <para>
+    /// Answers 1, because this fake <i>is</i> the rule that received the message — it is standing in
+    /// for a workspace that has a working channel, which is what every test using it means by
+    /// handing it over. Answering 0 would be the honest count for a service with no rules behind it
+    /// and would make every one of those tests also assert the "nobody could receive it" report,
+    /// which is a different fact with its own tests and its own fixture: the real service, over a
+    /// workspace that genuinely has no rule.
+    /// </para>
     /// </summary>
-    public Task NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
+    public Task<int> NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        Notifications.Add(new Sent(evt, severity, title, body));
-        return Task.CompletedTask;
+        Notifications.Add(new Sent(workspaceId, evt, severity, title, body));
+        return Task.FromResult(1);
     }
 
     /// <summary>
@@ -162,7 +181,7 @@ public sealed class RecordingNotificationService : INotificationService
     public Task<NotificationResult> NotifyRuleAsync(Guid alertId, AlertSeverity severity, string title, string body, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        Notifications.Add(new Sent(AlertEvent.ThresholdBreached, severity, title, body));
+        Notifications.Add(new Sent(Guid.Empty, AlertEvent.ThresholdBreached, severity, title, body));
         return Task.FromResult(NotificationResult.Ok);
     }
 

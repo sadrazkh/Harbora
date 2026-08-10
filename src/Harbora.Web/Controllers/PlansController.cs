@@ -16,10 +16,64 @@ namespace Harbora.Web.Controllers;
 /// </summary>
 [Authorize]
 [Route("plans")]
-public sealed class PlansController(HarboraDbContext db, IQuotaService quota, ICurrentUser currentUser) : Controller
+public sealed class PlansController(
+    HarboraDbContext db, IQuotaService quota, ICurrentUser currentUser, IAuditLogger audit) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private bool IsProvider => User.IsInRole("Owner") || User.IsInRole("Admin");
+    private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
+    private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    /// <summary>
+    /// Reads one price box, and returns the refusal to show the operator — or null when the box was
+    /// accepted, which includes it having been left empty.
+    ///
+    /// <para>
+    /// <b>Empty is an answer: nobody has priced this.</b> It is stored as null, and null is not
+    /// zero. Zero says a resource is deliberately free and is a tier somebody may genuinely want to
+    /// sell; null says no human has answered yet, and the hourly tick has to be able to tell them
+    /// apart. A box that wrote zero when it was left blank would give every unpriced resource away
+    /// for ever while each tick reported success.
+    /// </para>
+    ///
+    /// <para>
+    /// The refusals name the box. There are four price boxes on this screen and "that is not a
+    /// number" without saying which one sends an operator to check all of them — and they are in
+    /// both languages, because a price box a Persian-reading operator has to guess at is how an
+    /// hourly rate gets typed into a per-gibibyte one.
+    /// </para>
+    /// </summary>
+    private string? ReadRate(string? typed, string labelEn, string labelFa, out long? minor)
+    {
+        if (!Harbora.Web.Infrastructure.MinorUnits.TryParseRate(typed, out minor))
+            return IsFa
+                ? $"«{labelFa}» باید عدد باشد، مثلاً ۱۲٫۵۰ را به شکل 12.50 بنویسید. برای «قیمت‌گذاری‌نشده» خالی بگذارید."
+                : $"'{labelEn}' must be a figure, for example 12.50. Leave it empty for 'not priced'.";
+
+        if (minor < 0)
+            return IsFa
+                ? $"«{labelFa}» نمی‌تواند منفی باشد — این یعنی بابت اجرای بار کاری به مشتری پول بدهیم."
+                : $"'{labelEn}' cannot be negative — that is a machine that pays customers to run workloads.";
+
+        return null;
+    }
+
+    /// <summary>What an operator sees written on a price box, in whichever language they read.</summary>
+    private const string BaseRateEn = "Hourly minimum";
+    private const string BaseRateFa = "حداقل هزینهٔ هر ساعت";
+    private const string DiskRateEn = "Disk — per GB, per hour";
+    private const string DiskRateFa = "دیسک — هر گیگابایت، هر ساعت";
+    private const string RunningRateEn = "Running — per hour";
+    private const string RunningRateFa = "در حال اجرا — هر ساعت";
+    private const string StoppedRateEn = "Stopped — per hour";
+    private const string StoppedRateFa = "متوقف — هر ساعت";
+
+    /// <summary>A refusal shown on the page the form was posted from, with nothing written.</summary>
+    private IActionResult Refuse(string error)
+    {
+        TempData["Error"] = error;
+        return RedirectToAction(nameof(Index));
+    }
 
     // Same reasoning as Servers: this is the platform's plan administration, not a price list.
     [HttpGet("")]
@@ -57,15 +111,35 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
         return View(vm);
     }
 
+    /// <summary>
+    /// Offers a new plan.
+    ///
+    /// <para>
+    /// <paramref name="monthlyPrice"/> is the pre-existing display figure on the plan card and has
+    /// nothing to do with the two rates beside it: it is a <c>decimal</c> nobody charges, while a
+    /// rate is a <c>long</c> count of minor units the hourly tick spends. They are deliberately not
+    /// read the same way, and following the older one's pattern is how money becomes a floating
+    /// figure that bends over a month of addition.
+    /// </para>
+    /// </summary>
     [HttpPost("create")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.PlansManage)]
     public async Task<IActionResult> CreatePlan(
         string name, int maxApps, int maxServices, long maxMemoryMb, double maxCpu,
-        long maxDiskGb, string? allowedSizeKeys, decimal monthlyPrice, CancellationToken ct)
+        long maxDiskGb, string? allowedSizeKeys, decimal monthlyPrice,
+        string? baseRatePerHour, string? diskGbHour, bool allowsOverage, CancellationToken ct)
     {
         if (!IsProvider) return Forbid();
-        db.Plans.Add(new Plan
+
+        // Every box read before anything is written. A plan saved with its caps and without the
+        // price that was refused is a plan the form said it had not created.
+        if (ReadRate(baseRatePerHour, BaseRateEn, BaseRateFa, out var baseRateMinor) is { } refusal)
+            return Refuse(refusal);
+        if (ReadRate(diskGbHour, DiskRateEn, DiskRateFa, out var diskRateMinor) is { } diskRefusal)
+            return Refuse(diskRefusal);
+
+        var plan = new Plan
         {
             Name = name,
             NameFa = name,
@@ -77,9 +151,15 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
             // screen showed a column for it.
             MaxDiskBytes = maxDiskGb * 1024 * 1024 * 1024,
             AllowedSizeKeys = allowedSizeKeys ?? "",
-            MonthlyPrice = monthlyPrice
-        });
+            MonthlyPrice = monthlyPrice,
+            BaseRatePerHourMinor = baseRateMinor,
+            DiskGbHourMinor = diskRateMinor,
+            AllowsOverage = allowsOverage
+        };
+        db.Plans.Add(plan);
         await db.SaveChangesAsync(ct);
+
+        await LogPlanRatesAsync(plan, ct);
         return RedirectToAction(nameof(Index));
     }
 
@@ -92,12 +172,21 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
     [Authorize(Policy = Capabilities.PlansManage)]
     public async Task<IActionResult> UpdatePlan(
         Guid id, string name, int maxApps, int maxServices, long maxMemoryMb, double maxCpu,
-        long maxDiskGb, string? allowedSizeKeys, decimal monthlyPrice, CancellationToken ct)
+        long maxDiskGb, string? allowedSizeKeys, decimal monthlyPrice,
+        string? baseRatePerHour, string? diskGbHour, bool allowsOverage, CancellationToken ct)
     {
         if (!IsProvider) return Forbid();
 
         var plan = await db.Plans.FirstOrDefaultAsync(p => p.Id == id, ct);
         if (plan is null) return NotFound();
+
+        // Before the first assignment, not after. The entity is tracked, so a refusal that had
+        // already written half the form would leave a correct-looking plan one stray SaveChanges
+        // away from being stored.
+        if (ReadRate(baseRatePerHour, BaseRateEn, BaseRateFa, out var baseRateMinor) is { } refusal)
+            return Refuse(refusal);
+        if (ReadRate(diskGbHour, DiskRateEn, DiskRateFa, out var diskRateMinor) is { } diskRefusal)
+            return Refuse(diskRefusal);
 
         plan.Name = name;
         plan.MaxApps = maxApps;
@@ -107,7 +196,12 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
         plan.MaxDiskBytes = maxDiskGb * 1024 * 1024 * 1024;
         plan.AllowedSizeKeys = allowedSizeKeys ?? "";
         plan.MonthlyPrice = monthlyPrice;
+        plan.BaseRatePerHourMinor = baseRateMinor;
+        plan.DiskGbHourMinor = diskRateMinor;
+        plan.AllowsOverage = allowsOverage;
         await db.SaveChangesAsync(ct);
+
+        await LogPlanRatesAsync(plan, ct);
 
         // Nothing is taken away from tenants who are already over the new limit — a plan change must
         // not delete somebody's apps. They keep what they have and cannot add more, and the list
@@ -115,6 +209,35 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
         TempData["Message"] = "Plan updated. Tenants already over the new limits keep what they have.";
         return RedirectToAction(nameof(Index));
     }
+
+    /// <summary>
+    /// What this plan now costs, and who said so.
+    ///
+    /// <para>
+    /// A price change is the most disputable thing an administrator does on this screen, and a line
+    /// recording only that somebody changed something settles no dispute — so the figures go in,
+    /// in the minor units they are stored in. An unset rate is written as <c>null</c> rather than
+    /// as <c>0</c>, because the record of the change has to keep the same distinction the column
+    /// does: "priced at nothing" and "not priced" are different decisions to have to defend.
+    /// </para>
+    /// </summary>
+    private Task LogPlanRatesAsync(Plan plan, CancellationToken ct) =>
+        audit.LogAsync("billing.plan_rates", "plan", plan.Id.ToString(), ClientIp,
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+            {
+                baseRatePerHourMinor = plan.BaseRatePerHourMinor,
+                diskGbHourMinor = plan.DiskGbHourMinor,
+                allowsOverage = plan.AllowsOverage
+            }), ct: ct);
+
+    /// <summary>The same, for a resource tier. Keyed by the tier's key, which is what apps store.</summary>
+    private Task LogSizeRatesAsync(InstanceSize size, CancellationToken ct) =>
+        audit.LogAsync("billing.size_rates", "instance_size", size.Key, ClientIp,
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+            {
+                runningRatePerHourMinor = size.RunningRatePerHourMinor,
+                stoppedRatePerHourMinor = size.StoppedRatePerHourMinor
+            }), ct: ct);
 
     /// <summary>
     /// Corrects a storage tier.
@@ -158,7 +281,7 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
     [Authorize(Policy = Capabilities.PlansManage)]
     public async Task<IActionResult> CreateSize(
         string key, string name, double cpuCores, long memoryMb, long diskGb, int sortOrder,
-        CancellationToken ct)
+        string? runningRate, string? stoppedRate, CancellationToken ct)
     {
         var slug = Harbora.Infrastructure.Tenancy.InstanceSizeKey.Normalise(key);
         if (slug is null)
@@ -175,7 +298,12 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
             return RedirectToAction(nameof(Index));
         }
 
-        db.InstanceSizes.Add(new InstanceSize
+        if (ReadRate(runningRate, RunningRateEn, RunningRateFa, out var runningMinor) is { } refusal)
+            return Refuse(refusal);
+        if (ReadRate(stoppedRate, StoppedRateEn, StoppedRateFa, out var stoppedMinor) is { } stoppedRefusal)
+            return Refuse(stoppedRefusal);
+
+        var size = new InstanceSize
         {
             Key = slug,
             Name = string.IsNullOrWhiteSpace(name) ? slug : name.Trim(),
@@ -183,9 +311,17 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
             CpuCores = cpuCores,
             MemoryBytes = memoryMb * 1024 * 1024,
             DiskBytes = diskGb * 1024 * 1024 * 1024,
-            SortOrder = sortOrder
-        });
+            SortOrder = sortOrder,
+            // Each state priced from its own box, and either may be left empty. A tier added
+            // without a price is not a free tier — it is a tier the tick has to report as unpriced,
+            // which is the only way an operator finds out before a month of it has gone by.
+            RunningRatePerHourMinor = runningMinor,
+            StoppedRatePerHourMinor = stoppedMinor
+        };
+        db.InstanceSizes.Add(size);
         await db.SaveChangesAsync(ct);
+
+        await LogSizeRatesAsync(size, ct);
 
         TempData["Message"] = $"Size '{slug}' added.";
         return RedirectToAction(nameof(Index));
@@ -203,17 +339,26 @@ public sealed class PlansController(HarboraDbContext db, IQuotaService quota, IC
     [Authorize(Policy = Capabilities.PlansManage)]
     public async Task<IActionResult> UpdateSize(
         Guid id, string name, double cpuCores, long memoryMb, long diskGb, int sortOrder,
-        CancellationToken ct)
+        string? runningRate, string? stoppedRate, CancellationToken ct)
     {
         var size = await db.InstanceSizes.FirstOrDefaultAsync(s => s.Id == id, ct);
         if (size is null) return NotFound();
+
+        if (ReadRate(runningRate, RunningRateEn, RunningRateFa, out var runningMinor) is { } refusal)
+            return Refuse(refusal);
+        if (ReadRate(stoppedRate, StoppedRateEn, StoppedRateFa, out var stoppedMinor) is { } stoppedRefusal)
+            return Refuse(stoppedRefusal);
 
         size.Name = string.IsNullOrWhiteSpace(name) ? size.Name : name.Trim();
         size.CpuCores = cpuCores;
         size.MemoryBytes = memoryMb * 1024 * 1024;
         size.DiskBytes = diskGb * 1024 * 1024 * 1024;
         size.SortOrder = sortOrder;
+        size.RunningRatePerHourMinor = runningMinor;
+        size.StoppedRatePerHourMinor = stoppedMinor;
         await db.SaveChangesAsync(ct);
+
+        await LogSizeRatesAsync(size, ct);
 
         // Says what it does not do. Instances already on this tier keep the figures they were given
         // — they carry their own copy — so a change here is about what happens next, not a resize

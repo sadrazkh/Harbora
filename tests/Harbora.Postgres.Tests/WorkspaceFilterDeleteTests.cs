@@ -1,5 +1,7 @@
 using FluentAssertions;
 using Harbora.Application.Abstractions;
+using Harbora.Domain.Apps;
+using Harbora.Domain.Common;
 using Harbora.Domain.Monitoring;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -106,6 +108,50 @@ public sealed class WorkspaceFilterDeleteTests(PostgresLane lane)
         var deleted = await scoped.Alerts.ExecuteDeleteAsync();
 
         deleted.Should().Be(visible);
+    }
+
+    [PostgresFact]
+    public async Task A_scoped_update_of_another_tenants_app_changes_nothing_and_says_nothing()
+    {
+        // The half of AppOperationsService that has no voice. Its SetStatusAsync is the single place
+        // an app's status is written, and it writes with ExecuteUpdate — which folds the tenant
+        // filter into the UPDATE's WHERE. Called about another workspace's app it matches no rows,
+        // raises nothing, and returns as though it had worked: the panel reports the app stopped, the
+        // container keeps running, and the hourly tick keeps billing it at the running rate.
+        //
+        // That is why the fix is IgnoreQueryFilters on ResolveAsync AND on SetStatusAsync together.
+        // The read half throws loudly and is pinned by a fast-lane test; this half is silent and only
+        // exists as SQL, so it is pinned here. Both directions are below.
+        var connectionString = await lane.FreshlyMigratedAsync("scoped_update");
+
+        var theirApp = new App { WorkspaceId = TenantTwo, Name = "api", Slug = "api", Status = AppStatus.Running };
+        await using (var system = PostgresLane.Open(connectionString))
+        {
+            system.Apps.Add(theirApp);
+            await system.SaveChangesAsync();
+        }
+
+        await using (var scoped = PostgresLane.Open(connectionString, new FixedWorkspaceScope(TenantOne)))
+        {
+            var filtered = await scoped.Apps.Where(a => a.Id == theirApp.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(a => a.Status, AppStatus.Stopped));
+
+            filtered.Should().Be(0,
+                "the filter composed into the UPDATE, so the statement reported success having " +
+                "changed nothing — which is the shape nobody sees");
+        }
+
+        await using (var scoped = PostgresLane.Open(connectionString, new FixedWorkspaceScope(TenantOne)))
+        {
+            var unfiltered = await scoped.Apps.IgnoreQueryFilters().Where(a => a.Id == theirApp.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(a => a.Status, AppStatus.Stopped));
+
+            unfiltered.Should().Be(1, "saying it ignores the filter has to actually reach the row");
+        }
+
+        await using (var system = PostgresLane.Open(connectionString))
+            (await system.Apps.AsNoTracking().SingleAsync(a => a.Id == theirApp.Id))
+                .Status.Should().Be(AppStatus.Stopped);
     }
 
     /// <summary>Two rows for one tenant and one for another, written without a scope in the way.</summary>

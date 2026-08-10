@@ -223,6 +223,27 @@ public static class DependencyInjection
         services.Configure<Maintenance.RetentionOptions>(
             config.GetSection(Maintenance.RetentionOptions.SectionName));
         services.AddHostedService<Maintenance.DataRetentionSweeper>();
+
+        // The hourly charge. Registered, but nothing schedules it yet and it refuses to move any
+        // money while Billing:Enabled is false — which is the shipped default, because an install
+        // that upgraded into billing unasked would start charging tenants who were never told there
+        // was a price.
+        services.Configure<Billing.BillingOptions>(config.GetSection(Billing.BillingOptions.SectionName));
+        services.AddScoped<Billing.BillingTick>();
+        // Stopping what a workspace is running once its balance is gone, and bringing back exactly
+        // what that stop took away. Registered beside the tick and, like it, scheduled by nothing
+        // yet; it refuses to suspend anybody at all while Billing:Enabled is false.
+        services.AddScoped<Billing.BillingSuspension>();
+        // Money in, and the bill that says where the money went. Unlike the three above it is NOT
+        // switched off by Billing:Enabled: taking a payment and showing somebody what they were
+        // charged neither costs a customer money nor stops their workloads, and an install that
+        // switched billing off after a suspension must still be able to lift it.
+        services.AddScoped<Billing.WalletService>();
+        // The gate every start path asks before a container runs. Registered here rather than beside
+        // the deployment engine because the rule it holds is a billing rule, and a second copy of it
+        // living next to the thing it refuses is how a rule quietly stops being one. Like the tick
+        // and the suspension it refuses nothing at all while Billing:Enabled is false.
+        services.AddScoped<Application.Abstractions.IBillingGate, Billing.BillingGate>();
         services.AddScoped<Services.AdminerService>();
         services.AddHostedService<Services.AdminerSweeper>();
 

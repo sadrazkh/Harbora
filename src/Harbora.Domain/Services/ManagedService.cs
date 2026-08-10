@@ -76,4 +76,20 @@ public class ManagedService : BaseEntity
     /// changed major version is the one failure here nobody recovers from quickly.
     /// </summary>
     public string? RunningImage { get; set; }
+
+    /// <summary>
+    /// Whether this database was running at the moment its workspace was suspended for an empty
+    /// balance, so a top-up starts back what the suspension stopped and nothing else. The counterpart
+    /// of <c>App.WasRunningAtSuspension</c>, and it exists for the sharper version of the same
+    /// reason: a database the customer stopped themselves must not come back and start spending the
+    /// money they just put in, and a database the suspension stopped must, because everything else
+    /// they are paying to restart needs it.
+    ///
+    /// <para>
+    /// This is the <b>only</b> record that a stopped database was ever running — nothing else
+    /// distinguishes it from one the customer stopped — which is why the suspension writes it before
+    /// touching a container, and why a resumption that could not start a database keeps it set.
+    /// </para>
+    /// </summary>
+    public bool WasRunningAtSuspension { get; set; }
 }

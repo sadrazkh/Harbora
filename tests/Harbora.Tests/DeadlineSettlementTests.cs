@@ -459,6 +459,8 @@ internal sealed class ProvisionHarness : IDisposable
         new SingleEngineFactory(Docker),
         new PassthroughProtector(),
         new NoopJobQueue(),
+        new Harbora.Infrastructure.Billing.BillingGate(
+            _db, Options.Create(new Harbora.Infrastructure.Billing.BillingOptions())),
         Options.Create(new HarboraRuntimeOptions()),
         Clock,
         NullLogger<Harbora.Infrastructure.Services.ManagedServiceEngine>.Instance);
@@ -506,6 +508,8 @@ internal sealed class CronHarness : IDisposable
         _db,
         new SingleEngineFactory(Docker),
         new PassthroughProtector(),
+        new Harbora.Infrastructure.Billing.BillingGate(
+            _db, Options.Create(new Harbora.Infrastructure.Billing.BillingOptions())),
         Options.Create(new HarboraRuntimeOptions()),
         Clock,
         NullLogger<CronJobRunner>.Instance);

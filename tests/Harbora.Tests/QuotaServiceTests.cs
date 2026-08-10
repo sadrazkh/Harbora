@@ -5,8 +5,10 @@ using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
 using Harbora.Domain.Services;
 using Harbora.Domain.Tenancy;
+using Harbora.Infrastructure.Billing;
 using Harbora.Infrastructure.Tenancy;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -34,7 +36,10 @@ public class QuotaServiceTests : IDisposable
 
     public void Dispose() => _db.Dispose();
 
-    private QuotaService Service() => new(_db);
+    // Billing switched on, so the plan's own AllowsOverage flag is the only thing that can turn a
+    // cap below into a price line — and every plan here leaves it false, so all of them are walls.
+    private QuotaService Service() =>
+        new(_db, Options.Create(new BillingOptions { Enabled = true }));
 
     private void GivenPlan(long maxDiskGb, int maxApps = 0, int maxServices = 0)
     {

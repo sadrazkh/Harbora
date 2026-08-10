@@ -1,4 +1,4 @@
-﻿using Harbora.Application.Abstractions;
+using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
@@ -24,6 +24,7 @@ public sealed class DeploymentPipeline(
     ISecretProtector protector,
     ISecretRedactor redactor,
     INotificationService notifications,
+    IBillingGate billing,
     IHttpClientFactory httpFactory,
     ISystemClock clock,
     IOptions<HarboraRuntimeOptions> options,
@@ -188,6 +189,38 @@ public sealed class DeploymentPipeline(
         deployment.ConfigJson = DeploymentConfig
             .From(app, v => v.IsSecret ? SafeUnprotect(v.Value) : v.Value, protector.DeriveKey("config-fingerprint"))
             .ToJson();
+
+        // Money before machinery, and asked HERE rather than where the deployment was queued.
+        // Eleven call sites queue one — five buttons on the app page, two API routes, the redeploy
+        // page, a webhook, a preview, a template stack — and the queue is durable, so any of them
+        // can be claimed an hour after the balance that paid for it ran out. A check on the buttons
+        // would be eleven checks, one of which somebody will forget; this is one.
+        //
+        // Refused outside the try on purpose. The catch below writes
+        // `app.Status = ActiveDeploymentId is null ? Failed : Running`, which is right for a deploy
+        // that broke halfway and wrong for one that never started: an app the suspension had
+        // stopped would be recorded as Running, and the next hour would be billed for a container
+        // that is not there.
+        var mayStart = await billing.CanStartAsync(app.WorkspaceId, ct);
+        if (!mayStart.Allowed)
+        {
+            // English only, on purpose — this is a decision, not the gap QuotaCheck.ReasonFa was
+            // added to close. deployment.ErrorMessage and the line below land in the deploy log
+            // alongside git checkout output, Docker build errors and health-check diagnosis, none of
+            // which is ever translated; the log is exactly the "deliberate LTR island" the panel's
+            // RTL rules already carve out for code, IDs and terminals (see
+            // docs/product-audit/19-do-not-change-list.md, item 21). Splicing Persian into one line
+            // of that stream would not make the log readable to a Persian speaker — everything around
+            // it would still be English — it would just make this one line look like a rendering bug.
+            // And unlike Start/Restart, nobody reading it is necessarily the person the refusal
+            // happened to: the queue is durable, so this may be read an hour later by whoever is
+            // debugging the deploy, in whatever language that happens to be.
+            deployment.ErrorMessage = mayStart.Reason;
+            await SetStatus(DeploymentStatus.Failed);
+            await Record(LogStream.System, $"❌ Deployment refused: {mayStart.Reason}");
+            await FlushLog();
+            return;
+        }
 
         try
         {

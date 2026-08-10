@@ -1,0 +1,106 @@
+@model TenantCreditViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+}
+<div class="max-w-2xl">
+    <a href="/tenants/@Model.WorkspaceId" class="text-accent-text text-sm">← @Model.Name</a>
+    <h1 class="text-2xl font-bold tracking-tight text-ink mt-1 mb-4">
+        @(isFa ? "شارژ حساب مشتری" : "Credit this account")
+    </h1>
+
+    @if (err is not null)
+    {
+        <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>
+    }
+
+    @* What the account holds now. A top-up decided without the current balance in front of you is a
+       guess, and the number a customer quotes over the phone is rarely the one in the ledger. *@
+    <div class="rounded-xl border border-line bg-surface p-4 mb-4">
+        <div class="text-ink-muted text-sm">@(isFa ? "موجودی فعلی" : "Balance now")</div>
+        @if (Model.HasWallet)
+        {
+            <div class="mt-1 text-xl font-bold @(Model.BalanceMinor > 0 ? "text-ink" : "text-danger")" dir="ltr">
+                @MinorUnits.Format(Model.BalanceMinor, Model.Currency)
+            </div>
+        }
+        else
+        {
+            @* Not zero. Nobody has billed them yet, and printing 0 would claim a balance that has
+               never been set — the same rule the rest of this panel applies to an unmeasured disk. *@
+            <div class="mt-1 text-xl font-bold text-ink-faint" dir="ltr">—</div>
+            <div class="mt-0.5 text-[11px] text-ink-faint">
+                @(isFa ? "هنوز هیچ صورت‌حسابی برای این مشتری صادر نشده است." : "This tenant has never been billed.")
+            </div>
+        }
+    </div>
+
+    @if (Model.Suspended)
+    {
+        <div class="rounded-xl border @(Model.SuspendedForNoBalance ? "border-warn bg-warn-soft text-warn" : "border-line bg-surface text-ink") p-4 mb-4 text-sm">
+            @if (Model.SuspendedForNoBalance)
+            {
+                @(isFa
+                    ? "این فضای کاری به‌دلیل تمام‌شدن اعتبار معلق است. اگر این شارژ موجودی را مثبت کند، تعلیق برداشته می‌شود و همان اپلیکیشن‌هایی که همان تعلیق متوقفشان کرده بود دوباره اجرا می‌شوند."
+                    : "This workspace is suspended because its balance ran out. If this credit takes the balance above zero, the suspension is lifted and exactly the apps that suspension stopped are started again.")
+            }
+            else
+            {
+                @(isFa
+                    ? "این فضای کاری به دلیلی غیر از اعتبار معلق است. شارژ حساب این تعلیق را برنمی‌دارد."
+                    : "This workspace is suspended for a reason other than money. Crediting the account does not lift that.")
+            }
+        </div>
+    }
+
+    <form asp-controller="Tenants" asp-action="Credit" asp-route-id="@Model.WorkspaceId" method="post" class="space-y-4">
+        @Html.AntiForgeryToken()
+
+        @* The id of this decision, minted when this page was rendered. Submitting this form twice —
+           a double-click, a back button, a retried POST — carries the same one and credits once.
+           Reloading the page is how an administrator deliberately makes a second credit. *@
+        <input type="hidden" name="creditId" value="@Model.CreditId" />
+
+        <div>
+            <label for="credit-amount" class="block text-sm text-ink-muted mb-1">
+                @(isFa ? "مبلغ" : "Amount") <span class="text-ink-faint">(@Model.Currency)</span>
+            </label>
+            <input id="credit-amount" name="amount" value="@Model.Amount" inputmode="decimal" autocomplete="off"
+                   dir="ltr" placeholder="250000"
+                   class="w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm" />
+            <p class="mt-1 text-xs text-ink-faint">
+                @(isFa ? "با رقم انگلیسی بنویسید؛ جداکنندهٔ اعشار نقطه است." : "In figures, with a dot for any decimal.")
+            </p>
+        </div>
+
+        <div>
+            <label for="credit-note" class="block text-sm text-ink-muted mb-1">
+                @(isFa ? "بابت چه چیزی؟" : "What is it for?")
+            </label>
+            <input id="credit-note" name="note" value="@Model.Note" autocomplete="off"
+                   placeholder="@(isFa ? "مثلاً: واریز کارت‌به‌کارت ۱۴۰۵/۰۵/۱۸" : "e.g. card payment 2026-08-09")"
+                   class="w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm" />
+            <p class="mt-1 text-xs text-ink-faint">
+                @(isFa
+                    ? "روی صورت‌حساب مشتری دیده می‌شود و تنها چیزی است که می‌گوید چرا موجودی تغییر کرده."
+                    : "The customer sees this on their bill. It is the only thing that says why the balance moved.")
+            </p>
+        </div>
+
+        <p class="text-xs text-ink-faint">
+            @(isFa
+                ? "این حرکت مالی برگشت‌ناپذیر است: هیچ سطری از دفتر حساب پاک یا ویرایش نمی‌شود، و اصلاح یک اشتباه یعنی ثبت سطر مقابل آن — هر دو تا همیشه روی صورت‌حساب می‌مانند."
+                : "This cannot be undone: no line in the ledger is ever edited or deleted, so correcting a mistake means writing an opposing line and both stay on the bill for ever.")
+        </p>
+
+        <div class="flex gap-2">
+            <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                @(isFa ? "شارژ کن" : "Credit the account")
+            </button>
+            <a href="/tenants/@Model.WorkspaceId"
+               class="rounded-lg border border-line px-4 py-2 text-sm text-ink-muted hover:text-ink">
+                @(isFa ? "انصراف" : "Cancel")
+            </a>
+        </div>
+    </form>
+</div>

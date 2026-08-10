@@ -28,6 +28,28 @@ public class InstanceSize : BaseEntity
     /// </summary>
     public long DiskBytes { get; set; }
 
+    /// <summary>
+    /// What one hour of this size costs while it is running, in minor units.
+    ///
+    /// <para>
+    /// <b>Null means nobody has priced this size; zero means it is deliberately free.</b> Note that
+    /// this deliberately breaks the "zero means no ceiling" convention the limit columns above
+    /// follow — a limit left blank is a decision not to limit, but a price left blank is not a
+    /// decision to give it away. Collapsing the two is how an operator adds a size, forgets to
+    /// price it, and hosts every workload on it for nothing for ever while each hourly tick reports
+    /// success. Every size that predates billing is null, which is the truth about it.
+    /// </para>
+    /// </summary>
+    public long? RunningRatePerHourMinor { get; set; }
+
+    /// <summary>
+    /// What one hour costs while the workload is stopped but not deleted — the reserved slot, the
+    /// image and the port. Disk is charged separately per gibibyte, so this is only the slot.
+    /// Null and zero mean what they mean on <see cref="RunningRatePerHourMinor"/>, and each state
+    /// is resolved from its own column so pricing one does not vouch for the other.
+    /// </summary>
+    public long? StoppedRatePerHourMinor { get; set; }
+
     public bool IsBuiltIn { get; set; }
     public bool IsEnabled { get; set; } = true;
     public int SortOrder { get; set; }

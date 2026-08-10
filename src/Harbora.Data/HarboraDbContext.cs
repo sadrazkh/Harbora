@@ -119,6 +119,9 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Storage.StoragePlan> StoragePlans => Set<Harbora.Domain.Storage.StoragePlan>();
     public DbSet<Harbora.Domain.Tenancy.UsageRecord> UsageRecords => Set<Harbora.Domain.Tenancy.UsageRecord>();
 
+    public DbSet<Harbora.Domain.Billing.Wallet> Wallets => Set<Harbora.Domain.Billing.Wallet>();
+    public DbSet<Harbora.Domain.Billing.BillingLedgerEntry> BillingLedger => Set<Harbora.Domain.Billing.BillingLedgerEntry>();
+
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
@@ -384,6 +387,43 @@ public class HarboraDbContext : DbContext
         b.Entity<Harbora.Domain.Tenancy.Plan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
         b.Entity<Harbora.Domain.Tenancy.UsageRecord>(e => e.HasIndex(x => new { x.WorkspaceId, x.Period }).IsUnique());
         b.Entity<AuditLog>(e => e.HasIndex(x => x.CreatedAt));
+
+        b.Entity<Harbora.Domain.Billing.Wallet>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            e.HasIndex(x => x.WorkspaceId).IsUnique();
+            e.Property(x => x.Currency).HasMaxLength(3);
+            e.Property(x => x.ConcurrencyStamp).IsConcurrencyToken();
+        });
+
+        b.Entity<Harbora.Domain.Billing.BillingLedgerEntry>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            e.Property(x => x.ResourceName).HasMaxLength(200);
+            e.Property(x => x.Description).HasMaxLength(400);
+
+            // Reading a bill: one workspace, newest first.
+            e.HasIndex(x => new { x.WorkspaceId, x.BillingHour });
+
+            // Reading one resource's history: "what did this app cost me".
+            e.HasIndex(x => new { x.WorkspaceId, x.ResourceType, x.ResourceId });
+
+            // The idempotency key. Covers BOTH kinds the tick writes: scoping it to Charge alone
+            // would leave PlanMinimumTopUp free to be written twice by a retried tick, which is the
+            // same double-charge this index exists to prevent, arriving through the one line with no
+            // resource behind it. Credit and Adjustment are made by a person and may legitimately
+            // repeat within an hour, so they are outside the filter.
+            //
+            // PlanMinimumTopUp rows carry a null ResourceId by design (BilledResourceType.PlanBase's
+            // doc comment) — there is no resource behind that line. Postgres's default treats two
+            // NULLs as distinct, which would let a retried tick write the plan-minimum line twice
+            // right through this index. AreNullsDistinct(false) closes that: NULLS NOT DISTINCT
+            // (PG15+) makes the two NULL ResourceIds collide like any other equal value.
+            e.HasIndex(x => new { x.WorkspaceId, x.ResourceType, x.ResourceId, x.BillingHour })
+                .IsUnique()
+                .AreNullsDistinct(false)
+                .HasFilter("\"Kind\" IN (0, 2)");
+        });
 
         b.Entity<PasswordResetToken>(e =>
         {

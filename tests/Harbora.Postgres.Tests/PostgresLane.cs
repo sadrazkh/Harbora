@@ -18,9 +18,9 @@ namespace Harbora.Postgres.Tests;
 /// trade for the three thousand facts that care about rules rather than about SQL. What it cannot
 /// check is the part that only exists in Postgres: a partial unique index, a concurrency token
 /// under a real race, <c>COALESCE</c> in a claim predicate, a global query filter turned into a
-/// <c>DELETE</c> — and, above all, the hand-written <c>UPDATE</c>s inside four migrations that no
-/// test has ever executed. <c>MigrationConsistencyTests</c> compares the model to the snapshot; it
-/// never runs a statement.
+/// <c>DELETE</c> — and, above all, the hand-written <c>UPDATE</c>s inside two of the five migrations
+/// these branches add, which no test has ever executed. <c>MigrationConsistencyTests</c> compares
+/// the model to the snapshot; it never runs a statement.
 /// </para>
 ///
 /// <para>
@@ -242,4 +242,32 @@ public sealed class PostgresFactAttribute : FactAttribute
     private static string OneLine(string message) =>
         string.Join(' ', message.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.Trim()).Where(line => line.Length > 0));
+}
+
+/// <summary>
+/// <see cref="PostgresFactAttribute"/>'s bargain, for a test with cases.
+///
+/// <para>
+/// It exists because its absence was a trap. Every gate in this assembly hung off
+/// <c>[PostgresFact]</c>, so a plain <c>[Theory]</c> written here — the obvious thing to reach for
+/// when one claim has four shapes — inherited no gate at all: it would start a container that is not
+/// there and go red on every machine without a daemon, which is the exact failure the fact attribute
+/// exists to prevent, arriving through the one xUnit attribute nobody thought to cover.
+/// <c>BillingRateColumnTests</c> worked around it by looping inside a fact and left a comment saying
+/// there was no theory equivalent. There is now.
+/// </para>
+///
+/// <para>
+/// It shares <see cref="PostgresFactAttribute"/>'s probe rather than repeating it, so both report the
+/// same reason and probe once between them. Each case still costs a database of its own where the
+/// test writes — a loop inside one fact remains the right shape for several assertions over one
+/// shared read-only schema, and the wrong one for several rows that must not see each other.
+/// </para>
+/// </summary>
+public sealed class PostgresTheoryAttribute : TheoryAttribute
+{
+    public PostgresTheoryAttribute()
+    {
+        if (PostgresFactAttribute.SkipReason is { } reason) Skip = reason;
+    }
 }

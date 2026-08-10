@@ -70,6 +70,27 @@ public class App : BaseEntity
     public AppSourceType SourceType { get; set; }
     public AppStatus Status { get; set; } = AppStatus.Created;
 
+    /// <summary>
+    /// Whether this app was running at the moment its workspace was suspended, so resumption starts
+    /// what the outage stopped and nothing else. An app the customer had stopped themselves must not
+    /// come back and start spending the money they just put in.
+    ///
+    /// <para>
+    /// Written before anything is stopped, for the same reason the node agent persists its drain flag
+    /// before any stop: a panel that dies halfway through suspending ten apps must still know all ten
+    /// were running, or the outage quietly becomes the customer's new configuration.
+    /// </para>
+    ///
+    /// <para>
+    /// A suspension that is starting rebuilds the set from what is running; one that is retrying only
+    /// adds to it. Both halves are needed and they fail in opposite directions — always rebuilding
+    /// erases the record on the second pass, since by then the apps are stopped because the first
+    /// pass stopped them, while always adding lets a marker stranded by an unfinished resumption
+    /// start an app the customer stopped themselves.
+    /// </para>
+    /// </summary>
+    public bool WasRunningAtSuspension { get; set; }
+
     // --- Git source (SourceType = GitRepository) ---
     public Guid? GitRepositoryId { get; set; }
     public GitRepository? GitRepository { get; set; }
