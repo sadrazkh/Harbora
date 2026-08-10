@@ -47,22 +47,38 @@ public sealed class BillingPageViewModel
     /// <summary>Money paid in during the same window, newest first, never summed into the table above.</summary>
     public IReadOnlyList<BillingCreditRow> Credits { get; init; } = [];
 
-    /// <summary>Signed, so it adds up with <see cref="CreditTotalMinor"/> to the period's movement.</summary>
+    /// <summary>Append-only corrections in the same window, shown apart from charges and payments.</summary>
+    public IReadOnlyList<BillingAdjustmentRow> Adjustments { get; init; } = [];
+
+    /// <summary>Signed costs; add credits and adjustments to obtain the period's balance movement.</summary>
     public long CostTotalMinor => Costs.Sum(c => c.TotalMinor);
 
     public long CreditTotalMinor => Credits.Sum(c => c.AmountMinor);
+
+    public long AdjustmentTotalMinor => Adjustments.Sum(a => a.AmountMinor);
 }
 
 /// <param name="AmountMinor">Positive: a credit is money in.</param>
 /// <param name="Note">Why it moved, in the words of whoever moved it.</param>
 public sealed record BillingCreditRow(DateTimeOffset Hour, long AmountMinor, string Note);
 
+/// <param name="AmountMinor">Signed: positive returns credit; negative removes credit.</param>
+public sealed record BillingAdjustmentRow(DateTimeOffset Hour, long AmountMinor, string Note);
+
 public sealed class VoucherAdminPageViewModel
 {
     public string Currency { get; init; } = "IRR";
     public string? CreatedCode { get; init; }
+    public string Query { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public string ExpiryFrom { get; init; } = string.Empty;
+    public string ExpiryTo { get; init; } = string.Empty;
+    public Guid? WorkspaceId { get; init; }
+    public IReadOnlyList<VoucherWorkspaceOption> Workspaces { get; init; } = [];
     public IReadOnlyList<VoucherAdminRow> Vouchers { get; init; } = [];
 }
+
+public sealed record VoucherWorkspaceOption(Guid Id, string Name);
 
 public sealed record VoucherAdminRow(
     Guid Id,
@@ -75,6 +91,26 @@ public sealed record VoucherAdminRow(
     bool IsDisabled,
     DateTimeOffset? RedeemedAt,
     string? RedeemedWorkspace);
+
+public sealed class BillingRunsPageViewModel
+{
+    public bool BillingEnabled { get; init; }
+    public IReadOnlyList<BillingRunAdminRow> Runs { get; init; } = [];
+}
+
+public sealed record BillingRunAdminRow(
+    Guid Id,
+    DateTimeOffset BillingHour,
+    Harbora.Domain.Billing.BillingRunStatus Status,
+    int Attempts,
+    int WorkspacesCharged,
+    int LinesWritten,
+    int WorkspacesSuspended,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? CompletedAt,
+    string FailureSummary,
+    bool HasLiveJob,
+    bool CanRetry);
 
 /// <summary>
 /// The page an administrator confirms a credit on.

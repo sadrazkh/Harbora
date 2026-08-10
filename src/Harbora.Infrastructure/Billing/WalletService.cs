@@ -288,13 +288,9 @@ public sealed class WalletService(
     /// </para>
     ///
     /// <para>
-    /// <b>Everything except a credit is on it.</b> That is a blacklist rather than a whitelist and
-    /// deliberately so: the plan-minimum line and a correction are both money that left the wallet,
-    /// and a whitelist of "Charge" would drop them — showing a customer a total smaller than the one
-    /// they were billed, with nothing on screen to explain the difference. A kind appended to
-    /// <see cref="LedgerKind"/> later therefore appears on the bill by default instead of silently
-    /// vanishing from it, which is the safer way round for a document whose job is to account for a
-    /// balance.
+    /// Only machine-written charges and the plan minimum are resource costs. Credits and append-only
+    /// adjustments are money movements with their own dated tables on the bill; folding either into
+    /// a resource row would hide its note and make a correction look like a cheaper workload.
     /// </para>
     ///
     /// <para>
@@ -303,7 +299,8 @@ public sealed class WalletService(
     /// separate top-ups would become one figure — in which a top-up applied twice is invisible. The
     /// screen lists them instead, dated, with the note and the person, which is what a record of
     /// payments has to be. What that leaves behind is checkable and is meant to be checked: this
-    /// breakdown plus the credits in the same window is exactly the balance's movement across it.
+    /// breakdown plus credits and signed adjustments in the same window is exactly the balance's
+    /// movement across it.
     /// </para>
     /// </summary>
     public async Task<IReadOnlyList<ResourceCost>> BreakdownAsync(
@@ -313,7 +310,7 @@ public sealed class WalletService(
             .Where(l => l.WorkspaceId == workspaceId
                         && l.BillingHour >= from
                         && l.BillingHour < to
-                        && l.Kind != LedgerKind.Credit)
+                        && (l.Kind == LedgerKind.Charge || l.Kind == LedgerKind.PlanMinimumTopUp))
             .GroupBy(l => new { l.ResourceType, l.ResourceId, l.ResourceName })
             .Select(g => new
             {

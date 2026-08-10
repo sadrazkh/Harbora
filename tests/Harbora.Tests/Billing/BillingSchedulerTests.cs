@@ -124,6 +124,70 @@ public sealed class BillingSchedulerTests
         (await dbAfter.Jobs.SingleAsync(j => j.TargetId == runId)).Status.Should().Be(JobStatus.Pending);
     }
 
+    [Fact]
+    public async Task An_operator_can_retry_an_incomplete_run_immediately()
+    {
+        await using var services = Provider();
+        Guid runId;
+        await using (var scope = services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+            var run = new BillingRun
+            {
+                BillingHour = Now.AddMinutes(-30).AddHours(-1),
+                Status = BillingRunStatus.Incomplete,
+                FailureSummary = "temporary metering failure"
+            };
+            db.BillingRuns.Add(run);
+            db.Jobs.Add(new Job
+            {
+                Kind = JobKind.BillingHour,
+                TargetId = run.Id,
+                Status = JobStatus.Failed,
+                FinishedAt = Now.AddMinutes(-1)
+            });
+            await db.SaveChangesAsync();
+            runId = run.Id;
+        }
+
+        await using var retryScope = services.CreateAsyncScope();
+        var retryDb = retryScope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+        var result = await new BillingRunRetryService(
+            retryDb, retryScope.ServiceProvider.GetRequiredService<ISystemClock>())
+            .RetryAsync(runId, default);
+
+        result.Queued.Should().BeTrue();
+        (await retryDb.BillingRuns.SingleAsync(r => r.Id == runId)).Status.Should().Be(BillingRunStatus.Queued);
+        (await retryDb.Jobs.CountAsync(j => j.TargetId == runId)).Should().Be(2);
+        (await retryDb.Jobs.SingleAsync(j => j.TargetId == runId && j.Status == JobStatus.Pending))
+            .ExclusiveWith.Should().Be(BillingScheduler.ExclusiveKey);
+    }
+
+    [Fact]
+    public async Task Repeating_an_operator_retry_does_not_create_a_second_live_job()
+    {
+        await using var services = Provider();
+        Guid runId;
+        await using (var scope = services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+            var run = new BillingRun { BillingHour = Now.AddHours(-1), Status = BillingRunStatus.Incomplete };
+            db.BillingRuns.Add(run);
+            await db.SaveChangesAsync();
+            runId = run.Id;
+        }
+
+        await using var retryScope = services.CreateAsyncScope();
+        var retryDb = retryScope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+        var service = new BillingRunRetryService(
+            retryDb, retryScope.ServiceProvider.GetRequiredService<ISystemClock>());
+
+        (await service.RetryAsync(runId, default)).Queued.Should().BeTrue();
+        (await service.RetryAsync(runId, default)).AlreadyQueued.Should().BeTrue();
+        (await retryDb.Jobs.CountAsync(j => j.TargetId == runId &&
+            (j.Status == JobStatus.Pending || j.Status == JobStatus.Running))).Should().Be(1);
+    }
+
     private static ServiceProvider Provider()
     {
         var services = new ServiceCollection();

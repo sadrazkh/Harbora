@@ -231,6 +231,7 @@ public static class DependencyInjection
         services.Configure<Billing.BillingOptions>(config.GetSection(Billing.BillingOptions.SectionName));
         services.AddScoped<Billing.BillingTick>();
         services.AddScoped<Billing.BillingRunHandler>();
+        services.AddScoped<Billing.BillingRunRetryService>();
         services.AddHostedService<Billing.BillingScheduler>();
         // Stopping what a workspace is running once its balance is gone, and bringing back exactly
         // what that stop took away. Registered beside the tick and, like it, scheduled by nothing

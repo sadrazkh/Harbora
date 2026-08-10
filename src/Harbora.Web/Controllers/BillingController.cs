@@ -69,6 +69,15 @@ public sealed class BillingController(
             .Select(l => new BillingCreditRow(l.BillingHour, l.AmountMinor, l.Description))
             .ToListAsync(ct);
 
+        var adjustments = await db.BillingLedger.AsNoTracking()
+            .Where(l => l.WorkspaceId == WorkspaceId
+                        && l.Kind == LedgerKind.Adjustment
+                        && l.BillingHour >= from
+                        && l.BillingHour < to)
+            .OrderByDescending(l => l.BillingHour).ThenByDescending(l => l.CreatedAt)
+            .Select(l => new BillingAdjustmentRow(l.BillingHour, l.AmountMinor, l.Description))
+            .ToListAsync(ct);
+
         var thisMonth = Label(MonthOf(null).From);
         var period = Label(from);
 
@@ -90,7 +99,8 @@ public sealed class BillingController(
             // link to an empty page reads as a page that failed to load.
             NextPeriod = string.CompareOrdinal(period, thisMonth) < 0 ? Label(from.AddMonths(1)) : null,
             Costs = await wallets.BreakdownAsync(WorkspaceId, from, to, ct),
-            Credits = credits
+            Credits = credits,
+            Adjustments = adjustments
         });
     }
 

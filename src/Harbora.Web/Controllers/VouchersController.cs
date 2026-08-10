@@ -26,12 +26,52 @@ public sealed class VouchersController(
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
     [HttpGet("")]
-    public async Task<IActionResult> Index(CancellationToken ct)
+    public async Task<IActionResult> Index(
+        string? q, string? status, string? expiryFrom, string? expiryTo,
+        Guid? workspaceId, CancellationToken ct)
     {
         ViewData["Title"] = "Billing vouchers";
         var workspaceNames = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
             .ToDictionaryAsync(w => w.Id, w => w.Name, ct);
-        var rows = await db.BillingVouchers.AsNoTracking()
+        var query = db.BillingVouchers.AsNoTracking().AsQueryable();
+        var now = DateTimeOffset.UtcNow;
+
+        var term = q?.Trim();
+        if (!string.IsNullOrWhiteSpace(term))
+        {
+            var lowered = term.ToLowerInvariant();
+            var matchingWorkspaces = workspaceNames
+                .Where(pair => pair.Value.Contains(term, StringComparison.OrdinalIgnoreCase))
+                .Select(pair => pair.Key)
+                .ToList();
+            query = query.Where(v =>
+                v.CodeHint.ToLower().Contains(lowered)
+                || v.Note.ToLower().Contains(lowered)
+                || (v.RedeemedWorkspaceId != null && matchingWorkspaces.Contains(v.RedeemedWorkspaceId.Value)));
+        }
+
+        query = status?.Trim().ToLowerInvariant() switch
+        {
+            "available" => query.Where(v => !v.IsDisabled && v.RedeemedAt == null
+                                             && (v.ExpiresAt == null || v.ExpiresAt > now)),
+            "redeemed" => query.Where(v => v.RedeemedAt != null),
+            "disabled" => query.Where(v => v.IsDisabled),
+            "expired" => query.Where(v => !v.IsDisabled && v.RedeemedAt == null
+                                           && v.ExpiresAt != null && v.ExpiresAt <= now),
+            _ => query
+        };
+
+        if (workspaceId is { } redeemedBy)
+            query = query.Where(v => v.RedeemedWorkspaceId == redeemedBy);
+
+        if (DateOnly.TryParseExact(expiryFrom, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var fromDate))
+            query = query.Where(v => v.ExpiresAt >= new DateTimeOffset(fromDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero));
+        if (DateOnly.TryParseExact(expiryTo, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var toDate))
+            query = query.Where(v => v.ExpiresAt < new DateTimeOffset(toDate.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero));
+
+        var rows = await query
             .OrderByDescending(v => v.CreatedAt)
             .Take(200)
             .ToListAsync(ct);
@@ -40,6 +80,13 @@ public sealed class VouchersController(
         {
             Currency = billing.Value.CurrencyOrDefault,
             CreatedCode = TempData["CreatedVoucherCode"] as string,
+            Query = term ?? string.Empty,
+            Status = status?.Trim().ToLowerInvariant() ?? string.Empty,
+            ExpiryFrom = expiryFrom ?? string.Empty,
+            ExpiryTo = expiryTo ?? string.Empty,
+            WorkspaceId = workspaceId,
+            Workspaces = workspaceNames.OrderBy(pair => pair.Value)
+                .Select(pair => new VoucherWorkspaceOption(pair.Key, pair.Value)).ToList(),
             Vouchers = rows.Select(v => new VoucherAdminRow(
                 v.Id, v.CodeHint, v.AmountMinor, v.Currency, v.Note, v.CreatedAt, v.ExpiresAt,
                 v.IsDisabled, v.RedeemedAt,

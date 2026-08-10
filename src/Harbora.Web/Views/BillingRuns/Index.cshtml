@@ -1,0 +1,103 @@
+@model BillingRunsPageViewModel
+@using Harbora.Domain.Billing
+@{
+    ViewData["Title"] = "Billing runs";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+    string StatusText(BillingRunStatus status) => status switch
+    {
+        BillingRunStatus.Queued => isFa ? "در صف" : "Queued",
+        BillingRunStatus.Running => isFa ? "در حال اجرا" : "Running",
+        BillingRunStatus.Succeeded => isFa ? "موفق" : "Succeeded",
+        BillingRunStatus.Incomplete => isFa ? "ناقص" : "Incomplete",
+        _ => status.ToString()
+    };
+    string StatusClass(BillingRunStatus status) => status switch
+    {
+        BillingRunStatus.Succeeded => "bg-ok-soft text-ok",
+        BillingRunStatus.Incomplete => "bg-danger-soft text-danger",
+        BillingRunStatus.Running => "bg-accent-soft text-accent-text",
+        _ => "bg-surface-2 text-ink-muted"
+    };
+}
+
+<div class="mb-6 flex items-start justify-between gap-4">
+    <div>
+        <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "اجرای صورتحساب" : "Billing runs")</h1>
+        <p class="text-ink-muted text-sm">@(isFa ? "وضعیت ۲۰۰ اجرای ساعتی اخیر و تلاش مجدد کنترل‌شده." : "The latest 200 hourly accounting runs and controlled retries.")</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+        <a href="/vouchers" class="btn-secondary">@(isFa ? "ووچرها" : "Vouchers")</a>
+        <a href="/tenants" class="btn-secondary">@(isFa ? "مستأجرها" : "Tenants")</a>
+    </div>
+</div>
+
+@if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
+@if (!Model.BillingEnabled)
+{
+    <div class="mb-4 rounded-lg bg-warning-soft border border-warning text-warning px-4 py-3 text-sm">
+        @(isFa ? "صورتحساب در تنظیمات غیرفعال است؛ مشاهده‌ی سابقه ممکن است اما تلاش مجدد تا زمان فعال‌سازی مجاز نیست." : "Billing is disabled in configuration. History remains visible, but retries are unavailable until it is enabled.")
+    </div>
+}
+
+<section class="rounded-xl border border-line bg-surface overflow-x-auto">
+    @if (Model.Runs.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel("history", isFa ? "هنوز اجرای صورتحساب ثبت نشده است." : "No billing runs have been recorded yet."))" />
+    }
+    else
+    {
+        <table class="w-full min-w-[1050px] text-sm">
+            <thead class="text-ink-muted border-b border-line">
+                <tr>
+                    <th class="p-3 text-start">@(isFa ? "ساعت UTC" : "UTC hour")</th>
+                    <th class="p-3 text-start">@(isFa ? "وضعیت" : "Status")</th>
+                    <th class="p-3 text-end">@(isFa ? "تلاش" : "Attempts")</th>
+                    <th class="p-3 text-end">@(isFa ? "ورک‌اسپیس" : "Workspaces")</th>
+                    <th class="p-3 text-end">@(isFa ? "ردیف دفتر" : "Ledger lines")</th>
+                    <th class="p-3 text-end">@(isFa ? "تعلیق" : "Suspended")</th>
+                    <th class="p-3 text-start">@(isFa ? "شروع / پایان" : "Started / completed")</th>
+                    <th class="p-3 text-start">@(isFa ? "خطا" : "Failure")</th>
+                    <th class="p-3 text-end">@(isFa ? "عملیات" : "Action")</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-line">
+                @foreach (var run in Model.Runs)
+                {
+                    <tr>
+                        <td class="p-3 font-mono text-xs text-ink">@run.BillingHour.UtcDateTime.ToString(Dates.Stamp)</td>
+                        <td class="p-3"><span class="rounded px-2 py-1 text-xs @StatusClass(run.Status)">@StatusText(run.Status)</span></td>
+                        <td class="p-3 text-end text-ink-muted">@run.Attempts</td>
+                        <td class="p-3 text-end text-ink-muted">@run.WorkspacesCharged</td>
+                        <td class="p-3 text-end text-ink-muted">@run.LinesWritten</td>
+                        <td class="p-3 text-end text-ink-muted">@run.WorkspacesSuspended</td>
+                        <td class="p-3 text-xs text-ink-muted" dir="ltr">
+                            <div>@(run.StartedAt?.UtcDateTime.ToString(Dates.Precise) ?? "—")</div>
+                            <div>@(run.CompletedAt?.UtcDateTime.ToString(Dates.Precise) ?? "—")</div>
+                        </td>
+                        <td class="p-3 max-w-sm text-xs text-danger whitespace-pre-wrap break-words">@(string.IsNullOrWhiteSpace(run.FailureSummary) ? "—" : run.FailureSummary)</td>
+                        <td class="p-3 text-end">
+                            @if (run.CanRetry)
+                            {
+                                <form asp-controller="BillingRuns" asp-action="Retry" asp-route-id="@run.Id" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <button class="btn-secondary text-xs">@(isFa ? "تلاش مجدد" : "Retry")</button>
+                                </form>
+                            }
+                            else if (run.HasLiveJob && run.Status != BillingRunStatus.Succeeded)
+                            {
+                                <span class="text-xs text-ink-faint">@(isFa ? "در صف/اجرا" : "Queued/running")</span>
+                            }
+                            else
+                            {
+                                <span class="text-ink-faint">—</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>

@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace Harbora.Infrastructure.Billing;
 
@@ -100,7 +101,7 @@ public sealed class BillingScheduler(
         if (db.ChangeTracker.HasChanges()) await db.SaveChangesAsync(ct);
     }
 
-    private static void Queue(HarboraDbContext db, BillingRun run, DateTimeOffset now)
+    internal static void Queue(HarboraDbContext db, BillingRun run, DateTimeOffset now)
     {
         run.Status = BillingRunStatus.Queued;
         run.UpdatedAt = now;
@@ -120,6 +121,47 @@ public sealed class BillingScheduler(
         var utc = instant.ToUniversalTime();
         return new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero);
     }
+}
+
+public sealed record BillingRunRetryResult(bool Queued, bool AlreadyQueued);
+
+/// <summary>
+/// Gives an operator one safe path for retrying an incomplete billing hour. The database's partial
+/// unique index on live billing jobs is the final guard when two administrators click together.
+/// </summary>
+public sealed class BillingRunRetryService(HarboraDbContext db, ISystemClock clock)
+{
+    public async Task<BillingRunRetryResult> RetryAsync(Guid runId, CancellationToken ct)
+    {
+        var run = await db.BillingRuns.FirstOrDefaultAsync(r => r.Id == runId, ct)
+                  ?? throw new InvalidOperationException("Billing run does not exist.");
+
+        if (run.Status == BillingRunStatus.Succeeded)
+            throw new InvalidOperationException("A completed billing run cannot be retried.");
+
+        if (await HasLiveJobAsync(runId, ct))
+            return new BillingRunRetryResult(false, true);
+
+        BillingScheduler.Queue(db, run, clock.UtcNow.ToUniversalTime());
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return new BillingRunRetryResult(true, false);
+        }
+        catch (DbUpdateException ex)
+            when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            // Another request won the race. Do not report an error for the safe, desired outcome.
+            db.ChangeTracker.Clear();
+            if (await HasLiveJobAsync(runId, ct))
+                return new BillingRunRetryResult(false, true);
+            throw;
+        }
+    }
+
+    private Task<bool> HasLiveJobAsync(Guid runId, CancellationToken ct) => db.Jobs.AnyAsync(j =>
+        j.Kind == JobKind.BillingHour && j.TargetId == runId &&
+        (j.Status == JobStatus.Pending || j.Status == JobStatus.Running), ct);
 }
 
 /// <summary>Executes one persisted BillingRun and leaves an inspectable result for the operator.</summary>

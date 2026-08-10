@@ -966,11 +966,11 @@ public class WalletServiceTests
     }
 
     [Fact]
-    public async Task A_correction_lands_on_the_bill_of_the_thing_it_corrects()
+    public async Task A_correction_stays_out_of_resource_costs_for_its_own_dated_table()
     {
         // Nothing in this ledger is ever edited or deleted; a mistake gets an opposing line. If the
-        // breakdown did not read those, the bill would go on showing the wrong figure for that app
-        // for ever, and the correction would exist only in the balance.
+        // bill shows those in their own dated table. Folding one into a resource cost would hide its
+        // note and make a manual money movement look like a cheaper app.
         await using var db = WalletHarness.SystemContext();
         var ws = WalletHarness.SeedWorkspace(db);
         var api = Guid.NewGuid();
@@ -982,8 +982,8 @@ public class WalletServiceTests
         var costs = await WalletHarness.Wallets(db).BreakdownAsync(ws, Day, Day.AddDays(1), default);
 
         var line = costs.Single(c => c.Name == "api");
-        line.TotalMinor.Should().Be(-600);
-        line.RunningHours.Should().Be(1, "a correction is not an hour of anything");
+        line.TotalMinor.Should().Be(-1_000);
+        line.RunningHours.Should().Be(1);
     }
 
     [Fact]

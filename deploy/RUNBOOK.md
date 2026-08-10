@@ -266,7 +266,15 @@ under **Tenants → Billing vouchers**. The plaintext voucher is shown once; onl
 stored. Any member of a workspace can redeem it on their own **Billing** page. Both routes append one
 idempotent credit line, and a replay cannot move the balance twice. An administrator can also append
 an Adjustment from the tenant page to reverse a mistaken credit; the original line is never edited
-or deleted.
+or deleted. Customers see those signed corrections in a separate **Balance adjustments** table on
+their bill rather than mixed into resource costs. The voucher console can filter by text, state,
+expiry window and redeeming workspace.
+
+The provider can inspect the latest hourly accounting history under **Tenants → Billing runs**.
+Incomplete runs show their counters and failure summary and can be retried there while billing is
+enabled. A retry uses the durable queue and its live-job uniqueness guard, so repeated or concurrent
+clicks do not create two live executions. When `Billing:Enabled` is `false`, history remains visible
+but the retry action is deliberately unavailable.
 
 **"Sell past the caps" changes what a plan refuses, not just what it charges.** The Plans form gains a
 tick box for it. On a plan with it set, that plan's limits on apps, databases, memory, CPU and disk

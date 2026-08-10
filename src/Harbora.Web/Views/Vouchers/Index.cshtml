@@ -7,9 +7,12 @@
     var err = TempData["Error"] as string;
 }
 
-<div class="mb-6">
-    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "ووچرهای اعتبار" : "Billing vouchers")</h1>
-    <p class="text-sm text-ink-muted">@(isFa ? "هر کد فقط یک‌بار و برای یک فضای کاری قابل استفاده است." : "Each code can be used once by one workspace.")</p>
+<div class="mb-6 flex items-start justify-between gap-4">
+    <div>
+        <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "ووچرهای اعتبار" : "Billing vouchers")</h1>
+        <p class="text-sm text-ink-muted">@(isFa ? "هر کد فقط یک‌بار و برای یک فضای کاری قابل استفاده است." : "Each code can be used once by one workspace.")</p>
+    </div>
+    <a href="/billing-runs" class="btn-secondary">@(isFa ? "اجرای صورتحساب" : "Billing runs")</a>
 </div>
 
 @if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
@@ -50,6 +53,45 @@
     </form>
 </div>
 
+<form method="get" action="/vouchers" class="rounded-xl border border-line bg-surface p-4 mb-4 grid md:grid-cols-3 gap-3">
+    <label class="form-field md:col-span-2">
+        <span>@(isFa ? "جست‌وجو" : "Search")</span>
+        <input name="q" value="@Model.Query" class="form-control" placeholder="@(isFa ? "چهار رقم آخر، توضیح یا فضای کاری" : "last four characters, note or workspace")" />
+    </label>
+    <label class="form-field">
+        <span>@(isFa ? "وضعیت" : "Status")</span>
+        <select name="status" class="form-control">
+            <option value="" selected="@(Model.Status == "")">@(isFa ? "همه" : "All")</option>
+            <option value="available" selected="@(Model.Status == "available")">@(isFa ? "آماده استفاده" : "Available")</option>
+            <option value="redeemed" selected="@(Model.Status == "redeemed")">@(isFa ? "استفاده‌شده" : "Redeemed")</option>
+            <option value="expired" selected="@(Model.Status == "expired")">@(isFa ? "منقضی" : "Expired")</option>
+            <option value="disabled" selected="@(Model.Status == "disabled")">@(isFa ? "غیرفعال" : "Disabled")</option>
+        </select>
+    </label>
+    <label class="form-field">
+        <span>@(isFa ? "فضای کاری مصرف‌کننده" : "Redeeming workspace")</span>
+        <select name="workspaceId" class="form-control">
+            <option value="">@(isFa ? "همه" : "All")</option>
+            @foreach (var workspace in Model.Workspaces)
+            {
+                <option value="@workspace.Id" selected="@(workspace.Id == Model.WorkspaceId)">@workspace.Name</option>
+            }
+        </select>
+    </label>
+    <label class="form-field">
+        <span>@(isFa ? "انقضا از" : "Expiry from")</span>
+        <input name="expiryFrom" type="date" value="@Model.ExpiryFrom" class="form-control" dir="ltr" />
+    </label>
+    <label class="form-field">
+        <span>@(isFa ? "انقضا تا" : "Expiry to")</span>
+        <input name="expiryTo" type="date" value="@Model.ExpiryTo" class="form-control" dir="ltr" />
+    </label>
+    <div class="md:col-span-3 flex gap-2">
+        <button type="submit" class="btn-primary">@(isFa ? "اعمال فیلتر" : "Apply filters")</button>
+        <a href="/vouchers" class="btn-secondary">@(isFa ? "پاک‌کردن" : "Clear")</a>
+    </div>
+</form>
+
 <div class="rounded-xl border border-line bg-surface overflow-hidden">
     <table class="w-full text-sm">
         <thead class="bg-surface-2 text-ink-muted">
@@ -62,6 +104,10 @@
             </tr>
         </thead>
         <tbody>
+        @if (Model.Vouchers.Count == 0)
+        {
+            <tr><td colspan="5" class="p-4 text-ink-faint">@(isFa ? "ووچری با این فیلترها پیدا نشد." : "No vouchers matched these filters.")</td></tr>
+        }
         @foreach (var voucher in Model.Vouchers)
         {
             var status = voucher.RedeemedAt is not null

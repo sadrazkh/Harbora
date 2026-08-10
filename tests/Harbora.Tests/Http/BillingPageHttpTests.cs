@@ -185,6 +185,36 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
                 "the heading in Persian, so asking for English is what changed the page");
     }
 
+    [Fact]
+    public async Task A_balance_adjustment_is_shown_apart_from_resource_costs()
+    {
+        Panel.Seed(db => db.BillingLedger.Add(new BillingLedgerEntry
+        {
+            WorkspaceId = fixture.WorkspaceId,
+            BillingHour = new DateTimeOffset(2026, 10, 4, 12, 0, 0, TimeSpan.Zero),
+            Kind = LedgerKind.Adjustment,
+            AmountMinor = 12_345,
+            ResourceType = BilledResourceType.None,
+            ResourceId = null,
+            ResourceName = "billing-adjustment",
+            RunState = BilledRunState.NotApplicable,
+            Hours = 0,
+            Description = "support correction 9117"
+        }));
+        Panel.GivenUser(fixture.WorkspaceId, "bill-adjustment@example.com", SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.176", "bill-adjustment@example.com");
+        client.DefaultRequestHeaders.AcceptLanguage.Add(
+            new System.Net.Http.Headers.StringWithQualityHeaderValue("en"));
+
+        var page = await (await client.GetAsync("/billing?month=2026-10")).Content.ReadAsStringAsync();
+
+        page.Should().Contain("Balance adjustments this month")
+            .And.Contain("support correction 9117")
+            .And.Contain("&#x2B;123.45");
+        page.Should().NotContain("billing-adjustment",
+            "the adjustment must not be disguised as a resource cost row");
+    }
+
     // --- balance vouchers --------------------------------------------------------------------
 
     [Fact]
@@ -229,6 +259,84 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
 
         response.StatusCode.Should().Be(HttpStatusCode.Found);
         response.RedirectPath().Should().Be("/account/denied");
+    }
+
+    [Fact]
+    public async Task The_voucher_console_filters_by_search_status_expiry_and_redeeming_workspace()
+    {
+        var redeemedBy = GivenTenant("voucher-filter-workspace");
+        var matching = new BillingVoucher
+        {
+            CodeHash = "FILTER-MATCH-" + Guid.NewGuid().ToString("N"), CodeHint = "M911",
+            AmountMinor = 10_000, Currency = "IRR", Note = "campaign-filter-911",
+            CreatedByUserId = Guid.CreateVersion7(), RedeemedAt = new DateTimeOffset(2026, 11, 3, 1, 0, 0, TimeSpan.Zero),
+            RedeemedWorkspaceId = redeemedBy, ExpiresAt = new DateTimeOffset(2026, 11, 10, 0, 0, 0, TimeSpan.Zero)
+        };
+        var wrongWorkspace = new BillingVoucher
+        {
+            CodeHash = "FILTER-WRONG-" + Guid.NewGuid().ToString("N"), CodeHint = "W911",
+            AmountMinor = 10_000, Currency = "IRR", Note = "campaign-filter-911 wrong-workspace",
+            CreatedByUserId = Guid.CreateVersion7(), RedeemedAt = new DateTimeOffset(2026, 11, 3, 1, 0, 0, TimeSpan.Zero),
+            RedeemedWorkspaceId = fixture.WorkspaceId, ExpiresAt = new DateTimeOffset(2026, 11, 10, 0, 0, 0, TimeSpan.Zero)
+        };
+        var wrongExpiry = new BillingVoucher
+        {
+            CodeHash = "FILTER-DATE-" + Guid.NewGuid().ToString("N"), CodeHint = "D911",
+            AmountMinor = 10_000, Currency = "IRR", Note = "campaign-filter-911 wrong-expiry",
+            CreatedByUserId = Guid.CreateVersion7(), RedeemedAt = new DateTimeOffset(2026, 11, 3, 1, 0, 0, TimeSpan.Zero),
+            RedeemedWorkspaceId = redeemedBy, ExpiresAt = new DateTimeOffset(2026, 12, 10, 0, 0, 0, TimeSpan.Zero)
+        };
+        Panel.Seed(db => db.BillingVouchers.AddRange(matching, wrongWorkspace, wrongExpiry));
+        Panel.GivenUser(fixture.WorkspaceId, "voucher-filter-owner@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.177", "voucher-filter-owner@example.com");
+        client.DefaultRequestHeaders.AcceptLanguage.Add(
+            new System.Net.Http.Headers.StringWithQualityHeaderValue("en"));
+
+        var page = await (await client.GetAsync(
+            $"/vouchers?q=campaign-filter-911&status=redeemed&workspaceId={redeemedBy}&expiryFrom=2026-11-01&expiryTo=2026-11-30"))
+            .Content.ReadAsStringAsync();
+
+        page.Should().Contain("campaign-filter-911")
+            .And.NotContain("wrong-workspace")
+            .And.NotContain("wrong-expiry");
+    }
+
+    [Fact]
+    public async Task An_ordinary_member_cannot_open_billing_run_operations()
+    {
+        var tenant = GivenTenant("billing-run-console-refused");
+        Panel.GivenUser(tenant, "billing-run-member@example.com", SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.178", "billing-run-member@example.com");
+
+        var response = await client.GetAsync("/billing-runs");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        response.RedirectPath().Should().Be("/account/denied");
+    }
+
+    [Fact]
+    public async Task Disabled_billing_keeps_run_history_visible_but_refuses_retry()
+    {
+        var run = new BillingRun
+        {
+            BillingHour = new DateTimeOffset(2026, 11, 7, 8, 0, 0, TimeSpan.Zero),
+            Status = BillingRunStatus.Incomplete,
+            FailureSummary = "billing-run-visible-911"
+        };
+        Panel.Seed(db => db.BillingRuns.Add(run));
+        Panel.GivenUser(fixture.WorkspaceId, "billing-run-owner@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.179", "billing-run-owner@example.com");
+        client.DefaultRequestHeaders.AcceptLanguage.Add(
+            new System.Net.Http.Headers.StringWithQualityHeaderValue("en"));
+
+        var page = await (await client.GetAsync("/billing-runs")).Content.ReadAsStringAsync();
+        page.Should().Contain("billing-run-visible-911").And.Contain("Billing is disabled in configuration");
+        page.Should().NotContain(">Retry<");
+        var token = await client.AntiforgeryTokenFrom("/billing-runs");
+        var response = await client.PostFormAsync($"/billing-runs/{run.Id}/retry", token);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        Panel.Read(db => db.Jobs.Count(j => j.TargetId == run.Id)).Should().Be(0);
     }
 
     // --- who may credit -----------------------------------------------------------------------

@@ -20,11 +20,8 @@ public enum LedgerKind
     /// A correction: an opposing line, because nothing here is ever edited or deleted.
     ///
     /// <para>
-    /// <b>Nothing writes one.</b> No service, screen or command in this platform posts an
-    /// adjustment — the member exists, and the ledger's unique index deliberately leaves room for
-    /// two in one hour, but a credit that landed on the wrong workspace has no remedy in the
-    /// product and has to be settled outside it. Said here rather than left to be discovered,
-    /// because a kind that reads like a working feature is how somebody promises a customer one.
+    /// Written only by the provider's dedicated balance-adjustment workflow, so the original
+    /// movement remains intact and the correction has its own identity and audit record.
     /// </para>
     /// </summary>
     Adjustment = 3
