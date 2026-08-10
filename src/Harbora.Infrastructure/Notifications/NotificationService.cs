@@ -35,15 +35,29 @@ public sealed class NotificationService(
     /// reported success regardless. Reading case-insensitively fixes the targets already stored.
     /// </summary>
     private static readonly JsonSerializerOptions TargetJson = new() { PropertyNameCaseInsensitive = true };
-    public async Task NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
+    /// <summary>
+    /// <inheritdoc cref="INotificationService.NotifyAsync" path="/summary/para"/>
+    ///
+    /// <para>
+    /// The number counts rules the message was <i>handed to</i>, not rules that took it. A channel
+    /// that answered 404 is counted, because it is a rule that exists and its refusal is recorded on
+    /// the row itself; zero means the workspace has nowhere for this to go, which is the outcome
+    /// that has no other home — nothing throws and no row changes.
+    /// </para>
+    /// </summary>
+    public async Task<int> NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
     {
         // Tracked, not AsNoTracking: the delivery outcome is written back onto these rows.
         var alerts = await db.Alerts
             .Where(a => a.WorkspaceId == workspaceId && a.IsEnabled && a.MinSeverity <= severity)
             .ToListAsync(ct);
 
-        foreach (var alert in alerts.Where(a => Matches(a, evt)))
+        var matching = alerts.Where(a => Matches(a, evt)).ToList();
+
+        foreach (var alert in matching)
             await DispatchSafe(alert, severity, title, body, ct);
+
+        return matching.Count;
     }
 
     /// <summary>

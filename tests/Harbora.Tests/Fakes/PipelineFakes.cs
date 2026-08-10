@@ -150,12 +150,21 @@ public sealed class RecordingNotificationService : INotificationService
     /// workspace's alert rules and posts to Discord/Telegram/a webhook with the token it was given,
     /// so a dead one delivers nothing. A fake that recorded the alert anyway would report a
     /// notification nobody received.
+    ///
+    /// <para>
+    /// Answers 1, because this fake <i>is</i> the rule that received the message — it is standing in
+    /// for a workspace that has a working channel, which is what every test using it means by
+    /// handing it over. Answering 0 would be the honest count for a service with no rules behind it
+    /// and would make every one of those tests also assert the "nobody could receive it" report,
+    /// which is a different fact with its own tests and its own fixture: the real service, over a
+    /// workspace that genuinely has no rule.
+    /// </para>
     /// </summary>
-    public Task NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
+    public Task<int> NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         Notifications.Add(new Sent(workspaceId, evt, severity, title, body));
-        return Task.CompletedTask;
+        return Task.FromResult(1);
     }
 
     /// <summary>

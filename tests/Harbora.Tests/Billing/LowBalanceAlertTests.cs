@@ -450,7 +450,7 @@ public class LowBalanceAlertTests
     /// case where the failure escapes anyway — a disposed context, a broken rule query.</summary>
     private sealed class BrokenNotifications : INotificationService
     {
-        public Task NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity,
+        public Task<int> NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity,
             string title, string body, CancellationToken ct) =>
             throw new InvalidOperationException("the alert rules could not be read");
 
@@ -525,6 +525,85 @@ public class LowBalanceAlertTests
     private sealed class SingleHandlerFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
+    }
+
+    /// <summary>
+    /// The real notification service, over a context that can actually see the workspace's rules.
+    ///
+    /// <para>
+    /// The scope is the whole reason this exists rather than <c>Harness.TickContext</c>, and getting
+    /// it wrong would make the two tests below pass for the wrong reason. <c>Alert</c> carries a
+    /// tenant filter; under a context scoped to a tenant that owns nothing, the rules read comes back
+    /// empty whether or not the workspace has any — so "nobody could receive it" would be a fact
+    /// about the filter, and it would go on being reported after somebody added the rule. A system
+    /// scope is also what production hands this: background work has no <c>HttpContext</c>, which is
+    /// exactly when <c>HttpWorkspaceScope.IsUnscoped</c> is true and the filters are inert.
+    /// </para>
+    /// </summary>
+    private static NotificationService RealNotifications(BillingContext db, HttpMessageHandler handler)
+    {
+        var own = Harness.SystemContext(db.Store);
+
+        return new NotificationService(
+            own,
+            new PassthroughProtector(),
+            new SingleHandlerFactory(handler),
+            new PlatformMailer(own, new PassthroughProtector(), NullLogger<PlatformMailer>.Instance),
+            Options.Create(new NotificationOptions { DeliveryTimeoutSeconds = 10 }),
+            NullLogger<NotificationService>.Instance);
+    }
+
+    /// <summary>An enabled webhook rule that takes anything the platform sends it.</summary>
+    private static void SeedAlertRule(BillingContext db, Guid workspaceId)
+    {
+        db.Alerts.Add(new Alert
+        {
+            WorkspaceId = workspaceId,
+            Name = "ops",
+            Channel = AlertChannel.Webhook,
+            MinSeverity = AlertSeverity.Info,
+            EncryptedTarget = """{"url":"https://hooks.example.com/abc"}""",
+            IsEnabled = true,
+        });
+        db.SaveChanges();
+    }
+
+    [Fact]
+    public async Task A_warning_no_rule_could_receive_is_not_left_recorded_as_sent()
+    {
+        // Nothing seeds an alert rule — AlertsController is the only thing in the product that
+        // creates one — so a fresh tenant has none at all. With no rules the dispatch loop runs zero
+        // times: nothing throws, nothing is delivered, and the balance the customer was "warned at"
+        // has already been written down, so the warning is never sent again while the balance keeps
+        // falling. Their first notice would be their site stopping.
+        await using var db = Harness.SystemContext();
+        SeedTenant(db, "tenant", balanceMinor: Threshold - 500);
+
+        var handler = new Responder();
+        var result = await Harness.Tick(db, notifications: RealNotifications(db, handler))
+            .ChargeHourAsync(Hour, default);
+
+        handler.Calls.Should().Be(0, "the fixture is only worth anything if there really is no rule");
+        result.Failures.Should().ContainSingle()
+            .Which.Should().Contain("tenant").And.Contain("no alert rule");
+    }
+
+    [Fact]
+    public async Task A_warning_a_rule_did_receive_is_not_reported_as_unheard()
+    {
+        // The other direction, and what keeps the count above honest. A rules read that found none
+        // because the tenant filter hid them would report every workspace on the install as
+        // unreachable — the right number for the wrong reason, and one nobody could act on.
+        await using var db = Harness.SystemContext();
+        var ws = SeedTenant(db, "tenant", balanceMinor: Threshold - 500);
+        SeedAlertRule(db, ws);
+
+        var handler = new Responder();
+        var result = await Harness.Tick(db, notifications: RealNotifications(db, handler))
+            .ChargeHourAsync(Hour, default);
+
+        handler.Calls.Should().Be(1);
+        result.Failures.Should().BeEmpty();
     }
 
     [Fact]

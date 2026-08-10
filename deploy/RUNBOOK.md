@@ -257,13 +257,14 @@ there was a price, so you have to say yes on purpose.
 Read the rest of this item before you say yes. Parts of it are not finished, and one of those means
 that turning the switch on today changes almost nothing.
 
-**Nothing runs the hourly charge yet.** The wallet, the ledger, the per-app bill, the low-balance
-warning, the suspension and the start gate are all in this build and all work when something calls
-them — but no timer, scheduler or background service calls the hourly pass. It is registered and
-waiting. Until that lands in a later release, switching billing on gives you the *screens* (set
-prices on **Plans**, credit an account from **Tenants → a tenant → Credit**, and your customers get a
-**Billing** page showing their balance and where it went) and no money moves on its own. **Do not
-read this release as "billing works, just off."** It is off, and it is also not yet plugged in.
+**Nothing runs the hourly charge yet.** The hourly pass itself is whole: it charges every workspace
+for the hour that has just ended, sends the low-balance warning, and then stops the apps and managed
+databases of every workspace the hour left at or below zero. What is missing is the thing that calls
+it — no timer, scheduler or background service does. It is registered and waiting. Until that lands
+in a later release, switching billing on gives you the *screens* (set prices on **Plans**, credit an
+account from **Tenants → a tenant → Credit**, and your customers get a **Billing** page showing their
+balance and where it went), and no money moves and nothing stops on its own. **Do not read this
+release as "billing works, just off."** It is off, and it is also not yet plugged in.
 
 **Blank prices are not free prices.** Every rate arrives unset — on plans and on instance sizes — and
 that is deliberately different from a rate of zero. Unset means nobody has decided; the hourly pass
@@ -293,6 +294,18 @@ warned at. **At zero, their apps and their managed databases are stopped, and st
 refused until somebody credits the account.** Their data is untouched and a credit brings back
 exactly what the suspension stopped — but their site goes down, and it goes down without a human
 deciding it should. Tell them the terms before you enable this, not afterwards.
+
+Two exceptions, both deliberate: **your own workspace is never stopped for money** (the panel lives
+in it, so collecting that debt would take down the screen you would fix it from), and **a tenant an
+operator has suspended by hand is left exactly as they are** — their balance goes on falling and
+their workloads go on running, because lifting that suspension is not billing's to do. The pass names
+that tenant in its warnings every run until somebody acts.
+
+**A tenant with no alert channel gets no warning at all.** The low-balance warning goes to that
+workspace's alert rules, and nothing creates one for them — somebody has to add a channel on that
+tenant's **Alerts** page. A workspace with none is told nothing, and the first they know of it is
+their site stopping. The pass names every workspace it could not warn in that run's warnings, so it
+is at least visible — to you, not to them.
 
 **Two things it will not charge for as things stand, so do not price as though it will.**
 

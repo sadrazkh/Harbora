@@ -76,8 +76,18 @@ public interface INotificationService
     /// <summary>
     /// Deliver a notification to every enabled alert in the workspace that opted into this event
     /// and whose minimum severity is satisfied. Best-effort — channel failures are logged, not thrown.
+    ///
+    /// <para>
+    /// Answers how many rules it was handed to, and that number is the only way a caller can tell
+    /// the difference between "delivered" and "there was nobody to deliver to". Nothing seeds an
+    /// alert rule — the alerts page is the only thing in the product that creates one — so a
+    /// workspace with none is the ordinary case, not an edge one, and against it this method
+    /// iterates nothing, raises nothing and returns. A caller that discards the count records a
+    /// notification sent to nobody; the failure of a channel that <i>exists</i> is a different fact
+    /// and is written back onto the rule, where a broken channel is meant to be read.
+    /// </para>
     /// </summary>
-    Task NotifyAsync(Guid workspaceId, Domain.Common.AlertEvent evt, Domain.Common.AlertSeverity severity, string title, string body, CancellationToken ct);
+    Task<int> NotifyAsync(Guid workspaceId, Domain.Common.AlertEvent evt, Domain.Common.AlertSeverity severity, string title, string body, CancellationToken ct);
 
     /// <summary>
     /// Deliver through one specific rule, whatever its event opt-ins say.

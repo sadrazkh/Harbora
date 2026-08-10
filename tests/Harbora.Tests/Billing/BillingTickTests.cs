@@ -126,6 +126,27 @@ internal static class Harness
         new(store ?? "billing-" + Guid.NewGuid(), SystemWorkspaceScope.Instance);
 
     /// <summary>
+    /// More balance than any fixture here spends, for a test that charges one workspace twice.
+    ///
+    /// <para>
+    /// The pass stops a workspace it has left at or below nothing, which is the feature — and a
+    /// fixture seeded with a wallet at zero is a workspace whose first charged hour takes it there.
+    /// A test about the ledger's own arithmetic that then charged a second hour would be charging it
+    /// against apps this pass had just stopped, and would be quietly about two things. Paying the
+    /// fixture up keeps it about one.
+    /// </para>
+    /// </summary>
+    public const long PaidUp = 1_000_000;
+
+    /// <summary>Puts a balance on a workspace, standing in for hours nobody wants to run.</summary>
+    public static void SetBalance(BillingContext db, Guid workspaceId, long balanceMinor)
+    {
+        var wallet = db.Wallets.Single(w => w.WorkspaceId == workspaceId);
+        wallet.BalanceMinor = balanceMinor;
+        db.SaveChanges();
+    }
+
+    /// <summary>
     /// The context the tick is given, over the same rows, scoped to <see cref="Guid.Empty"/>.
     ///
     /// <para>
@@ -144,7 +165,10 @@ internal static class Harness
         int maxBackfillHours = 72,
         bool enabled = true,
         BillingContext? through = null,
-        INotificationService? notifications = null)
+        INotificationService? notifications = null,
+        FakeAppOperations? operations = null,
+        FakeDatabaseOperations? databases = null,
+        Func<BillingSuspension>? suspension = null)
     {
         // Handing the database to the tick means giving up your cached copy of it. The tick writes
         // through a context of its own, so anything this one is still tracking is about to be stale
@@ -164,6 +188,22 @@ internal static class Harness
         // and, worse, would invite somebody to "fix" that by making the resolution optional, which
         // is the shape where a warning nobody receives reports itself as sent.
         services.AddSingleton<INotificationService>(notifications ?? new RecordingNotificationService());
+
+        // Registered for every tick, and registered per scope, both for reasons the notification
+        // line above gives. Per scope because that is what production does: the sweep resolves a
+        // suspension of its own for each workspace it stops, so a workspace whose stop fell over
+        // half-written cannot leave anything behind in a context the next workspace's save would
+        // commit under its name. A singleton here would share one change tracker across all of them
+        // and quietly excuse exactly that.
+        var stopApps = operations ?? Operations(db);
+        var stopDatabases = databases ?? Databases(db);
+
+        services.AddScoped(_ => suspension?.Invoke() ?? new BillingSuspension(
+            TickContext(db),
+            stopApps,
+            stopDatabases,
+            Options.Create(new BillingOptions { Enabled = enabled }),
+            NullLogger<BillingSuspension>.Instance));
 
         var provider = services.BuildServiceProvider();
 
@@ -428,15 +468,20 @@ public class BillingTickTests
         var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 500);
         await db.SaveChangesAsync();
 
+        // Paid up, so the second hour is charged for an app that is still running. Left at zero the
+        // first pass would stop it, and this would be a test about suspension wearing a ledger's
+        // clothes.
+        Harness.SetBalance(db, ws, Harness.PaidUp);
+
         await Harness.Tick(db).ChargeHourAsync(Hour, default);
         await Harness.Tick(db).ChargeHourAsync(Hour.AddHours(1), default);
 
         var wallet = await db.Wallets.SingleAsync(w => w.WorkspaceId == ws);
         var ledger = await db.BillingLedger.Where(l => l.WorkspaceId == ws).SumAsync(l => l.AmountMinor);
-        wallet.BalanceMinor.Should().Be(ledger);
+        wallet.BalanceMinor.Should().Be(Harness.PaidUp + ledger);
 
         // Named, because "they agree" is also true of two zeros. Two hours at 500 is 1000.
-        wallet.BalanceMinor.Should().Be(-1000);
+        ledger.Should().Be(-1000);
     }
 
     [Fact]
@@ -924,6 +969,11 @@ public class BillingTickTests
         var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: null);
         await db.SaveChangesAsync();
 
+        // Paid up, so the app is still running when the corrected pass reaches it. A wallet at zero
+        // is a workspace the first pass suspends, and the price set afterwards would then be a
+        // stopped app's price — a different question from the one this test is asking.
+        Harness.SetBalance(db, ws, Harness.PaidUp);
+
         await Harness.Tick(db).ChargeHourAsync(Hour, default);
 
         (await db.InstanceSizes.SingleAsync()).RunningRatePerHourMinor = 500;
@@ -932,7 +982,8 @@ public class BillingTickTests
         var result = await Harness.Tick(db).ChargeHourAsync(Hour, default);
 
         result.LinesWritten.Should().Be(1);
-        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-500);
+        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor
+            .Should().Be(Harness.PaidUp - 500);
     }
 
     [Fact]
@@ -948,8 +999,14 @@ public class BillingTickTests
         Harness.AddRunningAppOnAnUnpricedSize(db, ws);
         await db.SaveChangesAsync();
 
+        // Paid up, so both apps are still running when the correction arrives. A wallet at zero is a
+        // workspace the first pass suspends, and there is no correcting a running app's price on an
+        // app this test has had stopped underneath it.
+        Harness.SetBalance(db, ws, Harness.PaidUp);
+
         await Harness.Tick(db).ChargeHourAsync(Hour, default);
-        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-500);
+        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor
+            .Should().Be(Harness.PaidUp - 500);
 
         (await db.InstanceSizes.SingleAsync(s => s.Key == "later")).RunningRatePerHourMinor = 300;
         await db.SaveChangesAsync();
@@ -960,8 +1017,8 @@ public class BillingTickTests
         (await db.BillingLedger.CountAsync(l => l.WorkspaceId == ws)).Should().Be(2);
 
         var wallet = await db.Wallets.SingleAsync(w => w.WorkspaceId == ws);
-        wallet.BalanceMinor.Should().Be(-800);
-        wallet.BalanceMinor.Should().Be(
+        wallet.BalanceMinor.Should().Be(Harness.PaidUp - 800);
+        wallet.BalanceMinor.Should().Be(Harness.PaidUp +
             await db.BillingLedger.Where(l => l.WorkspaceId == ws).SumAsync(l => l.AmountMinor));
     }
 

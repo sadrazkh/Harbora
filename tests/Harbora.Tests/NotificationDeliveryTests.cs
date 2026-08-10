@@ -206,6 +206,45 @@ public class NotificationDeliveryTests
             .Should().BeNull("a stale error would send someone hunting a problem that is already fixed");
     }
 
+    // ---- how many rules it reached ----
+    //
+    // The number NotifyAsync answers with is the only thing that can tell a caller "nobody could
+    // have received this", and the caller that needs it is the hourly billing pass: with no rule on
+    // the workspace the dispatch loop runs zero times, nothing throws, no row changes, and the
+    // warning before a customer's site stops is recorded as delivered to nobody.
+
+    [Fact]
+    public async Task A_rule_that_took_the_notification_is_counted()
+    {
+        var handler = new Responder(HttpStatusCode.OK);
+        var (service, _, _) = Build(handler);
+
+        var reached = await service.NotifyAsync(
+            Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical, "t", "b", default);
+
+        reached.Should().Be(1);
+        handler.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_rule_that_opted_out_of_the_event_is_not_counted_as_having_received_it()
+    {
+        // Rules the message was handed to, not rules the workspace happens to own. A workspace whose
+        // only channel has this event unticked hears nothing, and counting it would tell the caller
+        // somebody was told — the same fault the count exists to close, one layer further down.
+        var handler = new Responder(HttpStatusCode.OK);
+        var (service, db, rule) = Build(handler);
+
+        rule.OnDeployFailed = false;
+        await db.SaveChangesAsync();
+
+        var reached = await service.NotifyAsync(
+            Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical, "t", "b", default);
+
+        reached.Should().Be(0);
+        handler.Calls.Should().Be(0, "the count has to agree with what actually went out");
+    }
+
     [Fact]
     public async Task An_unreachable_channel_never_throws_into_the_caller()
     {

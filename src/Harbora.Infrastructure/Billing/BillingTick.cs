@@ -25,10 +25,18 @@ namespace Harbora.Infrastructure.Billing;
 /// pass, so a forgotten price on a popular tier is one legible line rather than twenty thousand.
 /// </para>
 /// </summary>
+/// <param name="WorkspacesSuspended">
+/// How many workspaces this pass took down for an empty balance — counted only where the pass is
+/// what took them down, so a suspension it merely retried, and one it declined to touch, are both
+/// zero. It says nothing about how many workloads actually stopped: a workspace holding nothing
+/// running is suspended without a container being touched, and anything left running after the
+/// attempt is named in <see cref="Failures"/> instead.
+/// </param>
 public sealed record BillingTickResult(
     int WorkspacesCharged,
     int LinesWritten,
     int HoursBackfilled,
+    int WorkspacesSuspended,
     IReadOnlyList<string> Failures);
 
 /// <summary>
@@ -68,6 +76,16 @@ public sealed record BillingTickResult(
 /// because a day of backfill opens a fresh scope per hour and would otherwise send twenty-four copies
 /// of one piece of news. What outlives it is <see cref="Wallet.LowBalanceWarnedAtBalanceMinor"/>.
 /// </para>
+///
+/// <para>
+/// <b>And then the lights actually go out.</b> Charging somebody past zero and leaving their
+/// containers up is the state this whole feature exists to prevent, so once the money is settled the
+/// pass hands every workspace it left at or below nothing to <see cref="BillingSuspension"/>. That is
+/// the promise the runbook makes to a customer before an operator switches billing on, and before it
+/// was wired the platform kept it only in the narrow sense that the start gate refused NEW starts —
+/// which is worse than not keeping it, because an operator seeing refusals concludes that suspension
+/// works while the balance goes negative without bound and the workloads go on being charged.
+/// </para>
 /// </summary>
 public sealed class BillingTick(
     IServiceScopeFactory scopeFactory,
@@ -83,10 +101,12 @@ public sealed class BillingTick(
     private const int WalletWriteAttempts = 3;
 
     /// <summary>
-    /// One hour, every workspace. Idempotent twice over: the lines already written for the hour are
-    /// read first and skipped, and the unique index on
-    /// (WorkspaceId, ResourceType, ResourceId, BillingHour) settles the race the read cannot win. A
-    /// retry from the durable queue is therefore harmless.
+    /// One hour, every workspace, and then a stop for everyone the hour left at nothing. Idempotent
+    /// twice over: the lines already written for the hour are read first and skipped, and the unique
+    /// index on (WorkspaceId, ResourceType, ResourceId, BillingHour) settles the race the read cannot
+    /// win. A retry from the durable queue is therefore harmless — and so is the suspension it runs
+    /// afterwards, which finds the workspace already stopped and finishes anything the last attempt
+    /// could not.
     /// </summary>
     public async Task<BillingTickResult> ChargeHourAsync(DateTimeOffset hour, CancellationToken ct)
     {
@@ -94,6 +114,7 @@ public sealed class BillingTick(
         if (Off(hour)) return pass.Result();
 
         await ChargeHourAsync(hour, pass, ct);
+        await StopWhoeverIsOutOfMoneyAsync(pass, ct);
         return pass.Result();
     }
 
@@ -127,21 +148,27 @@ public sealed class BillingTick(
         }
 
         var dropped = owed - pass.HoursBackfilled;
-        if (dropped <= 0) return pass.Result();
+        if (dropped > 0)
+        {
+            // Named rather than skipped. The whole point of the bound is that the platform does not
+            // get to decide on its own how much free hosting is acceptable, so the hours it declined
+            // to pay for are stated, with the setting that decided it.
+            var from = next.AddHours(pass.HoursBackfilled);
+            var message =
+                $"The backfill stopped at the {bound}-hour bound; {dropped} hour(s) from " +
+                $"{from:yyyy-MM-dd HH:mm}Z onwards were not charged. Raise " +
+                $"{BillingOptions.SectionName}:{nameof(BillingOptions.MaxBackfillHours)}, or run the " +
+                "catch-up again — the oldest hours were paid first, so the rest are still reachable.";
+            pass.Report("backfill-bound", message);
+            logger.LogWarning(
+                "Billing backfill stopped at the {Bound}-hour bound; {Dropped} hour(s) from {From} were not charged.",
+                bound, dropped, from);
+        }
 
-        // Named rather than skipped. The whole point of the bound is that the platform does not get
-        // to decide on its own how much free hosting is acceptable, so the hours it declined to pay
-        // for are stated, with the setting that decided it.
-        var from = next.AddHours(pass.HoursBackfilled);
-        var message =
-            $"The backfill stopped at the {bound}-hour bound; {dropped} hour(s) from " +
-            $"{from:yyyy-MM-dd HH:mm}Z onwards were not charged. Raise " +
-            $"{BillingOptions.SectionName}:{nameof(BillingOptions.MaxBackfillHours)}, or run the " +
-            "catch-up again — the oldest hours were paid first, so the rest are still reachable.";
-        pass.Report("backfill-bound", message);
-        logger.LogWarning(
-            "Billing backfill stopped at the {Bound}-hour bound; {Dropped} hour(s) from {From} were not charged.",
-            bound, dropped, from);
+        // After every hour of the arrears, never between them — the reason is in
+        // StopWhoeverIsOutOfMoneyAsync, and it is the difference between billing a day the customer
+        // spent running and billing it at the rate of the outage this pass caused halfway through.
+        await StopWhoeverIsOutOfMoneyAsync(pass, ct);
 
         return pass.Result();
     }
@@ -238,6 +265,147 @@ public sealed class BillingTick(
             }
         }
     }
+
+    /// <summary>
+    /// Stops every workspace the money has run out for, once the money has finished moving.
+    ///
+    /// <para>
+    /// <b>Why this is a pass of its own and not four lines inside the charge loop.</b> A workspace's
+    /// hour is priced from the status its workloads are in <i>now</i> — there is no history of what
+    /// they were doing at 3am — so anything that stops a container mid-pass corrupts the input of
+    /// every hour the pass has not reached yet. Suspending inside the loop during a day of catch-up
+    /// would charge the first owed hour at the running rate, take the apps down, and then bill the
+    /// remaining twenty-three hours of a day the customer spent running at the stopped rate, on a
+    /// bill that says "Stopped" about an app that was up. The arrears are settled in full first, and
+    /// only then is anybody stopped. Two smaller reasons point the same way: the decision is taken on
+    /// the balance the customer actually ends the pass with rather than on an intermediate one, and a
+    /// node that takes thirty seconds to answer a stop cannot delay charging the tenants behind it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>At or below nothing, which is the gate's line and not a second opinion about it.</b>
+    /// <c>BillingGate</c> opens on <c>balance &gt; 0</c>, so the hour that stops a workspace is the
+    /// same hour it stops being able to start anything. A stricter test here would leave a workspace
+    /// sitting at exactly zero running everything it already had while unable to start a thing, which
+    /// is neither of the two states this feature has words for.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A wallet has to exist.</b> No wallet is not a balance of zero — it is a workspace nothing
+    /// has ever charged, because the row is created by the first hour that costs something. Reading
+    /// its absence as an empty balance would suspend every tenant on the install the moment billing
+    /// was switched on, before a single hour had been billed to anybody.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The provider's own workspace is not offered, and that is not a second copy of the rule.</b>
+    /// <see cref="BillingSuspension.SuspendAsync"/> refuses it, and that refusal is the authority — a
+    /// caller-side skip can only ever make this pass suspend FEWER workspaces, never one it should
+    /// not, which is why the two are safe to have. What the skip is actually for is noise: the pass
+    /// charges the platform's own workspace like everybody else, so its balance goes negative on the
+    /// first hour and stays there for the life of the install, and a refusal reported once an hour
+    /// for ever is exactly how the channel that also carries the real faults stops being read.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A scope each, so one workspace's failure cannot be written under the next one's name.</b>
+    /// <see cref="BillingSuspension"/> writes what was running before it touches a container, and a
+    /// fault between those two leaves that half in the change tracker. Sharing one context down the
+    /// loop would hand those writes to the next workspace's save — the shape the charge loop above
+    /// clears its tracker to avoid — and here the leftovers are suspension flags. A scope per
+    /// workspace throws the whole context away instead, which cannot be got wrong later.
+    /// </para>
+    /// </summary>
+    private async Task StopWhoeverIsOutOfMoneyAsync(Pass pass, CancellationToken ct)
+    {
+        List<OutOfMoney> unpaid;
+
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+
+            // Unfiltered for the reason the whole class is: this runs with no session behind it, and
+            // a filtered read finds no workspaces and stops nobody while reporting a clean pass.
+            unpaid = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
+                .Where(w => !w.IsDefault)
+                .Join(db.Wallets.IgnoreQueryFilters().AsNoTracking(),
+                    w => w.Id, wallet => wallet.WorkspaceId,
+                    (w, wallet) => new { w.Id, w.Name, w.IsSuspended, wallet.BalanceMinor })
+                .Where(x => x.BalanceMinor <= 0)
+                .Select(x => new OutOfMoney(x.Id, x.Name, x.IsSuspended))
+                .ToListAsync(ct);
+        }
+        // The one read that decides who gets stopped, so it is the one whose failure would otherwise
+        // be silent in the worst way: a pass that charged everybody and then threw on the way to
+        // stopping anybody. Thrown outward it would also lose the whole hour's result — including the
+        // failure that named whatever took the database down in the first place, which is exactly the
+        // case the charge loop above already handles by hand.
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            pass.Report("suspension-read",
+                "The pass could not read which workspaces have run out of balance, so none of them " +
+                $"were stopped: {ex.Message}. Whatever is out of money is still running and still " +
+                "being charged for; the next pass will try again.");
+            logger.LogError(ex, "Reading the workspaces to suspend for an empty balance failed; nobody was stopped.");
+            return;
+        }
+
+        foreach (var workspace in unpaid)
+        {
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+
+                // Required, never optional, for the reason the notification service is: a
+                // null-tolerant resolution would turn "nobody wired the suspension up" into a pass
+                // that charges everybody, stops nobody and reports success — which is the fault this
+                // method was written to close, arriving back through the container.
+                var suspension = scope.ServiceProvider.GetRequiredService<BillingSuspension>();
+
+                var outcome = await suspension.SuspendAsync(workspace.Id, ct);
+
+                // Passed through as they are. Each one is already a sentence naming the workspace and
+                // what is still running in it, and every one of them is a workload spending a balance
+                // that is not there — including the refusals, which name a cost somebody has to
+                // decide about rather than a bug.
+                foreach (var failure in outcome.Failures)
+                    pass.Report($"suspension:{workspace.Id}:{failure}", failure);
+
+                // Counted only where this pass is what took them down. A workspace it merely retried
+                // was already stopped last hour and stays at or below nothing for ever afterwards, so
+                // counting it would report the same outage as news every hour until somebody paid.
+                if (!workspace.AlreadySuspended && outcome.WorkspaceSuspended)
+                    pass.Suspended.Add(workspace.Id);
+            }
+            // Shutdown is not a suspension failure, the same guard the charge loop uses: without it,
+            // stopping the panel mid-pass records one failure per remaining tenant for a run that was
+            // simply asked to stop.
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                // Named, counted and stepped over. One tenant's unreachable node must not leave the
+                // next tenant's containers up on a balance of nothing — and nothing here throws
+                // outward, because the money is committed and an hour rolled back over a container
+                // that would not stop is free hosting bought with an outage.
+                pass.Report($"suspension:{workspace.Id}",
+                    $"Workspace \"{workspace.Name}\" has run out of balance and could not be " +
+                    $"stopped: {ex.Message}. Its apps and databases are still running and still " +
+                    "being charged for; the next pass will try again.");
+                logger.LogError(ex,
+                    "Suspending workspace {Workspace} for an empty balance failed; the remaining workspaces were still suspended.",
+                    workspace.Id);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A workspace the pass is about to stop.
+    /// </summary>
+    /// <param name="AlreadySuspended">
+    /// Read before the attempt, because afterwards every one of them is suspended and the difference
+    /// between "this pass stopped them" and "this pass finished stopping them" has gone.
+    /// </param>
+    private sealed record OutOfMoney(Guid Id, string Name, bool AlreadySuspended);
 
     /// <summary>
     /// Charges one workspace for one hour, and answers with what that hour cost it in minor units.
@@ -549,6 +717,16 @@ public sealed class BillingTick(
     /// stays low — and this whole mechanism exists because that flood is what makes a customer stop
     /// reading.
     /// </para>
+    ///
+    /// <para>
+    /// <b>That argument has one hole, and it is filled here rather than by reordering the two.</b>
+    /// It rests on there being a rule for the failed attempt to be recorded on. A workspace with no
+    /// alert rule at all — the ordinary case, since nothing but the alerts page creates one — has
+    /// nowhere for the failure to be read, and the dispatch simply iterates nothing and returns. So
+    /// the count of rules reached is asked for, and a count of zero is reported on this pass exactly
+    /// as a throwing channel is. The record still goes first: a warning nobody could hear must not
+    /// become a warning sent once an hour for ever to the same nobody.
+    /// </para>
     /// </summary>
     private async Task ReviewLowBalanceAsync(
         HarboraDbContext db,
@@ -583,8 +761,28 @@ public sealed class BillingTick(
             if (verdict != LowBalanceVerdict.Warn) return;
 
             var (title, body) = LowBalanceMessage(workspace.Name, wallet.BalanceMinor, hourCostMinor);
-            await notifications.NotifyAsync(
+            var rulesReached = await notifications.NotifyAsync(
                 workspace.Id, AlertEvent.LowBalance, AlertSeverity.Warning, title, body, ct);
+
+            if (rulesReached > 0) return;
+
+            // Nobody could have received it, which until this line was the one way a warning could be
+            // recorded as delivered while reaching nobody at all. Nothing seeds an alert rule — the
+            // alerts page is the only thing that creates one — so a workspace with none is the
+            // ordinary case; the dispatch loop runs zero times, raises nothing, and the balance the
+            // customer was "warned at" is already written down above, so this warning is never sent
+            // again while the balance keeps falling. The reasoning for writing the record first
+            // holds only where there is a rule for the failed attempt to be recorded on. There is
+            // not, so it is said here instead — the same treatment the throwing channel below gets,
+            // and for the same reason.
+            pass.Report($"low-balance-unheard:{workspace.Id}",
+                $"Workspace \"{workspace.Name}\" is inside its low-balance warning window and has no " +
+                "alert rule to receive the warning, so nobody was told. Its apps and databases will " +
+                "be stopped when the balance reaches zero whether or not anybody heard. Add a " +
+                "channel on that workspace's Alerts page.");
+            logger.LogWarning(
+                "Workspace {Workspace} has no alert rule to receive its low-balance warning; nobody was told.",
+                workspace.Id);
         }
         // Shutdown is not a warning failure, same guard as the charge above.
         catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -908,6 +1106,12 @@ public sealed class BillingTick(
         /// <summary>Distinct workspaces, so one workspace over three hours is still one workspace.</summary>
         public HashSet<Guid> Charged { get; } = [];
 
+        /// <summary>
+        /// Workspaces this pass stopped. A set for the same reason <see cref="Charged"/> is one,
+        /// and because the sweep that fills it is allowed to be run twice over the same pass.
+        /// </summary>
+        public HashSet<Guid> Suspended { get; } = [];
+
         public int LinesWritten { get; set; }
         public int HoursBackfilled { get; set; }
 
@@ -919,6 +1123,7 @@ public sealed class BillingTick(
             if (_reported.Add(key)) _failures.Add(message);
         }
 
-        public BillingTickResult Result() => new(Charged.Count, LinesWritten, HoursBackfilled, _failures);
+        public BillingTickResult Result() =>
+            new(Charged.Count, LinesWritten, HoursBackfilled, Suspended.Count, _failures);
     }
 }
