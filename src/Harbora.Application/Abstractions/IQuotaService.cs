@@ -7,6 +7,14 @@ namespace Harbora.Application.Abstractions;
 /// </summary>
 public interface IQuotaService
 {
+    /// <summary>
+    /// Serialises resource creation for one workspace until the caller has saved and committed the
+    /// resource. The quota queries must run while this lease is held; otherwise two requests can
+    /// both read the same old count and both cross the plan ceiling.
+    /// </summary>
+    Task<IQuotaReservation> AcquireCreationLockAsync(Guid workspaceId, CancellationToken ct) =>
+        Task.FromResult<IQuotaReservation>(NoopQuotaReservation.Instance);
+
     Task<WorkspaceUsage> GetUsageAsync(Guid workspaceId, CancellationToken ct);
     Task<QuotaCheck> CanAddAppAsync(Guid workspaceId, string? instanceSizeKey, Guid? excludeAppId, CancellationToken ct);
     Task<QuotaCheck> CanAddServiceAsync(Guid workspaceId, string? instanceSizeKey, CancellationToken ct);
@@ -24,6 +32,26 @@ public interface IQuotaService
     Task<QuotaCheck> CanAddWorkloadsAsync(
         Guid workspaceId, WorkloadQuotaDelta delta, CancellationToken ct) =>
         Task.FromResult(QuotaCheck.Ok);
+}
+
+/// <summary>
+/// A workspace-scoped creation transaction. Disposing without committing rolls the attempted
+/// creation back. Non-relational test doubles use <see cref="NoopQuotaReservation"/>.
+/// </summary>
+public interface IQuotaReservation : IAsyncDisposable
+{
+    Task CommitAsync(CancellationToken ct);
+}
+
+/// <summary>Default reservation for fakes and the EF in-memory provider.</summary>
+public sealed class NoopQuotaReservation : IQuotaReservation
+{
+    public static readonly NoopQuotaReservation Instance = new();
+
+    private NoopQuotaReservation() { }
+
+    public Task CommitAsync(CancellationToken ct) => Task.CompletedTask;
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
 /// <summary>Resources a single operation is about to add to a workspace.</summary>

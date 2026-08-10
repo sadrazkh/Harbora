@@ -55,6 +55,8 @@ public sealed class PreviewEnvironmentService(
                 new DeploymentRequest(existing.Id, DeploymentTrigger.Webhook, Guid.Empty, branch, sha), ct);
         }
 
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(parent.WorkspaceId, ct);
+
         // A preview costs the same as any other service, so it is subject to the same plan. Checked
         // before anything is created: a half-made preview is worse than none.
         var allowed = await quota.CanAddAppAsync(parent.WorkspaceId, parent.InstanceSizeKey, null, ct);
@@ -87,6 +89,8 @@ public sealed class PreviewEnvironmentService(
 
         var environment = await EnsureEnvironmentAsync(parent, projectId, branch, ct);
         var preview = await CreatePreviewAsync(parent, environment.Id, branch, ct);
+
+        await quotaReservation.CommitAsync(ct);
 
         return await deployEngine.QueueDeploymentAsync(
             new DeploymentRequest(preview.Id, DeploymentTrigger.Webhook, Guid.Empty, branch, sha), ct);

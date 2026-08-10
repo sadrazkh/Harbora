@@ -111,6 +111,8 @@ public sealed class EnvironmentCloner(
         if (plan.ResourceCount == 0)
             return CloneOutcome.Refused("There is nothing in that environment to copy.", plan);
 
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(workspaceId, ct);
+
         if (await QuotaRefusalAsync(workspaceId, plan, ct) is { } refusal)
             return CloneOutcome.Refused(refusal, plan);
 
@@ -323,6 +325,8 @@ public sealed class EnvironmentCloner(
                 : ex.Message;
             return CloneOutcome.Refused(reason, plan);
         }
+
+        await quotaReservation.CommitAsync(ct);
 
         // Only now, with rows that exist: provisioning a database whose row was rolled back leaves
         // a container nothing owns.

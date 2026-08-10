@@ -107,6 +107,7 @@ public sealed class UsersController(
         if (workspaceId is null)
             return Back("This installation has no workspace to add the account to.", error: true);
 
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(workspaceId.Value, ct);
         var seat = await quota.CanAddGovernedResourcesAsync(workspaceId.Value,
             new GovernanceQuotaDelta(Members: 1), ct);
         if (!seat.Allowed) return Back((IsFa ? seat.ReasonFa : null) ?? seat.Reason!, error: true);
@@ -115,6 +116,7 @@ public sealed class UsersController(
             Harbora.Infrastructure.Security.WorkspaceMembership.For(workspaceId.Value, created.Id, role));
 
         await db.SaveChangesAsync(ct);
+        await quotaReservation.CommitAsync(ct);
 
         await audit.LogAsync("user.created", "user", email, ClientIp, ct: ct);
         return Back($"Created {email}.");
@@ -158,6 +160,7 @@ public sealed class UsersController(
             ?? await db.Workspaces.IgnoreQueryFilters().Select(w => (Guid?)w.Id).FirstOrDefaultAsync(ct);
         if (workspaceId is null)
             return Back("This installation has no workspace to add the account to.", error: true);
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(workspaceId.Value, ct);
         var seat = await quota.CanAddGovernedResourcesAsync(workspaceId.Value,
             new GovernanceQuotaDelta(Members: 1), ct);
         if (!seat.Allowed) return Back((IsFa ? seat.ReasonFa : null) ?? seat.Reason!, error: true);
@@ -173,6 +176,7 @@ public sealed class UsersController(
             CreatedAt = clock.UtcNow
         });
         await db.SaveChangesAsync(ct);
+        await quotaReservation.CommitAsync(ct);
 
         var link = $"{Request.Scheme}://{Request.Host}/account/reset?token={token}";
         try

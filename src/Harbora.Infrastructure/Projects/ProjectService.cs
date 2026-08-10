@@ -28,16 +28,25 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
     /// </summary>
     public async Task<Environment> EnsureDefaultEnvironmentAsync(Guid workspaceId, CancellationToken ct)
     {
+        await using var reservation = quota is null
+            ? NoopQuotaReservation.Instance
+            : await quota.AcquireCreationLockAsync(workspaceId, ct);
+
         var existing = await db.Environments
             .Where(e => e.WorkspaceId == workspaceId)
             .OrderByDescending(e => e.IsDefault).ThenBy(e => e.CreatedAt)
             .FirstOrDefaultAsync(ct);
-        if (existing is not null) return existing;
+        if (existing is not null)
+        {
+            await reservation.CommitAsync(ct);
+            return existing;
+        }
 
         var name = await db.Workspaces.Where(w => w.Id == workspaceId).Select(w => w.Name)
                        .FirstOrDefaultAsync(ct) ?? "Default";
 
         var (_, environment) = await CreateAsync(workspaceId, name, DefaultProjectSlug, ct);
+        await reservation.CommitAsync(ct);
         return environment;
     }
 
@@ -84,6 +93,10 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
     private async Task<(Project Project, Environment Environment)> CreateCoreAsync(
         Guid workspaceId, string name, string? slug, bool save, CancellationToken ct)
     {
+        await using var reservation = save && quota is not null
+            ? await quota.AcquireCreationLockAsync(workspaceId, ct)
+            : NoopQuotaReservation.Instance;
+
         if (quota is not null)
         {
             var check = await quota.CanAddGovernedResourcesAsync(workspaceId,
@@ -111,7 +124,11 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
 
         db.Projects.Add(project);
         db.Environments.Add(environment);
-        if (save) await db.SaveChangesAsync(ct);
+        if (save)
+        {
+            await db.SaveChangesAsync(ct);
+            await reservation.CommitAsync(ct);
+        }
         return (project, environment);
     }
 
@@ -119,6 +136,10 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
     public async Task<Environment> AddEnvironmentAsync(
         Guid workspaceId, Guid projectId, string name, CancellationToken ct)
     {
+        await using var reservation = quota is null
+            ? NoopQuotaReservation.Instance
+            : await quota.AcquireCreationLockAsync(workspaceId, ct);
+
         if (quota is not null)
         {
             var check = await quota.CanAddGovernedResourcesAsync(workspaceId,
@@ -149,6 +170,7 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
         };
         db.Environments.Add(environment);
         await db.SaveChangesAsync(ct);
+        await reservation.CommitAsync(ct);
         return environment;
     }
 

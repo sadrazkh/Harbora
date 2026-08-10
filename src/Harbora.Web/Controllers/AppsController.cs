@@ -187,6 +187,9 @@ public sealed class AppsController(
         var needMem = size?.MemoryBytes ?? 0;
         var needCpu = size?.CpuCores ?? 0;
 
+        // Keep the count we are about to read stable until the app and its first-hour debit commit.
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(WorkspaceId, ct);
+
         // Enforce the workspace's plan quota before creating anything.
         var check = await quota.CanAddAppAsync(WorkspaceId, model.InstanceSizeKey, excludeAppId: null, ct);
         if (!check.Allowed)
@@ -318,6 +321,8 @@ public sealed class AppsController(
             await PopulateTemplates(ct);
             return View(model);
         }
+
+        await quotaReservation.CommitAsync(ct);
 
         // "Give it a repo and it just works": build + deploy right away and show live logs.
         var canDeploy = model.SourceType is AppSourceType.GitRepository
@@ -649,6 +654,7 @@ public sealed class AppsController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(WorkspaceId, ct);
         var quotaCheck = await quota.CanAddGovernedResourcesAsync(WorkspaceId,
             new GovernanceQuotaDelta(Volumes: 1), ct);
         if (!quotaCheck.Allowed)
@@ -663,6 +669,7 @@ public sealed class AppsController(
             MountPath = normalised
         });
         await db.SaveChangesAsync(ct);
+        await quotaReservation.CommitAsync(ct);
         await audit.LogAsync("app.volume_added", "app", $"{app.Name}:{normalised}", ClientIp, ct: ct);
 
         // Says what it does not do. The volume is a row until the next deployment creates the
@@ -1277,6 +1284,7 @@ public sealed class AppsController(
         // a route.
         if (IsReservedHost(host)) { TempData["Error"] = ReservedHostRefusal(host); return RedirectToAction(nameof(Details), new { id }); }
 
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(WorkspaceId, ct);
         var quotaCheck = await quota.CanAddGovernedResourcesAsync(WorkspaceId,
             new GovernanceQuotaDelta(Domains: 1), ct);
         if (!quotaCheck.Allowed)
@@ -1287,6 +1295,7 @@ public sealed class AppsController(
 
         app.Domains.Add(new DomainName { Host = host, SslEnabled = ssl, ForceHttps = ssl, IsPrimary = app.Domains.Count == 0 });
         await db.SaveChangesAsync(ct);
+        await quotaReservation.CommitAsync(ct);
         TempData["Message"] = "Domain added. Redeploy to route it.";
         return RedirectToAction(nameof(Details), new { id });
     }

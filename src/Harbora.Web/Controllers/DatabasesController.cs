@@ -316,6 +316,7 @@ public sealed partial class DatabasesController(
             ModelState.AddModelError(nameof(model.Version), "The selected database version is not supported.");
         }
 
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(WorkspaceId, ct);
         var check = await quota.CanAddServiceAsync(WorkspaceId, model.InstanceSizeKey, ct);
         if (!check.Allowed) ModelState.AddModelError(string.Empty, check.Reason ?? "Plan quota exceeded.");
 
@@ -403,6 +404,8 @@ public sealed partial class DatabasesController(
             await PopulateCreateAsync(ct);
             return View(model);
         }
+
+        await quotaReservation.CommitAsync(ct);
 
         await engine.QueueProvisionAsync(service.Id, ct);
         return RedirectToAction(nameof(Details), new { id = service.Id });

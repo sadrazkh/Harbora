@@ -75,6 +75,8 @@ public sealed class TemplateDeploymentService(
             && string.IsNullOrWhiteSpace(request.RepositoryUrl))
             throw new InvalidOperationException("This starter needs a Git repository URL.");
 
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(request.WorkspaceId, ct);
+
         if (manifest.Service is null)
         {
             var appQuota = await quota.CanAddAppAsync(request.WorkspaceId, null, null, ct);
@@ -284,6 +286,7 @@ public sealed class TemplateDeploymentService(
                 Domain.Billing.BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey))
             .ToList();
         await creationBilling.SaveAsync(request.WorkspaceId, createdResources, ct);
+        await quotaReservation.CommitAsync(ct);
 
         // The durable queue is FIFO. Dependencies are therefore provisioned before the application
         // that consumes them is built and health-checked.

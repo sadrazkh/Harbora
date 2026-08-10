@@ -647,6 +647,7 @@ public sealed partial class TenantsController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(id, ct);
         var seat = await quota.CanAddGovernedResourcesAsync(id,
             new GovernanceQuotaDelta(Members: 1), ct);
         if (!seat.Allowed)
@@ -657,6 +658,7 @@ public sealed partial class TenantsController(
 
         db.WorkspaceMembers.Add(new WorkspaceMember { Workspace = ws, User = user, Role = role });
         await db.SaveChangesAsync(ct);
+        await quotaReservation.CommitAsync(ct);
         TempData["Message"] = $"Added {email} as {role}.";
         return RedirectToAction(nameof(Details), new { id });
     }

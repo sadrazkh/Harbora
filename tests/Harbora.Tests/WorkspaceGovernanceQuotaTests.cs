@@ -39,6 +39,25 @@ public sealed class WorkspaceGovernanceQuotaTests : IDisposable
     private QuotaService Service(bool billing = true) =>
         new(_db, Options.Create(new BillingOptions { Enabled = billing }));
 
+    [Theory]
+    [InlineData("src/Harbora.Web/Controllers/AppsController.cs")]
+    [InlineData("src/Harbora.Web/Controllers/DatabasesController.cs")]
+    [InlineData("src/Harbora.Web/Controllers/BackupsController.cs")]
+    [InlineData("src/Harbora.Web/Controllers/UsersController.cs")]
+    [InlineData("src/Harbora.Web/Controllers/TenantsController.cs")]
+    [InlineData("src/Harbora.Infrastructure/Projects/ProjectService.cs")]
+    [InlineData("src/Harbora.Infrastructure/Projects/EnvironmentCloner.cs")]
+    [InlineData("src/Harbora.Infrastructure/Projects/PreviewEnvironmentService.cs")]
+    [InlineData("src/Harbora.Infrastructure/Templates/TemplateDeploymentService.cs")]
+    [InlineData("src/Harbora.Infrastructure/Security/WorkspaceAccountService.cs")]
+    public void Every_quota_guarded_creation_surface_takes_the_workspace_creation_lock(string relativePath)
+    {
+        var root = Path.GetFullPath(Path.Combine(TestPaths.WebRoot, "..", ".."));
+        File.ReadAllText(Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar)))
+            .Should().Contain("AcquireCreationLockAsync",
+                $"{relativePath} creates quota-counted resources and must hold the workspace lock from check through save");
+    }
+
     [Fact]
     public async Task Usage_reports_every_governed_resource_and_pending_seat()
     {

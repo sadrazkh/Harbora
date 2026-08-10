@@ -187,6 +187,7 @@ public sealed partial class BackupsController(
             TempData["Error"] = "The backup target or destination does not belong to this workspace.";
             return RedirectToAction(nameof(Index));
         }
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(WorkspaceId, ct);
         var quotaCheck = await quota.CanAddGovernedResourcesAsync(WorkspaceId,
             new GovernanceQuotaDelta(BackupSchedules: 1), ct);
         if (!quotaCheck.Allowed)
@@ -200,6 +201,7 @@ public sealed partial class BackupsController(
             IntervalHours = Math.Max(1, intervalHours), RetentionCount = Math.Max(1, retentionCount), IsEnabled = true
         });
         await db.SaveChangesAsync(ct);
+        await quotaReservation.CommitAsync(ct);
         return RedirectToAction(nameof(Index));
     }
 

@@ -3,6 +3,7 @@ using Harbora.Data;
 using Harbora.Domain.Tenancy;
 using Harbora.Infrastructure.Billing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Options;
 
 namespace Harbora.Infrastructure.Tenancy;
@@ -20,6 +21,39 @@ namespace Harbora.Infrastructure.Tenancy;
 /// </summary>
 public sealed class QuotaService(HarboraDbContext db, IOptions<BillingOptions> billing) : IQuotaService
 {
+    /// <summary>
+    /// Takes a transaction-scoped PostgreSQL advisory lock derived from the workspace id. Every
+    /// resource-creation path takes the same lock before reading usage and commits it only after its
+    /// resource has been saved, turning the old check-then-insert race into a serial decision.
+    /// </summary>
+    public async Task<IQuotaReservation> AcquireCreationLockAsync(Guid workspaceId, CancellationToken ct)
+    {
+        if (!db.Database.IsRelational()) return NoopQuotaReservation.Instance;
+
+        // A stack deployment owns the transaction and then calls ProjectService.PrepareAsync in the
+        // same DbContext. PostgreSQL advisory locks are re-entrant on that connection, so nested
+        // callers only add the same lock and leave commit ownership with the outer operation.
+        var ownsTransaction = db.Database.CurrentTransaction is null;
+        IDbContextTransaction? transaction = null;
+        try
+        {
+            if (ownsTransaction)
+                transaction = await db.Database.BeginTransactionAsync(ct);
+
+            await db.Database.ExecuteSqlRawAsync(
+                "SELECT pg_advisory_xact_lock({0})", [LockKey(workspaceId)], ct);
+
+            return transaction is null
+                ? NoopQuotaReservation.Instance
+                : new DatabaseQuotaReservation(transaction);
+        }
+        catch
+        {
+            if (transaction is not null) await transaction.DisposeAsync();
+            throw;
+        }
+    }
+
     public async Task<WorkspaceUsage> GetUsageAsync(Guid workspaceId, CancellationToken ct)
     {
         var (plan, apps, services, mem, cpu, suspended) = await SnapshotAsync(workspaceId, ct);
@@ -298,6 +332,27 @@ public sealed class QuotaService(HarboraDbContext db, IOptions<BillingOptions> b
         string.IsNullOrWhiteSpace(plan.AllowedSizeKeys) ||
         plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Contains(sizeKey, StringComparer.OrdinalIgnoreCase);
+
+    private static long LockKey(Guid workspaceId)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        workspaceId.TryWriteBytes(bytes, bigEndian: true, out _);
+        return System.Buffers.Binary.BinaryPrimitives.ReadInt64BigEndian(bytes);
+    }
+
+    private sealed class DatabaseQuotaReservation(IDbContextTransaction transaction) : IQuotaReservation
+    {
+        private bool _committed;
+
+        public async Task CommitAsync(CancellationToken ct)
+        {
+            if (_committed) return;
+            await transaction.CommitAsync(ct);
+            _committed = true;
+        }
+
+        public ValueTask DisposeAsync() => transaction.DisposeAsync();
+    }
 
     private sealed record GovernanceUsage(
         int Members, int Projects, int Environments, int Domains, int Volumes, int BackupSchedules);

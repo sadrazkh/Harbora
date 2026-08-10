@@ -103,6 +103,11 @@ public sealed partial class WorkspaceAccountService(
         email = NormalizeEmail(email);
         if (role is not (WorkspaceRole.Admin or WorkspaceRole.Member or WorkspaceRole.Viewer or WorkspaceRole.Operator))
             throw new ArgumentException("Choose a valid workspace role.", nameof(role));
+
+        await using var reservation = quota is null
+            ? NoopQuotaReservation.Instance
+            : await quota.AcquireCreationLockAsync(workspaceId, ct);
+
         if (await db.WorkspaceMembers.IgnoreQueryFilters()
             .AnyAsync(m => m.WorkspaceId == workspaceId && m.User!.Email == email, ct))
             throw new InvalidOperationException("That account is already a member of this workspace.");
@@ -137,6 +142,7 @@ public sealed partial class WorkspaceAccountService(
         };
         db.WorkspaceInvitations.Add(row);
         await db.SaveChangesAsync(ct);
+        await reservation.CommitAsync(ct);
         return new(row, token);
     }
 
@@ -152,6 +158,15 @@ public sealed partial class WorkspaceAccountService(
     {
         var invitation = await FindInvitationAsync(token, ct)
             ?? throw new InvalidOperationException("This invitation is not valid.");
+
+        await using var reservation = quota is null
+            ? NoopQuotaReservation.Instance
+            : await quota.AcquireCreationLockAsync(invitation.WorkspaceId, ct);
+
+        // The token had to be read once to discover its workspace and therefore its lock key. Read
+        // it again after taking that lock so two acceptance requests cannot both act on the stale
+        // pre-lock state.
+        await db.Entry(invitation).ReloadAsync(ct);
         if (invitation.IsRevoked) throw new InvalidOperationException("This invitation was revoked.");
         if (invitation.AcceptedAt is not null) throw new InvalidOperationException("This invitation was already used.");
         if (invitation.ExpiresAt <= clock.UtcNow) throw new InvalidOperationException("This invitation has expired.");
@@ -179,6 +194,7 @@ public sealed partial class WorkspaceAccountService(
         invitation.AcceptedAt = clock.UtcNow;
         invitation.AcceptedByUserId = user.Id;
         await db.SaveChangesAsync(ct);
+        await reservation.CommitAsync(ct);
         return invitation.Workspace!;
     }
 
