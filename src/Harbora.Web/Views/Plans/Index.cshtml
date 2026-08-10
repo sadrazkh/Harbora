@@ -16,6 +16,18 @@
         : $"{b / 1024.0 / 1024 / 1024:0.##} GB";
     string Count(int n) => n <= 0 ? (isFa ? "نامحدود" : "unlimited") : n.ToString();
     string Cores(double c) => c <= 0 ? (isFa ? "نامحدود" : "unlimited") : c.ToString("0.##");
+
+    // A price, said as what it is. Blank is not zero anywhere on this screen: "not priced" is a
+    // resource the hourly meter cannot charge for and an operator has to come back to, and "free"
+    // is a decision somebody made. Shown in the lists as well as in the forms, because the whole
+    // point of the distinction is that an unpriced tier is visible before a month of it has gone by.
+    string Rate(long? minor) => minor is null
+        ? (isFa ? "قیمت‌گذاری‌نشده" : "not priced")
+        : minor.Value == 0
+            ? (isFa ? "رایگان" : "free")
+            : Harbora.Web.Infrastructure.MinorUnits.Format(minor.Value);
+
+    string RateClass(long? minor) => minor is null ? "text-warn" : "text-ink-muted";
 }
 <h1 class="text-2xl font-bold tracking-tight text-ink mb-1">@(isFa ? "پلن و مصرف" : "Plan &amp; Usage")</h1>
 <p class="text-ink-muted text-sm mb-6">@(isFa ? "پلن فعلی:" : "Current plan:") <span class="text-ink font-medium">@u.PlanName</span>
@@ -108,6 +120,23 @@
                 <li>@(isFa ? "دیسک:" : "Disk:") @Disk(p.MaxDiskBytes)</li>
                 @if (!string.IsNullOrWhiteSpace(p.AllowedSizeKeys)){<li>@(isFa ? "اندازه‌های مجاز:" : "Allowed sizes:") <span dir="ltr" class="font-mono text-xs">@p.AllowedSizeKeys</span></li>}
             </ul>
+            @* What the hourly meter charges, next to what the caps allow. A plan can look complete
+               and be unbillable, and this is the only place that difference is visible before the
+               tick runs. *@
+            <ul class="mt-3 space-y-1 border-t border-line pt-3 text-sm">
+                <li class="@RateClass(p.BaseRatePerHourMinor)">
+                    @(isFa ? "حداقل هزینهٔ هر ساعت:" : "Hourly minimum:") <span dir="ltr">@Rate(p.BaseRatePerHourMinor)</span>
+                </li>
+                <li class="@RateClass(p.DiskGbHourMinor)">
+                    @(isFa ? "دیسک — هر گیگابایت، هر ساعت:" : "Disk — per GB, per hour:") <span dir="ltr">@Rate(p.DiskGbHourMinor)</span>
+                </li>
+                @if (p.AllowsOverage)
+                {
+                    <li class="text-ink-faint">
+                        @(isFa ? "عبور از سقف‌ها مجاز است و با همان نرخ‌های بالا حساب می‌شود." : "May go past its caps, charged at the ordinary rates above.")
+                    </li>
+                }
+            </ul>
         </div>
     }
 </div>
@@ -116,9 +145,19 @@
 <div class="rounded-xl border border-line bg-surface divide-y divide-line mb-8">
     @foreach (var s in Model.Sizes)
     {
-        <div class="flex items-center justify-between p-3 text-sm">
+        <div class="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
             <span class="font-medium">@(isFa ? s.NameFa : s.Name) <span class="text-ink-faint font-mono">@s.Key</span></span>
-            <span class="text-ink-muted" dir="ltr">@s.CpuCores vCPU · @Mem(s.MemoryBytes) · @Disk(s.DiskBytes)</span>
+            <span class="flex flex-wrap items-center gap-x-3">
+                <span class="text-ink-muted" dir="ltr">@s.CpuCores vCPU · @Mem(s.MemoryBytes) · @Disk(s.DiskBytes)</span>
+                @* A tier with no price hosts every workload on it for nothing, and the hourly tick
+                   says so to nobody. Here it is on the list an operator already reads. *@
+                <span class="@RateClass(s.RunningRatePerHourMinor)">
+                    @(isFa ? "در حال اجرا — هر ساعت:" : "Running — per hour:") <span dir="ltr">@Rate(s.RunningRatePerHourMinor)</span>
+                </span>
+                <span class="@RateClass(s.StoppedRatePerHourMinor)">
+                    @(isFa ? "متوقف — هر ساعت:" : "Stopped — per hour:") <span dir="ltr">@Rate(s.StoppedRatePerHourMinor)</span>
+                </span>
+            </span>
         </div>
     }
 </div>
@@ -141,7 +180,7 @@
             @foreach (var s in Model.Sizes)
             {
                 <form asp-controller="Plans" asp-action="UpdateSize" asp-route-id="@s.Id" method="post"
-                      class="grid gap-3 rounded-lg border border-line bg-surface-2 p-3 sm:grid-cols-5">
+                      class="grid gap-3 rounded-lg border border-line bg-surface-2 p-3 sm:grid-cols-4">
                     @Html.AntiForgeryToken()
                     <div>
                         <label class="form-label" for="sname-@s.Id">@(isFa ? "نام" : "Name") <code dir="ltr" class="text-[11px] font-normal text-ink-faint">@s.Key</code></label>
@@ -159,6 +198,22 @@
                         <label class="form-label" for="sdisk-@s.Id">@(isFa ? "دیسک (GB)" : "Disk (GB)")</label>
                         <input id="sdisk-@s.Id" name="diskGb" type="number" min="0" value="@(s.DiskBytes / 1024 / 1024 / 1024)" class="form-control" dir="ltr" />
                     </div>
+                    @* Money boxes, deliberately plain text with a decimal keypad rather than
+                       type="number": what is typed is read invariantly by the server, and a number
+                       input hands the server whatever the browser's locale made of the keystrokes.
+                       Empty is a value here — see the note under this form. *@
+                    <div>
+                        <label class="form-label" for="srun-@s.Id">@(isFa ? "در حال اجرا — هر ساعت" : "Running — per hour")</label>
+                        <input id="srun-@s.Id" name="runningRate" value="@Harbora.Web.Infrastructure.MinorUnits.Box(s.RunningRatePerHourMinor)"
+                               inputmode="decimal" autocomplete="off" class="form-control" dir="ltr"
+                               placeholder="@(isFa ? "قیمت‌گذاری‌نشده" : "not priced")" />
+                    </div>
+                    <div>
+                        <label class="form-label" for="sstop-@s.Id">@(isFa ? "متوقف — هر ساعت" : "Stopped — per hour")</label>
+                        <input id="sstop-@s.Id" name="stoppedRate" value="@Harbora.Web.Infrastructure.MinorUnits.Box(s.StoppedRatePerHourMinor)"
+                               inputmode="decimal" autocomplete="off" class="form-control" dir="ltr"
+                               placeholder="@(isFa ? "قیمت‌گذاری‌نشده" : "not priced")" />
+                    </div>
                     <div>
                         <label class="form-label" for="sorder-@s.Id">@(isFa ? "ترتیب" : "Order")</label>
                         <div class="flex items-center gap-2">
@@ -171,7 +226,7 @@
         </div>
 
         <form asp-controller="Plans" asp-action="CreateSize" method="post"
-              class="mt-4 grid gap-3 border-t border-line pt-4 sm:grid-cols-5">
+              class="mt-4 grid gap-3 border-t border-line pt-4 sm:grid-cols-4">
             @Html.AntiForgeryToken()
             <div>
                 <label class="form-label" for="new-size-key">@(isFa ? "کلید" : "Key")</label>
@@ -190,6 +245,16 @@
                 <input id="new-size-mem" name="memoryMb" type="number" min="0" value="8192" class="form-control" dir="ltr" />
             </div>
             <div>
+                <label class="form-label" for="new-size-run">@(isFa ? "در حال اجرا — هر ساعت" : "Running — per hour")</label>
+                <input id="new-size-run" name="runningRate" inputmode="decimal" autocomplete="off" class="form-control" dir="ltr"
+                       placeholder="@(isFa ? "قیمت‌گذاری‌نشده" : "not priced")" />
+            </div>
+            <div>
+                <label class="form-label" for="new-size-stop">@(isFa ? "متوقف — هر ساعت" : "Stopped — per hour")</label>
+                <input id="new-size-stop" name="stoppedRate" inputmode="decimal" autocomplete="off" class="form-control" dir="ltr"
+                       placeholder="@(isFa ? "قیمت‌گذاری‌نشده" : "not priced")" />
+            </div>
+            <div>
                 <label class="form-label" for="new-size-disk">@(isFa ? "دیسک (GB)" : "Disk (GB)")</label>
                 <div class="flex items-center gap-2">
                     <input id="new-size-disk" name="diskGb" type="number" min="0" value="160" class="form-control" dir="ltr" />
@@ -199,6 +264,14 @@
             </div>
         </form>
         <p class="mt-2 text-xs text-ink-faint">@(isFa ? "۰ در هر سقف یعنی بدون محدودیت." : "0 in any limit means no ceiling.")</p>
+        @* Said explicitly, because it is the opposite of the line above it and the two boxes sit
+           in the same row. A cap of zero is a decision not to cap; a price left blank is not a
+           decision to charge nothing. *@
+        <p class="mt-1 text-xs text-ink-faint">
+            @(isFa
+                ? "در جعبه‌های قیمت، خالی یعنی «قیمت‌گذاری‌نشده» — نه رایگان. برای رایگان بودن عمدی، ۰ بنویسید."
+                : "In a price box, empty means 'not priced' — not free. Type 0 for deliberately free.")
+        </p>
     </section>
 }
 
@@ -262,8 +335,58 @@
                 </p>
             </div>
 
+            @* ---- what the meter charges, as opposed to what the card advertises ----
+               The monthly price above is display only and nothing collects it. These two are the
+               hourly meter, and until one of them is set this plan bills nobody. *@
+            <div class="sm:col-span-2 border-t border-line pt-4">
+                <h3 class="text-sm font-semibold text-ink">@(isFa ? "نرخ‌های ساعتی" : "Hourly rates")</h3>
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa
+                        ? "این‌ها همان چیزی است که هر ساعت از موجودی مشتری کم می‌شود. «قیمت ماهانه» بالا فقط نمایشی است و چیزی از آن برداشت نمی‌شود."
+                        : "These are what is taken from the customer's balance each hour. The monthly price above is display only and nothing collects it.")
+                </p>
+            </div>
+            <div>
+                <label class="form-label" for="new-base-rate">@(isFa ? "حداقل هزینهٔ هر ساعت" : "Hourly minimum")</label>
+                <input id="new-base-rate" name="baseRatePerHour" inputmode="decimal" autocomplete="off" class="form-control" dir="ltr"
+                       placeholder="@(isFa ? "قیمت‌گذاری‌نشده" : "not priced")" />
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa
+                        ? "کف پرداخت: مشتری این پلن دست‌کم این مبلغ را در هر ساعت می‌پردازد، حتی وقتی چیزی اجرا نمی‌کند."
+                        : "The floor: a tenant on this plan pays at least this much per hour, even running nothing.")
+                </p>
+            </div>
+            <div>
+                <label class="form-label" for="new-disk-rate">@(isFa ? "دیسک — هر گیگابایت، هر ساعت" : "Disk — per GB, per hour")</label>
+                <input id="new-disk-rate" name="diskGbHour" inputmode="decimal" autocomplete="off" class="form-control" dir="ltr"
+                       placeholder="@(isFa ? "قیمت‌گذاری‌نشده" : "not priced")" />
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa
+                        ? "بابت هر گیگابایت حجم اختصاص‌یافته، رو به بالا گرد می‌شود."
+                        : "Charged per gibibyte of allocated volume, rounded up.")
+                </p>
+            </div>
+            <div class="sm:col-span-2">
+                <label class="flex items-start gap-2 text-sm text-ink">
+                    <input type="checkbox" name="allowsOverage" value="true" class="mt-0.5" />
+                    <span>
+                        @(isFa ? "اجازهٔ عبور از سقف‌های این پلن" : "Let tenants go past this plan's caps")
+                        <span class="mt-1 block text-xs text-ink-faint">
+                            @(isFa
+                                ? "مازاد با همان نرخ‌های بالا حساب می‌شود، نه با نرخ جریمه‌ای جدا. تا وقتی صورت‌حساب ساعتی روشن نشده باشد این گزینه هیچ کاری نمی‌کند و سقف‌ها همچنان دیوارند. سقف پلن تنها چیزی است که ظرفیت سرور را محدود می‌کند، پس پلنی که از سقف عبور می‌کند بهتر است به یک استخر سرور مشخص بسته شود."
+                                : "The excess is charged at the ordinary rates above, not at a separate burst rate. This does nothing until hourly billing is switched on — until then the caps are still walls. A plan cap is the only thing bounding a node's capacity, so an overage plan is best pinned to a node pool.")
+                        </span>
+                    </span>
+                </label>
+            </div>
+
             <div class="sm:col-span-2"><button class="btn-primary px-4 py-2">@(isFa ? "ساخت پلن" : "Create plan")</button></div>
         </form>
+        <p class="mt-3 text-xs text-ink-faint">
+            @(isFa
+                ? "در جعبه‌های قیمت، خالی یعنی «قیمت‌گذاری‌نشده» — نه رایگان. برای رایگان بودن عمدی، ۰ بنویسید."
+                : "In a price box, empty means 'not priced' — not free. Type 0 for deliberately free.")
+        </p>
     </section>
 
     @* ---- correcting a plan ----
@@ -338,6 +461,40 @@
                                 <label class="form-label" for="sizes-@p.Id">@(isFa ? "اندازه‌های مجاز" : "Allowed instance sizes")</label>
                                 <input id="sizes-@p.Id" name="allowedSizeKeys" value="@p.AllowedSizeKeys" class="form-control font-mono" dir="ltr" placeholder="nano,micro,small" />
                                 <p class="mt-1 text-xs text-ink-faint">@(isFa ? "خالی یعنی همهٔ اندازه‌ها." : "Empty means every size.")</p>
+                            </div>
+
+                            <div class="sm:col-span-2 border-t border-line pt-4">
+                                <h3 class="text-sm font-semibold text-ink">@(isFa ? "نرخ‌های ساعتی" : "Hourly rates")</h3>
+                                <p class="mt-1 text-xs text-ink-faint">
+                                    @(isFa
+                                        ? "خالی یعنی «قیمت‌گذاری‌نشده» — نه رایگان. برای رایگان بودن عمدی، ۰ بنویسید."
+                                        : "Empty means 'not priced' — not free. Type 0 for deliberately free.")
+                                </p>
+                            </div>
+                            <div>
+                                <label class="form-label" for="base-rate-@p.Id">@(isFa ? "حداقل هزینهٔ هر ساعت" : "Hourly minimum")</label>
+                                <input id="base-rate-@p.Id" name="baseRatePerHour" value="@Harbora.Web.Infrastructure.MinorUnits.Box(p.BaseRatePerHourMinor)"
+                                       inputmode="decimal" autocomplete="off" class="form-control" dir="ltr"
+                                       placeholder="@(isFa ? "قیمت‌گذاری‌نشده" : "not priced")" />
+                            </div>
+                            <div>
+                                <label class="form-label" for="disk-rate-@p.Id">@(isFa ? "دیسک — هر گیگابایت، هر ساعت" : "Disk — per GB, per hour")</label>
+                                <input id="disk-rate-@p.Id" name="diskGbHour" value="@Harbora.Web.Infrastructure.MinorUnits.Box(p.DiskGbHourMinor)"
+                                       inputmode="decimal" autocomplete="off" class="form-control" dir="ltr"
+                                       placeholder="@(isFa ? "قیمت‌گذاری‌نشده" : "not priced")" />
+                            </div>
+                            <div class="sm:col-span-2">
+                                <label class="flex items-start gap-2 text-sm text-ink">
+                                    <input type="checkbox" name="allowsOverage" value="true" class="mt-0.5" checked="@p.AllowsOverage" />
+                                    <span>
+                                        @(isFa ? "اجازهٔ عبور از سقف‌های این پلن" : "Let tenants go past this plan's caps")
+                                        <span class="mt-1 block text-xs text-ink-faint">
+                                            @(isFa
+                                                ? "مازاد با همان نرخ‌های بالا حساب می‌شود، نه با نرخ جریمه‌ای جدا. تا وقتی صورت‌حساب ساعتی روشن نشده باشد این گزینه هیچ کاری نمی‌کند."
+                                                : "The excess is charged at the ordinary rates above, not at a separate burst rate. This does nothing until hourly billing is switched on.")
+                                        </span>
+                                    </span>
+                                </label>
                             </div>
 
                             <div class="sm:col-span-2">

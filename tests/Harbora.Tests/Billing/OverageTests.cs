@@ -26,8 +26,9 @@ namespace Harbora.Tests.Billing;
 /// <para>
 /// <b>What the tenant pays for the excess is the ordinary meter</b>, not a surcharge: an application
 /// past the cap is charged its instance size's hourly rate like every other application, and a
-/// volume past the cap is charged the plan's gibibyte-hour. <c>Plan.OverageCpuCoreHourMinor</c> and
-/// its two neighbours are read by nothing on this branch. That is why the sale is conditional on the
+/// volume past the cap is charged the plan's gibibyte-hour. <c>Plan</c> briefly carried
+/// <c>OverageCpuCoreHourMinor</c> and two neighbours for a surcharge; nothing ever read them and
+/// they were dropped rather than put on the admin form. That is why the sale is conditional on the
 /// meter running at all — see
 /// <see cref="A_plan_sells_nothing_past_its_caps_while_billing_is_switched_off"/>.
 /// </para>

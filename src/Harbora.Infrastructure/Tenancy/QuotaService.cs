@@ -118,7 +118,7 @@ public sealed class QuotaService(HarboraDbContext db, IOptions<BillingOptions> b
     /// false on every install that has not opted in — <see cref="BillingTick"/> returns without
     /// charging anybody. Lifting a published limit there would hand out capacity for nothing while
     /// this method reported success, which is the shape the rest of this feature is built to avoid.
-    /// The consequence to hand on: the screen that offers this tick box has to say it does nothing
+    /// The consequence, now carried out: the screen that offers this tick box says it does nothing
     /// until billing is switched on, because the tenant's refusal cannot say it for them — the
     /// wording they see is the ordinary cap message, unchanged.
     /// </para>
@@ -126,11 +126,14 @@ public sealed class QuotaService(HarboraDbContext db, IOptions<BillingOptions> b
     /// <para>
     /// <b>What the excess costs is the ordinary meter.</b> An application past the cap is charged its
     /// instance size's hourly rate like every other application, and a volume past it is charged the
-    /// plan's gibibyte-hour. <c>Plan.OverageCpuCoreHourMinor</c> and its two neighbours are a
-    /// surcharge nothing on this branch reads; a plan with this flag set and those columns blank
-    /// still bills for what it hands over, so they are not required here. If a surcharge is ever
-    /// wired up, it has to be told apart from the rate already being charged, or the hour is billed
-    /// twice.
+    /// plan's gibibyte-hour. There is no surcharge, and no column for one: <c>Plan</c> carried
+    /// <c>OverageCpuCoreHourMinor</c> and two neighbours that nothing read, and they were dropped
+    /// rather than surfaced on the plan form, because an operator who sets a burst rate and is
+    /// charged nothing extra for ever is the failure this whole feature was written against.
+    /// Adding one back starts at the tick, not at the column: the compute meter is priced per
+    /// size-hour, so there is no per-core figure to charge an over-cap fraction of an hour at, and
+    /// whatever is added has to be told apart from the rate already being charged or the hour is
+    /// billed twice.
     /// </para>
     ///
     /// <para>

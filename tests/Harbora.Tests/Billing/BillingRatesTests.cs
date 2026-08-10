@@ -137,9 +137,6 @@ public class BillingRatesTests
         var rateColumns = new (Type Owner, string Name)[]
         {
             (typeof(Plan), nameof(Plan.BaseRatePerHourMinor)),
-            (typeof(Plan), nameof(Plan.OverageCpuCoreHourMinor)),
-            (typeof(Plan), nameof(Plan.OverageMemoryGbHourMinor)),
-            (typeof(Plan), nameof(Plan.OverageDiskGbHourMinor)),
             (typeof(Plan), nameof(Plan.DiskGbHourMinor)),
             (typeof(InstanceSize), nameof(InstanceSize.RunningRatePerHourMinor)),
             (typeof(InstanceSize), nameof(InstanceSize.StoppedRatePerHourMinor)),

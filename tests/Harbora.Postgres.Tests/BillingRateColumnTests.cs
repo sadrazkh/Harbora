@@ -34,12 +34,9 @@ public sealed class BillingRateColumnTests(PostgresLane lane)
         var plan = await db.Plans.AsNoTracking()
             .SingleAsync(p => p.Id == UpgradeFromPreviousRelease.Seeded.PlanCarriedAcross);
 
-        // Every one of the five, not a sample: the UPDATE names each column separately, so a
-        // forgotten line leaves exactly one of them reading as a deliberate zero for ever.
+        // Both of them, not a sample: the UPDATE names each column separately, so a forgotten line
+        // leaves exactly one of them reading as a deliberate zero for ever.
         plan.BaseRatePerHourMinor.Should().BeNull("nobody has priced this plan's floor");
-        plan.OverageCpuCoreHourMinor.Should().BeNull("nobody has priced a core-hour of overage");
-        plan.OverageMemoryGbHourMinor.Should().BeNull("nobody has priced a gibibyte-hour of overage memory");
-        plan.OverageDiskGbHourMinor.Should().BeNull("nobody has priced a gibibyte-hour of overage disk");
         plan.DiskGbHourMinor.Should().BeNull("nobody has priced a gibibyte-hour of volume");
 
         var size = await db.InstanceSizes.AsNoTracking()
@@ -50,18 +47,24 @@ public sealed class BillingRateColumnTests(PostgresLane lane)
     }
 
     /// <summary>
-    /// The seven, spelled as the migration spells them. A fact rather than a theory with seven
-    /// cases on purpose: this assembly gates on Docker through <see cref="PostgresFactAttribute"/>
-    /// and has no theory equivalent, so an <c>[InlineData]</c> row here would run — and fail — on
-    /// every machine without a daemon, which is precisely the red-on-a-laptop that attribute exists
-    /// to prevent.
+    /// The four, spelled as the migrations spell them. A fact rather than a theory with four cases
+    /// on purpose: this assembly gates on Docker through <see cref="PostgresFactAttribute"/> and
+    /// has no theory equivalent, so an <c>[InlineData]</c> row here would run — and fail — on every
+    /// machine without a daemon, which is precisely the red-on-a-laptop that attribute exists to
+    /// prevent.
+    ///
+    /// <para>
+    /// Four rather than the seven <c>BillingRates</c> created. <c>BillingOverageRatesRemoved</c>
+    /// drops <c>OverageCpuCoreHourMinor</c> and its two neighbours, which nothing ever read: the
+    /// excess past a cap is charged at the ordinary meter, so those columns were a surcharge that
+    /// looked settable and collected nothing.
+    /// <see cref="An_overage_surcharge_column_is_gone_rather_than_left_unread"/> is the other side
+    /// of this list — it fails if one of them comes back.
+    /// </para>
     /// </summary>
     private static readonly (string Table, string Column)[] RateColumns =
     [
         ("Plans", "BaseRatePerHourMinor"),
-        ("Plans", "OverageCpuCoreHourMinor"),
-        ("Plans", "OverageMemoryGbHourMinor"),
-        ("Plans", "OverageDiskGbHourMinor"),
         ("Plans", "DiskGbHourMinor"),
         ("InstanceSizes", "RunningRatePerHourMinor"),
         ("InstanceSizes", "StoppedRatePerHourMinor"),
@@ -90,6 +93,40 @@ public sealed class BillingRateColumnTests(PostgresLane lane)
             // there to tell apart from a column that is present and carries no default.
             found.Should().NotBeNull($"the migrations create \"{table}\".\"{column}\"");
             found.Should().Be("no default", $"\"{table}\".\"{column}\" must not fill itself in");
+        }
+    }
+
+    /// <summary>
+    /// That the three overage surcharge columns really left the database, and not only the model.
+    ///
+    /// <para>
+    /// They were added by <c>BillingRates</c>, made nullable by <c>BillingRatesNullable</c> and
+    /// dropped by <c>BillingOverageRatesRemoved</c>, all inside one unmerged branch. A model
+    /// property deleted without the matching <c>DropColumn</c> leaves a column behind that nothing
+    /// names — invisible to EF, invisible to <c>MigrationConsistencyTests</c> once the snapshot
+    /// agrees with the model, and still sitting there as a priced-looking figure for the next
+    /// person who reads the schema by hand.
+    /// </para>
+    /// </summary>
+    [PostgresFact]
+    public async Task An_overage_surcharge_column_is_gone_rather_than_left_unread()
+    {
+        var connectionString = await lane.HeadSchemaAsync();
+
+        foreach (var column in new[]
+                 {
+                     "OverageCpuCoreHourMinor", "OverageMemoryGbHourMinor", "OverageDiskGbHourMinor"
+                 })
+        {
+            var found = await PostgresLane.ScalarAsync<string>(connectionString,
+                $"""
+                 SELECT column_name FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'Plans' AND column_name = '{column}'
+                 """);
+
+            found.Should().BeNull(
+                $"\"Plans\".\"{column}\" is a surcharge nothing collects; bringing it back means "
+                + "wiring the tick first, not adding a box to the plan form");
         }
     }
 }

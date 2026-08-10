@@ -46,29 +46,22 @@ public class Plan : BaseEntity
 
     /// <summary>
     /// Whether this plan sells capacity past its own caps. False keeps today's behaviour, where
-    /// <c>IQuotaService</c> refuses; true lets the tenant past and charges the overage rates below.
+    /// <c>IQuotaService</c> refuses; true lets the tenant past.
+    ///
+    /// <para>
+    /// <b>What the excess costs is the ordinary meter, not a surcharge.</b> An application past the
+    /// cap pays its instance size's hourly rate exactly like one inside it, and a volume past the
+    /// cap pays <see cref="DiskGbHourMinor"/> exactly like one inside it. There is deliberately no
+    /// second, higher rate: this plan class carried three — a per-core-hour, a per-memory-gibibyte
+    /// -hour and a per-disk-gibibyte-hour — which nothing ever read, and they were removed rather
+    /// than surfaced, because a price an operator can set and nothing collects is worse than no
+    /// price at all. Anyone adding burst pricing has to start with the tick, not with a column:
+    /// the compute meter is priced per size-hour, so there is no per-core figure to charge the
+    /// over-cap fraction of an hour at, and whatever is added has to be told apart from the rate
+    /// already being charged or the hour is billed twice.
+    /// </para>
     /// </summary>
     public bool AllowsOverage { get; set; }
-
-    /// <summary>
-    /// Charged per core-hour beyond <see cref="MaxCpuCores"/>. Only read when
-    /// <see cref="AllowsOverage"/>. Null is unpriced; see <see cref="BaseRatePerHourMinor"/>.
-    /// A plan that sells overage without pricing it gives the capacity away, which is the exact
-    /// shape this nullability exists to make visible.
-    /// </summary>
-    public long? OverageCpuCoreHourMinor { get; set; }
-
-    /// <summary>
-    /// Charged per gibibyte-hour beyond <see cref="MaxMemoryBytes"/>. Only read when
-    /// <see cref="AllowsOverage"/>. Null is unpriced; see <see cref="BaseRatePerHourMinor"/>.
-    /// </summary>
-    public long? OverageMemoryGbHourMinor { get; set; }
-
-    /// <summary>
-    /// Charged per gibibyte-hour beyond <see cref="MaxDiskBytes"/>. Only read when
-    /// <see cref="AllowsOverage"/>. Null is unpriced; see <see cref="BaseRatePerHourMinor"/>.
-    /// </summary>
-    public long? OverageDiskGbHourMinor { get; set; }
 
     /// <summary>
     /// Charged per gibibyte-hour of allocated volume, inside the caps as well as past them.

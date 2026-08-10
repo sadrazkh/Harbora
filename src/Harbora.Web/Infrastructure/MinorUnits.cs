@@ -95,4 +95,50 @@ public static class MinorUnits
         minor = (long)Math.Round(major * PerMajor, MidpointRounding.AwayFromZero);
         return true;
     }
+
+    /// <summary>
+    /// Reads a price box on an administration form, where leaving it empty is an answer of its own.
+    ///
+    /// <para>
+    /// <b>An empty box is accepted and yields <c>null</c>, not <c>0</c>.</b> That is the whole
+    /// difference between "this resource is deliberately free" and "no human has priced it yet",
+    /// and the two want opposite responses: a zero is a line worth no money, an unset rate is an
+    /// operator who has to be told. A form that wrote zero for an empty box would destroy the
+    /// distinction every rate column on <c>Plan</c> and <c>InstanceSize</c> is nullable to keep.
+    /// </para>
+    ///
+    /// <para>
+    /// Refuses only what it cannot read. A negative figure parses here and is handed back as a
+    /// negative — the caller refuses it and says so, because "that is not a number" and "a price
+    /// cannot be negative" send an administrator to two different corrections, and one refusal
+    /// covering both is the shape that makes somebody guess.
+    /// </para>
+    /// </summary>
+    public static bool TryParseRate(string? text, out long? minor)
+    {
+        minor = null;
+        if (string.IsNullOrWhiteSpace(text)) return true;
+
+        if (!TryParseMajor(text, out var parsed)) return false;
+
+        minor = parsed;
+        return true;
+    }
+
+    /// <summary>
+    /// A rate as it goes back into a form box: empty for a rate nobody has set, and <b>ungrouped</b>.
+    ///
+    /// <para>
+    /// Not <see cref="Format(long)"/>, which groups. A number box whose value carries thousands
+    /// separators is a value the input refuses, and a browser that refuses its own initial value
+    /// renders the box empty — so an administrator who came to change a cap saves the form and
+    /// silently un-prices the plan, which reads on every later tick as a resource nobody has
+    /// priced. Invariant for the same reason the parser is: this string is posted straight back
+    /// into <see cref="TryParseRate"/>, and a round trip through two cultures is where a factor of
+    /// ten comes from.
+    /// </para>
+    /// </summary>
+    public static string Box(long? minor) => minor is { } value
+        ? (value / (decimal)PerMajor).ToString("0.00", CultureInfo.InvariantCulture)
+        : string.Empty;
 }
