@@ -131,7 +131,17 @@ public sealed class PassthroughRedactor : ISecretRedactor
 /// <summary>Records the notifications raised so failure paths can be asserted.</summary>
 public sealed class RecordingNotificationService : INotificationService
 {
-    public sealed record Sent(AlertEvent Event, AlertSeverity Severity, string Title, string Body);
+    /// <summary>
+    /// <paramref name="Workspace"/> is <see cref="Guid.Empty"/> for a notification raised against one
+    /// rule by id, which carries its own workspace and is never told one.
+    ///
+    /// <para>
+    /// It is recorded at all because "a notification was sent" and "the right customer was told" are
+    /// different facts, and a caller that looks up the wrong workspace raises exactly the right
+    /// number of notifications to the wrong people.
+    /// </para>
+    /// </summary>
+    public sealed record Sent(Guid Workspace, AlertEvent Event, AlertSeverity Severity, string Title, string Body);
 
     public List<Sent> Notifications { get; } = [];
 
@@ -144,7 +154,7 @@ public sealed class RecordingNotificationService : INotificationService
     public Task NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        Notifications.Add(new Sent(evt, severity, title, body));
+        Notifications.Add(new Sent(workspaceId, evt, severity, title, body));
         return Task.CompletedTask;
     }
 
@@ -162,7 +172,7 @@ public sealed class RecordingNotificationService : INotificationService
     public Task<NotificationResult> NotifyRuleAsync(Guid alertId, AlertSeverity severity, string title, string body, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        Notifications.Add(new Sent(AlertEvent.ThresholdBreached, severity, title, body));
+        Notifications.Add(new Sent(Guid.Empty, AlertEvent.ThresholdBreached, severity, title, body));
         return Task.FromResult(NotificationResult.Ok);
     }
 

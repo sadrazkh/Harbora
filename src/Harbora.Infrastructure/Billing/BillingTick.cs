@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Billing;
@@ -59,6 +59,14 @@ public sealed record BillingTickResult(
 /// is unknown. Charging it anyway would let the corrected pass add the missing lines on top of a
 /// top-up that already covered them — two passes, each looking right, adding up to an overcharge.
 /// Under-charging visibly beats over-charging invisibly.
+/// </para>
+///
+/// <para>
+/// <b>The warning before the lights go out is sent once, not once an hour.</b> This pass is the only
+/// thing that knows what an hour actually costs a workspace, so it is where the balance is measured
+/// against the customer's chosen number of hours — and the de-duplication has to outlive the pass,
+/// because a day of backfill opens a fresh scope per hour and would otherwise send twenty-four copies
+/// of one piece of news. What outlives it is <see cref="Wallet.LowBalanceWarnedAtBalanceMinor"/>.
 /// </para>
 /// </summary>
 public sealed class BillingTick(
@@ -164,6 +172,11 @@ public sealed class BillingTick(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
 
+        // Required, never optional. A null-tolerant resolution here would turn "nobody wired the
+        // notifications up" into a pass that charges everybody, warns nobody, and reports success —
+        // the exact failure this warning exists to prevent, arriving through the container.
+        var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
+
         var workspaces = await db.Workspaces.IgnoreQueryFilters().AsNoTracking().ToListAsync(ct);
         if (workspaces.Count == 0) return;
 
@@ -181,7 +194,14 @@ public sealed class BillingTick(
 
             try
             {
-                await ChargeWorkspaceAsync(db, workspace, plan, sizes, billingHour, pass, ct);
+                var hourCostMinor = await ChargeWorkspaceAsync(db, workspace, plan, sizes, billingHour, pass, ct);
+
+                // Deliberately outside the charge and after it. The review has to run for a
+                // workspace that was charged NOTHING this hour as well as for one that was charged,
+                // because "nothing is running it down any more" is what re-arms a warning already
+                // sent. Folded into ChargeWorkspaceAsync it would sit behind that method's several
+                // early returns and never see the case it exists for.
+                await ReviewLowBalanceAsync(db, notifications, workspace, hourCostMinor, pass, ct);
             }
             // Shutdown is not a billing failure. Without the guard, stopping the panel mid-pass
             // records one failure per remaining tenant for a run that was simply asked to stop.
@@ -219,7 +239,17 @@ public sealed class BillingTick(
         }
     }
 
-    private async Task ChargeWorkspaceAsync(
+    /// <summary>
+    /// Charges one workspace for one hour, and answers with what that hour cost it in minor units.
+    ///
+    /// <para>
+    /// The figure is what the <i>hour</i> came to, not what this pass happened to write: an hour
+    /// another pass had already half-written cost the customer the same, and the low-balance review
+    /// downstream is asking how fast the money is going, not who wrote the rows. Zero means the
+    /// workspace held nothing chargeable — a real answer, not a missing one.
+    /// </para>
+    /// </summary>
+    private async Task<long> ChargeWorkspaceAsync(
         HarboraDbContext db,
         Workspace workspace,
         Plan? plan,
@@ -388,7 +418,11 @@ public sealed class BillingTick(
             // `?? 0` here to turn "nobody priced it" back into "it is free".
             unknowns == 0 ? plan?.BaseRatePerHourMinor : null);
 
-        if (lines.Count == 0) return;
+        // Every planned line is money out, so the hour's cost is the negation of their sum. Read off
+        // the plan rather than off the wallet movement below, which is only the part this pass wrote.
+        var hourCostMinor = -lines.Sum(l => l.AmountMinor);
+
+        if (lines.Count == 0) return hourCostMinor;
 
         // What this hour already holds. The unique index is the authority, but reaching it means an
         // exception and a rolled-back transaction, and the ordinary retry is not a race — it is the
@@ -398,7 +432,7 @@ public sealed class BillingTick(
         // `written.Add` returning false means the line is already on the bill. Adding as we go also
         // drops a duplicate inside this hour's own plan, which the index would refuse anyway.
         var fresh = lines.Where(l => written.Add((l.Type, l.Id))).ToList();
-        if (fresh.Count == 0) return;
+        if (fresh.Count == 0) return hourCostMinor;
 
         var wallet = await db.Wallets.IgnoreQueryFilters()
             .FirstOrDefaultAsync(w => w.WorkspaceId == workspace.Id, ct);
@@ -442,10 +476,205 @@ public sealed class BillingTick(
         // halves of one fact — the wallet is a cached total whose truth is SUM(AmountMinor) — and
         // committing them separately leaves a window where the cache is a lie, plus a crash window
         // where it stays one until somebody reconciles.
-        if (!await SaveAsync(db, wallet, moved, workspace.Id, hour, fresh, ct)) return;
+        if (!await SaveAsync(db, wallet, moved, workspace.Id, hour, fresh, ct)) return hourCostMinor;
 
         pass.LinesWritten += fresh.Count;
         pass.Charged.Add(workspace.Id);
+
+        return hourCostMinor;
+    }
+
+    /// <summary>
+    /// Tells a workspace its balance is running out, once — and works out whether "once" has already
+    /// happened.
+    ///
+    /// <para>
+    /// <b>Read after the money is committed, never before.</b> The verdict is a question about the
+    /// balance the customer actually has, and the charge above can retry: a concurrency conflict
+    /// reloads the wallet and re-applies the movement on top of somebody else's credit, which is
+    /// precisely the case where a decision taken beforehand would warn a customer who had just paid.
+    /// Reading here means the number this judges is the number the ledger now sums to.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The record is written before the notification goes out.</b> If the write lands and the
+    /// delivery does not, the customer misses one warning and the failed attempt is on the alert rule
+    /// where a broken channel is meant to be read. The other order loses the record on a crash and
+    /// sends the same warning again next hour, and the hour after that, for as long as the balance
+    /// stays low — and this whole mechanism exists because that flood is what makes a customer stop
+    /// reading.
+    /// </para>
+    /// </summary>
+    private async Task ReviewLowBalanceAsync(
+        HarboraDbContext db,
+        INotificationService notifications,
+        Workspace workspace,
+        long hourCostMinor,
+        Pass pass,
+        CancellationToken ct)
+    {
+        // Unfiltered for the reason the whole class is: this runs with no session behind it, and a
+        // filtered read finds no wallet and quietly warns nobody. Tracked, because the verdict below
+        // is written back onto this row.
+        var wallet = await db.Wallets.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(w => w.WorkspaceId == workspace.Id, ct);
+
+        // No wallet is no charge that has ever landed, so there is nothing to be running out of and
+        // nothing to re-arm. Not the same as a balance of zero, which has a row.
+        if (wallet is null) return;
+
+        var verdict = Review(
+            wallet.BalanceMinor, hourCostMinor, wallet.LowBalanceHours, wallet.LowBalanceWarnedAtBalanceMinor);
+
+        if (verdict == LowBalanceVerdict.Silent) return;
+
+        try
+        {
+            wallet.LowBalanceWarnedAtBalanceMinor =
+                verdict == LowBalanceVerdict.Warn ? wallet.BalanceMinor : null;
+
+            await db.SaveChangesAsync(ct);
+
+            if (verdict != LowBalanceVerdict.Warn) return;
+
+            var (title, body) = LowBalanceMessage(workspace.Name, wallet.BalanceMinor, hourCostMinor);
+            await notifications.NotifyAsync(
+                workspace.Id, AlertEvent.LowBalance, AlertSeverity.Warning, title, body, ct);
+        }
+        // Shutdown is not a warning failure, same guard as the charge above.
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            // Named rather than swallowed. Nothing here throws outward — the money is committed and
+            // an unreachable Telegram bot must not undo an hour's billing — so this report is the
+            // only place a warning that never reached anybody is visible at all.
+            pass.Report($"low-balance-warning:{workspace.Id}",
+                $"Workspace \"{workspace.Name}\" is inside its low-balance warning window and could " +
+                $"not be told: {ex.Message}. Its apps will be stopped when the balance reaches zero " +
+                "whether or not the warning arrived.");
+            logger.LogError(ex,
+                "Warning workspace {Workspace} that its balance is running low failed; the hour it was charged for stands.",
+                workspace.Id);
+        }
+    }
+
+    /// <summary>What the balance says should happen to the low-balance warning this hour.</summary>
+    private enum LowBalanceVerdict
+    {
+        /// <summary>Nothing to do, and nothing to write.</summary>
+        Silent,
+        /// <summary>Tell them, and write down the balance they were told at.</summary>
+        Warn,
+        /// <summary>They are out of the window; forget the warning so the next one is news again.</summary>
+        Rearm
+    }
+
+    /// <summary>
+    /// The whole rule, in one place and with no database in it.
+    ///
+    /// <para>
+    /// Two things make a warning news again, and both are here because either alone is a hole. A
+    /// balance that climbed clear of the window and fell back into it is a second episode months
+    /// later, which a "warn at most once ever" rule would say nothing about. And money arriving
+    /// while still inside the window is a customer who read the first warning and topped up too
+    /// little — the one moment when telling them again is the most useful thing this feature does,
+    /// and which a plain hysteresis on the window would miss entirely.
+    /// </para>
+    ///
+    /// <para>
+    /// The counterpart is what does <i>not</i> re-arm it: time. The hourly pass only ever takes money
+    /// out, so a balance above the one that was warned at can only mean somebody put money in. That
+    /// is why this is a balance and not a timestamp — a timestamp needs every future writer of the
+    /// wallet to remember to clear it, and a flag that stays honest only while everybody remembers
+    /// is a flag that eventually lies.
+    /// </para>
+    /// </summary>
+    private static LowBalanceVerdict Review(
+        long balanceMinor, long hourCostMinor, int lowBalanceHours, long? warnedAtBalanceMinor)
+    {
+        // Zero is off, as a zero is on every other limit in this platform. Off leaves the record
+        // alone rather than clearing it: switching a warning off is not a customer recovering, and
+        // erasing an outstanding warning here would send a second copy of it the moment somebody
+        // switched the warning back on.
+        if (lowBalanceHours <= 0) return LowBalanceVerdict.Silent;
+
+        if (!RunningLow(balanceMinor, hourCostMinor, lowBalanceHours))
+            return warnedAtBalanceMinor is null ? LowBalanceVerdict.Silent : LowBalanceVerdict.Rearm;
+
+        // Already told, and no money has arrived since. Twenty of these is how a customer learns to
+        // skip the twenty-first, which is the one that says their site stopped.
+        return warnedAtBalanceMinor is { } warned && balanceMinor <= warned
+            ? LowBalanceVerdict.Silent
+            : LowBalanceVerdict.Warn;
+    }
+
+    /// <summary>
+    /// Whether the balance is worth fewer than <paramref name="lowBalanceHours"/> hours at what the
+    /// hour just charged actually cost.
+    ///
+    /// <para>
+    /// An hour that cost nothing is not "worth zero hours" — it is worth an unbounded number of them,
+    /// because nothing is running the balance down. A workspace holding nothing chargeable is
+    /// therefore never low, which is also what re-arms a warning when a customer stops everything:
+    /// the apps they start again next month are a new risk, and the warning they read before they
+    /// stopped was about a different set of them.
+    /// </para>
+    /// </summary>
+    private static bool RunningLow(long balanceMinor, long hourCostMinor, int lowBalanceHours)
+    {
+        if (hourCostMinor <= 0) return false;
+
+        // The threshold is hours × cost, and both are a customer's and an operator's numbers rather
+        // than the platform's. Multiplying them unchecked wraps to a negative on a large enough pair
+        // and turns "warn nearly everybody" into "warn nobody" — silently, and only on the installs
+        // with the biggest bills. A threshold too large to hold is one no balance can reach.
+        if (lowBalanceHours > long.MaxValue / hourCostMinor) return true;
+
+        return balanceMinor < lowBalanceHours * hourCostMinor;
+    }
+
+    /// <summary>
+    /// The warning, in both languages.
+    ///
+    /// <para>
+    /// Both, because nothing here can know which one to pick. This runs on a timer with no request
+    /// and therefore no culture; the destination is a channel — a Telegram group, a shared mailbox, a
+    /// webhook — rather than a person with a <c>PreferredCulture</c>; and an install serving Persian
+    /// customers is the one this platform is built for first. That is item 21 of the do-not-change
+    /// list reaching a surface that has no request to read a language off, and the honest answer is
+    /// to say it twice rather than to guess.
+    /// </para>
+    ///
+    /// <para>
+    /// It counts in hours rather than money on purpose. Hours is the unit the customer set the
+    /// window in, it needs no currency and no decimal places to render, and "about nineteen hours" is
+    /// the sentence somebody can act on — a balance in minor units is not.
+    /// </para>
+    /// </summary>
+    private static (string Title, string Body) LowBalanceMessage(
+        string workspaceName, long balanceMinor, long hourCostMinor)
+    {
+        // Floored, never rounded: a warning that promises an hour the customer does not have is
+        // worse than one that understates.
+        //
+        // Invariant, so a pool thread that happens to be under fa-IR cannot send a figure in digits
+        // the reader has never seen. Said plainly rather than left implicit: no test fails if that
+        // argument is deleted, because .NET does not substitute native digits on this path today —
+        // it is a guard against a format that grows one later, and against the habit of leaving the
+        // thread's culture to decide what a machine-read message looks like.
+        var hours = balanceMinor <= 0 ? 0 : balanceMinor / hourCostMinor;
+        var left = hours.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        var title = $"Balance running low: {workspaceName} — اعتبار رو به پایان است";
+
+        var body =
+            $"Workspace \"{workspaceName}\" has about {left} more hour(s) of balance at what the last " +
+            "hour cost it. When the balance reaches zero its apps and databases are stopped until it " +
+            "is topped up.\n\n" +
+            $"اعتبار فضای کاری «{workspaceName}» با نرخ ساعت گذشته تقریباً برای {left} ساعت دیگر کافی " +
+            "است. با رسیدن اعتبار به صفر، برنامه‌ها و پایگاه‌های داده‌ی آن تا زمان شارژ حساب متوقف " +
+            "می‌شوند.";
+
+        return (title, body);
     }
 
     /// <summary>

@@ -227,7 +227,17 @@ public enum AlertEvent
     BackupFailed = 4,
     Test = 5,
     /// <summary>Appended so existing persisted values keep their meaning.</summary>
-    ThresholdBreached = 6
+    ThresholdBreached = 6,
+    /// <summary>
+    /// The balance is worth fewer than the workspace's chosen number of hours at what the last
+    /// charged hour actually cost. Appended, for the same reason as the value above it.
+    ///
+    /// <para>
+    /// Unlike its neighbours this one carries no per-rule opt-in flag on <c>Alert</c>, and that is a
+    /// decision rather than an omission — see <c>NotificationService.Matches</c>, which says why.
+    /// </para>
+    /// </summary>
+    LowBalance = 7
 }
 
 /// <summary>

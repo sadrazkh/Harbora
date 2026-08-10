@@ -69,6 +69,27 @@ public sealed class NotificationService(
             "This is a test notification from Harbora.", ct);
     }
 
+    /// <summary>
+    /// Which rules an event goes to.
+    ///
+    /// <para>
+    /// The default is <c>false</c>, which is the safe answer for a rule-matching function and a trap
+    /// for whoever appends the next <see cref="AlertEvent"/>: an event with no arm here is delivered
+    /// to nobody, raises nothing, throws nothing, and leaves its caller reporting a notification
+    /// sent. Anything appended to that enum needs a line in this switch on the same day.
+    /// </para>
+    ///
+    /// <para>
+    /// <see cref="AlertEvent.LowBalance"/> answers true for every rule rather than reading an opt-in
+    /// flag of its own, and that is deliberate. Its five neighbours are things that happened to one
+    /// resource; this one says the whole workspace is about to stop, and it is the last message the
+    /// platform sends a customer while they can still do something about it — an install where
+    /// somebody had quietly unticked it would deliver silence and a suspension. The customer's own
+    /// out is the one every rule already has: switch the rule off, or set its minimum severity above
+    /// Warning. Adding a sixth checkbox would also mean a column, a migration and a bilingual label,
+    /// which is a lot of surface to build for the answer "no thank you, do not tell me".
+    /// </para>
+    /// </summary>
     private static bool Matches(Alert a, AlertEvent evt) => evt switch
     {
         AlertEvent.DeployFailed => a.OnDeployFailed,
@@ -76,6 +97,7 @@ public sealed class NotificationService(
         AlertEvent.SslExpiring => a.OnSslExpiring,
         AlertEvent.DiskWarning => a.OnDiskWarning,
         AlertEvent.BackupFailed => a.OnBackupFailed,
+        AlertEvent.LowBalance => true,
         AlertEvent.Test => true,
         _ => false
     };

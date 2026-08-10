@@ -143,7 +143,8 @@ internal static class Harness
         BillingContext db,
         int maxBackfillHours = 72,
         bool enabled = true,
-        BillingContext? through = null)
+        BillingContext? through = null,
+        INotificationService? notifications = null)
     {
         // Handing the database to the tick means giving up your cached copy of it. The tick writes
         // through a context of its own, so anything this one is still tracking is about to be stale
@@ -156,6 +157,14 @@ internal static class Harness
         // a scope from IServiceScopeFactory.
         var services = new ServiceCollection();
         services.AddSingleton<HarboraDbContext>(through ?? TickContext(db));
+
+        // Registered for every tick, not only the tests that assert on it. The tick resolves this
+        // out of the scope it opens, so a harness that supplied it only on request would make every
+        // other test in this file fail on a missing service the moment the warning was wired in —
+        // and, worse, would invite somebody to "fix" that by making the resolution optional, which
+        // is the shape where a warning nobody receives reports itself as sent.
+        services.AddSingleton<INotificationService>(notifications ?? new RecordingNotificationService());
+
         var provider = services.BuildServiceProvider();
 
         return new BillingTick(
