@@ -12,13 +12,21 @@ public sealed record UpgradedInstall(string ConnectionString);
 /// install could be carrying, migrated the rest of the way.
 ///
 /// <para>
-/// Three of the seven migrations on these branches contain hand-written SQL, and until this lane
-/// existed none of it had been executed anywhere. All three <b>change rows</b> rather than being
+/// Eleven migrations sit on these branches and three of them contain hand-written SQL, which until
+/// this lane existed had never been executed anywhere. All three <b>change rows</b> rather than being
 /// additive in the way a column is; one has to, because the <c>CREATE UNIQUE INDEX</c> that follows
 /// would otherwise fail and leave the panel unable to boot, and one has to because the migration
 /// before it filled a price column with a zero that would read as a decision. What follows is the
 /// set of rows that reaches every branch of every one of those statements — the ones that must be
 /// changed, and, just as importantly, the ones that must be left alone.
+/// </para>
+///
+/// <para>
+/// The other eight are additive — new tables, new nullable columns, one dropped column — and are
+/// exercised by being applied at all: <c>An_install_at_the_previous_release_can_be_carried_across</c>
+/// migrates this database the whole way, so any of them that cannot run over a populated install
+/// fails there. Nothing needs seeding for them, which is why they are absent below rather than
+/// forgotten.
 /// </para>
 ///
 /// <para>
@@ -36,7 +44,19 @@ internal static class UpgradeFromPreviousRelease
     /// </summary>
     public const string PreviousRelease = "20260806145158_AlertThresholds";
 
-    /// <summary>What this upgrade applies, in order. <see cref="MigrationTests"/> pins that they are these.</summary>
+    /// <summary>
+    /// The migrations that follow <see cref="PreviousRelease"/>, in order.
+    /// <see cref="MigrationTests"/> pins that they are still these.
+    ///
+    /// <para>
+    /// A prefix, not the whole upgrade: the run itself applies every migration to head, and this
+    /// list only fixes where the boundary is. It is deliberately the four that were here before
+    /// billing, because those are the ones the seed below is written against — extending it every
+    /// time a branch appends a migration would turn a tripwire on the boundary into a second copy of
+    /// the migrations folder, and the "can it be carried across" fact already covers the rest by
+    /// running them.
+    /// </para>
+    /// </summary>
     public static readonly string[] Applied =
     [
         "20260807090816_JobNextAttemptAt",

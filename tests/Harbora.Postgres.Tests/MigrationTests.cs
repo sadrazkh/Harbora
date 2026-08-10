@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -31,11 +29,15 @@ public sealed class MigrationTests(PostgresLane lane)
     }
 
     [PostgresFact]
-    public async Task The_upgrade_under_test_is_the_four_migrations_this_branch_added()
+    public async Task The_upgrade_starts_where_master_ends_and_the_next_four_are_unchanged()
     {
         // A tripwire on the constant the upgrade lane migrates to. Renaming a migration, or adding
         // one before the boundary, would otherwise quietly turn "upgraded from the previous release"
         // into something else, and every assertion built on it would go on passing.
+        //
+        // Four rather than all eleven these branches now carry, for the reason on Applied: this
+        // pins the boundary, and An_install_at_the_previous_release_can_be_carried_across covers
+        // everything past it by running it.
         await using var db = PostgresLane.Open(await lane.HeadSchemaAsync());
 
         var all = db.Database.GetMigrations().ToList();
@@ -80,10 +82,19 @@ public sealed class MigrationTests(PostgresLane lane)
             .Should().Be(new ColumnShape("character varying", Nullable: true, MaxLength: 1024));
     }
 
+    /// <summary>
+    /// Why an index with no filter at all would be wrong here, said once for the two backup indexes
+    /// below: without the <c>WHERE</c>, finished rows are covered too and a target could be backed
+    /// up — or a directory restored into — exactly once, ever.
+    /// </summary>
+    private const string AnUnfilteredIndexWouldCoverFinishedRows =
+        "an index with no filter at all covers finished rows too, and a target would be backed " +
+        "up exactly once, ever";
+
     [PostgresFact]
     public async Task The_active_backup_index_is_unique_over_the_target_and_filtered_to_the_live_states()
     {
-        var definition = await IndexDefinitionAsync(
+        var definition = await IndexCatalogue.DefinitionAsync(
             await lane.HeadSchemaAsync(), "IX_BackupSnapshots_ActiveTarget");
 
         definition.Should().StartWith("CREATE UNIQUE INDEX");
@@ -91,16 +102,17 @@ public sealed class MigrationTests(PostgresLane lane)
 
         // Pending, Preparing, Running — the three live states, spelled as the migration spells them
         // because a migration that has shipped goes on meaning the numbers it was written with.
-        FilteredStatuses(definition).Should().BeEquivalentTo(new[] { 0, 1, 2 },
-            "a filter over any other set covers the wrong rows: too few and a second live backup of " +
-            "one target walks straight past the index, too many and a target can be backed up once " +
-            "and never again. Postgres printed the index as {0}", definition);
+        IndexCatalogue.FilteredValues(definition, AnUnfilteredIndexWouldCoverFinishedRows)
+            .Should().BeEquivalentTo(new[] { 0, 1, 2 },
+                "a filter over any other set covers the wrong rows: too few and a second live backup of " +
+                "one target walks straight past the index, too many and a target can be backed up once " +
+                "and never again. Postgres printed the index as {0}", definition);
     }
 
     [PostgresFact]
     public async Task The_active_restore_index_is_unique_over_the_destination_alone()
     {
-        var definition = await IndexDefinitionAsync(
+        var definition = await IndexCatalogue.DefinitionAsync(
             await lane.HeadSchemaAsync(), "IX_RestoreJobs_ActiveDestination");
 
         definition.Should().StartWith("CREATE UNIQUE INDEX");
@@ -111,15 +123,16 @@ public sealed class MigrationTests(PostgresLane lane)
 
         // Pending and Running. A restore has no Preparing, so this list is shorter than the backups'
         // by one — and Completed is out, or a directory could be restored into exactly once, ever.
-        FilteredStatuses(definition).Should().BeEquivalentTo(new[] { 0, 1 },
-            "the index has to cover every state a restore can still be holding the directory in, and " +
-            "no state in which it has let go of it. Postgres printed the index as {0}", definition);
+        IndexCatalogue.FilteredValues(definition, AnUnfilteredIndexWouldCoverFinishedRows)
+            .Should().BeEquivalentTo(new[] { 0, 1 },
+                "the index has to cover every state a restore can still be holding the directory in, and " +
+                "no state in which it has let go of it. Postgres printed the index as {0}", definition);
     }
 
     [PostgresFact]
     public async Task The_chart_index_puts_the_ranged_column_last()
     {
-        var definition = await IndexDefinitionAsync(
+        var definition = await IndexCatalogue.DefinitionAsync(
             await lane.HeadSchemaAsync(), "IX_MetricRollups_ServerId_Name_ResourceRef_Period_PeriodStart");
 
         definition.Should().NotStartWith("CREATE UNIQUE",
@@ -188,56 +201,6 @@ public sealed class MigrationTests(PostgresLane lane)
         var lines = new List<string>();
         while (await reader.ReadAsync()) lines.Add(reader.GetString(0));
         return string.Join("\n", lines);
-    }
-
-    /// <summary>
-    /// The status values a partial index's filter admits, with the syntax thrown away.
-    ///
-    /// <para>
-    /// Postgres does not hand back the <c>WHERE "Status" IN (0, 1, 2)</c> the migration wrote. It
-    /// reprints the parsed predicate, which over the versions has been <c>= ANY (ARRAY[0, 1, 2])</c>
-    /// and <c>= ANY ('{0,1,2}'::integer[])</c>, and could be a chain of <c>OR</c>s tomorrow. Pinning
-    /// any one of those spellings would be a test that breaks on a Postgres upgrade while the index
-    /// is still exactly right. So this reads the numbers out and ignores everything around them:
-    /// every rendering of a membership test over integers prints those integers, and prints no
-    /// others.
-    /// </para>
-    ///
-    /// <para>
-    /// Digits that touch a letter are not values — they are the tail of a type name like
-    /// <c>int4</c>, which some renderings of a cast reach for. Excluding them costs nothing if
-    /// Postgres never emits one, and is the difference between a green lane and an afternoon spent
-    /// on a filter that was correct all along if it does. This lane has never run, so that spelling
-    /// is a guess until it has; the caller prints the definition it read for the same reason.
-    /// </para>
-    ///
-    /// <para>
-    /// What it buys over asking whether the definition merely mentions <c>WHERE</c> and
-    /// <c>Status</c>: that pair is equally happy with <c>WHERE "Status" = 6</c> — a unique index over
-    /// <i>failed</i> rows, which would refuse a second failure of the same target and let two live
-    /// backups run side by side. Which rows the filter covers is the whole of what the filter is.
-    /// </para>
-    /// </summary>
-    private static IReadOnlyList<int> FilteredStatuses(string definition)
-    {
-        var filter = definition.IndexOf("WHERE", StringComparison.Ordinal);
-
-        filter.Should().BeGreaterThanOrEqualTo(0,
-            "an index with no filter at all covers finished rows too, and a target would be backed " +
-            "up exactly once, ever");
-
-        return Regex.Matches(definition[filter..], "(?<![A-Za-z0-9_])[0-9]+(?![A-Za-z0-9_])")
-            .Select(match => int.Parse(match.Value, CultureInfo.InvariantCulture))
-            .ToList();
-    }
-
-    private static async Task<string> IndexDefinitionAsync(string connectionString, string index)
-    {
-        var definition = await PostgresLane.ScalarAsync<string>(connectionString,
-            $"SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = '{index}'");
-
-        definition.Should().NotBeNull($"the migration creates an index called {index}");
-        return definition!;
     }
 
     private static async Task<ColumnShape> ColumnAsync(string connectionString, string table, string column)

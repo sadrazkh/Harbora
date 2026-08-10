@@ -47,11 +47,12 @@ public sealed class BillingRateColumnTests(PostgresLane lane)
     }
 
     /// <summary>
-    /// The four, spelled as the migrations spell them. A fact rather than a theory with four cases
-    /// on purpose: this assembly gates on Docker through <see cref="PostgresFactAttribute"/> and
-    /// has no theory equivalent, so an <c>[InlineData]</c> row here would run — and fail — on every
-    /// machine without a daemon, which is precisely the red-on-a-laptop that attribute exists to
-    /// prevent.
+    /// The four, spelled as the migrations spell them. A fact rather than a theory with four cases,
+    /// and the reason has changed: <see cref="PostgresTheoryAttribute"/> now exists, so a theory here
+    /// would be gated properly rather than going red on every machine without a daemon. It stays a
+    /// fact because these four are one claim — an upgraded install carries no prices — asked of one
+    /// shared read-only schema. Four theory cases would build nothing extra and report one mistake
+    /// as four.
     ///
     /// <para>
     /// Four rather than the seven <c>BillingRates</c> created. <c>BillingOverageRatesRemoved</c>
