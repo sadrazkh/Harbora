@@ -100,7 +100,10 @@ public class TemplateVersionDeploymentTests
             new AllowAll(),
             new PassthroughProtector(),
             new FakeManagedServiceEngine(),
-            new RecordingDeployments());
+            new RecordingDeployments(),
+            new Harbora.Infrastructure.Billing.ResourceCreationBilling(
+                db, new FixedClock(Now), Microsoft.Extensions.Options.Options.Create(
+                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })));
 
         return new Fixture(db, service, workspaceId, template);
     }

@@ -303,19 +303,19 @@ first-class setting for it yet (HARBORA-0065).
 only on a real domain; a `nip.io` install needs no new record. No new port is opened. `install.sh
 update` writes the router and the settings; a hand-built install needs §8.
 
-**5. Pay-as-you-go billing has arrived, switched off, and nothing is charging anybody.** New tables,
-new screens and a new setting — and after you upgrade, no customer of yours is billed a single unit
-and nothing of theirs stops. `Billing:Enabled` ships as `false`. Charging people is a commercial
-decision and an install that upgraded into it unasked would start billing tenants who were never told
-there was a price, so you have to say yes on purpose. The switch controls only automatic hourly
-charging, overage and balance-based suspension: **Billing**, **Billing vouchers**, manual tenant
-credit/adjustment, and **Billing runs** history remain visible and usable from the panel while it is
-off.
+**5. Pay-as-you-go billing is active by default.** A customer workspace must have a positive balance
+and enough money for the selected resources' first running hour. App/database creation, template
+deployment, environment cloning and automatic previews all debit that first hour in the same
+transaction that creates the resources; a refusal leaves none of those resources behind. The hourly
+pass recognizes the prepaid ledger line and cannot charge that resource twice for the same hour.
+Set `BILLING_ENABLED=false` only for a private installation that deliberately does not enforce money.
+The switch controls automatic charging, creation prepayment, overage and balance suspension; billing
+screens, vouchers and manual credits remain available while it is off.
 
 Read the rest of this item before you say yes. Billing is connected to the durable job queue: one
 `BillingRun` is persisted for every ended UTC hour, missing hours are discovered oldest-first after
 a restart, and an incomplete hour is retried without duplicating ledger lines that already landed.
-The first activation charges only the hour that has just ended — it never reaches backwards into the
+The first activation charges only the hour that has just ended — it never reaches backwards into a
 period in which billing was deliberately disabled.
 
 There is deliberately **no online payment gateway**. Money enters an account in either of two ways:
@@ -360,8 +360,8 @@ writes no line for it at all and names it in that run's warnings instead. Zero m
 is free. If you enable billing and set no prices, the hour is recorded as incomplete and retried;
 it never invents a zero or calls the hour settled. Type a `0` where you mean free.
 
-**Enable it through `.env`, deliberately.** The compose file maps the friendly keys below to the
-panel settings, with safe defaults for an older `.env` that has none of them:
+**Configure it through `.env`.** Billing now defaults to enabled, so the explicit first line below is
+optional but recommended as deployment documentation:
 
 ```bash
 printf '\nBILLING_ENABLED=true\nBILLING_CURRENCY=IRR\nBILLING_MAX_BACKFILL_HOURS=72\n' >> .env

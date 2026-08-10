@@ -1,5 +1,6 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Billing;
 using Harbora.Domain.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -42,9 +43,16 @@ namespace Harbora.Infrastructure.Billing;
 /// to put it right.
 /// </para>
 /// </summary>
-public sealed class BillingGate(HarboraDbContext db, IOptions<BillingOptions> options) : IBillingGate
+public sealed class BillingGate(
+    HarboraDbContext db,
+    IOptions<BillingOptions> options,
+    ISystemClock? clock = null) : IBillingGate
 {
-    public async Task<QuotaCheck> CanStartAsync(Guid workspaceId, CancellationToken ct)
+    public Task<QuotaCheck> CanStartAsync(Guid workspaceId, CancellationToken ct) =>
+        CanStartAsync(workspaceId, BilledResourceType.None, Guid.Empty, ct);
+
+    public async Task<QuotaCheck> CanStartAsync(
+        Guid workspaceId, BilledResourceType resourceType, Guid resourceId, CancellationToken ct)
     {
         // The switch guards the money everywhere else in this feature and it guards it here too. An
         // install that upgraded into billing unasked must not begin refusing to run a tenant's
@@ -92,14 +100,36 @@ public sealed class BillingGate(HarboraDbContext db, IOptions<BillingOptions> op
                     "این فضای کاری معلق است، بنابراین چیزی در آن اجرا نمی‌شود.");
         }
 
+        if (balanceMinor > 0) return QuotaCheck.Ok;
+
+        // Paying exactly one hour leaves the wallet at zero. That must not stop the very resource
+        // whose current hour is already on the ledger, but the identity is essential: a workspace-
+        // level exception would let every other stopped workload piggyback on one prepaid app.
+        if (balanceMinor == 0 && resourceType != BilledResourceType.None && resourceId != Guid.Empty)
+        {
+            var hour = TopOfHour(clock?.UtcNow ?? DateTimeOffset.UtcNow);
+            var prepaid = await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
+                .AnyAsync(l => l.WorkspaceId == workspaceId
+                               && l.ResourceType == resourceType
+                               && l.ResourceId == resourceId
+                               && l.BillingHour == hour
+                               && l.Kind == LedgerKind.Charge
+                               && l.AmountMinor < 0, ct);
+            if (prepaid) return QuotaCheck.Ok;
+        }
+
         // Zero is not a balance. The gap between the balance running out and the hourly pass
         // suspending the workspace is up to an hour wide, and this is the only thing standing in it.
-        return balanceMinor > 0
-            ? QuotaCheck.Ok
-            : QuotaCheck.Deny(
-                "This workspace has no balance left, so nothing new can be started. " +
-                "Top it up and try again.",
-                "اعتبار این فضای کاری به پایان رسیده است، بنابراین چیز جدیدی نمی‌تواند اجرا شود. " +
-                "حساب را شارژ کنید و دوباره تلاش کنید.");
+        return QuotaCheck.Deny(
+            "This workspace has no balance left, so nothing new can be started. " +
+            "Top it up and try again.",
+            "اعتبار این فضای کاری به پایان رسیده است، بنابراین چیز جدیدی نمی‌تواند اجرا شود. " +
+            "حساب را شارژ کنید و دوباره تلاش کنید.");
+    }
+
+    private static DateTimeOffset TopOfHour(DateTimeOffset instant)
+    {
+        var utc = instant.ToUniversalTime();
+        return new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero);
     }
 }

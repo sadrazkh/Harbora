@@ -72,7 +72,8 @@ public sealed class AppOperationsService(
             .Where(a => a.Id == appId).Select(a => a.WorkspaceId).FirstOrDefaultAsync(ct);
         if (workspaceId == Guid.Empty) return; // No such app; ResolveAsync below says so properly.
 
-        var mayStart = await billing.CanStartAsync(workspaceId, ct);
+        var mayStart = await billing.CanStartAsync(
+            workspaceId, Domain.Billing.BilledResourceType.App, appId, ct);
         // QuotaRefusedException, not a plain InvalidOperationException built from mayStart.Reason:
         // both callers of Start/Restart have a request in hand, and this is the shape that lets them
         // pick mayStart.ReasonFa for it instead of always showing English on a panel that is

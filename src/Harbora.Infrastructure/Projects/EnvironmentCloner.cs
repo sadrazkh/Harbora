@@ -40,6 +40,7 @@ public sealed class EnvironmentCloner(
     ISchedulerService scheduler,
     ISecretProtector protector,
     ISystemClock clock,
+    Billing.ResourceCreationBilling creationBilling,
     ILogger<EnvironmentCloner> log)
 {
     /// <summary>
@@ -303,7 +304,25 @@ public sealed class EnvironmentCloner(
             db.Apps.Add(copy);
         }
 
-        await db.SaveChangesAsync(ct);
+        var billable = created.Select(x => new Billing.CreatedBillableResource(
+                Domain.Billing.BilledResourceType.Service,
+                x.Row.Id, x.Row.Name, x.Row.InstanceSizeKey))
+            .Concat(attachments.Select(x => new Billing.CreatedBillableResource(
+                Domain.Billing.BilledResourceType.App,
+                x.Copy.Id, x.Copy.Name, x.Copy.InstanceSizeKey)))
+            .ToList();
+        try
+        {
+            await creationBilling.SaveAsync(workspaceId, billable, ct);
+        }
+        catch (Billing.CreationPaymentRequiredException ex)
+        {
+            db.ChangeTracker.Clear();
+            var reason = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa"
+                ? ex.ReasonFa
+                : ex.Message;
+            return CloneOutcome.Refused(reason, plan);
+        }
 
         // Only now, with rows that exist: provisioning a database whose row was rolled back leaves
         // a container nothing owns.

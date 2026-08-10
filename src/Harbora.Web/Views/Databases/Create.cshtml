@@ -44,7 +44,7 @@
                 {
                     <label class="form-field md:col-span-2"><span>@(isFa ? "پروژه و محیط" : "Project environment")</span><select asp-for="EnvironmentId" asp-items="environments" class="form-control"></select><small>@(isFa ? "این انتخاب شبکه خصوصی و اپ‌های قابل اتصال را تعیین می‌کند." : "This determines the private network and which apps can attach.")</small></label>
 
-                <label class="form-field"><span>@(isFa ? "اندازه منبع" : "Instance size")</span><select asp-for="InstanceSizeKey" asp-items="sizes" class="form-control"></select><small>@(isFa ? "سقف حافظه و CPU این دیتابیس، و سهمی که از quota فضای کاری می‌گیرد." : "The memory and CPU ceiling for this database, and what it takes from the workspace quota.")</small></label>
+                <label class="form-field"><span>@(isFa ? "اندازه منبع" : "Instance size")</span><select asp-for="InstanceSizeKey" asp-items="sizes" class="form-control"></select><small>@(isFa ? "هزینه یک ساعت اجرا همان لحظه کم می‌شود؛ با موجودی ناکافی دیتابیس ساخته نمی‌شود." : "One running hour is charged immediately; an insufficient balance creates no database.")</small></label>
 
                 @* Only when there is a choice. Databases used to be pinned to the control plane's
                    own machine with no way to say otherwise. *@

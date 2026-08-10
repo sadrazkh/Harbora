@@ -34,7 +34,8 @@ public sealed class AppsController(
     ILogger<AppsController> logger,
     IJobQueue jobs,
     IConfiguration config,
-    ICurrentUser currentUser) : Controller
+    ICurrentUser currentUser,
+    Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -295,7 +296,18 @@ public sealed class AppsController(
             templateAdvice = await ApplyTemplateAsync(app, templateId, ct);
 
         db.Apps.Add(app);
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await creationBilling.SaveAsync(WorkspaceId,
+                [new(Harbora.Domain.Billing.BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey)], ct);
+        }
+        catch (Harbora.Infrastructure.Billing.CreationPaymentRequiredException ex)
+        {
+            db.ChangeTracker.Clear();
+            ModelState.AddModelError(string.Empty, IsFa ? ex.ReasonFa : ex.Message);
+            await PopulateTemplates(ct);
+            return View(model);
+        }
 
         // "Give it a repo and it just works": build + deploy right away and show live logs.
         var canDeploy = model.SourceType is AppSourceType.GitRepository

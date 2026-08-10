@@ -53,7 +53,8 @@ public sealed class TemplateDeploymentService(
     IQuotaService quota,
     ISecretProtector protector,
     IManagedServiceEngine managedServices,
-    IDeploymentEngine deployments)
+    IDeploymentEngine deployments,
+    Billing.ResourceCreationBilling creationBilling)
 {
     public async Task<TemplateDeployResult> DeployAsync(TemplateDeployRequest request, CancellationToken ct)
     {
@@ -103,7 +104,7 @@ public sealed class TemplateDeploymentService(
         // call asks for the id directly and never sees the list at all.
         var version = await ResolveVersionAsync(template.Id, request.VersionId, server.Architecture, ct);
 
-        var (project, environment) = await projects.CreateAsync(
+        var (project, environment) = await projects.PrepareAsync(
             request.WorkspaceId,
             string.IsNullOrWhiteSpace(request.ProjectName) ? template.Name : request.ProjectName,
             request.ProjectName,
@@ -159,7 +160,9 @@ public sealed class TemplateDeploymentService(
         // so it can later be expanded with applications without moving networks.
         if (manifest.Service is not null)
         {
-            await db.SaveChangesAsync(ct);
+            await creationBilling.SaveAsync(request.WorkspaceId,
+                createdServices.Select(s => new Billing.CreatedBillableResource(
+                    Domain.Billing.BilledResourceType.Service, s.Id, s.Name, s.InstanceSizeKey)).ToList(), ct);
             foreach (var service in createdServices) await managedServices.QueueProvisionAsync(service.Id, ct);
             return new TemplateDeployResult(project.Id, null, createdServices.Single().Id, null, 0);
         }
@@ -257,7 +260,12 @@ public sealed class TemplateDeploymentService(
             });
 
         db.Apps.Add(app);
-        await db.SaveChangesAsync(ct);
+        var createdResources = createdServices.Select(s => new Billing.CreatedBillableResource(
+                Domain.Billing.BilledResourceType.Service, s.Id, s.Name, s.InstanceSizeKey))
+            .Append(new Billing.CreatedBillableResource(
+                Domain.Billing.BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey))
+            .ToList();
+        await creationBilling.SaveAsync(request.WorkspaceId, createdResources, ct);
 
         // The durable queue is FIFO. Dependencies are therefore provisioned before the application
         // that consumes them is built and health-checked.

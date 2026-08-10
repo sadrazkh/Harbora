@@ -201,7 +201,8 @@ public sealed class DeploymentPipeline(
         // that broke halfway and wrong for one that never started: an app the suspension had
         // stopped would be recorded as Running, and the next hour would be billed for a container
         // that is not there.
-        var mayStart = await billing.CanStartAsync(app.WorkspaceId, ct);
+        var mayStart = await billing.CanStartAsync(
+            app.WorkspaceId, Domain.Billing.BilledResourceType.App, app.Id, ct);
         if (!mayStart.Allowed)
         {
             // English only, on purpose — this is a decision, not the gap QuotaCheck.ReasonFa was

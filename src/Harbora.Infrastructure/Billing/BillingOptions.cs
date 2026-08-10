@@ -9,8 +9,9 @@ public sealed class BillingOptions
     public const string SectionName = "Billing";
 
     /// <summary>
-    /// Off by default. Billing is a commercial decision, and an install that upgrades into it
-    /// without being asked would start charging tenants who were never told there was a price.
+    /// The Web host ships this as enabled for a hosted PaaS: an unfunded customer must not allocate
+    /// billable capacity. The CLR default stays false so another host that forgets to bind its
+    /// configuration fails safe without unexpectedly moving money.
     ///
     /// <para>
     /// Read by <see cref="BillingTick"/> itself and not only by whatever schedules it. The switch

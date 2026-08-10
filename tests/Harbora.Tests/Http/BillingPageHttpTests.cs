@@ -147,11 +147,11 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
-    public async Task A_bill_for_a_workspace_nothing_has_ever_charged_does_not_claim_a_balance_of_zero()
+    public async Task A_fresh_bill_distinguishes_no_statement_from_the_zero_shown_in_the_account_menu()
     {
-        // "Nobody has billed you" and "you have nothing left" are opposite situations, and the panel
-        // does not print a nought for a figure nobody has set — the same rule it applies to a disk
-        // nobody has measured.
+        // The statement still says no bill has been issued. The account menu deliberately says
+        // zero, because resource creation now treats a missing wallet as no spendable money and the
+        // customer asked for that number to stay visible beside their name.
         Panel.GivenUser(fixture.WorkspaceId, "bill-fresh@example.com", SystemRole.Member);
         var client = await Panel.SignedInAs("203.0.113.153", "bill-fresh@example.com");
 
@@ -159,7 +159,7 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
 
         page.Should().Contain("&#x647;&#x646;&#x648;&#x632; &#x635;&#x648;&#x631;&#x62A;&#x200C;&#x62D;&#x633;&#x627;&#x628;&#x6CC; &#x635;&#x627;&#x62F;&#x631; &#x646;&#x634;&#x62F;&#x647; &#x627;&#x633;&#x62A;.",
             "the panel's default language is Persian, and this is the sentence it says there");
-        page.Should().NotContain("0.00", "printing a nought would claim a balance nobody has set");
+        page.Should().Contain("0.00 IRR", "the account menu shows the active workspace's spendable balance");
     }
 
     [Fact]
@@ -315,7 +315,7 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
-    public async Task Disabled_billing_keeps_run_history_visible_but_refuses_retry()
+    public async Task Shipped_billing_keeps_run_history_visible_and_allows_retry()
     {
         var run = new BillingRun
         {
@@ -330,13 +330,13 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
             new System.Net.Http.Headers.StringWithQualityHeaderValue("en"));
 
         var page = await (await client.GetAsync("/billing-runs")).Content.ReadAsStringAsync();
-        page.Should().Contain("billing-run-visible-911").And.Contain("Billing is disabled in configuration");
-        page.Should().NotContain(">Retry<");
+        page.Should().Contain("billing-run-visible-911").And.Contain(">Retry<");
+        page.Should().NotContain("Billing is disabled in configuration");
         var token = await client.AntiforgeryTokenFrom("/billing-runs");
         var response = await client.PostFormAsync($"/billing-runs/{run.Id}/retry", token);
 
         response.StatusCode.Should().Be(HttpStatusCode.Found);
-        Panel.Read(db => db.Jobs.Count(j => j.TargetId == run.Id)).Should().Be(0);
+        Panel.Read(db => db.Jobs.Count(j => j.TargetId == run.Id)).Should().Be(1);
     }
 
     // --- who may credit -----------------------------------------------------------------------

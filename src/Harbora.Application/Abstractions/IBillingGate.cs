@@ -1,3 +1,5 @@
+using Harbora.Domain.Billing;
+
 namespace Harbora.Application.Abstractions;
 
 /// <summary>
@@ -25,4 +27,13 @@ namespace Harbora.Application.Abstractions;
 public interface IBillingGate
 {
     Task<QuotaCheck> CanStartAsync(Guid workspaceId, CancellationToken ct);
+
+    /// <summary>
+    /// Resource-aware form used by workload start paths. Implementations that do not distinguish a
+    /// prepaid first hour retain the workspace-level rule; the production gate uses the identity to
+    /// let exactly the already-paid resource start when its debit left the wallet at zero.
+    /// </summary>
+    Task<QuotaCheck> CanStartAsync(
+        Guid workspaceId, BilledResourceType resourceType, Guid resourceId, CancellationToken ct) =>
+        CanStartAsync(workspaceId, ct);
 }

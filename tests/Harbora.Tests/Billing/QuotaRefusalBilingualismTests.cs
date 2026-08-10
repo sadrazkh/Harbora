@@ -182,7 +182,10 @@ public class QuotaRefusalBilingualismTests
             logger: NullLogger<AppsController>.Instance,
             jobs: new NoopJobQueue(),
             config: new ConfigurationBuilder().Build(),
-            currentUser: currentUser)
+            currentUser: currentUser,
+            creationBilling: new Harbora.Infrastructure.Billing.ResourceCreationBilling(
+                db, clock, Microsoft.Extensions.Options.Options.Create(
+                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })))
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
@@ -232,7 +235,10 @@ public class QuotaRefusalBilingualismTests
             adminer: null!,
             audit: new SilentAudit(),
             node: node,
-            currentUser: currentUser)
+            currentUser: currentUser,
+            creationBilling: new Harbora.Infrastructure.Billing.ResourceCreationBilling(
+                db, clock, Microsoft.Extensions.Options.Options.Create(
+                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })))
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };

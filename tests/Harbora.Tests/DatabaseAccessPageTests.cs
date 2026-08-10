@@ -156,7 +156,10 @@ public class DatabaseAccessPageTests
             adminer: null!,
             audit: new SilentAudit(),
             node,
-            currentUser)
+            currentUser,
+            new Harbora.Infrastructure.Billing.ResourceCreationBilling(
+                db, clock, Microsoft.Extensions.Options.Options.Create(
+                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })))
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
@@ -209,7 +212,10 @@ public class DatabaseAccessPageTests
             adminer: null!,
             audit: new SilentAudit(),
             node,
-            currentUser)
+            currentUser,
+            new Harbora.Infrastructure.Billing.ResourceCreationBilling(
+                db, new Clock(), Microsoft.Extensions.Options.Options.Create(
+                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })))
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };

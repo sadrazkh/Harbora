@@ -210,6 +210,11 @@ workspace admins invite existing or new users with single-use, seven-day links a
 without receiving platform-admin access. Balances belong to workspaces, so the provider can fund a
 person's private workspace or any team workspace independently.
 
+Billable resources are prepaid: creating an app or database (including templates, cloned
+environments and automatic previews) atomically deducts one running hour. A zero or insufficient
+balance, or an instance size without a configured hourly rate, leaves no resource behind. The
+active workspace balance is always visible beside the account menu and links to its billing page.
+
 Instance sizes (nano → large) map to real CPU/memory limits, so customers only consume what their plan allows.
 
 ---

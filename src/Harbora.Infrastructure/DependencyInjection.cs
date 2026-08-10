@@ -226,14 +226,12 @@ public static class DependencyInjection
         services.AddHostedService<Maintenance.DataRetentionSweeper>();
 
         // The durable scheduler queues every ended UTC hour and retries incomplete accounting runs.
-        // It refuses to move any money while Billing:Enabled is false — the shipped default, because an install
-        // that upgraded into billing unasked would start charging tenants who were never told there
-        // was a price.
         services.Configure<Billing.BillingOptions>(config.GetSection(Billing.BillingOptions.SectionName));
         services.AddScoped<Billing.BillingTick>();
         services.AddScoped<Billing.BillingRunHandler>();
         services.AddScoped<Billing.BillingRunRetryService>();
         services.AddHostedService<Billing.BillingScheduler>();
+        services.AddScoped<Billing.ResourceCreationBilling>();
         // Stopping what a workspace is running once its balance is gone, and bringing back exactly
         // what that stop took away. Registered beside the tick and, like it, scheduled by nothing
         // yet; it refuses to suspend anybody at all while Billing:Enabled is false.

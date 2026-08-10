@@ -69,7 +69,20 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
     /// with nowhere to deploy is not a state worth being able to represent.
     /// </summary>
     public async Task<(Project Project, Environment Environment)> CreateAsync(
-        Guid workspaceId, string name, string? slug, CancellationToken ct)
+        Guid workspaceId, string name, string? slug, CancellationToken ct) =>
+        await CreateCoreAsync(workspaceId, name, slug, save: true, ct);
+
+    /// <summary>
+    /// Builds a project and its first environment in the current unit of work without saving it.
+    /// Stack deployment uses this so its project, resources and first-hour debit either all commit
+    /// or none do.
+    /// </summary>
+    public Task<(Project Project, Environment Environment)> PrepareAsync(
+        Guid workspaceId, string name, string? slug, CancellationToken ct) =>
+        CreateCoreAsync(workspaceId, name, slug, save: false, ct);
+
+    private async Task<(Project Project, Environment Environment)> CreateCoreAsync(
+        Guid workspaceId, string name, string? slug, bool save, CancellationToken ct)
     {
         var project = new Project
         {
@@ -91,7 +104,7 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
 
         db.Projects.Add(project);
         db.Environments.Add(environment);
-        await db.SaveChangesAsync(ct);
+        if (save) await db.SaveChangesAsync(ct);
         return (project, environment);
     }
 

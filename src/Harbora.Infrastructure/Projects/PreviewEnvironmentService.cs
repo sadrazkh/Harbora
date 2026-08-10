@@ -27,6 +27,7 @@ public sealed class PreviewEnvironmentService(
     IAppOperationsService operations,
     IQuotaService quota,
     ISystemClock clock,
+    Billing.ResourceCreationBilling creationBilling,
     ILogger<PreviewEnvironmentService> logger)
 {
     /// <summary>
@@ -132,7 +133,6 @@ public sealed class PreviewEnvironmentService(
         };
 
         db.Environments.Add(environment);
-        await db.SaveChangesAsync(ct);
         return environment;
     }
 
@@ -190,7 +190,10 @@ public sealed class PreviewEnvironmentService(
         }
 
         db.Apps.Add(preview);
-        await db.SaveChangesAsync(ct);
+        await creationBilling.SaveAsync(parent.WorkspaceId,
+            [new Billing.CreatedBillableResource(
+                Domain.Billing.BilledResourceType.App,
+                preview.Id, preview.Name, preview.InstanceSizeKey)], ct);
 
         if (PreviewPolicy.Advice(config) is { } advice)
             logger.LogInformation("Preview {Slug}: {Advice}", preview.Slug, advice);

@@ -36,7 +36,8 @@ public sealed partial class DatabasesController(
     Harbora.Infrastructure.Services.AdminerService adminer,
     IAuditLogger audit,
     INodeAgentClient node,
-    ICurrentUser currentUser) : Controller
+    ICurrentUser currentUser,
+    Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 
@@ -389,7 +390,19 @@ public sealed partial class DatabasesController(
         }
 
         db.ManagedServices.Add(service);
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await creationBilling.SaveAsync(WorkspaceId,
+                [new(Harbora.Domain.Billing.BilledResourceType.Service,
+                    service.Id, service.Name, service.InstanceSizeKey)], ct);
+        }
+        catch (Harbora.Infrastructure.Billing.CreationPaymentRequiredException ex)
+        {
+            db.ChangeTracker.Clear();
+            ModelState.AddModelError(string.Empty, IsFa ? ex.ReasonFa : ex.Message);
+            await PopulateCreateAsync(ct);
+            return View(model);
+        }
 
         await engine.QueueProvisionAsync(service.Id, ct);
         return RedirectToAction(nameof(Details), new { id = service.Id });

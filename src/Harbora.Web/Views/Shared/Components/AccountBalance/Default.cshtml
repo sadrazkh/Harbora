@@ -1,0 +1,15 @@
+@model Harbora.Web.Components.AccountBalanceViewComponent.Model
+@using Harbora.Web.Infrastructure
+@if (Model.Compact)
+{
+    <span class="whitespace-nowrap text-[11px] font-semibold @(Model.BalanceMinor > 0 ? "text-ok" : "text-danger")" dir="ltr">
+        @MinorUnits.Format(Model.BalanceMinor, Model.Currency)
+    </span>
+}
+else
+{
+    <span class="flex-1">
+        <strong class="block">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "موجودی حساب" : "Account balance")</strong>
+        <small class="@(Model.BalanceMinor > 0 ? "text-ok" : "text-danger")" dir="ltr">@MinorUnits.Format(Model.BalanceMinor, Model.Currency)</small>
+    </span>
+}

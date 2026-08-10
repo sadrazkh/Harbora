@@ -57,7 +57,8 @@ public sealed class ManagedServiceEngine(
         // can be claimed long after it was made — by which time the balance that paid for it may be
         // gone. Reported the way every other provision failure is reported, so a database that will
         // not appear says Failed on the screen rather than Provisioning for ever.
-        var mayStart = await billing.CanStartAsync(svc.WorkspaceId, ct);
+        var mayStart = await billing.CanStartAsync(
+            svc.WorkspaceId, Domain.Billing.BilledResourceType.Service, svc.Id, ct);
         if (!mayStart.Allowed)
         {
             // Nothing bilingual to decide here: ManagedService has no stored reason field, only the
@@ -243,7 +244,8 @@ public sealed class ManagedServiceEngine(
         // Throws rather than returning, for the reason AppOperationsService states at length: the
         // two lines below write Running, and a start that reports success without starting anything
         // hands the hourly tick an hour to bill for a container that is not there.
-        var mayStart = await billing.CanStartAsync(svc.WorkspaceId, ct);
+        var mayStart = await billing.CanStartAsync(
+            svc.WorkspaceId, Domain.Billing.BilledResourceType.Service, svc.Id, ct);
         // QuotaRefusedException carries mayStart.ReasonFa along, so the controller that catches it —
         // reached from a request, and so with a culture to pick with — need not show English only.
         if (!mayStart.Allowed) throw new QuotaRefusedException(mayStart);

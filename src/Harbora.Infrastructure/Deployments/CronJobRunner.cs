@@ -72,7 +72,8 @@ public sealed class CronJobRunner(
         // this history is where somebody looks to find out why last night's job did not happen, and
         // a schedule that quietly stops firing is the hardest kind of outage to notice. The row is
         // finished the moment it is written, so it cannot hold the "one at a time" guard above shut.
-        var mayStart = await billing.CanStartAsync(job.WorkspaceId, ct);
+        var mayStart = await billing.CanStartAsync(
+            job.WorkspaceId, Domain.Billing.BilledResourceType.App, job.Id, ct);
         if (!mayStart.Allowed)
         {
             // English only, and a decision rather than the gap ReasonFa exists to close: CronRun.Error

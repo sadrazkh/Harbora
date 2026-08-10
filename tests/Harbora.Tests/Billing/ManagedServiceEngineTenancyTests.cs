@@ -264,7 +264,9 @@ public class ManagedServiceEngineTenancyTests
             adminer: null!,
             audit: new SilentAudit(),
             node: node,
-            currentUser: currentUser)
+            currentUser: currentUser,
+            creationBilling: new Harbora.Infrastructure.Billing.ResourceCreationBilling(
+                db, clock, Options.Create(new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })))
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };

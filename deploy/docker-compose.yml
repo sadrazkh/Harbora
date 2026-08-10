@@ -141,9 +141,9 @@ services:
       Cloudflare__TokenFilePath: /dynamic/secrets/cloudflare-token
       Cloudflare__DynamicConfigPath: /dynamic/cloudflare.yml
       Cloudflare__EnabledMarkerPath: /dynamic/cloudflare.enabled
-      # Billing stays opt-in. These defaults also make an older .env safe after an upgrade; an
-      # operator can set the three friendly keys without maintaining a compose override.
-      Billing__Enabled: ${BILLING_ENABLED:-false}
+      # Hosted-PaaS default: an unfunded workspace cannot allocate billable resources. Private
+      # installations may deliberately opt out with BILLING_ENABLED=false.
+      Billing__Enabled: ${BILLING_ENABLED:-true}
       Billing__Currency: ${BILLING_CURRENCY:-IRR}
       Billing__MaxBackfillHours: ${BILLING_MAX_BACKFILL_HOURS:-72}
       ASPNETCORE_ENVIRONMENT: Production

@@ -154,6 +154,9 @@ public class EnvironmentClonerTests
 
         var cloner = new EnvironmentCloner(
             db, engine, quota, scheduler, new Fakes.PassthroughProtector(), new Clock(),
+            new Harbora.Infrastructure.Billing.ResourceCreationBilling(
+                db, new Clock(), Microsoft.Extensions.Options.Options.Create(
+                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
             NullLogger<EnvironmentCloner>.Instance);
 
         return new Harness(db, cloner, source, engine, quota, scheduler, app, service);

@@ -95,7 +95,10 @@ public class BillingLedgerEntry : BaseEntity
 {
     public Guid WorkspaceId { get; set; }
 
-    /// <summary>The UTC hour this line pays for — always an hour that has already ended.</summary>
+    /// <summary>
+    /// The UTC hour this line pays for. Metered lines are written after the hour ends; the first
+    /// hour of a newly-created workload is prepaid into the current hour.
+    /// </summary>
     public DateTimeOffset BillingHour { get; set; }
 
     public LedgerKind Kind { get; set; }
