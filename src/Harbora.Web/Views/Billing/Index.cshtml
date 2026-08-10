@@ -4,6 +4,8 @@
 @{
     ViewData["Title"] = "Billing";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
 
     // The bill answers "this app was on for ten hours and stopped for fourteen" — so an hour count
     // is only printed where hours are a thing the resource has. A disk is neither up nor down; it is
@@ -32,6 +34,9 @@
         _ => isFa ? "سایر" : "Other"
     };
 }
+
+@if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
 
 <div class="mb-6">
     <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "صورت‌حساب" : "Billing")</h1>
@@ -94,6 +99,16 @@
             </p>
         </div>
     }
+</div>
+
+<div class="rounded-xl border border-line bg-surface p-4 mb-6">
+    <h2 class="font-semibold text-ink mb-2">@(isFa ? "شارژ با ووچر" : "Redeem a voucher")</h2>
+    <p class="text-sm text-ink-muted mb-3">@(isFa ? "کدی را که از ارائه‌دهنده گرفته‌اید وارد کنید؛ هر کد فقط یک‌بار قابل استفاده است." : "Enter the code supplied by your provider. Each code can be used once.")</p>
+    <form method="post" action="/billing/voucher" class="flex flex-col sm:flex-row gap-2">
+        @Html.AntiForgeryToken()
+        <input name="code" required autocomplete="off" dir="ltr" class="form-control flex-1 font-mono" placeholder="XXXXX-XXXXX-XXXXX-XXXXX" />
+        <button type="submit" class="btn-primary">@(isFa ? "اعمال ووچر" : "Redeem")</button>
+    </form>
 </div>
 
 @* ---- the month ------------------------------------------------------------------------------ *@

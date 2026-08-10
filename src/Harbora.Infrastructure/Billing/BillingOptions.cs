@@ -34,6 +34,12 @@ public sealed class BillingOptions
     /// </summary>
     public int MaxBackfillHours { get; set; } = 72;
 
+    /// <summary>How often an incomplete hour is offered to the durable queue again.</summary>
+    public int IncompleteRetryMinutes { get; set; } = 30;
+
+    /// <summary>How often the lightweight scheduler looks for a newly ended or retryable hour.</summary>
+    public int SchedulerPollSeconds { get; set; } = 60;
+
     /// <summary>What <see cref="Currency"/> falls back to: the currency this platform was built for.</summary>
     public const string DefaultCurrency = "IRR";
 

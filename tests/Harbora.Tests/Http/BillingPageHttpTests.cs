@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using FluentAssertions;
 using Harbora.Domain.Billing;
 using Harbora.Domain.Common;
@@ -183,6 +185,52 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
                 "the heading in Persian, so asking for English is what changed the page");
     }
 
+    // --- balance vouchers --------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_workspace_member_redeems_a_voucher_into_their_current_workspace()
+    {
+        const string code = "ABCDEFGHJKLM";
+        var tenant = GivenTenant("voucher-receiver", balanceMinor: -5_000);
+        var voucher = new BillingVoucher
+        {
+            CodeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))),
+            CodeHint = code[^4..],
+            AmountMinor = 100_000,
+            Currency = "IRR",
+            Note = "support top-up",
+            CreatedByUserId = Guid.CreateVersion7()
+        };
+        Panel.Seed(db => db.BillingVouchers.Add(voucher));
+        Panel.GivenUser(tenant, "voucher-member@example.com", SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.174", "voucher-member@example.com");
+        var token = await client.AntiforgeryTokenFrom("/billing");
+
+        var response = await client.PostFormAsync("/billing/voucher", token, ("code", "ABCDE-FGHJK-LM"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        response.RedirectPath().Should().Be("/billing");
+        BalanceOf(tenant).Should().Be(95_000);
+        Panel.Read(db => db.BillingVouchers.AsNoTracking().Single(v => v.Id == voucher.Id)
+                .RedeemedWorkspaceId)
+            .Should().Be(tenant);
+        Panel.Read(db => db.BillingLedger.IgnoreQueryFilters().Count(l => l.Id == voucher.Id))
+            .Should().Be(1, "a voucher is the idempotency key for its one credit line");
+    }
+
+    [Fact]
+    public async Task An_ordinary_member_cannot_open_the_provider_voucher_console()
+    {
+        var tenant = GivenTenant("voucher-console-refused");
+        Panel.GivenUser(tenant, "voucher-console-member@example.com", SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.175", "voucher-console-member@example.com");
+
+        var response = await client.GetAsync("/vouchers");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        response.RedirectPath().Should().Be("/account/denied");
+    }
+
     // --- who may credit -----------------------------------------------------------------------
 
     [Fact]
@@ -307,11 +355,8 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
         // The one screen where money moves without a resource, an hour or a unique index behind it.
         // A charge made through this door would have none of that ceremony, so it is refused.
         //
-        // The refusal used to send the administrator to write an adjustment instead, and nothing in
-        // the platform writes one — LedgerKind.Adjustment is a member with no writer. So it now says
-        // what is true: money does not come off an account here at all. An assertion on the old
-        // sentence is what would have kept that direction alive after the door it pointed at was
-        // found to be painted on.
+        // A negative number is still not a credit. The refusal points to the dedicated adjustment
+        // workflow so that this narrowly-scoped form cannot silently change meaning.
         var tenant = GivenTenant("credit-negative", balanceMinor: 50_000);
         Panel.GivenUser(fixture.WorkspaceId, "credit-negative@example.com", SystemRole.Owner);
         var client = await Panel.SignedInAs("203.0.113.161", "credit-negative@example.com");
@@ -319,8 +364,7 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
         var response = await SubmitConfirmationPageAsync(client, tenant, "-100", "taking it back");
 
         var page = await FollowAsync(client, response);
-        page.Should().Contain("not something this panel can do");
-        page.Should().NotContain("write an adjustment against it");
+        page.Should().Contain("use Adjust balance");
         BalanceOf(tenant).Should().Be(50_000);
     }
 

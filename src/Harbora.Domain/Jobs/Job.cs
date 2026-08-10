@@ -17,7 +17,10 @@ public enum JobKind
     BackupRestore = 5,
     BackupVerify = 6,
     BackupPrune = 7,
-    RepositoryHealthCheck = 8
+    RepositoryHealthCheck = 8,
+
+    // Appended: persisted enum values are never renumbered. The target is a BillingRun row.
+    BillingHour = 9
 }
 
 public enum JobStatus

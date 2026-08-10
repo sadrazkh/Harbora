@@ -10,6 +10,20 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-09-payg-billing-design.md`
 
+## Implementation status (2026-08-10)
+
+Phase 1 and Phase 2 are implemented. The original checklist below is retained as the historical
+execution plan; its unchecked boxes are not the current product status. In addition to its original
+scope, the completed runtime now has a durable ended-hour scheduler with restart/backfill and
+incomplete-run retries, automatic app and managed-database volume measurement, provider-side
+append-only adjustments and live wallet/ledger reconciliation.
+
+Funding deliberately has no online payment gateway. A provider administrator can either credit a
+workspace directly or create a globally single-use voucher. The plaintext voucher is shown once;
+only its SHA-256 hash is persisted, and redemption appends the same idempotent Credit ledger entry as
+a manual top-up. Billing remains disabled by default until the operator supplies prices and enables
+it explicitly. Operational activation and rollback are documented in `deploy/RUNBOOK.md`.
+
 ## Global Constraints
 
 - **Zero build warnings.** Not "no new warnings" — zero. `dotnet build Harbora.slnx -c Debug` must report `0 Warning(s)`.

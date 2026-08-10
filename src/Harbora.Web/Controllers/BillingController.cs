@@ -6,6 +6,7 @@ using Harbora.Domain.Identity;
 using Harbora.Infrastructure.Billing;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -32,7 +33,9 @@ namespace Harbora.Web.Controllers;
 public sealed class BillingController(
     HarboraDbContext db,
     WalletService wallets,
+    VoucherService vouchers,
     ICurrentUser currentUser,
+    IAuditLogger audit,
     Microsoft.Extensions.Options.IOptions<BillingOptions> billing,
     ISystemClock clock) : Controller
 {
@@ -89,6 +92,43 @@ public sealed class BillingController(
             Costs = await wallets.BreakdownAsync(WorkspaceId, from, to, ct),
             Credits = credits
         });
+    }
+
+    /// <summary>Redeems a single-use voucher into the workspace carried by the signed-in session.</summary>
+    [HttpPost("voucher")]
+    [ValidateAntiForgeryToken]
+    [EnableRateLimiting("voucher")]
+    public async Task<IActionResult> RedeemVoucher(string? code, CancellationToken ct)
+    {
+        if (currentUser.UserId is not { } userId || WorkspaceId == Guid.Empty)
+        {
+            TempData["Error"] = "Sign in to a workspace before redeeming a voucher.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        try
+        {
+            var result = await vouchers.RedeemAsync(code, WorkspaceId, userId, ct);
+            TempData["Message"] = result.Applied
+                ? $"Voucher applied. Your balance is now {Harbora.Web.Infrastructure.MinorUnits.Format(result.BalanceMinor)}."
+                : $"That voucher was already applied to this workspace. Your balance is {Harbora.Web.Infrastructure.MinorUnits.Format(result.BalanceMinor)}.";
+            if (result.Failures.Count > 0) TempData["Error"] = string.Join(" ", result.Failures);
+
+            await audit.LogAsync("billing.voucher.redeem", "voucher", result.VoucherId.ToString(),
+                HttpContext.Connection.RemoteIpAddress?.ToString(),
+                metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    workspaceId = WorkspaceId,
+                    result.AmountMinor,
+                    result.Applied
+                }), ct: ct);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            TempData["Error"] = ex.Message;
+        }
+
+        return RedirectToAction(nameof(Index));
     }
 
     /// <summary>

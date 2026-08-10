@@ -963,6 +963,7 @@ public class BillingTickTests
         result.LinesWritten.Should().Be(0);
         (await db.BillingLedger.CountAsync()).Should().Be(0);
         result.Failures.Should().ContainSingle(f => f.Contains("tenant-size"));
+        result.AccountingComplete.Should().BeFalse("the durable scheduler must retry this hour after pricing is fixed");
     }
 
     [Fact]
@@ -988,6 +989,7 @@ public class BillingTickTests
         var result = await Harness.Tick(db).ChargeHourAsync(Hour, default);
 
         result.LinesWritten.Should().Be(1);
+        result.AccountingComplete.Should().BeTrue("the missing price was supplied and the hour is now fully accounted");
         (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor
             .Should().Be(Harness.PaidUp - 500);
     }

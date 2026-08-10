@@ -4,9 +4,12 @@
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
 }
-<div class="mb-6">
-    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "مستأجرها" : "Tenants")</h1>
-    <p class="text-ink-muted text-sm">@(isFa ? "workspaceهای مشتریان روی این پلتفرم و پلن هرکدام." : "Customer workspaces hosted on this platform and their plans.")</p>
+<div class="mb-6 flex items-start justify-between gap-4">
+    <div>
+        <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "مستأجرها" : "Tenants")</h1>
+        <p class="text-ink-muted text-sm">@(isFa ? "workspaceهای مشتریان روی این پلتفرم و پلن هرکدام." : "Customer workspaces hosted on this platform and their plans.")</p>
+    </div>
+    <a href="/vouchers" class="btn-secondary">@(isFa ? "ووچرهای اعتبار" : "Billing vouchers")</a>
 </div>
 
 @if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}

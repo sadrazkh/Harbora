@@ -224,12 +224,14 @@ public static class DependencyInjection
             config.GetSection(Maintenance.RetentionOptions.SectionName));
         services.AddHostedService<Maintenance.DataRetentionSweeper>();
 
-        // The hourly charge. Registered, but nothing schedules it yet and it refuses to move any
-        // money while Billing:Enabled is false — which is the shipped default, because an install
+        // The durable scheduler queues every ended UTC hour and retries incomplete accounting runs.
+        // It refuses to move any money while Billing:Enabled is false — the shipped default, because an install
         // that upgraded into billing unasked would start charging tenants who were never told there
         // was a price.
         services.Configure<Billing.BillingOptions>(config.GetSection(Billing.BillingOptions.SectionName));
         services.AddScoped<Billing.BillingTick>();
+        services.AddScoped<Billing.BillingRunHandler>();
+        services.AddHostedService<Billing.BillingScheduler>();
         // Stopping what a workspace is running once its balance is gone, and bringing back exactly
         // what that stop took away. Registered beside the tick and, like it, scheduled by nothing
         // yet; it refuses to suspend anybody at all while Billing:Enabled is false.
@@ -239,6 +241,7 @@ public static class DependencyInjection
         // charged neither costs a customer money nor stops their workloads, and an install that
         // switched billing off after a suspension must still be able to lift it.
         services.AddScoped<Billing.WalletService>();
+        services.AddScoped<Billing.VoucherService>();
         // The gate every start path asks before a container runs. Registered here rather than beside
         // the deployment engine because the rule it holds is a billing rule, and a second copy of it
         // living next to the thing it refuses is how a rule quietly stops being one. Like the tick

@@ -37,7 +37,8 @@ public sealed record BillingTickResult(
     int LinesWritten,
     int HoursBackfilled,
     int WorkspacesSuspended,
-    IReadOnlyList<string> Failures);
+    IReadOnlyList<string> Failures,
+    bool AccountingComplete);
 
 /// <summary>
 /// Charges every workspace for one hour that has already ended.
@@ -346,7 +347,7 @@ public sealed class BillingTick(
             pass.Report("suspension-read",
                 "The pass could not read which workspaces have run out of balance, so none of them " +
                 $"were stopped: {ex.Message}. Whatever is out of money is still running and still " +
-                "being charged for; the next pass will try again.");
+                "being charged for; the next pass will try again.", accountingIncomplete: false);
             logger.LogError(ex, "Reading the workspaces to suspend for an empty balance failed; nobody was stopped.");
             return;
         }
@@ -370,7 +371,7 @@ public sealed class BillingTick(
                 // that is not there — including the refusals, which name a cost somebody has to
                 // decide about rather than a bug.
                 foreach (var failure in outcome.Failures)
-                    pass.Report($"suspension:{workspace.Id}:{failure}", failure);
+                    pass.Report($"suspension:{workspace.Id}:{failure}", failure, accountingIncomplete: false);
 
                 // Counted only where this pass is what took them down. A workspace it merely retried
                 // was already stopped last hour and stays at or below nothing for ever afterwards, so
@@ -390,7 +391,7 @@ public sealed class BillingTick(
                 pass.Report($"suspension:{workspace.Id}",
                     $"Workspace \"{workspace.Name}\" has run out of balance and could not be " +
                     $"stopped: {ex.Message}. Its apps and databases are still running and still " +
-                    "being charged for; the next pass will try again.");
+                    "being charged for; the next pass will try again.", accountingIncomplete: false);
                 logger.LogError(ex,
                     "Suspending workspace {Workspace} for an empty balance failed; the remaining workspaces were still suspended.",
                     workspace.Id);
@@ -788,7 +789,7 @@ public sealed class BillingTick(
                 $"Workspace \"{workspace.Name}\" is inside its low-balance warning window and has no " +
                 "alert rule to receive the warning, so nobody was told. Its apps and databases will " +
                 "be stopped when the balance reaches zero whether or not anybody heard. Add a " +
-                "channel on that workspace's Alerts page.");
+                "channel on that workspace's Alerts page.", accountingIncomplete: false);
             logger.LogWarning(
                 "Workspace {Workspace} has no alert rule to receive its low-balance warning; nobody was told.",
                 workspace.Id);
@@ -802,7 +803,7 @@ public sealed class BillingTick(
             pass.Report($"low-balance-warning:{workspace.Id}",
                 $"Workspace \"{workspace.Name}\" is inside its low-balance warning window and could " +
                 $"not be told: {ex.Message}. Its apps will be stopped when the balance reaches zero " +
-                "whether or not the warning arrived.");
+                "whether or not the warning arrived.", accountingIncomplete: false);
             logger.LogError(ex,
                 "Warning workspace {Workspace} that its balance is running low failed; the hour it was charged for stands.",
                 workspace.Id);
@@ -1126,13 +1127,15 @@ public sealed class BillingTick(
 
         private readonly HashSet<string> _reported = new(StringComparer.Ordinal);
         private readonly List<string> _failures = [];
+        private bool _accountingComplete = true;
 
-        public void Report(string key, string message)
+        public void Report(string key, string message, bool accountingIncomplete = true)
         {
+            if (accountingIncomplete) _accountingComplete = false;
             if (_reported.Add(key)) _failures.Add(message);
         }
 
         public BillingTickResult Result() =>
-            new(Charged.Count, LinesWritten, HoursBackfilled, Suspended.Count, _failures);
+            new(Charged.Count, LinesWritten, HoursBackfilled, Suspended.Count, _failures, _accountingComplete);
     }
 }

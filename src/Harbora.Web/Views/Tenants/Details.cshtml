@@ -94,10 +94,26 @@
                 <div class="mt-0.5 text-[11px] text-ink-faint">@(isFa ? "هنوز صورت‌حسابی صادر نشده" : "never billed")</div>
             }
         </div>
-        <a href="/tenants/@Model.WorkspaceId/credit"
-           class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
-            @(isFa ? "شارژ حساب" : "Credit the account")
-        </a>
+        <div class="flex items-center gap-2">
+            <a href="/tenants/@Model.WorkspaceId/adjustment" class="btn-secondary">
+                @(isFa ? "اصلاح موجودی" : "Adjust balance")
+            </a>
+            <a href="/tenants/@Model.WorkspaceId/credit"
+               class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                @(isFa ? "شارژ حساب" : "Credit the account")
+            </a>
+        </div>
+    </div>
+    <div class="mt-3 text-xs @(Model.BalanceReconciled ? "text-ok" : "text-danger")">
+        @if (Model.BalanceReconciled)
+        {
+            <span>@(isFa ? "موجودی کیف پول با جمع دفتر کل برابر است." : "Wallet balance matches the ledger total.")</span>
+        }
+        else
+        {
+            <span>@(isFa ? "هشدار: موجودی کیف پول و دفتر کل اختلاف دارند" : "Warning: wallet and ledger are out of balance"):</span>
+            <strong dir="ltr">@MinorUnits.Format(Model.BalanceDifferenceMinor, Model.Currency)</strong>
+        }
     </div>
 </div>
 

@@ -63,6 +63,7 @@ public static class JobExecutionPolicy
         JobKind.BackupVerify => TimeSpan.FromHours(1),
         JobKind.BackupPrune => TimeSpan.FromHours(1),
         JobKind.RepositoryHealthCheck => TimeSpan.FromMinutes(5),
+        JobKind.BillingHour => TimeSpan.FromMinutes(30),
 
         // A kind appended to the enum without a deadline still gets one. "For ever" is the defect
         // this class exists to remove, so it cannot be the default.
@@ -94,6 +95,9 @@ public static class JobExecutionPolicy
         JobKind.BackupSnapshot => 2,
         JobKind.BackupVerify => 2,
         JobKind.BackupPrune => 2,
+        // BillingRunHandler records an incomplete result and the scheduler offers it again. A job
+        // retry here would create a second retry loop with a different clock.
+        JobKind.BillingHour => 1,
 
         // Unknown work is assumed to have side effects, which is the safe assumption to be wrong about.
         _ => 1

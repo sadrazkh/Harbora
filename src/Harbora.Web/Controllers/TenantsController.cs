@@ -181,12 +181,10 @@ public sealed partial class TenantsController(
     /// A page rather than a box on the details screen, for the reason every destructive action on
     /// this panel already has one: the figure has to be looked at by somebody before the money
     /// moves, and a number typed into a row of other controls is a number nobody re-reads. Money in
-    /// is not destructive, but it is irreversible in the strongest sense there is here: nothing in
-    /// this ledger is ever edited or deleted, and <b>the panel has no way to write the opposing
-    /// line</b> that would cancel one. <see cref="LedgerKind.Adjustment"/> exists and nothing posts
-    /// it, so a credit that lands on the wrong tenant is settled off the platform. That makes this
-    /// page the last place anybody checks the workspace, the amount and the note, rather than the
-    /// first of two.
+    /// is not destructive, but it is permanent: nothing in this ledger is edited or deleted. A
+    /// mistake can be offset from the tenant screen with a separately audited Adjustment line, but
+    /// the original credit remains visible. That still makes this page the right place to check the
+    /// workspace, amount and note before the append-only entry is written.
     /// </para>
     ///
     /// <para>
@@ -253,9 +251,8 @@ public sealed partial class TenantsController(
 
         if (amountMinor <= 0)
             return Again(
-                "A credit puts money in. Taking money off an account is not something this panel " +
-                "can do: the ledger has a line for a correction and nothing here writes one, so a " +
-                "credit made in error has to be settled outside Harbora.");
+                "A credit only puts money in. To take money off or correct a mistake, use Adjust " +
+                "balance on this tenant's account; the original credit will remain in the ledger.");
 
         if (string.IsNullOrWhiteSpace(note))
             return Again("Say what this credit is for. It is the only thing on the line that explains why the balance moved.");
@@ -364,6 +361,73 @@ public sealed partial class TenantsController(
             Amount = amount,
             Note = note
         };
+    }
+
+    [HttpGet("{id:guid}/adjustment")]
+    public async Task<IActionResult> ConfirmAdjustment(Guid id, CancellationToken ct)
+    {
+        var ws = await db.Workspaces.AsNoTracking().FirstOrDefaultAsync(w => w.Id == id, ct);
+        if (ws is null) return NotFound();
+        var walletRow = await db.Wallets.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(w => w.WorkspaceId == id, ct);
+        ViewData["Title"] = $"Adjust {ws.Name}";
+        return View(new TenantAdjustmentViewModel
+        {
+            WorkspaceId = id,
+            AdjustmentId = Guid.CreateVersion7(),
+            Name = ws.Name,
+            BalanceMinor = walletRow?.BalanceMinor ?? 0,
+            Currency = walletRow?.Currency ?? FallbackCurrency,
+            Amount = TempData["AdjustmentAmount"] as string,
+            Note = TempData["AdjustmentNote"] as string
+        });
+    }
+
+    [HttpPost("{id:guid}/adjustment")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Adjustment(
+        Guid id, Guid adjustmentId, string? amount, string? note, CancellationToken ct)
+    {
+        IActionResult Again(string error)
+        {
+            TempData["Error"] = error;
+            TempData["AdjustmentAmount"] = amount;
+            TempData["AdjustmentNote"] = note;
+            return RedirectToAction(nameof(ConfirmAdjustment), new { id });
+        }
+
+        if (adjustmentId == Guid.Empty) return Again("Open the adjustment page again; its id is missing.");
+        if (!Harbora.Web.Infrastructure.MinorUnits.TryParseMajor(amount, out var amountMinor) || amountMinor == 0)
+            return Again("Enter a non-zero amount. Positive returns money; negative removes money.");
+        if (string.IsNullOrWhiteSpace(note)) return Again("Explain what this correction reverses.");
+        if (currentUser.UserId is not { } userId) return Again("Sign in again before adjusting a balance.");
+
+        Harbora.Infrastructure.Billing.AdjustmentResult result;
+        try
+        {
+            result = await wallet.AdjustAsync(new Harbora.Infrastructure.Billing.AdjustmentRequest(
+                adjustmentId, id, amountMinor, note.Trim(), userId), ct);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DbUpdateException)
+        {
+            await audit.LogAsync("billing.adjustment.refused", "workspace", id.ToString(), ClientIp,
+                metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    adjustmentId, amountMinor, reason = ex.Message
+                }), ct: ct);
+            return Again(ex.Message);
+        }
+
+        await audit.LogAsync("billing.adjustment", "workspace", id.ToString(), ClientIp,
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+            {
+                adjustmentId, amountMinor, result.Applied, result.BalanceMinor
+            }), ct: ct);
+        TempData["Message"] = result.Applied
+            ? $"Adjustment applied. Balance is now {Harbora.Web.Infrastructure.MinorUnits.Format(result.BalanceMinor)}."
+            : $"That adjustment was already applied. Balance remains {Harbora.Web.Infrastructure.MinorUnits.Format(result.BalanceMinor)}.";
+        if (result.Failures.Count > 0) TempData["Error"] = string.Join(" ", result.Failures);
+        return RedirectToAction(nameof(Details), new { id });
     }
 
     /// <summary>
@@ -484,15 +548,19 @@ public sealed partial class TenantsController(
 
         // Unfiltered, because this is the provider console: the administrator's own session belongs
         // to the provider's workspace, and a filtered read would show every tenant a balance of zero.
-        var wallet = await db.Wallets.IgnoreQueryFilters().AsNoTracking()
+        var walletRow = await db.Wallets.IgnoreQueryFilters().AsNoTracking()
             .FirstOrDefaultAsync(w => w.WorkspaceId == ws.Id, ct);
+
+        var reconciliation = await wallet.ReconcileAsync(ws.Id, ct);
 
         return View(new TenantDetailsViewModel
         {
             WorkspaceId = ws.Id, Name = ws.Name, Slug = ws.Slug, IsDefault = ws.IsDefault, Suspended = ws.IsSuspended,
-            HasWallet = wallet is not null,
-            BalanceMinor = wallet?.BalanceMinor ?? 0,
-            Currency = wallet?.Currency ?? FallbackCurrency,
+            HasWallet = walletRow is not null,
+            BalanceMinor = walletRow?.BalanceMinor ?? 0,
+            Currency = walletRow?.Currency ?? FallbackCurrency,
+            LedgerBalanceMinor = reconciliation.LedgerBalanceMinor,
+            BalanceDifferenceMinor = reconciliation.DifferenceMinor,
             Usage = await quota.GetUsageAsync(ws.Id, ct),
             MemoryGbHours = metered?.MemoryGbHours ?? 0,
             CpuCoreHours = metered?.CpuCoreHours ?? 0,

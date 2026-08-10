@@ -87,14 +87,12 @@
             </p>
         </div>
 
-        @* Said as a warning rather than as a note, because it is one. The ledger is append-only, and
-           the opposing line that would cancel a mistake — LedgerKind.Adjustment — has no writer
-           anywhere in the platform: no screen, no service, no command. So this page is not the first
-           of two chances to get the workspace and the amount right; it is the only one. *@
+        @* The original line remains permanent even when an administrator later offsets it with an
+           Adjustment. That distinction is worth making explicit before money moves. *@
         <p class="rounded-lg border border-warn bg-warn-soft px-3 py-2 text-xs text-warn">
             @(isFa
-                ? "این حرکت مالی برگشت‌ناپذیر است و از داخل پنل هم قابل اصلاح نیست: هیچ سطری از دفتر حساب پاک یا ویرایش نمی‌شود، و هیچ بخشی از پنل سطر مقابل آن را نمی‌نویسد. پیش از تأیید، فضای کاری، مبلغ و توضیح را یک بار دیگر بخوانید."
-                : "This cannot be undone, and it cannot be corrected from the panel either: no line in the ledger is ever edited or deleted, and nothing here writes the opposing line that would cancel one. Read the workspace, the amount and the note once more before you confirm.")
+                ? "این سطر مالی هیچ‌وقت پاک یا ویرایش نمی‌شود. اگر اشتباهی رخ دهد، فقط می‌توان از صفحهٔ همان فضای کاری یک سطر اصلاحیِ جدا و قابل حسابرسی ثبت کرد. پیش از تأیید، فضای کاری، مبلغ و توضیح را دوباره بخوانید."
+                : "This ledger line is never edited or deleted. A mistake can only be offset by a separate, audited adjustment from the tenant page. Read the workspace, amount and note once more before confirming.")
         </p>
 
         <div class="flex gap-2">

@@ -1,5 +1,6 @@
 ﻿using Harbora.Domain.Jobs;
 using Harbora.Infrastructure.Backups;
+using Harbora.Infrastructure.Billing;
 using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,6 +40,9 @@ public static class JobDispatcher
 
         JobKind.CronRun =>
             scope.GetRequiredService<CronJobRunner>().RunAsync(job.TargetId, ct),
+
+        JobKind.BillingHour =>
+            scope.GetRequiredService<BillingRunHandler>().ExecuteAsync(job.TargetId, ct),
 
         _ => throw new NotSupportedException($"No handler is registered for job kind {job.Kind}.")
     };

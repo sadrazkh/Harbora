@@ -29,13 +29,13 @@ affected implementation item; the absence of the external environment alone does
 - **Rollback:** config to serial; migrations additive-only.
 - **Docs:** README limitations updated (serial claim removed only when true).
 
-**Closeout status — 2026-08-08**
+**Closeout status — 2026-08-10**
 
 - **Implementation Complete:** items 0001–0010 are present in the production paths, migrations,
   API/CLI/UI surfaces and dedicated regression tests. The Phase 2 changes retain those paths and
   their tests remain green.
 - **Repository Validation Complete:** solution build succeeded with 0 errors and 0 warnings;
-  `Harbora.Tests` passed 3,209/3,209; migration/model consistency passed; the production frontend
+  `Harbora.Tests` passed 3,569/3,569; migration/model consistency passed; the production frontend
   bundle built successfully. The Node Agent and ingress suites exercised by Phase 2 also remained
   green.
 - **External/Live Validation Pending:** the wall-clock two-tenant demonstration and Docker-backed
@@ -54,16 +54,16 @@ affected implementation item; the absence of the external environment alone does
 - **Rollback:** none needed (additive); installer keeps old behavior when vars pre-exist.
 - **Docs:** node quickstart rewritten from the working path; RUNBOOK regenerated.
 
-**Closeout status — 2026-08-08**
+**Closeout status — 2026-08-10**
 
 - **Implementation Complete:** every repository deliverable in 0011–0022, 0047, 0051 and 0054 is
   present. In particular, 0011, 0018, 0019, 0020, 0022 and 0047 have complete code, scripts,
   workflows, tests or runbooks; they are not placeholders merely because their live environment is
   absent.
 - **Repository Validation Complete:** solution build succeeded with 0 errors and 0 warnings;
-  `Harbora.Tests` passed 3,209/3,209; Node Agent passed 498 tests with 17 Docker-only tests skipped;
+  `Harbora.Tests` passed 3,569/3,569; Node Agent passed 498 tests with 17 Docker-only tests skipped;
   the Node ingress end-to-end suite passed 15/15; migration/model consistency passed 2/2; and the
-  production frontend bundle built successfully. The 50 Testcontainers/PostgreSQL tests reported
+  production frontend bundle built successfully. The 70 Testcontainers/PostgreSQL tests reported
   explicit skips because this host has no Docker daemon. Bash syntax checks could not run because
   this Windows host has no `bash`; the consolidated CI job owns that check.
 - **External/Live Validation Pending:** fresh VPS installation, real node enrollment, live DNS/TLS,

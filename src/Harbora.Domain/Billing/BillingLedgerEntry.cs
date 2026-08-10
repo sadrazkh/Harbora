@@ -84,9 +84,8 @@ public enum BilledRunState
 /// "why did my balance move" is a query rather than a reconstruction.
 ///
 /// <para>
-/// The shape a correction would take is a new <see cref="LedgerKind.Adjustment"/> line rather than
-/// an edit — and nothing in the platform writes one. See the note on that member: this is a design
-/// the schema is ready for and the product does not offer.
+/// Corrections are new <see cref="LedgerKind.Adjustment"/> lines written from the provider tenant
+/// screen. The original line remains intact, so both the mistake and its correction stay auditable.
 /// </para>
 ///
 /// <para>

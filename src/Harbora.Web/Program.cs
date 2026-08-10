@@ -153,6 +153,7 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("auth", PerIp(10));      // login attempts / IP / minute
     options.AddPolicy("webhook", PerIp(60));   // inbound git webhooks / IP / minute
+    options.AddPolicy("voucher", PerIp(10));   // guessed/replayed voucher codes / IP / minute
 });
 
 var app = builder.Build();

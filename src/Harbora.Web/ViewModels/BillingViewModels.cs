@@ -57,6 +57,25 @@ public sealed class BillingPageViewModel
 /// <param name="Note">Why it moved, in the words of whoever moved it.</param>
 public sealed record BillingCreditRow(DateTimeOffset Hour, long AmountMinor, string Note);
 
+public sealed class VoucherAdminPageViewModel
+{
+    public string Currency { get; init; } = "IRR";
+    public string? CreatedCode { get; init; }
+    public IReadOnlyList<VoucherAdminRow> Vouchers { get; init; } = [];
+}
+
+public sealed record VoucherAdminRow(
+    Guid Id,
+    string Hint,
+    long AmountMinor,
+    string Currency,
+    string Note,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? ExpiresAt,
+    bool IsDisabled,
+    DateTimeOffset? RedeemedAt,
+    string? RedeemedWorkspace);
+
 /// <summary>
 /// The page an administrator confirms a credit on.
 ///
@@ -85,6 +104,17 @@ public sealed class TenantCreditViewModel
     public bool SuspendedForNoBalance { get; init; }
 
     /// <summary>What the administrator had typed, handed back when the form is re-rendered.</summary>
+    public string? Amount { get; init; }
+    public string? Note { get; init; }
+}
+
+public sealed class TenantAdjustmentViewModel
+{
+    public Guid WorkspaceId { get; init; }
+    public Guid AdjustmentId { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public long BalanceMinor { get; init; }
+    public string Currency { get; init; } = "IRR";
     public string? Amount { get; init; }
     public string? Note { get; init; }
 }

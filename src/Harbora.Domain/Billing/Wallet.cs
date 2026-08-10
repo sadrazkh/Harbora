@@ -13,20 +13,9 @@ namespace Harbora.Domain.Billing;
 /// </para>
 ///
 /// <para>
-/// <b>Checkable, not checked.</b> Nothing in the product reconciles the two — no command, no health
-/// probe, no screen. The only place they are compared is in the test suite. So "the ledger proves the
-/// balance" is a property of the design, and until something reads it on a live install it stays one.
-/// </para>
-///
-/// <para>
-/// <b>Nothing in the product checks it.</b> There is no reconcile screen, command or scheduled pass —
-/// the only place the two are compared is the test suite, which proves the code that writes them
-/// keeps them level, not that any particular install's rows are. An operator who suspects a drift
-/// reads it off the database themselves:
-/// <c>SELECT w."WorkspaceId", w."BalanceMinor", COALESCE(SUM(l."AmountMinor"), 0) FROM "Wallets" w
-/// LEFT JOIN "BillingLedger" l ON l."WorkspaceId" = w."WorkspaceId" GROUP BY w."WorkspaceId",
-/// w."BalanceMinor"</c>. Saying so here rather than implying a check that does not exist:
-/// a comment promising one is how nobody goes looking for the drift.
+/// The provider tenant-details screen reconciles this cached value with the ledger sum on every
+/// read and makes any difference visible. It deliberately does not rewrite either side: drift is
+/// evidence to investigate, not a number that a read path should hide.
 /// </para>
 /// </summary>
 public class Wallet : BaseEntity

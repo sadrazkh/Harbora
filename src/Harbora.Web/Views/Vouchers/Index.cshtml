@@ -1,0 +1,92 @@
+@model VoucherAdminPageViewModel
+@using Harbora.Web.Infrastructure
+@{
+    ViewData["Title"] = "Billing vouchers";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+}
+
+<div class="mb-6">
+    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "ووچرهای اعتبار" : "Billing vouchers")</h1>
+    <p class="text-sm text-ink-muted">@(isFa ? "هر کد فقط یک‌بار و برای یک فضای کاری قابل استفاده است." : "Each code can be used once by one workspace.")</p>
+</div>
+
+@if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
+
+@if (Model.CreatedCode is { } created)
+{
+    <div class="rounded-xl border border-ok bg-ok-soft p-4 mb-6">
+        <div class="font-semibold text-ok">@(isFa ? "این کد فقط همین یک‌بار نمایش داده می‌شود" : "This code is shown only once")</div>
+        <code class="block mt-2 text-lg font-mono select-all" dir="ltr">@created</code>
+        <p class="mt-2 text-xs text-ink-muted">@(isFa ? "آن را همین حالا کپی کنید؛ فقط هش کد در دیتابیس ذخیره شده است." : "Copy it now; only its hash is stored in the database.")</p>
+    </div>
+}
+
+<div class="rounded-xl border border-line bg-surface p-5 mb-6">
+    <h2 class="font-semibold text-ink mb-4">@(isFa ? "ساخت ووچر" : "Create voucher")</h2>
+    <form method="post" action="/vouchers/create" class="grid md:grid-cols-2 gap-4">
+        @Html.AntiForgeryToken()
+        <label class="form-field">
+            <span>@(isFa ? $"مبلغ ({Model.Currency})" : $"Amount ({Model.Currency})")</span>
+            <input name="amount" required inputmode="decimal" dir="ltr" class="form-control" placeholder="250000" />
+        </label>
+        <label class="form-field">
+            <span>@(isFa ? "کد دلخواه (اختیاری)" : "Custom code (optional)")</span>
+            <input name="code" dir="ltr" class="form-control font-mono" placeholder="@(isFa ? "خالی = تولید امن خودکار" : "blank = securely generated")" />
+        </label>
+        <label class="form-field">
+            <span>@(isFa ? "تاریخ انقضا (اختیاری)" : "Expiry (optional)")</span>
+            <input name="expiresAt" type="datetime-local" dir="ltr" class="form-control" />
+        </label>
+        <label class="form-field">
+            <span>@(isFa ? "توضیح" : "Note")</span>
+            <input name="note" class="form-control" maxlength="200" placeholder="@(isFa ? "مثلاً هدیه تمدید" : "e.g. renewal credit")" />
+        </label>
+        <div class="md:col-span-2">
+            <button type="submit" class="btn-primary">@(isFa ? "ساخت ووچر" : "Create voucher")</button>
+        </div>
+    </form>
+</div>
+
+<div class="rounded-xl border border-line bg-surface overflow-hidden">
+    <table class="w-full text-sm">
+        <thead class="bg-surface-2 text-ink-muted">
+            <tr>
+                <th class="p-3 text-start">@(isFa ? "کد" : "Code")</th>
+                <th class="p-3 text-start">@(isFa ? "مبلغ" : "Amount")</th>
+                <th class="p-3 text-start">@(isFa ? "وضعیت" : "Status")</th>
+                <th class="p-3 text-start">@(isFa ? "توضیح" : "Note")</th>
+                <th class="p-3"></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var voucher in Model.Vouchers)
+        {
+            var status = voucher.RedeemedAt is not null
+                ? (isFa ? $"استفاده‌شده توسط {voucher.RedeemedWorkspace}" : $"Redeemed by {voucher.RedeemedWorkspace}")
+                : voucher.IsDisabled
+                    ? (isFa ? "غیرفعال" : "Disabled")
+                    : voucher.ExpiresAt is { } expiry && expiry <= DateTimeOffset.UtcNow
+                        ? (isFa ? "منقضی" : "Expired")
+                        : (isFa ? "آماده استفاده" : "Available");
+            <tr class="border-t border-line">
+                <td class="p-3 font-mono" dir="ltr">••••@voucher.Hint</td>
+                <td class="p-3" dir="ltr">@MinorUnits.Format(voucher.AmountMinor, voucher.Currency)</td>
+                <td class="p-3">@status</td>
+                <td class="p-3 text-ink-muted">@voucher.Note</td>
+                <td class="p-3 text-end">
+                    @if (voucher.RedeemedAt is null && !voucher.IsDisabled)
+                    {
+                        <form method="post" action="/vouchers/@voucher.Id/disable">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="btn-secondary text-danger">@(isFa ? "غیرفعال‌کردن" : "Disable")</button>
+                        </form>
+                    }
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</div>

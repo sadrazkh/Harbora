@@ -10,7 +10,8 @@ using Microsoft.Extensions.Logging;
 namespace Harbora.Infrastructure.Tenancy;
 
 /// <summary>
-/// Measures one volume at a time, so a disk quota is checked against something real.
+/// Measures one app or managed-database volume at a time, so disk quota and billing are checked
+/// against something real.
 ///
 /// A quota that depends on a figure somebody has to remember to refresh is not a quota. But
 /// measuring means walking a whole directory inside a container, which is minutes on a large volume
@@ -57,11 +58,31 @@ public sealed class StorageMeasurer(IServiceScopeFactory scopeFactory, ILogger<S
         var stale = clock.UtcNow - StaleAfter;
 
         // Never measured first, then oldest. Nulls sort before dates, so one ordering does both.
-        var volume = await db.Volumes.IgnoreQueryFilters()
+        var appVolume = await db.Volumes.IgnoreQueryFilters()
             .Where(v => v.StorageMeasuredAt == null || v.StorageMeasuredAt < stale)
             .OrderBy(v => v.StorageMeasuredAt)
-            .Select(v => new { v.Id, v.Name, ServerId = v.App!.ServerId })
+            .ThenBy(v => v.CreatedAt)
+            .Select(v => new Candidate(
+                v.Id, v.Name, v.Name, v.App!.ServerId, v.StorageMeasuredAt, v.CreatedAt, false))
             .FirstOrDefaultAsync(ct);
+
+        var databaseVolume = await db.ManagedServices.IgnoreQueryFilters()
+            .Where(s => s.VolumeName != "" &&
+                        (s.StorageMeasuredAt == null || s.StorageMeasuredAt < stale))
+            .OrderBy(s => s.StorageMeasuredAt)
+            .ThenBy(s => s.CreatedAt)
+            .Select(s => new Candidate(
+                s.Id, s.Name, s.VolumeName, s.ServerId, s.StorageMeasuredAt, s.CreatedAt, true))
+            .FirstOrDefaultAsync(ct);
+
+        // Null sorts first by design: never-measured storage beats stale storage. Comparing both
+        // candidate kinds here prevents a large app-volume fleet from starving database disks.
+        var volume = new[] { appVolume, databaseVolume }
+            .Where(v => v is not null)
+            .OrderBy(v => v!.MeasuredAt is null ? 0 : 1)
+            .ThenBy(v => v!.MeasuredAt ?? v.CreatedAt)
+            .ThenBy(v => v!.IsDatabase ? 1 : 0)
+            .FirstOrDefault();
 
         if (volume is null) return;
 
@@ -70,21 +91,42 @@ public sealed class StorageMeasurer(IServiceScopeFactory scopeFactory, ILogger<S
 
         // Read-only: measuring must not be able to change what it is measuring.
         var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
-            MeasuringImage, StorageMeasurement.Command, [(volume.Name, "/data", true)]),
+            MeasuringImage, StorageMeasurement.Command, [(volume.VolumeName, "/data", true)]),
             new InlineProgress<string>(line => { lock (output) output.AppendLine(line); }), ct);
 
         var bytes = exit == 0 ? StorageMeasurement.Parse(output.ToString()) : null;
 
-        var row = await db.Volumes.IgnoreQueryFilters().FirstOrDefaultAsync(v => v.Id == volume.Id, ct);
-        if (row is null) return;
+        if (volume.IsDatabase)
+        {
+            var row = await db.ManagedServices.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(s => s.Id == volume.Id, ct);
+            if (row is null) return;
+            row.StorageBytes = bytes;
+            row.StorageMeasuredAt = clock.UtcNow;
+        }
+        else
+        {
+            var row = await db.Volumes.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(v => v.Id == volume.Id, ct);
+            if (row is null) return;
+            row.StorageBytes = bytes;
+            row.StorageMeasuredAt = clock.UtcNow;
+        }
 
-        // The timestamp is written even when the figure is not, so a volume that cannot be measured
-        // does not get retried every ten minutes for ever.
-        row.StorageBytes = bytes;
-        row.StorageMeasuredAt = clock.UtcNow;
+        // The timestamp is written even when the figure is not, so broken storage does not get
+        // retried every ten minutes for ever and starve everything behind it.
         await db.SaveChangesAsync(ct);
 
         if (bytes is null)
             logger.LogWarning("Could not measure volume {Name} (exit {Exit}).", volume.Name, exit);
     }
+
+    private sealed record Candidate(
+        Guid Id,
+        string Name,
+        string VolumeName,
+        Guid ServerId,
+        DateTimeOffset? MeasuredAt,
+        DateTimeOffset CreatedAt,
+        bool IsDatabase);
 }

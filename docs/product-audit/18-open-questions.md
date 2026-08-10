@@ -33,7 +33,9 @@ Localization consolidation cost depends on it (ternary→resx pays off triple if
 This environment couldn't run the browser against a live panel (no Docker, no DB creds). **Default:** add a Playwright mobile-viewport smoke (L6) in Phase 2 and a manual device pass during Phase 12.
 
 **Q11 — Billing: manual credit ledger in Phase 13 or defer entirely?**
-Metering basis exists; no ledger/invoicing. **Default:** defer ledger until Q2 answered; Phase 13 ships usage overviews + manual limit editing only.
+**Resolved 2026-08-10:** the append-only ledger and hourly billing runtime are implemented. Funding
+is intentionally provider-managed for now: direct admin credit or a hashed, single-use voucher;
+there is no online payment gateway.
 
 **Q12 — Public docs site (tutorial is in-repo Persian only)?**
 **Default:** Phase 15; English translation of the tutorial rides the Phase 12 localization effort.

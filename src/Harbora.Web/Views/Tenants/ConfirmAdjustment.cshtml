@@ -1,0 +1,36 @@
+@model TenantAdjustmentViewModel
+@using Harbora.Web.Infrastructure
+@{
+    ViewData["Title"] = $"Adjust {Model.Name}";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+}
+
+<div class="mb-6">
+    <a href="/tenants/@Model.WorkspaceId" class="text-accent-text text-sm">← @Model.Name</a>
+    <h1 class="mt-2 text-2xl font-bold text-ink">@(isFa ? "اصلاح موجودی" : "Balance adjustment")</h1>
+    <p class="text-sm text-ink-muted">@(isFa ? "ردیف قبلی حذف نمی‌شود؛ یک ردیف اصلاحی مخالف در دفتر ثبت می‌شود." : "The old line is not edited; an opposing adjustment is appended to the ledger.")</p>
+</div>
+
+@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
+
+<div class="max-w-xl rounded-xl border border-line bg-surface p-5">
+    <div class="mb-4 text-sm text-ink-muted">
+        @(isFa ? "موجودی فعلی" : "Current balance"):
+        <strong dir="ltr">@MinorUnits.Format(Model.BalanceMinor, Model.Currency)</strong>
+    </div>
+    <form method="post" action="/tenants/@Model.WorkspaceId/adjustment" class="space-y-4">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="adjustmentId" value="@Model.AdjustmentId" />
+        <label class="form-field">
+            <span>@(isFa ? "مبلغ اصلاح" : "Adjustment amount")</span>
+            <input name="amount" value="@Model.Amount" required inputmode="decimal" dir="ltr" class="form-control" placeholder="-250000" />
+            <small>@(isFa ? "مثبت: بازگرداندن اعتبار؛ منفی: برداشتن اعتبار اشتباه" : "Positive returns credit; negative removes an erroneous credit.")</small>
+        </label>
+        <label class="form-field">
+            <span>@(isFa ? "دلیل اصلاح" : "Reason")</span>
+            <textarea name="note" required maxlength="400" class="form-control" rows="3">@Model.Note</textarea>
+        </label>
+        <button type="submit" class="btn-primary">@(isFa ? "ثبت ردیف اصلاحی" : "Post adjustment")</button>
+    </form>
+</div>

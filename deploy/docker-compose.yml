@@ -122,6 +122,11 @@ services:
       Harbora__MasterKey: ${HARBORA_MASTER_KEY}
       Traefik__DynamicConfigPath: "/dynamic/harbora.yml"
       Runtime__RootDomain: ${ROOT_DOMAIN}
+      # Billing stays opt-in. These defaults also make an older .env safe after an upgrade; an
+      # operator can set the three friendly keys without maintaining a compose override.
+      Billing__Enabled: ${BILLING_ENABLED:-false}
+      Billing__Currency: ${BILLING_CURRENCY:-IRR}
+      Billing__MaxBackfillHours: ${BILLING_MAX_BACKFILL_HOURS:-72}
       ASPNETCORE_ENVIRONMENT: Production
       # Surfaced so `harbora info` can report what the panel is actually configured with.
       PANEL_DOMAIN: ${PANEL_DOMAIN}

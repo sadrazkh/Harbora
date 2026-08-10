@@ -121,6 +121,8 @@ public class HarboraDbContext : DbContext
 
     public DbSet<Harbora.Domain.Billing.Wallet> Wallets => Set<Harbora.Domain.Billing.Wallet>();
     public DbSet<Harbora.Domain.Billing.BillingLedgerEntry> BillingLedger => Set<Harbora.Domain.Billing.BillingLedgerEntry>();
+    public DbSet<Harbora.Domain.Billing.BillingRun> BillingRuns => Set<Harbora.Domain.Billing.BillingRun>();
+    public DbSet<Harbora.Domain.Billing.BillingVoucher> BillingVouchers => Set<Harbora.Domain.Billing.BillingVoucher>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -425,6 +427,23 @@ public class HarboraDbContext : DbContext
                 .HasFilter("\"Kind\" IN (0, 2)");
         });
 
+        b.Entity<Harbora.Domain.Billing.BillingRun>(e =>
+        {
+            e.HasIndex(x => x.BillingHour).IsUnique();
+            e.Property(x => x.FailureSummary).HasMaxLength(4000);
+        });
+
+        b.Entity<Harbora.Domain.Billing.BillingVoucher>(e =>
+        {
+            e.HasIndex(x => x.CodeHash).IsUnique();
+            e.HasIndex(x => new { x.IsDisabled, x.RedeemedAt, x.ExpiresAt });
+            e.Property(x => x.CodeHash).HasMaxLength(64);
+            e.Property(x => x.CodeHint).HasMaxLength(8);
+            e.Property(x => x.Currency).HasMaxLength(3);
+            e.Property(x => x.Note).HasMaxLength(200);
+            e.Property(x => x.ConcurrencyStamp).IsConcurrencyToken();
+        });
+
         b.Entity<PasswordResetToken>(e =>
         {
             // Looked up by the hash of whatever arrived in the URL, on every attempt.
@@ -438,6 +457,11 @@ public class HarboraDbContext : DbContext
             // this and gets no index of its own — it only ever excludes the handful of rows serving
             // a retry backoff, which this index has already narrowed to Pending.
             e.HasIndex(x => new { x.Status, x.CreatedAt });
+            // At most one live dispatch may point at a billing hour. Completed jobs stay as the
+            // audit trail and a later retry may create a new row for the same BillingRun.
+            e.HasIndex(x => new { x.Kind, x.TargetId })
+                .IsUnique()
+                .HasFilter("\"Kind\" = 9 AND \"Status\" IN (0, 1)");
             // Finding the live job for a deployment/backup when cancelling or reconciling.
             e.HasIndex(x => new { x.TargetId, x.Status });
             e.Property(x => x.ClaimedBy).HasMaxLength(128);

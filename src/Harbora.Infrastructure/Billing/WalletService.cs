@@ -44,6 +44,28 @@ namespace Harbora.Infrastructure.Billing;
 /// <param name="Note">Why the money moved, in the words of the person who moved it. Required.</param>
 public sealed record CreditRequest(Guid Id, Guid WorkspaceId, long AmountMinor, string Note, Guid ByUserId);
 
+/// <summary>A compensating ledger line. Positive returns money; negative removes an erroneous credit.</summary>
+public sealed record AdjustmentRequest(Guid Id, Guid WorkspaceId, long AmountMinor, string Note, Guid ByUserId);
+
+public sealed record AdjustmentResult(
+    long BalanceMinor,
+    bool Applied,
+    bool StillSuspended,
+    int AppsStarted,
+    int DatabasesStarted,
+    int AppsStopped,
+    int DatabasesStopped,
+    IReadOnlyList<string> Failures);
+
+public sealed record WalletReconciliation(
+    bool HasWallet,
+    long WalletBalanceMinor,
+    long LedgerBalanceMinor,
+    long DifferenceMinor)
+{
+    public bool IsBalanced => DifferenceMinor == 0;
+}
+
 /// <summary>
 /// What one credit did — the money, and then what the money was supposed to switch back on.
 ///
@@ -204,7 +226,8 @@ public sealed class WalletService(
                             $"There is no workspace with id {credit.WorkspaceId}, so nothing can be " +
                             "credited to it.");
 
-        var (applied, balanceMinor) = await WriteAsync(credit, note, ct);
+        var (applied, balanceMinor) = await WriteAsync(new Movement(
+            credit.Id, credit.WorkspaceId, credit.AmountMinor, note, credit.ByUserId, LedgerKind.Credit), ct);
 
         var startedApps = 0;
         var startedDatabases = 0;
@@ -321,19 +344,77 @@ public sealed class WalletService(
     }
 
     /// <summary>
+    /// Writes a compensating line without changing the old one. Positive returns money; negative
+    /// removes an erroneous credit. The resulting balance drives the same suspend/resume authority
+    /// as an hourly charge or a normal credit.
+    /// </summary>
+    public async Task<AdjustmentResult> AdjustAsync(AdjustmentRequest adjustment, CancellationToken ct)
+    {
+        if (adjustment.Id == Guid.Empty)
+            throw new ArgumentException("An adjustment needs an id.", nameof(adjustment));
+        if (adjustment.AmountMinor == 0)
+            throw new ArgumentOutOfRangeException(nameof(adjustment), "An adjustment must move the balance.");
+        var note = adjustment.Note?.Trim();
+        if (string.IsNullOrWhiteSpace(note))
+            throw new ArgumentException("An adjustment needs a note explaining the correction.", nameof(adjustment));
+        if (!await db.Workspaces.IgnoreQueryFilters().AnyAsync(w => w.Id == adjustment.WorkspaceId, ct))
+            throw new InvalidOperationException($"There is no workspace with id {adjustment.WorkspaceId}.");
+
+        var (applied, balance) = await WriteAsync(new Movement(
+            adjustment.Id, adjustment.WorkspaceId, adjustment.AmountMinor, note,
+            adjustment.ByUserId, LedgerKind.Adjustment), ct);
+
+        BillingSuspensionResult outcome;
+        try
+        {
+            outcome = balance > 0
+                ? await suspension.ResumeAsync(adjustment.WorkspaceId, ct)
+                : await suspension.SuspendAsync(adjustment.WorkspaceId, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogError(ex,
+                "Applying the workload state after adjustment {Adjustment} failed; the money movement was kept.",
+                adjustment.Id);
+            return new AdjustmentResult(
+                balance, applied, balance <= 0, 0, 0, 0, 0,
+                [$"The adjustment was applied, but updating the workspace's suspension failed: {ex.Message}"]);
+        }
+
+        return new AdjustmentResult(
+            balance, applied, outcome.WorkspaceSuspended,
+            outcome.AppsStarted, outcome.DatabasesStarted,
+            outcome.AppsStopped, outcome.DatabasesStopped, outcome.Failures);
+    }
+
+    /// <summary>Compares the cached wallet with the append-only source of truth without mutating either.</summary>
+    public async Task<WalletReconciliation> ReconcileAsync(Guid workspaceId, CancellationToken ct)
+    {
+        var wallet = await db.Wallets.IgnoreQueryFilters().AsNoTracking()
+            .Where(w => w.WorkspaceId == workspaceId)
+            .Select(w => (long?)w.BalanceMinor)
+            .FirstOrDefaultAsync(ct);
+        var ledger = await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
+            .Where(l => l.WorkspaceId == workspaceId)
+            .SumAsync(l => (long?)l.AmountMinor, ct) ?? 0;
+        var cached = wallet ?? 0;
+        return new WalletReconciliation(wallet is not null, cached, ledger, cached - ledger);
+    }
+
+    /// <summary>
     /// Writes the line and moves the balance, once. False means this credit was already on the
     /// ledger and nothing new was written; the balance returned beside it is the real one either way.
     /// </summary>
     private async Task<(bool Applied, long BalanceMinor)> WriteAsync(
-        CreditRequest credit, string note, CancellationToken ct)
+        Movement movement, CancellationToken ct)
     {
         // The ordinary repeat is not a race — it is one person's decision submitted twice — so it is
         // answered by a read. The primary key below is what settles the race the read cannot win.
-        if (await AlreadyAppliedAsync(credit, note, ct))
-            return (false, await BalanceAsync(credit.WorkspaceId, ct));
+        if (await AlreadyAppliedAsync(movement, ct))
+            return (false, await BalanceAsync(movement.WorkspaceId, ct));
 
         var wallet = await db.Wallets.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(w => w.WorkspaceId == credit.WorkspaceId, ct);
+            .FirstOrDefaultAsync(w => w.WorkspaceId == movement.WorkspaceId, ct);
 
         if (wallet is null)
         {
@@ -347,7 +428,7 @@ public sealed class WalletService(
             // domain and settable nowhere is a column that lies on every install but one.
             wallet = new Wallet
             {
-                WorkspaceId = credit.WorkspaceId,
+                WorkspaceId = movement.WorkspaceId,
                 Currency = options.Value.CurrencyOrDefault
             };
             db.Wallets.Add(wallet);
@@ -356,29 +437,29 @@ public sealed class WalletService(
         db.BillingLedger.Add(new BillingLedgerEntry
         {
             // The caller's id, not a fresh one. This is the idempotency key — see CreditRequest.Id.
-            Id = credit.Id,
-            WorkspaceId = credit.WorkspaceId,
+            Id = movement.Id,
+            WorkspaceId = movement.WorkspaceId,
             // Filed under the hour it was made in. BillingHour is what every statement window filters
             // on, so a credit left at the default instant would sit in year one, appear on no bill
             // the customer will ever open, and leave the ledger and the balance disagreeing.
             BillingHour = TopOfHour(clock.UtcNow),
-            Kind = LedgerKind.Credit,
-            AmountMinor = credit.AmountMinor,
+            Kind = movement.Kind,
+            AmountMinor = movement.AmountMinor,
             ResourceType = BilledResourceType.None,
             ResourceId = null,
-            ResourceName = string.Empty,
+            ResourceName = movement.Kind == LedgerKind.Adjustment ? "Balance adjustment" : string.Empty,
             RunState = BilledRunState.NotApplicable,
             // Neither an hour nor a rate. The entity defaults Hours to 1 because nearly every line is
-            // one hour of one thing; a credit is no hours of nothing, and leaving the default would
+            // one hour of one thing; a manual money movement is no hours of nothing, and leaving the default would
             // put an hour on the bill that nobody spent.
             RatePerHourMinor = 0,
             Hours = 0,
-            Description = note,
+            Description = movement.Note,
             // A person's money movement has a person on it.
-            CreatedByUserId = credit.ByUserId,
+            CreatedByUserId = movement.ByUserId,
         });
 
-        Apply(wallet, credit.AmountMinor);
+        Apply(wallet, movement.AmountMinor);
 
         for (var attempt = 1; ; attempt++)
         {
@@ -402,7 +483,7 @@ public sealed class WalletService(
                 // no money at all.
                 if (entry.State == EntityState.Detached) throw;
 
-                Apply(wallet, credit.AmountMinor);
+                Apply(wallet, movement.AmountMinor);
             }
             catch (DbUpdateException e)
                 when (e.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
@@ -417,8 +498,8 @@ public sealed class WalletService(
                 // would drop a credit nobody has made while telling the administrator it landed, so
                 // the question the code actually needs answering is asked directly. A constraint
                 // violation leaves the connection healthy, so it can be asked.
-                if (await AlreadyAppliedAsync(credit, note, ct))
-                    return (false, await BalanceAsync(credit.WorkspaceId, ct));
+                if (await AlreadyAppliedAsync(movement, ct))
+                    return (false, await BalanceAsync(movement.WorkspaceId, ct));
 
                 throw;
             }
@@ -448,29 +529,37 @@ public sealed class WalletService(
     /// the failure shape this class exists to refuse rather than absorb.
     /// </para>
     /// </summary>
-    private async Task<bool> AlreadyAppliedAsync(CreditRequest credit, string note, CancellationToken ct)
+    private async Task<bool> AlreadyAppliedAsync(Movement movement, CancellationToken ct)
     {
         var existing = await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
-            .Where(l => l.Id == credit.Id)
+            .Where(l => l.Id == movement.Id)
             .Select(l => new { l.Kind, l.WorkspaceId, l.AmountMinor, l.Description })
             .FirstOrDefaultAsync(ct);
 
         if (existing is null) return false;
 
-        if (existing.Kind == LedgerKind.Credit
-            && existing.WorkspaceId == credit.WorkspaceId
-            && existing.AmountMinor == credit.AmountMinor
-            && existing.Description == note)
+        if (existing.Kind == movement.Kind
+            && existing.WorkspaceId == movement.WorkspaceId
+            && existing.AmountMinor == movement.AmountMinor
+            && existing.Description == movement.Note)
             return true;
 
         throw new InvalidOperationException(
-            $"Ledger line {credit.Id} already exists and is not this credit: it is a " +
+            $"Ledger line {movement.Id} already exists and is not this movement: it is a " +
             $"{existing.Kind} of {existing.AmountMinor} on workspace {existing.WorkspaceId} noted " +
-            $"\"{existing.Description}\", and this asks for a credit of {credit.AmountMinor} on " +
-            $"workspace {credit.WorkspaceId} noted \"{note}\". Nothing was written — an id reused " +
+            $"\"{existing.Description}\", and this asks for a {movement.Kind} of {movement.AmountMinor} on " +
+            $"workspace {movement.WorkspaceId} noted \"{movement.Note}\". Nothing was written — an id reused " +
             "for a different movement is a mistake, and reporting it as already applied would say " +
             "the money arrived somewhere it did not, or say what it was for when it was not that.");
     }
+
+    private sealed record Movement(
+        Guid Id,
+        Guid WorkspaceId,
+        long AmountMinor,
+        string Note,
+        Guid ByUserId,
+        LedgerKind Kind);
 
     /// <summary>
     /// The balance as the store has it.

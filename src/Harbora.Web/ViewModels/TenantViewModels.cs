@@ -52,6 +52,9 @@ public sealed class TenantDetailsViewModel
     public long BalanceMinor { get; set; }
 
     public string Currency { get; set; } = "IRR";
+    public long LedgerBalanceMinor { get; set; }
+    public long BalanceDifferenceMinor { get; set; }
+    public bool BalanceReconciled => BalanceDifferenceMinor == 0;
 
     // Metered usage for the current billing month.
     public double MemoryGbHours { get; set; }

@@ -284,7 +284,7 @@ Statuses can combine (e.g. ✅⚙️ = works but has an operational hazard). Evi
 | Feature | Status |
 |---|---|
 | Provider console (tenants, plans, quotas, sizes) | ✅ — incl. monthly usage + CSV export |
-| Manual credit / billing | ❌ — metering basis only (GB-h, vCPU-h); no ledger |
+| Manual credit / billing | ✅ — hourly append-only ledger, durable scheduler, provider credits/adjustments, single-use vouchers; no online gateway by design |
 | User management (roles, suspend, invite, 2FA reset) | ✅ |
 | Feature flags | 🟡 — config-file flags (`Features:*`), not runtime toggles |
 | Support tooling / incident mgmt / announcements / changelog | ❌ |

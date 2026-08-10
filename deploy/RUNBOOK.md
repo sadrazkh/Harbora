@@ -254,17 +254,19 @@ and nothing of theirs stops. `Billing:Enabled` ships as `false`. Charging people
 decision and an install that upgraded into it unasked would start billing tenants who were never told
 there was a price, so you have to say yes on purpose.
 
-Read the rest of this item before you say yes. Parts of it are not finished, and one of those means
-that turning the switch on today changes almost nothing.
+Read the rest of this item before you say yes. Billing is connected to the durable job queue: one
+`BillingRun` is persisted for every ended UTC hour, missing hours are discovered oldest-first after
+a restart, and an incomplete hour is retried without duplicating ledger lines that already landed.
+The first activation charges only the hour that has just ended — it never reaches backwards into the
+period in which billing was deliberately disabled.
 
-**Nothing runs the hourly charge yet.** The hourly pass itself is whole: it charges every workspace
-for the hour that has just ended, sends the low-balance warning, and then stops the apps and managed
-databases of every workspace the hour left at or below zero. What is missing is the thing that calls
-it — no timer, scheduler or background service does. It is registered and waiting. Until that lands
-in a later release, switching billing on gives you the *screens* (set prices on **Plans**, credit an
-account from **Tenants → a tenant → Credit**, and your customers get a **Billing** page showing their
-balance and where it went), and no money moves and nothing stops on its own. **Do not read this
-release as "billing works, just off."** It is off, and it is also not yet plugged in.
+There is deliberately **no online payment gateway**. Money enters an account in either of two ways:
+an administrator credits a tenant from **Tenants → tenant → Credit**, or creates a single-use code
+under **Tenants → Billing vouchers**. The plaintext voucher is shown once; only its SHA-256 hash is
+stored. Any member of a workspace can redeem it on their own **Billing** page. Both routes append one
+idempotent credit line, and a replay cannot move the balance twice. An administrator can also append
+an Adjustment from the tenant page to reverse a mistaken credit; the original line is never edited
+or deleted.
 
 **"Sell past the caps" changes what a plan refuses, not just what it charges.** The Plans form gains a
 tick box for it. On a plan with it set, that plan's limits on apps, databases, memory, CPU and disk
@@ -275,24 +277,18 @@ Leave it off and the caps behave exactly as they always have. It does nothing at
 **Blank prices are not free prices.** Every rate arrives unset — on plans and on instance sizes — and
 that is deliberately different from a rate of zero. Unset means nobody has decided; the hourly pass
 writes no line for it at all and names it in that run's warnings instead. Zero means you decided it
-is free. If you enable billing and set no prices, you get a system that runs, reports success and
-bills nothing. Type a `0` where you mean free.
+is free. If you enable billing and set no prices, the hour is recorded as incomplete and retried;
+it never invents a zero or calls the hour settled. Type a `0` where you mean free.
 
-**`.env` will not switch it on.** Same trap as item 3: the compose file names the panel's environment
-variables one by one and this is not among them, so a line in `.env` is read by nothing. Use an
-override file, which Compose merges automatically and `git pull` will never overwrite:
+**Enable it through `.env`, deliberately.** The compose file maps the friendly keys below to the
+panel settings, with safe defaults for an older `.env` that has none of them:
 
 ```bash
-cat > /opt/harbora/app/deploy/docker-compose.override.yml <<'YAML'
-services:
-  panel:
-    environment:
-      Billing__Enabled: "true"
-YAML
+printf '\nBILLING_ENABLED=true\nBILLING_CURRENCY=IRR\nBILLING_MAX_BACKFILL_HOURS=72\n' >> .env
 cd /opt/harbora/app/deploy && docker compose up -d panel
 ```
 
-**What your customers will experience once it is both switched on and scheduled.** Every workspace is
+**What your customers will experience once it is switched on.** Every workspace is
 charged once an hour for what it held during the hour that just ended — apps and databases at their
 instance size's rate, running or stopped, plus disk, plus the plan's hourly minimum if the hour came
 to less than that. They get one warning when the balance is worth fewer hours than they asked to be
@@ -313,15 +309,8 @@ tenant's **Alerts** page. A workspace with none is told nothing, and the first t
 their site stopping. The pass names every workspace it could not warn in that run's warnings, so it
 is at least visible — to you, not to them.
 
-**Two things it will not charge for as things stand, so do not price as though it will.**
+**One thing it will not charge for as things stand, so do not price as though it will.**
 
-- *A managed database's disk.* The hourly pass does charge it — but only against a measurement, and
-  nothing measures a database's volume on a schedule. It is measured when somebody presses the
-  measure button on that database's page, and at no other time, so on a live install every database
-  reads as unmeasured and its storage is free. An app's volumes are different: those are measured on
-  a timer. Each unmeasured database is named in that run's warnings, and it is a real hole rather
-  than noise — a customer can hold as much data as they like on a database and pay for the size of
-  the machine only.
 - *Traffic.* Nothing anywhere in Harbora measures bandwidth. A plan can be sold with a traffic
   allowance printed on it and the platform will neither count it nor enforce it, so plan copy that
   implies a metered allowance is a promise you cannot keep. Metering it is a project of its own, not
