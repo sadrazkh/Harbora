@@ -7,10 +7,17 @@ public sealed record WorkspaceSummaryRow(
     WorkspaceRole Role, long? BalanceMinor, string Currency);
 
 public sealed record WorkspaceMemberRow(
-    Guid UserId, string Email, string DisplayName, WorkspaceRole Role, bool IsOwner, bool IsCurrentUser);
+    Guid UserId, string Email, string DisplayName, WorkspaceRole Role, bool IsOwner, bool IsCurrentUser,
+    bool ScopedToProjects);
 
 public sealed record WorkspaceInvitationRow(
     Guid Id, string Email, WorkspaceRole Role, string TokenHint, DateTimeOffset ExpiresAt);
+
+public sealed record WorkspaceEnvironmentOption(Guid Id, string Name);
+public sealed record WorkspaceProjectOption(
+    Guid Id, string Name, IReadOnlyList<WorkspaceEnvironmentOption> Environments);
+public sealed record WorkspaceProjectGrantRow(
+    Guid Id, Guid UserId, Guid ProjectId, Guid? EnvironmentId, SystemRole Role, string Description);
 
 public sealed class WorkspaceHubViewModel
 {
@@ -21,6 +28,8 @@ public sealed class WorkspaceHubViewModel
     public IReadOnlyList<WorkspaceSummaryRow> Workspaces { get; init; } = [];
     public IReadOnlyList<WorkspaceMemberRow> Members { get; init; } = [];
     public IReadOnlyList<WorkspaceInvitationRow> Invitations { get; init; } = [];
+    public IReadOnlyList<WorkspaceProjectOption> Projects { get; init; } = [];
+    public IReadOnlyList<WorkspaceProjectGrantRow> Grants { get; init; } = [];
 }
 
 public sealed class AcceptWorkspaceInvitationViewModel

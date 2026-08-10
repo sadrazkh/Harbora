@@ -127,7 +127,9 @@ public sealed class PlansController(
     [Authorize(Policy = Capabilities.PlansManage)]
     public async Task<IActionResult> CreatePlan(
         string name, int maxApps, int maxServices, long maxMemoryMb, double maxCpu,
-        long maxDiskGb, string? allowedSizeKeys, decimal monthlyPrice,
+        long maxDiskGb, int maxMembers, int maxProjects, int maxEnvironments,
+        int maxDomains, int maxVolumes, int maxBackupSchedules,
+        string? allowedSizeKeys, decimal monthlyPrice,
         string? baseRatePerHour, string? diskGbHour, bool allowsOverage, CancellationToken ct)
     {
         if (!IsProvider) return Forbid();
@@ -145,6 +147,12 @@ public sealed class PlansController(
             NameFa = name,
             MaxApps = maxApps,
             MaxServices = maxServices,
+            MaxMembers = Math.Max(0, maxMembers),
+            MaxProjects = Math.Max(0, maxProjects),
+            MaxEnvironments = Math.Max(0, maxEnvironments),
+            MaxDomains = Math.Max(0, maxDomains),
+            MaxVolumes = Math.Max(0, maxVolumes),
+            MaxBackupSchedules = Math.Max(0, maxBackupSchedules),
             MaxMemoryBytes = maxMemoryMb * 1024 * 1024,
             MaxCpuCores = maxCpu,
             // The form never used to set this, so every plan carried a disk limit of zero while the
@@ -172,7 +180,9 @@ public sealed class PlansController(
     [Authorize(Policy = Capabilities.PlansManage)]
     public async Task<IActionResult> UpdatePlan(
         Guid id, string name, int maxApps, int maxServices, long maxMemoryMb, double maxCpu,
-        long maxDiskGb, string? allowedSizeKeys, decimal monthlyPrice,
+        long maxDiskGb, int maxMembers, int maxProjects, int maxEnvironments,
+        int maxDomains, int maxVolumes, int maxBackupSchedules,
+        string? allowedSizeKeys, decimal monthlyPrice,
         string? baseRatePerHour, string? diskGbHour, bool allowsOverage, CancellationToken ct)
     {
         if (!IsProvider) return Forbid();
@@ -191,6 +201,12 @@ public sealed class PlansController(
         plan.Name = name;
         plan.MaxApps = maxApps;
         plan.MaxServices = maxServices;
+        plan.MaxMembers = Math.Max(0, maxMembers);
+        plan.MaxProjects = Math.Max(0, maxProjects);
+        plan.MaxEnvironments = Math.Max(0, maxEnvironments);
+        plan.MaxDomains = Math.Max(0, maxDomains);
+        plan.MaxVolumes = Math.Max(0, maxVolumes);
+        plan.MaxBackupSchedules = Math.Max(0, maxBackupSchedules);
         plan.MaxMemoryBytes = maxMemoryMb * 1024 * 1024;
         plan.MaxCpuCores = maxCpu;
         plan.MaxDiskBytes = maxDiskGb * 1024 * 1024 * 1024;

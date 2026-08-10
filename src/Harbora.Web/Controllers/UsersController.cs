@@ -26,7 +26,8 @@ public sealed class UsersController(
     IAuditLogger audit,
     ICurrentUser currentUser,
     Harbora.Application.Abstractions.ISystemClock clock,
-    Harbora.Infrastructure.Notifications.PlatformMailer mailer) : Controller
+    Harbora.Infrastructure.Notifications.PlatformMailer mailer,
+    IQuotaService quota) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
@@ -50,10 +51,13 @@ public sealed class UsersController(
             .ToDictionaryAsync(w => w.OwnerUserId!.Value, w => w.Id, ct);
         var membershipCounts = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
             .GroupBy(m => m.UserId).ToDictionaryAsync(g => g.Key, g => g.Count(), ct);
+        var scopedUsers = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
+            .Where(m => m.ScopedToProjects).Select(m => m.UserId).Distinct().ToListAsync(ct);
         users = users.Select(u => u with
         {
             PersonalWorkspaceId = personal.GetValueOrDefault(u.Id),
-            WorkspaceCount = membershipCounts.GetValueOrDefault(u.Id)
+            WorkspaceCount = membershipCounts.GetValueOrDefault(u.Id),
+            ScopedToProjects = scopedUsers.Contains(u.Id)
         }).ToList();
 
         ViewBag.ActorRole = await ActorRoleAsync(ct);
@@ -103,6 +107,10 @@ public sealed class UsersController(
         if (workspaceId is null)
             return Back("This installation has no workspace to add the account to.", error: true);
 
+        var seat = await quota.CanAddGovernedResourcesAsync(workspaceId.Value,
+            new GovernanceQuotaDelta(Members: 1), ct);
+        if (!seat.Allowed) return Back((IsFa ? seat.ReasonFa : null) ?? seat.Reason!, error: true);
+
         db.WorkspaceMembers.Add(
             Harbora.Infrastructure.Security.WorkspaceMembership.For(workspaceId.Value, created.Id, role));
 
@@ -150,6 +158,9 @@ public sealed class UsersController(
             ?? await db.Workspaces.IgnoreQueryFilters().Select(w => (Guid?)w.Id).FirstOrDefaultAsync(ct);
         if (workspaceId is null)
             return Back("This installation has no workspace to add the account to.", error: true);
+        var seat = await quota.CanAddGovernedResourcesAsync(workspaceId.Value,
+            new GovernanceQuotaDelta(Members: 1), ct);
+        if (!seat.Allowed) return Back((IsFa ? seat.ReasonFa : null) ?? seat.Reason!, error: true);
         db.WorkspaceMembers.Add(
             Harbora.Infrastructure.Security.WorkspaceMembership.For(workspaceId.Value, created.Id, role));
 

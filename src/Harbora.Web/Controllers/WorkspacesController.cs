@@ -60,6 +60,17 @@ public sealed class WorkspacesController(
                 .Where(i => i.WorkspaceId == WorkspaceId && i.AcceptedAt == null && !i.IsRevoked)
                 .OrderByDescending(i => i.CreatedAt).ToListAsync(ct)
             : [];
+        var projects = canManage
+            ? await db.Projects.IgnoreQueryFilters().AsNoTracking()
+                .Where(p => p.WorkspaceId == WorkspaceId).Include(p => p.Environments)
+                .OrderBy(p => p.Name).ToListAsync(ct)
+            : [];
+        var grants = canManage
+            ? await db.ProjectGrants.IgnoreQueryFilters().AsNoTracking()
+                .Where(g => g.WorkspaceId == WorkspaceId).ToListAsync(ct)
+            : [];
+        var projectNames = projects.ToDictionary(p => p.Id, p => p.Name);
+        var environmentNames = projects.SelectMany(p => p.Environments).ToDictionary(e => e.Id, e => e.Name);
 
         return View(new WorkspaceHubViewModel
         {
@@ -76,9 +87,20 @@ public sealed class WorkspacesController(
             }).ToList(),
             Members = members.Select(m => new WorkspaceMemberRow(
                 m.UserId, m.User!.Email, m.User.DisplayName, m.Role,
-                current.Workspace.OwnerUserId == m.UserId, m.UserId == UserId)).ToList(),
+                current.Workspace.OwnerUserId == m.UserId, m.UserId == UserId,
+                m.ScopedToProjects)).ToList(),
             Invitations = invitations.Select(i => new WorkspaceInvitationRow(
-                i.Id, i.Email, i.Role, i.TokenHint, i.ExpiresAt)).ToList()
+                i.Id, i.Email, i.Role, i.TokenHint, i.ExpiresAt)).ToList(),
+            Projects = projects.Select(p => new WorkspaceProjectOption(
+                p.Id, p.Name, p.Environments.OrderBy(e => e.Name)
+                    .Select(e => new WorkspaceEnvironmentOption(e.Id, e.Name)).ToList())).ToList(),
+            Grants = grants.Select(g => new WorkspaceProjectGrantRow(
+                g.Id, g.UserId, g.ProjectId, g.EnvironmentId, g.Role,
+                Harbora.Domain.Authorization.ProjectAccess.Describe(g,
+                    projectNames.GetValueOrDefault(g.ProjectId, "(deleted project)"),
+                    g.EnvironmentId is { } environmentId
+                        ? environmentNames.GetValueOrDefault(environmentId, "(deleted environment)")
+                        : null))).ToList()
         });
     }
 
@@ -209,6 +231,7 @@ public sealed class WorkspacesController(
             .FirstOrDefaultAsync(m => m.WorkspaceId == WorkspaceId && m.UserId == userId, ct);
         if (member is null) return NotFound();
         member.Role = role;
+        if (role == WorkspaceRole.Admin) member.ScopedToProjects = false;
         await db.SaveChangesAsync(ct);
         await audit.LogAsync("workspace.member_role_changed", "user", userId.ToString(), ClientIp, ct: ct);
         return Back(IsFa ? "نقش عضو تغییر کرد." : "Member role updated.");
@@ -222,10 +245,136 @@ public sealed class WorkspacesController(
         var workspace = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
             .FirstOrDefaultAsync(w => w.Id == WorkspaceId, ct);
         if (workspace?.OwnerUserId == userId) return Back(IsFa ? "مالک را نمی‌توان حذف کرد." : "The workspace owner cannot be removed.", true);
+        await db.ProjectGrants.IgnoreQueryFilters()
+            .Where(g => g.WorkspaceId == WorkspaceId && g.UserId == userId).ExecuteDeleteAsync(ct);
         await db.WorkspaceMembers.IgnoreQueryFilters()
             .Where(m => m.WorkspaceId == WorkspaceId && m.UserId == userId).ExecuteDeleteAsync(ct);
         await audit.LogAsync("workspace.member_removed", "user", userId.ToString(), ClientIp, ct: ct);
         return Back(IsFa ? "عضو حذف شد." : "Member removed.");
+    }
+
+    [HttpPost("members/{userId:guid}/scope")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SetMemberScope(Guid userId, bool scoped, CancellationToken ct)
+    {
+        if (!await CanManageAsync(WorkspaceId, ct)) return Forbid();
+        var member = await db.WorkspaceMembers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(m => m.WorkspaceId == WorkspaceId && m.UserId == userId, ct);
+        if (member is null) return NotFound();
+        if (member.Role == WorkspaceRole.Admin && scoped)
+            return Back(IsFa ? "مدیر فضای کاری را نمی‌توان به چند پروژه محدود کرد." : "A workspace admin cannot be limited to selected projects.", true);
+
+        member.ScopedToProjects = scoped;
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("workspace.member_scope_changed", "user", userId.ToString(), ClientIp,
+            metadataJson: $"{{\"scoped\":{scoped.ToString().ToLowerInvariant()}}}", ct: ct);
+        return Back(scoped
+            ? (IsFa ? "عضو فقط به پروژه‌های مجاز دسترسی دارد." : "The member is now limited to granted projects.")
+            : (IsFa ? "محدودیت پروژه برداشته شد." : "Project scoping was removed."));
+    }
+
+    [HttpPost("members/{userId:guid}/grants")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> AddProjectGrant(
+        Guid userId, Guid projectId, Guid? environmentId, SystemRole role, CancellationToken ct)
+    {
+        if (!await CanManageAsync(WorkspaceId, ct)) return Forbid();
+        if (role is not (SystemRole.Member or SystemRole.Operator or SystemRole.Viewer))
+            return Back(IsFa ? "نقش مجوز معتبر نیست." : "Choose a valid grant role.", true);
+        var targetMember = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(m => m.WorkspaceId == WorkspaceId && m.UserId == userId, ct);
+        if (targetMember is null) return NotFound();
+        if (targetMember.Role == WorkspaceRole.Admin)
+            return Back(IsFa ? "مدیر به همه پروژه‌ها دسترسی دارد و مجوز پروژه‌ای نمی‌گیرد." : "An admin already reaches every project and cannot be project-scoped.", true);
+        if (environmentId is { } environment)
+        {
+            var environmentProject = await db.Environments.IgnoreQueryFilters().AsNoTracking()
+                .Where(e => e.Id == environment && e.WorkspaceId == WorkspaceId)
+                .Select(e => (Guid?)e.ProjectId).FirstOrDefaultAsync(ct);
+            if (environmentProject is null) return NotFound();
+            projectId = environmentProject.Value;
+        }
+        else if (!await db.Projects.IgnoreQueryFilters()
+            .AnyAsync(p => p.Id == projectId && p.WorkspaceId == WorkspaceId, ct)) return NotFound();
+
+        var existing = await db.ProjectGrants.IgnoreQueryFilters().FirstOrDefaultAsync(g =>
+            g.WorkspaceId == WorkspaceId && g.UserId == userId && g.ProjectId == projectId
+            && g.EnvironmentId == environmentId, ct);
+        if (existing is null)
+            db.ProjectGrants.Add(new Harbora.Domain.Authorization.ProjectGrant
+            {
+                WorkspaceId = WorkspaceId, UserId = userId, ProjectId = projectId,
+                EnvironmentId = environmentId, Role = role
+            });
+        else existing.Role = role;
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("workspace.project_grant_saved", "user", userId.ToString(), ClientIp, ct: ct);
+        return Back(IsFa ? "مجوز پروژه ذخیره شد." : "Project grant saved.");
+    }
+
+    [HttpPost("grants/{grantId:guid}/remove")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RemoveProjectGrant(Guid grantId, CancellationToken ct)
+    {
+        if (!await CanManageAsync(WorkspaceId, ct)) return Forbid();
+        var removed = await db.ProjectGrants.IgnoreQueryFilters()
+            .Where(g => g.Id == grantId && g.WorkspaceId == WorkspaceId).ExecuteDeleteAsync(ct);
+        if (removed == 0) return NotFound();
+        await audit.LogAsync("workspace.project_grant_removed", "project_grant", grantId.ToString(), ClientIp, ct: ct);
+        return Back(IsFa ? "مجوز پروژه حذف شد." : "Project grant removed.");
+    }
+
+    [HttpPost("transfer-ownership")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> TransferOwnership(Guid userId, CancellationToken ct)
+    {
+        var workspace = await db.Workspaces.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(w => w.Id == WorkspaceId, ct);
+        if (workspace is null) return NotFound();
+        if (workspace.IsPersonal)
+            return Back(IsFa ? "مالکیت فضای شخصی قابل انتقال نیست." : "A personal workspace cannot be transferred.", true);
+        if (workspace.OwnerUserId != UserId) return Forbid();
+        var target = await db.WorkspaceMembers.IgnoreQueryFilters().Include(m => m.User)
+            .FirstOrDefaultAsync(m => m.WorkspaceId == WorkspaceId && m.UserId == userId, ct);
+        if (target is null) return NotFound();
+        if (target.User?.IsActive != true)
+            return Back(IsFa ? "مالک جدید باید حساب فعال داشته باشد." : "The new owner must have an active account.", true);
+
+        workspace.OwnerUserId = userId;
+        target.Role = WorkspaceRole.Admin;
+        target.ScopedToProjects = false;
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("workspace.ownership_transferred", "workspace", WorkspaceId.ToString(), ClientIp,
+            metadataJson: $"{{\"newOwnerUserId\":\"{userId}\"}}", ct: ct);
+        return Back(IsFa ? "مالکیت فضای کاری منتقل شد." : "Workspace ownership transferred.");
+    }
+
+    [HttpPost("leave")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Leave(CancellationToken ct)
+    {
+        var leavingWorkspaceId = WorkspaceId;
+        var workspace = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(w => w.Id == leavingWorkspaceId, ct);
+        if (workspace is null) return NotFound();
+        if (workspace.OwnerUserId == UserId || workspace.IsPersonal)
+            return Back(IsFa ? "مالک نمی‌تواند فضای کاری خودش را ترک کند؛ ابتدا مالکیت را منتقل کنید." : "The owner cannot leave; transfer ownership first.", true);
+
+        await db.ProjectGrants.IgnoreQueryFilters()
+            .Where(g => g.WorkspaceId == leavingWorkspaceId && g.UserId == UserId).ExecuteDeleteAsync(ct);
+        await db.WorkspaceMembers.IgnoreQueryFilters()
+            .Where(m => m.WorkspaceId == leavingWorkspaceId && m.UserId == UserId).ExecuteDeleteAsync(ct);
+        var next = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
+            .Where(m => m.UserId == UserId).OrderByDescending(m => m.Workspace!.IsPersonal)
+            .Select(m => new { m.WorkspaceId, m.Role }).FirstOrDefaultAsync(ct);
+        if (next is null)
+        {
+            await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            return Redirect("/account/login");
+        }
+        await SwitchSessionAsync(next.WorkspaceId, next.Role, ct);
+        await audit.LogAsync("workspace.member_left", "workspace", leavingWorkspaceId.ToString(), ClientIp, ct: ct);
+        return Redirect("/workspaces");
     }
 
     [HttpPost("invitations/{id:guid}/revoke")]

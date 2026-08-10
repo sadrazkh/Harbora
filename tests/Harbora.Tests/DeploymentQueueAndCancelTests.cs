@@ -127,6 +127,18 @@ public class DeploymentQueueAndCancelTests
             Id = userId, Email = "me@example.com", DisplayName = "Tester",
             Role = role, ScopedToProjects = false
         });
+        db.WorkspaceMembers.Add(new WorkspaceMember
+        {
+            WorkspaceId = workspaceId,
+            UserId = userId,
+            Role = role switch
+            {
+                SystemRole.Owner or SystemRole.Admin => WorkspaceRole.Admin,
+                SystemRole.Operator => WorkspaceRole.Operator,
+                SystemRole.Viewer => WorkspaceRole.Viewer,
+                _ => WorkspaceRole.Member
+            }
+        });
 
         var deployment = new Deployment
         {

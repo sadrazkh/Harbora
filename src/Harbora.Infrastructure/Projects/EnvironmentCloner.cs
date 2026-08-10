@@ -401,7 +401,11 @@ public sealed class EnvironmentCloner(
     /// </summary>
     private async Task<string?> QuotaRefusalAsync(Guid workspaceId, ClonePlan plan, CancellationToken ct)
     {
-        var usage = await quota.GetUsageAsync(workspaceId, ct);
+        var governed = await quota.CanAddGovernedResourcesAsync(workspaceId,
+            new GovernanceQuotaDelta(
+                Environments: 1,
+                Volumes: plan.Apps.Sum(a => a.Volumes.Count)), ct);
+        if (!governed.Allowed) return governed.Reason;
 
         // A suspended workspace, or one whose size keys are not allowed on its plan, is refused by
         // the ordinary single-resource check — asked once here so the reason it gives is the reason
@@ -417,19 +421,13 @@ public sealed class EnvironmentCloner(
             if (!check.Allowed) return check.Reason;
         }
 
-        if (usage.MaxApps > 0 && usage.Apps + plan.Apps.Count > usage.MaxApps)
-            return $"This copy needs {plan.Apps.Count} more applications; the plan allows {usage.MaxApps} and {usage.Apps} are in use.";
-
-        if (usage.MaxServices > 0 && usage.Services + plan.Services.Count > usage.MaxServices)
-            return $"This copy needs {plan.Services.Count} more databases; the plan allows {usage.MaxServices} and {usage.Services} are in use.";
-
-        if (usage.MaxMemoryBytes > 0 && usage.MemoryUsedBytes + plan.MemoryBytes > usage.MaxMemoryBytes)
-            return $"This copy needs {Tenancy.ByteSize.Measured(plan.MemoryBytes)} of memory; the plan has "
-                 + $"{Tenancy.ByteSize.Measured(usage.MaxMemoryBytes - usage.MemoryUsedBytes)} left.";
-
-        if (usage.MaxCpuCores > 0 && usage.CpuUsed + plan.CpuCores > usage.MaxCpuCores)
-            return $"This copy needs {plan.CpuCores:0.##} CPU cores; the plan has "
-                 + $"{usage.MaxCpuCores - usage.CpuUsed:0.##} left.";
+        var aggregate = await quota.CanAddWorkloadsAsync(workspaceId,
+            new WorkloadQuotaDelta(
+                Apps: plan.Apps.Count,
+                Services: plan.Services.Count,
+                MemoryBytes: plan.MemoryBytes,
+                CpuCores: plan.CpuCores), ct);
+        if (!aggregate.Allowed) return aggregate.Reason;
 
         return null;
     }

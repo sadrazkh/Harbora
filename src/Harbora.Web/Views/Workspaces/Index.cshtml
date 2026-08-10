@@ -6,6 +6,7 @@
     var message = TempData["Message"] as string;
     var error = TempData["Error"] as string;
     var invitationLink = TempData["InvitationLink"] as string;
+    var currentMember = Model.Members.FirstOrDefault(m => m.IsCurrentUser);
 }
 
 <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
@@ -93,6 +94,54 @@
                             <span class="status-pill bg-surface-2 text-ink-muted">@(member.IsOwner ? (isFa ? "مالک" : "owner") : member.Role.ToString())</span>
                         }
                     </div>
+                    @if (Model.CanManageCurrent && !member.IsOwner && member.Role != WorkspaceRole.Admin)
+                    {
+                        <div class="w-full rounded-lg border border-line bg-surface-2 p-3 text-xs">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <span class="text-ink-muted">@(isFa ? "دامنه دسترسی پروژه" : "Project access scope")</span>
+                                <form asp-action="SetMemberScope" asp-route-userId="@member.UserId" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="scoped" value="@((!member.ScopedToProjects).ToString().ToLowerInvariant())" />
+                                    <button class="btn-secondary py-1">
+                                        @(member.ScopedToProjects
+                                            ? (isFa ? "دسترسی به همه پروژه‌ها" : "Allow every project")
+                                            : (isFa ? "محدود به پروژه‌های انتخابی" : "Limit to selected projects"))
+                                    </button>
+                                </form>
+                            </div>
+                            @if (member.ScopedToProjects)
+                            {
+                                <div class="mt-2 space-y-1">
+                                    @foreach (var grant in Model.Grants.Where(g => g.UserId == member.UserId))
+                                    {
+                                        <div class="flex items-center justify-between gap-2">
+                                            <span>@grant.Description</span>
+                                            <form asp-action="RemoveProjectGrant" asp-route-grantId="@grant.Id" method="post">
+                                                @Html.AntiForgeryToken()<button class="text-danger">@(isFa ? "حذف" : "Remove")</button>
+                                            </form>
+                                        </div>
+                                    }
+                                </div>
+                                <form asp-action="AddProjectGrant" asp-route-userId="@member.UserId" method="post" class="mt-3 grid gap-2 md:grid-cols-4">
+                                    @Html.AntiForgeryToken()
+                                    <select name="projectId" class="form-control py-1" required>
+                                        @foreach (var project in Model.Projects) { <option value="@project.Id">@project.Name</option> }
+                                    </select>
+                                    <select name="environmentId" class="form-control py-1">
+                                        <option value="">@(isFa ? "کل پروژه" : "Whole project")</option>
+                                        @foreach (var project in Model.Projects)
+                                        {
+                                            <optgroup label="@project.Name">
+                                                @foreach (var environment in project.Environments) { <option value="@environment.Id">@environment.Name</option> }
+                                            </optgroup>
+                                        }
+                                    </select>
+                                    <select name="role" class="form-control py-1"><option value="Member">Member</option><option value="Operator">Operator</option><option value="Viewer">Viewer</option></select>
+                                    <button class="btn-secondary py-1">@(isFa ? "افزودن مجوز" : "Add grant")</button>
+                                </form>
+                            }
+                        </div>
+                    }
                 </div>
             }
         </div>
@@ -136,6 +185,27 @@
                 <p class="text-xs leading-5 text-ink-faint">@(isFa ? "اگر SMTP تنظیم نباشد، لینک یک‌بار نمایش داده می‌شود تا خودتان بفرستید." : "Without SMTP, a one-time link is shown for you to send manually.")</p>
             </form>
             <partial name="Design/_PanelEnd" />
+
+            @if (!Model.CurrentIsPersonal && currentMember?.IsOwner == true)
+            {
+                <partial name="Design/_PanelStart" model="@(new PanelModel(isFa ? "انتقال مالکیت" : "Transfer ownership"))" />
+                <form asp-action="TransferOwnership" method="post" class="space-y-3" onsubmit="return confirm('@(isFa ? "مالکیت منتقل شود؟" : "Transfer workspace ownership?")');">
+                    @Html.AntiForgeryToken()
+                    <select name="userId" class="form-control" required>
+                        @foreach (var member in Model.Members.Where(m => !m.IsOwner)) { <option value="@member.UserId">@member.DisplayName (@member.Email)</option> }
+                    </select>
+                    <button class="btn-secondary w-full">@(isFa ? "انتقال مالکیت" : "Transfer ownership")</button>
+                </form>
+                <partial name="Design/_PanelEnd" />
+            }
+        }
+
+        @if (!Model.CurrentIsPersonal && currentMember?.IsOwner != true)
+        {
+            <form asp-action="Leave" method="post" onsubmit="return confirm('@(isFa ? "از فضای کاری خارج شوید؟" : "Leave this workspace?")');">
+                @Html.AntiForgeryToken()
+                <button class="w-full rounded-lg border border-danger/30 px-3 py-2 text-sm text-danger">@(isFa ? "خروج از فضای کاری" : "Leave workspace")</button>
+            </form>
         }
     </aside>
 </div>

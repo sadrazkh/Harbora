@@ -50,6 +50,20 @@ public class EnvironmentClonerTests
             => Task.FromResult(Single);
         public Task<QuotaCheck> CanAddServiceAsync(Guid w, string? size, CancellationToken ct)
             => Task.FromResult(Single);
+        public Task<QuotaCheck> CanAddWorkloadsAsync(Guid w, WorkloadQuotaDelta delta, CancellationToken ct)
+        {
+            if (Usage.MaxApps > 0 && Usage.Apps + delta.Apps > Usage.MaxApps)
+                return Task.FromResult(QuotaCheck.Deny(
+                    $"This copy needs {delta.Apps} applications; {Usage.Apps} / {Usage.MaxApps} are in use."));
+            if (Usage.MaxServices > 0 && Usage.Services + delta.Services > Usage.MaxServices)
+                return Task.FromResult(QuotaCheck.Deny(
+                    $"This copy needs {delta.Services} databases; {Usage.Services} / {Usage.MaxServices} are in use."));
+            if (Usage.MaxMemoryBytes > 0 && Usage.MemoryUsedBytes + delta.MemoryBytes > Usage.MaxMemoryBytes)
+                return Task.FromResult(QuotaCheck.Deny("Memory quota exceeded."));
+            if (Usage.MaxCpuCores > 0 && Usage.CpuUsed + delta.CpuCores > Usage.MaxCpuCores)
+                return Task.FromResult(QuotaCheck.Deny("CPU quota exceeded."));
+            return Task.FromResult(QuotaCheck.Ok);
+        }
     }
 
     /// <summary>

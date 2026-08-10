@@ -10,7 +10,36 @@ public interface IQuotaService
     Task<WorkspaceUsage> GetUsageAsync(Guid workspaceId, CancellationToken ct);
     Task<QuotaCheck> CanAddAppAsync(Guid workspaceId, string? instanceSizeKey, Guid? excludeAppId, CancellationToken ct);
     Task<QuotaCheck> CanAddServiceAsync(Guid workspaceId, string? instanceSizeKey, CancellationToken ct);
+
+    /// <summary>
+    /// Checks non-compute governance limits as one aggregate operation. Callers describe everything
+    /// they are about to add so templates and clones cannot pass six one-at-a-time checks and then
+    /// exceed a cap as a batch.
+    /// </summary>
+    Task<QuotaCheck> CanAddGovernedResourcesAsync(
+        Guid workspaceId, GovernanceQuotaDelta delta, CancellationToken ct) =>
+        Task.FromResult(QuotaCheck.Ok);
+
+    /// <summary>Checks a whole stack/clone as one unit instead of one stale snapshot per item.</summary>
+    Task<QuotaCheck> CanAddWorkloadsAsync(
+        Guid workspaceId, WorkloadQuotaDelta delta, CancellationToken ct) =>
+        Task.FromResult(QuotaCheck.Ok);
 }
+
+/// <summary>Resources a single operation is about to add to a workspace.</summary>
+public sealed record GovernanceQuotaDelta(
+    int Members = 0,
+    int Projects = 0,
+    int Environments = 0,
+    int Domains = 0,
+    int Volumes = 0,
+    int BackupSchedules = 0);
+
+public sealed record WorkloadQuotaDelta(
+    int Apps = 0,
+    int Services = 0,
+    long MemoryBytes = 0,
+    double CpuCores = 0);
 
 /// <param name="Reason">English refusal text. Never null when <paramref name="Allowed"/> is false.</param>
 /// <param name="ReasonFa">
@@ -79,4 +108,10 @@ public sealed record WorkspaceUsage(
     long MemoryUsedBytes, long MaxMemoryBytes,
     double CpuUsed, double MaxCpuCores,
     bool Suspended,
-    long DiskUsedBytes = 0, long MaxDiskBytes = 0, int DiskUnmeasured = 0);
+    long DiskUsedBytes = 0, long MaxDiskBytes = 0, int DiskUnmeasured = 0,
+    int Members = 0, int MaxMembers = 0,
+    int Projects = 0, int MaxProjects = 0,
+    int Environments = 0, int MaxEnvironments = 0,
+    int Domains = 0, int MaxDomains = 0,
+    int Volumes = 0, int MaxVolumes = 0,
+    int BackupSchedules = 0, int MaxBackupSchedules = 0);

@@ -439,18 +439,19 @@ public sealed partial class TenantsController(
     [Authorize(Policy = Capabilities.TenantsManage)]
     public async Task<IActionResult> SetScope(Guid id, Guid userId, bool scoped, CancellationToken ct)
     {
-        var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
-        if (user is null) return NotFound();
+        var membership = await db.WorkspaceMembers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(m => m.WorkspaceId == id && m.UserId == userId, ct);
+        if (membership is null) return NotFound();
 
         // An administrator is never scoped — administering a workspace you can only see half of is
         // not administering it — so saying so is better than a switch that silently does nothing.
-        if (user.Role is SystemRole.Owner or SystemRole.Admin && scoped)
+        if (membership.Role == WorkspaceRole.Admin && scoped)
         {
             TempData["Error"] = "An owner or admin is not limited to projects; change their role first.";
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        user.ScopedToProjects = scoped;
+        membership.ScopedToProjects = scoped;
         await db.SaveChangesAsync(ct);
         TempData["Message"] = scoped
             ? "Limited to the projects granted below."
@@ -464,6 +465,13 @@ public sealed partial class TenantsController(
     public async Task<IActionResult> AddGrant(
         Guid id, Guid userId, Guid projectId, Guid? environmentId, SystemRole role, CancellationToken ct)
     {
+        if (!await db.WorkspaceMembers.IgnoreQueryFilters()
+            .AnyAsync(m => m.WorkspaceId == id && m.UserId == userId, ct)) return NotFound();
+        if (role is not (SystemRole.Member or SystemRole.Operator or SystemRole.Viewer))
+        {
+            TempData["Error"] = "Choose Member, Operator or Viewer for a project grant.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
         if (!await db.Projects.IgnoreQueryFilters().AnyAsync(p => p.Id == projectId && p.WorkspaceId == id, ct))
             return NotFound();
 
@@ -517,7 +525,7 @@ public sealed partial class TenantsController(
         // Platform admin acting on another workspace: scoping to their own would return nothing.
         var rows = await db.WorkspaceMembers.IgnoreQueryFilters().Where(m => m.WorkspaceId == id)
             .Join(db.Users, m => m.UserId, u => u.Id,
-                  (m, u) => new { u.Id, u.Email, u.DisplayName, Role = u.Role, u.IsActive, u.ScopedToProjects })
+                  (m, u) => new { u.Id, u.Email, u.DisplayName, Role = u.Role, u.IsActive, m.ScopedToProjects })
             .OrderBy(m => m.Email).ToListAsync(ct);
 
         // Grants, written out as sentences: a permission nobody can read is a permission nobody
@@ -636,6 +644,14 @@ public sealed partial class TenantsController(
         if (await db.WorkspaceMembers.IgnoreQueryFilters().AnyAsync(m => m.WorkspaceId == id && m.UserId == user.Id, ct))
         {
             TempData["Error"] = "This user is already a member.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var seat = await quota.CanAddGovernedResourcesAsync(id,
+            new GovernanceQuotaDelta(Members: 1), ct);
+        if (!seat.Allowed)
+        {
+            TempData["Error"] = seat.Reason;
             return RedirectToAction(nameof(Details), new { id });
         }
 

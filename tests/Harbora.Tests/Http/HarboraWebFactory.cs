@@ -189,7 +189,8 @@ public sealed class HarboraWebFactory : WebApplicationFactory<Program>
                     SystemRole.Operator => WorkspaceRole.Operator,
                     SystemRole.Viewer => WorkspaceRole.Viewer,
                     _ => WorkspaceRole.Member
-                }
+                },
+                ScopedToProjects = scopedToProjects
             });
         });
 

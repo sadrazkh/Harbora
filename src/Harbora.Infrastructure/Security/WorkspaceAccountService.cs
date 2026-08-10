@@ -21,7 +21,8 @@ public sealed partial class WorkspaceAccountService(
     HarboraDbContext db,
     ProjectService projects,
     ISystemClock clock,
-    IOptions<BillingOptions> billing)
+    IOptions<BillingOptions> billing,
+    IQuotaService? quota = null)
 {
     public async Task<Workspace> EnsurePersonalWorkspaceAsync(User user, CancellationToken ct)
     {
@@ -106,8 +107,18 @@ public sealed partial class WorkspaceAccountService(
             .AnyAsync(m => m.WorkspaceId == workspaceId && m.User!.Email == email, ct))
             throw new InvalidOperationException("That account is already a member of this workspace.");
 
-        var token = Base64Url(RandomNumberGenerator.GetBytes(32));
         var now = clock.UtcNow;
+        var replacesActiveReservation = await db.WorkspaceInvitations.IgnoreQueryFilters()
+            .AnyAsync(i => i.WorkspaceId == workspaceId && i.Email == email
+                && i.AcceptedAt == null && !i.IsRevoked && i.ExpiresAt > now, ct);
+        if (quota is not null)
+        {
+            var check = await quota.CanAddGovernedResourcesAsync(workspaceId,
+                new GovernanceQuotaDelta(Members: replacesActiveReservation ? 0 : 1), ct);
+            if (!check.Allowed) throw new InvalidOperationException(check.Reason);
+        }
+
+        var token = Base64Url(RandomNumberGenerator.GetBytes(32));
         var old = await db.WorkspaceInvitations.IgnoreQueryFilters()
             .Where(i => i.WorkspaceId == workspaceId && i.Email == email && i.AcceptedAt == null && !i.IsRevoked)
             .ToListAsync(ct);
@@ -146,6 +157,15 @@ public sealed partial class WorkspaceAccountService(
         if (invitation.ExpiresAt <= clock.UtcNow) throw new InvalidOperationException("This invitation has expired.");
         if (!string.Equals(invitation.Email, NormalizeEmail(user.Email), StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("This invitation belongs to a different email address.");
+
+        if (quota is not null)
+        {
+            // The pending invitation already reserves this seat. A zero delta still refuses if an
+            // administrator lowered the plan beneath its current use after the link was issued.
+            var check = await quota.CanAddGovernedResourcesAsync(invitation.WorkspaceId,
+                new GovernanceQuotaDelta(), ct);
+            if (!check.Allowed) throw new InvalidOperationException(check.Reason);
+        }
 
         if (!await db.WorkspaceMembers.IgnoreQueryFilters()
                 .AnyAsync(m => m.WorkspaceId == invitation.WorkspaceId && m.UserId == user.Id, ct))

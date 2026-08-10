@@ -86,6 +86,31 @@
     }
 </div>
 
+<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+    @foreach (var item in new (string Label, int Used, int Limit)[]
+    {
+        (isFa ? "اعضا و دعوت‌ها" : "Members & invitations", u.Members, u.MaxMembers),
+        (isFa ? "پروژه‌ها" : "Projects", u.Projects, u.MaxProjects),
+        (isFa ? "محیط‌ها" : "Environments", u.Environments, u.MaxEnvironments),
+        (isFa ? "دامنه‌ها" : "Domains", u.Domains, u.MaxDomains),
+        (isFa ? "والیوم‌ها" : "Volumes", u.Volumes, u.MaxVolumes),
+        (isFa ? "زمان‌بندی پشتیبان" : "Backup schedules", u.BackupSchedules, u.MaxBackupSchedules)
+    })
+    {
+        var reading = AllocationReading.OfCount(item.Used, item.Limit);
+        <div class="rounded-xl border border-line bg-surface p-4">
+            <div class="text-ink-muted text-sm">@item.Label</div>
+            <div class="mt-1 text-xl font-bold" dir="ltr">@item.Used / @Count(item.Limit)</div>
+            @if (reading.HasShare)
+            {
+                <div class="mt-2 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+                    <div class="h-full @(reading.IsOver ? "bg-warn" : "bg-accent-hover")" style="width:@(reading.Percent)%"></div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
 @if (u.DiskUnmeasured > 0)
 {
     @* Said rather than folded into the number. A disk figure missing half its volumes is not a
@@ -113,6 +138,10 @@
             <ul class="mt-3 space-y-1 text-sm text-ink-muted">
                 <li>@(isFa ? "اپلیکیشن:" : "Apps:") @Count(p.MaxApps)</li>
                 <li>@(isFa ? "دیتابیس:" : "Databases:") @Count(p.MaxServices)</li>
+                <li>@(isFa ? "اعضا:" : "Members:") @Count(p.MaxMembers)</li>
+                <li>@(isFa ? "پروژه / محیط:" : "Projects / environments:") @Count(p.MaxProjects) / @Count(p.MaxEnvironments)</li>
+                <li>@(isFa ? "دامنه / والیوم:" : "Domains / volumes:") @Count(p.MaxDomains) / @Count(p.MaxVolumes)</li>
+                <li>@(isFa ? "زمان‌بندی پشتیبان:" : "Backup schedules:") @Count(p.MaxBackupSchedules)</li>
                 <li>@(isFa ? "حافظه:" : "Memory:") @Mem(p.MaxMemoryBytes)</li>
                 <li>@(isFa ? "پردازنده:" : "CPU:") @Cores(p.MaxCpuCores)</li>
                 @* The plan carried a disk limit, the quota check enforced it, and the card that
@@ -133,7 +162,7 @@
                 @if (p.AllowsOverage)
                 {
                     <li class="text-ink-faint">
-                        @(isFa ? "عبور از سقف‌ها مجاز است و با همان نرخ‌های بالا حساب می‌شود." : "May go past its caps, charged at the ordinary rates above.")
+                        @(isFa ? "عبور از سقف‌های محاسباتی و دیسک مجاز است و با همان نرخ‌های بالا حساب می‌شود." : "May go past compute and disk caps, charged at the ordinary rates above.")
                     </li>
                 }
             </ul>
@@ -305,6 +334,12 @@
                 <label class="form-label" for="new-services">@(isFa ? "حداکثر تعداد دیتابیس" : "Maximum databases")</label>
                 <input id="new-services" name="maxServices" type="number" min="0" value="1" class="form-control" dir="ltr" />
             </div>
+            <div><label class="form-label" for="new-members">@(isFa ? "حداکثر اعضا و دعوت‌ها" : "Maximum members & invitations")</label><input id="new-members" name="maxMembers" type="number" min="0" value="3" class="form-control" dir="ltr" /></div>
+            <div><label class="form-label" for="new-projects">@(isFa ? "حداکثر پروژه‌ها" : "Maximum projects")</label><input id="new-projects" name="maxProjects" type="number" min="0" value="3" class="form-control" dir="ltr" /></div>
+            <div><label class="form-label" for="new-environments">@(isFa ? "حداکثر محیط‌ها" : "Maximum environments")</label><input id="new-environments" name="maxEnvironments" type="number" min="0" value="6" class="form-control" dir="ltr" /></div>
+            <div><label class="form-label" for="new-domains">@(isFa ? "حداکثر دامنه‌ها" : "Maximum domains")</label><input id="new-domains" name="maxDomains" type="number" min="0" value="5" class="form-control" dir="ltr" /></div>
+            <div><label class="form-label" for="new-volumes">@(isFa ? "حداکثر والیوم‌ها" : "Maximum volumes")</label><input id="new-volumes" name="maxVolumes" type="number" min="0" value="5" class="form-control" dir="ltr" /></div>
+            <div><label class="form-label" for="new-backup-schedules">@(isFa ? "حداکثر زمان‌بندی پشتیبان" : "Maximum backup schedules")</label><input id="new-backup-schedules" name="maxBackupSchedules" type="number" min="0" value="2" class="form-control" dir="ltr" /></div>
             <div>
                 <label class="form-label" for="new-memory">@(isFa ? "حافظه — مگابایت (MB)" : "Memory — megabytes (MB)")</label>
                 <input id="new-memory" name="maxMemoryMb" type="number" min="0" value="1024" class="form-control" dir="ltr" />
@@ -370,11 +405,11 @@
                 <label class="flex items-start gap-2 text-sm text-ink">
                     <input type="checkbox" name="allowsOverage" value="true" class="mt-0.5" />
                     <span>
-                        @(isFa ? "اجازهٔ عبور از سقف‌های این پلن" : "Let tenants go past this plan's caps")
+                        @(isFa ? "اجازهٔ عبور از سقف‌های محاسباتی و دیسک" : "Let tenants go past compute and disk caps")
                         <span class="mt-1 block text-xs text-ink-faint">
                             @(isFa
                                 ? "مازاد با همان نرخ‌های بالا حساب می‌شود، نه با نرخ جریمه‌ای جدا. تا وقتی صورت‌حساب ساعتی روشن نشده باشد این گزینه هیچ کاری نمی‌کند و سقف‌ها همچنان دیوارند. سقف پلن تنها چیزی است که ظرفیت سرور را محدود می‌کند، پس پلنی که از سقف عبور می‌کند بهتر است به یک استخر سرور مشخص بسته شود."
-                                : "The excess is charged at the ordinary rates above, not at a separate burst rate. This does nothing until hourly billing is switched on — until then the caps are still walls. A plan cap is the only thing bounding a node's capacity, so an overage plan is best pinned to a node pool.")
+                                : "The excess is charged at the ordinary rates above, not at a separate burst rate. Member/project/domain/volume-count/backup-schedule limits remain hard walls. This does nothing until hourly billing is switched on — until then the caps are still walls. An overage plan is best pinned to a node pool.")
                         </span>
                     </span>
                 </label>
@@ -444,6 +479,12 @@
                                 <label class="form-label" for="services-@p.Id">@(isFa ? "حداکثر تعداد دیتابیس" : "Maximum databases")</label>
                                 <input id="services-@p.Id" name="maxServices" type="number" min="0" value="@p.MaxServices" class="form-control" dir="ltr" />
                             </div>
+                            <div><label class="form-label" for="members-@p.Id">@(isFa ? "اعضا و دعوت‌ها" : "Members & invitations")</label><input id="members-@p.Id" name="maxMembers" type="number" min="0" value="@p.MaxMembers" class="form-control" dir="ltr" /></div>
+                            <div><label class="form-label" for="projects-@p.Id">@(isFa ? "پروژه‌ها" : "Projects")</label><input id="projects-@p.Id" name="maxProjects" type="number" min="0" value="@p.MaxProjects" class="form-control" dir="ltr" /></div>
+                            <div><label class="form-label" for="environments-@p.Id">@(isFa ? "محیط‌ها" : "Environments")</label><input id="environments-@p.Id" name="maxEnvironments" type="number" min="0" value="@p.MaxEnvironments" class="form-control" dir="ltr" /></div>
+                            <div><label class="form-label" for="domains-@p.Id">@(isFa ? "دامنه‌ها" : "Domains")</label><input id="domains-@p.Id" name="maxDomains" type="number" min="0" value="@p.MaxDomains" class="form-control" dir="ltr" /></div>
+                            <div><label class="form-label" for="volumes-@p.Id">@(isFa ? "والیوم‌ها" : "Volumes")</label><input id="volumes-@p.Id" name="maxVolumes" type="number" min="0" value="@p.MaxVolumes" class="form-control" dir="ltr" /></div>
+                            <div><label class="form-label" for="backup-schedules-@p.Id">@(isFa ? "زمان‌بندی پشتیبان" : "Backup schedules")</label><input id="backup-schedules-@p.Id" name="maxBackupSchedules" type="number" min="0" value="@p.MaxBackupSchedules" class="form-control" dir="ltr" /></div>
                             <div>
                                 <label class="form-label" for="memory-@p.Id">@(isFa ? "حافظه — مگابایت (MB)" : "Memory — megabytes (MB)")</label>
                                 <input id="memory-@p.Id" name="maxMemoryMb" type="number" min="0" value="@(p.MaxMemoryBytes / 1024 / 1024)" class="form-control" dir="ltr" />
@@ -487,11 +528,11 @@
                                 <label class="flex items-start gap-2 text-sm text-ink">
                                     <input type="checkbox" name="allowsOverage" value="true" class="mt-0.5" checked="@p.AllowsOverage" />
                                     <span>
-                                        @(isFa ? "اجازهٔ عبور از سقف‌های این پلن" : "Let tenants go past this plan's caps")
+                                        @(isFa ? "اجازهٔ عبور از سقف‌های محاسباتی و دیسک" : "Let tenants go past compute and disk caps")
                                         <span class="mt-1 block text-xs text-ink-faint">
                                             @(isFa
                                                 ? "مازاد با همان نرخ‌های بالا حساب می‌شود، نه با نرخ جریمه‌ای جدا. تا وقتی صورت‌حساب ساعتی روشن نشده باشد این گزینه هیچ کاری نمی‌کند."
-                                                : "The excess is charged at the ordinary rates above, not at a separate burst rate. This does nothing until hourly billing is switched on.")
+                                                : "The excess is charged at the ordinary rates above. Governance limits remain hard walls. This does nothing until hourly billing is switched on.")
                                         </span>
                                     </span>
                                 </label>
@@ -590,6 +631,12 @@
                         PlanResource.Disk => $"{Disk((long)b.Used)} / {Disk((long)b.Limit)}",
                         PlanResource.Cpu => $"{b.Used:0.##} / {b.Limit:0.##} " + (isFa ? "هسته" : "cores"),
                         PlanResource.Services => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "دیتابیس" : "databases"),
+                        PlanResource.Members => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "عضو/دعوت" : "members/invitations"),
+                        PlanResource.Projects => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "پروژه" : "projects"),
+                        PlanResource.Environments => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "محیط" : "environments"),
+                        PlanResource.Domains => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "دامنه" : "domains"),
+                        PlanResource.Volumes => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "والیوم" : "volumes"),
+                        PlanResource.BackupSchedules => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "زمان‌بندی پشتیبان" : "backup schedules"),
                         _ => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "اپلیکیشن" : "apps")
                     };
                     <div class="flex flex-wrap justify-between gap-2">

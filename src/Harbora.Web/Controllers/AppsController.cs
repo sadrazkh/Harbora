@@ -295,6 +295,16 @@ public sealed class AppsController(
         if (model.TemplateId is { } templateId)
             templateAdvice = await ApplyTemplateAsync(app, templateId, ct);
 
+        var governed = await quota.CanAddGovernedResourcesAsync(WorkspaceId,
+            new GovernanceQuotaDelta(Domains: app.Domains.Count, Volumes: app.Volumes.Count), ct);
+        if (!governed.Allowed)
+        {
+            ModelState.AddModelError(string.Empty,
+                (IsFa ? governed.ReasonFa : null) ?? governed.Reason ?? "Plan quota exceeded.");
+            await PopulateTemplates(ct);
+            return View(model);
+        }
+
         db.Apps.Add(app);
         try
         {
@@ -636,6 +646,14 @@ public sealed class AppsController(
             TempData["Error"] = IsFa
                 ? $"«{normalised}» از قبل هست."
                 : $"{normalised} is already mounted.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var quotaCheck = await quota.CanAddGovernedResourcesAsync(WorkspaceId,
+            new GovernanceQuotaDelta(Volumes: 1), ct);
+        if (!quotaCheck.Allowed)
+        {
+            TempData["Error"] = (IsFa ? quotaCheck.ReasonFa : null) ?? quotaCheck.Reason;
             return RedirectToAction(nameof(Details), new { id });
         }
 
@@ -1245,6 +1263,7 @@ public sealed class AppsController(
     [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> AddDomain(Guid id, string host, bool ssl, CancellationToken ct)
     {
+        if (!await access.CanTouchAppAsync(id, Capabilities.AppsEnv, ct)) return Forbid();
         var app = await db.Apps.Include(a => a.Domains).FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
         host = (host ?? "").Trim().ToLowerInvariant();
@@ -1257,6 +1276,14 @@ public sealed class AppsController(
         // ReservedHosts for why a second router on that SNI name turns mTLS off instead of adding
         // a route.
         if (IsReservedHost(host)) { TempData["Error"] = ReservedHostRefusal(host); return RedirectToAction(nameof(Details), new { id }); }
+
+        var quotaCheck = await quota.CanAddGovernedResourcesAsync(WorkspaceId,
+            new GovernanceQuotaDelta(Domains: 1), ct);
+        if (!quotaCheck.Allowed)
+        {
+            TempData["Error"] = (IsFa ? quotaCheck.ReasonFa : null) ?? quotaCheck.Reason;
+            return RedirectToAction(nameof(Details), new { id });
+        }
 
         app.Domains.Add(new DomainName { Host = host, SslEnabled = ssl, ForceHttps = ssl, IsPrimary = app.Domains.Count == 0 });
         await db.SaveChangesAsync(ct);

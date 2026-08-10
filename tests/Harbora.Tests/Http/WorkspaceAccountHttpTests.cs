@@ -74,4 +74,62 @@ public sealed class WorkspaceAccountHttpTests(HarboraHttpFixture fixture)
         response.StatusCode.Should().Be(HttpStatusCode.Found);
         response.RedirectPath().Should().Be("/account/login");
     }
+
+    [Fact]
+    public async Task Workspace_owner_can_scope_a_member_and_grant_one_project()
+    {
+        var ownerEmail = $"scope-owner-{Guid.NewGuid():N}@example.com";
+        var memberEmail = $"scope-member-{Guid.NewGuid():N}@example.com";
+        Panel.GivenUser(fixture.WorkspaceId, ownerEmail, SystemRole.Member);
+        var member = Panel.GivenUser(fixture.WorkspaceId, memberEmail, SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.185", ownerEmail);
+        var token = await client.AntiforgeryTokenFrom("/workspaces");
+        await client.PostFormAsync("/workspaces/create", token, ("name", "Scoped Team"));
+        var team = Panel.Read(db => db.Workspaces.IgnoreQueryFilters()
+            .Single(w => w.Name == "Scoped Team" && w.OwnerUser!.Email == ownerEmail));
+        Panel.Seed(db => db.WorkspaceMembers.Add(new Harbora.Domain.Identity.WorkspaceMember
+        {
+            WorkspaceId = team.Id, UserId = member.Id, Role = WorkspaceRole.Member
+        }));
+        var project = Panel.Read(db => db.Projects.IgnoreQueryFilters().Single(p => p.WorkspaceId == team.Id));
+
+        token = await client.AntiforgeryTokenFrom("/workspaces");
+        await client.PostFormAsync($"/workspaces/members/{member.Id}/scope", token, ("scoped", "true"));
+        token = await client.AntiforgeryTokenFrom("/workspaces");
+        await client.PostFormAsync($"/workspaces/members/{member.Id}/grants", token,
+            ("projectId", project.Id.ToString()), ("role", "Member"));
+
+        Panel.Read(db => db.WorkspaceMembers.IgnoreQueryFilters()
+            .Single(m => m.WorkspaceId == team.Id && m.UserId == member.Id).ScopedToProjects).Should().BeTrue();
+        Panel.Read(db => db.ProjectGrants.IgnoreQueryFilters()
+            .Any(g => g.WorkspaceId == team.Id && g.UserId == member.Id && g.ProjectId == project.Id)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Shared_workspace_ownership_can_be_transferred_to_an_active_member()
+    {
+        var ownerEmail = $"transfer-owner-{Guid.NewGuid():N}@example.com";
+        var nextEmail = $"transfer-next-{Guid.NewGuid():N}@example.com";
+        Panel.GivenUser(fixture.WorkspaceId, ownerEmail, SystemRole.Member);
+        var nextOwner = Panel.GivenUser(fixture.WorkspaceId, nextEmail, SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.186", ownerEmail);
+        var token = await client.AntiforgeryTokenFrom("/workspaces");
+        await client.PostFormAsync("/workspaces/create", token, ("name", "Transfer Team"));
+        var team = Panel.Read(db => db.Workspaces.IgnoreQueryFilters()
+            .Single(w => w.Name == "Transfer Team" && w.OwnerUser!.Email == ownerEmail));
+        Panel.Seed(db => db.WorkspaceMembers.Add(new Harbora.Domain.Identity.WorkspaceMember
+        {
+            WorkspaceId = team.Id, UserId = nextOwner.Id, Role = WorkspaceRole.Member
+        }));
+
+        token = await client.AntiforgeryTokenFrom("/workspaces");
+        var response = await client.PostFormAsync("/workspaces/transfer-ownership", token,
+            ("userId", nextOwner.Id.ToString()));
+
+        response.RedirectPath().Should().Be("/workspaces");
+        Panel.Read(db => db.Workspaces.IgnoreQueryFilters().Single(w => w.Id == team.Id).OwnerUserId)
+            .Should().Be(nextOwner.Id);
+        Panel.Read(db => db.WorkspaceMembers.IgnoreQueryFilters()
+            .Single(m => m.WorkspaceId == team.Id && m.UserId == nextOwner.Id).Role).Should().Be(WorkspaceRole.Admin);
+    }
 }

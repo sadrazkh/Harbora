@@ -100,7 +100,20 @@ public sealed class AccountController(
         var personal = await workspaceAccounts.EnsurePersonalWorkspaceAsync(user, ct);
         var destination = personal;
         if (invitation is not null)
-            destination = await workspaceAccounts.AcceptInvitationAsync(model.InvitationToken!, user, ct);
+        {
+            try
+            {
+                destination = await workspaceAccounts.AcceptInvitationAsync(model.InvitationToken!, user, ct);
+            }
+            catch (InvalidOperationException ex)
+            {
+                // The account and its personal workspace are already valid. A plan may have been
+                // lowered after the invitation was issued; do not turn that race into a 500 or
+                // discard a registration. Sign in to the personal workspace and explain the
+                // invitation refusal so an administrator can free a seat or change the plan.
+                TempData["Error"] = ex.Message;
+            }
+        }
 
         var membershipRole = await db.WorkspaceMembers.IgnoreQueryFilters()
             .Where(m => m.WorkspaceId == destination.Id && m.UserId == user.Id)

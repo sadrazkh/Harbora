@@ -94,6 +94,17 @@ public sealed class TemplateDeploymentService(
             : await db.InstanceSizes.AsNoTracking()
                 .FirstOrDefaultAsync(s => s.Key == request.InstanceSizeKey, ct);
 
+        var appCount = manifest.Service is null ? 1 : 0;
+        var workloadCount = appCount + dependencyTypes.Count;
+        var aggregateQuota = await quota.CanAddWorkloadsAsync(request.WorkspaceId,
+            new WorkloadQuotaDelta(
+                Apps: appCount,
+                Services: dependencyTypes.Count,
+                MemoryBytes: (size?.MemoryBytes ?? 0) * workloadCount,
+                CpuCores: (size?.CpuCores ?? 0) * workloadCount), ct);
+        if (!aggregateQuota.Allowed)
+            throw new InvalidOperationException(aggregateQuota.Reason ?? "Plan quota exceeded.");
+
         var server = await db.Servers.Where(s => s.IsLocal)
             .Select(s => new { s.Id, s.Architecture }).FirstOrDefaultAsync(ct)
             ?? throw new InvalidOperationException("No local server is configured.");
@@ -258,6 +269,13 @@ public sealed class TemplateDeploymentService(
                 ForceHttps = true,
                 IsPrimary = true
             });
+
+        var governed = await quota.CanAddGovernedResourcesAsync(request.WorkspaceId,
+            new GovernanceQuotaDelta(
+                Domains: app.Domains.Count,
+                Volumes: app.Volumes.Count), ct);
+        if (!governed.Allowed)
+            throw new InvalidOperationException(governed.Reason ?? "Plan quota exceeded.");
 
         db.Apps.Add(app);
         var createdResources = createdServices.Select(s => new Billing.CreatedBillableResource(

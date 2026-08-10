@@ -342,6 +342,18 @@ Plans, Tenants, Users or platform settings. Provider Owners/Admins retain those 
 The provider credits a personal or shared workspace from **Tenants → workspace → Credit**; the
 platform **Users** table links directly to each user's personal wallet when it exists.
 
+Workspace administrators can change roles, remove members, reserve seats with expiring invitations,
+limit a member to selected projects/environments, transfer a shared workspace to another member,
+and leave a workspace they do not own. Project scoping is stored on the membership, not on the
+account, so the same person can be an administrator in one workspace and a staging-only contractor
+in another. Removing a membership or lowering its role takes effect on the next request.
+
+Compute plans also cap members (live invitations count), projects, environments, domains, app
+volumes and recurring backup schedules. `0` means unlimited, as for the older app/service/CPU/RAM/
+disk caps. Stack templates and environment clones are checked as one batch; a package cannot pass
+several stale one-resource checks and land over its plan. The Plans page shows both the configured
+limits and current usage for every governed resource.
+
 The provider can inspect the latest hourly accounting history under **Platform → Billing runs**.
 Incomplete runs show their counters and failure summary and can be retried there while billing is
 enabled. A retry uses the durable queue and its live-job uniqueness guard, so repeated or concurrent
@@ -353,6 +365,8 @@ tick box for it. On a plan with it set, that plan's limits on apps, databases, m
 stop refusing — a customer can go past them and is charged for what they use at the ordinary rate.
 Leave it off and the caps behave exactly as they always have. It does nothing at all while
 `Billing:Enabled` is `false`, so it cannot hand out free capacity on an install that is not charging.
+Member, project, environment, domain, volume-count and backup-schedule limits remain hard walls even
+on an overage plan because those resources have no configured overage rate to collect.
 
 **Blank prices are not free prices.** Every rate arrives unset — on plans and on instance sizes — and
 that is deliberately different from a rate of zero. Unset means nobody has decided; the hourly pass

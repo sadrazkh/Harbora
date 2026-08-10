@@ -23,6 +23,7 @@ public sealed partial class BackupsController(
     Harbora.Infrastructure.Backups.BackupDeliveryService delivery,
     IHttpClientFactory httpFactory,
     Harbora.Infrastructure.Security.ProjectAccessService access,
+    IQuotaService quota,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -44,6 +45,10 @@ public sealed partial class BackupsController(
         };
 
         vm.Targets.Add(($"{BackupType.FullPlatform}|platform", "🌐 Full platform"));
+        // The full-workspace export includes platform settings and therefore belongs only to the
+        // provider workspace. Customer workspaces still get app and database targets below.
+        if (!await db.Workspaces.AnyAsync(w => w.Id == WorkspaceId && w.IsDefault, ct))
+            vm.Targets.Clear();
         foreach (var app in await db.Apps.Where(a => a.WorkspaceId == WorkspaceId).ToListAsync(ct))
             vm.Targets.Add(($"{BackupType.AppConfig}|{app.Id}", $"📦 {app.Name} (config)"));
         foreach (var svc in await db.ManagedServices.Where(s => s.WorkspaceId == WorkspaceId).ToListAsync(ct))
@@ -60,6 +65,12 @@ public sealed partial class BackupsController(
         if (!TryParseTarget(target, out var type, out var reference))
         {
             TempData["Error"] = "Invalid backup target.";
+            return RedirectToAction(nameof(Index));
+        }
+        if (!await OwnsTargetAsync(type, reference, Capabilities.BackupsRun, ct)
+            || !await db.BackupDestinations.AnyAsync(d => d.Id == destinationId && d.WorkspaceId == WorkspaceId, ct))
+        {
+            TempData["Error"] = "The backup target or destination does not belong to this workspace.";
             return RedirectToAction(nameof(Index));
         }
         await engine.QueueBackupAsync(WorkspaceId, type, reference, destinationId, scheduled: false, ct);
@@ -170,6 +181,19 @@ public sealed partial class BackupsController(
             TempData["Error"] = "Invalid schedule target.";
             return RedirectToAction(nameof(Index));
         }
+        if (!await OwnsTargetAsync(type, reference, Capabilities.BackupsManage, ct)
+            || !await db.BackupDestinations.AnyAsync(d => d.Id == destinationId && d.WorkspaceId == WorkspaceId, ct))
+        {
+            TempData["Error"] = "The backup target or destination does not belong to this workspace.";
+            return RedirectToAction(nameof(Index));
+        }
+        var quotaCheck = await quota.CanAddGovernedResourcesAsync(WorkspaceId,
+            new GovernanceQuotaDelta(BackupSchedules: 1), ct);
+        if (!quotaCheck.Allowed)
+        {
+            TempData["Error"] = quotaCheck.Reason;
+            return RedirectToAction(nameof(Index));
+        }
         db.BackupSchedules.Add(new BackupSchedule
         {
             WorkspaceId = WorkspaceId, DestinationId = destinationId, Type = type, TargetRef = reference,
@@ -200,6 +224,20 @@ public sealed partial class BackupsController(
     /// <summary>The same question for the destructive action.</summary>
     private Task<bool> MayRestoreAsync(Guid backupId, CancellationToken ct) =>
         access.CanTouchBackupAsync(backupId, Capabilities.BackupsRestore, ct);
+
+    private async Task<bool> OwnsTargetAsync(
+        BackupType type, string reference, string capability, CancellationToken ct)
+    {
+        if (type == BackupType.FullPlatform)
+            return reference == "platform"
+                && await db.Workspaces.AnyAsync(w => w.Id == WorkspaceId && w.IsDefault, ct);
+        if (!Guid.TryParse(reference, out var id)) return false;
+        if (type is BackupType.AppConfig or BackupType.Volume)
+            return await access.CanTouchAppAsync(id, capability, ct);
+        if (type is BackupType.Database or BackupType.Service)
+            return await access.CanTouchServiceAsync(id, capability, ct);
+        return false;
+    }
 
     private async Task EnsureDefaultDestinationAsync(CancellationToken ct)
     {

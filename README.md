@@ -504,6 +504,9 @@ dotnet run --project src/Harbora.Web                             # auto-migrates
 - Git OAuth requires registering an OAuth app (client id/secret); token connection needs no setup.
 - Billing includes balances, manual operator credit/adjustment, single-use vouchers, hourly PAYG
   ledger lines and per-resource statements. There is deliberately no online payment gateway.
+- Workspace governance includes seat reservations for pending invitations, per-workspace roles,
+  project/environment grants, ownership transfer, self-service leave, and plan limits for projects,
+  environments, domains, persistent volumes and recurring backup schedules.
 - Health checks HTTP-probe the app's health path (falling back to container-liveness when none is set).
 
 ## License

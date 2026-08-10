@@ -16,7 +16,7 @@ namespace Harbora.Infrastructure.Projects;
 /// nothing" — the state that would otherwise appear months later, in production, on somebody's
 /// dashboard.
 /// </summary>
-public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clock)
+public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clock, IQuotaService? quota = null)
 {
     /// <summary>The slug the migration used, so old and new workspaces look identical.</summary>
     public const string DefaultProjectSlug = "default";
@@ -84,6 +84,13 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
     private async Task<(Project Project, Environment Environment)> CreateCoreAsync(
         Guid workspaceId, string name, string? slug, bool save, CancellationToken ct)
     {
+        if (quota is not null)
+        {
+            var check = await quota.CanAddGovernedResourcesAsync(workspaceId,
+                new GovernanceQuotaDelta(Projects: 1, Environments: 1), ct);
+            if (!check.Allowed) throw new QuotaRefusedException(check);
+        }
+
         var project = new Project
         {
             WorkspaceId = workspaceId,
@@ -112,6 +119,13 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
     public async Task<Environment> AddEnvironmentAsync(
         Guid workspaceId, Guid projectId, string name, CancellationToken ct)
     {
+        if (quota is not null)
+        {
+            var check = await quota.CanAddGovernedResourcesAsync(workspaceId,
+                new GovernanceQuotaDelta(Environments: 1), ct);
+            if (!check.Allowed) throw new QuotaRefusedException(check);
+        }
+
         var slug = Slugify(name);
         if (slug.Length == 0) slug = "environment";
 

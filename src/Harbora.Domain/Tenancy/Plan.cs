@@ -14,6 +14,19 @@ public class Plan : BaseEntity
     public int MaxApps { get; set; }
     public int MaxServices { get; set; }
 
+    /// <summary>Workspace seats, including unexpired pending invitations (0 = unlimited).</summary>
+    public int MaxMembers { get; set; }
+    /// <summary>Projects owned by the workspace (0 = unlimited).</summary>
+    public int MaxProjects { get; set; }
+    /// <summary>Environments across every project, including previews (0 = unlimited).</summary>
+    public int MaxEnvironments { get; set; }
+    /// <summary>Custom and automatically assigned application domains (0 = unlimited).</summary>
+    public int MaxDomains { get; set; }
+    /// <summary>Persistent application volumes (0 = unlimited).</summary>
+    public int MaxVolumes { get; set; }
+    /// <summary>Recurring backup schedules (0 = unlimited).</summary>
+    public int MaxBackupSchedules { get; set; }
+
     /// <summary>Total memory a workspace may commit across all its apps (0 = unlimited).</summary>
     public long MaxMemoryBytes { get; set; }
     /// <summary>Total CPU cores a workspace may commit (0 = unlimited).</summary>

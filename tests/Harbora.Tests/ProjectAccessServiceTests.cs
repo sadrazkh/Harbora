@@ -66,6 +66,19 @@ public class ProjectAccessServiceTests : IDisposable
             Id = _user, Email = "someone@example.com", DisplayName = "Someone",
             Role = role, ScopedToProjects = scoped
         });
+        _db.WorkspaceMembers.Add(new WorkspaceMember
+        {
+            WorkspaceId = _workspace,
+            UserId = _user,
+            Role = role switch
+            {
+                SystemRole.Owner or SystemRole.Admin => WorkspaceRole.Admin,
+                SystemRole.Operator => WorkspaceRole.Operator,
+                SystemRole.Viewer => WorkspaceRole.Viewer,
+                _ => WorkspaceRole.Member
+            },
+            ScopedToProjects = scoped
+        });
 
         foreach (var (project, environment, grantRole) in grants)
             _db.ProjectGrants.Add(new ProjectGrant
@@ -205,6 +218,21 @@ public class ProjectAccessServiceTests : IDisposable
         var app = GivenApp(_secretEnvironment);
 
         (await Service().CanTouchAppAsync(app, Capabilities.AppsDeploy, default)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Workspace_role_wins_over_the_accounts_platform_role()
+    {
+        GivenUser(SystemRole.Admin, scoped: false);
+        var membership = await _db.WorkspaceMembers.SingleAsync();
+        membership.Role = WorkspaceRole.Viewer;
+        await _db.SaveChangesAsync();
+
+        var app = GivenApp(_shopProduction);
+
+        (await Service().CanSeeAppAsync(app, default)).Should().BeTrue();
+        (await Service().CanTouchAppAsync(app, Capabilities.AppsDeploy, default)).Should().BeFalse(
+            "being a platform administrator must not silently make this membership a workspace administrator");
     }
 
     [Fact]

@@ -9,7 +9,13 @@ public enum PlanResource
     Services = 1,
     Memory = 2,
     Cpu = 3,
-    Disk = 4
+    Disk = 4,
+    Members = 5,
+    Projects = 6,
+    Environments = 7,
+    Domains = 8,
+    Volumes = 9,
+    BackupSchedules = 10
 }
 
 /// <summary>One limit a workspace has gone past, with both figures so it can be read.</summary>
@@ -62,6 +68,18 @@ public static class PlanOverage
         if (usage.MaxDiskBytes > 0 && usage.DiskUsedBytes > usage.MaxDiskBytes)
             breaches.Add(new PlanBreach(PlanResource.Disk, usage.DiskUsedBytes, usage.MaxDiskBytes));
 
+        AddCount(breaches, PlanResource.Members, usage.Members, usage.MaxMembers);
+        AddCount(breaches, PlanResource.Projects, usage.Projects, usage.MaxProjects);
+        AddCount(breaches, PlanResource.Environments, usage.Environments, usage.MaxEnvironments);
+        AddCount(breaches, PlanResource.Domains, usage.Domains, usage.MaxDomains);
+        AddCount(breaches, PlanResource.Volumes, usage.Volumes, usage.MaxVolumes);
+        AddCount(breaches, PlanResource.BackupSchedules, usage.BackupSchedules, usage.MaxBackupSchedules);
+
         return breaches;
+    }
+
+    private static void AddCount(List<PlanBreach> breaches, PlanResource resource, int used, int limit)
+    {
+        if (limit > 0 && used > limit) breaches.Add(new PlanBreach(resource, used, limit));
     }
 }

@@ -65,6 +65,13 @@ public class WorkspaceMember : BaseEntity
     public User? User { get; set; }
 
     public WorkspaceRole Role { get; set; } = WorkspaceRole.Member;
+
+    /// <summary>
+    /// When true, this membership only reaches projects explicitly granted in this workspace.
+    /// This belongs to the membership, not the account: one person may be an administrator in one
+    /// workspace and a contractor limited to staging in another.
+    /// </summary>
+    public bool ScopedToProjects { get; set; }
 }
 
 /// <summary>A single-use invitation to one workspace. Only the token digest is persisted.</summary>

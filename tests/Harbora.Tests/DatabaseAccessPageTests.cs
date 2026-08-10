@@ -122,6 +122,12 @@ public class DatabaseAccessPageTests
             Role = SystemRole.Owner,
             ScopedToProjects = false
         });
+        db.Add(new Harbora.Domain.Identity.WorkspaceMember
+        {
+            WorkspaceId = workspaceId,
+            UserId = currentUser.UserId.Value,
+            Role = WorkspaceRole.Admin
+        });
         db.SaveChanges();
 
         var docker = new FakeDockerEngine();
@@ -192,6 +198,12 @@ public class DatabaseAccessPageTests
             DisplayName = "Tester",
             Role = SystemRole.Owner,
             ScopedToProjects = false
+        });
+        db.Add(new Harbora.Domain.Identity.WorkspaceMember
+        {
+            WorkspaceId = workspaceId,
+            UserId = currentUser.UserId.Value,
+            Role = WorkspaceRole.Admin
         });
         db.SaveChanges();
         var protector = new PassthroughProtector();

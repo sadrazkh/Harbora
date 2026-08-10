@@ -160,6 +160,7 @@ public class RateAdminTests
 
         await f.Controller.CreatePlan(
             "Standard", maxApps: 3, maxServices: 2, maxMemoryMb: 2048, maxCpu: 2, maxDiskGb: 40,
+            maxMembers: 0, maxProjects: 0, maxEnvironments: 0, maxDomains: 0, maxVolumes: 0, maxBackupSchedules: 0,
             allowedSizeKeys: "small", monthlyPrice: 25m,
             baseRatePerHour: "1.50",
             diskGbHour: "0.25",
@@ -246,7 +247,9 @@ public class RateAdminTests
 
         await f.Controller.UpdatePlan(
             plan.Id, "Standard", maxApps: 3, maxServices: 2, maxMemoryMb: 2048, maxCpu: 2,
-            maxDiskGb: 40, allowedSizeKeys: "small", monthlyPrice: 25m,
+            maxDiskGb: 40, maxMembers: 0, maxProjects: 0, maxEnvironments: 0,
+            maxDomains: 0, maxVolumes: 0, maxBackupSchedules: 0,
+            allowedSizeKeys: "small", monthlyPrice: 25m,
             baseRatePerHour: "9.99",
             diskGbHour: "5.55",
             allowsOverage: true, ct: default);
@@ -286,7 +289,7 @@ public class RateAdminTests
         var f = Build();
 
         await f.Controller.CreatePlan(
-            "Standard", 3, 2, 2048, 2, 40, "small", 25m,
+            "Standard", 3, 2, 2048, 2, 40, 0, 0, 0, 0, 0, 0, "small", 25m,
             baseRatePerHour: "", diskGbHour: "   ", allowsOverage: false, ct: default);
 
         var plan = await f.Db.Plans.SingleAsync();
@@ -318,7 +321,7 @@ public class RateAdminTests
         var f = Build();
 
         await f.Controller.CreatePlan(
-            "Free tier", 1, 0, 256, 0.25, 5, "nano", 0m,
+            "Free tier", 1, 0, 256, 0.25, 5, 0, 0, 0, 0, 0, 0, "nano", 0m,
             baseRatePerHour: "0", diskGbHour: "0.00", allowsOverage: false, ct: default);
 
         var plan = await f.Db.Plans.SingleAsync();
@@ -353,7 +356,7 @@ public class RateAdminTests
         await f.Db.SaveChangesAsync();
 
         await f.Controller.UpdatePlan(
-            plan.Id, "Standard", 3, 2, 2048, 2, 40, "small", 25m,
+            plan.Id, "Standard", 3, 2, 2048, 2, 40, 0, 0, 0, 0, 0, 0, "small", 25m,
             baseRatePerHour: "", diskGbHour: "", allowsOverage: false, ct: default);
 
         var saved = await f.Db.Plans.SingleAsync();
@@ -386,7 +389,7 @@ public class RateAdminTests
         var f = Build();
 
         var result = await f.Controller.CreatePlan(
-            "Standard", 3, 2, 2048, 2, 40, "small", 25m,
+            "Standard", 3, 2, 2048, 2, 40, 0, 0, 0, 0, 0, 0, "small", 25m,
             baseRatePerHour: "-1.00", diskGbHour: null, allowsOverage: false, ct: default);
 
         result.Should().BeOfType<RedirectToActionResult>();
@@ -419,7 +422,9 @@ public class RateAdminTests
 
         await f.Controller.UpdatePlan(
             plan.Id, "Renamed", maxApps: 99, maxServices: 99, maxMemoryMb: 1, maxCpu: 99,
-            maxDiskGb: 99, allowedSizeKeys: "nano", monthlyPrice: 999m,
+            maxDiskGb: 99, maxMembers: 0, maxProjects: 0, maxEnvironments: 0,
+            maxDomains: 0, maxVolumes: 0, maxBackupSchedules: 0,
+            allowedSizeKeys: "nano", monthlyPrice: 999m,
             baseRatePerHour: baseRate, diskGbHour: diskRate, allowsOverage: false, ct: default);
 
         var saved = await f.Db.Plans.AsNoTracking().SingleAsync();
@@ -503,7 +508,7 @@ public class RateAdminTests
         var plan = Existing(f.Db);
 
         await f.Controller.UpdatePlan(
-            plan.Id, "Standard", 3, 2, 2048, 2, 40, "small", 25m,
+            plan.Id, "Standard", 3, 2, 2048, 2, 40, 0, 0, 0, 0, 0, 0, "small", 25m,
             baseRatePerHour: "1.50", diskGbHour: "0.25", allowsOverage: false, ct: default);
 
         var entry = f.Audit.Entries.Should().ContainSingle().Subject;

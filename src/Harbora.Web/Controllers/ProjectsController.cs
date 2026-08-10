@@ -141,8 +141,16 @@ public sealed class ProjectsController(
             return RedirectToAction(nameof(Index));
         }
 
-        var (project, _) = await projects.CreateAsync(WorkspaceId, name, null, ct);
-        return RedirectToAction(nameof(Details), new { id = project.Id });
+        try
+        {
+            var (project, _) = await projects.CreateAsync(WorkspaceId, name, null, ct);
+            return RedirectToAction(nameof(Details), new { id = project.Id });
+        }
+        catch (QuotaRefusedException ex)
+        {
+            TempData["Error"] = IsFa ? ex.ReasonFa ?? ex.Message : ex.Message;
+            return RedirectToAction(nameof(Index));
+        }
     }
 
     [HttpPost("{id:guid}/environments")]
@@ -153,8 +161,16 @@ public sealed class ProjectsController(
         if (!await db.Projects.AnyAsync(p => p.Id == id && p.WorkspaceId == WorkspaceId, ct))
             return NotFound();
 
-        var environment = await projects.AddEnvironmentAsync(WorkspaceId, id, name, ct);
-        return RedirectToAction(nameof(Details), new { id, environmentId = environment.Id });
+        try
+        {
+            var environment = await projects.AddEnvironmentAsync(WorkspaceId, id, name, ct);
+            return RedirectToAction(nameof(Details), new { id, environmentId = environment.Id });
+        }
+        catch (QuotaRefusedException ex)
+        {
+            TempData["Error"] = IsFa ? ex.ReasonFa ?? ex.Message : ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
     }
 
     /// <summary>

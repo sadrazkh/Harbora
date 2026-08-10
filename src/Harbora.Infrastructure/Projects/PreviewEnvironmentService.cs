@@ -64,6 +64,27 @@ public sealed class PreviewEnvironmentService(
             return null;
         }
 
+        var environmentSlug = PreviewNaming.Slug(branch);
+        var addsEnvironment = !await db.Environments.IgnoreQueryFilters()
+            .AnyAsync(e => e.ProjectId == projectId && e.Slug == environmentSlug, ct);
+        var rootDomain = await db.Settings.IgnoreQueryFilters()
+            .Where(s => s.Key == Domain.Settings.SettingKeys.PlatformRootDomain)
+            .Select(s => s.Value).FirstOrDefaultAsync(ct);
+        var previewHost = Deployments.ServicePlan.HasPublicTraffic(parent.Kind)
+            ? PreviewNaming.Host(parent.Slug, branch, rootDomain)
+            : null;
+        var addsDomain = previewHost is not null && !await db.Domains.IgnoreQueryFilters()
+            .AnyAsync(d => d.Host == previewHost, ct);
+        var governed = await quota.CanAddGovernedResourcesAsync(parent.WorkspaceId,
+            new GovernanceQuotaDelta(
+                Environments: addsEnvironment ? 1 : 0,
+                Domains: addsDomain ? 1 : 0), ct);
+        if (!governed.Allowed)
+        {
+            logger.LogInformation("No preview for {Branch}: {Reason}", branch, governed.Reason);
+            return null;
+        }
+
         var environment = await EnsureEnvironmentAsync(parent, projectId, branch, ct);
         var preview = await CreatePreviewAsync(parent, environment.Id, branch, ct);
 

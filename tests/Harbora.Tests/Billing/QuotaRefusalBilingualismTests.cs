@@ -157,6 +157,10 @@ public class QuotaRefusalBilingualismTests
             Id = userId, Email = "me@example.com", DisplayName = "Tester",
             Role = SystemRole.Owner, ScopedToProjects = false
         });
+        db.WorkspaceMembers.Add(new WorkspaceMember
+        {
+            WorkspaceId = workspaceId, UserId = userId, Role = WorkspaceRole.Admin
+        });
         db.SaveChanges();
 
         var currentUser = new Caller(workspaceId, userId);
@@ -213,6 +217,10 @@ public class QuotaRefusalBilingualismTests
         {
             Id = userId, Email = "me@example.com", DisplayName = "Tester",
             Role = SystemRole.Owner, ScopedToProjects = false
+        });
+        db.WorkspaceMembers.Add(new WorkspaceMember
+        {
+            WorkspaceId = workspaceId, UserId = userId, Role = WorkspaceRole.Admin
         });
         db.SaveChanges();
 

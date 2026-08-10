@@ -194,22 +194,30 @@ public sealed class ProjectAccessService(HarboraDbContext db, ICurrentUser curre
     private async Task<(SystemRole Role, bool Scoped, IReadOnlyCollection<ProjectGrant> Grants)> CallerAsync(
         CancellationToken ct)
     {
-        var user = await db.Users.AsNoTracking()
-            .Where(u => u.Id == currentUser.UserId)
-            .Select(u => new { u.Role, u.ScopedToProjects })
+        var membership = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
+            .Where(m => m.UserId == currentUser.UserId && m.WorkspaceId == currentUser.WorkspaceId)
+            .Select(m => new { m.Role, m.ScopedToProjects })
             .FirstOrDefaultAsync(ct);
 
         // No user record behind the claim: nothing is granted. Deny rather than fall back to a
         // default role, which is how a deleted account keeps working.
-        if (user is null) return (SystemRole.Viewer, true, []);
+        if (membership is null) return (SystemRole.Viewer, true, []);
+
+        var role = membership.Role switch
+        {
+            WorkspaceRole.Admin => SystemRole.Admin,
+            WorkspaceRole.Member => SystemRole.Member,
+            WorkspaceRole.Operator => SystemRole.Operator,
+            _ => SystemRole.Viewer
+        };
 
         // Only loaded when they matter — an unscoped member is the common case and needs no query.
-        if (!user.ScopedToProjects) return (user.Role, false, []);
+        if (!membership.ScopedToProjects) return (role, false, []);
 
         var grants = await db.ProjectGrants.AsNoTracking()
             .Where(g => g.UserId == currentUser.UserId && g.WorkspaceId == currentUser.WorkspaceId)
             .ToListAsync(ct);
 
-        return (user.Role, true, grants);
+        return (role, true, grants);
     }
 }

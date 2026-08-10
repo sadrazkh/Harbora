@@ -179,7 +179,7 @@ public sealed class StorageController(
         // counted before the next one is made.
         if (plan is { MaxBuckets: > 0 })
         {
-            var held = await db.StorageBuckets.CountAsync(ct);
+            var held = await db.StorageBuckets.CountAsync(b => b.WorkspaceId == WorkspaceId, ct);
             if (held >= plan.MaxBuckets)
                 return Back(IsFa
                     ? $"پلن «{plan.Name}» حداکثر {plan.MaxBuckets} باکت می‌دهد و همه استفاده شده‌اند."

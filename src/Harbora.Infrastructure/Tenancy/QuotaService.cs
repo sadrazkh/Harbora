@@ -28,6 +28,7 @@ public sealed class QuotaService(HarboraDbContext db, IOptions<BillingOptions> b
         // the usage screen — the one place a person looks to find out where they stand — had no
         // disk on it at all.
         var disk = await DiskUsageAsync(workspaceId, ct);
+        var governed = await GovernanceUsageAsync(workspaceId, ct);
 
         return new WorkspaceUsage(
             plan?.Name ?? "Default",
@@ -36,7 +37,71 @@ public sealed class QuotaService(HarboraDbContext db, IOptions<BillingOptions> b
             mem, plan?.MaxMemoryBytes ?? 0,
             cpu, plan?.MaxCpuCores ?? 0,
             suspended,
-            disk.MeasuredBytes, plan?.MaxDiskBytes ?? 0, disk.UnmeasuredResources);
+            disk.MeasuredBytes, plan?.MaxDiskBytes ?? 0, disk.UnmeasuredResources,
+            governed.Members, plan?.MaxMembers ?? 0,
+            governed.Projects, plan?.MaxProjects ?? 0,
+            governed.Environments, plan?.MaxEnvironments ?? 0,
+            governed.Domains, plan?.MaxDomains ?? 0,
+            governed.Volumes, plan?.MaxVolumes ?? 0,
+            governed.BackupSchedules, plan?.MaxBackupSchedules ?? 0);
+    }
+
+    public async Task<QuotaCheck> CanAddGovernedResourcesAsync(
+        Guid workspaceId, GovernanceQuotaDelta delta, CancellationToken ct)
+    {
+        if (delta is { Members: < 0 } or { Projects: < 0 } or { Environments: < 0 }
+            or { Domains: < 0 } or { Volumes: < 0 } or { BackupSchedules: < 0 })
+            throw new ArgumentOutOfRangeException(nameof(delta), "A quota delta cannot be negative.");
+
+        var workspace = await db.Workspaces.AsNoTracking()
+            .FirstOrDefaultAsync(w => w.Id == workspaceId, ct);
+        if (workspace?.IsSuspended == true)
+            return QuotaCheck.Deny("This workspace is suspended.", "این فضای کاری تعلیق شده است.");
+
+        var plan = workspace?.PlanId is { } planId
+            ? await db.Plans.AsNoTracking().FirstOrDefaultAsync(p => p.Id == planId, ct)
+            : await db.Plans.AsNoTracking().FirstOrDefaultAsync(p => p.IsDefault, ct);
+        // These are governance ceilings, not metered capacity. There is no per-member,
+        // per-project or per-domain overage rate to collect, so AllowsOverage must not turn them
+        // into free unlimited resources. Compute/disk overage is handled by the workload checks.
+        if (plan is null) return QuotaCheck.Ok;
+
+        var used = await GovernanceUsageAsync(workspaceId, ct);
+        return Refuse(plan.MaxMembers, used.Members, delta.Members, "member", "عضو")
+            ?? Refuse(plan.MaxProjects, used.Projects, delta.Projects, "project", "پروژه")
+            ?? Refuse(plan.MaxEnvironments, used.Environments, delta.Environments, "environment", "محیط")
+            ?? Refuse(plan.MaxDomains, used.Domains, delta.Domains, "domain", "دامنه")
+            ?? Refuse(plan.MaxVolumes, used.Volumes, delta.Volumes, "volume", "والیوم")
+            ?? Refuse(plan.MaxBackupSchedules, used.BackupSchedules, delta.BackupSchedules,
+                "backup schedule", "زمان‌بندی پشتیبان‌گیری")
+            ?? QuotaCheck.Ok;
+    }
+
+    public async Task<QuotaCheck> CanAddWorkloadsAsync(
+        Guid workspaceId, WorkloadQuotaDelta delta, CancellationToken ct)
+    {
+        if (delta is { Apps: < 0 } or { Services: < 0 } or { MemoryBytes: < 0 } or { CpuCores: < 0 })
+            throw new ArgumentOutOfRangeException(nameof(delta), "A quota delta cannot be negative.");
+
+        var (plan, apps, services, memory, cpu, suspended) = await SnapshotAsync(workspaceId, ct);
+        if (suspended)
+            return QuotaCheck.Deny("This workspace is suspended.", "این فضای کاری تعلیق شده است.");
+        if (plan is null || SellsPastItsCaps(plan)) return QuotaCheck.Ok;
+
+        if (plan.MaxApps > 0 && apps + delta.Apps > plan.MaxApps)
+            return QuotaCheck.Deny(
+                $"The plan allows {plan.MaxApps} app(s); this operation would use {apps + delta.Apps}.",
+                $"این پلن حداکثر {plan.MaxApps} برنامه اجازه می‌دهد؛ این عملیات مصرف را به {apps + delta.Apps} می‌رساند.");
+        if (plan.MaxServices > 0 && services + delta.Services > plan.MaxServices)
+            return QuotaCheck.Deny(
+                $"The plan allows {plan.MaxServices} service(s); this operation would use {services + delta.Services}.",
+                $"این پلن حداکثر {plan.MaxServices} سرویس اجازه می‌دهد؛ این عملیات مصرف را به {services + delta.Services} می‌رساند.");
+        if (plan.MaxMemoryBytes > 0 && memory + delta.MemoryBytes > plan.MaxMemoryBytes)
+            return QuotaCheck.Deny("Memory quota exceeded for this plan.", "سهمیه حافظه این پلن کافی نیست.");
+        if (plan.MaxCpuCores > 0 && cpu + delta.CpuCores > plan.MaxCpuCores)
+            return QuotaCheck.Deny("CPU quota exceeded for this plan.", "سهمیه پردازنده این پلن کافی نیست.");
+
+        return QuotaCheck.Ok;
     }
 
     public async Task<QuotaCheck> CanAddAppAsync(Guid workspaceId, string? instanceSizeKey, Guid? excludeAppId, CancellationToken ct)
@@ -171,6 +236,32 @@ public sealed class QuotaService(HarboraDbContext db, IOptions<BillingOptions> b
             all.Count(b => b is null));
     }
 
+    private async Task<GovernanceUsage> GovernanceUsageAsync(Guid workspaceId, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var members = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
+            .CountAsync(m => m.WorkspaceId == workspaceId, ct);
+        members += await db.WorkspaceInvitations.IgnoreQueryFilters().AsNoTracking()
+            .CountAsync(i => i.WorkspaceId == workspaceId && i.AcceptedAt == null
+                && !i.IsRevoked && i.ExpiresAt > now, ct);
+
+        return new GovernanceUsage(
+            members,
+            await db.Projects.AsNoTracking().CountAsync(p => p.WorkspaceId == workspaceId, ct),
+            await db.Environments.AsNoTracking().CountAsync(e => e.WorkspaceId == workspaceId, ct),
+            await db.Domains.AsNoTracking().CountAsync(d => d.App!.WorkspaceId == workspaceId, ct),
+            await db.Volumes.AsNoTracking().CountAsync(v => v.App!.WorkspaceId == workspaceId, ct),
+            await db.BackupSchedules.AsNoTracking().CountAsync(s => s.WorkspaceId == workspaceId, ct));
+    }
+
+    private static QuotaCheck? Refuse(int limit, int used, int adding, string resource, string resourceFa)
+    {
+        if (limit <= 0 || used + adding <= limit) return null;
+        return QuotaCheck.Deny(
+            $"The plan allows {limit} {resource}(s); {used} are already reserved and this operation adds {adding}.",
+            $"این پلن حداکثر {limit} {resourceFa} اجازه می‌دهد؛ اکنون {used} مورد رزرو شده و این عملیات {adding} مورد اضافه می‌کند.");
+    }
+
     // --- helpers ---
 
     private async Task<(Plan? Plan, int Apps, int Services, long Mem, double Cpu, bool Suspended)> SnapshotAsync(
@@ -207,4 +298,7 @@ public sealed class QuotaService(HarboraDbContext db, IOptions<BillingOptions> b
         string.IsNullOrWhiteSpace(plan.AllowedSizeKeys) ||
         plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Contains(sizeKey, StringComparer.OrdinalIgnoreCase);
+
+    private sealed record GovernanceUsage(
+        int Members, int Projects, int Environments, int Domains, int Volumes, int BackupSchedules);
 }

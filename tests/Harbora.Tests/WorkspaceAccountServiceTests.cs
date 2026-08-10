@@ -6,6 +6,7 @@ using Harbora.Domain.Identity;
 using Harbora.Infrastructure.Billing;
 using Harbora.Infrastructure.Projects;
 using Harbora.Infrastructure.Security;
+using Harbora.Infrastructure.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -74,6 +75,30 @@ public class WorkspaceAccountServiceTests
 
         await spend.Should().ThrowAsync<InvalidOperationException>().WithMessage("*different email*");
         db.WorkspaceInvitations.Single().AcceptedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Invitation_is_not_issued_when_the_plan_has_no_seat_left()
+    {
+        await using var db = Db();
+        var plan = new Harbora.Domain.Tenancy.Plan
+        {
+            Name = "One seat", MaxMembers = 1, IsEnabled = true, MonthlyPrice = 1
+        };
+        var owner = new User { Email = "seat-owner@example.com", DisplayName = "Owner", PasswordHash = "hash" };
+        db.AddRange(plan, owner);
+        await db.SaveChangesAsync();
+        var quota = new QuotaService(db, Options.Create(new BillingOptions { Enabled = true }));
+        var service = new WorkspaceAccountService(
+            db, new ProjectService(db, new Clock(), quota), new Clock(),
+            Options.Create(new BillingOptions { Currency = "IRR", Enabled = true }), quota);
+        var workspace = await service.CreateTeamWorkspaceAsync(owner.Id, "Full team", default);
+
+        var invite = () => service.InviteAsync(
+            workspace.Id, owner.Id, "next@example.com", WorkspaceRole.Member, default);
+
+        await invite.Should().ThrowAsync<InvalidOperationException>().WithMessage("*member*");
+        db.WorkspaceInvitations.Should().BeEmpty();
     }
 
     private static HarboraDbContext Db() => new(new DbContextOptionsBuilder<HarboraDbContext>()
