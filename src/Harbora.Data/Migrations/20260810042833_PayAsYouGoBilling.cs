@@ -6,11 +6,63 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Harbora.Data.Migrations
 {
     /// <inheritdoc />
-    public partial class Billing : Migration
+    public partial class PayAsYouGoBilling : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.AddColumn<int>(
+                name: "SuspendedReason",
+                table: "Workspaces",
+                type: "integer",
+                nullable: false,
+                defaultValue: 0);
+
+            migrationBuilder.AddColumn<bool>(
+                name: "AllowsOverage",
+                table: "Plans",
+                type: "boolean",
+                nullable: false,
+                defaultValue: false);
+
+            migrationBuilder.AddColumn<long>(
+                name: "BaseRatePerHourMinor",
+                table: "Plans",
+                type: "bigint",
+                nullable: true);
+
+            migrationBuilder.AddColumn<long>(
+                name: "DiskGbHourMinor",
+                table: "Plans",
+                type: "bigint",
+                nullable: true);
+
+            migrationBuilder.AddColumn<bool>(
+                name: "WasRunningAtSuspension",
+                table: "ManagedServices",
+                type: "boolean",
+                nullable: false,
+                defaultValue: false);
+
+            migrationBuilder.AddColumn<long>(
+                name: "RunningRatePerHourMinor",
+                table: "InstanceSizes",
+                type: "bigint",
+                nullable: true);
+
+            migrationBuilder.AddColumn<long>(
+                name: "StoppedRatePerHourMinor",
+                table: "InstanceSizes",
+                type: "bigint",
+                nullable: true);
+
+            migrationBuilder.AddColumn<bool>(
+                name: "WasRunningAtSuspension",
+                table: "Apps",
+                type: "boolean",
+                nullable: false,
+                defaultValue: false);
+
             migrationBuilder.CreateTable(
                 name: "BillingLedger",
                 columns: table => new
@@ -45,6 +97,7 @@ namespace Harbora.Data.Migrations
                     BalanceMinor = table.Column<long>(type: "bigint", nullable: false),
                     Currency = table.Column<string>(type: "character varying(3)", maxLength: 3, nullable: false),
                     LowBalanceHours = table.Column<int>(type: "integer", nullable: false),
+                    LowBalanceWarnedAtBalanceMinor = table.Column<long>(type: "bigint", nullable: true),
                     ConcurrencyStamp = table.Column<Guid>(type: "uuid", nullable: false),
                     CreatedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     UpdatedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
@@ -87,6 +140,38 @@ namespace Harbora.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "Wallets");
+
+            migrationBuilder.DropColumn(
+                name: "SuspendedReason",
+                table: "Workspaces");
+
+            migrationBuilder.DropColumn(
+                name: "AllowsOverage",
+                table: "Plans");
+
+            migrationBuilder.DropColumn(
+                name: "BaseRatePerHourMinor",
+                table: "Plans");
+
+            migrationBuilder.DropColumn(
+                name: "DiskGbHourMinor",
+                table: "Plans");
+
+            migrationBuilder.DropColumn(
+                name: "WasRunningAtSuspension",
+                table: "ManagedServices");
+
+            migrationBuilder.DropColumn(
+                name: "RunningRatePerHourMinor",
+                table: "InstanceSizes");
+
+            migrationBuilder.DropColumn(
+                name: "StoppedRatePerHourMinor",
+                table: "InstanceSizes");
+
+            migrationBuilder.DropColumn(
+                name: "WasRunningAtSuspension",
+                table: "Apps");
         }
     }
 }

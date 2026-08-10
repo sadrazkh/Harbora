@@ -18,9 +18,9 @@ namespace Harbora.Postgres.Tests;
 /// trade for the three thousand facts that care about rules rather than about SQL. What it cannot
 /// check is the part that only exists in Postgres: a partial unique index, a concurrency token
 /// under a real race, <c>COALESCE</c> in a claim predicate, a global query filter turned into a
-/// <c>DELETE</c> — and, above all, the hand-written <c>UPDATE</c>s inside four migrations that no
-/// test has ever executed. <c>MigrationConsistencyTests</c> compares the model to the snapshot; it
-/// never runs a statement.
+/// <c>DELETE</c> — and, above all, the hand-written <c>UPDATE</c>s inside two of the five migrations
+/// these branches add, which no test has ever executed. <c>MigrationConsistencyTests</c> compares
+/// the model to the snapshot; it never runs a statement.
 /// </para>
 ///
 /// <para>

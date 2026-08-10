@@ -10,9 +10,9 @@ namespace Harbora.Postgres.Tests;
 ///
 /// <para>
 /// <c>MigrationConsistencyTests</c> in the fast suite already proves the model and the snapshot
-/// agree. What it cannot prove is that the statements run: it never opens a connection. Sixty-odd
-/// migrations had never been executed against a PostgreSQL by anything in this repository, and
-/// three of the newest carry hand-written SQL.
+/// agree. What it cannot prove is that the statements run: it never opens a connection. Not one
+/// migration in this repository had ever been executed against a PostgreSQL by anything in it, and
+/// two of the newest carry hand-written SQL.
 /// </para>
 /// </summary>
 [Collection(PostgresLane.Collection)]
@@ -35,9 +35,11 @@ public sealed class MigrationTests(PostgresLane lane)
         // one before the boundary, would otherwise quietly turn "upgraded from the previous release"
         // into something else, and every assertion built on it would go on passing.
         //
-        // Four rather than all eleven these branches now carry, for the reason on Applied: this
-        // pins the boundary, and An_install_at_the_previous_release_can_be_carried_across covers
-        // everything past it by running it.
+        // Four rather than all five these branches now carry, for the reason on Applied: this pins
+        // the boundary, and An_install_at_the_previous_release_can_be_carried_across covers
+        // everything past it by running it. It was eleven before billing's seven migrations were
+        // squashed into one, which is exactly the kind of drift this comment keeps acquiring — the
+        // Take(4) assertion below has been correct throughout and says nothing about the total.
         await using var db = PostgresLane.Open(await lane.HeadSchemaAsync());
 
         var all = db.Database.GetMigrations().ToList();

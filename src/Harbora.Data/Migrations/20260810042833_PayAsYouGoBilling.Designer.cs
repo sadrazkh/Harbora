@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    [Migration("20260809212008_BillingSuspension")]
-    partial class BillingSuspension
+    [Migration("20260810042833_PayAsYouGoBilling")]
+    partial class PayAsYouGoBilling
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -1117,6 +1117,9 @@ namespace Harbora.Data.Migrations
 
                     b.Property<int>("LowBalanceHours")
                         .HasColumnType("integer");
+
+                    b.Property<long?>("LowBalanceWarnedAtBalanceMinor")
+                        .HasColumnType("bigint");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -2711,6 +2714,9 @@ namespace Harbora.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<bool>("WasRunningAtSuspension")
+                        .HasColumnType("boolean");
+
                     b.Property<Guid>("WorkspaceId")
                         .HasColumnType("uuid");
 
@@ -3147,15 +3153,6 @@ namespace Harbora.Data.Migrations
 
                     b.Property<string>("NodePool")
                         .HasColumnType("text");
-
-                    b.Property<long?>("OverageCpuCoreHourMinor")
-                        .HasColumnType("bigint");
-
-                    b.Property<long?>("OverageDiskGbHourMinor")
-                        .HasColumnType("bigint");
-
-                    b.Property<long?>("OverageMemoryGbHourMinor")
-                        .HasColumnType("bigint");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");

@@ -12,21 +12,28 @@ public sealed record UpgradedInstall(string ConnectionString);
 /// install could be carrying, migrated the rest of the way.
 ///
 /// <para>
-/// Eleven migrations sit on these branches and three of them contain hand-written SQL, which until
-/// this lane existed had never been executed anywhere. All three <b>change rows</b> rather than being
-/// additive in the way a column is; one has to, because the <c>CREATE UNIQUE INDEX</c> that follows
-/// would otherwise fail and leave the panel unable to boot, and one has to because the migration
-/// before it filled a price column with a zero that would read as a decision. What follows is the
-/// set of rows that reaches every branch of every one of those statements — the ones that must be
-/// changed, and, just as importantly, the ones that must be left alone.
+/// Five migrations sit on these branches and two of them contain hand-written SQL, which until this
+/// lane existed had never been executed anywhere. Both <b>change rows</b> rather than being additive
+/// in the way a column is, and one has to, because the <c>CREATE UNIQUE INDEX</c> that follows would
+/// otherwise fail and leave the panel unable to boot. What follows is the set of rows that reaches
+/// every branch of every one of those statements — the ones that must be changed, and, just as
+/// importantly, the ones that must be left alone.
 /// </para>
 ///
 /// <para>
-/// The other eight are additive — new tables, new nullable columns, one dropped column — and are
-/// exercised by being applied at all: <c>An_install_at_the_previous_release_can_be_carried_across</c>
-/// migrates this database the whole way, so any of them that cannot run over a populated install
-/// fails there. Nothing needs seeding for them, which is why they are absent below rather than
-/// forgotten.
+/// It was eleven until billing's seven were squashed into one, and the third hand-written statement
+/// went with them: one of those seven existed only to undo a zero that the one before it had been
+/// forced to write into every plan and every tier. A migration generated once from the final model
+/// adds those columns nullable and writes nothing, so there is nothing left to undo. The plan and
+/// the size are still seeded below — "arrives unpriced" is the claim, and it is worth asking of a
+/// real upgrade whatever happens to make it true.
+/// </para>
+///
+/// <para>
+/// The other three are additive — two new tables, new columns, one new index — and are exercised by
+/// being applied at all: <c>An_install_at_the_previous_release_can_be_carried_across</c> migrates
+/// this database the whole way, so any of them that cannot run over a populated install fails there.
+/// Nothing needs seeding for them, which is why they are absent below rather than forgotten.
 /// </para>
 ///
 /// <para>
@@ -102,17 +109,28 @@ internal static class UpgradeFromPreviousRelease
     }
 
     // ---------------------------------------------------------------------------------------
-    // BillingRatesNullable — UPDATE … SET "…Minor" = NULLIF("…Minor", 0)
+    // PayAsYouGoBilling — ADD COLUMN "…Minor" bigint NULL, over rows that predate the price
     // ---------------------------------------------------------------------------------------
 
     /// <summary>
     /// A plan and a size that were on the install before billing existed, so neither can carry a
-    /// price. What makes them worth seeding is what happens to them on the way across:
-    /// <c>BillingRates</c> adds the seven columns as <c>NOT NULL DEFAULT 0</c>, which writes a zero
-    /// into both of these rows, and <c>BillingRatesNullable</c> then has to turn those zeros back
-    /// into nulls. Without that statement an upgraded install arrives with every plan and every tier
-    /// priced at zero — which now reads as <i>deliberately free</i> — and nothing downstream has any
-    /// way to know it was never asked.
+    /// price. What makes them worth seeding is what the upgrade must leave them holding: nothing.
+    ///
+    /// <para>
+    /// <c>PayAsYouGoBilling</c> adds the rate columns nullable and with no default, so both of these
+    /// rows come across null and no statement has to put them right. That is the whole reason the
+    /// squash was worth doing: the two migrations it replaced added the columns
+    /// <c>NOT NULL DEFAULT 0</c> — the only way to add a required column to a table that already has
+    /// rows — and then spent a hand-written <c>UPDATE</c> turning those zeros back into nulls.
+    /// </para>
+    ///
+    /// <para>
+    /// Still seeded, because the claim is about the rows rather than about the statement: an
+    /// upgraded install must arrive with every price <i>unset</i> rather than at zero, which now
+    /// reads as <i>deliberately free</i>, and nothing downstream has any way to know it was never
+    /// asked. A migration that declared one of these columns required would put the zeros back, and
+    /// this is the pair of rows that would be holding them.
+    /// </para>
     /// </summary>
     private static async Task SeedTenancyPricingAsync(SchemaSeed seed)
     {
