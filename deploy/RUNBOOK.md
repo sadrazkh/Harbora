@@ -96,8 +96,10 @@ token limited to the zones Harbora serves, with `Zone:Read` and `DNS:Edit`, then
 overlay:
 
 ```bash
+read -rsp 'Cloudflare API token: ' CF_TOKEN; echo
 curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install.sh | \
-  sudo env CF_DNS_API_TOKEN='paste-the-zone-scoped-token' bash -s -- update
+  sudo env CF_DNS_API_TOKEN="$CF_TOKEN" bash -s -- update
+unset CF_TOKEN
 ```
 
 The installer stores the token in the mode-600 `deploy/.env` and sets:
