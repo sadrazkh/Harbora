@@ -140,7 +140,14 @@ check_node_dns() {
     warn "     این میزبان تازه است: کانال نودها حالا نام خودش را دارد. / This host is new: the node channel now has a name of its own."
     warn "     بدون این رکورد نودها ثبت می‌شوند ولی هرگز وصل نمی‌شوند. / Without this record nodes enrol and then never connect."
   }
-  cloudflare_mode && warn "Node channel exception: keep $node DNS-only (grey cloud); ordinary Cloudflare proxying terminates the client-certificate TLS session."
+  # `if`, not `cloudflare_mode && warn …`. This is the last command in the function, so under
+  # `set -e` the short-circuit form makes the whole function return non-zero on every install that
+  # is NOT in Cloudflare mode — and the script then dies here, silently, right after printing the
+  # tick above and before anything is built. An update that stops before the build looks exactly
+  # like an update that had nothing to do.
+  if cloudflare_mode; then
+    warn "Node channel exception: keep $node DNS-only (grey cloud); ordinary Cloudflare proxying terminates the client-certificate TLS session."
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -214,7 +221,12 @@ configure_domains() {
     dns_ok=0
     warn "     nodes.$PANEL_DOMAIN فقط برای کانال نودهاست. / used only by the node channel (mTLS)."
   }
-  cloudflare_mode && warn "Node channel exception: keep nodes.$PANEL_DOMAIN DNS-only (grey cloud); panel/apps/S3 stay Proxied."
+  # `if`, for the reason spelled out in check_node_dns: a bare `cloudflare_mode && warn …` is only
+  # safe where another command follows it, and that is a fragile thing to leave lying next to an
+  # `if` somebody may later move.
+  if cloudflare_mode; then
+    warn "Node channel exception: keep nodes.$PANEL_DOMAIN DNS-only (grey cloud); panel/apps/S3 stay Proxied."
+  fi
   if [ "$dns_ok" -eq 0 ]; then
     warn "DNS کامل نیست؛ نصب ادامه می‌یابد ولی SSL تا اصلاح DNS صادر نمی‌شود."
     warn "DNS is incomplete; install continues, but SSL won't issue until DNS points here."
