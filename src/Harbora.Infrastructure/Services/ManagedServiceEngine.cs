@@ -202,9 +202,43 @@ public sealed class ManagedServiceEngine(
             : Networking.EnvironmentNetwork.For(placement.ProjectSlug, placement.Slug, environmentId);
     }
 
+    /// <summary>
+    /// Starts a stopped database, after asking whether the workspace may start anything.
+    ///
+    /// <para>
+    /// <b>The service is read unfiltered, together with <see cref="StopAsync"/> and never one without
+    /// the other.</b> This is the half of <c>BillingSuspension</c>'s fix that
+    /// <c>AppOperationsService</c> got and this file did not. Both request-bound callers of this route
+    /// are on the databases screen, in the customer's own session — but the resume after a top-up is
+    /// not: it is driven from <c>WalletService</c> under whatever scope credited the account, and the
+    /// only way an account is ever credited is an administrator pressing Credit on the provider
+    /// console. That runs inside an HTTP request, so <c>HttpWorkspaceScope.IsUnscoped</c> is false and
+    /// the ambient workspace is the <i>provider's</i>. Read through the tenant filter this matched
+    /// nothing and threw "Sequence contains no elements" before a node was reached, so every managed
+    /// database of a customer who had just paid stayed down while the failure they were shown blamed
+    /// the node for not coming back — and retrying reproduced it exactly.
+    /// </para>
+    ///
+    /// <para>
+    /// The pair is fixed together because it is one route in both directions. Unfiltering only the
+    /// start would leave a suspension that cannot stop a database it has already written
+    /// <c>WasRunningAtSuspension</c> on — the markers say the workspace owes those databases a start
+    /// while nothing ever stopped them, which is the same disagreement seen from the other side.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Ownership is the caller's to check</b>, exactly as it is for
+    /// <c>AppOperationsService.ResolveAsync</c>. Both request-bound entry points —
+    /// <c>DatabasesController.Start</c> and <c>.Stop</c> — call its <c>Guard</c> first, which asks
+    /// <c>ProjectAccessService.CanTouchServiceAsync</c>; that predicate names
+    /// <c>WorkspaceId == currentUser.WorkspaceId</c> explicitly and so does not depend on the ambient
+    /// filter being narrow. <c>BillingSuspension</c>, the remaining caller, is bound to the one
+    /// workspace it was asked about. Held by <c>ManagedServiceEngineTenancyTests</c>.
+    /// </para>
+    /// </summary>
     public async Task StartAsync(Guid serviceId, CancellationToken ct)
     {
-        var svc = await db.ManagedServices.FirstAsync(s => s.Id == serviceId, ct);
+        var svc = await db.ManagedServices.IgnoreQueryFilters().FirstAsync(s => s.Id == serviceId, ct);
 
         // Throws rather than returning, for the reason AppOperationsService states at length: the
         // two lines below write Running, and a start that reports success without starting anything
@@ -221,9 +255,14 @@ public sealed class ManagedServiceEngine(
         await db.SaveChangesAsync(ct);
     }
 
+    /// <summary>
+    /// Stops a running database. Never gated on the balance — a workspace with no money must still be
+    /// able to put its own things down — and read unfiltered for the reason
+    /// <see cref="StartAsync"/> gives, which is a statement about the pair and not about either half.
+    /// </summary>
     public async Task StopAsync(Guid serviceId, CancellationToken ct)
     {
-        var svc = await db.ManagedServices.FirstAsync(s => s.Id == serviceId, ct);
+        var svc = await db.ManagedServices.IgnoreQueryFilters().FirstAsync(s => s.Id == serviceId, ct);
         var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
         var id = await FindContainerIdAsync(docker, svc.ContainerName, ct);
         if (id is not null) await docker.StopContainerAsync(id, ct);

@@ -23,7 +23,8 @@ public sealed partial class TenantsController(
     IQuotaService quota,
     Harbora.Infrastructure.Billing.WalletService wallet,
     ICurrentUser currentUser,
-    IAuditLogger audit) : Controller
+    IAuditLogger audit,
+    Harbora.Infrastructure.Billing.BillingSuspension suspension) : Controller
 {
     /// <summary>Where the request came from, for the audit trail on a money movement.</summary>
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -49,7 +50,8 @@ public sealed partial class TenantsController(
                 w.Id, w.Name, w.Slug, w.IsDefault, w.PlanId,
                 w.PlanId is { } pid && planName.TryGetValue(pid, out var n) ? n : "Default",
                 memCounts.GetValueOrDefault(w.Id), appCounts.GetValueOrDefault(w.Id), svcCounts.GetValueOrDefault(w.Id),
-                w.IsSuspended));
+                w.IsSuspended,
+                w.SuspendedReason == SuspensionReason.NoBalance));
         }
         return View(vm);
     }
@@ -94,6 +96,17 @@ public sealed partial class TenantsController(
         var ws = await db.Workspaces.FirstOrDefaultAsync(w => w.Id == id, ct);
         if (ws is null) return NotFound();
         if (ws.IsDefault) { TempData["Error"] = "The provider workspace cannot be suspended."; return RedirectToAction(nameof(Index)); }
+
+        // A billing suspension is not this action's to lift by hand, and the two field writes below
+        // are exactly how it used to try. They clear the reason, and the reason is the only thing
+        // BillingSuspension.ResumeAsync will act on — so every app and database the suspension
+        // stopped kept WasRunningAtSuspension set with nothing left in the platform that reads it.
+        // Down containers, markers saying somebody owes them a start, and nobody who does: the
+        // stranding BillingSuspension refuses to cause when it defers to an operator's suspension,
+        // caused here instead by the operator lifting billing's.
+        if (!suspended && ws.SuspendedReason == SuspensionReason.NoBalance)
+            return await LiftBillingSuspensionAsync(ws, ct);
+
         ws.IsSuspended = suspended;
         // Says who. Billing lifts a suspension only when the reason is NoBalance, so recording
         // Manual here is what stops a customer's payment quietly undoing this decision — and
@@ -102,6 +115,54 @@ public sealed partial class TenantsController(
         ws.SuspendedReason = suspended ? SuspensionReason.Manual : SuspensionReason.None;
         await db.SaveChangesAsync(ct);
         TempData["Message"] = suspended ? "Tenant suspended." : "Tenant resumed.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Hands a NoBalance resume to the code that made the suspension, and reports what came back.
+    ///
+    /// <para>
+    /// <b>Routed rather than refused</b>, and the refusal is the tempting answer. "Only a top-up
+    /// lifts this" is true of the ordinary case and leaves nothing at all for the workspaces that
+    /// are actually stuck: one whose credit landed while a node was down, one reconciled by hand
+    /// outside the ledger, one suspended before billing was switched off. Every one of those is in
+    /// credit, still flagged, and has no button.
+    /// </para>
+    ///
+    /// <para>
+    /// Routing loses nothing, because the refusal still happens where it is true. Each start goes
+    /// through <c>IBillingGate</c>; on an empty balance every one is refused, nothing is stranded,
+    /// no marker is cleared, the reason stays <see cref="SuspensionReason.NoBalance"/> so a later
+    /// top-up still recognises this suspension as its own — and the operator is shown, per workload,
+    /// what did not come back. The platform works out which of the two answers is honest today
+    /// instead of the operator guessing from a button that looks the same either way.
+    /// </para>
+    /// </summary>
+    private async Task<IActionResult> LiftBillingSuspensionAsync(Workspace ws, CancellationToken ct)
+    {
+        var result = await suspension.ResumeAsync(ws.Id, ct);
+
+        if (result.WorkspaceSuspended)
+        {
+            // Never dressed up as a partial success. The operator pressed a button labelled "resume"
+            // and the workspace is still suspended; anything short of saying so plainly is how a
+            // customer gets told their services are back while they are not.
+            TempData["Error"] = string.Join(" ", result.Failures.Prepend(
+                $"{ws.Name} is still suspended: it was suspended for an empty balance, and the " +
+                "workloads it stopped could not all be started again. They are still recorded as " +
+                "owed a start, so a top-up — or this button again — will try them once more."));
+
+            return RedirectToAction(nameof(Index));
+        }
+
+        // Named apart rather than added together, as the credit screen names them: an administrator
+        // told "2 workloads came back" has not been told whether the database is one of them, and
+        // that is the half every app beside it depends on.
+        TempData["Message"] =
+            $"{ws.Name} resumed."
+            + (result.AppsStarted > 0 ? $" {result.AppsStarted} app(s) were started again." : "")
+            + (result.DatabasesStarted > 0 ? $" {result.DatabasesStarted} database(s) were started again." : "");
+
         return RedirectToAction(nameof(Index));
     }
 

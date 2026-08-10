@@ -103,7 +103,11 @@ public class TenantsControllerCreditTests
     {
         var audit = new RecordingAudit();
         var wallet = WalletHarness.Wallets(db, through: walletContext);
-        var controller = new TenantsController(db, new Hasher(), new Quota(), wallet, new Caller(), audit)
+        // The suspension is null here and nowhere else: crediting reaches ResumeAsync through
+        // WalletService, which holds its own. The console's resume button is the only caller that
+        // holds one directly, and TenantsControllerResumeTests drives that.
+        var controller = new TenantsController(
+            db, new Hasher(), new Quota(), wallet, new Caller(), audit, suspension: null!)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

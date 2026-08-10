@@ -18,7 +18,19 @@ public sealed record TenantRow(
     int Members,
     int Apps,
     int Services,
-    bool Suspended);
+    bool Suspended,
+    /// <summary>
+    /// Whether the suspension on this row is <see cref="Harbora.Domain.Identity.SuspensionReason.NoBalance"/>.
+    ///
+    /// <para>
+    /// The list showed "suspended" and offered "resume", and the two kinds of suspension are not the
+    /// same act to lift. An operator's own is two field writes. Billing's runs the workloads the
+    /// suspension stopped back through the platform's start routes, each of which asks the billing
+    /// gate — so on an empty balance it correctly refuses and the row stays suspended. An operator
+    /// who cannot see which one they are looking at cannot tell a refusal from a bug.
+    /// </para>
+    /// </summary>
+    bool SuspendedForNoBalance);
 
 public sealed class TenantDetailsViewModel
 {

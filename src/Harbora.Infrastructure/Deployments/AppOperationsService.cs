@@ -174,8 +174,11 @@ public sealed class AppOperationsService(
     /// <para>
     /// Unfiltering only this half would be worse than leaving both: the throw would become a filtered
     /// <c>ExecuteUpdate</c> in <see cref="SetStatusAsync"/> that matches no rows and reports success,
-    /// which is the shape nobody sees. <c>BillingSuspension</c>'s remarks describe both halves and
-    /// name them as one fix; this is that fix.
+    /// which is the shape nobody sees. <c>BillingSuspension</c>'s remarks name three reads, not two:
+    /// these, and <c>ManagedServiceEngine.StartAsync</c>/<c>StopAsync</c>. This is the app half. The
+    /// database half is in that file, and it landed later — for a while this comment said the fix was
+    /// finished when the two reads that bring a customer's <i>database</i> back were still filtered,
+    /// so a top-up restored the apps and left the data layer they all need down.
     /// </para>
     ///
     /// <para>

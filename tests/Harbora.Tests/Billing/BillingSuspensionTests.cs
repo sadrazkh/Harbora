@@ -299,17 +299,26 @@ public class BillingSuspensionTests
     [Fact]
     public async Task A_suspension_that_is_starting_forgets_a_mark_stranded_by_an_earlier_one()
     {
-        // A marker outlives its suspension whenever the resumption never ran — an operator clearing
-        // the flag from the console is the everyday way. Left in place, the next top-up would start
-        // an app the customer stopped themselves months ago and spend the money they had just put in.
+        // A marker outlives its suspension whenever the resumption never ran. Left in place, the
+        // next top-up would start an app the customer stopped themselves months ago and spend the
+        // money they had just put in.
         await using var db = Harness.SystemContext();
         var ws = Harness.SeedWorkspaceWithTwoApps(db, running: "api", stopped: "worker");
         await db.SaveChangesAsync();
 
         await Harness.Suspension(db).SuspendAsync(ws, default);
 
-        // The operator lifts it by hand, which says nothing about anybody's apps.
-        await Console(db).Suspend(ws, suspended: false, default);
+        // The flags cleared without the markers being read, staged directly against the table. The
+        // console's resume button used to be the everyday way to produce this state and no longer
+        // is: a NoBalance resume now goes through ResumeAsync, which starts what it can and clears
+        // the marker of everything that came back (TenantsControllerResumeTests). What is left is
+        // the stranding this pass still has to survive — a workspace whose flags were cleared by a
+        // release older than that fix, by a hand at the database, or by a resumption killed halfway.
+        var workspace = await db.Workspaces.SingleAsync(w => w.Id == ws);
+        workspace.IsSuspended = false;
+        workspace.SuspendedReason = SuspensionReason.None;
+        await db.SaveChangesAsync();
+
         (await db.Apps.SingleAsync(a => a.Slug == "api")).WasRunningAtSuspension.Should().BeTrue(
             "the fixture is only worth anything if the stale mark is really there");
 
@@ -1036,10 +1045,17 @@ public class BillingSuspensionTests
     /// The provider console, built by hand. Suspending is the only action reached here and it uses
     /// none of the hasher, the quota service, the wallet, the signed-in user or the audit log, so
     /// nothing stands in for those.
+    ///
+    /// <para>
+    /// The suspension is null for the same reason and only while it stays true: neither action
+    /// reached from here is a <c>NoBalance</c> resume, which is the one branch that routes through
+    /// it. <c>TenantsControllerResumeTests</c> is where that branch is driven, with a real
+    /// <see cref="Harbora.Infrastructure.Billing.BillingSuspension"/> over a real engine.
+    /// </para>
     /// </summary>
     private static TenantsController Console(BillingContext db)
     {
-        var controller = new TenantsController(db, null!, null!, null!, null!, null!)
+        var controller = new TenantsController(db, null!, null!, null!, null!, null!, null!)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

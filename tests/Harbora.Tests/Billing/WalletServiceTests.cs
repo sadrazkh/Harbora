@@ -62,13 +62,23 @@ internal static class WalletHarness
     /// <param name="databases">
     /// The database stop/start route. A credit that lifts a suspension starts back the managed
     /// databases the suspension stopped, exactly as it does the apps.
+    ///
+    /// <para>
+    /// Typed as the interface rather than as <see cref="FakeDatabaseOperations"/> so the <b>real</b>
+    /// <c>ManagedServiceEngine</c> can be handed in. That matters more than it looks: the fake reads
+    /// with <c>IgnoreQueryFilters()</c>, and until the engine did too, every test here that said a
+    /// top-up brings the database back was green about something production could not do. See
+    /// <c>ManagedServiceEngineTenancyTests</c>, and
+    /// <see cref="WalletServiceTests.A_top_up_brings_the_database_back_through_the_engine_the_panel_actually_uses"/>,
+    /// which is this path with nothing faked between the credit and the daemon.
+    /// </para>
     /// </param>
     public static WalletService Wallets(
         BillingContext db,
         FakeAppOperations? operations = null,
         BillingContext? through = null,
         BillingContext? resumeThrough = null,
-        FakeDatabaseOperations? databases = null)
+        IManagedServiceEngine? databases = null)
     {
         // The service writes through a context of its own, so anything this one still tracks is
         // about to be stale — and EF answers a query from the instance it is already tracking, which
@@ -132,6 +142,9 @@ internal static class WalletHarness
             WorkspaceId = workspaceId,
             Name = name,
             Status = ServiceStatus.Stopped,
+            // Named as the engine names one, because a test driving the real engine finds the
+            // container by this and would silently find nothing if it were blank.
+            ContainerName = $"harbora-svc-{name}",
             VolumeName = $"harbora-svc-{name}-data",
             WasRunningAtSuspension = true
         };
@@ -544,6 +557,56 @@ public class WalletServiceTests
 
         operations.Started.Should().Equal(app);
         databases.Started.Should().Equal(database);
+        (await db.ManagedServices.IgnoreQueryFilters().AsNoTracking().SingleAsync(s => s.Id == database))
+            .Status.Should().Be(ServiceStatus.Running);
+    }
+
+    [Fact]
+    public async Task A_top_up_brings_the_database_back_through_the_engine_the_panel_actually_uses()
+    {
+        // The test above proves the arithmetic and the counting with FakeDatabaseOperations standing
+        // in for the engine — and that fake reads with IgnoreQueryFilters() while, until this branch,
+        // ManagedServiceEngine did not. So it was green about precisely the thing production could
+        // not do: a credit is made from the provider console, inside a request whose ambient
+        // workspace is the PROVIDER's, and the engine's filtered read of the customer's row matched
+        // nothing and threw "Sequence contains no elements" before a node was reached. Every managed
+        // database of a customer who had just paid stayed down.
+        //
+        // Nothing stands between CreditAsync and the daemon here. One context serves the credit, the
+        // resume and the engine, which is the single scoped context a real request hands all three.
+        await using var db = WalletHarness.SystemContext();
+        var ws = WalletHarness.SeedWorkspace(
+            db, balanceMinor: -5_000, suspended: true, reason: SuspensionReason.NoBalance);
+        var database = WalletHarness.SeedStoppedDatabaseOwedAStart(db, ws, "orders-db");
+        await db.SaveChangesAsync();
+
+        var console = WalletHarness.ProviderContext(db);
+        var docker = new FakeDockerEngine();
+        await docker.RunContainerAsync(new DockerRunRequest(
+            "postgres:16", "harbora-svc-orders-db", "harbora",
+            new Dictionary<string, string>(),
+            new Dictionary<string, string> { ["harbora.managed"] = "true", ["harbora.service"] = "orders-db" },
+            [], 5432, 0, 0, null), default);
+
+        var engine = new Harbora.Infrastructure.Services.ManagedServiceEngine(
+            console, new SingleEngineFactory(docker), new PassthroughProtector(), new NoopJobQueue(),
+            new BillingGate(console, Options.Create(new BillingOptions { Enabled = true })),
+            Options.Create(new HarboraRuntimeOptions()), WalletHarness.Clock,
+            NullLogger<Harbora.Infrastructure.Services.ManagedServiceEngine>.Instance);
+
+        var result = await WalletHarness.Wallets(db, through: console, databases: engine)
+            .CreditAsync(WalletHarness.Credit(ws, 100_000), default);
+
+        result.DatabasesStarted.Should().Be(1);
+        result.StillSuspended.Should().BeFalse();
+        result.Failures.Should().BeEmpty();
+
+        // The claim the message on the screen makes, checked against the daemon rather than against
+        // a counter the resume kept about itself.
+        docker.Calls.Should().Contain(
+            c => c.Operation == "RestartContainerAsync" && c.Target == "harbora-svc-orders-db",
+            "the customer's own container coming back is the whole of what a top-up buys them");
+
         (await db.ManagedServices.IgnoreQueryFilters().AsNoTracking().SingleAsync(s => s.Id == database))
             .Status.Should().Be(ServiceStatus.Running);
     }

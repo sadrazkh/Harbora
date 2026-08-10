@@ -56,14 +56,26 @@
                             <div class="flex items-center justify-end gap-2">
                                 @if (t.Suspended)
                                 {
-                                    <span class="text-xs rounded bg-danger/15 text-danger px-2 py-0.5">@(isFa ? "معلق" : "suspended")</span>
+                                    @* Which kind, not merely that there is one. Lifting an operator's own
+                                       suspension is two field writes; lifting billing's runs the stopped
+                                       workloads back through the start routes, and the billing gate refuses
+                                       every one of them while the balance is empty. An operator who cannot
+                                       tell the two apart cannot tell a correct refusal from a broken button. *@
+                                    <span class="text-xs rounded bg-danger/15 text-danger px-2 py-0.5">
+                                        @(t.SuspendedForNoBalance
+                                            ? (isFa ? "معلق — بی‌اعتبار" : "suspended — no balance")
+                                            : (isFa ? "معلق — توسط مدیر" : "suspended — by an operator"))
+                                    </span>
                                 }
                                 @if (!t.IsDefault)
                                 {
                                     <form asp-controller="Tenants" asp-action="Suspend" asp-route-id="@t.WorkspaceId" method="post">
                                         @Html.AntiForgeryToken()
                                         <input type="hidden" name="suspended" value="@(t.Suspended ? "false" : "true")" />
-                                        <button class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-2 py-1">@(t.Suspended ? (isFa ? "فعال‌سازی" : "resume") : (isFa ? "تعلیق" : "suspend"))</button>
+                                        <button class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-2 py-1"
+                                                title="@(t.SuspendedForNoBalance
+                                                    ? (isFa ? "این تعلیق را صورتحساب اعمال کرده است. با فشردن این دکمه، بارهای کاری متوقف‌شده دوباره راه‌اندازی می‌شوند؛ تا زمانی که حساب اعتبار نداشته باشد، این کار رد می‌شود." : "Billing made this suspension. This starts back the workloads it stopped, and is refused while the account has no balance.")
+                                                    : null)">@(t.Suspended ? (isFa ? "فعال‌سازی" : "resume") : (isFa ? "تعلیق" : "suspend"))</button>
                                     </form>
                                 }
                             </div>
