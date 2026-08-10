@@ -135,12 +135,17 @@
                     <td class="p-3 text-ink">@(c.Name.Length > 0 ? c.Name : (isFa ? "(بی‌نام)" : "(unnamed)"))</td>
                     <td class="p-3 text-ink-muted">@Kind(c.Type)</td>
                     <td class="p-3 text-ink-muted" dir="ltr">@Hours(c)</td>
-                    <td class="p-3 text-end text-ink" dir="ltr">@MinorUnits.Format(c.TotalMinor)</td>
+                    @* ResourceCost.TotalMinor is signed the way the ledger stores it — negative is
+                       money out — and that sign is exactly right for the reconciliation at the foot
+                       of this page. It is wrong for a column headed "Cost": the customer who asked
+                       for this screen asked "it costs this much", not "it costs minus this much", so
+                       the flip happens here, once, at render, and nowhere the arithmetic can see it. *@
+                    <td class="p-3 text-end text-ink" dir="ltr">@MinorUnits.Format(Math.Abs(c.TotalMinor))</td>
                 </tr>
             }
             <tr class="border-t border-line-strong bg-surface-2 font-semibold">
                 <td class="p-3 text-ink" colspan="3">@(isFa ? "جمع" : "In total")</td>
-                <td class="p-3 text-end text-ink" dir="ltr">@MinorUnits.Format(Model.CostTotalMinor, Model.Currency)</td>
+                <td class="p-3 text-end text-ink" dir="ltr">@MinorUnits.Format(Math.Abs(Model.CostTotalMinor), Model.Currency)</td>
             </tr>
         }
         </tbody>
@@ -192,8 +197,14 @@
     </table>
 </div>
 
+@* The ledger itself still stores a cost as a negative movement and a payment as a positive one —
+   that convention is untouched, and it is what makes the two tables reconcile against the wallet.
+   This page shows both tables' figures as positive amounts, because "what did this cost me" and
+   "what did I pay in" are both questions a customer reads as a plain amount; the note below says
+   how to get from those two positive figures back to a change in balance, without claiming either
+   one is printed with the ledger's own sign. *@
 <p class="mt-3 text-xs text-ink-faint">
     @(isFa
-        ? "هزینه‌ها منفی و پرداخت‌ها مثبت نوشته می‌شوند، دقیقاً همان‌طور که در دفتر حساب ثبت شده‌اند؛ جمع این دو، تغییر موجودی شما در همین بازه است."
-        : "Costs are written negative and payments positive, exactly as the ledger stores them — the two totals together are what your balance did over this period.")
+        ? "هزینه‌ها و پرداخت‌ها، هر دو، در این صفحه به‌صورت عدد مثبت نشان داده می‌شوند. پرداخت‌ها منهای هزینه‌ها، همان تغییری است که موجودی شما در این بازه داشته است."
+        : "Both totals on this page are shown as positive amounts. Payments minus costs is what your balance did over this period.")
 </p>

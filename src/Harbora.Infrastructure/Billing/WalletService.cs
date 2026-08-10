@@ -317,7 +317,7 @@ public sealed class WalletService(
     {
         // The ordinary repeat is not a race — it is one person's decision submitted twice — so it is
         // answered by a read. The primary key below is what settles the race the read cannot win.
-        if (await AlreadyAppliedAsync(credit, ct))
+        if (await AlreadyAppliedAsync(credit, note, ct))
             return (false, await BalanceAsync(credit.WorkspaceId, ct));
 
         var wallet = await db.Wallets.IgnoreQueryFilters()
@@ -396,7 +396,7 @@ public sealed class WalletService(
                 // would drop a credit nobody has made while telling the administrator it landed, so
                 // the question the code actually needs answering is asked directly. A constraint
                 // violation leaves the connection healthy, so it can be asked.
-                if (await AlreadyAppliedAsync(credit, ct))
+                if (await AlreadyAppliedAsync(credit, note, ct))
                     return (false, await BalanceAsync(credit.WorkspaceId, ct));
 
                 throw;
@@ -413,27 +413,42 @@ public sealed class WalletService(
     /// administrator the money had reached this customer when it reached another one — and the
     /// customer it did reach is not going to raise it.
     /// </para>
+    ///
+    /// <para>
+    /// The note is compared alongside the kind, the workspace and the amount — not because two
+    /// credits with different notes move different money, but because a note edited after its id was
+    /// already used (a back button, a correction, a resubmit) is a real second decision about what
+    /// the line should say, and it is the one of the four a silent "already applied" would make
+    /// disappear without moving a cent. Get the workspace or the amount wrong and money sits in the
+    /// wrong place, loudly. Get the note wrong and the ledger keeps telling the old story for as long
+    /// as anyone reads it, with nothing on screen to say a second story was ever offered. Refusing
+    /// costs an administrator a reload of the confirmation page for a fresh id; keeping the first
+    /// note silently costs nobody anything they would ever think to complain about — which is exactly
+    /// the failure shape this class exists to refuse rather than absorb.
+    /// </para>
     /// </summary>
-    private async Task<bool> AlreadyAppliedAsync(CreditRequest credit, CancellationToken ct)
+    private async Task<bool> AlreadyAppliedAsync(CreditRequest credit, string note, CancellationToken ct)
     {
         var existing = await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
             .Where(l => l.Id == credit.Id)
-            .Select(l => new { l.Kind, l.WorkspaceId, l.AmountMinor })
+            .Select(l => new { l.Kind, l.WorkspaceId, l.AmountMinor, l.Description })
             .FirstOrDefaultAsync(ct);
 
         if (existing is null) return false;
 
         if (existing.Kind == LedgerKind.Credit
             && existing.WorkspaceId == credit.WorkspaceId
-            && existing.AmountMinor == credit.AmountMinor)
+            && existing.AmountMinor == credit.AmountMinor
+            && existing.Description == note)
             return true;
 
         throw new InvalidOperationException(
             $"Ledger line {credit.Id} already exists and is not this credit: it is a " +
-            $"{existing.Kind} of {existing.AmountMinor} on workspace {existing.WorkspaceId}, and " +
-            $"this asks for a credit of {credit.AmountMinor} on workspace {credit.WorkspaceId}. " +
-            "Nothing was written — an id reused for a different movement is a mistake, and reporting " +
-            "it as already applied would say the money arrived somewhere it did not.");
+            $"{existing.Kind} of {existing.AmountMinor} on workspace {existing.WorkspaceId} noted " +
+            $"\"{existing.Description}\", and this asks for a credit of {credit.AmountMinor} on " +
+            $"workspace {credit.WorkspaceId} noted \"{note}\". Nothing was written — an id reused " +
+            "for a different movement is a mistake, and reporting it as already applied would say " +
+            "the money arrived somewhere it did not, or say what it was for when it was not that.");
     }
 
     /// <summary>

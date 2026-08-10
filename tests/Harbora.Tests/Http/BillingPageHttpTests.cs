@@ -91,7 +91,14 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
 
         page.Should().Contain("bill-me-api", "the name is copied onto the line, not joined back to the app");
         page.Should().Contain("2 / 3", "two hours running and three stopped is the question being answered");
-        page.Should().Contain("-23.00", "2 × 1000 + 3 × 100 minor units, converted once at the view boundary");
+        // 2 × 1000 + 3 × 100 minor units is -2300 in the ledger's own convention — negative is money
+        // out — and that sign is exactly right for the reconciliation note further down this same
+        // page. It is wrong under a column headed "Cost": a customer who asked "this app was on for
+        // ten hours, what did it cost me" did not ask for a minus sign in front of the answer. The
+        // view flips it at render, nowhere near the arithmetic WalletServiceTests' own reconciliation
+        // test still depends on.
+        page.Should().Contain("23.00", "2 × 1000 + 3 × 100 minor units, converted once at the view boundary")
+            .And.NotContain("-23.00", "a cost column reads as a positive amount, not the ledger's own negative sign");
     }
 
     [Fact]

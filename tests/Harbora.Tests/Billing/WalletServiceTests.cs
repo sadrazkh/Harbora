@@ -11,6 +11,7 @@ using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using Xunit;
 
 namespace Harbora.Tests.Billing;
@@ -342,6 +343,30 @@ public class WalletServiceTests
     }
 
     [Fact]
+    public async Task A_credit_id_reused_for_a_different_note_is_refused_rather_than_silently_dropping_the_correction()
+    {
+        // The workspace and the amount, wrong, put money in the wrong place — loudly, because
+        // AlreadyAppliedAsync throws. A note is not money, but a back button, an edit and a resubmit
+        // carrying the same id (a real shape: the page is re-rendered from what the browser already
+        // has, not from a fresh GET) is a genuine second decision about what the line should say. Were
+        // it accepted quietly the correction would vanish and the ledger would go on telling the first
+        // note's story, with nothing on screen to say a second one was ever offered.
+        await using var db = WalletHarness.SystemContext();
+        var ws = WalletHarness.SeedWorkspace(db);
+        await db.SaveChangesAsync();
+
+        var credit = WalletHarness.Credit(ws, 100_000, note: "first note");
+        await WalletHarness.Wallets(db).CreditAsync(credit, default);
+
+        var replay = async () => await WalletHarness.Wallets(db)
+            .CreditAsync(credit with { Note = "corrected note" }, default);
+
+        await replay.Should().ThrowAsync<InvalidOperationException>();
+        (await db.BillingLedger.IgnoreQueryFilters().AsNoTracking().SingleAsync(l => l.Kind == LedgerKind.Credit))
+            .Description.Should().Be("first note", "the refused note must not overwrite the one that was kept");
+    }
+
+    [Fact]
     public async Task A_credit_with_no_id_of_its_own_is_refused()
     {
         // An empty id is not an id. Left to the database it would be a real primary key, so exactly
@@ -355,6 +380,34 @@ public class WalletServiceTests
             .CreditAsync(WalletHarness.Credit(ws, id: Guid.Empty), default);
 
         await credit.Should().ThrowAsync<ArgumentException>();
+    }
+
+    // --- when two credits collide for real ---------------------------------------------------
+
+    [Fact]
+    public async Task A_unique_violation_from_the_wallet_row_alone_is_not_read_as_this_credit_already_applied()
+    {
+        // 23505 says a unique index refused this, not which one — and this write touches two: the
+        // ledger's own primary key and Wallets.WorkspaceId, which two DIFFERENT first-ever credits
+        // landing on one brand-new workspace together would both try to insert. The losing write's
+        // recovery read asks the ledger for a row under ITS OWN id — this test never seeds one — so
+        // AlreadyAppliedAsync finds nothing and WriteAsync is left with no honest answer but to throw:
+        // reading a bare "already applied" here would tell an administrator their money landed while
+        // dropping a credit nobody made.
+        await using var db = WalletHarness.SystemContext();
+        var ws = WalletHarness.SeedWorkspace(db, withWallet: false);
+        await db.SaveChangesAsync();
+
+        var hostile = WalletHarness.ProviderContext(db);
+        hostile.FailTheNextSaveWith = Refusal(
+            PostgresErrorCodes.UniqueViolation, "duplicate key value violates \"IX_Wallets_WorkspaceId\"");
+
+        var credit = async () => await WalletHarness.Wallets(db, through: hostile)
+            .CreditAsync(WalletHarness.Credit(ws, 100_000), default);
+
+        await credit.Should().ThrowAsync<DbUpdateException>();
+        (await db.BillingLedger.IgnoreQueryFilters().AsNoTracking().AnyAsync()).Should().BeFalse();
+        (await db.Wallets.IgnoreQueryFilters().AsNoTracking().AnyAsync()).Should().BeFalse();
     }
 
     // --- what a credit is not ---------------------------------------------------------------
@@ -943,4 +996,12 @@ public class WalletServiceTests
 
     /// <summary>The day every breakdown here is taken over, so a window has something to cut.</summary>
     private static readonly DateTimeOffset Day = new(2026, 8, 1, 0, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
+    /// The refusal PostgreSQL would raise, wrapped the way EF delivers it. Built rather than mocked
+    /// for the same reason BillingTickTests builds its own: the SQLSTATE is the whole subject of the
+    /// test that uses it.
+    /// </summary>
+    private static DbUpdateException Refusal(string sqlState, string message) =>
+        new(message, new PostgresException(message, "ERROR", "ERROR", sqlState));
 }

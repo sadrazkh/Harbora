@@ -200,7 +200,38 @@ public sealed partial class TenantsController(
             // The service's own refusals, shown rather than turned into a 500. It is the last line
             // of defence behind the checks above and behind any other caller, so reaching it means a
             // real disagreement worth reading.
+            //
+            // Audited before it is shown, and this is the one attempt on this whole screen that is
+            // worth auditing. A double-click or a second confirmation page produces a normal "already
+            // applied" or a normal second credit, both logged below like any other; reaching THIS
+            // catch means an id was reused for a workspace, an amount or a note that does not match
+            // what it was first used for — the exact "expensive mistake nobody reports" this design
+            // exists to refuse. The administrator who typed it sees the message once and moves on;
+            // without a row here, that is the only place it would ever have been written down. The
+            // full text goes in rather than a category, because a category would say a refusal
+            // happened and nothing about which decision it was or what it collided with — and that is
+            // exactly what somebody reading this audit log months later would need.
+            await audit.LogAsync("billing.credit.refused", "workspace", id.ToString(), ClientIp,
+                metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    creditId, amountMinor, note = note.Trim(), reason = ex.Message
+                }), ct: ct);
             return Again(ex.Message);
+        }
+        catch (DbUpdateException)
+        {
+            // Not the service's own refusal — the database's. WalletService.WriteAsync's remarks say
+            // why: 23505 names a unique index refused the write, not which one, and this write can
+            // collide on either the ledger's primary key or Wallets.WorkspaceId. Losing the first
+            // race is answered by re-reading and reporting "already applied"; losing the SECOND is
+            // what reaches here, because a genuine collision on the wallet row alone means no ledger
+            // line was ever written under this id — nothing to find, so WriteAsync correctly throws
+            // rather than guesses. No money moved either way, so unlike the catch above there is
+            // nothing to name and nothing to audit: the honest answer is "try again", not "here is
+            // what went wrong", because nothing did — two legitimate writes just arrived together.
+            return Again(
+                "Another write reached this account's balance at the same moment as this one, and " +
+                "this one was refused rather than guessed at. Nothing was credited — retry it.");
         }
 
         // Written whether or not this POST was the one that moved the money. An audit trail that
