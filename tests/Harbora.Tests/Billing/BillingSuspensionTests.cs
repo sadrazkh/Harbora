@@ -637,11 +637,12 @@ public class BillingSuspensionTests
 
     /// <summary>
     /// The provider console, built by hand. Suspending is the only action reached here and it uses
-    /// neither the hasher nor the quota service, so nothing stands in for those.
+    /// none of the hasher, the quota service, the wallet, the signed-in user or the audit log, so
+    /// nothing stands in for those.
     /// </summary>
     private static TenantsController Console(BillingContext db)
     {
-        var controller = new TenantsController(db, null!, null!)
+        var controller = new TenantsController(db, null!, null!, null!, null!, null!)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

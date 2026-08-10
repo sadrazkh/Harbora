@@ -21,15 +21,22 @@ public sealed record NavGroup(string Key, IReadOnlyList<NavItem> Items);
 /// The sidebar, as data.
 ///
 /// Grouped the way the mockups group things, and containing every section Harbora actually has —
-/// nothing functional was dropped to match a picture, and nothing was invented to fill one. There
-/// is deliberately no Billing item: there is no billing.
+/// nothing functional was dropped to match a picture, and nothing was invented to fill one. Billing
+/// was left out of this list for exactly that reason for as long as there was no billing; it is here
+/// now because there is one, and the page behind it renders a balance and a per-resource breakdown
+/// out of real ledger rows.
 /// </summary>
 public static class NavigationMap
 {
     public static IReadOnlyList<NavGroup> All { get; } =
     [
         new("overview", [
-            new("dashboard", "Home", "Index", "layout-dashboard")
+            new("dashboard", "Home", "Index", "layout-dashboard"),
+            // No capability, and that is the decision rather than an oversight: this is the page
+            // somebody opens when their app has stopped and they want to know why. A bill only a
+            // Workspace Admin can read is a bill that gets asked for by email instead, and it shows
+            // nothing anybody in the workspace could not infer from what they are already running.
+            new("billing", "Billing", "Index", "wallet")
         ]),
         new("deploy", [
             new("applications", "Apps", "Index", "boxes"),

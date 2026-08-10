@@ -1,0 +1,199 @@
+@model BillingPageViewModel
+@using Harbora.Domain.Billing
+@using Harbora.Infrastructure.Billing
+@{
+    ViewData["Title"] = "Billing";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    // The bill answers "this app was on for ten hours and stopped for fourteen" — so an hour count
+    // is only printed where hours are a thing the resource has. A disk is neither up nor down; it is
+    // held, and "0 hours running" against it reads as a disk switched off all month and charged for.
+    string Hours(ResourceCost c) => c.RunningHours == 0 && c.StoppedHours == 0
+        ? "—"
+        : $"{c.RunningHours} / {c.StoppedHours}";
+
+    string Kind(BilledResourceType type) => (type, isFa) switch
+    {
+        (BilledResourceType.App, true) => "اپلیکیشن",       (BilledResourceType.App, false) => "App",
+        (BilledResourceType.Service, true) => "دیتابیس",     (BilledResourceType.Service, false) => "Database",
+        (BilledResourceType.Volume, true) => "دیسک",         (BilledResourceType.Volume, false) => "Disk",
+        (BilledResourceType.PlanBase, true) => "حداقل پلن",  (BilledResourceType.PlanBase, false) => "Plan minimum",
+        _ => isFa ? "سایر" : "Other"
+    };
+}
+
+<div class="mb-6">
+    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "صورت‌حساب" : "Billing")</h1>
+    <p class="text-ink-muted text-sm">@Model.WorkspaceName</p>
+</div>
+
+@* ---- the balance ---------------------------------------------------------------------------- *@
+<div class="grid sm:grid-cols-2 gap-4 mb-6">
+    <div class="rounded-xl border border-line bg-surface p-4">
+        <div class="text-ink-muted text-sm">@(isFa ? "موجودی" : "Balance")</div>
+        @if (Model.HasWallet)
+        {
+            <div class="mt-1 text-2xl font-bold @(Model.BalanceMinor > 0 ? "text-ink" : "text-danger")" dir="ltr">
+                @MinorUnits.Format(Model.BalanceMinor, Model.Currency)
+            </div>
+            @if (Model.BalanceMinor <= 0)
+            {
+                @* Zero is not a balance: the gate refuses to start anything on one. Saying "you have
+                   0" without saying what that means leaves somebody waiting for an app that will
+                   never come back. *@
+                <div class="mt-1 text-xs text-danger">
+                    @(isFa
+                        ? "چیز جدیدی تا شارژ شدن حساب اجرا نمی‌شود."
+                        : "Nothing new will start until the account is topped up.")
+                </div>
+            }
+        }
+        else
+        {
+            @* Not zero. No wallet means no hourly pass has ever reached this workspace, which is a
+               different fact from having nothing left — and the panel's own rule is that an unread
+               figure is never printed as a nought. *@
+            <div class="mt-1 text-2xl font-bold text-ink-faint" dir="ltr">—</div>
+            <div class="mt-1 text-xs text-ink-faint">
+                @(isFa ? "هنوز صورت‌حسابی صادر نشده است." : "Nothing has been billed yet.")
+            </div>
+        }
+    </div>
+
+    @if (Model.Suspended)
+    {
+        <div class="rounded-xl border border-danger bg-danger-soft p-4">
+            <div class="text-danger text-sm font-semibold mb-1">@(isFa ? "معلق" : "Suspended")</div>
+            <p class="text-danger text-sm">
+                @if (Model.SuspendedForNoBalance)
+                {
+                    @(isFa
+                        ? "به‌دلیل تمام‌شدن اعتبار. با شارژ حساب، همان چیزهایی که این تعلیق متوقفشان کرده بود دوباره اجرا می‌شوند."
+                        : "Because the balance ran out. Topping the account up starts back exactly what this suspension stopped.")
+                }
+                else
+                {
+                    @* Said plainly rather than hidden behind a generic "contact support": telling
+                       somebody to pay for a suspension a payment does not lift is sending them to
+                       spend money on nothing. *@
+                    @(isFa
+                        ? "این تعلیق به‌دلیل اعتبار نیست و با پرداخت برداشته نمی‌شود. با پشتیبانی تماس بگیرید."
+                        : "This suspension is not about money and paying does not lift it. Please contact support.")
+                }
+            </p>
+        </div>
+    }
+</div>
+
+@* ---- the month ------------------------------------------------------------------------------ *@
+<div class="flex items-center gap-3 mb-3">
+    <h2 class="font-semibold text-ink">@(isFa ? "این ماه چه چیزی چقدر شد" : "What each thing cost")</h2>
+    <span class="text-sm text-ink-faint" dir="ltr">@Model.Period</span>
+    <span class="flex-1"></span>
+    @* rtl:rotate-180 on the arrows: "previous" is to the reader's left in one script and to their
+       right in the other, and an arrow that does not follow is an arrow pointing at the wrong month. *@
+    <a href="/billing?month=@Model.PreviousPeriod" class="text-sm text-accent-text">
+        <span class="inline-block rtl:rotate-180">←</span> @Model.PreviousPeriod
+    </a>
+    @if (Model.NextPeriod is { } next)
+    {
+        <a href="/billing?month=@next" class="text-sm text-accent-text">
+            @next <span class="inline-block rtl:rotate-180">→</span>
+        </a>
+    }
+</div>
+
+<div class="rounded-xl border border-line bg-surface overflow-hidden mb-6">
+    <table class="w-full text-sm">
+        <thead class="bg-surface-2 text-ink-muted">
+            <tr>
+                <th class="p-3 text-start font-medium">@(isFa ? "چه چیزی" : "What")</th>
+                <th class="p-3 text-start font-medium">@(isFa ? "نوع" : "Kind")</th>
+                <th class="p-3 text-start font-medium">
+                    @(isFa ? "ساعت روشن / خاموش" : "Hours running / stopped")
+                </th>
+                <th class="p-3 text-end font-medium">@(isFa ? "هزینه" : "Cost")</th>
+            </tr>
+        </thead>
+        <tbody>
+        @if (Model.Costs.Count == 0)
+        {
+            <tr>
+                <td colspan="4" class="p-4 text-ink-faint">
+                    @(isFa ? "در این ماه چیزی برای این فضای کاری ثبت نشده است." : "Nothing was charged to this workspace in this month.")
+                </td>
+            </tr>
+        }
+        else
+        {
+            @foreach (var c in Model.Costs)
+            {
+                <tr class="border-t border-line">
+                    @* The name copied onto the ledger line when it was charged, never joined back to
+                       the row — so an app deleted last week still reads here, under the name it had
+                       at the time. *@
+                    <td class="p-3 text-ink">@(c.Name.Length > 0 ? c.Name : (isFa ? "(بی‌نام)" : "(unnamed)"))</td>
+                    <td class="p-3 text-ink-muted">@Kind(c.Type)</td>
+                    <td class="p-3 text-ink-muted" dir="ltr">@Hours(c)</td>
+                    <td class="p-3 text-end text-ink" dir="ltr">@MinorUnits.Format(c.TotalMinor)</td>
+                </tr>
+            }
+            <tr class="border-t border-line-strong bg-surface-2 font-semibold">
+                <td class="p-3 text-ink" colspan="3">@(isFa ? "جمع" : "In total")</td>
+                <td class="p-3 text-end text-ink" dir="ltr">@MinorUnits.Format(Model.CostTotalMinor, Model.Currency)</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</div>
+
+@* ---- what was paid in ------------------------------------------------------------------------
+   Kept out of the table above rather than netted off against it. Folded in, three separate top-ups
+   become one figure — and a top-up applied twice would be invisible in it, which is the one mistake
+   on this page that the person who benefits from it will not report. *@
+<h2 class="font-semibold text-ink mb-3">@(isFa ? "پرداخت‌های این ماه" : "Paid in this month")</h2>
+<div class="rounded-xl border border-line bg-surface overflow-hidden">
+    <table class="w-full text-sm">
+        <thead class="bg-surface-2 text-ink-muted">
+            <tr>
+                <th class="p-3 text-start font-medium">@(isFa ? "تاریخ" : "When")</th>
+                <th class="p-3 text-start font-medium">@(isFa ? "بابت" : "For")</th>
+                <th class="p-3 text-end font-medium">@(isFa ? "مبلغ" : "Amount")</th>
+            </tr>
+        </thead>
+        <tbody>
+        @if (Model.Credits.Count == 0)
+        {
+            <tr>
+                <td colspan="3" class="p-4 text-ink-faint">
+                    @(isFa ? "در این ماه پرداختی ثبت نشده است." : "No payment was recorded in this month.")
+                </td>
+            </tr>
+        }
+        else
+        {
+            @foreach (var credit in Model.Credits)
+            {
+                <tr class="border-t border-line">
+                    @* The billing hour, in UTC and said so: a payment's slot on the bill is the hour
+                       the ledger filed it under, and a customer reconciling against a bank statement
+                       in their own zone needs to know which clock this one is. *@
+                    <td class="p-3 text-ink-muted" dir="ltr">@credit.Hour.ToString(Dates.Stamp) UTC</td>
+                    <td class="p-3 text-ink">@credit.Note</td>
+                    <td class="p-3 text-end text-ok" dir="ltr">@MinorUnits.Format(credit.AmountMinor)</td>
+                </tr>
+            }
+            <tr class="border-t border-line-strong bg-surface-2 font-semibold">
+                <td class="p-3 text-ink" colspan="2">@(isFa ? "جمع" : "In total")</td>
+                <td class="p-3 text-end text-ink" dir="ltr">@MinorUnits.Format(Model.CreditTotalMinor, Model.Currency)</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</div>
+
+<p class="mt-3 text-xs text-ink-faint">
+    @(isFa
+        ? "هزینه‌ها منفی و پرداخت‌ها مثبت نوشته می‌شوند، دقیقاً همان‌طور که در دفتر حساب ثبت شده‌اند؛ جمع این دو، تغییر موجودی شما در همین بازه است."
+        : "Costs are written negative and payments positive, exactly as the ledger stores them — the two totals together are what your balance did over this period.")
+</p>

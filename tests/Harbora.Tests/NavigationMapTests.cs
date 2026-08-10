@@ -81,10 +81,24 @@ public class NavigationMapTests
     }
 
     [Fact]
-    public void There_is_no_billing_section()
+    public void The_billing_section_leads_to_a_page_that_is_actually_built()
     {
-        // The mockups have one. Harbora has no billing, and a menu item leading to an empty page is
-        // the exact thing this redesign is meant to stop doing.
-        Items(NavigationMap.All).Should().NotContain(i => i.Key == "billing");
+        // This test used to assert the opposite, and its reason was right at the time: the mockups
+        // had a Billing entry, Harbora had no billing, and a menu item leading to an empty page is
+        // the exact thing that redesign was meant to stop doing. The rule has not changed — only the
+        // fact it was applied to. There is a wallet, an hourly charge and a per-resource breakdown
+        // now, so the entry is earned; what is asserted is still "the sidebar does not offer a
+        // destination that is not there", pointed at the controller that has to keep existing.
+        Items(NavigationMap.All).Should().ContainSingle(i => i.Key == "billing")
+            .Which.Controller.Should().Be("Billing");
+    }
+
+    [Fact]
+    public void Reading_your_own_bill_needs_no_capability()
+    {
+        // Everybody in a workspace can see what it is running, so everybody may see what that costs.
+        // Gating it behind an administrator's capability is how "why did my app stop" becomes an
+        // email to support instead of a page somebody reads for themselves.
+        Items(NavigationMap.All).Single(i => i.Key == "billing").Capability.Should().BeNull();
     }
 }

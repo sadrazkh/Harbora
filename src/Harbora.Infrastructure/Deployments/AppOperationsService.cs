@@ -158,9 +158,37 @@ public sealed class AppOperationsService(
 
     // --- helpers ---
 
+    /// <summary>
+    /// The app, its server's engine, and the container currently serving it.
+    ///
+    /// <para>
+    /// Read unfiltered, together with <see cref="SetStatusAsync"/> and never one without the other.
+    /// Half this service's callers are asking about a workspace that is not their session's: the
+    /// resume after a top-up is driven from the provider console, where the administrator's own
+    /// workspace is the provider's, and the preview sweeper and the branch-deleted webhook have no
+    /// session at all. Under the tenant filter every one of those found no app and threw "Sequence
+    /// contains no elements" before reaching a node — so a customer who had just paid was told their
+    /// services were coming back while each start failed on a database predicate.
+    /// </para>
+    ///
+    /// <para>
+    /// Unfiltering only this half would be worse than leaving both: the throw would become a filtered
+    /// <c>ExecuteUpdate</c> in <see cref="SetStatusAsync"/> that matches no rows and reports success,
+    /// which is the shape nobody sees. <c>BillingSuspension</c>'s remarks describe both halves and
+    /// name them as one fix; this is that fix.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Ownership is the caller's to check</b>, exactly as it already is for
+    /// <see cref="DeleteAsync"/> just above: every request-bound entry point resolves the app against
+    /// the caller's workspace before it gets here (<c>AppsController</c> asks <c>OwnsAsync</c> on
+    /// stop, start and restart), and the sessionless callers are each bound to one workspace by the
+    /// work they were queued for.
+    /// </para>
+    /// </summary>
     private async Task<(App App, IDockerEngine Docker, string? ContainerId)> ResolveAsync(Guid appId, CancellationToken ct)
     {
-        var app = await db.Apps.FirstAsync(a => a.Id == appId, ct);
+        var app = await db.Apps.IgnoreQueryFilters().FirstAsync(a => a.Id == appId, ct);
         var docker = await engineFactory.ResolveAsync(app.ServerId, ct);
         var id = await FindContainerIdAsync(docker, app.Slug, ct);
         return (app, docker, id);
@@ -174,9 +202,21 @@ public sealed class AppOperationsService(
         return DeploymentPlanning.CurrentContainerId(containers, slug);
     }
 
+    /// <summary>
+    /// Writes what the app is now doing — the single place an app's status is set.
+    ///
+    /// <para>
+    /// Unfiltered, and the other half of <see cref="ResolveAsync"/>'s note. This is the dangerous
+    /// half: <c>ExecuteUpdate</c> composes an <c>UPDATE</c> with the filter folded into its
+    /// <c>WHERE</c>, so a caller in the wrong scope matches no rows, raises nothing, and returns as
+    /// if it had worked. The app would be reported stopped while its container kept running and the
+    /// hourly tick kept billing it at the running rate — which is the one outcome here that costs a
+    /// customer money nobody can point at.
+    /// </para>
+    /// </summary>
     private async Task SetStatusAsync(App app, AppStatus status, CancellationToken ct)
     {
-        await db.Apps.Where(a => a.Id == app.Id)
+        await db.Apps.IgnoreQueryFilters().Where(a => a.Id == app.Id)
             .ExecuteUpdateAsync(s => s.SetProperty(a => a.Status, status), ct);
     }
 }
