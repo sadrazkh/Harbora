@@ -57,15 +57,28 @@ public sealed class BillingGate(
         // The switch guards the money everywhere else in this feature and it guards it here too. An
         // install that upgraded into billing unasked must not begin refusing to run a tenant's
         // workloads over a balance nobody ever told them existed.
-        if (!options.Value.Enabled) return QuotaCheck.Ok;
-
         var workspace = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
             .FirstOrDefaultAsync(w => w.Id == workspaceId, ct);
+
+        // With billing disabled, legacy/unit-test workloads may not have a workspace row. Preserve
+        // that compatibility while still treating an existing archived/deleted row as an absolute
+        // lifecycle stop independent of billing configuration.
+        if (!options.Value.Enabled)
+            return workspace is { DeletedAt: not null } or { ArchivedAt: not null }
+                ? QuotaCheck.Deny(
+                    "This workspace is archived or deleted, so nothing can be started in it.",
+                    "این فضای کاری بایگانی یا حذف شده است و چیزی در آن اجرا نمی‌شود.")
+                : QuotaCheck.Ok;
 
         if (workspace is null)
             return QuotaCheck.Deny(
                 $"There is no workspace with id {workspaceId}, so nothing can be started for it.",
                 $"فضای کاری‌ای با شناسه‌ی {workspaceId} وجود ندارد؛ چیزی برای آن اجرا نخواهد شد.");
+
+        if (workspace.DeletedAt is not null || workspace.ArchivedAt is not null)
+            return QuotaCheck.Deny(
+                "This workspace is archived or deleted, so nothing can be started in it.",
+                "این فضای کاری بایگانی یا حذف شده است و چیزی در آن اجرا نمی‌شود.");
 
         if (workspace.IsDefault) return QuotaCheck.Ok;
 
@@ -95,6 +108,9 @@ public sealed class BillingGate(
             // the same gate it is trying to reopen. Raising/removing the cap has the same effect.
             if (WorkspaceBudgetService.CanResetSpendLimit(
                     workspace, clock?.UtcNow ?? DateTimeOffset.UtcNow))
+                return QuotaCheck.Ok;
+
+            if (workspace.SuspendedReason == SuspensionReason.Archived && workspace.ArchivedAt is null)
                 return QuotaCheck.Ok;
 
             return workspace.SuspendedReason == SuspensionReason.Manual

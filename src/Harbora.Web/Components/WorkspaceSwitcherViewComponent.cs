@@ -15,7 +15,8 @@ public sealed class WorkspaceSwitcherViewComponent(HarboraDbContext db, ICurrent
         var userId = currentUser.UserId ?? Guid.Empty;
         var current = currentUser.WorkspaceId ?? Guid.Empty;
         var options = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
-            .Where(m => m.UserId == userId)
+            .Where(m => m.UserId == userId
+                && m.Workspace!.ArchivedAt == null && m.Workspace.DeletedAt == null)
             .OrderByDescending(m => m.Workspace!.IsPersonal).ThenBy(m => m.Workspace!.Name)
             .Select(m => new Option(m.WorkspaceId, m.Workspace!.Name, m.Workspace.IsPersonal, m.Role, m.WorkspaceId == current))
             .ToListAsync();

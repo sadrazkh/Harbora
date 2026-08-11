@@ -66,7 +66,10 @@ public sealed class WorkspaceMembershipValidationMiddleware(RequestDelegate next
             .Where(m => m.UserId == userId && m.WorkspaceId == workspaceId)
             .Select(m => new { m.Role })
             .FirstOrDefaultAsync(context.RequestAborted);
-        if (user is null || membership is null)
+        var workspaceActive = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
+            .AnyAsync(w => w.Id == workspaceId && w.ArchivedAt == null && w.DeletedAt == null,
+                context.RequestAborted);
+        if (user is null || membership is null || !workspaceActive)
         {
             await RejectAsync(context);
             return;

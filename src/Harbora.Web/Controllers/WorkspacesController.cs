@@ -23,7 +23,8 @@ public sealed class WorkspacesController(
     WorkspaceAccountService accounts,
     PlatformMailer mailer,
     IAuditLogger audit,
-    Harbora.Application.Abstractions.ISystemClock clock) : Controller
+    Harbora.Application.Abstractions.ISystemClock clock,
+    Harbora.Infrastructure.Billing.BillingSuspension suspension) : Controller
 {
     private Guid UserId => currentUser.UserId ?? Guid.Empty;
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -39,10 +40,13 @@ public sealed class WorkspacesController(
         if (signedInUser is null) return Challenge();
         await accounts.EnsurePersonalWorkspaceAsync(signedInUser, ct);
         var memberships = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
-            .Where(m => m.UserId == UserId)
+            .Where(m => m.UserId == UserId && m.Workspace!.DeletedAt == null)
             .Include(m => m.Workspace)
             .OrderByDescending(m => m.Workspace!.IsPersonal).ThenBy(m => m.Workspace!.Name)
             .ToListAsync(ct);
+        // Keep a second boundary after materialisation. This protects the workspace chooser even
+        // if a provider handles the nullable navigation predicate differently.
+        memberships = memberships.Where(m => m.Workspace?.DeletedAt is null).ToList();
         var current = memberships.FirstOrDefault(m => m.WorkspaceId == WorkspaceId);
         if (current?.Workspace is null) return Forbid();
 
@@ -84,7 +88,8 @@ public sealed class WorkspacesController(
                 var wallet = wallets.GetValueOrDefault(m.WorkspaceId);
                 return new WorkspaceSummaryRow(m.WorkspaceId, m.Workspace!.Name, m.Workspace.Slug,
                     m.Workspace.IsPersonal, m.WorkspaceId == WorkspaceId, m.Role,
-                    wallet?.BalanceMinor, wallet?.Currency ?? "IRR");
+                    wallet?.BalanceMinor, wallet?.Currency ?? "IRR", m.Workspace.ArchivedAt,
+                    m.Workspace.OwnerUserId == UserId);
             }).ToList(),
             Members = members.Select(m => new WorkspaceMemberRow(
                 m.UserId, m.User!.Email, m.User.DisplayName, m.Role,
@@ -121,6 +126,9 @@ public sealed class WorkspacesController(
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Switch(Guid workspaceId, string? returnUrl, CancellationToken ct)
     {
+        var workspaceActive = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
+            .AnyAsync(w => w.Id == workspaceId && w.ArchivedAt == null && w.DeletedAt == null, ct);
+        if (!workspaceActive) return Forbid();
         var role = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
             .Where(m => m.WorkspaceId == workspaceId && m.UserId == UserId)
             .Select(m => (WorkspaceRole?)m.Role).FirstOrDefaultAsync(ct);
@@ -366,7 +374,9 @@ public sealed class WorkspacesController(
         await db.WorkspaceMembers.IgnoreQueryFilters()
             .Where(m => m.WorkspaceId == leavingWorkspaceId && m.UserId == UserId).ExecuteDeleteAsync(ct);
         var next = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
-            .Where(m => m.UserId == UserId).OrderByDescending(m => m.Workspace!.IsPersonal)
+            .Where(m => m.UserId == UserId
+                && m.Workspace!.ArchivedAt == null && m.Workspace.DeletedAt == null)
+            .OrderByDescending(m => m.Workspace!.IsPersonal)
             .Select(m => new { m.WorkspaceId, m.Role }).FirstOrDefaultAsync(ct);
         if (next is null)
         {
@@ -376,6 +386,93 @@ public sealed class WorkspacesController(
         await SwitchSessionAsync(next.WorkspaceId, next.Role, ct);
         await audit.LogAsync("workspace.member_left", "workspace", leavingWorkspaceId.ToString(), ClientIp, ct: ct);
         return Redirect("/workspaces");
+    }
+
+    [HttpPost("{id:guid}/archive")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Archive(Guid id, string? confirmation, CancellationToken ct)
+    {
+        var workspace = await OwnedWorkspaceAsync(id, ct);
+        if (workspace is null) return Forbid();
+        if (workspace.IsPersonal || workspace.IsDefault)
+            return Back(IsFa ? "فضای کاری شخصی یا پیش‌فرض قابل بایگانی نیست." : "Personal and platform workspaces cannot be archived.", true);
+        if (!string.Equals(confirmation?.Trim(), workspace.Slug, StringComparison.Ordinal))
+            return Back(IsFa ? "برای بایگانی، شناسهٔ فضای کاری را دقیق وارد کنید." : "Type the workspace slug exactly to archive it.", true);
+
+        var outcome = await suspension.SuspendForArchiveAsync(workspace.Id, ct);
+        if (!outcome.WorkspaceSuspended)
+            return Back(string.Join(" ", outcome.Failures.DefaultIfEmpty("The workspace could not be archived.")), true);
+
+        workspace.ArchivedAt ??= clock.UtcNow;
+        workspace.ArchivedByUserId ??= UserId;
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("workspace.archived", "workspace", workspace.Id.ToString(), ClientIp,
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new { outcome.Failures }), ct: ct);
+
+        if (WorkspaceId == workspace.Id)
+        {
+            var next = await NextActiveMembershipAsync(workspace.Id, ct);
+            if (next is null) return Redirect("/account/login");
+            await SwitchSessionAsync(next.Value.WorkspaceId, next.Value.Role, ct);
+        }
+
+        TempData[outcome.Failures.Count == 0 ? "Message" : "Error"] = outcome.Failures.Count == 0
+            ? (IsFa ? "فضای کاری بایگانی شد." : "Workspace archived.")
+            : string.Join(" ", outcome.Failures);
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost("{id:guid}/recover")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Recover(Guid id, CancellationToken ct)
+    {
+        var workspace = await OwnedWorkspaceAsync(id, ct);
+        if (workspace?.ArchivedAt is null || workspace.DeletedAt is not null) return NotFound();
+        var archivedAt = workspace.ArchivedAt;
+        var archivedBy = workspace.ArchivedByUserId;
+
+        // Open only the recovery window. The Archived suspension remains until every workload the
+        // archive stopped is confirmed running, and the gate recognises exactly this combination.
+        workspace.ArchivedAt = null;
+        workspace.ArchivedByUserId = null;
+        await db.SaveChangesAsync(ct);
+        var outcome = await suspension.ResumeArchivedAsync(workspace.Id, ct);
+        if (outcome.WorkspaceSuspended)
+        {
+            workspace = await db.Workspaces.IgnoreQueryFilters().SingleAsync(w => w.Id == id, ct);
+            workspace.ArchivedAt = archivedAt;
+            workspace.ArchivedByUserId = archivedBy;
+            await db.SaveChangesAsync(ct);
+            return Back(string.Join(" ", outcome.Failures.DefaultIfEmpty("Recovery did not finish; the workspace remains archived.")), true);
+        }
+
+        await audit.LogAsync("workspace.recovered", "workspace", workspace.Id.ToString(), ClientIp, ct: ct);
+        return Back(IsFa ? "فضای کاری بازیابی شد." : "Workspace recovered.");
+    }
+
+    [HttpPost("{id:guid}/delete")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Delete(Guid id, string? confirmation, CancellationToken ct)
+    {
+        var workspace = await OwnedWorkspaceAsync(id, ct);
+        if (workspace?.ArchivedAt is null || workspace.DeletedAt is not null) return NotFound();
+        if (workspace.IsPersonal || workspace.IsDefault) return Forbid();
+        if (workspace.ArchivedAt > clock.UtcNow.AddHours(-24))
+            return Back(IsFa ? "حذف نهایی فقط ۲۴ ساعت بعد از بایگانی فعال می‌شود." : "Final deletion is available 24 hours after archiving.", true);
+        if (!string.Equals(confirmation?.Trim(), workspace.Slug, StringComparison.Ordinal))
+            return Back(IsFa ? "برای حذف، شناسهٔ فضای کاری را دقیق وارد کنید." : "Type the workspace slug exactly to delete it.", true);
+
+        workspace.DeletedAt = clock.UtcNow;
+        workspace.DeletedByUserId = UserId;
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("workspace.deleted", "workspace", workspace.Id.ToString(), ClientIp,
+            metadataJson: "{\"mode\":\"safe-tombstone\"}", ct: ct);
+        await db.WorkspaceInvitations.IgnoreQueryFilters().Where(i => i.WorkspaceId == id)
+            .ExecuteUpdateAsync(s => s.SetProperty(i => i.IsRevoked, true), ct);
+        // Keep memberships and grants as immutable ownership/access evidence. DeletedAt is the
+        // security boundary: lists, session validation, switching and billing gates all reject
+        // this workspace, while operators retain enough history for audit and later purging.
+        return Back(IsFa ? "فضای کاری حذف شد و برای پاک‌سازی امن علامت‌گذاری شد." : "Workspace deleted and retained as a safe cleanup tombstone.");
     }
 
     [HttpPost("invitations/{id:guid}/revoke")]
@@ -392,6 +489,21 @@ public sealed class WorkspacesController(
     private async Task<bool> CanManageAsync(Guid workspaceId, CancellationToken ct) =>
         await db.WorkspaceMembers.IgnoreQueryFilters()
             .AnyAsync(m => m.WorkspaceId == workspaceId && m.UserId == UserId && m.Role == WorkspaceRole.Admin, ct);
+
+    private Task<Workspace?> OwnedWorkspaceAsync(Guid id, CancellationToken ct) =>
+        db.Workspaces.IgnoreQueryFilters().FirstOrDefaultAsync(
+            w => w.Id == id && w.OwnerUserId == UserId && w.DeletedAt == null, ct);
+
+    private async Task<(Guid WorkspaceId, WorkspaceRole Role)?> NextActiveMembershipAsync(
+        Guid excluding, CancellationToken ct)
+    {
+        var next = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
+            .Where(m => m.UserId == UserId && m.WorkspaceId != excluding
+                && m.Workspace!.ArchivedAt == null && m.Workspace.DeletedAt == null)
+            .OrderByDescending(m => m.Workspace!.IsPersonal)
+            .Select(m => new { m.WorkspaceId, m.Role }).FirstOrDefaultAsync(ct);
+        return next is null ? null : (next.WorkspaceId, next.Role);
+    }
 
     private async Task SwitchSessionAsync(Guid workspaceId, WorkspaceRole role, CancellationToken ct)
     {

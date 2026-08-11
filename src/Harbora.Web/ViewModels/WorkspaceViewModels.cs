@@ -4,7 +4,8 @@ namespace Harbora.Web.ViewModels;
 
 public sealed record WorkspaceSummaryRow(
     Guid Id, string Name, string Slug, bool IsPersonal, bool IsCurrent,
-    WorkspaceRole Role, long? BalanceMinor, string Currency);
+    WorkspaceRole Role, long? BalanceMinor, string Currency,
+    DateTimeOffset? ArchivedAt, bool IsOwner);
 
 public sealed record WorkspaceMemberRow(
     Guid UserId, string Email, string DisplayName, WorkspaceRole Role, bool IsOwner, bool IsCurrentUser,

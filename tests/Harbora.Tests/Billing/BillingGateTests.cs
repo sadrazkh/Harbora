@@ -169,6 +169,21 @@ public class BillingGateTests
     }
 
     [Fact]
+    public async Task Archived_workspace_is_refused_even_when_billing_is_switched_off()
+    {
+        await using var db = GateHarness.SystemContext();
+        var id = GateHarness.SeedWorkspace(db, balanceMinor: 5_000);
+        await db.SaveChangesAsync();
+        var workspace = await db.Workspaces.SingleAsync(w => w.Id == id);
+        workspace.ArchivedAt = DateTimeOffset.UtcNow;
+        workspace.IsSuspended = true;
+        workspace.SuspendedReason = SuspensionReason.Archived;
+        await db.SaveChangesAsync();
+
+        (await GateHarness.Gate(db, enabled: false).CanStartAsync(id, default)).Allowed.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task A_manually_suspended_workspace_cannot_start_however_much_it_pays()
     {
         await using var db = GateHarness.SystemContext();

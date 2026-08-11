@@ -143,10 +143,13 @@ public sealed class BillingSuspension(
     public Task<BillingSuspensionResult> SuspendForSpendLimitAsync(Guid workspaceId, CancellationToken ct) =>
         SuspendAsync(workspaceId, SuspensionReason.SpendLimit, ct);
 
+    public Task<BillingSuspensionResult> SuspendForArchiveAsync(Guid workspaceId, CancellationToken ct) =>
+        SuspendAsync(workspaceId, SuspensionReason.Archived, ct);
+
     private async Task<BillingSuspensionResult> SuspendAsync(
         Guid workspaceId, SuspensionReason reason, CancellationToken ct)
     {
-        if (reason is not (SuspensionReason.NoBalance or SuspensionReason.SpendLimit))
+        if (reason is not (SuspensionReason.NoBalance or SuspensionReason.SpendLimit or SuspensionReason.Archived))
             throw new ArgumentOutOfRangeException(nameof(reason));
         var report = new Report();
 
@@ -160,7 +163,7 @@ public sealed class BillingSuspension(
         // The switch guards the money everywhere else in this feature; here it guards something
         // dearer than money. An install that upgraded into billing unasked must not stop a tenant's
         // services over a balance nobody ever told them existed.
-        if (!options.Value.Enabled)
+        if (reason != SuspensionReason.Archived && !options.Value.Enabled)
         {
             report.Add(
                 $"Workspace \"{workspace.Name}\" was not suspended because " +
@@ -404,7 +407,14 @@ public sealed class BillingSuspension(
     /// the only record that the app was ever running, and the next suspension replaces the set.
     /// </para>
     /// </summary>
-    public async Task<BillingSuspensionResult> ResumeAsync(Guid workspaceId, CancellationToken ct)
+    public Task<BillingSuspensionResult> ResumeAsync(Guid workspaceId, CancellationToken ct) =>
+        ResumeAsync(workspaceId, allowArchive: false, ct);
+
+    public Task<BillingSuspensionResult> ResumeArchivedAsync(Guid workspaceId, CancellationToken ct) =>
+        ResumeAsync(workspaceId, allowArchive: true, ct);
+
+    private async Task<BillingSuspensionResult> ResumeAsync(
+        Guid workspaceId, bool allowArchive, CancellationToken ct)
     {
         var report = new Report();
 
@@ -418,7 +428,9 @@ public sealed class BillingSuspension(
         // Not reported as a failure. A payment landing on a workspace an operator suspended, or on
         // one that was never suspended at all, is an ordinary thing that happens; the correct
         // response is to leave it exactly as it is.
-        if (workspace.SuspendedReason is not (SuspensionReason.NoBalance or SuspensionReason.SpendLimit))
+        if (allowArchive
+            ? workspace.SuspendedReason != SuspensionReason.Archived
+            : workspace.SuspendedReason is not (SuspensionReason.NoBalance or SuspensionReason.SpendLimit))
             return report.Result(workspace.IsSuspended);
 
         if (workspace.SuspendedReason == SuspensionReason.SpendLimit)

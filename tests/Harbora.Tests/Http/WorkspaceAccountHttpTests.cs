@@ -1,6 +1,7 @@
 using System.Net;
 using FluentAssertions;
 using Harbora.Domain.Common;
+using Harbora.Domain.Identity;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -164,5 +165,50 @@ public sealed class WorkspaceAccountHttpTests(HarboraHttpFixture fixture)
             .Should().Be(nextOwner.Id);
         Panel.Read(db => db.WorkspaceMembers.IgnoreQueryFilters()
             .Single(m => m.WorkspaceId == team.Id && m.UserId == nextOwner.Id).Role).Should().Be(WorkspaceRole.Admin);
+    }
+
+    [Fact]
+    public async Task Owner_can_archive_recover_and_safely_delete_a_team_workspace()
+    {
+        var email = $"lifecycle-{Guid.NewGuid():N}@example.com";
+        var owner = Panel.GivenUser(fixture.WorkspaceId, email, SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.189", email);
+        var token = await client.AntiforgeryTokenFrom("/workspaces");
+        await client.PostFormAsync("/workspaces/create", token, ("name", "Lifecycle Team"));
+        var team = Panel.Read(db => db.Workspaces.IgnoreQueryFilters()
+            .Single(w => w.OwnerUserId == owner.Id && !w.IsPersonal && w.Name == "Lifecycle Team"));
+
+        token = await client.AntiforgeryTokenFrom("/workspaces");
+        var archived = await client.PostFormAsync($"/workspaces/{team.Id}/archive", token,
+            ("confirmation", team.Slug));
+
+        archived.RedirectPath().Should().Be("/workspaces");
+        var afterArchive = Panel.Read(db => db.Workspaces.IgnoreQueryFilters().Single(w => w.Id == team.Id));
+        afterArchive.ArchivedAt.Should().NotBeNull();
+        afterArchive.IsSuspended.Should().BeTrue();
+        afterArchive.SuspendedReason.Should().Be(SuspensionReason.Archived);
+
+        token = await client.AntiforgeryTokenFrom("/workspaces");
+        await client.PostFormAsync($"/workspaces/{team.Id}/recover", token);
+        var recovered = Panel.Read(db => db.Workspaces.IgnoreQueryFilters().Single(w => w.Id == team.Id));
+        recovered.ArchivedAt.Should().BeNull();
+        recovered.IsSuspended.Should().BeFalse();
+
+        token = await client.AntiforgeryTokenFrom("/workspaces");
+        await client.PostFormAsync($"/workspaces/{team.Id}/archive", token, ("confirmation", team.Slug));
+        Panel.Seed(db => db.Workspaces.IgnoreQueryFilters().Single(w => w.Id == team.Id).ArchivedAt = DateTimeOffset.UtcNow.AddHours(-25));
+        token = await client.AntiforgeryTokenFrom("/workspaces");
+        await client.PostFormAsync($"/workspaces/{team.Id}/delete", token, ("confirmation", team.Slug));
+
+        Panel.Read(db => db.Workspaces.IgnoreQueryFilters().Single(w => w.Id == team.Id).DeletedAt)
+            .Should().NotBeNull();
+        // Tombstones deliberately retain membership history, but can no longer be discovered or
+        // selected by the former owner.
+        var list = await client.GetStringAsync("/workspaces");
+        list.Should().NotContain("Lifecycle Team");
+        token = await client.AntiforgeryTokenFrom("/workspaces");
+        var switchDeleted = await client.PostFormAsync("/workspaces/switch", token,
+            ("workspaceId", team.Id.ToString()));
+        switchDeleted.RedirectPath().Should().Be("/account/denied");
     }
 }

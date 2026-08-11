@@ -207,7 +207,8 @@ public sealed class BillingTick(
         // the exact failure this warning exists to prevent, arriving through the container.
         var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
 
-        var workspaces = await db.Workspaces.IgnoreQueryFilters().AsNoTracking().ToListAsync(ct);
+        var workspaces = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
+            .Where(w => w.DeletedAt == null).ToListAsync(ct);
         if (workspaces.Count == 0) return;
 
         var plans = await db.Plans.IgnoreQueryFilters().AsNoTracking().ToListAsync(ct);

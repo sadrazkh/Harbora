@@ -292,7 +292,8 @@ public sealed class AccountController(
     {
         user.LastLoginAt = clock.UtcNow;
         var previousMembership = await db.WorkspaceMembers.IgnoreQueryFilters()
-            .Where(m => m.UserId == user.Id)
+            .Where(m => m.UserId == user.Id
+                && m.Workspace!.ArchivedAt == null && m.Workspace.DeletedAt == null)
             .OrderBy(m => m.CreatedAt)
             .Select(m => new { m.WorkspaceId, m.Role })
             .FirstOrDefaultAsync();

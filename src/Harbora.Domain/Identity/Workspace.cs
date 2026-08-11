@@ -19,6 +19,14 @@ public class Workspace : BaseEntity
     /// </summary>
     public bool IsPersonal { get; set; }
 
+    /// <summary>Soft lifecycle stop. Archived workspaces can be recovered by their owner.</summary>
+    public DateTimeOffset? ArchivedAt { get; set; }
+    public Guid? ArchivedByUserId { get; set; }
+
+    /// <summary>Irreversible from the customer panel; retained as a tombstone for safe cleanup.</summary>
+    public DateTimeOffset? DeletedAt { get; set; }
+    public Guid? DeletedByUserId { get; set; }
+
     /// <summary>Tenancy plan governing this workspace's quotas (null = platform default plan).</summary>
     public Guid? PlanId { get; set; }
 
@@ -68,7 +76,10 @@ public enum SuspensionReason
     NoBalance = 2,
 
     /// <summary>The workspace reached its own hard monthly spend ceiling.</summary>
-    SpendLimit = 3
+    SpendLimit = 3,
+
+    /// <summary>The owner archived the workspace.</summary>
+    Archived = 4
 }
 
 public class WorkspaceMember : BaseEntity

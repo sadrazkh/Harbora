@@ -41,7 +41,8 @@ public sealed class TokenAuthenticationHandler(
         // Same bootstrap as cookie login: establishes the caller's workspace, so it must bypass the
         // workspace filter.
         var membership = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
-            .Where(m => m.UserId == user.Id)
+            .Where(m => m.UserId == user.Id
+                && m.Workspace!.ArchivedAt == null && m.Workspace.DeletedAt == null)
             .OrderByDescending(m => m.Workspace!.IsPersonal)
             .Select(m => new { m.WorkspaceId, m.Role })
             .FirstOrDefaultAsync(Context.RequestAborted);
