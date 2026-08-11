@@ -83,6 +83,7 @@ builder.Services.AddSingleton(sp => new HealthProbe(
     sp.GetRequiredService<TimeProvider>(),
     sp.GetRequiredService<ILogger<HealthProbe>>()));
 builder.Services.AddSingleton<VolumeArchiver>();
+builder.Services.AddSingleton<ArtifactRelayTransfer>();
 builder.Services.AddSingleton<DockerWorkspaceProvisioner>();
 builder.Services.AddSingleton<WorkloadDeployer>();
 builder.Services.AddSingleton<StateReconciler>();
@@ -155,6 +156,7 @@ builder.Services.AddSingleton<INodeCommandHandler, CreateNetworkHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, DeleteNetworkHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, CreateVolumeHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, SnapshotVolumeHandler>();
+builder.Services.AddSingleton<INodeCommandHandler, TransferSnapshotHandler>();
 builder.Services.AddSingleton<INodeCommandHandler, RestoreVolumeHandler>();
 
 builder.Services.AddSingleton<INodeCommandHandler, RegisterHttpRouteHandler>();

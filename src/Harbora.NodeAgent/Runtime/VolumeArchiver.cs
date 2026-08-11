@@ -97,25 +97,48 @@ public sealed partial class VolumeArchiver(
 
         await runtime.EnsureVolumeAsync(volumeName, AgentLabels(), ct);
 
-        // Clear first. Extracting over the existing contents would leave behind whatever the
-        // archive does not mention, which for a database directory is the previous instance's
-        // files mixed into the restored one.
-        var cleared = await RunAsync(
-            ["find", TargetMount, "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+"],
-            [new VolumeMount(volumeName, TargetMount, false)],
-            progress, ct);
+        // Extract first, then swap with same-filesystem renames. If the swap fails halfway the
+        // original tree is moved back before this helper exits.
+        const string restoreScript = """
+            set -e
+            STAGE=/target/.harbora-restore
+            PREV=/target/.harbora-previous
+            rm -rf "$STAGE" "$PREV"
+            mkdir -p "$STAGE"
+            tar "$TAR_FLAGS" "$ARCHIVE" -C "$STAGE"
+            set +e
+            mkdir -p "$PREV"
+            find /target -mindepth 1 -maxdepth 1 ! -name .harbora-restore ! -name .harbora-previous -exec mv {} "$PREV"/ \;
+            moved=$?
+            find "$STAGE" -mindepth 1 -maxdepth 1 -exec mv {} /target/ \;
+            placed=$?
+            if [ $moved -ne 0 ] || [ $placed -ne 0 ]; then
+              find /target -mindepth 1 -maxdepth 1 ! -name .harbora-restore ! -name .harbora-previous -exec rm -rf {} \;
+              find "$PREV" -mindepth 1 -maxdepth 1 -exec mv {} /target/ \;
+              rm -rf "$STAGE" "$PREV"
+              exit 90
+            fi
+            rm -rf "$PREV" "$STAGE"
+            """;
 
-        if (cleared != 0)
-            throw new ArchiveException(NodeErrorCode.VolumeOperationFailed, $"Clearing volume '{volumeName}' exited {cleared}.");
-
-        var tarFlags = compressed ? "-xzf" : "-xf";
-        var extracted = await RunAsync(
-            ["tar", tarFlags, archive, "-C", TargetMount],
+        var restored = await RunAsync(
+            ["sh", "-ec", restoreScript],
             [new VolumeMount(volumeName, TargetMount, false), new VolumeMount(ArchiveVolume, ArchiveMount, ReadOnly: true)],
-            progress, ct);
+            progress, ct,
+            new Dictionary<string, string>
+            {
+                ["TAR_FLAGS"] = compressed ? "-xzf" : "-xf",
+                ["ARCHIVE"] = archive,
+            });
 
-        if (extracted != 0)
-            throw new ArchiveException(NodeErrorCode.VolumeOperationFailed, $"Restoring volume '{volumeName}' exited {extracted}.");
+        if (restored == 90)
+            throw new ArchiveException(
+                NodeErrorCode.VolumeOperationFailed,
+                $"Restoring volume '{volumeName}' failed during the swap; its original contents were put back.");
+        if (restored != 0)
+            throw new ArchiveException(
+                NodeErrorCode.VolumeOperationFailed,
+                $"Restoring volume '{volumeName}' exited {restored}; its live contents were not replaced.");
 
         log.LogInformation("Restored volume {Volume} from snapshot {Snapshot}.", volumeName, snapshotId);
     }
@@ -123,6 +146,26 @@ public sealed partial class VolumeArchiver(
     /// <summary>Path inside the helper container. Not a host path — the archive volume is Docker-managed.</summary>
     internal static string ArchivePathFor(string snapshotId, bool compress) =>
         $"{ArchiveMount}/{snapshotId}.tar{(compress ? ".gz" : string.Empty)}";
+
+    /// <summary>Reads the identity of a staged archive without exposing its Docker volume.</summary>
+    public async Task<(long SizeBytes, string Sha256)> InspectAsync(string snapshotId, bool compress, CancellationToken ct)
+    {
+        Guard("snapshot", snapshotId);
+        var archive = ArchivePath(snapshotId, compress);
+        return (await SizeAsync(archive, ct), await ChecksumAsync(archive, ct));
+    }
+
+    /// <summary>Best-effort cleanup after an archive has safely crossed the relay.</summary>
+    public async Task DeleteSnapshotAsync(string snapshotId, bool compress, CancellationToken ct)
+    {
+        Guard("snapshot", snapshotId);
+        var archive = ArchivePath(snapshotId, compress);
+        var exit = await RunAsync(
+            ["rm", "-f", archive],
+            [new VolumeMount(ArchiveVolume, ArchiveMount, false)], null, ct);
+        if (exit != 0)
+            log.LogWarning("Could not remove staged snapshot {Snapshot}; helper exited {Exit}.", snapshotId, exit);
+    }
 
     private static string ArchivePath(string snapshotId, bool compress) => ArchivePathFor(snapshotId, compress);
 
@@ -133,7 +176,7 @@ public sealed partial class VolumeArchiver(
         var exit = await RunAsync(
             ["sha256sum", archive],
             [new VolumeMount(ArchiveVolume, ArchiveMount, ReadOnly: true)],
-            new Progress<string>(output.Add), ct);
+            new CaptureProgress(output), ct);
 
         if (exit != 0)
             throw new ArchiveException(NodeErrorCode.VolumeOperationFailed, $"Checksumming '{archive}' exited {exit}.");
@@ -153,7 +196,7 @@ public sealed partial class VolumeArchiver(
         var exit = await RunAsync(
             ["stat", "-c", "%s", archive],
             [new VolumeMount(ArchiveVolume, ArchiveMount, ReadOnly: true)],
-            new Progress<string>(output.Add), ct);
+            new CaptureProgress(output), ct);
 
         if (exit != 0) return 0;
 
@@ -162,12 +205,14 @@ public sealed partial class VolumeArchiver(
     }
 
     private Task<int> RunAsync(
-        IReadOnlyList<string> argv, IReadOnlyList<VolumeMount> mounts, IProgress<string>? progress, CancellationToken ct) =>
+        IReadOnlyList<string> argv, IReadOnlyList<VolumeMount> mounts, IProgress<string>? progress,
+        CancellationToken ct, IReadOnlyDictionary<string, string>? env = null) =>
         runtime.RunOneOffAsync(new OneOffRequest
         {
             ImageReference = _options.MaintenanceImage,
             Command = argv,
             Mounts = mounts,
+            Env = env ?? new Dictionary<string, string>(),
             Labels = AgentLabels(),
             Resources = new ResourceLimits { MemoryBytes = 256 * 1024 * 1024, PidsLimit = 64 },
             TimeoutSeconds = 3600,
@@ -178,6 +223,11 @@ public sealed partial class VolumeArchiver(
         [NodeLabels.Managed] = "true",
         [NodeLabels.Tenant] = "harbora-system",
     };
+
+    private sealed class CaptureProgress(List<string> output) : IProgress<string>
+    {
+        public void Report(string value) => output.Add(value);
+    }
 
     /// <summary>
     /// Names reaching a helper's argv must be plain. Even without a shell, a value like

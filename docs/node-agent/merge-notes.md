@@ -68,7 +68,7 @@ The difference between them, for whoever decides when to migrate:
 | Direction | Inbound: the panel connects to port 9700 | Outbound only: the node dials the panel |
 | Firewall | Needs an inbound rule on the customer's server | None |
 | Credential | A static bearer token, optional mTLS | Enrollment token → mTLS certificate, rotated |
-| Command surface | The Docker API, effectively | 24 named verbs, no shell |
+| Command surface | The Docker API, effectively | 25 named verbs, no arbitrary shell |
 | Idempotency | None | Per-command, durable |
 | Replay protection | None | Nonce + freshness window, durable |
 | Rollback on failed health | No | Yes, automatic |
@@ -161,7 +161,6 @@ thing either branch needs and doing it once is less work than doing it twice.
 | Update signature verification | `agentUpdateRequest.signatureBase64` is in the contract; the agent enforces only the SHA-256 today. A checksum protects against corruption and a swapped file, not against a compromised release host | `AgentUpdater.ApplyAsync`, plus a pinned release public key in configuration |
 | Rolling update with >1 replica | `UpgradeMode.RollingUpdate` is accepted and behaves as blue/green, which is correct for a single replica and not yet meaningful for several | `WorkloadDeployer` |
 | Compose stacks | `workloadSpec.composeFile` is carried and validated, but the deployer expands only `containers[]` | `WorkloadDeployer`, reusing the panel's existing compose import |
-| Snapshot shipping | `SnapshotVolume` writes to a node-local Docker volume and returns its checksum; moving it to a backup destination stays a control-plane concern | Control plane |
 | Route publication | The node reports `host:port` for a route; Traefik still lives with the control plane. A node-local proxy is not attempted | Control plane |
 | `RotateDatabaseAccessCredential` overlap | `overlapSeconds` is accepted and logged as unsupported — none of the four engines can hold two live passwords for one user | Contract note; would need a second user per rotation |
 | Metrics endpoint auth | Loopback-only, no authentication. Anyone already on the box can read it — which is the same population that can read the state directory | Fine as is; documented |
@@ -169,9 +168,15 @@ thing either branch needs and doing it once is less work than doing it twice.
 | Ingress tunnel bandwidth | Every request to an app on a tunnelled node passes through the panel. That is the trade the tunnel is, and it is stated on the node page — but a panel serving a busy tunnelled fleet is carrying traffic it does not carry for a direct one | Nothing to fix; capacity planning |
 | Ingress tunnel across panel replicas | `NodeIngressRegistry` is per-instance, like `NodeChannelRegistry`. A node's tunnel lands on one replica, and only that replica's listeners can serve it. Single-instance Harbora is unaffected | The same shared routing layer the command path would need |
 | Building on a v1 node | The contract has no build verb, deliberately: a build context is arbitrary code plus an arbitrary Dockerfile. An app deployed from a Git source cannot be placed on a v1 node, and `NodeWorkloadEngine.BuildImageAsync` refuses by name rather than failing obscurely | Build centrally, push to a registry, let the node pull by digest |
-| Release tasks and volume backups on a v1 node | Both need a one-off container, which is a shell with extra steps and so is not a verb. `RunOneOffAsync` throws `NodeCapabilityException` instead of skipping the task quietly | A narrow `RunReleaseTask` verb whose command comes from the app manifest rather than from the request |
+| Release tasks on a v1 node | A release task needs a one-off container, which is a shell with extra steps and so is not a verb. `RunOneOffAsync` throws `NodeCapabilityException` instead of skipping the task quietly | A narrow `RunReleaseTask` verb whose command comes from the app manifest rather than from the request |
 
-Closed since this table was written: **per-container statistics from a v1 node**. `GetStatsAsync`
+Closed since this table was written: **snapshot shipping and volume backups on a v1 node**. The
+node snapshots into its private archive volume and exchanges the artifact only with its configured
+control plane through a one-use, one-direction bearer ticket. The panel verifies the node checksum,
+then applies its normal encryption and Local/S3/SFTP storage path; destination credentials never
+leave the panel. Restore verifies the checksum before an extract-first, rollback-capable swap.
+
+Also closed: **per-container statistics from a v1 node**. `GetStatsAsync`
 returned null, so the metrics collector had host pressure from the heartbeat and no per-app CPU or
 memory. `GetWorkloadStats` is that verb, added in contract v1.3.0 and dispatched by
 `NodeWorkloadEngine.GetStatsAsync`.

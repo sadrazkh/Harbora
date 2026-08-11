@@ -111,11 +111,11 @@ sequenceDiagram
   loop every 30s
     N->>CP: node.heartbeat (ephemeral)
   end
-  CP->>N: control.command (one of 24 verbs, scoped, idempotency key)
+  CP->>N: control.command (one of 25 verbs, scoped, idempotency key)
   N-->>CP: command.ack → command.progress* → command.result (durable outbox)
 ```
 
-- **24 verbs** (schema-enforced closed enum; conformance test asserts no shell/exec verb exists): Deploy/Update/Stop/Start/Restart/Delete/Status/Stats/List workloads, StreamLogs, Create/Delete network, Create/Snapshot/Restore volume, Create/Revoke/Rotate DB access grant, Register HTTP/TCP route, RemoveRoute, ConfigureIngress, DrainNode, UpdateAgent.
+- **25 verbs** (schema-enforced closed enum; conformance test asserts no shell/exec verb exists): Deploy/Update/Stop/Start/Restart/Delete/Status/Stats/List workloads, StreamLogs, Create/Delete network, Create/Snapshot/Transfer/Restore volume, Create/Revoke/Rotate DB access grant, Register HTTP/TCP route, RemoveRoute, ConfigureIngress, DrainNode, UpdateAgent.
 - **Capability gaps by design:** a v1 node cannot build from Git, run one-off containers, release tasks, volume backups (panel-side engine), or terminals (`NodeWorkloadEngine.cs:123,389,400` throw `NodeCapabilityException`).
 - **Self-update:** SHA-256-verified download, drain-first, marker-before-swap, post-restart version adjudication with automatic rollback to `.previous` binary.
 - **Ingress tunnel (NAT nodes):** one tunnel per node; `Open` frame carries only a 4-byte port; resolver dials `127.0.0.1` and only ports the node itself published; panel binds per-port internal listeners that Traefik targets; ports persisted (`HostPortAllocation.IngressPort`) and rebound on panel restart (`NodeIngressRebinder`). Tested end-to-end over real sockets/mTLS (15 facts).

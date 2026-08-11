@@ -151,6 +151,31 @@ public sealed record SnapshotVolumeResult
     public long DurationMs { get; init; }
 }
 
+public enum SnapshotTransferDirection { UploadToPanel = 0, DownloadFromPanel = 1 }
+
+/// <summary>
+/// Moves a node-local snapshot through a short-lived relay owned by its configured control plane.
+/// The request deliberately contains no arbitrary URL or repository credentials: a node may only
+/// call the panel it enrolled with, and S3/SFTP remain the panel's concern.
+/// </summary>
+public sealed record TransferSnapshotRequest
+{
+    public required string TenantId { get; init; }
+    public required string SnapshotId { get; init; }
+    public required SnapshotTransferDirection Direction { get; init; }
+    public required Guid RelayId { get; init; }
+    public required string RelayToken { get; init; }
+    public long ArtifactSizeBytes { get; init; }
+    public string? ExpectedSha256 { get; init; }
+}
+
+public sealed record TransferSnapshotResult
+{
+    public required string SnapshotId { get; init; }
+    public long SizeBytes { get; init; }
+    public required string Sha256 { get; init; }
+}
+
 /// <summary>Payload of <c>RestoreVolume</c>.</summary>
 public sealed record RestoreVolumeRequest
 {

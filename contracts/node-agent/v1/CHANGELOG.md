@@ -4,6 +4,21 @@ Versioning: the directory name (`v1`) is the **major** version and appears in ev
 changes are recorded here and do not move the directory. A breaking change creates `v2/` and both
 are served until every node has moved.
 
+## v1.4.0 — control-plane artifact relay
+
+Additive. An older node does not advertise the new verb, so the panel must not schedule a remote
+volume backup through it.
+
+- **`TransferSnapshot`** (`volumes:write`) — upload or download one named snapshot through a
+  short-lived relay on the node's configured control plane.
+
+The request carries a one-use, direction-bound relay ticket but no arbitrary URL and no Local,
+S3 or SFTP credentials. Transfers are chunked so a proxied control-plane hostname can carry large
+archives without exceeding a reverse proxy's per-request upload limit. Both sides verify SHA-256
+before the panel stores an artifact or the node replaces a volume.
+
+---
+
 ## v1.3.0 — per-workload resource statistics
 
 Additive. The verb is advertised through `supportedCommands`, which the agent derives from the

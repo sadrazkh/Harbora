@@ -228,7 +228,7 @@ Three things it cannot do, and says so by name rather than pretending:
 | Call | Behaviour |
 |---|---|
 | `BuildImageAsync` | Throws `NodeCapabilityException`. There is no build verb; a build context is arbitrary code plus an arbitrary Dockerfile. Deploy from a prebuilt image or a template |
-| `RunOneOffAsync` | Throws `NodeCapabilityException`. Release tasks and volume backups need it, and "run this container to completion" is a shell with extra steps |
+| `RunOneOffAsync` | Throws `NodeCapabilityException`. Release tasks still need it; backups use the narrow snapshot/restore and artifact-relay verbs instead |
 | `GetStatsAsync` | Returns null, meaning *not measured*. Host pressure still arrives on the heartbeat; a fabricated zero would draw a flat line across a busy container |
 
 `ListContainersAsync` is the opposite case: it **throws** when the node does not answer. An empty
@@ -370,7 +370,7 @@ one that needs the warning next to it about existing routes keeping their upstre
 
 There is deliberately **no** endpoint that forwards an arbitrary command to a node. The node's
 allowlist is what makes a compromised panel survivable, and a passthrough here would move the
-boundary from "twenty-four verbs" to "twenty-four verbs plus whatever that endpoint accepts".
+boundary from "twenty-five verbs" to "twenty-five verbs plus whatever that endpoint accepts".
 
 ---
 

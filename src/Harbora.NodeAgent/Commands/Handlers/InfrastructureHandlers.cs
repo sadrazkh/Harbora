@@ -175,6 +175,34 @@ public sealed class SnapshotVolumeHandler(
     }
 }
 
+/// <summary>Relays a staged snapshot only to or from this node's configured control plane.</summary>
+public sealed class TransferSnapshotHandler(ArtifactRelayTransfer transfer) : INodeCommandHandler
+{
+    public string Command => NodeCommands.TransferSnapshot;
+
+    public async Task<CommandResult> HandleAsync(CommandContext context, CancellationToken ct)
+    {
+        var request = context.Envelope.PayloadAs<TransferSnapshotRequest>();
+        if (request is null)
+            return context.Fail(NodeErrorCode.ValidationFailed, "The payload has no transfer request.");
+        if (CreateNetworkHandler.Mismatch(context, request.TenantId) is { } refusal) return refusal;
+
+        try
+        {
+            await context.ReportAsync("transferring", 50, $"transferring snapshot {request.SnapshotId}", ct);
+            return context.Ok(await transfer.TransferAsync(request, ct));
+        }
+        catch (VolumeArchiver.ArchiveException e)
+        {
+            return context.Fail(e.Code, e.Message, retryable: e.Code == NodeErrorCode.VolumeOperationFailed);
+        }
+        catch (ContainerRuntimeException e)
+        {
+            return context.Fail(e.Code, e.Message, e.Retryable);
+        }
+    }
+}
+
 /// <summary>Restores a volume from an archive, verifying the checksum before writing anything.</summary>
 public sealed class RestoreVolumeHandler(
     WorkloadRegistry registry, WorkloadDeployer deployer, VolumeArchiver archiver, ILogger<RestoreVolumeHandler> log)
@@ -213,6 +241,8 @@ public sealed class RestoreVolumeHandler(
                 await archiver.RestoreAsync(
                     request.VolumeName, request.SnapshotId, request.ExpectedSha256,
                     compressed: true, context.ProgressLines("restoring", ct), ct);
+
+                await archiver.DeleteSnapshotAsync(request.SnapshotId, compress: true, CancellationToken.None);
 
                 return context.Ok(new AcknowledgedResult { Applied = true, Detail = $"restored from {request.SnapshotId}" });
             }

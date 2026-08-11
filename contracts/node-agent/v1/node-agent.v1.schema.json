@@ -35,7 +35,7 @@
         "DeployWorkload", "UpdateWorkload", "StopWorkload", "StartWorkload", "RestartWorkload",
         "DeleteWorkload", "GetWorkloadStatus", "GetWorkloadStats", "ListWorkloads", "StreamLogs",
         "CreateNetwork", "DeleteNetwork",
-        "CreateVolume", "SnapshotVolume", "RestoreVolume",
+        "CreateVolume", "SnapshotVolume", "TransferSnapshot", "RestoreVolume",
         "CreateDatabaseAccessGrant", "RevokeDatabaseAccessGrant", "RotateDatabaseAccessCredential",
         "RegisterHttpRoute", "RegisterTcpRoute", "RemoveRoute", "ConfigureIngress",
         "DrainNode", "UpdateAgent"

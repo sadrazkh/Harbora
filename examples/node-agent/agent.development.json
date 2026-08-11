@@ -26,6 +26,7 @@
     "DataDirectory": "/tmp/harbora-node-dev",
     "DockerHost": "unix:///var/run/docker.sock",
     "MaintenanceImage": "docker.io/library/busybox:1.36",
+    "ArtifactTransferImage": "docker.io/curlimages/curl:8.10.1",
 
     "HeartbeatIntervalSeconds": 10,
     "MaxConcurrentCommands": 2,

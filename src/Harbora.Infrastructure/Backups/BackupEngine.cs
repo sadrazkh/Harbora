@@ -29,11 +29,9 @@ namespace Harbora.Infrastructure.Backups;
 ///
 /// <para>
 /// Resolving the host is only half of it, because the helper and the panel have to share the staging
-/// volume: the helper writes into <see cref="BackupOptions.StagingVolume"/> by name on its own host
-/// and the panel reads <see cref="BackupOptions.StagingDir"/> here. Those are the same disk on one
-/// machine and never on two, so an archive taken anywhere else cannot be brought back — and until a
-/// transport exists (HARBORA-0034), <see cref="RequireCapableHost"/> refuses in front of the work
-/// rather than letting it half-happen on a machine nothing here can see.
+/// volume. Enrolled v1 nodes use their narrow snapshot verbs and a one-use HTTPS relay back to this
+/// panel; storage credentials remain here. The legacy inbound agent still has no artifact transport,
+/// so <see cref="RequireCapableHost"/> refuses it before any helper starts.
 /// </para>
 /// </summary>
 public sealed class BackupEngine(
@@ -47,10 +45,12 @@ public sealed class BackupEngine(
     ISystemClock clock,
     IOptions<BackupOptions> options,
     IOptions<Deployments.HarboraRuntimeOptions> runtime,
-    ILogger<BackupEngine> logger) : IBackupEngine
+    ILogger<BackupEngine> logger,
+    ArtifactRelayRegistry? relays = null) : IBackupEngine
 {
     private readonly BackupOptions _opt = options.Value;
     private readonly Deployments.HarboraRuntimeOptions _runtime = runtime.Value;
+    private readonly ArtifactRelayRegistry _relays = relays ?? new ArtifactRelayRegistry(TimeProvider.System);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
 
     public async Task<Guid> QueueBackupAsync(Guid workspaceId, BackupType type, string targetRef, Guid destinationId, bool scheduled, CancellationToken ct)
@@ -104,13 +104,14 @@ public sealed class BackupEngine(
             // The time, then this run's own identity — see BackupRunIdentity.StampFor for why the
             // second half exists and why the calendar is pinned.
             var stamp = BackupRunIdentity.StampFor(clock.UtcNow, backup.Id);
-            var (key, stagedPath) = backup.Type switch
+            var nodeArtifact = await TryBackupNodeAsync(backup, stamp, ct);
+            var (key, stagedPath) = nodeArtifact ?? (backup.Type switch
             {
                 BackupType.AppConfig => await BackupAppConfigAsync(backup, stamp, ct),
                 BackupType.FullPlatform => await BackupPlatformAsync(backup, stamp, ct),
                 BackupType.Database or BackupType.Service => await BackupDatabaseAsync(backup, stamp, ct),
                 _ => await BackupVolumeAsync(backup, stamp, ct)
-            };
+            });
 
             // Encrypt before the artifact leaves staging. The checksum is taken over the file we
             // actually store, so verification can detect corruption in transit or at rest without
@@ -276,6 +277,42 @@ public sealed class BackupEngine(
         return (key, staged);
     }
 
+    private async Task<(string Key, string Path)?> TryBackupNodeAsync(
+        Backup backup, string stamp, CancellationToken ct)
+    {
+        if (backup.Type is BackupType.AppConfig or BackupType.FullPlatform) return null;
+
+        var host = await HostForAsync(backup.Type, backup.TargetRef, ct);
+        if (host.Docker is not Nodes.NodeWorkloadEngine node) return null;
+
+        var (volumeName, label) = await ResolveVolumeAsync(backup.Type, backup.TargetRef, ct);
+        var key = $"{backup.Type.ToString().ToLowerInvariant()}-{label}-{stamp}.tgz";
+        var staged = Path.Combine(_opt.StagingDir, key);
+        var snapshotId = backup.Id.ToString("n");
+        var workloadId = await ContainerForTargetAsync(backup.Type, backup.TargetRef, ct);
+        var relay = _relays.CreateUpload(staged);
+
+        try
+        {
+            var result = await node.SnapshotToPanelAsync(volumeName, workloadId, snapshotId, relay, ct);
+            if (!File.Exists(staged))
+                throw new InvalidOperationException("The node reported a completed transfer, but no artifact reached the panel.");
+
+            var actual = await Sha256Async(staged, ct);
+            if (!actual.Equals(result.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"The relayed artifact checksum is {actual}, but node reported {result.Sha256}.");
+            if (result.SizeBytes > 0 && new FileInfo(staged).Length != result.SizeBytes)
+                throw new InvalidOperationException("The relayed artifact size differs from the node snapshot.");
+
+            return (key, staged);
+        }
+        finally
+        {
+            _relays.Revoke(relay.Id);
+        }
+    }
+
     // --- restore ---
 
     public async Task RestoreAsync(Guid backupId, CancellationToken ct)
@@ -324,11 +361,29 @@ public sealed class BackupEngine(
         // Volume restore: stop the container, wipe + untar the volume, restart.
         var (volumeName, _) = await ResolveVolumeAsync(backup.Type, backup.TargetRef, ct);
 
+        var host = await HostForAsync(backup.Type, backup.TargetRef, ct);
+        if (host.Docker is Nodes.NodeWorkloadEngine node)
+        {
+            var snapshotId = $"restore-{backup.Id:n}";
+            var checksum = await Sha256Async(localPath, ct);
+            var workloadId = await ContainerForTargetAsync(backup.Type, backup.TargetRef, ct);
+            var relay = _relays.CreateDownload(localPath);
+            try
+            {
+                await node.RestoreFromPanelAsync(
+                    volumeName, workloadId, snapshotId, checksum, new FileInfo(localPath).Length, relay, ct);
+                return;
+            }
+            finally
+            {
+                _relays.Revoke(relay.Id);
+            }
+        }
+
         // Asked before anything is stopped, and long before anything is wiped. A host that cannot run
         // the helper has to end the restore while the current container is still serving — the
         // refusal is worth nothing if it arrives after the container is down.
-        var docker = RequireCapableHost(
-            await HostForAsync(backup.Type, backup.TargetRef, ct), "have a volume restored into it");
+        var docker = RequireCapableHost(host, "have a volume restored into it");
 
         var fileName = Path.GetFileName(localPath);
         var stagedCopy = Path.Combine(_opt.StagingDir, fileName);
@@ -922,12 +977,6 @@ public sealed class BackupEngine(
     /// job through — for either of the two quite different reasons it cannot.
     ///
     /// <para>
-    /// <b>A v1 node</b> has no verb for running a container to completion — that is a shell with
-    /// extra steps, and the contract withholds it deliberately. Dispatching the node's own
-    /// SnapshotVolume and RestoreVolume verbs is a later phase (HARBORA-0034).
-    /// </para>
-    ///
-    /// <para>
     /// <b>Any other machine that is not this one</b> — the older inbound HTTP agent — is the more
     /// dangerous case precisely because it refuses nothing. It runs the helper exactly as asked, and
     /// the helper reads and writes through <see cref="BackupOptions.StagingVolume"/> <em>by name on
@@ -940,19 +989,12 @@ public sealed class BackupEngine(
     /// </para>
     ///
     /// <para>
-    /// Both refusals are raised before any helper starts, so both can promise the same thing about
-    /// the state of the world — and mean it.
+    /// The refusal is raised before any helper starts, so it can promise that nothing was left on
+    /// the remote host.
     /// </para>
     /// </summary>
     private static IDockerEngine RequireCapableHost(BackupHost host, string work)
     {
-        if (Nodes.NodeWorkloadEngine.NodeBehind(host.Docker) is { } nodeId)
-            throw new InvalidOperationException(
-                $"{host.Subject} runs on node {nodeId}, which cannot {work} yet: a v1 node offers no way " +
-                "to run the helper container this needs, and Harbora will not read this panel's own disk " +
-                "instead. Nothing was read and nothing was written. The panel will dispatch the node's " +
-                "own volume snapshots in a later phase.");
-
         if (host.Machine is { } elsewhere)
             throw new InvalidOperationException(
                 $"{host.Subject} runs on {elsewhere}, which cannot {work} yet: the helper container " +

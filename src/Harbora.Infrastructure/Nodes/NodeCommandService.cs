@@ -76,7 +76,8 @@ public sealed class NodeCommandService(
         TimeSpan? timeout = null,
         string? sourceIp = null,
         string? tenantScope = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool redactPayload = false)
     {
         if (!NodeCommandCatalog.TryGet(command, out var descriptor))
             throw new ArgumentException($"'{command}' is not a node command.", nameof(command));
@@ -132,7 +133,7 @@ public sealed class NodeCommandService(
             CorrelationId = envelope.CorrelationId,
             Nonce = envelope.Nonce,
             RequiredScope = descriptor.RequiredScope,
-            PayloadJson = envelope.Payload.GetRawText(),
+            PayloadJson = redactPayload ? "{\"redacted\":true}" : envelope.Payload.GetRawText(),
             Status = NodeCommandStatus.Queued,
             IssuedAt = envelope.IssuedAt,
             TimeoutSeconds = envelope.TimeoutSeconds ?? 0,

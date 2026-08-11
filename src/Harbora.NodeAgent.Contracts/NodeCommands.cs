@@ -24,6 +24,7 @@ public static class NodeCommands
 
     public const string CreateVolume = "CreateVolume";
     public const string SnapshotVolume = "SnapshotVolume";
+    public const string TransferSnapshot = "TransferSnapshot";
     public const string RestoreVolume = "RestoreVolume";
 
     public const string CreateDatabaseAccessGrant = "CreateDatabaseAccessGrant";
@@ -93,6 +94,7 @@ public static class NodeCommandCatalog
 
             [NodeCommands.CreateVolume] = new(NodeCommands.CreateVolume, NodeScopes.VolumesWrite, 120, true),
             [NodeCommands.SnapshotVolume] = new(NodeCommands.SnapshotVolume, NodeScopes.VolumesWrite, 3600, true),
+            [NodeCommands.TransferSnapshot] = new(NodeCommands.TransferSnapshot, NodeScopes.VolumesWrite, 3600, true),
             [NodeCommands.RestoreVolume] = new(NodeCommands.RestoreVolume, NodeScopes.VolumesWrite, 3600, true),
 
             [NodeCommands.CreateDatabaseAccessGrant] = new(NodeCommands.CreateDatabaseAccessGrant, NodeScopes.DatabaseAccessWrite, 300, true),

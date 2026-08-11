@@ -3,6 +3,7 @@ using Harbora.Application.Abstractions;
 using Harbora.NodeAgent.Contracts;
 using Microsoft.Extensions.Logging;
 using NodeContracts = Harbora.NodeAgent.Contracts;
+using Harbora.Infrastructure.Backups;
 
 namespace Harbora.Infrastructure.Nodes;
 
@@ -11,7 +12,7 @@ namespace Harbora.Infrastructure.Nodes;
 ///
 /// <para>
 /// The pipeline speaks <see cref="IDockerEngine"/> — pull, run, list, remove — because that is what
-/// the local engine and the old inbound agent both are. A v1 node speaks twenty-two named verbs and
+/// the local engine and the old inbound agent both are. A v1 node speaks twenty-five named verbs and
 /// deliberately does not offer a Docker API, so this class is the translation between the two.
 /// </para>
 ///
@@ -404,6 +405,109 @@ public sealed class NodeWorkloadEngine(
         return Task.CompletedTask;
     }
 
+    /// <summary>Snapshots a node volume and uploads it through a one-use panel relay.</summary>
+    public async Task<TransferSnapshotResult> SnapshotToPanelAsync(
+        string volumeName,
+        string? quiesceWorkloadId,
+        string snapshotId,
+        ArtifactRelayTicket relay,
+        CancellationToken ct)
+    {
+        if (commands is null)
+            throw new InvalidOperationException($"Node {nodeId} has no available backup command channel.");
+
+        var snapshot = await commands.SendAsync(
+            nodeId, NodeContracts.NodeCommands.SnapshotVolume,
+            new SnapshotVolumeRequest
+            {
+                TenantId = PlatformTenant,
+                VolumeName = volumeName,
+                SnapshotId = snapshotId,
+                QuiesceWorkloadId = quiesceWorkloadId,
+                Compress = true,
+            },
+            idempotencyKey: $"backup:snapshot:{snapshotId}",
+            reason: $"snapshot {volumeName} for backup",
+            tenantScope: PlatformTenant,
+            ct: ct);
+        if (!snapshot.Succeeded)
+            throw new NodeCommandFailedException(nodeId, NodeContracts.NodeCommands.SnapshotVolume, snapshot);
+
+        var expected = snapshot.ResultAs<SnapshotVolumeResult>()
+            ?? throw new NodeCommandFailedException(nodeId, NodeContracts.NodeCommands.SnapshotVolume, snapshot);
+
+        var transferred = await commands.SendAsync(
+            nodeId, NodeContracts.NodeCommands.TransferSnapshot,
+            new TransferSnapshotRequest
+            {
+                TenantId = PlatformTenant,
+                SnapshotId = snapshotId,
+                Direction = SnapshotTransferDirection.UploadToPanel,
+                RelayId = relay.Id,
+                RelayToken = relay.Token,
+            },
+            idempotencyKey: $"backup:upload:{snapshotId}:{relay.Id:n}",
+            reason: $"relay backup snapshot {snapshotId} to panel",
+            tenantScope: PlatformTenant,
+            ct: ct,
+            redactPayload: true);
+        if (!transferred.Succeeded)
+            throw new NodeCommandFailedException(nodeId, NodeContracts.NodeCommands.TransferSnapshot, transferred);
+
+        var result = transferred.ResultAs<TransferSnapshotResult>()
+            ?? throw new NodeCommandFailedException(nodeId, NodeContracts.NodeCommands.TransferSnapshot, transferred);
+        if (!result.Sha256.Equals(expected.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Node snapshot checksum changed during relay ({expected.Sha256} -> {result.Sha256}).");
+        return result;
+    }
+
+    /// <summary>Downloads, verifies and restores a panel artifact through a one-use relay.</summary>
+    public async Task RestoreFromPanelAsync(
+        string volumeName,
+        string? quiesceWorkloadId,
+        string snapshotId,
+        string expectedSha256,
+        long artifactSizeBytes,
+        ArtifactRelayTicket relay,
+        CancellationToken ct)
+    {
+        if (commands is null)
+            throw new InvalidOperationException($"Node {nodeId} has no available restore command channel.");
+
+        var transferred = await commands.SendAsync(
+            nodeId, NodeContracts.NodeCommands.TransferSnapshot,
+            new TransferSnapshotRequest
+            {
+                TenantId = PlatformTenant,
+                SnapshotId = snapshotId,
+                Direction = SnapshotTransferDirection.DownloadFromPanel,
+                RelayId = relay.Id,
+                RelayToken = relay.Token,
+                ArtifactSizeBytes = artifactSizeBytes,
+                ExpectedSha256 = expectedSha256,
+            },
+            idempotencyKey: $"restore:download:{snapshotId}:{relay.Id:n}",
+            reason: $"relay restore snapshot {snapshotId} from panel",
+            tenantScope: PlatformTenant,
+            ct: ct,
+            redactPayload: true);
+        if (!transferred.Succeeded)
+            throw new NodeCommandFailedException(nodeId, NodeContracts.NodeCommands.TransferSnapshot, transferred);
+
+        await SendAsync(
+            NodeContracts.NodeCommands.RestoreVolume,
+            new RestoreVolumeRequest
+            {
+                TenantId = PlatformTenant,
+                VolumeName = volumeName,
+                SnapshotId = snapshotId,
+                ExpectedSha256 = expectedSha256,
+                QuiesceWorkloadId = quiesceWorkloadId,
+            },
+            $"restore:volume:{snapshotId}", ct);
+    }
+
     public Task ConnectNetworkAsync(string containerNameOrId, string network, CancellationToken ct)
     {
         // The panel's proxy and the panel itself run on a different machine. Attaching them to a
@@ -424,7 +528,8 @@ public sealed class NodeWorkloadEngine(
             "run a one-off container",
             "A v1 node has no verb for running an arbitrary container to completion — that is a shell " +
             "with extra steps, and the contract withholds it on purpose. Release tasks and volume " +
-            "backups for an app on a v1 node are not supported yet; see docs/node-agent/merge-notes.md.");
+            "inspection helpers are not supported; backups use dedicated snapshot and artifact-relay " +
+            "verbs instead. See docs/node-agent/merge-notes.md.");
 
     // --- host ---
 

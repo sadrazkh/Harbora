@@ -100,6 +100,7 @@ which is what `systemctl edit harbora-node-agent` is for.
     "HeartbeatIntervalSeconds": 30,
     "MaxConcurrentCommands": 4,
     "MaintenanceImage": "docker.io/library/busybox:1.36",
+    "ArtifactTransferImage": "docker.io/curlimages/curl:8.10.1",
     "Ports": { "Start": 30000, "End": 32767 },
     "Metrics": { "Enabled": true, "BindAddress": "127.0.0.1", "Port": 9701 },
     "Security": {
@@ -117,6 +118,9 @@ Settings worth knowing about:
   a property of the install rather than a default.
 - **`MaintenanceImage`** is the image used for the agent's own helper containers (volume archiving,
   checksums). Pin it by digest in production: `repo@sha256:…`.
+- **`ArtifactTransferImage`** supplies curl for the one-use HTTPS backup relay. It can contact only
+  the configured `ControlPlaneUrl`; object-storage and SFTP credentials stay in the panel. Pin this
+  image by digest in production too.
 - **`Ports`** is the range host ports are allocated from for workloads that must be reachable across
   nodes. Ports below 1024 are refused.
 

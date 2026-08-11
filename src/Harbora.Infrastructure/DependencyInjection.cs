@@ -143,6 +143,7 @@ public static class DependencyInjection
 
         // Backups (config + volume/db), storage (local + S3), and the schedule runner.
         services.Configure<Backups.BackupOptions>(config.GetSection("Backups"));
+        services.AddSingleton<Backups.ArtifactRelayRegistry>();
         services.Configure<Terminals.TerminalFeatureOptions>(
             config.GetSection(Terminals.TerminalFeatureOptions.SectionName));
         // BackupStorage executes SFTP transfers through IDockerEngine, which is scoped because its

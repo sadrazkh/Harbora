@@ -70,7 +70,7 @@ payload it has not already decided it is willing to act on.
 
 ### There is no remote shell
 
-The catalog has twenty-four verbs and none of them executes a command supplied by the caller. The
+The catalog has twenty-five verbs and none of them executes a command supplied by the caller. The
 contract test `Allowlist_contains_no_arbitrary_execution_verb` asserts this rather than trusting it
 to stay true.
 

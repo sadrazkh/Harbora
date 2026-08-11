@@ -54,6 +54,8 @@ public sealed class NodeAgentOptions
     /// </para>
     /// </summary>
     public string MaintenanceImage { get; set; } = "docker.io/library/busybox:1.36";
+    /// <summary>Small HTTP helper used only to exchange snapshots with the configured control plane.</summary>
+    public string ArtifactTransferImage { get; set; } = "docker.io/curlimages/curl:8.10.1";
 
     /// <summary>
     /// TCP gateway to dial for database tunnels, as <c>host:port</c>. Normally supplied by the
@@ -109,6 +111,9 @@ public sealed class NodeAgentOptions
 
         if (string.IsNullOrWhiteSpace(NodeName))
             problems.Add("NodeName is required.");
+
+        if (string.IsNullOrWhiteSpace(ArtifactTransferImage))
+            problems.Add("ArtifactTransferImage is required.");
 
         if (HeartbeatIntervalSeconds is < 5 or > 600)
             problems.Add("HeartbeatIntervalSeconds must be between 5 and 600.");

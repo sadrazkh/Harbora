@@ -538,6 +538,54 @@ public sealed class CommandHandlerTests : IDisposable
             "nothing beyond the checksum should have run");
     }
 
+    [Fact]
+    public async Task Snapshot_relay_can_only_call_the_configured_panel_and_redacts_its_token()
+    {
+        var archiver = new VolumeArchiver(_agent.Wrapped, _runtime, _clock, TestFactories.Log<VolumeArchiver>());
+        var redactor = new SecretRedactor();
+        var transfer = new ArtifactRelayTransfer(_runtime, archiver, redactor, _agent.Wrapped);
+        var token = new string('a', 64);
+        var relayId = Guid.Parse("11111111-2222-3333-4444-555555555555");
+
+        var result = await transfer.TransferAsync(new TransferSnapshotRequest
+        {
+            TenantId = "tenant-1",
+            SnapshotId = "snap-1",
+            Direction = SnapshotTransferDirection.UploadToPanel,
+            RelayId = relayId,
+            RelayToken = token,
+        }, CancellationToken.None);
+
+        var curl = _runtime.OneOffs.First(o => o.Command.FirstOrDefault() == "sh");
+        curl.Env["RELAY_URL"].Should().Be("https://panel.test/api/node-artifacts/11111111-2222-3333-4444-555555555555");
+        string.Join(' ', curl.Command).Should().NotContain(token);
+        redactor.Redact($"Bearer {token}").Should().NotContain(token);
+        result.Sha256.Should().Be(_runtime.HelperChecksum);
+        _runtime.PulledImages.Should().Contain(_agent.Options.ArtifactTransferImage);
+    }
+
+    [Fact]
+    public async Task A_corrupt_relay_download_is_deleted_before_restore_can_start()
+    {
+        var archiver = new VolumeArchiver(_agent.Wrapped, _runtime, _clock, TestFactories.Log<VolumeArchiver>());
+        var transfer = new ArtifactRelayTransfer(_runtime, archiver, new SecretRedactor(), _agent.Wrapped);
+
+        var act = async () => await transfer.TransferAsync(new TransferSnapshotRequest
+        {
+            TenantId = "tenant-1",
+            SnapshotId = "snap-2",
+            Direction = SnapshotTransferDirection.DownloadFromPanel,
+            RelayId = Guid.NewGuid(),
+            RelayToken = new string('b', 64),
+            ArtifactSizeBytes = 4096,
+            ExpectedSha256 = new string('f', 64),
+        }, CancellationToken.None);
+
+        await act.Should().ThrowAsync<VolumeArchiver.ArchiveException>();
+        _runtime.OneOffs.Should().Contain(o =>
+            o.Command.SequenceEqual(new[] { "rm", "-f", "/snapshots/snap-2.tar.gz" }));
+    }
+
     public void Dispose() => _agent.Dispose();
 
     private sealed class NullEvents : INodeEventPublisher
