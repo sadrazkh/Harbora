@@ -10,12 +10,25 @@ public enum MailResourceStatus
     Disabled = 3
 }
 
+public enum MailDomainMode
+{
+    Managed = 0,
+    External = 1
+}
+
 public sealed class MailDomain : BaseEntity
 {
     public Guid WorkspaceId { get; set; }
-    public Guid MailServerId { get; set; }
+    public Guid? MailServerId { get; set; }
+    public MailDomainMode Mode { get; set; } = MailDomainMode.Managed;
     public string Domain { get; set; } = string.Empty;
     public string? ProviderObjectId { get; set; }
+    public string? ExternalProviderName { get; set; }
+    public string? ExternalAdminUrl { get; set; }
+    public string? ExternalImapHost { get; set; }
+    public int? ExternalImapPort { get; set; }
+    public string? ExternalSmtpHost { get; set; }
+    public int? ExternalSmtpPort { get; set; }
     public string? DnsZone { get; set; }
     public MailResourceStatus Status { get; set; } = MailResourceStatus.Provisioning;
     public string? LastError { get; set; }

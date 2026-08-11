@@ -181,6 +181,10 @@ public class HarboraDbContext : DbContext
         {
             e.Property(x => x.Domain).HasMaxLength(253).IsRequired();
             e.Property(x => x.ProviderObjectId).HasMaxLength(128);
+            e.Property(x => x.ExternalProviderName).HasMaxLength(128);
+            e.Property(x => x.ExternalAdminUrl).HasMaxLength(512);
+            e.Property(x => x.ExternalImapHost).HasMaxLength(253);
+            e.Property(x => x.ExternalSmtpHost).HasMaxLength(253);
             e.Property(x => x.DnsZone).HasMaxLength(8192);
             e.Property(x => x.LastError).HasMaxLength(2048);
             e.HasIndex(x => x.Domain).IsUnique();

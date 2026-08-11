@@ -28,10 +28,14 @@ public sealed class MailController(
     {
         ViewData["Title"] = IsFa ? "ایمیل" : "Email";
         var canManage = (await authorization.AuthorizeAsync(User, Capabilities.PlatformManage)).Succeeded;
+        var server = await db.MailServers.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(x => x.IsActive, ct);
+        var origin = server is null ? null : await db.Servers.IgnoreQueryFilters().AsNoTracking()
+            .Where(x => x.Id == server.ServerId).Select(x => x.Hostname).FirstOrDefaultAsync(ct);
         return View(new MailPageViewModel
         {
-            Server = await db.MailServers.IgnoreQueryFilters().AsNoTracking()
-                .FirstOrDefaultAsync(x => x.IsActive, ct),
+            Server = server,
+            MailOriginHost = origin,
             Domains = await db.MailDomains.Include(x => x.Mailboxes)
                 .Where(x => x.WorkspaceId == WorkspaceId)
                 .OrderBy(x => x.Domain).ToListAsync(ct),
@@ -111,6 +115,33 @@ public sealed class MailController(
             var result = await mail.CreateDomainAsync(WorkspaceId, domain, ct);
             TempData[result.Ok ? "Message" : "Error"] = result.Ok
                 ? (IsFa ? "دامنه ایمیل ساخته شد. رکوردهای DNS پایین صفحه را تنظیم کنید." : "Mail domain created. Configure the DNS records shown below.")
+                : result.Error;
+        }
+        catch (CreationPaymentRequiredException ex)
+        {
+            TempData["Error"] = IsFa ? ex.ReasonFa : ex.Message;
+        }
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost("domains/external")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> ConnectExternalDomain(
+        string domain, string providerName, string mxHost, int mxPriority,
+        string? spfValue, string? dkimName, string? dkimValue, string? dmarcValue,
+        string? imapHost, int? imapPort, string? smtpHost, int? smtpPort,
+        string? adminUrl, string? additionalDnsRecords, CancellationToken ct)
+    {
+        try
+        {
+            var result = await mail.CreateExternalDomainAsync(
+                WorkspaceId, domain, providerName, mxHost, mxPriority, spfValue, dkimName,
+                dkimValue, dmarcValue, imapHost, imapPort, smtpHost, smtpPort, adminUrl,
+                additionalDnsRecords, ct);
+            TempData[result.Ok ? "Message" : "Error"] = result.Ok
+                ? (IsFa ? "دامنه به سرویس ایمیل ثالث متصل شد؛ رکوردهای زیر را در DNS ثبت کنید."
+                    : "External email domain connected; publish the DNS records below.")
                 : result.Error;
         }
         catch (CreationPaymentRequiredException ex)

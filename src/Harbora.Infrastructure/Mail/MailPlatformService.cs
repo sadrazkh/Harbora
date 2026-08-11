@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
@@ -25,6 +26,9 @@ public sealed class MailPlatformService(
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex LocalPattern = new(
         "^[a-z0-9](?:[a-z0-9.!#$%&'*+/=?^_`{|}~-]{0,62}[a-z0-9])?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex DnsOwnerPattern = new(
+        "^(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\\.)*[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public async Task<MailOperationResult> ProvisionAsync(
@@ -199,19 +203,98 @@ public sealed class MailPlatformService(
         }
     }
 
+    public async Task<MailOperationResult> CreateExternalDomainAsync(
+        Guid workspaceId, string name, string providerName, string mxHost, int mxPriority,
+        string? spfValue, string? dkimName, string? dkimValue, string? dmarcValue,
+        string? imapHost, int? imapPort, string? smtpHost, int? smtpPort,
+        string? adminUrl, string? additionalDnsRecords, CancellationToken ct)
+    {
+        name = NormalizeDomain(name);
+        mxHost = NormalizeDomain(mxHost);
+        imapHost = NormalizeOptionalHost(imapHost);
+        smtpHost = NormalizeOptionalHost(smtpHost);
+        providerName = (providerName ?? "").Trim();
+
+        if (!DomainPattern.IsMatch(name)) return new(false, Error: "Enter a valid domain name.");
+        if (providerName.Length is < 1 or > 128)
+            return new(false, Error: "Enter the external email provider name.");
+        if (!DomainPattern.IsMatch(mxHost)) return new(false, Error: "Enter a valid MX hostname.");
+        if (mxPriority is < 0 or > 65535) return new(false, Error: "MX priority must be between 0 and 65535.");
+        if (!ValidOptionalPort(imapPort) || !ValidOptionalPort(smtpPort))
+            return new(false, Error: "IMAP and SMTP ports must be between 1 and 65535.");
+        if ((imapHost is not null && !DomainPattern.IsMatch(imapHost)) ||
+            (smtpHost is not null && !DomainPattern.IsMatch(smtpHost)))
+            return new(false, Error: "Enter valid IMAP and SMTP hostnames.");
+        if (!ValidDnsText(spfValue, 2048) || !ValidDnsText(dkimName, 253) ||
+            !ValidDnsText(dkimValue, 4096) || !ValidDnsText(dmarcValue, 2048))
+            return new(false, Error: "DNS values contain an invalid newline or are too long.");
+        if (!ValidMultilineText(additionalDnsRecords, 4096))
+            return new(false, Error: "Additional provider DNS records are too long or contain an invalid control character.");
+        if (!string.IsNullOrWhiteSpace(dkimName) &&
+            !DnsOwnerPattern.IsMatch(dkimName.Trim().TrimEnd('.')))
+            return new(false, Error: "Enter a valid DKIM record name, such as selector._domainkey.");
+        if (!string.IsNullOrWhiteSpace(adminUrl) &&
+            (!Uri.TryCreate(adminUrl.Trim(), UriKind.Absolute, out var portal) || portal.Scheme != "https"))
+            return new(false, Error: "The provider portal must be an absolute HTTPS URL.");
+
+        await using var reservation = await quotas.AcquireCreationLockAsync(workspaceId, ct);
+        if (await db.MailDomains.IgnoreQueryFilters().AnyAsync(x => x.Domain == name, ct))
+            return new(false, Error: "This mail domain is already registered.");
+
+        var zone = new StringBuilder().AppendLine($"{name}. 3600 IN MX {mxPriority} {mxHost}.");
+        AppendTxt(zone, name + ".", spfValue);
+        if (!string.IsNullOrWhiteSpace(dkimName) && !string.IsNullOrWhiteSpace(dkimValue))
+        {
+            var owner = dkimName!.Trim().TrimEnd('.');
+            if (!owner.EndsWith(name, StringComparison.OrdinalIgnoreCase)) owner += "." + name;
+            AppendTxt(zone, owner + ".", dkimValue);
+        }
+        AppendTxt(zone, "_dmarc." + name + ".", dmarcValue);
+        if (!string.IsNullOrWhiteSpace(additionalDnsRecords))
+            zone.AppendLine("; Additional records supplied by the external provider")
+                .AppendLine(additionalDnsRecords.Trim());
+        if (zone.Length > 8192)
+            return new(false, Error: "The combined provider DNS instructions are too long.");
+
+        var row = new MailDomain
+        {
+            WorkspaceId = workspaceId,
+            Mode = MailDomainMode.External,
+            Domain = name,
+            ExternalProviderName = providerName,
+            ExternalAdminUrl = string.IsNullOrWhiteSpace(adminUrl) ? null : adminUrl.Trim(),
+            ExternalImapHost = imapHost,
+            ExternalImapPort = imapHost is null ? null : imapPort ?? 993,
+            ExternalSmtpHost = smtpHost,
+            ExternalSmtpPort = smtpHost is null ? null : smtpPort ?? 465,
+            DnsZone = zone.ToString().TrimEnd(),
+            Status = MailResourceStatus.Ready,
+            RatePerHourMinor = 0
+        };
+        db.MailDomains.Add(row);
+        // A third-party domain has a zero Harbora rate, but still passes the same funded-account
+        // gate as every other resource. Zero balance must not become a back door around tenancy.
+        await creationBilling.SaveAsync(workspaceId,
+            [new(BilledResourceType.MailDomain, row.Id, name, null, 0)], ct);
+        await reservation.CommitAsync(ct);
+        return new(true);
+    }
+
     public async Task<MailOperationResult> CreateMailboxAsync(
         Guid workspaceId, Guid domainId, string localPart, string displayName, long quotaMb, CancellationToken ct)
     {
         localPart = localPart.Trim().ToLowerInvariant();
         if (!LocalPattern.IsMatch(localPart)) return new(false, Error: "Enter a valid mailbox name.");
         await using var reservation = await quotas.AcquireCreationLockAsync(workspaceId, ct);
+        var domain = await db.MailDomains.FirstOrDefaultAsync(
+            d => d.Id == domainId && d.WorkspaceId == workspaceId && d.Status == MailResourceStatus.Ready, ct);
+        if (domain?.Mode == MailDomainMode.External)
+            return new(false, Error: "Mailboxes for an external provider must be created in that provider's portal.");
+        if (domain?.ProviderObjectId is null) return new(false, Error: "Mail domain not found or not ready.");
         var server = await ReadyServerAsync(ct);
         if (server is null) return new(false, Error: "The platform mail server is not ready.");
         if (server.MailboxRatePerHourMinor is not { } rate)
             return new(false, Error: "The provider has not priced mailboxes.");
-        var domain = await db.MailDomains.FirstOrDefaultAsync(
-            d => d.Id == domainId && d.WorkspaceId == workspaceId && d.Status == MailResourceStatus.Ready, ct);
-        if (domain?.ProviderObjectId is null) return new(false, Error: "Mail domain not found or not ready.");
         if (await db.MailMailboxes.AnyAsync(m => m.MailDomainId == domainId && m.LocalPart == localPart, ct))
             return new(false, Error: "This mailbox already exists.");
         var count = await db.MailMailboxes.CountAsync(x => x.WorkspaceId == workspaceId, ct);
@@ -290,6 +373,12 @@ public sealed class MailPlatformService(
             return new(false, Error: "Type the full domain name to confirm deletion.");
         if (domain.Mailboxes.Count > 0)
             return new(false, Error: "Delete every mailbox on this domain first.");
+        if (domain.Mode == MailDomainMode.External)
+        {
+            db.MailDomains.Remove(domain);
+            await db.SaveChangesAsync(ct);
+            return new(true);
+        }
         var server = await ReadyServerAsync(ct);
         if (server is null) return new(false, Error: "The platform mail server is not ready.");
         if (domain.ProviderObjectId is not null)
@@ -308,6 +397,8 @@ public sealed class MailPlatformService(
     {
         var domain = await db.MailDomains.FirstOrDefaultAsync(
             x => x.Id == domainId && x.WorkspaceId == workspaceId, ct);
+        if (domain?.Mode == MailDomainMode.External)
+            return new(false, Error: "External DNS records are supplied by the selected provider; reconnect the domain to change them.");
         if (domain?.ProviderObjectId is null) return new(false, Error: "Mail domain not found or not ready.");
         var server = await ReadyServerAsync(ct);
         if (server is null) return new(false, Error: "The platform mail server is not ready.");
@@ -325,10 +416,32 @@ public sealed class MailPlatformService(
     private string User(MailServer server) => protector.Unprotect(server.EncryptedAdminUser);
     private string Password(MailServer server) => protector.Unprotect(server.EncryptedAdminPassword);
 
+    private static string NormalizeDomain(string? value) =>
+        (value ?? "").Trim().TrimEnd('.').ToLowerInvariant();
+    private static string? NormalizeOptionalHost(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : NormalizeDomain(value);
+    private static bool ValidOptionalPort(int? value) => value is null or >= 1 and <= 65535;
+    private static bool ValidDnsText(string? value, int max) =>
+        string.IsNullOrWhiteSpace(value) || (value.Length <= max && !value.Contains('\r') && !value.Contains('\n'));
+    private static bool ValidMultilineText(string? value, int max) =>
+        string.IsNullOrWhiteSpace(value) || (value.Length <= max && value.All(c => c is '\r' or '\n' or '\t' || !char.IsControl(c)));
+    private static void AppendTxt(StringBuilder zone, string owner, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return;
+        zone.Append(owner).Append(" 3600 IN TXT \"")
+            .Append(value.Trim().Replace("\\", "\\\\").Replace("\"", "\\\""))
+            .AppendLine("\"");
+    }
+
     private static Task<string> RunContainerAsync(
         IDockerEngine docker, MailServer row, string? recoveryAdmin, CancellationToken ct)
     {
-        var env = new Dictionary<string, string> { ["STALWART_PUBLIC_URL"] = row.ApiBaseUrl };
+        var env = new Dictionary<string, string>
+        {
+            // JMAP/OAuth discovery must advertise the address used by mail clients. ApiBaseUrl may
+            // be an origin-only bootstrap URL and must never leak into public discovery documents.
+            ["STALWART_PUBLIC_URL"] = "https://" + row.PublicHostname
+        };
         if (!string.IsNullOrEmpty(recoveryAdmin)) env["STALWART_RECOVERY_ADMIN"] = recoveryAdmin;
         return docker.RunContainerAsync(new DockerRunRequest(
             row.Image, row.ContainerName, "harbora-mail", env,
@@ -344,6 +457,7 @@ public sealed class MailPlatformService(
             PublishToHostPort: 8080,
             AdditionalPublishedPorts: new Dictionary<int, int>
             {
+                [443] = 443,
                 [25] = 25, [465] = 465, [587] = 587, [993] = 993
             }), ct);
     }
