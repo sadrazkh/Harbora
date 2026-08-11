@@ -194,19 +194,7 @@ public sealed class NodeWorkloadEngine(
                         .Select(v => new MountSpec { VolumeName = v.VolumeName, MountPath = v.MountPath, ReadOnly = v.ReadOnly })
                         .ToList(),
                     NetworkAliases = request.NetworkAliases?.ToList() ?? [],
-                    Ports = request.ContainerPort is { } port
-                        ?
-                        [
-                            new PortMapping
-                            {
-                                ContainerPort = port,
-                                // A node is reachable from the panel's proxy only through a published
-                                // host port; there is no shared overlay between them.
-                                PublishToHost = true,
-                                HostPort = request.PublishToHostPort,
-                            },
-                        ]
-                        : [],
+                    Ports = BuildPorts(request),
                     Resources = new ResourceLimits
                     {
                         MemoryBytes = request.MemoryLimitBytes,
@@ -243,6 +231,28 @@ public sealed class NodeWorkloadEngine(
         // The workload id, not a Docker container id. Everything downstream treats it as opaque and
         // hands it back to Stop/Remove/Restart, which is exactly what we want.
         return request.ContainerName;
+    }
+
+    private static List<PortMapping> BuildPorts(DockerRunRequest request)
+    {
+        var ports = new List<PortMapping>();
+        if (request.ContainerPort is { } port)
+            ports.Add(new PortMapping
+            {
+                ContainerPort = port,
+                PublishToHost = request.PublishToHostPort is not null,
+                HostPort = request.PublishToHostPort
+            });
+
+        if (request.AdditionalPublishedPorts is not null)
+            ports.AddRange(request.AdditionalPublishedPorts.Select(pair => new PortMapping
+            {
+                ContainerPort = pair.Key,
+                PublishToHost = true,
+                HostPort = pair.Value
+            }));
+
+        return ports.DistinctBy(p => p.ContainerPort).ToList();
     }
 
     public Task StopContainerAsync(string containerId, CancellationToken ct) =>

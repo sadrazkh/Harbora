@@ -1,0 +1,132 @@
+@model Harbora.Web.ViewModels.MailPageViewModel
+@using Harbora.Domain.Mail
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var message = TempData["Message"] as string;
+    var error = TempData["Error"] as string;
+    var adminSecret = TempData["MailAdminSecret"] as string;
+    var mailboxSecret = TempData["MailboxSecret"] as string;
+    string Rate(long? minor) => minor is null ? (isFa ? "قیمت‌گذاری نشده" : "not priced")
+        : $"{minor.Value / 100m:#,##0.00} {Model.Currency}";
+}
+
+<partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+    isFa ? "سرویس ایمیل" : "Email service",
+    isFa ? "دامنه و صندوق ایمیل اختصاصی روی میل‌سرور مدیریت‌شدهٔ پلتفرم." : "Custom domains and mailboxes on the platform-managed mail server."))" />
+
+@if (message is not null) { <div class="alert-success mb-4">@message</div> }
+@if (error is not null) { <div class="alert-danger mb-4" dir="auto">@error</div> }
+@if (adminSecret is not null)
+{
+    <div class="alert-warning mb-4"><div><strong>@(isFa ? "رمز مدیر (فقط همین بار):" : "Admin password (shown once):")</strong><code class="mt-2 block select-all" dir="ltr">@adminSecret</code></div></div>
+}
+@if (mailboxSecret is not null)
+{
+    <div class="alert-warning mb-4"><div><strong>@(isFa ? "رمز صندوق (فقط همین بار):" : "Mailbox password (shown once):")</strong><code class="mt-2 block select-all" dir="ltr">@mailboxSecret</code></div></div>
+}
+
+@if (Model.Server is null)
+{
+    <div class="alert-warning mb-6">@(isFa ? "ادمین هنوز میل‌سرور پلتفرم را راه‌اندازی نکرده است." : "The provider has not provisioned the platform mail server yet.")</div>
+    @if (Model.CanManagePlatform)
+    {
+        <section class="rounded-xl border border-line bg-surface p-5 shadow-panel">
+            <h2 class="mb-4 text-sm font-semibold">@(isFa ? "راه‌اندازی Stalwart" : "Provision Stalwart")</h2>
+            <form asp-action="Provision" method="post" class="grid gap-4 md:grid-cols-2">
+                <div><label class="form-label">@(isFa ? "سرور" : "Server")</label><select name="serverId" class="form-select" required>@foreach (var s in Model.AvailableServers) { <option value="@s.Id">@s.Name (@s.Hostname)</option> }</select></div>
+                <div><label class="form-label">@(isFa ? "نام عمومی میل‌سرور" : "Public mail hostname")</label><input name="hostname" class="form-control" dir="ltr" placeholder="mail.example.com" required /></div>
+                <div><label class="form-label">@(isFa ? "آدرس API" : "Management/API URL")</label><input name="apiBaseUrl" class="form-control" dir="ltr" placeholder="https://mail.example.com" required /></div>
+                <div><label class="form-label">Image</label><input name="image" class="form-control" dir="ltr" value="stalwartlabs/stalwart:v0.16" required /></div>
+                <div><label class="form-label">@(isFa ? "کاربر مدیر" : "Admin user")</label><input name="adminUser" class="form-control" dir="ltr" value="admin" /></div>
+                <div><label class="form-label">@(isFa ? "رمز مدیر (خالی = تولید خودکار)" : "Admin password (blank = generate)")</label><input name="adminPassword" type="password" class="form-control" dir="ltr" /></div>
+                <div><label class="form-label">@(isFa ? "قیمت هر دامنه / ساعت" : "Domain / hour")</label><input name="domainRate" class="form-control" inputmode="decimal" dir="ltr" required /></div>
+                <div><label class="form-label">@(isFa ? "قیمت هر صندوق / ساعت" : "Mailbox / hour")</label><input name="mailboxRate" class="form-control" inputmode="decimal" dir="ltr" required /></div>
+                <div><label class="form-label">@(isFa ? "حد دامنه هر ورک‌اسپیس (۰=نامحدود)" : "Domains/workspace (0=unlimited)")</label><input name="maxDomains" type="number" min="0" value="5" class="form-control" dir="ltr" /></div>
+                <div><label class="form-label">@(isFa ? "حد صندوق هر ورک‌اسپیس (۰=نامحدود)" : "Mailboxes/workspace (0=unlimited)")</label><input name="maxMailboxes" type="number" min="0" value="25" class="form-control" dir="ltr" /></div>
+                <div class="md:col-span-2"><button class="btn-primary">@(isFa ? "راه‌اندازی سرویس" : "Provision service")</button></div>
+            </form>
+        </section>
+    }
+}
+else
+{
+    var server = Model.Server;
+    <section class="mb-6 rounded-xl border border-line bg-surface p-5 shadow-panel">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div><h2 class="font-semibold" dir="ltr">@server.PublicHostname</h2><p class="text-xs text-ink-muted">@server.Status · @Rate(server.DomainRatePerHourMinor) / @Rate(server.MailboxRatePerHourMinor)</p></div>
+            @if (Model.CanManagePlatform && server.Status != MailServerStatus.Ready)
+            {
+                <form asp-action="Activate" asp-route-id="@server.Id" method="post" class="grid min-w-[18rem] gap-2">
+                    <p class="text-xs text-ink-muted" dir="auto">@(isFa ? "ابتدا Wizard را در /admin تمام کنید و حساب مدیر دائمی بسازید؛ سپس اطلاعاتش را اینجا وارد کنید. Recovery credential پس از موفقیت حذف می‌شود." : "Complete the /admin wizard and create a permanent administrator first. The recovery credential is removed after this succeeds.")</p>
+                    <input name="permanentUser" class="form-control" dir="ltr" placeholder="permanent admin" required /><input name="permanentPassword" type="password" class="form-control" dir="ltr" placeholder="password" required /><button class="btn-primary">@(isFa ? "آزمایش و پایان راه‌اندازی" : "Test & finish setup")</button>
+                </form>
+            }
+        </div>
+        @if (server.LastError is not null) { <p class="mt-3 text-xs text-danger" dir="auto">@server.LastError</p> }
+        <div class="mt-4 grid gap-2 text-xs md:grid-cols-4" dir="ltr"><code>SMTP 25 / 587</code><code>SMTPS 465</code><code>IMAPS 993</code><code>@server.ApiBaseUrl</code></div>
+        @if (Model.CanManagePlatform)
+        {
+            <form asp-action="UpdateOffer" asp-route-id="@server.Id" method="post" class="mt-5 grid gap-3 border-t border-line pt-4 md:grid-cols-5">
+                <div><label class="form-label">@(isFa ? "دامنه / ساعت" : "Domain / hour")</label><input name="domainRate" value="@Harbora.Web.Infrastructure.MinorUnits.Box(server.DomainRatePerHourMinor)" class="form-control" dir="ltr" required /></div>
+                <div><label class="form-label">@(isFa ? "صندوق / ساعت" : "Mailbox / hour")</label><input name="mailboxRate" value="@Harbora.Web.Infrastructure.MinorUnits.Box(server.MailboxRatePerHourMinor)" class="form-control" dir="ltr" required /></div>
+                <div><label class="form-label">@(isFa ? "حد دامنه" : "Domain limit")</label><input name="maxDomains" value="@server.MaxDomainsPerWorkspace" type="number" min="0" class="form-control" dir="ltr" /></div>
+                <div><label class="form-label">@(isFa ? "حد صندوق" : "Mailbox limit")</label><input name="maxMailboxes" value="@server.MaxMailboxesPerWorkspace" type="number" min="0" class="form-control" dir="ltr" /></div>
+                <div class="self-end"><button class="btn-secondary">@(isFa ? "ذخیرهٔ تعرفه" : "Save offer")</button></div>
+            </form>
+        }
+    </section>
+
+    @if (server.Status == MailServerStatus.Ready)
+    {
+        <section class="mb-6 rounded-xl border border-line bg-surface p-5 shadow-panel">
+            <h2 class="mb-3 text-sm font-semibold">@(isFa ? "افزودن دامنه" : "Add mail domain")</h2>
+            <form asp-action="CreateDomain" method="post" class="flex flex-wrap gap-3"><input name="domain" class="form-control max-w-md" dir="ltr" placeholder="example.com" required /><button class="btn-primary">@(isFa ? "ساخت و پرداخت ساعت اول" : "Create & prepay first hour")</button></form>
+            <p class="mt-2 text-xs text-ink-muted">@(isFa ? $"هزینه دامنه: {Rate(server.DomainRatePerHourMinor)}" : $"Domain price: {Rate(server.DomainRatePerHourMinor)}")</p>
+        </section>
+    }
+
+    @if (Model.Domains.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel("mail", isFa ? "هنوز دامنه ایمیلی ندارید." : "No mail domains yet."))" />
+    }
+    else
+    {
+        <div class="space-y-4">
+        @foreach (var domain in Model.Domains)
+        {
+            <section class="rounded-xl border border-line bg-surface p-5 shadow-panel">
+                <div class="flex flex-wrap items-start justify-between gap-3"><div><h2 class="font-semibold" dir="ltr">@domain.Domain</h2><p class="text-xs text-ink-muted">@domain.Status · @Rate(domain.RatePerHourMinor) / hour</p></div><span class="status-pill bg-success-soft text-success">@domain.Mailboxes.Count @(isFa ? "صندوق" : "mailboxes")</span></div>
+                <div class="mt-4 rounded-lg bg-surface-2 p-3 text-xs" dir="ltr">
+                    @if (!string.IsNullOrWhiteSpace(domain.DnsZone)) { <pre class="whitespace-pre-wrap break-all">@domain.DnsZone</pre> }
+                    else { <div>MX 10 @Model.Server.PublicHostname.</div><div>TXT @@ &quot;v=spf1 mx -all&quot;</div><div>TXT _dmarc &quot;v=DMARC1; p=quarantine&quot;</div> }
+                    <form asp-action="RefreshDns" asp-route-id="@domain.Id" method="post" class="mt-2" dir="auto"><button class="btn-ghost text-xs">@(isFa ? "به‌روزرسانی DNS و DKIM از میل‌سرور" : "Refresh DNS & DKIM from mail server")</button></form>
+                </div>
+                <form asp-action="CreateMailbox" asp-route-domainId="@domain.Id" method="post" class="mt-4 grid gap-3 md:grid-cols-4">
+                    <div><label class="form-label">@(isFa ? "نام صندوق" : "Mailbox")</label><input name="localPart" class="form-control" dir="ltr" placeholder="hello" required /></div>
+                    <div><label class="form-label">@(isFa ? "نام نمایشی" : "Display name")</label><input name="displayName" class="form-control" /></div>
+                    <div><label class="form-label">@(isFa ? "سهمیه MB (۰=نامحدود)" : "Quota MB (0=unlimited)")</label><input name="quotaMb" type="number" min="0" value="1024" class="form-control" dir="ltr" /></div>
+                    <div class="self-end"><button class="btn-secondary">@(isFa ? "ساخت صندوق" : "Create mailbox")</button></div>
+                </form>
+                @if (domain.Mailboxes.Count > 0)
+                {
+                    <div class="mt-4 divide-y divide-line">
+                    @foreach (var box in domain.Mailboxes.OrderBy(x => x.LocalPart))
+                    {
+                        <div class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                            <span dir="ltr">@box.LocalPart@@@domain.Domain</span>
+                            <div class="flex items-center gap-2"><span class="text-ink-muted">@box.Status · @Rate(box.RatePerHourMinor)</span><form asp-action="ResetPassword" asp-route-id="@box.Id" method="post"><button class="btn-ghost text-xs">@(isFa ? "رمز جدید" : "Reset password")</button></form><form asp-action="DeleteMailbox" asp-route-id="@box.Id" method="post" onsubmit="return confirm('@(isFa ? "این صندوق و همه ایمیل‌هایش حذف شود؟" : "Delete this mailbox and all of its email?")')"><button class="btn-ghost text-xs text-danger">@(isFa ? "حذف" : "Delete")</button></form></div>
+                        </div>
+                    }
+                    </div>
+                }
+                else
+                {
+                    <form asp-action="DeleteDomain" asp-route-id="@domain.Id" method="post" class="mt-4 flex flex-wrap items-end gap-2 border-t border-line pt-4">
+                        <div><label class="form-label">@(isFa ? "برای حذف، نام کامل دامنه را بنویسید" : "Type the full domain to delete")</label><input name="confirmation" class="form-control" dir="ltr" autocomplete="off" /></div><button class="btn-ghost text-danger">@(isFa ? "حذف دامنه" : "Delete domain")</button>
+                    </form>
+                }
+            </section>
+        }
+        </div>
+    }
+}

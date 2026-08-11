@@ -13,7 +13,8 @@ public sealed record CreatedBillableResource(
     BilledResourceType Type,
     Guid Id,
     string Name,
-    string? InstanceSizeKey);
+    string? InstanceSizeKey,
+    long? DirectRatePerHourMinor = null);
 
 /// <summary>A customer-facing refusal raised before a billable resource is persisted.</summary>
 public sealed class CreationPaymentRequiredException(string reason, string reasonFa)
@@ -75,8 +76,23 @@ public sealed class ResourceCreationBilling(
         var total = 0L;
         foreach (var resource in resources)
         {
+            if (resource.Type is BilledResourceType.MailDomain or BilledResourceType.Mailbox)
+            {
+                if (resource.DirectRatePerHourMinor is not { } direct || direct < 0)
+                    throw Unpriced(resource.Name);
+                try { total = checked(total + direct); }
+                catch (OverflowException)
+                {
+                    throw new CreationPaymentRequiredException(
+                        "The first-hour price is too large to charge safely. No resource was created.",
+                        "هزینه ساعت اول بیش از حد مجاز است و با اطمینان قابل کسر نیست؛ هیچ منبعی ساخته نشد.");
+                }
+                priced.Add((resource, direct));
+                continue;
+            }
+
             if (resource.Type is not (BilledResourceType.App or BilledResourceType.Service))
-                throw new ArgumentException("Creation prepayment supports only apps and managed services.", nameof(resources));
+                throw new ArgumentException("This resource type cannot be prepaid.", nameof(resources));
 
             if (string.IsNullOrWhiteSpace(resource.InstanceSizeKey)
                 || !sizes.TryGetValue(resource.InstanceSizeKey, out var size))

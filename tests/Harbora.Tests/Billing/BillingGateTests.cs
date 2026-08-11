@@ -636,6 +636,9 @@ public class StartPathCensusTests
         ["src/Harbora.Infrastructure/Services/DockerTcpGateway.cs"] =
             "a per-grant proxy onto an existing database, so the database itself never publishes a " +
             "port; it starts no workload of its own",
+        ["src/Harbora.Infrastructure/Mail/MailPlatformService.cs"] =
+            "the provider's single shared mail plane, not one tenant workload; tenant domains and " +
+            "mailboxes are separately prepaid and metered before they are provisioned on it",
         ["src/Modules/Backup/Harbora.Modules.Backup.Infrastructure/ContainerDatabaseBackupProvider.cs"] =
             "runs the database's own dump client against a database that is already running",
         ["src/Modules/Backup/Harbora.Modules.Backup.Infrastructure/BackupTargetResolver.cs"] =

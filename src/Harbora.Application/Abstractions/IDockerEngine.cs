@@ -122,7 +122,9 @@ public record DockerRunRequest(
     /// written to connect to <c>db:5432</c> must resolve <c>db</c>, not the versioned container name
     /// that lets old and new coexist during a cutover.
     /// </summary>
-    IReadOnlyList<string>? NetworkAliases = null);
+    IReadOnlyList<string>? NetworkAliases = null,
+    /// <summary>Additional TCP container-to-host port publications for multi-protocol services.</summary>
+    IReadOnlyDictionary<int, int>? AdditionalPublishedPorts = null);
 
 public record ContainerInfo(string Id, string Name, string Image, string State, string Status, IReadOnlyDictionary<string, string> Labels);
 public record ImageInfo(string Id, string Tag, DateTimeOffset CreatedAt, long SizeBytes);

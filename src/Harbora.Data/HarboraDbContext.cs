@@ -7,6 +7,7 @@ using Harbora.Domain.Deployments;
 using Harbora.Domain.Git;
 using Harbora.Domain.Identity;
 using Harbora.Domain.Monitoring;
+using Harbora.Domain.Mail;
 using Harbora.Domain.Networking;
 using Harbora.Domain.Servers;
 using Harbora.Domain.Services;
@@ -69,6 +70,9 @@ public class HarboraDbContext : DbContext
     public DbSet<Backup> Backups => Set<Backup>();
     public DbSet<BackupSchedule> BackupSchedules => Set<BackupSchedule>();
     public DbSet<BackupDelivery> BackupDeliveries => Set<BackupDelivery>();
+    public DbSet<MailServer> MailServers => Set<MailServer>();
+    public DbSet<MailDomain> MailDomains => Set<MailDomain>();
+    public DbSet<MailMailbox> MailMailboxes => Set<MailMailbox>();
 
     // Backup module (docs/backup-sync/ARCHITECTURE.md). Separate tables from the four above rather
     // than extra columns on them: a repository is a managed store with its own history and garbage
@@ -160,6 +164,41 @@ public class HarboraDbContext : DbContext
             e.Property(x => x.TokenHash).HasMaxLength(64).IsRequired();
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<MailServer>(e =>
+        {
+            e.Property(x => x.PublicHostname).HasMaxLength(253).IsRequired();
+            e.Property(x => x.ApiBaseUrl).HasMaxLength(512).IsRequired();
+            e.Property(x => x.Image).HasMaxLength(256).IsRequired();
+            e.Property(x => x.ContainerName).HasMaxLength(128).IsRequired();
+            e.Property(x => x.LastError).HasMaxLength(2048);
+            e.HasIndex(x => x.IsActive).IsUnique().HasFilter("\"IsActive\" = TRUE");
+            e.HasOne<Server>().WithMany().HasForeignKey(x => x.ServerId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<MailDomain>(e =>
+        {
+            e.Property(x => x.Domain).HasMaxLength(253).IsRequired();
+            e.Property(x => x.ProviderObjectId).HasMaxLength(128);
+            e.Property(x => x.DnsZone).HasMaxLength(8192);
+            e.Property(x => x.LastError).HasMaxLength(2048);
+            e.HasIndex(x => x.Domain).IsUnique();
+            e.HasIndex(x => new { x.WorkspaceId, x.Status });
+            e.HasOne(x => x.MailServer).WithMany().HasForeignKey(x => x.MailServerId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<MailMailbox>(e =>
+        {
+            e.Property(x => x.LocalPart).HasMaxLength(64).IsRequired();
+            e.Property(x => x.DisplayName).HasMaxLength(128);
+            e.Property(x => x.ProviderObjectId).HasMaxLength(128);
+            e.Property(x => x.LastError).HasMaxLength(2048);
+            e.HasIndex(x => new { x.MailDomainId, x.LocalPart }).IsUnique();
+            e.HasIndex(x => new { x.WorkspaceId, x.Status });
+            e.HasOne(x => x.MailDomain).WithMany(x => x.Mailboxes).HasForeignKey(x => x.MailDomainId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         b.Entity<Workspace>(e =>
@@ -752,6 +791,8 @@ public class HarboraDbContext : DbContext
         b.Entity<App>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Route>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<ManagedService>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<MailDomain>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<MailMailbox>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Backup>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<BackupDestination>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<BackupSchedule>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);

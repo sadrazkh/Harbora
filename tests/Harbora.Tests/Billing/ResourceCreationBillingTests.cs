@@ -77,6 +77,37 @@ public sealed class ResourceCreationBillingTests
     }
 
     [Fact]
+    public async Task A_mail_resource_uses_its_direct_price_and_never_needs_an_instance_size()
+    {
+        await using var db = Harness.SystemContext();
+        var (workspaceId, _) = Seed(db, balance: 500, rate: 125);
+        var id = Guid.CreateVersion7();
+
+        var charged = await Billing(db).SaveAsync(workspaceId,
+            [new(BilledResourceType.MailDomain, id, "example.com", null, 80)], default);
+
+        charged.Should().Be(80);
+        (await db.Wallets.IgnoreQueryFilters().SingleAsync()).BalanceMinor.Should().Be(420);
+        var line = await db.BillingLedger.IgnoreQueryFilters().SingleAsync();
+        line.ResourceType.Should().Be(BilledResourceType.MailDomain);
+        line.ResourceId.Should().Be(id);
+        line.RatePerHourMinor.Should().Be(80);
+    }
+
+    [Fact]
+    public async Task An_unpriced_mail_resource_is_refused_instead_of_becoming_free()
+    {
+        await using var db = Harness.SystemContext();
+        var (workspaceId, _) = Seed(db, balance: 500, rate: 125);
+
+        var act = () => Billing(db).SaveAsync(workspaceId,
+            [new(BilledResourceType.Mailbox, Guid.CreateVersion7(), "hello@example.com", null)], default);
+
+        await act.Should().ThrowAsync<CreationPaymentRequiredException>();
+        (await db.Wallets.IgnoreQueryFilters().SingleAsync()).BalanceMinor.Should().Be(500);
+    }
+
+    [Fact]
     public async Task A_stack_is_refused_as_one_unit_when_its_combined_first_hour_is_not_funded()
     {
         await using var db = Harness.SystemContext();

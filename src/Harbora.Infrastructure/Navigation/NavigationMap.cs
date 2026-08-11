@@ -55,6 +55,7 @@ public static class NavigationMap
             new("routing", "Routes", "Index", "route", Capabilities.RoutesManage, Advanced: true)
         ]),
         new("data", [
+            new("mail", "Mail", "Index", "mail"),
             new("backups", "Backups", "Index", "archive"),
             // Object storage sits beside backups rather than under Deploy: it is where data lives,
             // and the page says so itself when no S3 server is configured — which is why it is a

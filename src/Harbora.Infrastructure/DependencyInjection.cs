@@ -234,6 +234,8 @@ public static class DependencyInjection
         services.AddHostedService<Billing.BillingScheduler>();
         services.AddScoped<Billing.ResourceCreationBilling>();
         services.AddScoped<Billing.WorkspaceBudgetService>();
+        services.AddScoped<Mail.StalwartClient>();
+        services.AddScoped<Mail.MailPlatformService>();
         // Stopping what a workspace is running once its balance is gone, and bringing back exactly
         // what that stop took away. Registered beside the tick and, like it, scheduled by nothing
         // yet; it refuses to suspend anybody at all while Billing:Enabled is false.

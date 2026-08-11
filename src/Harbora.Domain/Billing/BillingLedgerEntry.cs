@@ -65,7 +65,9 @@ public enum BilledResourceType
     /// gained would supply one.
     /// </para>
     /// </summary>
-    ServiceVolume = 5
+    ServiceVolume = 5,
+    MailDomain = 6,
+    Mailbox = 7
 }
 
 /// <summary>Whether the resource was running for the hour being charged.</summary>

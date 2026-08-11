@@ -4,6 +4,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Billing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
+using Harbora.Domain.Mail;
 using Harbora.Domain.Services;
 using Harbora.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
@@ -640,6 +641,25 @@ public sealed class BillingTick(
             billable.Add(new BillableResource(
                 BilledResourceType.Volume, volume.Id, volume.Name, BilledRunState.NotApplicable, rate));
         }
+
+        // Mail resources carry immutable price snapshots. A later provider price change applies to
+        // new subscriptions and cannot silently rewrite an existing tenant's hourly agreement.
+        var mailDomains = await db.MailDomains.IgnoreQueryFilters().AsNoTracking()
+            .Where(d => d.WorkspaceId == workspace.Id && d.Status == MailResourceStatus.Ready)
+            .ToListAsync(ct);
+        foreach (var domain in mailDomains)
+            billable.Add(new BillableResource(
+                BilledResourceType.MailDomain, domain.Id, domain.Domain,
+                BilledRunState.Running, domain.RatePerHourMinor));
+
+        var mailDomainIds = mailDomains.Select(d => d.Id).ToList();
+        var mailboxes = await db.MailMailboxes.IgnoreQueryFilters().AsNoTracking()
+            .Where(m => mailDomainIds.Contains(m.MailDomainId) && m.Status == MailResourceStatus.Ready)
+            .ToListAsync(ct);
+        foreach (var mailbox in mailboxes)
+            billable.Add(new BillableResource(
+                BilledResourceType.Mailbox, mailbox.Id, mailbox.LocalPart,
+                BilledRunState.Running, mailbox.RatePerHourMinor));
 
         if (plan is null)
         {

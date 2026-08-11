@@ -152,17 +152,26 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
             }
         };
 
+        var published = new Dictionary<int, int>();
+        if (r.ContainerPort is { } primary && r.PublishToHostPort is { } primaryHost)
+            published[primary] = primaryHost;
+        if (r.AdditionalPublishedPorts is not null)
+            foreach (var pair in r.AdditionalPublishedPorts) published[pair.Key] = pair.Value;
+
         if (r.ContainerPort is { } port)
         {
             create.ExposedPorts = new Dictionary<string, EmptyStruct> { [$"{port}/tcp"] = default };
+        }
 
-            // Publish to a host port so a remote node's container is reachable across the network
-            // (used for cross-node routing where there is no shared overlay network).
-            if (r.PublishToHostPort is { } hostPort)
-                hostConfig.PortBindings = new Dictionary<string, IList<PortBinding>>
-                {
-                    [$"{port}/tcp"] = [new PortBinding { HostPort = hostPort.ToString() }]
-                };
+        if (published.Count > 0)
+        {
+            create.ExposedPorts ??= new Dictionary<string, EmptyStruct>();
+            hostConfig.PortBindings = new Dictionary<string, IList<PortBinding>>();
+            foreach (var pair in published)
+            {
+                create.ExposedPorts[$"{pair.Key}/tcp"] = default;
+                hostConfig.PortBindings[$"{pair.Key}/tcp"] = [new PortBinding { HostPort = pair.Value.ToString() }];
+            }
         }
 
         if (r.Command is { Count: > 0 })

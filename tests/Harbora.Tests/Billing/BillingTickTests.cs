@@ -5,6 +5,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Billing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
+using Harbora.Domain.Mail;
 using Harbora.Domain.Services;
 using Harbora.Domain.Tenancy;
 using Harbora.Infrastructure.Billing;
@@ -465,6 +466,42 @@ public class BillingTickTests
 
         (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-500);
         (await db.BillingLedger.CountAsync(l => l.WorkspaceId == ws)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Ready_mail_domains_and_mailboxes_are_charged_at_their_price_snapshots()
+    {
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "mail-tenant", ratePerHour: 0);
+        await db.SaveChangesAsync();
+        Harness.SetBalance(db, ws, Harness.PaidUp);
+        var server = new MailServer
+        {
+            ServerId = Guid.CreateVersion7(), PublicHostname = "mail.example.com",
+            ApiBaseUrl = "https://mail.example.com", EncryptedAdminUser = "x",
+            EncryptedAdminPassword = "x", Status = MailServerStatus.Ready
+        };
+        var domain = new MailDomain
+        {
+            WorkspaceId = ws, MailServerId = server.Id, Domain = "example.com",
+            Status = MailResourceStatus.Ready, RatePerHourMinor = 80
+        };
+        var mailbox = new MailMailbox
+        {
+            WorkspaceId = ws, MailDomainId = domain.Id, LocalPart = "hello",
+            Status = MailResourceStatus.Ready, RatePerHourMinor = 20
+        };
+        db.AddRange(server, domain, mailbox);
+        await db.SaveChangesAsync();
+
+        await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        (await db.BillingLedger.Where(x => x.WorkspaceId == ws &&
+            x.ResourceType == BilledResourceType.MailDomain).SingleAsync()).AmountMinor.Should().Be(-80);
+        (await db.BillingLedger.Where(x => x.WorkspaceId == ws &&
+            x.ResourceType == BilledResourceType.Mailbox).SingleAsync()).AmountMinor.Should().Be(-20);
+        (await db.Wallets.SingleAsync(x => x.WorkspaceId == ws)).BalanceMinor
+            .Should().Be(Harness.PaidUp - 100);
     }
 
     [Fact]
