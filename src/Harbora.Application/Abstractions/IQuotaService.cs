@@ -32,6 +32,15 @@ public interface IQuotaService
     Task<QuotaCheck> CanAddWorkloadsAsync(
         Guid workspaceId, WorkloadQuotaDelta delta, CancellationToken ct) =>
         Task.FromResult(QuotaCheck.Ok);
+
+    /// <summary>Checks a new deployment against the workspace's live deployment ceiling.</summary>
+    Task<QuotaCheck> CanQueueDeploymentAsync(Guid workspaceId, CancellationToken ct) =>
+        Task.FromResult(QuotaCheck.Ok);
+
+    /// <summary>Checks the requested number of retained restore points for one schedule.</summary>
+    Task<QuotaCheck> CanUseBackupRetentionAsync(
+        Guid workspaceId, int retentionCount, CancellationToken ct) =>
+        Task.FromResult(QuotaCheck.Ok);
 }
 
 /// <summary>
@@ -67,7 +76,8 @@ public sealed record WorkloadQuotaDelta(
     int Apps = 0,
     int Services = 0,
     long MemoryBytes = 0,
-    double CpuCores = 0);
+    double CpuCores = 0,
+    int CronJobs = 0);
 
 /// <param name="Reason">English refusal text. Never null when <paramref name="Allowed"/> is false.</param>
 /// <param name="ReasonFa">
@@ -142,4 +152,7 @@ public sealed record WorkspaceUsage(
     int Environments = 0, int MaxEnvironments = 0,
     int Domains = 0, int MaxDomains = 0,
     int Volumes = 0, int MaxVolumes = 0,
-    int BackupSchedules = 0, int MaxBackupSchedules = 0);
+    int BackupSchedules = 0, int MaxBackupSchedules = 0,
+    int CronJobs = 0, int MaxCronJobs = 0,
+    int ActiveDeployments = 0, int MaxConcurrentDeployments = 0,
+    int MaxBackupRetentionCount = 0);

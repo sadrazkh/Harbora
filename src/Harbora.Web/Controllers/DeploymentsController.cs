@@ -228,10 +228,19 @@ public sealed class DeploymentsController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        var deploymentId = await deployEngine.QueueDeploymentAsync(new DeploymentRequest(
-            target.Id, Harbora.Domain.Common.DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty,
-            // The artifact, released as-is. Nothing is built and no source is fetched.
-            ImageOverride: source.Value.Plan.ImageTag), ct);
+        Guid deploymentId;
+        try
+        {
+            deploymentId = await deployEngine.QueueDeploymentAsync(new DeploymentRequest(
+                target.Id, Harbora.Domain.Common.DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty,
+                // The artifact, released as-is. Nothing is built and no source is fetched.
+                ImageOverride: source.Value.Plan.ImageTag), ct);
+        }
+        catch (QuotaRefusedException ex)
+        {
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
 
         await audit.LogAsync("app.promote", "app", target.Id.ToString(), ClientIp, ct: ct);
         TempData["Message"] = $"Promoting {source.Value.Plan.ImageTag} to {target.Name}.";

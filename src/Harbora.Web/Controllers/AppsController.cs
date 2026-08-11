@@ -194,6 +194,14 @@ public sealed class AppsController(
         var check = await quota.CanAddAppAsync(WorkspaceId, model.InstanceSizeKey, excludeAppId: null, ct);
         if (!check.Allowed)
             ModelState.AddModelError(string.Empty, check.Reason ?? "Plan quota exceeded.");
+        if (model.Kind == ServiceKind.Cron)
+        {
+            var cronCheck = await quota.CanAddWorkloadsAsync(WorkspaceId,
+                new WorkloadQuotaDelta(CronJobs: 1), ct);
+            if (!cronCheck.Allowed)
+                ModelState.AddModelError(string.Empty,
+                    (IsFa ? cronCheck.ReasonFa : null) ?? cronCheck.Reason ?? "Scheduled-job quota exceeded.");
+        }
 
         // The environment id is a writable form value. Workspace ownership alone is not enough:
         // a project-scoped member must not create an app in another project in the same workspace.
@@ -330,9 +338,19 @@ public sealed class AppsController(
             or AppSourceType.PrebuiltImage or AppSourceType.StaticSite;
         if (model.DeployNow && canDeploy)
         {
-            var deploymentId = await deployEngine.QueueDeploymentAsync(
-                new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, app.GitRef), ct);
-            return RedirectToAction("Details", "Deployments", new { id = deploymentId });
+            try
+            {
+                var deploymentId = await deployEngine.QueueDeploymentAsync(
+                    new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, app.GitRef), ct);
+                return RedirectToAction("Details", "Deployments", new { id = deploymentId });
+            }
+            catch (QuotaRefusedException ex)
+            {
+                // The application and its first-hour debit are already committed. Keep it visible
+                // and explain that its initial deploy must wait for another deployment to finish.
+                TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+                return RedirectToAction(nameof(Details), new { id = app.Id });
+            }
         }
 
         if (templateAdvice is not null) TempData["Message"] = templateAdvice;
@@ -852,8 +870,17 @@ public sealed class AppsController(
 
         await audit.LogAsync("app.version_updated", "app", $"{app.Name}={version.Version}", ClientIp, ct: ct);
 
-        var deploymentId = await deployEngine.QueueDeploymentAsync(
-            new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, app.GitRef), ct);
+        Guid deploymentId;
+        try
+        {
+            deploymentId = await deployEngine.QueueDeploymentAsync(
+                new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, app.GitRef), ct);
+        }
+        catch (QuotaRefusedException ex)
+        {
+            TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
 
         return RedirectToAction("Details", "Deployments", new { id = deploymentId });
     }
@@ -921,8 +948,17 @@ public sealed class AppsController(
 
         await audit.LogAsync("app.tag_updated", "app", $"{app.Name}={repository}:{tag}", ClientIp, ct: ct);
 
-        var deploymentId = await deployEngine.QueueDeploymentAsync(
-            new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, app.GitRef), ct);
+        Guid deploymentId;
+        try
+        {
+            deploymentId = await deployEngine.QueueDeploymentAsync(
+                new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, app.GitRef), ct);
+        }
+        catch (QuotaRefusedException ex)
+        {
+            TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
 
         return RedirectToAction("Details", "Deployments", new { id = deploymentId });
     }

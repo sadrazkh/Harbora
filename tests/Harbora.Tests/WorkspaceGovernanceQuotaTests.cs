@@ -4,6 +4,7 @@ using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Backups;
 using Harbora.Domain.Common;
+using Harbora.Domain.Deployments;
 using Harbora.Domain.Identity;
 using Harbora.Domain.Networking;
 using Harbora.Domain.Projects;
@@ -50,6 +51,7 @@ public sealed class WorkspaceGovernanceQuotaTests : IDisposable
     [InlineData("src/Harbora.Infrastructure/Projects/PreviewEnvironmentService.cs")]
     [InlineData("src/Harbora.Infrastructure/Templates/TemplateDeploymentService.cs")]
     [InlineData("src/Harbora.Infrastructure/Security/WorkspaceAccountService.cs")]
+    [InlineData("src/Harbora.Infrastructure/Deployments/DeploymentEngine.cs")]
     public void Every_quota_guarded_creation_surface_takes_the_workspace_creation_lock(string relativePath)
     {
         var root = Path.GetFullPath(Path.Combine(TestPaths.WebRoot, "..", ".."));
@@ -81,7 +83,7 @@ public sealed class WorkspaceGovernanceQuotaTests : IDisposable
         {
             WorkspaceId = _workspace, Project = project, Name = "Production", Slug = "production"
         });
-        var app = new App { WorkspaceId = _workspace, Name = "Web", Slug = "web" };
+        var app = new App { WorkspaceId = _workspace, Name = "Nightly", Slug = "nightly", Kind = ServiceKind.Cron };
         app.Domains.Add(new DomainName { Host = "web.example.com" });
         app.Volumes.Add(new Volume { Name = "web-data", MountPath = "/data" });
         _db.Apps.Add(app);
@@ -89,6 +91,10 @@ public sealed class WorkspaceGovernanceQuotaTests : IDisposable
         {
             WorkspaceId = _workspace, DestinationId = Guid.CreateVersion7(),
             Type = BackupType.AppConfig, TargetRef = app.Id.ToString()
+        });
+        _db.Deployments.Add(new Deployment
+        {
+            WorkspaceId = _workspace, App = app, Number = 1, Status = DeploymentStatus.Building
         });
         await _db.SaveChangesAsync();
 
@@ -100,6 +106,8 @@ public sealed class WorkspaceGovernanceQuotaTests : IDisposable
         usage.Domains.Should().Be(1);
         usage.Volumes.Should().Be(1);
         usage.BackupSchedules.Should().Be(1);
+        usage.CronJobs.Should().Be(1);
+        usage.ActiveDeployments.Should().Be(1);
     }
 
     [Fact]
@@ -154,5 +162,57 @@ public sealed class WorkspaceGovernanceQuotaTests : IDisposable
             new GovernanceQuotaDelta(Projects: 1), default)).Allowed.Should().BeFalse();
         (await Service(billing: false).CanAddGovernedResourcesAsync(_workspace,
             new GovernanceQuotaDelta(Projects: 1), default)).Allowed.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Cron_cap_is_a_hard_wall_even_when_compute_overage_is_enabled()
+    {
+        _plan.MaxCronJobs = 1;
+        _plan.AllowsOverage = true;
+        _db.Apps.Add(new App
+        {
+            WorkspaceId = _workspace, Name = "Existing cron", Slug = "existing-cron",
+            Kind = ServiceKind.Cron
+        });
+        await _db.SaveChangesAsync();
+
+        var result = await Service(billing: true).CanAddWorkloadsAsync(_workspace,
+            new WorkloadQuotaDelta(CronJobs: 1), default);
+
+        result.Allowed.Should().BeFalse();
+        result.Reason.Should().Contain("scheduled job");
+        result.ReasonFa.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task Concurrent_deployment_cap_counts_every_in_flight_state_in_the_workspace()
+    {
+        _plan.MaxConcurrentDeployments = 1;
+        var app = new App { WorkspaceId = _workspace, Name = "Web", Slug = "web" };
+        _db.Apps.Add(app);
+        _db.Deployments.Add(new Deployment
+        {
+            WorkspaceId = _workspace, App = app, Number = 1,
+            Status = DeploymentStatus.HealthChecking
+        });
+        await _db.SaveChangesAsync();
+
+        var result = await Service().CanQueueDeploymentAsync(_workspace, default);
+
+        result.Allowed.Should().BeFalse();
+        result.Reason.Should().Contain("concurrent deployment");
+    }
+
+    [Fact]
+    public async Task Backup_retention_cannot_exceed_the_plan_per_schedule_ceiling()
+    {
+        _plan.MaxBackupRetentionCount = 7;
+        await _db.SaveChangesAsync();
+
+        (await Service().CanUseBackupRetentionAsync(_workspace, 7, default)).Allowed.Should().BeTrue();
+        var result = await Service().CanUseBackupRetentionAsync(_workspace, 8, default);
+
+        result.Allowed.Should().BeFalse();
+        result.ReasonFa.Should().NotBeNullOrWhiteSpace();
     }
 }

@@ -425,12 +425,16 @@ public sealed class EnvironmentCloner(
             if (!check.Allowed) return check.Reason;
         }
 
+        var sourceAppIds = plan.Apps.Select(a => a.SourceId).ToList();
+        var cronJobs = await db.Apps.AsNoTracking()
+            .CountAsync(a => sourceAppIds.Contains(a.Id) && a.Kind == ServiceKind.Cron, ct);
         var aggregate = await quota.CanAddWorkloadsAsync(workspaceId,
             new WorkloadQuotaDelta(
                 Apps: plan.Apps.Count,
                 Services: plan.Services.Count,
                 MemoryBytes: plan.MemoryBytes,
-                CpuCores: plan.CpuCores), ct);
+                CpuCores: plan.CpuCores,
+                CronJobs: cronJobs), ct);
         if (!aggregate.Allowed) return aggregate.Reason;
 
         return null;

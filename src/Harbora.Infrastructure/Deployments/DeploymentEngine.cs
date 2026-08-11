@@ -14,7 +14,8 @@ namespace Harbora.Infrastructure.Deployments;
 public sealed class DeploymentEngine(
     HarboraDbContext db,
     IJobQueue jobs,
-    ISystemClock clock) : IDeploymentEngine
+    ISystemClock clock,
+    IQuotaService? quota = null) : IDeploymentEngine
 {
     public async Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct)
     {
@@ -25,6 +26,9 @@ public sealed class DeploymentEngine(
         // deployment, so the row still belongs to exactly one tenant.
         var app = await db.Apps.IgnoreQueryFilters().FirstOrDefaultAsync(a => a.Id == request.AppId, ct)
                   ?? throw new InvalidOperationException("App not found.");
+        await using var quotaReservation = quota is null
+            ? NoopQuotaReservation.Instance
+            : await quota.AcquireCreationLockAsync(app.WorkspaceId, ct);
 
         // At most one active deployment per app (H3). Coalescing is only correct when both the
         // in-flight deployment and the new request want the SAME thing — deduping double-clicks and
@@ -51,6 +55,13 @@ public sealed class DeploymentEngine(
                         : $"A rollback (deployment #{inFlight.Number}) is still running. Wait for it to finish, then deploy.");
 
             return inFlight.Id;
+        }
+
+        if (quota is not null)
+        {
+            var mayQueue = await quota.CanQueueDeploymentAsync(app.WorkspaceId, ct);
+            if (!mayQueue.Allowed)
+                throw new QuotaRefusedException(mayQueue);
         }
 
         // Filtered, this returns nothing for a webhook and every push is "deployment #1", colliding
@@ -88,6 +99,7 @@ public sealed class DeploymentEngine(
         // redelivered push can still produce two rows. Serialising them here is what stops that
         // becoming two docker builds, two containers under one name and two proxy applies.
         await jobs.EnqueueExclusiveAsync(JobKind.Deployment, deploymentId, exclusiveWith: app.Id, ct);
+        await quotaReservation.CommitAsync(ct);
 
         return deploymentId;
     }

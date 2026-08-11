@@ -130,7 +130,8 @@ public sealed class PlansController(
         long maxDiskGb, int maxMembers, int maxProjects, int maxEnvironments,
         int maxDomains, int maxVolumes, int maxBackupSchedules,
         string? allowedSizeKeys, decimal monthlyPrice,
-        string? baseRatePerHour, string? diskGbHour, bool allowsOverage, CancellationToken ct)
+        string? baseRatePerHour, string? diskGbHour, bool allowsOverage, CancellationToken ct,
+        int maxCronJobs = 0, int maxConcurrentDeployments = 0, int maxBackupRetentionCount = 0)
     {
         if (!IsProvider) return Forbid();
 
@@ -153,6 +154,9 @@ public sealed class PlansController(
             MaxDomains = Math.Max(0, maxDomains),
             MaxVolumes = Math.Max(0, maxVolumes),
             MaxBackupSchedules = Math.Max(0, maxBackupSchedules),
+            MaxCronJobs = Math.Max(0, maxCronJobs),
+            MaxConcurrentDeployments = Math.Max(0, maxConcurrentDeployments),
+            MaxBackupRetentionCount = Math.Max(0, maxBackupRetentionCount),
             MaxMemoryBytes = maxMemoryMb * 1024 * 1024,
             MaxCpuCores = maxCpu,
             // The form never used to set this, so every plan carried a disk limit of zero while the
@@ -183,7 +187,8 @@ public sealed class PlansController(
         long maxDiskGb, int maxMembers, int maxProjects, int maxEnvironments,
         int maxDomains, int maxVolumes, int maxBackupSchedules,
         string? allowedSizeKeys, decimal monthlyPrice,
-        string? baseRatePerHour, string? diskGbHour, bool allowsOverage, CancellationToken ct)
+        string? baseRatePerHour, string? diskGbHour, bool allowsOverage, CancellationToken ct,
+        int maxCronJobs = 0, int maxConcurrentDeployments = 0, int maxBackupRetentionCount = 0)
     {
         if (!IsProvider) return Forbid();
 
@@ -207,6 +212,9 @@ public sealed class PlansController(
         plan.MaxDomains = Math.Max(0, maxDomains);
         plan.MaxVolumes = Math.Max(0, maxVolumes);
         plan.MaxBackupSchedules = Math.Max(0, maxBackupSchedules);
+        plan.MaxCronJobs = Math.Max(0, maxCronJobs);
+        plan.MaxConcurrentDeployments = Math.Max(0, maxConcurrentDeployments);
+        plan.MaxBackupRetentionCount = Math.Max(0, maxBackupRetentionCount);
         plan.MaxMemoryBytes = maxMemoryMb * 1024 * 1024;
         plan.MaxCpuCores = maxCpu;
         plan.MaxDiskBytes = maxDiskGb * 1024 * 1024 * 1024;

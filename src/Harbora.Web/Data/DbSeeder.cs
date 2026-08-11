@@ -203,11 +203,13 @@ public sealed class DbSeeder(HarboraDbContext db)
                 new Plan { Name = "Provider", NameFa = "اپراتور", IsDefault = true },
                 new Plan { Name = "Starter", NameFa = "شروع", MaxApps = 2, MaxServices = 1,
                     MaxMembers = 3, MaxProjects = 3, MaxEnvironments = 6, MaxDomains = 5,
-                    MaxVolumes = 5, MaxBackupSchedules = 2,
+                    MaxVolumes = 5, MaxBackupSchedules = 2, MaxCronJobs = 2,
+                    MaxConcurrentDeployments = 1, MaxBackupRetentionCount = 7,
                     MaxMemoryBytes = 1024 * MB, MaxCpuCores = 1, AllowedSizeKeys = "nano,micro", MonthlyPrice = 5 },
                 new Plan { Name = "Pro", NameFa = "حرفه‌ای", MaxApps = 10, MaxServices = 5,
                     MaxMembers = 15, MaxProjects = 20, MaxEnvironments = 50, MaxDomains = 50,
-                    MaxVolumes = 50, MaxBackupSchedules = 25,
+                    MaxVolumes = 50, MaxBackupSchedules = 25, MaxCronJobs = 25,
+                    MaxConcurrentDeployments = 4, MaxBackupRetentionCount = 30,
                     MaxMemoryBytes = 8192 * MB, MaxCpuCores = 8, AllowedSizeKeys = "nano,micro,small,medium", MonthlyPrice = 25 });
         }
         await db.SaveChangesAsync();

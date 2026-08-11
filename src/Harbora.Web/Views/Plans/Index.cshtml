@@ -94,7 +94,9 @@
         (isFa ? "محیط‌ها" : "Environments", u.Environments, u.MaxEnvironments),
         (isFa ? "دامنه‌ها" : "Domains", u.Domains, u.MaxDomains),
         (isFa ? "والیوم‌ها" : "Volumes", u.Volumes, u.MaxVolumes),
-        (isFa ? "زمان‌بندی پشتیبان" : "Backup schedules", u.BackupSchedules, u.MaxBackupSchedules)
+        (isFa ? "زمان‌بندی پشتیبان" : "Backup schedules", u.BackupSchedules, u.MaxBackupSchedules),
+        (isFa ? "کارهای زمان‌بندی‌شده" : "Scheduled jobs", u.CronJobs, u.MaxCronJobs),
+        (isFa ? "استقرارهای فعال" : "Active deployments", u.ActiveDeployments, u.MaxConcurrentDeployments)
     })
     {
         var reading = AllocationReading.OfCount(item.Used, item.Limit);
@@ -142,6 +144,8 @@
                 <li>@(isFa ? "پروژه / محیط:" : "Projects / environments:") @Count(p.MaxProjects) / @Count(p.MaxEnvironments)</li>
                 <li>@(isFa ? "دامنه / والیوم:" : "Domains / volumes:") @Count(p.MaxDomains) / @Count(p.MaxVolumes)</li>
                 <li>@(isFa ? "زمان‌بندی پشتیبان:" : "Backup schedules:") @Count(p.MaxBackupSchedules)</li>
+                <li>@(isFa ? "Cron / استقرار هم‌زمان:" : "Cron / concurrent deploys:") @Count(p.MaxCronJobs) / @Count(p.MaxConcurrentDeployments)</li>
+                <li>@(isFa ? "نگهداری هر زمان‌بندی پشتیبان:" : "Retention per backup schedule:") @Count(p.MaxBackupRetentionCount)</li>
                 <li>@(isFa ? "حافظه:" : "Memory:") @Mem(p.MaxMemoryBytes)</li>
                 <li>@(isFa ? "پردازنده:" : "CPU:") @Cores(p.MaxCpuCores)</li>
                 @* The plan carried a disk limit, the quota check enforced it, and the card that
@@ -340,6 +344,9 @@
             <div><label class="form-label" for="new-domains">@(isFa ? "حداکثر دامنه‌ها" : "Maximum domains")</label><input id="new-domains" name="maxDomains" type="number" min="0" value="5" class="form-control" dir="ltr" /></div>
             <div><label class="form-label" for="new-volumes">@(isFa ? "حداکثر والیوم‌ها" : "Maximum volumes")</label><input id="new-volumes" name="maxVolumes" type="number" min="0" value="5" class="form-control" dir="ltr" /></div>
             <div><label class="form-label" for="new-backup-schedules">@(isFa ? "حداکثر زمان‌بندی پشتیبان" : "Maximum backup schedules")</label><input id="new-backup-schedules" name="maxBackupSchedules" type="number" min="0" value="2" class="form-control" dir="ltr" /></div>
+            <div><label class="form-label" for="new-cron-jobs">@(isFa ? "حداکثر کارهای Cron" : "Maximum cron jobs")</label><input id="new-cron-jobs" name="maxCronJobs" type="number" min="0" value="2" class="form-control" dir="ltr" /></div>
+            <div><label class="form-label" for="new-concurrent-deployments">@(isFa ? "حداکثر استقرار هم‌زمان" : "Maximum concurrent deployments")</label><input id="new-concurrent-deployments" name="maxConcurrentDeployments" type="number" min="0" value="1" class="form-control" dir="ltr" /></div>
+            <div><label class="form-label" for="new-backup-retention">@(isFa ? "حداکثر نسخه نگهداری‌شده در هر زمان‌بندی" : "Maximum retained backups per schedule")</label><input id="new-backup-retention" name="maxBackupRetentionCount" type="number" min="0" value="7" class="form-control" dir="ltr" /></div>
             <div>
                 <label class="form-label" for="new-memory">@(isFa ? "حافظه — مگابایت (MB)" : "Memory — megabytes (MB)")</label>
                 <input id="new-memory" name="maxMemoryMb" type="number" min="0" value="1024" class="form-control" dir="ltr" />
@@ -485,6 +492,9 @@
                             <div><label class="form-label" for="domains-@p.Id">@(isFa ? "دامنه‌ها" : "Domains")</label><input id="domains-@p.Id" name="maxDomains" type="number" min="0" value="@p.MaxDomains" class="form-control" dir="ltr" /></div>
                             <div><label class="form-label" for="volumes-@p.Id">@(isFa ? "والیوم‌ها" : "Volumes")</label><input id="volumes-@p.Id" name="maxVolumes" type="number" min="0" value="@p.MaxVolumes" class="form-control" dir="ltr" /></div>
                             <div><label class="form-label" for="backup-schedules-@p.Id">@(isFa ? "زمان‌بندی پشتیبان" : "Backup schedules")</label><input id="backup-schedules-@p.Id" name="maxBackupSchedules" type="number" min="0" value="@p.MaxBackupSchedules" class="form-control" dir="ltr" /></div>
+                            <div><label class="form-label" for="cron-jobs-@p.Id">@(isFa ? "کارهای Cron" : "Cron jobs")</label><input id="cron-jobs-@p.Id" name="maxCronJobs" type="number" min="0" value="@p.MaxCronJobs" class="form-control" dir="ltr" /></div>
+                            <div><label class="form-label" for="concurrent-deployments-@p.Id">@(isFa ? "استقرار هم‌زمان" : "Concurrent deployments")</label><input id="concurrent-deployments-@p.Id" name="maxConcurrentDeployments" type="number" min="0" value="@p.MaxConcurrentDeployments" class="form-control" dir="ltr" /></div>
+                            <div><label class="form-label" for="backup-retention-@p.Id">@(isFa ? "نگهداری پشتیبان در هر زمان‌بندی" : "Backups retained per schedule")</label><input id="backup-retention-@p.Id" name="maxBackupRetentionCount" type="number" min="0" value="@p.MaxBackupRetentionCount" class="form-control" dir="ltr" /></div>
                             <div>
                                 <label class="form-label" for="memory-@p.Id">@(isFa ? "حافظه — مگابایت (MB)" : "Memory — megabytes (MB)")</label>
                                 <input id="memory-@p.Id" name="maxMemoryMb" type="number" min="0" value="@(p.MaxMemoryBytes / 1024 / 1024)" class="form-control" dir="ltr" />
@@ -637,6 +647,8 @@
                         PlanResource.Domains => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "دامنه" : "domains"),
                         PlanResource.Volumes => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "والیوم" : "volumes"),
                         PlanResource.BackupSchedules => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "زمان‌بندی پشتیبان" : "backup schedules"),
+                        PlanResource.CronJobs => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "کار زمان‌بندی‌شده" : "scheduled jobs"),
+                        PlanResource.ActiveDeployments => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "استقرار فعال" : "active deployments"),
                         _ => $"{b.Used:0} / {b.Limit:0} " + (isFa ? "اپلیکیشن" : "apps")
                     };
                     <div class="flex flex-wrap justify-between gap-2">

@@ -26,6 +26,12 @@ public class Plan : BaseEntity
     public int MaxVolumes { get; set; }
     /// <summary>Recurring backup schedules (0 = unlimited).</summary>
     public int MaxBackupSchedules { get; set; }
+    /// <summary>Scheduled applications in this workspace (0 = unlimited).</summary>
+    public int MaxCronJobs { get; set; }
+    /// <summary>Deployments that may be queued/running for this workspace at once (0 = unlimited).</summary>
+    public int MaxConcurrentDeployments { get; set; }
+    /// <summary>Maximum restore points one legacy backup schedule may retain (0 = unlimited).</summary>
+    public int MaxBackupRetentionCount { get; set; }
 
     /// <summary>Total memory a workspace may commit across all its apps (0 = unlimited).</summary>
     public long MaxMemoryBytes { get; set; }

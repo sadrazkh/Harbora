@@ -27,6 +27,8 @@ public sealed partial class BackupsController(
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
+    private static bool IsFa =>
+        System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken ct)
@@ -187,6 +189,7 @@ public sealed partial class BackupsController(
             TempData["Error"] = "The backup target or destination does not belong to this workspace.";
             return RedirectToAction(nameof(Index));
         }
+        retentionCount = Math.Max(1, retentionCount);
         await using var quotaReservation = await quota.AcquireCreationLockAsync(WorkspaceId, ct);
         var quotaCheck = await quota.CanAddGovernedResourcesAsync(WorkspaceId,
             new GovernanceQuotaDelta(BackupSchedules: 1), ct);
@@ -195,10 +198,16 @@ public sealed partial class BackupsController(
             TempData["Error"] = quotaCheck.Reason;
             return RedirectToAction(nameof(Index));
         }
+        var retentionCheck = await quota.CanUseBackupRetentionAsync(WorkspaceId, retentionCount, ct);
+        if (!retentionCheck.Allowed)
+        {
+            TempData["Error"] = (IsFa ? retentionCheck.ReasonFa : null) ?? retentionCheck.Reason;
+            return RedirectToAction(nameof(Index));
+        }
         db.BackupSchedules.Add(new BackupSchedule
         {
             WorkspaceId = WorkspaceId, DestinationId = destinationId, Type = type, TargetRef = reference,
-            IntervalHours = Math.Max(1, intervalHours), RetentionCount = Math.Max(1, retentionCount), IsEnabled = true
+            IntervalHours = Math.Max(1, intervalHours), RetentionCount = retentionCount, IsEnabled = true
         });
         await db.SaveChangesAsync(ct);
         await quotaReservation.CommitAsync(ct);

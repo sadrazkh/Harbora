@@ -15,7 +15,9 @@ public enum PlanResource
     Environments = 7,
     Domains = 8,
     Volumes = 9,
-    BackupSchedules = 10
+    BackupSchedules = 10,
+    CronJobs = 11,
+    ActiveDeployments = 12
 }
 
 /// <summary>One limit a workspace has gone past, with both figures so it can be read.</summary>
@@ -74,6 +76,9 @@ public static class PlanOverage
         AddCount(breaches, PlanResource.Domains, usage.Domains, usage.MaxDomains);
         AddCount(breaches, PlanResource.Volumes, usage.Volumes, usage.MaxVolumes);
         AddCount(breaches, PlanResource.BackupSchedules, usage.BackupSchedules, usage.MaxBackupSchedules);
+        AddCount(breaches, PlanResource.CronJobs, usage.CronJobs, usage.MaxCronJobs);
+        AddCount(breaches, PlanResource.ActiveDeployments,
+            usage.ActiveDeployments, usage.MaxConcurrentDeployments);
 
         return breaches;
     }
