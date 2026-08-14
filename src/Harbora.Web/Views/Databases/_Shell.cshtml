@@ -8,6 +8,13 @@
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var running = Model.Status == ServiceStatus.Running;
 
+    // Read once, here, so every tab shows what an action just did to it. TempData is consumed on
+    // read — a second `TempData["Message"]` anywhere downstream (Details.cshtml used to have one)
+    // would find nothing, not a redundant copy. The AdminToolUrl/User/Password panel is a different
+    // mechanism with its own markup and stays in Details.cshtml, untouched.
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+
     string Tone(ServiceStatus status) => status switch
     {
         ServiceStatus.Running => "is-ok",
@@ -88,9 +95,12 @@
     {
         <a href="@tab.Href"
            class="detail-tab @(tab.Key == Model.CurrentTab ? "is-current" : "")"
-           @(tab.Key == Model.CurrentTab ? "aria-current=page" : "")>@tab.Label</a>
+           aria-current="@(tab.Key == Model.CurrentTab ? "page" : null)">@tab.Label</a>
     }
 </nav>
+
+@if (msg is not null) { <div class="alert-success mb-4">@msg</div> }
+@if (err is not null) { <div class="alert-danger mb-4">@err</div> }
 
 @RenderBody()
 

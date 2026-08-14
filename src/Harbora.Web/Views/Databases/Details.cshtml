@@ -10,8 +10,8 @@
     var db = Model.Database;
     ViewData["Title"] = db.Name;
 
-    var msg = TempData["Message"] as string;
-    var err = TempData["Error"] as string;
+    // The Message/Error banner now renders once in _Shell.cshtml, above every tab — not here.
+    // TempData is consumed on read, so a second read site here would just find it already gone.
 
     var drifted = Harbora.Infrastructure.Services.VersionDrift.HasDrifted(db.Version, Model.RunningImage);
     var moving = Harbora.Infrastructure.Services.VersionDrift.IsMoving(db.Version);
@@ -22,9 +22,6 @@
             ? $"{bytes / 1024.0 / 1024:0.#} MB"
             : $"{bytes / 1024.0 / 1024 / 1024:0.##} GB";
 }
-
-@if (msg is not null) { <div class="alert-success mb-4">@msg</div> }
-@if (err is not null) { <div class="alert-danger mb-4">@err</div> }
 
 @if (TempData["AdminToolUrl"] is string toolUrl)
 {

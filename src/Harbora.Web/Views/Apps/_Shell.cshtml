@@ -7,6 +7,12 @@
 
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var running = Model.Status == AppStatus.Running;
+
+    // Read once, here, so every tab shows what an action just did to it. TempData is consumed on
+    // read — a second `TempData["Message"]` anywhere downstream (Details.cshtml used to have one)
+    // would find nothing, not a redundant copy.
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
     (string Key, string Href, string Label)[] tabs =
     [
         ("overview",    $"/apps/details/{Model.Id}",      isFa ? "نمای کلی"   : "Overview"),
@@ -61,9 +67,12 @@
     {
         <a href="@tab.Href"
            class="detail-tab @(tab.Key == Model.CurrentTab ? "is-current" : "")"
-           @(tab.Key == Model.CurrentTab ? "aria-current=page" : "")>@tab.Label</a>
+           aria-current="@(tab.Key == Model.CurrentTab ? "page" : null)">@tab.Label</a>
     }
 </nav>
+
+@if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
 
 @RenderBody()
 

@@ -15,11 +15,9 @@
     // one click away and the summary says what is inside.
     var advancedOpen = Harbora.Infrastructure.Navigation.PanelSections.StartsOpen(await PanelModes.GetAsync());
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
-    var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
+    // The Message/Error banner now renders once in _Shell.cshtml, above every tab — not here.
+    // TempData is consumed on read, so a second read site here would just find it already gone.
 }
-
-@if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
-@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
 
 <div class="grid lg:grid-cols-3 gap-6">
     <div class="lg:col-span-2 space-y-6">

@@ -25,8 +25,11 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
 {
     private HarboraWebFactory Panel => fixture.Panel;
 
+    // Named for exactly the two landmarks below, not for "everything" — see finding 8 of the
+    // detail-shell branch review: this net was down to two strings well before the rename, and a
+    // name promising more than two assertions is a name that lies to the next reader about coverage.
     [Fact]
-    public async Task The_app_page_still_shows_everything_it_showed_before_the_split()
+    public async Task The_overview_tab_still_shows_the_seeded_environment_variable_and_domain()
     {
         var (appId, _) = SeedAppWithEverything();
         Panel.GivenUser(fixture.WorkspaceId, "app-detail-owner@example.com", SystemRole.Owner);
@@ -121,6 +124,93 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
         // renders) identify each form regardless of which language rendered the page.
         html.Should().Contain("name=\"mountPath\"", "adding storage must not be lost in the move");
         html.Should().Contain($"/apps/{appId}/volumes/{volumeId}/remove", "nor removing it");
+    }
+
+    /// <summary>
+    /// Critical 1 of the detail-shell branch review: <c>AddVolume</c> redirects to the Volumes tab
+    /// (commit 9b1df6d, "send somebody back to the tab that shows what they just did") rather than to
+    /// Overview, but until the Message/Error banner moved into <c>_Shell.cshtml</c> that tab rendered
+    /// no <c>TempData</c> at all. A refused mount path posted the form, reloaded the page, and said
+    /// nothing — reproduced here rather than inferred, the same way the review reproduced it.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_volume_mount_shows_its_reason_on_the_volumes_tab_it_lands_on()
+    {
+        var (appId, _) = SeedAppWithEverything();
+        Panel.GivenUser(fixture.WorkspaceId, "app-volume-refusal@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.186", "app-volume-refusal@example.com");
+
+        // The panel renders Persian by default, and Razor's HTML encoder writes non-ASCII characters
+        // out as numeric character references (&#x645;&#x633;...) rather than literal glyphs — a
+        // Persian literal in this assertion would never match the rendered markup. Switching to
+        // English first keeps the assertion on plain text instead of on an encoding accident.
+        var languageToken = await client.AntiforgeryTokenFrom($"/apps/{appId}/volumes");
+        await client.PostFormAsync("/account/language", languageToken,
+            ("culture", "en"), ("returnUrl", $"/apps/{appId}/volumes"));
+
+        var token = await client.AntiforgeryTokenFrom($"/apps/{appId}/volumes");
+        var post = await client.PostFormAsync($"/apps/{appId}/volumes", token, ("mountPath", "relative-path"));
+
+        post.StatusCode.Should().Be(System.Net.HttpStatusCode.Found, "AddVolume redirects back to the Volumes tab either way");
+        post.RedirectPath().Should().Be($"/apps/{appId}/volumes");
+
+        var html = await (await client.GetAsync(post.RedirectPath())).Content.ReadAsStringAsync();
+
+        // The controller-set refusal text, exactly as ExplainMount builds it — not a generic banner
+        // div, so a redirect that renders no message at all fails this the same way a mangled one would.
+        html.Should().Contain("The path must start with /",
+            "the mount-path refusal must reach the page the redirect lands on, not be discarded with the tab it used to land on");
+    }
+
+    /// <summary>
+    /// Critical 2 of the detail-shell branch review, materially worse than the volume case: a
+    /// refused <c>Rollback</c> also redirects to the Deployments tab, and the comment on
+    /// <c>AppsController.Rollback</c> insists a blocked rollback must "say so" — it did not, because
+    /// the tab it landed on rendered no <c>TempData</c> either. Reproduced with the simplest of
+    /// <c>RollbackPlanner</c>'s refusals: a deployment that never succeeded has nothing to restore.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_rollback_shows_its_reason_on_the_deployments_tab_it_lands_on()
+    {
+        var app = new App
+        {
+            WorkspaceId = fixture.WorkspaceId,
+            ServerId = Guid.CreateVersion7(),
+            Name = "rollback-refusal-app",
+            Slug = "rollback-refusal-app",
+            SourceType = AppSourceType.PrebuiltImage,
+            PrebuiltImage = "ghcr.io/example/rollback-refusal:1.0",
+            Status = AppStatus.Running
+        };
+        var failedDeployment = new Deployment
+        {
+            AppId = app.Id,
+            WorkspaceId = fixture.WorkspaceId,
+            Number = 7,
+            Status = DeploymentStatus.Failed,
+            Trigger = DeploymentTrigger.Manual,
+            TriggeredByUserId = Guid.CreateVersion7()
+        };
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(app);
+            db.Deployments.Add(failedDeployment);
+        });
+        Panel.GivenUser(fixture.WorkspaceId, "app-rollback-refusal@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.187", "app-rollback-refusal@example.com");
+
+        var token = await client.AntiforgeryTokenFrom($"/apps/{app.Id}/deployments");
+        var post = await client.PostFormAsync($"/apps/rollback/{app.Id}", token, ("deploymentId", failedDeployment.Id.ToString()));
+
+        post.StatusCode.Should().Be(System.Net.HttpStatusCode.Found, "a refused rollback redirects back to the Deployments tab");
+        post.RedirectPath().Should().Be($"/apps/{app.Id}/deployments");
+
+        var html = await (await client.GetAsync(post.RedirectPath())).Content.ReadAsStringAsync();
+
+        // RollbackPlanner's own reason, which is never routed through the isFa ternary — asserting on
+        // it (rather than on a generic banner div) is what tells a broken refusal from a working one.
+        html.Should().Contain($"Deployment #{failedDeployment.Number} never succeeded",
+            "the rollback comment insists a blocked rollback must say so, and this is the reason it must show");
     }
 
     /// <summary>
