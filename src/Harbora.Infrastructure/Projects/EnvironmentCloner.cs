@@ -60,7 +60,7 @@ public sealed class EnvironmentCloner(
             .Where(a => a.EnvironmentId == source.Id)
             .Select(a => new
             {
-                a.Id, a.Name, a.Slug, a.InstanceSizeKey, a.MemoryLimitBytes, a.CpuLimit,
+                a.Id, a.Name, a.Slug, a.InstanceSizeKey, a.MemoryLimitBytes, a.CpuLimit, a.Kind,
                 Domains = a.Domains.Count,
                 Volumes = a.Volumes.Select(v => new { v.MountPath, v.ReadOnly, v.SizeLimitBytes }).ToList()
             })
@@ -90,7 +90,7 @@ public sealed class EnvironmentCloner(
             takenAppSlugs,
             takenContainers,
             apps.Select(a => new CloneSourceApp(
-                a.Id, a.Name, a.Slug, a.InstanceSizeKey, a.MemoryLimitBytes, a.CpuLimit, a.Domains,
+                a.Id, a.Name, a.Slug, a.InstanceSizeKey, a.MemoryLimitBytes, a.CpuLimit, a.Domains, a.Kind,
                 a.Volumes.Select(v => new CloneSourceVolume(v.MountPath, v.ReadOnly, v.SizeLimitBytes))
                     .ToList())).ToList(),
             services.Select(s => new CloneSourceService(
@@ -415,6 +415,11 @@ public sealed class EnvironmentCloner(
         var governed = await quota.CanAddGovernedResourcesAsync(workspaceId,
             new GovernanceQuotaDelta(
                 Environments: 1,
+                // One address per copy that can have one. App copies get an address now — before that
+                // they arrived with none, so leaving domains out of this estimate was correct then and
+                // lets a workspace clone straight past its domain limit today. Counted here with the
+                // rest rather than asked per app, for the reason this method's own docstring gives.
+                Domains: plan.Apps.Count(a => Deployments.ServicePlan.CanHaveDomains(a.Kind)),
                 Volumes: plan.Apps.Sum(a => a.Volumes.Count)), ct);
         if (!governed.Allowed) return governed.Reason;
 

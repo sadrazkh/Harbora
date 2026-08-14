@@ -1,4 +1,6 @@
-﻿namespace Harbora.Infrastructure.Projects;
+﻿using Harbora.Domain.Common;
+
+namespace Harbora.Infrastructure.Projects;
 
 /// <summary>A volume as it exists on the source application.</summary>
 public sealed record CloneSourceVolume(string MountPath, bool ReadOnly, long? SizeLimitBytes);
@@ -12,6 +14,12 @@ public sealed record CloneSourceApp(
     long MemoryLimitBytes,
     double CpuLimit,
     int DomainCount,
+    /// <summary>
+    /// What kind of service this is. Carried so the quota estimate can tell which copies will be
+    /// given an address: since app copies started getting one, an estimate that counts only volumes
+    /// under-predicts what the copy consumes, and a plan at its domain limit would be allowed past it.
+    /// </summary>
+    ServiceKind Kind,
     IReadOnlyList<CloneSourceVolume> Volumes);
 
 /// <summary>A managed service in the environment being copied.</summary>
@@ -42,6 +50,8 @@ public sealed record CloneAppSpec(
     string? InstanceSizeKey,
     long MemoryLimitBytes,
     double CpuLimit,
+    /// <summary>Carried from the source so the quota estimate knows which copies get an address.</summary>
+    ServiceKind Kind,
     IReadOnlyList<CloneVolumeSpec> Volumes);
 
 public sealed record CloneServiceSpec(
@@ -125,7 +135,7 @@ public sealed record ClonePlan(
             appSlugs.Add(slug);
 
             apps.Add(new CloneAppSpec(
-                app.Id, app.Name, slug, app.InstanceSizeKey, app.MemoryLimitBytes, app.CpuLimit,
+                app.Id, app.Name, slug, app.InstanceSizeKey, app.MemoryLimitBytes, app.CpuLimit, app.Kind,
                 app.Volumes.Select(v => new CloneVolumeSpec(
                     // The same shape the create form produces, so a cloned volume is not a
                     // different kind of thing from one made by hand.

@@ -1,4 +1,5 @@
 ﻿using FluentAssertions;
+using Harbora.Domain.Common;
 using Harbora.Infrastructure.Projects;
 using Xunit;
 
@@ -16,8 +17,8 @@ public class ClonePlanTests
 {
     private static CloneSourceApp App(
         string slug, string name = "App", long memory = 0, double cpu = 0, int domains = 0,
-        params string[] mounts) =>
-        new(Guid.NewGuid(), name, slug, "small", memory, cpu, domains,
+        ServiceKind kind = ServiceKind.Web, params string[] mounts) =>
+        new(Guid.NewGuid(), name, slug, "small", memory, cpu, domains, kind,
             mounts.Select(m => new CloneSourceVolume(m, false, null)).ToList());
 
     private static CloneSourceService Service(
@@ -130,7 +131,7 @@ public class ClonePlanTests
     public void A_volume_keeps_its_mount_path_and_its_limits()
     {
         var plan = ClonePlan.Of(new CloneRequest("Staging", Project, [], [], [],
-            [new CloneSourceApp(Guid.NewGuid(), "App", "api", "small", 0, 0, 0,
+            [new CloneSourceApp(Guid.NewGuid(), "App", "api", "small", 0, 0, 0, ServiceKind.Web,
                 [new CloneSourceVolume("/data", ReadOnly: true, SizeLimitBytes: 5_000)])],
             []));
 
@@ -249,4 +250,30 @@ public class ClonePlanTests
     [Fact]
     public void An_application_with_no_variables_at_all_is_attached_to_nothing() =>
         ClonePlan.IsAttachedTo([], "db").Should().BeFalse();
+
+    /// <summary>
+    /// The plan carries each copy's kind, so the quota estimate can count the addresses the copy will
+    /// consume.
+    ///
+    /// <para>
+    /// This became load-bearing the moment cloned applications started being given an address. Before
+    /// that they arrived with none, so leaving domains out of the clone's quota estimate was correct.
+    /// Afterwards it was not, and the shape of the mistake is the dangerous one: nothing fails, a
+    /// workspace already at its domain limit simply clones straight past it, and the limit is
+    /// discovered to have been decorative.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void A_plan_carries_each_copys_kind_so_only_the_ones_that_get_an_address_are_counted()
+    {
+        var plan = ClonePlan.Of(new CloneRequest("Staging", Project, [], [], [],
+            [App("web", kind: ServiceKind.Web),
+             App("site", kind: ServiceKind.Static),
+             App("worker", kind: ServiceKind.Worker),
+             App("nightly", kind: ServiceKind.Cron)],
+            []));
+
+        plan.Apps.Count(a => Harbora.Infrastructure.Deployments.ServicePlan.CanHaveDomains(a.Kind))
+            .Should().Be(2, "a worker and a cron take no inbound traffic, so neither consumes an address");
+    }
 }
