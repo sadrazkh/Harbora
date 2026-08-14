@@ -7,6 +7,7 @@ using Harbora.Domain.Git;
 using Harbora.Domain.Jobs;
 using Harbora.Domain.Monitoring;
 using Harbora.Domain.Networking;
+using Harbora.Infrastructure.Networking;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -35,7 +36,8 @@ public sealed partial class AppsController(
     IJobQueue jobs,
     IConfiguration config,
     ICurrentUser currentUser,
-    Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling) : Controller
+    Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling,
+    AppAddressAssigner addresses) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -284,20 +286,20 @@ public sealed partial class AppsController(
             app.GitRepository = repo;
         }
 
-        // Domain: use the one given, else auto-assign {slug}.{root domain} so the app is instantly reachable.
-        var rootDomain = await db.Settings.Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.PlatformRootDomain)
-            .Select(s => s.Value).FirstOrDefaultAsync(ct);
-        var host = Harbora.Infrastructure.Deployments.ServicePlan.HostFor(model.Kind, model.Domain, slug, rootDomain);
-        // A typed domain arrives here too, so the reserved-host rule has to be here too. The refusal
-        // is the same message the domains form gives, and it happens before the app is written.
-        if (IsReservedHost(host))
+        // One rule, one place. This used to derive the host here, check reserved names here, and then
+        // silently skip the insert when the name was taken — so an app could be created with no
+        // address and no explanation. AppAddressAssigner answers all three, and says which happened.
+        var addressed = await addresses.AssignAsync(app, model.Domain, suffix: null, ct);
+        if (addressed.Outcome == AppAddressOutcome.Reserved)
         {
-            ModelState.AddModelError(nameof(model.Domain), ReservedHostRefusal(host!));
+            ModelState.AddModelError(nameof(model.Domain), ReservedHostRefusal(model.Domain!));
             await PopulateTemplates(ct);
             return View(model);
         }
-        if (!string.IsNullOrWhiteSpace(host) && !await db.Domains.AnyAsync(d => d.Host == host, ct))
-            app.Domains.Add(new DomainName { Host = host, SslEnabled = true, ForceHttps = true, IsPrimary = true });
+        if (addressed.Outcome == AppAddressOutcome.Discriminated)
+            TempData["Message"] = IsFa
+                ? $"نام درخواستی گرفته شده بود؛ این اپ روی «{addressed.Host}» در دسترس است."
+                : $"That name was taken, so this app is reachable at '{addressed.Host}'.";
 
         // A template describes more than an image and a port. Until this was applied, an app
         // created from one arrived without the volume it declared — a static site whose content

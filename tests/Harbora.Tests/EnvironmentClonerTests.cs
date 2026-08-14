@@ -6,6 +6,7 @@ using Harbora.Domain.Common;
 using Harbora.Domain.Services;
 using Harbora.Infrastructure.Projects;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Environment = Harbora.Domain.Projects.Environment;
@@ -171,7 +172,8 @@ public class EnvironmentClonerTests
             new Harbora.Infrastructure.Billing.ResourceCreationBilling(
                 db, new Clock(), Microsoft.Extensions.Options.Options.Create(
                     new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
-            NullLogger<EnvironmentCloner>.Instance);
+            NullLogger<EnvironmentCloner>.Instance,
+            new Harbora.Infrastructure.Networking.AppAddressAssigner(db, new ConfigurationBuilder().Build()));
 
         return new Harness(db, cloner, source, engine, quota, scheduler, app, service);
     }

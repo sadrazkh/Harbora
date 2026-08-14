@@ -3,6 +3,7 @@ using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Services;
+using Harbora.Infrastructure.Networking;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Environment = Harbora.Domain.Projects.Environment;
@@ -41,7 +42,8 @@ public sealed class EnvironmentCloner(
     ISecretProtector protector,
     ISystemClock clock,
     Billing.ResourceCreationBilling creationBilling,
-    ILogger<EnvironmentCloner> log)
+    ILogger<EnvironmentCloner> log,
+    AppAddressAssigner addresses)
 {
     /// <summary>
     /// Works out what copying <paramref name="sourceEnvironmentId"/> would create, without creating
@@ -302,6 +304,11 @@ public sealed class EnvironmentCloner(
                     CreatedAt = now
                 });
             }
+
+            // A cloned app used to arrive with no address at all — the one creation path that had no
+            // rule rather than a wrong one. Its slug differs from the original's (spec.Slug), so this
+            // does not contend with the app it was copied from.
+            await addresses.AssignAsync(copy, requested: null, suffix: null, ct);
 
             db.Apps.Add(copy);
         }

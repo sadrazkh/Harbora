@@ -8,6 +8,7 @@ using Harbora.Infrastructure.Projects;
 using Harbora.Infrastructure.Templates;
 using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -103,7 +104,9 @@ public class TemplateVersionDeploymentTests
             new RecordingDeployments(),
             new Harbora.Infrastructure.Billing.ResourceCreationBilling(
                 db, new FixedClock(Now), Microsoft.Extensions.Options.Options.Create(
-                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })));
+                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
+            new Harbora.Infrastructure.Networking.AppAddressAssigner(
+                db, new ConfigurationBuilder().Build()));
 
         return new Fixture(db, service, workspaceId, template);
     }

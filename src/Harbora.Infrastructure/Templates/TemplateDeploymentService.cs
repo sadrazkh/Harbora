@@ -4,8 +4,8 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Git;
-using Harbora.Domain.Networking;
 using Harbora.Domain.Services;
+using Harbora.Infrastructure.Networking;
 using Harbora.Infrastructure.Projects;
 using Harbora.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
@@ -54,7 +54,8 @@ public sealed class TemplateDeploymentService(
     ISecretProtector protector,
     IManagedServiceEngine managedServices,
     IDeploymentEngine deployments,
-    Billing.ResourceCreationBilling creationBilling)
+    Billing.ResourceCreationBilling creationBilling,
+    AppAddressAssigner addresses)
 {
     public async Task<TemplateDeployResult> DeployAsync(TemplateDeployRequest request, CancellationToken ct)
     {
@@ -259,18 +260,9 @@ public sealed class TemplateDeploymentService(
             });
         }
 
-        var rootDomain = await db.Settings
-            .Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.PlatformRootDomain)
-            .Select(s => s.Value)
-            .FirstOrDefaultAsync(ct);
-        if (!string.IsNullOrWhiteSpace(rootDomain) && !rootDomain.Equals("localhost", StringComparison.OrdinalIgnoreCase))
-            app.Domains.Add(new DomainName
-            {
-                Host = $"{appSlug}.{rootDomain}",
-                SslEnabled = true,
-                ForceHttps = true,
-                IsPrimary = true
-            });
+        // Was a hand-built $"{appSlug}.{rootDomain}" with no kind check, no reserved-host check and no
+        // collision check — three ways to hand somebody a hostname that answers nothing.
+        await addresses.AssignAsync(app, requested: null, suffix: null, ct);
 
         var governed = await quota.CanAddGovernedResourcesAsync(request.WorkspaceId,
             new GovernanceQuotaDelta(

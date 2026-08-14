@@ -153,4 +153,27 @@ public class AppAddressAssignerTests
         decision.Host.Should().Be("shop-k3f.apps.example.com",
             "DNS is not multi-tenant — two workspaces cannot both answer on one hostname");
     }
+
+    /// <summary>
+    /// Pins the behaviour four callers are about to start depending on. This is not new behaviour —
+    /// <see cref="AssignAsync"/> has always run every <paramref name="requested"/> name through the
+    /// same collision check as a derived one, which is exactly what a branch preview's own
+    /// <c>PreviewNaming.Host</c> needs: it brings its own name, but not its own exemption from being
+    /// checked against everybody else's.
+    /// </summary>
+    [Fact]
+    public async Task A_caller_supplied_name_still_goes_through_the_collision_check()
+    {
+        await using var db = await DbWithRootDomain("apps.example.com");
+        db.Domains.Add(new DomainName { AppId = Guid.NewGuid(), Host = "shop-main.apps.example.com" });
+        await db.SaveChangesAsync();
+
+        var app = WebApp("shop");
+        var decision = await new AppAddressAssigner(db, EmptyConfig()).AssignAsync(
+            app, requested: "shop-main.apps.example.com", suffix: () => "k3f", CancellationToken.None);
+
+        decision.Outcome.Should().Be(AppAddressOutcome.Discriminated,
+            "branch previews bring their own name and must still not be given one that is taken");
+        decision.Host.Should().Be("shop-main-k3f.apps.example.com");
+    }
 }
