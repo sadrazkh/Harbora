@@ -29,6 +29,20 @@ public sealed class RailPreferences(HarboraDbContext db, ICurrentUser currentUse
             : RailVisibility.Resolve(account.Overview, platform.Overview, panel);
     }
 
+    /// <summary>
+    /// Whether any panel is open — a page draws the rail at all only when this is true, rather than
+    /// reserving the column for a shelf of headings with nothing open beneath them. Enumerates
+    /// <see cref="RailPanel"/> itself, so a view that wants "is there anything to show" never has to
+    /// list the panels by name and fall out of step when a third one is added.
+    /// </summary>
+    public async Task<bool> AnyOpenAsync(CancellationToken ct = default)
+    {
+        foreach (var panel in Enum.GetValues<RailPanel>())
+            if (await IsOpenAsync(panel, ct)) return true;
+
+        return false;
+    }
+
     /// <summary>Records a person's choice. Null means "follow the default again".</summary>
     public async Task SetAsync(RailPanel panel, bool? open, CancellationToken ct = default)
     {

@@ -11,6 +11,12 @@ namespace Harbora.Tests;
 /// somebody had already made, on every visit, forever. The rule has the shape the panel mode rule
 /// has, and the trap is the same one nullable booleans always carry: "closed" and "never asked" are
 /// different answers, and collapsing them reopens a panel the person deliberately shut.
+///
+/// Both panels now ship closed (Task 7): the rail used to reserve its column whether or not
+/// anything was drawn in it, so an open-by-default panel cost every first-time visitor the same
+/// width whether they wanted it or not. Nothing here changes for somebody who has already chosen —
+/// <see cref="RailVisibility.Resolve"/> never overrides a stored choice, which the tests below still
+/// cover on their own.
 /// </summary>
 public class RailVisibilityTests
 {
@@ -22,10 +28,12 @@ public class RailVisibilityTests
     }
 
     [Fact]
-    public void Overview_starts_shown()
+    public void Overview_starts_out_of_the_way_too()
     {
-        // The count of what they already have is the reason the page exists.
-        RailVisibility.Resolve(null, null, RailPanel.Overview).Should().BeTrue();
+        // Was true before Task 7 flipped the shipped default: the count of what somebody already has
+        // is the reason the page exists, but reserving the column for it cost the same first-time
+        // visitor the width they came for.
+        RailVisibility.Resolve(null, null, RailPanel.Overview).Should().BeFalse();
     }
 
     [Fact]

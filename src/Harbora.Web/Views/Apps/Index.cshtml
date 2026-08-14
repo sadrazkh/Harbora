@@ -4,6 +4,10 @@
 @{
     ViewData["Title"] = "Applications";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var here = Context.Request.Path + Context.Request.QueryString;
+    // The rail is only drawn when a panel is actually open (Task 7) — this is also the toolbar
+    // control's cue that a way back needs to be on the page instead.
+    var anyRailOpen = await Rails.AnyOpenAsync();
     var environments = Model.Apps.Select(a => a.Environment).Where(e => e != "—").Distinct().Order().ToList();
     string Bytes(long? bytes) => bytes switch
     {
@@ -78,6 +82,23 @@
                     <option value="all">@(isFa ? "همه محیط‌ها" : "All environments")</option>
                     @foreach (var environment in environments) { <option value="@environment">@environment</option> }
                 </select>
+            }
+            @if (!anyRailOpen)
+            {
+                @* Do-not-change item 23: closing every panel folds the rail away entirely (Task 7),
+                   so this is the only way back once it is gone — it must stay in the toolbar, outside
+                   the rail it reopens. Reopens Overview: "the count of what they already have, which
+                   is the reason the page exists" (RailPreferences). Quick start keeps its own toggle,
+                   reachable again once the rail is back. *@
+                <form asp-controller="Account" asp-action="SetRail" method="post" class="inline" data-rail-action="SetRail">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="panel" value="Overview" />
+                    <input type="hidden" name="open" value="true" />
+                    <input type="hidden" name="returnUrl" value="@here" />
+                    <button type="submit" class="btn-secondary" title="@(isFa ? "نمایش پنل کناری" : "Show side panel")">
+                        <i data-lucide="panel-right" class="h-4 w-4"></i>@(isFa ? "پنل کناری" : "Side panel")
+                    </button>
+                </form>
             }
         </div>
     </div>
@@ -194,14 +215,15 @@
 </section>
 
 @section RightRail {
-    @* Each panel folds to its heading and its toggle. Never removed: a setting that makes a feature
-       disappear entirely is a setting nobody finds their way back from — the discipline
-       PanelSections holds inside a form, applied to the rail. *@
-    @{
+    @* Each panel that IS drawn folds to its heading and its toggle rather than disappearing — the
+       discipline PanelSections holds inside a form, applied to the rail. That is a different question
+       from whether the rail is drawn at all: with every panel closed there is nothing here to fold to,
+       so the section renders nothing and _Layout draws no column for it (Task 7) — the toolbar's own
+       reopen control, above, is do-not-change item 23's way back for that case. *@
+    @if (anyRailOpen)
+    {
         var quickStartOpen = await Rails.IsOpenAsync(Harbora.Infrastructure.Navigation.RailPanel.QuickStart);
         var overviewOpen = await Rails.IsOpenAsync(Harbora.Infrastructure.Navigation.RailPanel.Overview);
-        var here = Context.Request.Path + Context.Request.QueryString;
-    }
 
     <section class="rail-panel">
         <div class="rail-heading">
@@ -289,6 +311,7 @@
         </div>
         }
     </section>
+    }
 }
 
 @section Scripts {
