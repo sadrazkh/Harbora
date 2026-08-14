@@ -20,16 +20,21 @@
     // generic in the other looks like two different things.
     string TypeKey(ManagedServiceType type) => Harbora.Infrastructure.Services.ServiceTypeKey.For(type);
 
-    // "access" links to the existing Databases/Access page and "backups" to the existing workspace-wide
-    // backup surface — neither is a route this shell renders itself, so CurrentTab never actually
-    // matches either while this shell is on screen. They are still listed here because this is the one
-    // strip that has to offer every one of a database's screens, not only the ones this shell draws.
+    // "access" links to the existing Databases/Access page, which this shell does not render itself,
+    // so CurrentTab never matches it while this shell is on screen. It is listed anyway because the
+    // strip has to offer every one of a database's screens, not only the ones drawn here.
+    //
+    // There is deliberately NO Backups tab. BackupsController.Index takes no filter — /backups is
+    // workspace-wide — so a tab reading "Backups" on this database's page would show every other
+    // database's too. Every other tab here shows THIS database; one that quietly widens to the
+    // workspace breaks the only promise a tab strip makes. The Overview already carries a
+    // database-scoped backups panel with its own "view all" link, so nothing is out of reach — and
+    // when a per-database backups view exists, this is where its tab goes.
     (string Key, string Href, string Label)[] tabs =
     [
         ("overview", $"/databases/{Model.Id}",        isFa ? "نمای کلی" : "Overview"),
         ("usage",    $"/databases/{Model.Id}/usage",  isFa ? "مصرف"     : "Usage"),
         ("access",   $"/databases/{Model.Id}/access", isFa ? "دسترسی"   : "Access"),
-        ("backups",  "/backups",                      isFa ? "پشتیبان‌ها" : "Backups"),
     ];
 }
 <nav class="breadcrumb mb-4" aria-label="breadcrumb">

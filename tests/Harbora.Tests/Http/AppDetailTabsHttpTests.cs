@@ -272,7 +272,18 @@ public class DatabaseDetailTabsHttpTests(HarboraHttpFixture fixture)
         // regardless of which language rendered it — the same reasoning AppDetailTabsHttpTests uses.
         html.Should().Contain($"/databases/{dbId}/usage", "the Usage tab must be reachable from Overview");
         html.Should().Contain($"/databases/{dbId}/access", "the Access tab must be reachable from Overview");
-        html.Should().Contain("/backups", "the Backups tab must be reachable from Overview");
+        // There is no Backups tab, on purpose. /backups is workspace-wide — BackupsController.Index
+        // takes no filter — so a tab reading "Backups" on this database's page would show every
+        // other database's as well, and every other tab in this strip shows THIS database.
+        //
+        // Asserted on the strip's own markup rather than on the page, because Overview still carries
+        // a database-scoped backups panel whose "view all" link points at /backups. A plain
+        // Contain("/backups") would therefore pass whether the tab was there or not — green for a
+        // reason it does not name, which is the one thing this suite exists to catch.
+        var strip = html[html.IndexOf("detail-tabs", StringComparison.Ordinal)..];
+        strip[..strip.IndexOf("</nav>", StringComparison.Ordinal)]
+            .Should().NotContain("/backups",
+                "a tab that widens from this database to the whole workspace breaks what a tab strip promises");
     }
 
     /// <summary>
