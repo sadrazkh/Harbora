@@ -120,6 +120,23 @@ public class AppAddressAssignerTests
         app.Domains.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// A hostname held by another tenant is taken, because DNS is not multi-tenant.
+    ///
+    /// <para>
+    /// Worth being honest about what this proves today. <c>DomainName</c> carries no tenant query
+    /// filter — <c>HarboraDbContext</c> says so deliberately, because a domain is only ever reached
+    /// through its parent and the parent is filtered. So the collision read sees every workspace's
+    /// hostnames without needing to ask for that, and this test passes for that reason rather than
+    /// because the assigner does anything clever.
+    /// </para>
+    /// <para>
+    /// It is still worth keeping, and this is the part that matters: it is the test that goes red on
+    /// the day somebody gives <c>DomainName</c> a filter. On that day the collision read starts
+    /// missing other tenants' names silently, and two apps get routed to one hostname with nothing
+    /// anywhere reporting a problem.
+    /// </para>
+    /// </summary>
     [Fact]
     public async Task A_name_taken_in_another_workspace_still_counts_as_taken()
     {
@@ -127,6 +144,8 @@ public class AppAddressAssignerTests
         db.Domains.Add(new DomainName { AppId = Guid.NewGuid(), Host = "shop.apps.example.com" });
         await db.SaveChangesAsync();
 
+        // A different workspace from the one the app below belongs to — WebApp() gives each app its
+        // own — so this is genuinely a cross-tenant name and not the same tenant's.
         var app = WebApp("shop");
         var decision = await new AppAddressAssigner(db, EmptyConfig())
             .AssignAsync(app, requested: null, suffix: () => "k3f", CancellationToken.None);

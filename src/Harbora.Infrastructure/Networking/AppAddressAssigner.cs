@@ -60,14 +60,23 @@ public sealed class AppAddressAssigner(HarboraDbContext db, IConfiguration confi
             app.Kind, requested, app.Slug, await RootDomainAsync(ct), ReservedFor());
         if (!decision.HasAddress) return decision;
 
-        // IgnoreQueryFilters: a hostname taken by another workspace is still taken. DNS is not
-        // multi-tenant, and a filtered query would report the name free and then route two apps to it.
+        // Read across every workspace on purpose: a hostname taken by another tenant is still taken,
+        // because DNS is not multi-tenant. A filtered read would report the name free and then route
+        // two apps to one hostname.
+        //
+        // No IgnoreQueryFilters() here, and that is deliberate rather than an oversight. DomainName
+        // carries no tenant filter — HarboraDbContext says so explicitly and gives the reason: it is
+        // only ever reached through its parent, which is filtered, so a navigation filter would add a
+        // join to every read for no extra protection. Writing IgnoreQueryFilters() would imply a
+        // filter that is not there and quietly contradict that decision. If DomainName is ever given
+        // one, this read must gain the escape at the same time — the test named for cross-workspace
+        // collisions is what fails on the day it does not.
         var host = decision.Host!;
         var outcome = AppAddressOutcome.Assigned;
 
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (!await db.Domains.IgnoreQueryFilters().AnyAsync(d => d.Host == host, ct))
+            if (!await db.Domains.AnyAsync(d => d.Host == host, ct))
             {
                 app.Domains.Add(new DomainName
                 {
