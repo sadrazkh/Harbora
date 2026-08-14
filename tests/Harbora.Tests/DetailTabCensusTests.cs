@@ -1,6 +1,8 @@
+using System.Reflection;
 using System.Text.RegularExpressions;
 using FluentAssertions;
 using Harbora.Web.Controllers;
+using Microsoft.AspNetCore.Mvc;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -34,6 +36,39 @@ public class DetailTabCensusTests
 
     private static string ControllerSource(string fileName) =>
         File.ReadAllText(Path.Combine(TestPaths.WebRoot, "Controllers", fileName));
+
+    /// <summary>Matches a route template that is nothing but "…/{id:guid}/word" — the shape every
+    /// tab href in a shell's <c>tabs = [ … ]</c> array takes. A multi-segment template like
+    /// <c>apps/{id:guid}/logs/data</c> does not match: the strip never links to those directly, so a
+    /// route like it must not silently widen what counts as a reachable tab.</summary>
+    private static readonly Regex TabRouteSegment = new(@"\{id:guid\}/(?<tab>[a-z]+)$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// The tab names a controller's own <c>[HttpGet]</c> route templates actually answer to — read
+    /// from the attribute's <see cref="Microsoft.AspNetCore.Mvc.Routing.IRouteTemplateProvider.Template"/>,
+    /// not from the method's name. The two can differ (a method named <c>Usage</c> could carry the
+    /// route <c>"…/consumption"</c>), and a census built on the name would call a link to the old
+    /// route "fine" the day the route moved and the method did not.
+    ///
+    /// <para>
+    /// <see cref="BindingFlags.DeclaredOnly"/> keeps this to methods the controller itself declares —
+    /// across every partial-class file it is split into, since a partial class is one type at
+    /// runtime — rather than the ~80 public methods it inherits from <c>Controller</c>,
+    /// <c>ControllerBase</c> and <c>object</c> (<c>Content</c>, <c>Json</c>, <c>View</c>,
+    /// <c>ToString</c>…). Without it, a tab href of <c>/apps/{id}/json</c> would pass this census
+    /// while 404-ing for real.
+    /// </para>
+    /// </summary>
+    private static HashSet<string> RouteTabs<TController>() where TController : Controller =>
+        typeof(TController)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .SelectMany(m => m.GetCustomAttributes<HttpGetAttribute>(inherit: false))
+            .Select(a => a.Template)
+            .Where(t => t is not null)
+            .Select(t => TabRouteSegment.Match(t!))
+            .Where(m => m.Success)
+            .Select(m => m.Groups["tab"].Value)
+            .ToHashSet();
 
     /// <summary>
     /// Just the <c>tabs = [ … ];</c> declaration out of a shell — the strip itself, not the file it
@@ -71,8 +106,7 @@ public class DetailTabCensusTests
 
         linked.Should().NotBeEmpty("a regex that matches nothing would pass this test for ever");
 
-        var actions = typeof(AppsController).GetMethods()
-            .Select(m => m.Name.ToLowerInvariant()).ToHashSet();
+        var actions = RouteTabs<AppsController>();
 
         linked.Should().OnlyContain(tab => actions.Contains(tab),
             "a tab pointed at an action that does not exist is a 404 nobody ever tries");
@@ -117,8 +151,7 @@ public class DetailTabCensusTests
 
         linked.Should().NotBeEmpty("a regex that matches nothing would pass this test for ever");
 
-        var actions = typeof(DatabasesController).GetMethods()
-            .Select(m => m.Name.ToLowerInvariant()).ToHashSet();
+        var actions = RouteTabs<DatabasesController>();
 
         linked.Should().OnlyContain(tab => actions.Contains(tab),
             "a tab pointed at an action that does not exist is a 404 nobody ever tries");
