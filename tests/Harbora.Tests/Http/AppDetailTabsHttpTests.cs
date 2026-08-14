@@ -44,6 +44,28 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
     }
 
     /// <summary>
+    /// The shell built in Task 2 draws a strip with a link to every other tab, on the very page
+    /// (<c>/apps/details/{id}</c>) that used to be the whole story. Nothing has moved out of Overview
+    /// yet — Tasks 3-5 do that — so this only checks the strip itself is there and points somewhere.
+    /// </summary>
+    [Fact]
+    public async Task Every_tab_of_an_app_is_reachable_from_the_page_itself()
+    {
+        var appId = SeedAppWithEverything();
+        Panel.GivenUser(fixture.WorkspaceId, "app-tabs-owner@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.181", "app-tabs-owner@example.com");
+
+        var html = await (await client.GetAsync($"/apps/details/{appId}")).Content.ReadAsStringAsync();
+
+        // Route fragments rather than the tab labels: the labels are the isFa ternary's Persian
+        // strings by default in this panel (same reasoning as the Rollback assertion above), so the
+        // untranslated href is what identifies each tab regardless of which language rendered it.
+        html.Should().Contain($"/apps/{appId}/usage", "the Usage tab must be reachable from Overview");
+        html.Should().Contain($"/apps/{appId}/volumes", "the Volumes tab must be reachable from Overview");
+        html.Should().Contain($"/apps/{appId}/deployments", "the Deployments tab must be reachable from Overview");
+    }
+
+    /// <summary>
     /// One app carrying one of each landmark the assertions above check for: an environment variable,
     /// a domain, a volume, and a deployment that has succeeded (so the rollback link the deployment
     /// list draws for a non-active successful deployment actually renders).

@@ -552,7 +552,23 @@ public sealed class AppsController(
                 .Take(20)
                 .ToListAsync(ct);
 
-        return View(app);
+        // The Overview tab, wrapped for the shared shell: _Shell.cshtml is typed to AppTabViewModel,
+        // so what reaches View() has to be an instance of it rather than the raw entity Details used
+        // to receive directly.
+        return View(new AppOverviewViewModel
+        {
+            Id = app.Id,
+            Name = app.Name,
+            Slug = app.Slug,
+            Kind = app.Kind,
+            Status = app.Status,
+            CurrentTab = "overview",
+            SourceType = app.SourceType,
+            GitRepositoryFullName = app.GitRepository?.FullName,
+            InstanceSizeKey = app.InstanceSizeKey,
+            HasVolumes = app.Volumes.Count > 0,
+            App = app
+        });
     }
 
     /// <summary>
