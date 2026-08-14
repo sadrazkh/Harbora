@@ -131,4 +131,36 @@ public class AppAddressHttpTests(HarboraHttpFixture fixture)
         Panel.Read(db => db.Domains.Where(d => d.AppId == untouched).ToList()).Should().BeEmpty(
             "the backfill is a control the operator presses, not something that happens to them");
     }
+
+    [Fact]
+    public async Task An_apps_overview_shows_its_address_as_a_link_you_can_follow()
+    {
+        var id = SeedApp("addr-overview-shop", ServiceKind.Web, withDomain: "addr-overview-shop.apps.example.com");
+        Panel.GivenUser(fixture.WorkspaceId, "addr-overview@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.205", "addr-overview@example.com");
+
+        var html = await (await client.GetAsync($"/apps/details/{id}")).Content.ReadAsStringAsync();
+
+        // On the href, not the bare hostname: the hostname also appears in the Domains table further
+        // down the page, so Contain("addr-overview-shop.apps.example.com") would pass whether or not
+        // the link this test is about was ever built.
+        html.Should().Contain("href=\"https://addr-overview-shop.apps.example.com\"",
+            "the address is meant to be one click, not something to read and retype");
+    }
+
+    [Fact]
+    public async Task A_workers_overview_states_why_it_has_no_address_instead_of_showing_a_gap()
+    {
+        var id = SeedApp("addr-overview-worker", ServiceKind.Worker, withDomain: null);
+        Panel.GivenUser(fixture.WorkspaceId, "addr-ovw-worker@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.206", "addr-ovw-worker@example.com");
+
+        var html = await (await client.GetAsync($"/apps/details/{id}")).Content.ReadAsStringAsync();
+
+        // On the marker, not the sentence: the panel renders Persian by default, so an assertion on
+        // the English wording would never match — and one on the Persian wording would break the day
+        // somebody improves the phrasing, which is not what this test is about.
+        html.Should().Contain("data-address-state=\"no-traffic\"",
+            "an unexplained blank is the promise-without-a-feature this project keeps removing");
+    }
 }
