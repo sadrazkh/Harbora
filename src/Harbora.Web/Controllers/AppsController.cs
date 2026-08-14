@@ -643,7 +643,7 @@ public sealed partial class AppsController(
         if (refusal != Harbora.Infrastructure.Storage.MountPathRefusal.None)
         {
             TempData["Error"] = ExplainMount(refusal);
-            return RedirectToAction(nameof(Details), new { id });
+            return RedirectToAction(nameof(Volumes), new { id });
         }
 
         var normalised = Harbora.Infrastructure.Storage.MountPath.Normalise(mountPath)!;
@@ -656,7 +656,7 @@ public sealed partial class AppsController(
             TempData["Error"] = IsFa
                 ? $"«{normalised}» از قبل هست."
                 : $"{normalised} is already mounted.";
-            return RedirectToAction(nameof(Details), new { id });
+            return RedirectToAction(nameof(Volumes), new { id });
         }
 
         await using var quotaReservation = await quota.AcquireCreationLockAsync(WorkspaceId, ct);
@@ -665,7 +665,7 @@ public sealed partial class AppsController(
         if (!quotaCheck.Allowed)
         {
             TempData["Error"] = (IsFa ? quotaCheck.ReasonFa : null) ?? quotaCheck.Reason;
-            return RedirectToAction(nameof(Details), new { id });
+            return RedirectToAction(nameof(Volumes), new { id });
         }
 
         app.Volumes.Add(new Volume
@@ -683,7 +683,7 @@ public sealed partial class AppsController(
         TempData["Message"] = IsFa
             ? $"«{normalised}» اضافه شد. با استقرار بعدی به کانتینر وصل می‌شود."
             : $"{normalised} was added. It is attached to the container on the next deployment.";
-        return RedirectToAction(nameof(Details), new { id });
+        return RedirectToAction(nameof(Volumes), new { id });
     }
 
     /// <summary>
@@ -727,7 +727,7 @@ public sealed partial class AppsController(
                 ? $"«{path}» دیگر وصل نمی‌شود. داده‌ها روی سرور ماندند."
                 : $"{path} is no longer mounted. The data is still on the server.");
 
-        return RedirectToAction(nameof(Details), new { id });
+        return RedirectToAction(nameof(Volumes), new { id });
     }
 
     private string ExplainMount(Harbora.Infrastructure.Storage.MountPathRefusal refusal) => (refusal, IsFa) switch
