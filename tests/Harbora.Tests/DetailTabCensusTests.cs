@@ -35,6 +35,25 @@ public class DetailTabCensusTests
     private static string ControllerSource(string fileName) =>
         File.ReadAllText(Path.Combine(TestPaths.WebRoot, "Controllers", fileName));
 
+    /// <summary>
+    /// Just the <c>tabs = [ … ];</c> declaration out of a shell — the strip itself, not the file it
+    /// lives in. The difference is not pedantry: the database shell's header already carries an
+    /// "External access" button pointing at <c>/databases/{id}/access</c>, so a test asking whether the
+    /// whole file mentions <c>/access</c> answers yes whether or not the Access tab is in the strip. It
+    /// would go on saying yes the day somebody deleted that tab. Reading the array is what makes the
+    /// reachability assertion below about the strip that is supposed to offer the tab.
+    /// </summary>
+    private static string TabStrip(string shell)
+    {
+        var start = shell.IndexOf("tabs =", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(-1, "every shell declares its strip as a `tabs = [ … ];` array");
+
+        var end = shell.IndexOf("];", start, StringComparison.Ordinal);
+        end.Should().BeGreaterThan(start, "the strip declaration must be closed");
+
+        return shell[start..end];
+    }
+
     // ---- Apps ----
 
     /// <summary>
@@ -67,7 +86,7 @@ public class DetailTabCensusTests
     [Fact]
     public void Every_app_tab_action_declared_in_its_route_file_is_reachable_from_the_shell()
     {
-        var shell = File.ReadAllText(ViewPath("Apps/_Shell.cshtml"));
+        var shell = TabStrip(File.ReadAllText(ViewPath("Apps/_Shell.cshtml")));
         var tabsSource = ControllerSource("AppsController.Tabs.cs");
 
         var declared = Regex.Matches(tabsSource, @"\[HttpGet\(""apps/\{id:guid\}/(?<tab>[a-z]+)""\)\]")
@@ -122,7 +141,7 @@ public class DetailTabCensusTests
     [Fact]
     public void Every_database_tab_action_declared_in_its_route_files_is_reachable_from_the_shell()
     {
-        var shell = File.ReadAllText(ViewPath("Databases/_Shell.cshtml"));
+        var shell = TabStrip(File.ReadAllText(ViewPath("Databases/_Shell.cshtml")));
         var tabsSource = ControllerSource("DatabasesController.Tabs.cs") + ControllerSource("DatabaseAccessActions.cs");
 
         var declared = Regex.Matches(tabsSource, @"\[HttpGet\(""\{id:guid\}/(?<tab>[a-z]+)""\)\]")
