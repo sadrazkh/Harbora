@@ -270,6 +270,8 @@ public static class DependencyInjection
         // Tells the truth about custom domains: where DNS points and what certificate is live.
         services.AddScoped<IDomainInspector, Networking.DomainInspector>();
         services.AddScoped<Networking.CloudflarePlatformService>();
+        // The one place every app-creation path asks what hostname an app should get.
+        services.AddScoped<Networking.AppAddressAssigner>();
 
         // Monitoring + notifications.
         services.AddHttpClient();

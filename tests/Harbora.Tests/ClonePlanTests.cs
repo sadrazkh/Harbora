@@ -1,4 +1,5 @@
 ﻿using FluentAssertions;
+using Harbora.Domain.Common;
 using Harbora.Infrastructure.Projects;
 using Xunit;
 
@@ -16,8 +17,8 @@ public class ClonePlanTests
 {
     private static CloneSourceApp App(
         string slug, string name = "App", long memory = 0, double cpu = 0, int domains = 0,
-        params string[] mounts) =>
-        new(Guid.NewGuid(), name, slug, "small", memory, cpu, domains,
+        ServiceKind kind = ServiceKind.Web, params string[] mounts) =>
+        new(Guid.NewGuid(), name, slug, "small", memory, cpu, domains, kind,
             mounts.Select(m => new CloneSourceVolume(m, false, null)).ToList());
 
     private static CloneSourceService Service(
@@ -130,7 +131,7 @@ public class ClonePlanTests
     public void A_volume_keeps_its_mount_path_and_its_limits()
     {
         var plan = ClonePlan.Of(new CloneRequest("Staging", Project, [], [], [],
-            [new CloneSourceApp(Guid.NewGuid(), "App", "api", "small", 0, 0, 0,
+            [new CloneSourceApp(Guid.NewGuid(), "App", "api", "small", 0, 0, 0, ServiceKind.Web,
                 [new CloneSourceVolume("/data", ReadOnly: true, SizeLimitBytes: 5_000)])],
             []));
 
@@ -249,4 +250,32 @@ public class ClonePlanTests
     [Fact]
     public void An_application_with_no_variables_at_all_is_attached_to_nothing() =>
         ClonePlan.IsAttachedTo([], "db").Should().BeFalse();
+
+    /// <summary>
+    /// The plan carries each copy's kind onto <see cref="CloneAppSpec"/>, which is what lets
+    /// <c>EnvironmentCloner.QuotaRefusalAsync</c> tell an addressable copy from one that will never
+    /// consume a domain.
+    ///
+    /// <para>
+    /// This file proves the plan's shape, not the quota decision built from it — that belongs to
+    /// <c>EnvironmentClonerTests</c>, exercised through a real <c>CloneAsync</c> call, because a plan-only
+    /// assertion that re-derives the same expression production uses cannot fail when production's own
+    /// expression is the thing that breaks. (An earlier version of this test did exactly that: it
+    /// recomputed <c>ServicePlan.CanHaveDomains</c> itself and compared it to a literal count, so it
+    /// stayed green even with the quota's <c>Domains:</c> term deleted outright.)
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Each_copys_kind_survives_onto_its_plan_entry()
+    {
+        var plan = ClonePlan.Of(new CloneRequest("Staging", Project, [], [], [],
+            [App("web", kind: ServiceKind.Web),
+             App("site", kind: ServiceKind.Static),
+             App("worker", kind: ServiceKind.Worker),
+             App("nightly", kind: ServiceKind.Cron)],
+            []));
+
+        plan.Apps.Select(a => a.Kind).Should().Equal(
+            ServiceKind.Web, ServiceKind.Static, ServiceKind.Worker, ServiceKind.Cron);
+    }
 }

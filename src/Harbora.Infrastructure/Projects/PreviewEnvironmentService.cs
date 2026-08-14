@@ -3,6 +3,7 @@ using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Networking;
+using Harbora.Infrastructure.Networking;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -28,7 +29,8 @@ public sealed class PreviewEnvironmentService(
     IQuotaService quota,
     ISystemClock clock,
     Billing.ResourceCreationBilling creationBilling,
-    ILogger<PreviewEnvironmentService> logger)
+    ILogger<PreviewEnvironmentService> logger,
+    AppAddressAssigner addresses)
 {
     /// <summary>
     /// Makes sure a preview of this branch exists and is up to date, and queues a deployment.
@@ -201,18 +203,13 @@ public sealed class PreviewEnvironmentService(
         foreach (var (key, value) in config.Copied)
             preview.EnvironmentVariables.Add(new EnvironmentVariable { Key = key, Value = value, IsSecret = false });
 
-        var rootDomain = await db.Settings.IgnoreQueryFilters()
-            .Where(s => s.Key == Domain.Settings.SettingKeys.PlatformRootDomain)
-            .Select(s => s.Value).FirstOrDefaultAsync(ct);
-
-        // Its own address, never the parent's: a preview that answered on production's hostname
-        // would be the worst possible outcome of this feature.
-        if (Deployments.ServicePlan.HasPublicTraffic(parent.Kind)
-            && PreviewNaming.Host(parent.Slug, branch, rootDomain) is { } host
-            && !await db.Domains.IgnoreQueryFilters().AnyAsync(d => d.Host == host, ct))
-        {
-            preview.Domains.Add(new DomainName { Host = host, SslEnabled = true, ForceHttps = true, IsPrimary = true });
-        }
+        // Its own address, never the parent's: a preview that answered on production's hostname would
+        // be the worst possible outcome of this feature. The NAME is still this service's own — two
+        // previews of one app must not collide by construction — but the checks around it are shared.
+        var rootDomain = await addresses.RootDomainAsync(ct);
+        await addresses.AssignAsync(
+            preview, PreviewNaming.Host(parent.Slug, branch, rootDomain), AppAddressRequestOrigin.Derived,
+            suffix: null, ct);
 
         db.Apps.Add(preview);
         await creationBilling.SaveAsync(parent.WorkspaceId,

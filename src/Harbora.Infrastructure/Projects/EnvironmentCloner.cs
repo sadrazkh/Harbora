@@ -3,6 +3,7 @@ using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Services;
+using Harbora.Infrastructure.Networking;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Environment = Harbora.Domain.Projects.Environment;
@@ -41,7 +42,8 @@ public sealed class EnvironmentCloner(
     ISecretProtector protector,
     ISystemClock clock,
     Billing.ResourceCreationBilling creationBilling,
-    ILogger<EnvironmentCloner> log)
+    ILogger<EnvironmentCloner> log,
+    AppAddressAssigner addresses)
 {
     /// <summary>
     /// Works out what copying <paramref name="sourceEnvironmentId"/> would create, without creating
@@ -58,7 +60,7 @@ public sealed class EnvironmentCloner(
             .Where(a => a.EnvironmentId == source.Id)
             .Select(a => new
             {
-                a.Id, a.Name, a.Slug, a.InstanceSizeKey, a.MemoryLimitBytes, a.CpuLimit,
+                a.Id, a.Name, a.Slug, a.InstanceSizeKey, a.MemoryLimitBytes, a.CpuLimit, a.Kind,
                 Domains = a.Domains.Count,
                 Volumes = a.Volumes.Select(v => new { v.MountPath, v.ReadOnly, v.SizeLimitBytes }).ToList()
             })
@@ -88,7 +90,7 @@ public sealed class EnvironmentCloner(
             takenAppSlugs,
             takenContainers,
             apps.Select(a => new CloneSourceApp(
-                a.Id, a.Name, a.Slug, a.InstanceSizeKey, a.MemoryLimitBytes, a.CpuLimit, a.Domains,
+                a.Id, a.Name, a.Slug, a.InstanceSizeKey, a.MemoryLimitBytes, a.CpuLimit, a.Domains, a.Kind,
                 a.Volumes.Select(v => new CloneSourceVolume(v.MountPath, v.ReadOnly, v.SizeLimitBytes))
                     .ToList())).ToList(),
             services.Select(s => new CloneSourceService(
@@ -303,6 +305,11 @@ public sealed class EnvironmentCloner(
                 });
             }
 
+            // A cloned app used to arrive with no address at all — the one creation path that had no
+            // rule rather than a wrong one. Its slug differs from the original's (spec.Slug), so this
+            // does not contend with the app it was copied from.
+            await addresses.AssignAsync(copy, requested: null, AppAddressRequestOrigin.Derived, suffix: null, ct);
+
             db.Apps.Add(copy);
         }
 
@@ -405,9 +412,20 @@ public sealed class EnvironmentCloner(
     /// </summary>
     private async Task<string?> QuotaRefusalAsync(Guid workspaceId, ClonePlan plan, CancellationToken ct)
     {
+        // No root domain configured means AssignAsync hands out NoRootDomain to every copy regardless
+        // of kind, so none of them consumes a domain — counting one per addressable copy anyway would
+        // refuse a clone for a limit it would not actually have touched.
+        var rootDomain = await addresses.RootDomainAsync(ct);
         var governed = await quota.CanAddGovernedResourcesAsync(workspaceId,
             new GovernanceQuotaDelta(
                 Environments: 1,
+                // One address per copy that can have one. App copies get an address now — before that
+                // they arrived with none, so leaving domains out of this estimate was correct then and
+                // lets a workspace clone straight past its domain limit today. Counted here with the
+                // rest rather than asked per app, for the reason this method's own docstring gives.
+                Domains: string.IsNullOrWhiteSpace(rootDomain)
+                    ? 0
+                    : plan.Apps.Count(a => Deployments.ServicePlan.CanHaveDomains(a.Kind)),
                 Volumes: plan.Apps.Sum(a => a.Volumes.Count)), ct);
         if (!governed.Allowed) return governed.Reason;
 

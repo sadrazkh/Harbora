@@ -1,0 +1,82 @@
+@model Harbora.Web.Controllers.AppAddressPreviewViewModel
+@{
+    ViewData["Title"] = "Addresses";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var givable = Model.Candidates.Count(c => c.Candidate is not null);
+}
+
+<div class="page-heading">
+    <div>
+        <div class="eyebrow"><i data-lucide="link" class="h-3.5 w-3.5"></i>@(isFa ? "بازبینی آدرس‌ها" : "Address backfill")</div>
+        <h1>@(isFa ? "دادن آدرس به اپ‌های موجود" : "Give existing apps an address")</h1>
+        <p>@(isFa
+            ? "اپ‌هایی که پیش از تنظیم دامنهٔ اصلی ساخته شده‌اند یا از یک اپ دیگر شبیه‌سازی شده‌اند و آدرسی نگرفته‌اند، اینجا فهرست می‌شوند. تا وقتی دکمه را نزنید چیزی تغییر نمی‌کند."
+            : "Apps cloned without an address, or created before the platform's root domain was configured, are listed here. Nothing changes until you press the button.")</p>
+    </div>
+</div>
+
+@if (msg is not null)
+{
+    <div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>
+}
+
+<section class="resource-shell">
+    @if (Model.RootDomain is null)
+    {
+        <div class="empty-state min-h-[20rem]">
+            <span class="empty-state-icon"><i data-lucide="globe" class="h-6 w-6"></i></span>
+            <h2>@(isFa ? "دامنهٔ اصلی پلتفرم تنظیم نشده است" : "No platform root domain is configured")</h2>
+            <p>@(isFa
+                ? "پیش از دادن آدرس به اپ‌ها، باید دامنهٔ اصلی پلتفرم را در تنظیمات مشخص کنید."
+                : "Set the platform's root domain in settings before any app can be given one.")</p>
+        </div>
+    }
+    else if (Model.Candidates.Count == 0)
+    {
+        <div class="empty-state min-h-[20rem]">
+            <span class="empty-state-icon"><i data-lucide="check" class="h-6 w-6"></i></span>
+            <h2>@(isFa ? "همهٔ اپ‌ها آدرس دارند" : "Every app already has an address")</h2>
+            <p>@(isFa ? "کاری برای بازبینی نیست." : "There is nothing left to back-fill.")</p>
+        </div>
+    }
+    else
+    {
+        <div class="overflow-x-auto">
+            <table class="resource-table">
+                <thead><tr>
+                    <th>@(isFa ? "برنامه" : "Application")</th>
+                    <th>@(isFa ? "آدرسی که خواهد گرفت" : "Address it would be given")</th>
+                </tr></thead>
+                <tbody id="addressRows">
+                @foreach (var candidate in Model.Candidates)
+                {
+                    <tr data-app-id="@candidate.Id">
+                        <td>
+                            <div class="table-primary">@candidate.Name</div>
+                            <div class="table-secondary">@candidate.Slug</div>
+                        </td>
+                        <td>
+                            @if (candidate.Candidate is { Length: > 0 } host)
+                            { <span class="domain-link"><i data-lucide="lock-keyhole" class="h-3.5 w-3.5"></i>@host</span> }
+                            else
+                            { <span class="table-secondary">@candidate.Reason</span> }
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+
+        <div class="resource-footer flex items-center justify-between gap-4">
+            <span>@(isFa ? $"{givable} از {Model.Candidates.Count} آدرس می‌گیرند" : $"{givable} of {Model.Candidates.Count} would get an address")</span>
+            <form asp-controller="Apps" asp-action="ApplyAddresses" method="post">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="btn-primary">
+                    <i data-lucide="link" class="h-4 w-4"></i>
+                    @(isFa ? "اعمال بازبینی" : "Apply the backfill")
+                </button>
+            </form>
+        </div>
+    }
+</section>

@@ -488,6 +488,48 @@
             </section>
         }
 
+        @* ---- Address ----
+           Sub-project A left this deliberately empty: a blank labelled space is a promise without a
+           feature. The feature exists now, so the space is earned. Three states, and the middle one
+           is the one that matters — a service that takes no inbound traffic must say so, or the gap
+           reads exactly like the placeholder this project has spent two sub-projects removing. *@
+        @{ var primaryDomain = app.Domains.FirstOrDefault(d => d.IsPrimary); }
+        <section class="rounded-xl border border-line bg-surface p-4">
+            <div class="mb-2 font-semibold">@(isFa ? "آدرس" : "Address")</div>
+            @if (primaryDomain is not null)
+            {
+                @* The scheme follows SslEnabled, exactly as the Domains table below does. Hard-coding
+                   https here would let one page show two schemes for one hostname the moment somebody
+                   turns SSL off — and the link at the top, the one people actually click, would be
+                   the wrong one. *@
+                var primaryScheme = primaryDomain.SslEnabled ? "https" : "http";
+                <div class="flex flex-wrap items-center gap-2">
+                    <a href="@primaryScheme://@primaryDomain.Host" target="_blank" rel="noopener" dir="ltr"
+                       class="text-accent-text truncate">@primaryDomain.Host</a>
+                    @* Same mechanism as the prebuilt-image reference above: the element's own text is
+                       what gets copied, so the control shows the full URL rather than a bare host. *@
+                    <code dir="ltr" data-copy-text
+                          class="rounded bg-code text-code-ink px-2 py-0.5 text-[11px]"
+                          title="@(isFa ? "برای کپی کلیک کنید" : "Click to copy")">@primaryScheme://@primaryDomain.Host</code>
+                </div>
+            }
+            else if (!Harbora.Infrastructure.Deployments.ServicePlan.CanHaveDomains(app.Kind))
+            {
+                <p data-address-state="no-traffic" class="text-xs text-ink-faint">
+                    @(isFa
+                        ? "این سرویس ترافیک ورودی نمی‌گیرد، پس آدرسی ندارد."
+                        : "This service takes no inbound traffic, so it has no address.")
+                </p>
+            }
+            else
+            {
+                <p data-address-state="none" class="text-xs text-ink-faint">
+                    @(isFa ? "این اپ هنوز آدرسی نگرفته است. " : "This app has not been given an address yet. ")<a
+                        href="/apps/addresses" class="text-accent-text hover:underline">@(isFa ? "دادن آدرس" : "Give it one")</a>
+                </p>
+            }
+        </section>
+
         @* ---- Domains ----
            The status shown here is probed, not configured: DNS is resolved and a real TLS handshake
            is made. The old "SSL" badge only meant a checkbox was ticked, so a domain that had never

@@ -567,7 +567,7 @@ public class NodeChannelDeploymentTests
         Between(controller, "public async Task<IActionResult> AddDomain", "app.Domains.Add")
             .Should().Contain("ReservedHost", "the domains form is the obvious way in");
 
-        Between(controller, "var host = Harbora.Infrastructure.Deployments.ServicePlan.HostFor", "app.Domains.Add")
+        Between(controller, "var addressed = await addresses.AssignAsync", "string? templateAdvice")
             .Should().Contain("ReservedHost", "and app creation takes a typed domain too");
     }
 

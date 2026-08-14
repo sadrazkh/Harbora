@@ -7,6 +7,7 @@ using Harbora.Domain.Git;
 using Harbora.Domain.Jobs;
 using Harbora.Domain.Monitoring;
 using Harbora.Domain.Networking;
+using Harbora.Infrastructure.Networking;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -35,7 +36,8 @@ public sealed partial class AppsController(
     IJobQueue jobs,
     IConfiguration config,
     ICurrentUser currentUser,
-    Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling) : Controller
+    Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling,
+    AppAddressAssigner addresses) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -59,6 +61,11 @@ public sealed partial class AppsController(
     private string ReservedHostRefusal(string host) => IsFa
         ? $"«{host}» یکی از نام‌های خودِ سامانه است و نمی‌توان آن را به یک اپ داد."
         : $"'{host}' is one of the platform's own host names and cannot be routed to an app.";
+
+    /// <summary>The same refusal AddDomain has always given a typed host that is already taken.</summary>
+    private string TakenHostRefusal(string host) => IsFa
+        ? $"«{host}» پیش‌تر استفاده شده است."
+        : $"'{host}' is already in use.";
 
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -284,20 +291,49 @@ public sealed partial class AppsController(
             app.GitRepository = repo;
         }
 
-        // Domain: use the one given, else auto-assign {slug}.{root domain} so the app is instantly reachable.
-        var rootDomain = await db.Settings.Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.PlatformRootDomain)
-            .Select(s => s.Value).FirstOrDefaultAsync(ct);
-        var host = Harbora.Infrastructure.Deployments.ServicePlan.HostFor(model.Kind, model.Domain, slug, rootDomain);
-        // A typed domain arrives here too, so the reserved-host rule has to be here too. The refusal
-        // is the same message the domains form gives, and it happens before the app is written.
-        if (IsReservedHost(host))
+        // One rule, one place. This used to derive the host here, check reserved names here, and then
+        // silently skip the insert when the name was taken — so an app could be created with no
+        // address and no explanation. AppAddressAssigner answers all three, and says which happened.
+        //
+        // Typed vs. derived matters for what a collision means: a blank field gets the slug-derived
+        // name, which may be discriminated the way a clone's own name is; a name someone actually
+        // typed is a promise made to them, and a collision on it is refused instead — see
+        // AppAddressRequestOrigin.
+        var origin = string.IsNullOrWhiteSpace(model.Domain)
+            ? AppAddressRequestOrigin.Derived
+            : AppAddressRequestOrigin.Typed;
+        var addressed = await addresses.AssignAsync(app, model.Domain, origin, suffix: null, ct);
+        if (addressed.Outcome == AppAddressOutcome.Reserved)
         {
-            ModelState.AddModelError(nameof(model.Domain), ReservedHostRefusal(host!));
+            // model.Domain is null whenever this came from the derived name rather than a typed one —
+            // recompute the same host AppAddress.Decide settled on internally, so the message names
+            // what actually offended instead of rendering an empty pair of quotes.
+            var offendingHost = Harbora.Infrastructure.Deployments.ServicePlan.HostFor(
+                app.Kind, model.Domain, app.Slug, await addresses.RootDomainAsync(ct)) ?? model.Domain ?? "";
+            ModelState.AddModelError(nameof(model.Domain), ReservedHostRefusal(offendingHost));
             await PopulateTemplates(ct);
             return View(model);
         }
-        if (!string.IsNullOrWhiteSpace(host) && !await db.Domains.AnyAsync(d => d.Host == host, ct))
-            app.Domains.Add(new DomainName { Host = host, SslEnabled = true, ForceHttps = true, IsPrimary = true });
+        if (addressed.Outcome == AppAddressOutcome.Taken)
+        {
+            // The same refusal AddDomain has always given a typed name that collides — not
+            // discriminated onto a zone with no DNS record for the mangled name and no wildcard
+            // certificate to cover it.
+            ModelState.AddModelError(nameof(model.Domain), TakenHostRefusal(model.Domain!));
+            await PopulateTemplates(ct);
+            return View(model);
+        }
+        if (addressed.Outcome == AppAddressOutcome.Discriminated)
+            TempData["Message"] = IsFa
+                ? $"نام درخواستی گرفته شده بود؛ این اپ روی «{addressed.Host}» در دسترس است."
+                : $"That name was taken, so this app is reachable at '{addressed.Host}'.";
+        else if (addressed.Outcome == AppAddressOutcome.Exhausted)
+            // Every discriminated attempt collided too — the enum's own docstring says this is "said
+            // out loud rather than skipped", so it is: silence here is the exact defect this branch
+            // removed everywhere else.
+            TempData["Message"] = IsFa
+                ? "چند نام دیگر هم گرفته شده بود، پس این اپ فعلاً بدون آدرس ساخته شد."
+                : "Several names were already taken, so this app was created with no address for now.";
 
         // A template describes more than an image and a port. Until this was applied, an app
         // created from one arrived without the volume it declared — a static site whose content
@@ -1332,9 +1368,29 @@ public sealed partial class AppsController(
     public async Task<IActionResult> DeleteDomain(Guid id, Guid domainId, CancellationToken ct)
     {
         if (!await MayAsync(id, Capabilities.AppsEnv, ct)) return NotFound();
-        var host = await db.Domains.Where(d => d.Id == domainId && d.AppId == id).Select(d => d.Host).FirstOrDefaultAsync(ct);
-        await db.Domains.Where(d => d.Id == domainId && d.AppId == id).ExecuteDeleteAsync(ct);
-        if (host is not null) await db.Routes.Where(r => r.AppId == id && r.Host == host).ExecuteDeleteAsync(ct);
+        var domain = await db.Domains.FirstOrDefaultAsync(d => d.Id == domainId && d.AppId == id, ct);
+        if (domain is not null)
+        {
+            db.Domains.Remove(domain);
+            var routes = await db.Routes.Where(r => r.AppId == id && r.Host == domain.Host).ToListAsync(ct);
+            db.Routes.RemoveRange(routes);
+
+            // Deleting the primary must not leave a live custom domain marked nobody's primary:
+            // Overview, the applications list and the backfill's "addressless" filter all key off
+            // IsPrimary, and an app with a domain that is nobody's primary reads — wrongly — as
+            // having none at all.
+            var survivorPrimaryAlready = await db.Domains
+                .AnyAsync(d => d.AppId == id && d.Id != domainId && d.IsPrimary, ct);
+            if (!survivorPrimaryAlready)
+            {
+                var survivor = await db.Domains.Where(d => d.AppId == id && d.Id != domainId)
+                    .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).FirstOrDefaultAsync(ct);
+                if (survivor is not null) survivor.IsPrimary = true;
+            }
+
+            await db.SaveChangesAsync(ct);
+        }
+
         TempData["Message"] = "Domain removed.";
         return RedirectToAction(nameof(Details), new { id });
     }
