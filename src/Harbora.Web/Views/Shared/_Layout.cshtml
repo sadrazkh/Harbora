@@ -65,15 +65,44 @@
 
         @* The rail is rendered exactly once. A Razor section cannot be rendered twice, so its
            placement is a CSS concern: beside the content on wide screens, beneath it otherwise.
-           It moves rather than disappearing, because on these pages it carries information. *@
+           It moves rather than disappearing, because on these pages it carries information.
+
+           The row below is Flexbox (`flex … 2xl:flex-row`), with `<main>` as `flex-1` and the rail as
+           `shrink-0` at a fixed width — not a grid with a reserved track, so a sibling that is not
+           rendered at all is space `<main>` reclaims on its own; nothing here has to compensate for it.
+
+           Whether the aside itself appears now depends on what the section actually puts on the page,
+           not on a page-agnostic flag: some pages (Users, Domains, Templates) draw their rail
+           unconditionally and must keep doing so, while Apps and Databases can legitimately close
+           every panel they own and end up with nothing to draw. Rendering the section into a buffer
+           first and checking whether it produced anything answers both without the layout needing to
+           know which panels belong to which page. *@
+        @{
+            var railBuffer = new StringWriter();
+            PushWriter(railBuffer);
+            // Apps/Index.cshtml's RightRail section awaits Rails.AnyOpenAsync() and two
+            // IsOpenAsync() calls — all three reach the database, so all three can throw. Without
+            // the finally, a throw here would leave the writer stack pushed at a buffer nobody
+            // reads again, and everything this layout renders afterwards would go into it instead
+            // of the response.
+            try
+            {
+                await RenderSectionAsync("RightRail", required: false);
+            }
+            finally
+            {
+                PopWriter();
+            }
+            var railHtml = railBuffer.ToString();
+        }
         <div class="flex min-h-0 flex-1 flex-col overflow-y-auto 2xl:flex-row">
             <main class="min-w-0 flex-1 p-4 md:p-6 2xl:p-7">
                 @RenderBody()
             </main>
-            @if (IsSectionDefined("RightRail"))
+            @if (!string.IsNullOrWhiteSpace(railHtml))
             {
                 <aside class="w-full shrink-0 space-y-5 border-t border-line bg-surface p-5 2xl:w-80 2xl:border-s 2xl:border-t-0">
-                    @await RenderSectionAsync("RightRail", required: false)
+                    @Html.Raw(railHtml)
                 </aside>
             }
         </div>

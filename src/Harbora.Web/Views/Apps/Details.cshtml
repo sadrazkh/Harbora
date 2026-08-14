@@ -1,61 +1,23 @@
-﻿@model App
+﻿@model Harbora.Web.ViewModels.AppOverviewViewModel
 @using Harbora.Infrastructure.Projects
 @inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
-@inject Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Terminals.TerminalFeatureOptions> TerminalFeatures
 @{
-    ViewData["Title"] = Model.Name;
+    // The header and tab strip now live in _Shell.cshtml, which is typed to AppTabViewModel rather
+    // than to the raw App entity — this local alias is what lets the rest of this file go on reading
+    // "app.Whatever" exactly as it read "Model.Whatever" before the split.
+    Layout = "_Shell";
+    var app = Model.App;
+
+    ViewData["Title"] = app.Name;
 
     // Simple mode folds the specialist parts of this page; Advanced leaves them open, so the page
     // is unchanged for anyone who was already using it. Folded, never dropped — the settings are
     // one click away and the summary says what is inside.
     var advancedOpen = Harbora.Infrastructure.Navigation.PanelSections.StartsOpen(await PanelModes.GetAsync());
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
-    var msg = TempData["Message"] as string; var err = TempData["Error"] as string;
-    var running = Model.Status == AppStatus.Running;
+    // The Message/Error banner now renders once in _Shell.cshtml, above every tab — not here.
+    // TempData is consumed on read, so a second read site here would just find it already gone.
 }
-<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
-    <div>
-        <a href="/apps" class="text-accent-text text-sm">← @T["Applications"]</a>
-        <h1 class="text-2xl font-bold tracking-tight text-ink flex items-center gap-3">@Model.Name <partial name="_StatusBadge" model="Model.Status" /></h1>
-        <p class="text-ink-muted text-sm">@Model.Slug · @Model.SourceType @(Model.GitRepository is not null ? "· " + Model.GitRepository.FullName : "")
-            @if (!string.IsNullOrEmpty(Model.InstanceSizeKey)){<span>· @Model.InstanceSizeKey</span>}
-        </p>
-    </div>
-    <div class="flex flex-wrap gap-2">
-        <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Deploy"]</button></form>
-        @if (Model.Kind == ServiceKind.Cron)
-        {
-            @* Without this a nightly job cannot be checked until tomorrow. It takes the same path the
-               schedule does, so what is tested here is what will happen at 03:00. *@
-            <form asp-controller="Apps" asp-action="RunNow" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">▶ @T["Run now"]</button></form>
-        }
-        <form asp-controller="Apps" asp-action="Restart" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">↻ @T["Restart"]</button></form>
-        @* Only when there is something to browse. An app with no volume keeps nothing between
-           deployments, and a Data button leading to "there is nothing here" is a dead button. *@
-        @if (Model.Volumes.Count > 0)
-        {
-            <a href="/apps/@Model.Id/data" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm inline-flex items-center gap-1.5"><i data-lucide="folder-open" class="h-4 w-4"></i>@(isFa ? "داده" : "Data")</a>
-        }
-        @* Only when the operator has turned terminals on, and only for something that is running.
-           A shell is the widest door the panel has; it does not get an always-visible button. *@
-        @if (TerminalFeatures.Value.Terminal && running)
-        {
-            <a href="/apps/@Model.Id/terminal" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm inline-flex items-center gap-1.5"><i data-lucide="square-terminal" class="h-4 w-4"></i>@(isFa ? "ترمینال" : "Terminal")</a>
-        }
-        @if (running)
-        {
-            <form asp-controller="Apps" asp-action="Stop" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">⏸ @T["Stop"]</button></form>
-        }
-        else
-        {
-            <form asp-controller="Apps" asp-action="Start" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">▶ @T["Start"]</button></form>
-        }
-        <a href="/apps/@Model.Id/logs" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">📜 @T["Logs"]</a>
-    </div>
-</div>
-
-@if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
-@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
 
 <div class="grid lg:grid-cols-3 gap-6">
     <div class="lg:col-span-2 space-y-6">
@@ -63,22 +25,22 @@
            For a cron service this is the app: there is no container to look at between runs, so
            "did it run, did it work, what did it say" can only be answered from history. It leads,
            because a deployment list answers none of those questions. *@
-        @if (Model.Kind == ServiceKind.Cron)
+        @if (app.Kind == ServiceKind.Cron)
         {
             var runs = ViewBag.CronRuns as List<Harbora.Domain.Apps.CronRun> ?? new();
             <section class="rounded-xl border border-line bg-surface">
                 <div class="px-4 py-3 border-b border-line flex flex-wrap items-baseline justify-between gap-2">
                     <span class="font-semibold">@T["Scheduled runs"]</span>
-                    @if (!string.IsNullOrWhiteSpace(Model.Command))
+                    @if (!string.IsNullOrWhiteSpace(app.Command))
                     {
                         @* What it runs, on the page where its results are — the two are meaningless apart. *@
-                        <code dir="ltr" class="rounded bg-code text-code-ink px-2 py-0.5 text-xs text-ink">@Model.Command</code>
+                        <code dir="ltr" class="rounded bg-code text-code-ink px-2 py-0.5 text-xs text-ink">@app.Command</code>
                     }
                     <span class="text-xs text-ink-muted">
-                        <span class="font-mono">@Model.CronExpression</span>
-                        @{ var described = Harbora.Infrastructure.Deployments.CronSchedule.Describe(Model.CronExpression ?? ""); }
+                        <span class="font-mono">@app.CronExpression</span>
+                        @{ var described = Harbora.Infrastructure.Deployments.CronSchedule.Describe(app.CronExpression ?? ""); }
                         @if (described.Length > 0){<span>· @described</span>}
-                        @if (Model.NextRunAt is { } next){<span>· @T["Next"]: @next.UtcDateTime.ToString(Dates.Stamp) UTC</span>}
+                        @if (app.NextRunAt is { } next){<span>· @T["Next"]: @next.UtcDateTime.ToString(Dates.Stamp) UTC</span>}
                     </span>
                 </div>
                 <div class="divide-y divide-line">
@@ -139,49 +101,23 @@
             </section>
         }
 
-        <details class="advanced-panel" open="@advancedOpen">
-            <summary><span><i data-lucide="rocket" class="h-4 w-4"></i>@T["Deployments"]</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
-            <div class="divide-y divide-line">
-                @if (!Model.Deployments.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
-                @foreach (var d in Model.Deployments.OrderByDescending(x => x.Number))
-                {
-                    <div class="flex items-center justify-between p-3">
-                        <a href="/deployments/details/@d.Id" class="min-w-0">
-                            <div class="text-sm font-medium">#@d.Number · @d.Trigger</div>
-                            <div class="text-xs text-ink-faint truncate">@(d.CommitMessage ?? d.GitRef) @(d.CommitSha is not null ? "· " + d.CommitSha[..Math.Min(7, d.CommitSha.Length)] : "")</div>
-                        </a>
-                        <div class="flex items-center gap-3">
-                            <partial name="_DeployStatusBadge" model="d.Status" />
-                            @if (d.Status == DeploymentStatus.Succeeded && d.Id != Model.ActiveDeploymentId)
-                            {
-                                @* Confirmation step shows the exact commit/image being restored and
-                                   blocks up front if retention already pruned that artifact. *@
-                                <a href="/apps/confirmrollback/@Model.Id?deploymentId=@d.Id"
-                                   class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-2 py-1">@T["Rollback"]</a>
-                            }
-                        </div>
-                    </div>
-                }
-            </div>
-        </details>
-
         @* ---- Environment variables ---- *@
         <details class="advanced-panel" open="@advancedOpen">
             <summary><span><i data-lucide="file-code-2" class="h-4 w-4"></i>@T["Environment Variables"]</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
             <div class="divide-y divide-line">
-                @if (!Model.EnvironmentVariables.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
-                @foreach (var e in Model.EnvironmentVariables.OrderBy(x => x.Key))
+                @if (!app.EnvironmentVariables.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
+                @foreach (var e in app.EnvironmentVariables.OrderBy(x => x.Key))
                 {
                     <div class="flex items-center justify-between p-3 text-sm font-mono">
                         <span class="text-ink">@e.Key @if (e.IsSecret){<span class="text-[10px] not-italic rounded bg-surface-2 px-1 text-warn font-sans">secret</span>}@if (e.AvailableAtBuild){<span class="text-[10px] rounded bg-surface-2 px-1 text-info font-sans">build</span>}</span>
                         <div class="flex items-center gap-2">
                             <span class="text-ink-faint">@(e.IsSecret ? "••••••" : e.Value)</span>
-                            <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@Model.Id" asp-route-envId="@e.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف متغیر {e.Key}" : $"Delete variable {e.Key}")">✕</button></form>
+                            <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@app.Id" asp-route-envId="@e.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف متغیر {e.Key}" : $"Delete variable {e.Key}")">✕</button></form>
                         </div>
                     </div>
                 }
             </div>
-            <form asp-controller="Apps" asp-action="AddEnv" asp-route-id="@Model.Id" method="post" class="p-3 border-t border-line grid grid-cols-1 sm:grid-cols-6 gap-2">
+            <form asp-controller="Apps" asp-action="AddEnv" asp-route-id="@app.Id" method="post" class="p-3 border-t border-line grid grid-cols-1 sm:grid-cols-6 gap-2">
                 @Html.AntiForgeryToken()
                 <input name="key" placeholder="KEY" class="sm:col-span-2 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm font-mono" />
                 <input name="value" placeholder="value" class="sm:col-span-2 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm font-mono" />
@@ -192,91 +128,9 @@
     </div>
 
     <div class="space-y-6">
-        @* ---- What this app is using, against what it is allowed to use ----
-           The page showed neither. "Is this app out of memory" could only be answered from the
-           monitoring page, which reports the host rather than this container. *@
         @{
-            var cpuPercent = ViewBag.CpuPercent as double?;
-            var memoryUsed = ViewBag.MemoryUsed as double?;
-            var measuredAt = ViewBag.MeasuredAt as DateTimeOffset?;
             var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
-
-            string Bytes(double? value) => value is null or 0
-                ? "—"
-                : value < 1024L * 1024 * 1024
-                    ? $"{value / 1024 / 1024:0.#} MB"
-                    : $"{value / 1024 / 1024 / 1024:0.##} GB";
-
-            // The same rule the lists and the plan page use. It was written inline here, where
-            // nothing could test it and each copy could drift.
-            var memoryShare = Harbora.Infrastructure.Monitoring.AllocationReading
-                .Of(memoryUsed, Model.MemoryLimitBytes);
-            var cpuShare = Harbora.Infrastructure.Monitoring.AllocationReading
-                .Of(cpuPercent, Model.CpuLimit * 100);
-
-            // Disk is measured rather than sampled — the volumes are walked on a schedule — so it
-            // reads as a fact with a date, not as a live figure.
-            var diskUsed = ViewBag.DiskUsed as long?;
-            var diskCaveat = ViewBag.DiskCaveat as string;
-            var diskShare = Harbora.Infrastructure.Monitoring.AllocationReading
-                .Of(diskUsed, Model.DiskLimitBytes);
         }
-        @* ---- storage ----
-           Volumes could only arrive from a template, so an application built from an image or a
-           repository had nowhere to keep anything that survives a deploy — and the Data browser,
-           which only appears when there is a volume, was unreachable for most of the platform. *@
-        <section class="rounded-xl border border-line bg-surface p-4">
-            <div class="mb-3 font-semibold">@(isFa ? "فضای دائمی" : "Persistent storage")</div>
-
-            @if (Model.Volumes.Count == 0)
-            {
-                <p class="text-xs leading-5 text-ink-faint">
-                    @(isFa
-                        ? "هرچه این اپ بنویسد با استقرار بعدی پاک می‌شود. برای نگه داشتن فایل‌ها یک مسیر اضافه کنید."
-                        : "Anything this application writes is gone at the next deployment. Add a path to keep files.")
-                </p>
-            }
-            else
-            {
-                <div class="space-y-2">
-                    @foreach (var volume in Model.Volumes.OrderBy(v => v.MountPath))
-                    {
-                        <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 p-2.5">
-                            <span class="min-w-0">
-                                <code dir="ltr" class="block truncate text-sm text-ink">@volume.MountPath</code>
-                                <small class="text-[11px] text-ink-faint">
-                                    @(volume.StorageBytes is { } bytes
-                                        ? Harbora.Infrastructure.Tenancy.ByteSize.Measured(bytes)
-                                        : (isFa ? "اندازه‌گیری نشده" : "not measured"))
-                                </small>
-                            </span>
-                            <span class="flex items-center gap-2">
-                                <a href="/apps/@Model.Id/data?volumeId=@volume.Id"
-                                   class="text-[11px] text-accent-text hover:underline">@(isFa ? "فایل‌ها" : "Files")</a>
-                                <form asp-controller="Apps" asp-action="RemoveVolume" asp-route-id="@Model.Id" asp-route-volumeId="@volume.Id" method="post"
-                                      onsubmit="return confirm('@(isFa ? "این مسیر دیگر وصل نشود؟ داده‌ها روی سرور می‌مانند." : "Stop mounting this path? The data stays on the server.")');">
-                                    @Html.AntiForgeryToken()
-                                    <button class="text-[11px] text-ink-faint hover:text-danger">@(isFa ? "برداشتن" : "Unmount")</button>
-                                </form>
-                            </span>
-                        </div>
-                    }
-                </div>
-            }
-
-            <form asp-controller="Apps" asp-action="AddVolume" asp-route-id="@Model.Id" method="post" class="mt-3 space-y-2">
-                @Html.AntiForgeryToken()
-                <label class="form-label" for="mount-path">@(isFa ? "مسیر داخل کانتینر" : "Path inside the container")</label>
-                <input id="mount-path" name="mountPath" required class="form-control font-mono text-sm" dir="ltr" placeholder="/data" />
-                <button class="btn-secondary w-full justify-center text-sm">@(isFa ? "افزودن فضا" : "Add storage")</button>
-            </form>
-            <p class="mt-1 text-[11px] leading-5 text-ink-faint">
-                @(isFa
-                    ? "با استقرار بعدی به کانتینر وصل می‌شود. پوشه‌های خود سیستم مثل /etc پذیرفته نمی‌شوند — والیوم خالی روی آن‌ها، ایمیج را خراب می‌کند."
-                    : "It is attached at the next deployment. The image's own directories — /etc and the like — are refused: an empty volume over one of them breaks the container.")
-            </p>
-        </section>
-
         @* ---- databases ----
            The page said nothing about them at all: the only way to attach one was to know to open
            each database in turn, and nothing here listed what this application was already using.
@@ -307,7 +161,7 @@
                             </span>
                             <form asp-controller="Databases" asp-action="Detach" asp-route-id="@link.Id" method="post">
                                 @Html.AntiForgeryToken()
-                                <input type="hidden" name="appId" value="@Model.Id" />
+                                <input type="hidden" name="appId" value="@app.Id" />
                                 <input type="hidden" name="returnUrl" value="@here" />
                                 <button class="text-[11px] text-ink-faint hover:text-danger">@(isFa ? "جدا کن" : "Detach")</button>
                             </form>
@@ -338,7 +192,7 @@
             {
                 <form asp-controller="Databases" asp-action="Attach" method="post" class="mt-3 space-y-2">
                     @Html.AntiForgeryToken()
-                    <input type="hidden" name="appId" value="@Model.Id" />
+                    <input type="hidden" name="appId" value="@app.Id" />
                     <input type="hidden" name="returnUrl" value="@here" />
                     <select name="id" class="form-control text-sm">
                         @foreach (var link in available)
@@ -393,7 +247,7 @@
                                 @* Straight to the screen that says what the move would break. It is
                                    a confirmation rather than a button because moving a service to
                                    another network severs every connection it already has. *@
-                                <a href="/networks/move?appId=@Model.Id&amp;targetEnvironmentId=@other.EnvironmentId"
+                                <a href="/networks/move?appId=@app.Id&amp;targetEnvironmentId=@other.EnvironmentId"
                                    class="whitespace-nowrap text-[11px] text-accent-text hover:underline">
                                     @(isFa ? "بردن اپ به آنجا" : "Move the app there")
                                 </a>
@@ -404,122 +258,14 @@
             }
         </section>
 
-        <section class="rounded-xl border border-line bg-surface p-4">
-            <div class="mb-3 flex items-center justify-between gap-2">
-                <div class="font-semibold">@(isFa ? "منابع" : "Resources")</div>
-                <span class="text-[11px] text-ink-faint">
-                    @(measuredAt is { } at
-                        ? (isFa ? $"آخرین نمونه {at.LocalDateTime:HH:mm}" : $"sampled {at.LocalDateTime:HH:mm}")
-                        : (isFa ? "هنوز اندازه‌گیری نشده" : "not measured yet"))
-                </span>
-            </div>
-
-            <div class="space-y-3">
-                <div>
-                    <div class="flex items-baseline justify-between text-xs">
-                        <span class="text-ink-muted">@T["Memory"]</span>
-                        <span class="text-ink">
-                            @Bytes(memoryUsed)
-                            @(Model.MemoryLimitBytes > 0
-                                ? $"/ {Bytes(Model.MemoryLimitBytes)}"
-                                : (isFa ? "· بدون سقف" : "· no limit"))
-                        </span>
-                    </div>
-                    @* Only drawn when there is a ceiling to draw it against. A bar with no maximum
-                       is a shape that implies a number nobody set. *@
-                    @if (memoryShare.HasShare)
-                    {
-                        <span class="metric-track mt-1"><i style="width:@memoryShare.Percent%"></i></span>
-                        @if (memoryShare.IsOver)
-                        {
-                            @* Real, and worth saying: shrinking an app does not shrink the running
-                               container — the new ceiling applies at the next deployment. *@
-                            <p class="mt-1 text-[11px] text-warn">
-                                @(isFa
-                                    ? "بالاتر از سقف جدید است؛ با استقرار بعدی اعمال می‌شود."
-                                    : "Over the new ceiling — it applies at the next deployment.")
-                            </p>
-                        }
-                    }
-                </div>
-
-                <div>
-                    <div class="flex items-baseline justify-between text-xs">
-                        <span class="text-ink-muted">CPU</span>
-                        <span class="text-ink">
-                            @(cpuPercent is null ? "—" : $"{cpuPercent:0.#}%")
-                            @(Model.CpuLimit > 0
-                                ? (isFa ? $"از {Model.CpuLimit} هسته" : $"of {Model.CpuLimit} vCPU")
-                                : (isFa ? "· بدون سقف" : "· no limit"))
-                        </span>
-                    </div>
-                    @if (cpuShare.HasShare)
-                    {
-                        <span class="metric-track is-violet mt-1"><i style="width:@cpuShare.Percent%"></i></span>
-                    }
-                </div>
-
-                @* Storage, which a tier now comes with. It was on the plan, enforced on create and
-                   shown on no page belonging to a resource. *@
-                <div>
-                    <div class="flex items-baseline justify-between text-xs">
-                        <span class="text-ink-muted">@(isFa ? "دیسک" : "Disk")</span>
-                        <span class="text-ink">
-                            @Bytes(diskUsed)
-                            @(Model.DiskLimitBytes > 0
-                                ? $"/ {Bytes(Model.DiskLimitBytes)}"
-                                : (isFa ? "· بدون سقف" : "· no limit"))
-                        </span>
-                    </div>
-                    @if (diskShare.HasShare)
-                    {
-                        <span class="metric-track mt-1"><i style="width:@diskShare.Percent%"></i></span>
-                    }
-                    @if (diskCaveat is not null)
-                    {
-                        @* An unmeasured volume makes the figure incomplete, not smaller. *@
-                        <p class="mt-1 text-[11px] text-warn">@diskCaveat</p>
-                    }
-                </div>
-            </div>
-
-            @* ---- the same figures over time ----
-               A single latest sample answers "is it alive". It does not answer "is this normal",
-               "when did it start" or "is it creeping up", which are the questions somebody has
-               when they open this page — and those were only answerable from the monitoring page,
-               which reports the host rather than this container. The dashed line is what the app
-               was allotted, so the gap between the two is the thing being looked at. *@
-            <div class="mt-4 space-y-4 border-t border-line pt-4">
-                <div data-island="metrics-chart"
-                     data-name="mem.used"
-                     data-label="@(isFa ? "حافظه" : "Memory")"
-                     data-color="#818cf8"
-                     data-app-id="@Model.Id"
-                     data-unit="bytes"
-                     data-limit="@Model.MemoryLimitBytes"
-                     data-height="90"></div>
-
-                <div data-island="metrics-chart"
-                     data-name="cpu.percent"
-                     data-label="CPU"
-                     data-color="#34d399"
-                     data-app-id="@Model.Id"
-                     data-unit="percent"
-                     data-limit="@(Model.CpuLimit * 100)"
-                     data-height="90"></div>
-
-                <div data-island="metrics-chart"
-                     data-name="net.rx"
-                     data-label="@(isFa ? "ترافیک ورودی" : "Network in")"
-                     data-color="#f59e0b"
-                     data-app-id="@Model.Id"
-                     data-unit="bytes"
-                     data-height="70"></div>
-            </div>
-
-            @if (sizes.Count > 0)
-            {
-                <form asp-controller="Apps" asp-action="Resize" asp-route-id="@Model.Id" method="post" class="mt-4 space-y-2">
+        @* ---- instance size ----
+           What this app is actually consuming against these limits now lives on the Usage tab; this
+           is only the control that changes them. *@
+        @if (sizes.Count > 0)
+        {
+            <section class="rounded-xl border border-line bg-surface p-4">
+                <div class="mb-3 font-semibold">@(isFa ? "اندازهٔ نمونه" : "Instance size")</div>
+                <form asp-controller="Apps" asp-action="Resize" asp-route-id="@app.Id" method="post" class="space-y-2">
                     @Html.AntiForgeryToken()
                     <select name="instanceSizeKey" class="form-control text-sm">
                         <option value="">@(isFa ? "بدون سقف" : "No limit")</option>
@@ -535,8 +281,8 @@
                             : "The ceiling belongs to the container, so it applies on the next deployment.")
                     </p>
                 </form>
-            }
-        </section>
+            </section>
+        }
 
         @* ---- The version this came from, and where it can go ----
            An app installed from a ready-made template had its version pinned at creation and
@@ -545,7 +291,7 @@
             var currentVersion = ViewBag.CurrentVersion as Harbora.Domain.Templates.AppTemplateVersion;
             var updates = ViewBag.UpdateVersions as List<Harbora.Domain.Templates.AppTemplateVersion> ?? [];
         }
-        @if (Model.TemplateId is not null)
+        @if (app.TemplateId is not null)
         {
             <section class="rounded-xl border border-line bg-surface p-4">
                 <div class="mb-2 font-semibold">@(isFa ? "نسخه" : "Version")</div>
@@ -556,17 +302,17 @@
                         : (isFa ? $"در حال اجرا: {currentVersion.Version}" : $"Running {currentVersion.Version}"))
                 </div>
 
-                @if (!string.IsNullOrWhiteSpace(Model.PrebuiltImage))
+                @if (!string.IsNullOrWhiteSpace(app.PrebuiltImage))
                 {
                     @* The exact reference, so somebody who would rather run it themselves can take
                        it. It is what actually gets pulled, digest and all. *@
                     <code dir="ltr" class="mt-2 block break-all rounded bg-code text-code-ink px-2 py-1 text-[11px]"
-                          data-copy-text>@Model.PrebuiltImage</code>
+                          data-copy-text>@app.PrebuiltImage</code>
                 }
 
                 @if (updates.Count > 0)
                 {
-                    <form asp-controller="Apps" asp-action="UpdateVersion" asp-route-id="@Model.Id" method="post" class="mt-3 space-y-2">
+                    <form asp-controller="Apps" asp-action="UpdateVersion" asp-route-id="@app.Id" method="post" class="mt-3 space-y-2">
                         @Html.AntiForgeryToken()
                         <select name="versionId" class="form-control text-sm" data-version-choice>
                             @foreach (var version in updates)
@@ -619,7 +365,7 @@
                 </p>
                 <code dir="ltr" class="mt-2 block break-all rounded bg-code text-code-ink px-2 py-1 text-[11px]" data-copy-text>@repository</code>
 
-                <form asp-controller="Apps" asp-action="UpdateTag" asp-route-id="@Model.Id" method="post" class="mt-3 space-y-2">
+                <form asp-controller="Apps" asp-action="UpdateTag" asp-route-id="@app.Id" method="post" class="mt-3 space-y-2">
                     @Html.AntiForgeryToken()
                     <input name="tag" value="@currentTag" dir="ltr" class="form-control text-sm"
                            placeholder="@(isFa ? "مثلاً 1.70.1" : "e.g. 1.70.1")" />
@@ -633,11 +379,11 @@
         @* ---- Release task ----
            Shown because it runs on every deploy and can fail one. Set at create time and then
            invisible, it is a command nobody remembers is there until it breaks a release. *@
-        @if (!string.IsNullOrWhiteSpace(Model.ReleaseCommand))
+        @if (!string.IsNullOrWhiteSpace(app.ReleaseCommand))
         {
             <section class="rounded-xl border border-line bg-surface p-4">
                 <div class="font-semibold mb-2">@(isFa ? "دستور پیش از انتشار" : "Release task")</div>
-                <code dir="ltr" class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs">@Model.ReleaseCommand</code>
+                <code dir="ltr" class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs">@app.ReleaseCommand</code>
                 <p class="text-[11px] text-ink-faint mt-2">
                     @(isFa
                         ? "پیش از راه‌اندازی نسخهٔ جدید اجرا می‌شود. اگر شکست بخورد، نسخهٔ فعلی همچنان سرویس می‌دهد."
@@ -647,29 +393,29 @@
         }
 
         @* ---- Git auto-deploy ---- *@
-        @if (Model.GitRepository is not null)
+        @if (app.GitRepository is not null)
         {
             <section class="rounded-xl border border-line bg-surface p-4">
                 <div class="font-semibold mb-2">@(isFa ? "استقرار خودکار (Git)" : "Auto-deploy (Git)")</div>
                 <div class="text-xs text-ink-muted mb-2">
-                    @(isFa ? "با هر push به" : "On push to") <code class="text-ink">@(Model.GitRef ?? Model.GitRepository.DefaultBranch)</code>
-                    @(Model.AutoDeployOnPush
+                    @(isFa ? "با هر push به" : "On push to") <code class="text-ink">@(app.GitRef ?? app.GitRepository.DefaultBranch)</code>
+                    @(app.AutoDeployOnPush
                         ? (isFa ? "خودکار دیپلوی می‌شود ✓" : "auto-deploys ✓")
                         : (isFa ? "غیرفعال است" : "is off"))
                 </div>
                 <div class="text-xs text-ink-muted">@(isFa ? "آدرس Webhook (در تنظیمات مخزن قرار دهید):" : "Webhook URL (add it in your repo settings):")</div>
-                <code class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs mt-1">@Context.Request.Scheme://@Context.Request.Host/webhooks/git/@Model.GitRepository.Id</code>
+                <code class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs mt-1">@Context.Request.Scheme://@Context.Request.Host/webhooks/git/@app.GitRepository.Id</code>
                 <div class="text-xs text-ink-muted mt-2">
                     @(isFa ? "سکرت:" : "Secret:")
                     @if (ViewBag.RevealWebhookSecret == true)
                     {
-                        <code class="text-ink break-all">@Model.GitRepository.WebhookSecret</code>
+                        <code class="text-ink break-all">@app.GitRepository.WebhookSecret</code>
                     }
                     else
                     {
                         @* Only on a click, like the Git page and the storage keys. *@
                         <code class="text-ink-faint">••••••••</code>
-                        <a href="/apps/details/@Model.Id?revealSecret=true" class="text-accent-text hover:underline">@(isFa ? "نمایش" : "Reveal")</a>
+                        <a href="/apps/details/@app.Id?revealSecret=true" class="text-accent-text hover:underline">@(isFa ? "نمایش" : "Reveal")</a>
                     }
                 </div>
                 <p class="text-[11px] text-ink-faint mt-2">@(isFa ? "Content-Type را application/json بگذارید. GitHub/Gitea با امضای HMAC و GitLab با هدر توکن تأیید می‌شوند." : "Use Content-Type application/json. GitHub/Gitea verify by HMAC; GitLab by token header.")</p>
@@ -679,16 +425,16 @@
                Shown next to auto-deploy because they are the same mechanism pointed at a different
                branch. A preview is a real service on a real address, so it is listed rather than
                left to be discovered in the app list looking like something somebody created. *@
-            @if (Model.PreviewOfAppId is null)
+            @if (app.PreviewOfAppId is null)
             {
                 var previews = ViewBag.Previews as List<Harbora.Domain.Apps.App> ?? [];
                 <section class="rounded-xl border border-line bg-surface p-4">
                     <div class="flex items-center justify-between gap-2 mb-2">
                         <div class="font-semibold">@(isFa ? "پیش‌نمایش شاخه‌ها" : "Branch previews")</div>
-                        <form method="post" asp-action="TogglePreviews" asp-route-id="@Model.Id">
+                        <form method="post" asp-action="TogglePreviews" asp-route-id="@app.Id">
                             @Html.AntiForgeryToken()
-                            <button type="submit" class="text-xs rounded-lg px-3 py-1 border @(Model.PreviewsEnabled ? "border-ok text-ok" : "border-line-strong text-ink-muted")">
-                                @(Model.PreviewsEnabled ? (isFa ? "روشن ✓" : "On ✓") : (isFa ? "خاموش" : "Off"))
+                            <button type="submit" class="text-xs rounded-lg px-3 py-1 border @(app.PreviewsEnabled ? "border-ok text-ok" : "border-line-strong text-ink-muted")">
+                                @(app.PreviewsEnabled ? (isFa ? "روشن ✓" : "On ✓") : (isFa ? "خاموش" : "Off"))
                             </button>
                         </form>
                     </div>
@@ -726,12 +472,12 @@
 
         @* A preview says so, and says what of. Otherwise it looks like an ordinary service that
            somebody will be surprised to find gone in a week. *@
-        @if (Model.PreviewOfAppId is { } parentId)
+        @if (app.PreviewOfAppId is { } parentId)
         {
             <section class="rounded-xl border border-warn bg-amber-950/20 p-4">
                 <div class="font-semibold mb-1">@(isFa ? "این یک پیش‌نمایش است" : "This is a preview")</div>
                 <div class="text-xs text-ink-muted">
-                    @(isFa ? "شاخهٔ" : "Branch") <code class="text-ink">@Model.PreviewBranch</code>
+                    @(isFa ? "شاخهٔ" : "Branch") <code class="text-ink">@app.PreviewBranch</code>
                     @(isFa ? "از" : "of") <a asp-action="Details" asp-route-id="@parentId" class="text-accent-text">@(isFa ? "سرویس اصلی" : "the parent service")</a>.
                 </div>
                 <div class="text-[11px] text-ink-faint mt-2">
@@ -749,13 +495,13 @@
         <section class="rounded-xl border border-line bg-surface">
             <div class="px-4 py-3 border-b border-line font-semibold">@T["Domains"]</div>
             <div class="divide-y divide-line">
-                @if (!Model.Domains.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
-                @foreach (var dom in Model.Domains)
+                @if (!app.Domains.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
+                @foreach (var dom in app.Domains)
                 {
                     @* The failure message travels as an attribute, not inside the script: Razor
                        HTML-encodes it either way, and entities are decoded in attributes but not in
                        a <script> body, where they would render as literal &#x…; escapes. *@
-                    <div class="p-3 text-sm" data-domain-row data-check-url="/apps/@Model.Id/domains/@dom.Id/check"
+                    <div class="p-3 text-sm" data-domain-row data-check-url="/apps/@app.Id/domains/@dom.Id/check"
                          data-check-failed="@(isFa ? "بررسی دامنه انجام نشد." : "The domain check could not run.")">
                         <div class="flex items-center justify-between gap-2">
                             <a href="@(dom.SslEnabled ? "https" : "http")://@dom.Host" target="_blank" rel="noopener" class="text-accent-text truncate">@dom.Host</a>
@@ -764,7 +510,7 @@
                                 <span data-domain-state class="text-xs text-ink-faint" title="@(isFa ? "در حال بررسی" : "Checking")">…</span>
                                 <button type="button" data-domain-recheck class="text-xs text-ink-faint hover:text-ink"
                                         title="@(isFa ? "بررسی مجدد" : "Re-check")">↻</button>
-                                <form asp-controller="Apps" asp-action="DeleteDomain" asp-route-id="@Model.Id" asp-route-domainId="@dom.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف دامنهٔ {dom.Host}" : $"Delete domain {dom.Host}")">✕</button></form>
+                                <form asp-controller="Apps" asp-action="DeleteDomain" asp-route-id="@app.Id" asp-route-domainId="@dom.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف دامنهٔ {dom.Host}" : $"Delete domain {dom.Host}")">✕</button></form>
                             </div>
                         </div>
                         @* Filled in by the check: the verdict, and the single action that fixes it. *@
@@ -773,7 +519,7 @@
                     </div>
                 }
             </div>
-            <form asp-controller="Apps" asp-action="AddDomain" asp-route-id="@Model.Id" method="post" class="p-3 border-t border-line space-y-2">
+            <form asp-controller="Apps" asp-action="AddDomain" asp-route-id="@app.Id" method="post" class="p-3 border-t border-line space-y-2">
                 @Html.AntiForgeryToken()
                 <input name="host" placeholder="app.example.com" class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
                 <div class="flex items-center justify-between">
@@ -796,7 +542,7 @@
             }
             else
             {
-                <form asp-controller="Apps" asp-action="SetProtection" asp-route-id="@Model.Id" method="post" class="p-4 space-y-3">
+                <form asp-controller="Apps" asp-action="SetProtection" asp-route-id="@app.Id" method="post" class="p-4 space-y-3">
                     @Html.AntiForgeryToken()
                     <label class="flex items-center gap-2 text-sm">
                         <input type="checkbox" name="basicAuthEnabled" value="true" @(ViewBag.ProtectionAuth == true ? "checked" : "") />
@@ -823,7 +569,7 @@
         <section class="rounded-xl border border-danger bg-red-950/10 p-4">
             <div class="font-semibold text-danger mb-1">@(isFa ? "منطقه‌ی خطر" : "Danger zone")</div>
             <p class="text-xs text-ink-muted mb-3">@(isFa ? "حذف اپ، کانتینر و مسیرهایش را پاک می‌کند." : "Deleting removes the container and its routes.")</p>
-            <form asp-controller="Apps" asp-action="Delete" asp-route-id="@Model.Id" method="post"
+            <form asp-controller="Apps" asp-action="Delete" asp-route-id="@app.Id" method="post"
                   onsubmit="return confirm('@(isFa ? "این اپ حذف شود؟ این عمل برگشت‌ناپذیر است." : "Delete this app? This cannot be undone.")')">
                 @Html.AntiForgeryToken()
                 <label class="flex items-center gap-1 text-xs mb-2"><input type="checkbox" name="removeVolumes" value="true"> @(isFa ? "حذف داده‌ها (volumes)" : "Also delete data volumes")</label>

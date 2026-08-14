@@ -1,0 +1,86 @@
+@model Harbora.Web.ViewModels.AppTabViewModel
+@inject Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Terminals.TerminalFeatureOptions> TerminalFeatures
+@{
+    // _ViewStart sets this for the main page only; a nested layout has to say so itself or the shell
+    // renders with no sidebar, no topbar and no <html> around it at all.
+    Layout = "_Layout";
+
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var running = Model.Status == AppStatus.Running;
+
+    // Read once, here, so every tab shows what an action just did to it. TempData is consumed on
+    // read — a second `TempData["Message"]` anywhere downstream (Details.cshtml used to have one)
+    // would find nothing, not a redundant copy.
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+    (string Key, string Href, string Label)[] tabs =
+    [
+        ("overview",    $"/apps/details/{Model.Id}",      isFa ? "نمای کلی"   : "Overview"),
+        ("usage",       $"/apps/{Model.Id}/usage",        isFa ? "مصرف"       : "Usage"),
+        ("volumes",     $"/apps/{Model.Id}/volumes",      isFa ? "والیوم‌ها"  : "Volumes"),
+        ("deployments", $"/apps/{Model.Id}/deployments",  isFa ? "استقرارها"  : "Deployments"),
+    ];
+}
+<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+    <div>
+        <a href="/apps" class="text-accent-text text-sm">← @T["Applications"]</a>
+        <h1 class="text-2xl font-bold tracking-tight text-ink flex items-center gap-3">@Model.Name <partial name="_StatusBadge" model="Model.Status" /></h1>
+        <p class="text-ink-muted text-sm">@Model.Slug · @Model.SourceType @(Model.GitRepositoryFullName is not null ? "· " + Model.GitRepositoryFullName : "")
+            @if (!string.IsNullOrEmpty(Model.InstanceSizeKey)){<span>· @Model.InstanceSizeKey</span>}
+        </p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+        <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Deploy"]</button></form>
+        @if (Model.Kind == ServiceKind.Cron)
+        {
+            @* Without this a nightly job cannot be checked until tomorrow. It takes the same path the
+               schedule does, so what is tested here is what will happen at 03:00. *@
+            <form asp-controller="Apps" asp-action="RunNow" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">▶ @T["Run now"]</button></form>
+        }
+        <form asp-controller="Apps" asp-action="Restart" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">↻ @T["Restart"]</button></form>
+        @* Only when there is something to browse. An app with no volume keeps nothing between
+           deployments, and a Data button leading to "there is nothing here" is a dead button. *@
+        @if (Model.HasVolumes)
+        {
+            <a href="/apps/@Model.Id/data" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm inline-flex items-center gap-1.5"><i data-lucide="folder-open" class="h-4 w-4"></i>@(isFa ? "داده" : "Data")</a>
+        }
+        @* Only when the operator has turned terminals on, and only for something that is running.
+           A shell is the widest door the panel has; it does not get an always-visible button. *@
+        @if (TerminalFeatures.Value.Terminal && running)
+        {
+            <a href="/apps/@Model.Id/terminal" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm inline-flex items-center gap-1.5"><i data-lucide="square-terminal" class="h-4 w-4"></i>@(isFa ? "ترمینال" : "Terminal")</a>
+        }
+        @if (running)
+        {
+            <form asp-controller="Apps" asp-action="Stop" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">⏸ @T["Stop"]</button></form>
+        }
+        else
+        {
+            <form asp-controller="Apps" asp-action="Start" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">▶ @T["Start"]</button></form>
+        }
+        <a href="/apps/@Model.Id/logs" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-2 text-sm">📜 @T["Logs"]</a>
+    </div>
+</div>
+
+<nav class="detail-tabs" aria-label="@(isFa ? "بخش‌های برنامه" : "Application sections")">
+    @foreach (var tab in tabs)
+    {
+        <a href="@tab.Href"
+           class="detail-tab @(tab.Key == Model.CurrentTab ? "is-current" : "")"
+           aria-current="@(tab.Key == Model.CurrentTab ? "page" : null)">@tab.Label</a>
+    }
+</nav>
+
+@if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
+
+@RenderBody()
+
+@* A nested layout only forwards what it explicitly renders — a tab that defines @section Scripts
+   (Details.cshtml does) throws "defined but not rendered" here otherwise, because _Layout's own
+   RenderSectionAsync("Scripts") is never reached: this page, not _Layout, is what Details renders
+   into. Re-declaring the section passes it on to _Layout unchanged, so the scripts still land at the
+   same place in the page they always did. *@
+@section Scripts {
+    @await RenderSectionAsync("Scripts", required: false)
+}

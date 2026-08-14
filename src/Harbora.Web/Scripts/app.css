@@ -240,6 +240,10 @@
   .rail-panel-header h2 { @apply text-sm font-semibold text-ink; }
   .rail-icon { @apply grid h-8 w-8 shrink-0 place-items-center rounded-lg; }
 
+  .detail-tabs { @apply mt-4 flex flex-wrap gap-1 border-b border-line; }
+  .detail-tab  { @apply rounded-t-lg px-3 py-2 text-sm text-ink-muted hover:text-ink hover:bg-surface-2; }
+  .detail-tab.is-current { @apply border-b-2 border-accent text-ink font-semibold; }
+
   .empty-state { @apply flex min-h-64 flex-col items-center justify-center p-8 text-center; }
   .empty-state-icon { @apply mb-3 grid h-12 w-12 place-items-center rounded-xl bg-surface-2 text-ink-faint; }
   .empty-state h2 { @apply text-sm font-semibold text-ink; }

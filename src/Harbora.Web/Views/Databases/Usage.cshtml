@@ -1,0 +1,56 @@
+@model Harbora.Web.ViewModels.DatabaseUsageViewModel
+@{
+    // Moved here from Details.cshtml's "this moment" stat-card grid and the metrics charts under
+    // it — unchanged behaviour, a new address.
+    Layout = "_Shell";
+    ViewData["Title"] = Model.Name;
+
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    string Gb(long? bytes) => bytes is null ? "—" : bytes < 1024 * 1024
+        ? $"{bytes / 1024.0:0.#} KB"
+        : bytes < 1024L * 1024 * 1024
+            ? $"{bytes / 1024.0 / 1024:0.#} MB"
+            : $"{bytes / 1024.0 / 1024 / 1024:0.##} GB";
+}
+
+<div class="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
+    <partial name="Design/_StatCard" model="@(new StatCardModel("activity", "CPU",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(Model.CpuPercent, "%"),
+        Model.CpuLimit > 0 ? (isFa ? $"سقف {Model.CpuLimit} هسته" : $"limit {Model.CpuLimit} vCPU") : (isFa ? "بدون سقف" : "no limit")))" />
+
+    <partial name="Design/_StatCard" model="@(new StatCardModel("server", isFa ? "حافظه" : "Memory",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Gb(Model.MemoryBytes)),
+        Model.MemoryLimitBytes > 0 ? (isFa ? $"سقف {Gb(Model.MemoryLimitBytes)}" : $"limit {Gb(Model.MemoryLimitBytes)}") : (isFa ? "بدون سقف" : "no limit")))" />
+
+    <partial name="Design/_StatCard" model="@(new StatCardModel("hard-drive", isFa ? "داده" : "Storage",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Gb(Model.StorageBytes)),
+        Model.DiskLimitBytes > 0
+            ? (isFa ? $"سقف {Gb(Model.DiskLimitBytes)}" : $"limit {Gb(Model.DiskLimitBytes)}")
+            : Model.StorageMeasuredAt?.LocalDateTime.ToString(Dates.Stamp)))" />
+
+    <partial name="Design/_StatCard" model="@(new StatCardModel("boxes", isFa ? "اپ متصل" : "Linked apps",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(Model.LinkedApps)))" />
+</div>
+
+@* The cards above are this moment. These are the same figures over time, which is what answers "is
+   this normal" and "when did it start" — the questions somebody opens a database page with. *@
+<div class="mb-6 grid gap-4 rounded-xl border border-line bg-surface p-4 sm:grid-cols-2">
+    <div data-island="metrics-chart"
+         data-name="mem.used"
+         data-label="@(isFa ? "حافظه" : "Memory")"
+         data-color="#818cf8"
+         data-service-id="@Model.Id"
+         data-unit="bytes"
+         data-limit="@Model.MemoryLimitBytes"
+         data-height="90"></div>
+
+    <div data-island="metrics-chart"
+         data-name="cpu.percent"
+         data-label="CPU"
+         data-color="#34d399"
+         data-service-id="@Model.Id"
+         data-unit="percent"
+         data-limit="@(Model.CpuLimit * 100)"
+         data-height="90"></div>
+</div>

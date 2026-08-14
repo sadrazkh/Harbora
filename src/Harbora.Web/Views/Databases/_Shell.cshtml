@@ -1,0 +1,114 @@
+@model Harbora.Web.ViewModels.DatabaseTabViewModel
+@{
+    // _ViewStart sets this for the main page only; a nested layout has to say so itself or the shell
+    // renders with no sidebar, no topbar and no <html> around it at all — the same trap Apps/_Shell.cshtml
+    // notes.
+    Layout = "_Layout";
+
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var running = Model.Status == ServiceStatus.Running;
+
+    // Read once, here, so every tab shows what an action just did to it. TempData is consumed on
+    // read — a second `TempData["Message"]` anywhere downstream (Details.cshtml used to have one)
+    // would find nothing, not a redundant copy. The AdminToolUrl/User/Password panel is a different
+    // mechanism with its own markup and stays in Details.cshtml, untouched.
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+
+    string Tone(ServiceStatus status) => status switch
+    {
+        ServiceStatus.Running => "is-ok",
+        ServiceStatus.Provisioning => "is-info",
+        ServiceStatus.Failed => "is-danger",
+        _ => "is-warn"
+    };
+
+    // One rule, shared with the list beside this page: a service whose mark is right in one place and
+    // generic in the other looks like two different things.
+    string TypeKey(ManagedServiceType type) => Harbora.Infrastructure.Services.ServiceTypeKey.For(type);
+
+    // "access" links to the existing Databases/Access page, which this shell does not render itself,
+    // so CurrentTab never matches it while this shell is on screen. It is listed anyway because the
+    // strip has to offer every one of a database's screens, not only the ones drawn here.
+    //
+    // There is deliberately NO Backups tab. BackupsController.Index takes no filter — /backups is
+    // workspace-wide — so a tab reading "Backups" on this database's page would show every other
+    // database's too. Every other tab here shows THIS database; one that quietly widens to the
+    // workspace breaks the only promise a tab strip makes. The Overview already carries a
+    // database-scoped backups panel with its own "view all" link, so nothing is out of reach — and
+    // when a per-database backups view exists, this is where its tab goes.
+    (string Key, string Href, string Label)[] tabs =
+    [
+        ("overview", $"/databases/{Model.Id}",        isFa ? "نمای کلی" : "Overview"),
+        ("usage",    $"/databases/{Model.Id}/usage",  isFa ? "مصرف"     : "Usage"),
+        ("access",   $"/databases/{Model.Id}/access", isFa ? "دسترسی"   : "Access"),
+    ];
+}
+<nav class="breadcrumb mb-4" aria-label="breadcrumb">
+    <a href="/databases">@T["Databases"]</a>
+    <i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i>
+    <span>@Model.Name</span>
+</nav>
+
+<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <div class="flex items-start gap-3">
+        <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(TypeKey(Model.Type), Model.Name, "h-14 w-14"))" />
+        <div class="min-w-0">
+            <h1 class="flex flex-wrap items-center gap-3 text-2xl font-bold tracking-tight text-ink">
+                @Model.Name
+                <span class="resource-status @Tone(Model.Status)"><i></i>@Model.Status</span>
+            </h1>
+            <p class="mt-1 text-sm text-ink-muted">@Model.Type @Model.Version · @Model.Project · @Model.Environment</p>
+        </div>
+    </div>
+
+    @if (Model.CanManage)
+    {
+        <div class="flex flex-wrap gap-2">
+            @if (running)
+            {
+                <form asp-controller="Databases" asp-action="Stop" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary"><i data-lucide="pause" class="h-4 w-4"></i>@T["Stop"]</button></form>
+            }
+            else
+            {
+                <form asp-controller="Databases" asp-action="Start" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary"><i data-lucide="play" class="h-4 w-4"></i>@T["Start"]</button></form>
+            }
+            <form asp-controller="Databases" asp-action="TestConnection" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary"><i data-lucide="plug-zap" class="h-4 w-4"></i>@(isFa ? "تست اتصال" : "Test")</button></form>
+            <a href="/databases/@Model.Id/access" class="btn-primary"><i data-lucide="key-round" class="h-4 w-4"></i>@(isFa ? "دسترسی خارجی" : "External access")</a>
+            @* A throwaway web tool onto this database, offered only for the engines it can speak to —
+               a button that opens "unknown driver" is worse than no button. *@
+            @if (Harbora.Infrastructure.Services.AdminerSession.Supports(Model.Type))
+            {
+                <form asp-controller="Databases" asp-action="OpenAdminTool" asp-route-id="@Model.Id" method="post">
+                    @Html.AntiForgeryToken()
+                    <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm inline-flex items-center gap-1.5">
+                        <i data-lucide="table-2" class="h-4 w-4" aria-hidden="true"></i>@(isFa ? "ابزار مدیریت" : "Admin tool")
+                    </button>
+                </form>
+            }
+        </div>
+    }
+</div>
+
+<nav class="detail-tabs" aria-label="@(isFa ? "بخش‌های دیتابیس" : "Database sections")">
+    @foreach (var tab in tabs)
+    {
+        <a href="@tab.Href"
+           class="detail-tab @(tab.Key == Model.CurrentTab ? "is-current" : "")"
+           aria-current="@(tab.Key == Model.CurrentTab ? "page" : null)">@tab.Label</a>
+    }
+</nav>
+
+@if (msg is not null) { <div class="alert-success mb-4">@msg</div> }
+@if (err is not null) { <div class="alert-danger mb-4">@err</div> }
+
+@RenderBody()
+
+@* A nested layout only forwards what it explicitly renders — a tab that defines @section Scripts
+   (Details.cshtml does) throws "defined but not rendered" here otherwise, because _Layout's own
+   RenderSectionAsync("Scripts") is never reached: this page, not _Layout, is what Details renders
+   into. Re-declaring the section passes it on to _Layout unchanged, so the scripts still land at the
+   same place in the page they always did. *@
+@section Scripts {
+    @await RenderSectionAsync("Scripts", required: false)
+}

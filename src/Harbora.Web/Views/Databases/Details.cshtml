@@ -2,12 +2,16 @@
 @using Harbora.Domain.Common
 @using Harbora.Domain.Backups
 @{
+    // The header and breadcrumb now live in _Shell.cshtml, which is typed to DatabaseTabViewModel
+    // rather than to the raw row — this local alias is what lets the rest of this file go on reading
+    // "db.Whatever" exactly as it read "Model.Database.Whatever" before the split.
+    Layout = "_Shell";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var db = Model.Database;
     ViewData["Title"] = db.Name;
 
-    var msg = TempData["Message"] as string;
-    var err = TempData["Error"] as string;
+    // The Message/Error banner now renders once in _Shell.cshtml, above every tab — not here.
+    // TempData is consumed on read, so a second read site here would just find it already gone.
 
     var drifted = Harbora.Infrastructure.Services.VersionDrift.HasDrifted(db.Version, Model.RunningImage);
     var moving = Harbora.Infrastructure.Services.VersionDrift.IsMoving(db.Version);
@@ -17,72 +21,7 @@
         : bytes < 1024L * 1024 * 1024
             ? $"{bytes / 1024.0 / 1024:0.#} MB"
             : $"{bytes / 1024.0 / 1024 / 1024:0.##} GB";
-
-    string Tone(ServiceStatus status) => status switch
-    {
-        ServiceStatus.Running => "is-ok",
-        ServiceStatus.Provisioning => "is-info",
-        ServiceStatus.Failed => "is-danger",
-        _ => "is-warn"
-    };
-
-    // One rule, shared with the list/page beside this one: a service whose mark is right in one
-    // place and generic in the other looks like two different things.
-    string TypeKey(ManagedServiceType type) => Harbora.Infrastructure.Services.ServiceTypeKey.For(type);
 }
-
-@* A database's own page. Its settings used to live in a strip beside the list of its siblings —
-   which is only ever as wide as whatever is left over, so the controls belonging to one resource
-   were the most cramped thing on the screen. *@
-<nav class="breadcrumb mb-4" aria-label="breadcrumb">
-    <a href="/databases">@T["Databases"]</a>
-    <i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i>
-    <span>@db.Name</span>
-</nav>
-
-<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
-    <div class="flex items-start gap-3">
-        <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(TypeKey(db.Type), db.Name, "h-14 w-14"))" />
-        <div class="min-w-0">
-            <h1 class="flex flex-wrap items-center gap-3 text-2xl font-bold tracking-tight text-ink">
-                @db.Name
-                <span class="resource-status @Tone(db.Status)"><i></i>@db.Status</span>
-            </h1>
-            <p class="mt-1 text-sm text-ink-muted">@db.Type @db.Version · @db.Project · @db.Environment</p>
-        </div>
-    </div>
-
-    @if (Model.CanManage)
-    {
-        <div class="flex flex-wrap gap-2">
-            @if (db.Status == ServiceStatus.Running)
-            {
-                <form asp-action="Stop" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary"><i data-lucide="pause" class="h-4 w-4"></i>@T["Stop"]</button></form>
-            }
-            else
-            {
-                <form asp-action="Start" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary"><i data-lucide="play" class="h-4 w-4"></i>@T["Start"]</button></form>
-            }
-            <form asp-action="TestConnection" asp-route-id="@db.Id" method="post">@Html.AntiForgeryToken()<button class="btn-secondary"><i data-lucide="plug-zap" class="h-4 w-4"></i>@(isFa ? "تست اتصال" : "Test")</button></form>
-            <a href="/databases/@db.Id/access" class="btn-primary"><i data-lucide="key-round" class="h-4 w-4"></i>@(isFa ? "دسترسی خارجی" : "External access")</a>
-            @* A throwaway web tool onto this database: private network, basic-auth with a password
-               generated per session, gone in an hour. Offered only for the engines it can speak to —
-               a button that opens "unknown driver" is worse than no button. *@
-            @if (Harbora.Infrastructure.Services.AdminerSession.Supports(db.Type))
-            {
-                <form asp-controller="Databases" asp-action="OpenAdminTool" asp-route-id="@db.Id" method="post">
-                    @Html.AntiForgeryToken()
-                    <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm inline-flex items-center gap-1.5">
-                        <i data-lucide="table-2" class="h-4 w-4" aria-hidden="true"></i>@(isFa ? "ابزار مدیریت" : "Admin tool")
-                    </button>
-                </form>
-            }
-        </div>
-    }
-</div>
-
-@if (msg is not null) { <div class="alert-success mb-4">@msg</div> }
-@if (err is not null) { <div class="alert-danger mb-4">@err</div> }
 
 @if (TempData["AdminToolUrl"] is string toolUrl)
 {
@@ -123,49 +62,6 @@ else if (moving)
             : "This service is not pinned to a version, so recreating its container can move it to a new major release — which will refuse to start on the data it already has.")</span>
     </div>
 }
-
-<div class="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
-    <partial name="Design/_StatCard" model="@(new StatCardModel("activity", "CPU",
-        Harbora.Infrastructure.Monitoring.MetricDisplay.For(db.CpuPercent, "%"),
-        Model.CpuLimit > 0 ? (isFa ? $"سقف {Model.CpuLimit} هسته" : $"limit {Model.CpuLimit} vCPU") : (isFa ? "بدون سقف" : "no limit")))" />
-
-    <partial name="Design/_StatCard" model="@(new StatCardModel("server", isFa ? "حافظه" : "Memory",
-        Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Gb(db.MemoryBytes)),
-        Model.MemoryLimitBytes > 0 ? (isFa ? $"سقف {Gb(Model.MemoryLimitBytes)}" : $"limit {Gb(Model.MemoryLimitBytes)}") : (isFa ? "بدون سقف" : "no limit")))" />
-
-    @* The tier's disk figure belongs beside the measurement, for the same reason the memory limit
-       does: "12 GB" answers nothing without the ceiling it is being measured against. *@
-    <partial name="Design/_StatCard" model="@(new StatCardModel("hard-drive", isFa ? "داده" : "Storage",
-        Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(Gb(db.StorageBytes)),
-        Model.DiskLimitBytes > 0
-            ? (isFa ? $"سقف {Gb(Model.DiskLimitBytes)}" : $"limit {Gb(Model.DiskLimitBytes)}")
-            : db.StorageMeasuredAt?.LocalDateTime.ToString(Dates.Stamp)))" />
-
-    <partial name="Design/_StatCard" model="@(new StatCardModel("boxes", isFa ? "اپ متصل" : "Linked apps",
-        Harbora.Infrastructure.Monitoring.MetricDisplay.For(db.LinkedApps)))" />
-</div>
-
-@* The cards above are this moment. These are the same figures over time, which is what answers
-   "is this normal" and "when did it start" — the questions somebody opens a database page with. *@
-<div class="mb-6 grid gap-4 rounded-xl border border-line bg-surface p-4 sm:grid-cols-2">
-    <div data-island="metrics-chart"
-         data-name="mem.used"
-         data-label="@(isFa ? "حافظه" : "Memory")"
-         data-color="#818cf8"
-         data-service-id="@db.Id"
-         data-unit="bytes"
-         data-limit="@Model.MemoryLimitBytes"
-         data-height="90"></div>
-
-    <div data-island="metrics-chart"
-         data-name="cpu.percent"
-         data-label="CPU"
-         data-color="#34d399"
-         data-service-id="@db.Id"
-         data-unit="percent"
-         data-limit="@(Model.CpuLimit * 100)"
-         data-height="90"></div>
-</div>
 
 <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
     <div class="space-y-6">

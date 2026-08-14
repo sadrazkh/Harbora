@@ -16,7 +16,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Harbora.Web.Controllers;
 
 [Authorize]
-public sealed class AppsController(
+public sealed partial class AppsController(
     HarboraDbContext db,
     IDeploymentEngine deployEngine,
     IAppOperationsService ops,
@@ -414,13 +414,7 @@ public sealed class AppsController(
         var app = await db.Apps
             .Include(a => a.EnvironmentVariables)
             .Include(a => a.Domains)
-            .Include(a => a.Deployments.OrderByDescending(d => d.Number).Take(20))
             .Include(a => a.GitRepository)
-            // Without this the page's Volumes collection is always empty, which is not "this
-            // application has no storage" — it is "nobody asked". The Data button and the storage
-            // panel are both drawn from it, so the entire file browser was invisible on every
-            // application, including the template ones that do have volumes.
-            .Include(a => a.Volumes)
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
@@ -434,27 +428,6 @@ public sealed class AppsController(
                 .Where(a => a.PreviewOfAppId == app.Id)
                 .OrderBy(a => a.PreviewBranch)
                 .ToListAsync(ct);
-
-        // What it is actually using, against what it is allowed to use. The page showed the limit
-        // nowhere and the usage nowhere, so "is this app out of memory" could only be answered from
-        // the monitoring page — which shows the host, not this container.
-        // The container is named per deployment — old and new coexist during a cutover — so the one
-        // to read is the deployment currently serving, not a name derived from the app alone.
-        var active = app.Deployments.FirstOrDefault(d => d.Id == app.ActiveDeploymentId)
-                     ?? app.Deployments.FirstOrDefault(d => d.Status == DeploymentStatus.Succeeded);
-
-        var containerName = active is null
-            ? Harbora.Infrastructure.Deployments.DeploymentPlanning.LegacyContainerName(app.Slug)
-            : Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.Slug, active.Number);
-
-        var samples = await db.MonitoringMetrics.AsNoTracking()
-            .Where(m => m.ResourceRef == containerName
-                        && (m.Name == "cpu.percent" || m.Name == "mem.used"))
-            .OrderByDescending(m => m.Timestamp).Take(120).ToListAsync(ct);
-
-        ViewBag.CpuPercent = samples.FirstOrDefault(m => m.Name == "cpu.percent")?.Value;
-        ViewBag.MemoryUsed = samples.FirstOrDefault(m => m.Name == "mem.used")?.Value;
-        ViewBag.MeasuredAt = samples.FirstOrDefault()?.Timestamp;
 
         // The sizes this workspace may move between, so the resize control offers the same list the
         // create form did rather than a free-text box.
@@ -508,12 +481,6 @@ public sealed class AppsController(
         ViewBag.ProtectionIps = appRoutes.Select(r => r.IpAllowlist).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? "";
         ViewBag.HasRoutes = appRoutes.Count > 0;
 
-        // Disk, alongside memory and CPU. A tier sells storage now, so the page that shows what a
-        // tier gave this app has to show that figure too — and how much of it is gone.
-        var disk = await AppDiskUsageAsync(app.Id, ct);
-        ViewBag.DiskUsed = disk.MeasuredBytes;
-        ViewBag.DiskCaveat = Harbora.Infrastructure.Tenancy.InstanceDisk.Caveat(disk);
-
         // Where this app could go next. An app installed from a ready-made template had no way to
         // move to a newer release at all: the version was pinned at creation and nothing offered
         // another, so "update n8n" meant deleting it and starting again.
@@ -552,7 +519,26 @@ public sealed class AppsController(
                 .Take(20)
                 .ToListAsync(ct);
 
-        return View(app);
+        // The Overview tab, wrapped for the shared shell: _Shell.cshtml is typed to AppTabViewModel,
+        // so what reaches View() has to be an instance of it rather than the raw entity Details used
+        // to receive directly.
+        return View(new AppOverviewViewModel
+        {
+            Id = app.Id,
+            Name = app.Name,
+            Slug = app.Slug,
+            Kind = app.Kind,
+            Status = app.Status,
+            CurrentTab = "overview",
+            SourceType = app.SourceType,
+            GitRepositoryFullName = app.GitRepository?.FullName,
+            InstanceSizeKey = app.InstanceSizeKey,
+            // Overview no longer loads the Volumes collection (that Include moved to the Volumes tab,
+            // which is the whole point of giving it its own route), so the header's "is there a Data
+            // button" question is answered the same way Usage answers it: an existence check.
+            HasVolumes = await db.Volumes.AnyAsync(v => v.AppId == app.Id, ct),
+            App = app
+        });
     }
 
     /// <summary>
@@ -656,7 +642,7 @@ public sealed class AppsController(
         if (refusal != Harbora.Infrastructure.Storage.MountPathRefusal.None)
         {
             TempData["Error"] = ExplainMount(refusal);
-            return RedirectToAction(nameof(Details), new { id });
+            return RedirectToAction(nameof(Volumes), new { id });
         }
 
         var normalised = Harbora.Infrastructure.Storage.MountPath.Normalise(mountPath)!;
@@ -669,7 +655,7 @@ public sealed class AppsController(
             TempData["Error"] = IsFa
                 ? $"«{normalised}» از قبل هست."
                 : $"{normalised} is already mounted.";
-            return RedirectToAction(nameof(Details), new { id });
+            return RedirectToAction(nameof(Volumes), new { id });
         }
 
         await using var quotaReservation = await quota.AcquireCreationLockAsync(WorkspaceId, ct);
@@ -678,7 +664,7 @@ public sealed class AppsController(
         if (!quotaCheck.Allowed)
         {
             TempData["Error"] = (IsFa ? quotaCheck.ReasonFa : null) ?? quotaCheck.Reason;
-            return RedirectToAction(nameof(Details), new { id });
+            return RedirectToAction(nameof(Volumes), new { id });
         }
 
         app.Volumes.Add(new Volume
@@ -696,7 +682,7 @@ public sealed class AppsController(
         TempData["Message"] = IsFa
             ? $"«{normalised}» اضافه شد. با استقرار بعدی به کانتینر وصل می‌شود."
             : $"{normalised} was added. It is attached to the container on the next deployment.";
-        return RedirectToAction(nameof(Details), new { id });
+        return RedirectToAction(nameof(Volumes), new { id });
     }
 
     /// <summary>
@@ -740,7 +726,7 @@ public sealed class AppsController(
                 ? $"«{path}» دیگر وصل نمی‌شود. داده‌ها روی سرور ماندند."
                 : $"{path} is no longer mounted. The data is still on the server.");
 
-        return RedirectToAction(nameof(Details), new { id });
+        return RedirectToAction(nameof(Volumes), new { id });
     }
 
     private string ExplainMount(Harbora.Infrastructure.Storage.MountPathRefusal refusal) => (refusal, IsFa) switch
@@ -1073,7 +1059,10 @@ public sealed class AppsController(
         if (!plan.CanRollback)
         {
             TempData["Error"] = plan.Reason;
-            return RedirectToAction(nameof(Details), new { id });
+            // Rollback is only ever reached from the deployment list, which now lives on its own
+            // tab rather than on Overview — same reasoning as AddVolume/RemoveVolume redirecting to
+            // Volumes: land back where the history (and this error) is actually shown.
+            return RedirectToAction(nameof(Deployments), new { id });
         }
 
         Guid newId;
@@ -1087,7 +1076,7 @@ public sealed class AppsController(
         {
             // A rollback must never be silently coalesced onto an in-flight deploy — say so.
             TempData["Error"] = ex.Message;
-            return RedirectToAction(nameof(Details), new { id });
+            return RedirectToAction(nameof(Deployments), new { id });
         }
         await audit.LogAsync("app.rollback", "app", id.ToString(), ClientIp,
             metadataJson: $"{{\"toDeploymentId\":\"{deploymentId}\"}}", ct: ct);

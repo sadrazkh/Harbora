@@ -1,0 +1,68 @@
+@model Harbora.Web.ViewModels.AppVolumesViewModel
+@{
+    // Moved here from Details.cshtml's "Persistent storage" panel — unchanged behaviour, a new
+    // address. The Add and Remove forms below post to the same actions, the same route values and
+    // the same antiforgery token they always did.
+    Layout = "_Shell";
+    ViewData["Title"] = Model.Name;
+
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+
+<div class="max-w-xl">
+    @* ---- storage ----
+       Volumes could only arrive from a template, so an application built from an image or a
+       repository had nowhere to keep anything that survives a deploy — and the Data browser,
+       which only appears when there is a volume, was unreachable for most of the platform. *@
+    <section class="rounded-xl border border-line bg-surface p-4">
+        <div class="mb-3 font-semibold">@(isFa ? "فضای دائمی" : "Persistent storage")</div>
+
+        @if (Model.Volumes.Count == 0)
+        {
+            <p class="text-xs leading-5 text-ink-faint">
+                @(isFa
+                    ? "هرچه این اپ بنویسد با استقرار بعدی پاک می‌شود. برای نگه داشتن فایل‌ها یک مسیر اضافه کنید."
+                    : "Anything this application writes is gone at the next deployment. Add a path to keep files.")
+            </p>
+        }
+        else
+        {
+            <div class="space-y-2">
+                @foreach (var volume in Model.Volumes)
+                {
+                    <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 p-2.5">
+                        <span class="min-w-0">
+                            <code dir="ltr" class="block truncate text-sm text-ink">@volume.MountPath</code>
+                            <small class="text-[11px] text-ink-faint">
+                                @(volume.StorageBytes is { } bytes
+                                    ? Harbora.Infrastructure.Tenancy.ByteSize.Measured(bytes)
+                                    : (isFa ? "اندازه‌گیری نشده" : "not measured"))
+                            </small>
+                        </span>
+                        <span class="flex items-center gap-2">
+                            <a href="/apps/@Model.Id/data?volumeId=@volume.Id"
+                               class="text-[11px] text-accent-text hover:underline">@(isFa ? "فایل‌ها" : "Files")</a>
+                            <form asp-controller="Apps" asp-action="RemoveVolume" asp-route-id="@Model.Id" asp-route-volumeId="@volume.Id" method="post"
+                                  onsubmit="return confirm('@(isFa ? "این مسیر دیگر وصل نشود؟ داده‌ها روی سرور می‌مانند." : "Stop mounting this path? The data stays on the server.")');">
+                                @Html.AntiForgeryToken()
+                                <button class="text-[11px] text-ink-faint hover:text-danger">@(isFa ? "برداشتن" : "Unmount")</button>
+                            </form>
+                        </span>
+                    </div>
+                }
+            </div>
+        }
+
+        <form asp-controller="Apps" asp-action="AddVolume" asp-route-id="@Model.Id" method="post" class="mt-3 space-y-2">
+            @Html.AntiForgeryToken()
+            <label class="form-label" for="mount-path">@(isFa ? "مسیر داخل کانتینر" : "Path inside the container")</label>
+            <input id="mount-path" name="mountPath" required class="form-control font-mono text-sm" dir="ltr" placeholder="/data" />
+            <button class="btn-secondary w-full justify-center text-sm">@(isFa ? "افزودن فضا" : "Add storage")</button>
+        </form>
+        <p class="mt-1 text-[11px] leading-5 text-ink-faint">
+            @(isFa
+                ? "با استقرار بعدی به کانتینر وصل می‌شود. پوشه‌های خود سیستم مثل /etc پذیرفته نمی‌شوند — والیوم خالی روی آن‌ها، ایمیج را خراب می‌کند."
+                : "It is attached at the next deployment. The image's own directories — /etc and the like — are refused: an empty volume over one of them breaks the container.")
+        </p>
+    </section>
+</div>

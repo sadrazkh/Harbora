@@ -1,0 +1,141 @@
+@model Harbora.Web.ViewModels.AppUsageViewModel
+@{
+    // Moved here from Details.cshtml's "Resources" panel — unchanged behaviour, a new address.
+    Layout = "_Shell";
+    ViewData["Title"] = Model.Name;
+
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    string Bytes(double? value) => value is null or 0
+        ? "—"
+        : value < 1024L * 1024 * 1024
+            ? $"{value / 1024 / 1024:0.#} MB"
+            : $"{value / 1024 / 1024 / 1024:0.##} GB";
+
+    // The same rule the lists and the plan page use. It used to be written inline in Details.cshtml,
+    // where nothing could test it and each copy could drift.
+    var memoryShare = Harbora.Infrastructure.Monitoring.AllocationReading
+        .Of(Model.MemoryUsed, Model.MemoryLimitBytes);
+    var cpuShare = Harbora.Infrastructure.Monitoring.AllocationReading
+        .Of(Model.CpuPercent, Model.CpuLimit * 100);
+
+    // Disk is measured rather than sampled — the volumes are walked on a schedule — so it reads as a
+    // fact with a date, not as a live figure.
+    var diskShare = Harbora.Infrastructure.Monitoring.AllocationReading
+        .Of(Model.DiskUsedBytes, Model.DiskLimitBytes);
+}
+
+<div class="max-w-xl">
+    <section class="rounded-xl border border-line bg-surface p-4">
+        <div class="mb-3 flex items-center justify-between gap-2">
+            <div class="font-semibold">@(isFa ? "منابع" : "Resources")</div>
+            <span class="text-[11px] text-ink-faint">
+                @(Model.MeasuredAt is { } at
+                    ? (isFa ? $"آخرین نمونه {at.LocalDateTime:HH:mm}" : $"sampled {at.LocalDateTime:HH:mm}")
+                    : (isFa ? "هنوز اندازه‌گیری نشده" : "not measured yet"))
+            </span>
+        </div>
+
+        <div class="space-y-3">
+            <div>
+                <div class="flex items-baseline justify-between text-xs">
+                    <span class="text-ink-muted">@T["Memory"]</span>
+                    <span class="text-ink">
+                        @Bytes(Model.MemoryUsed)
+                        @(Model.MemoryLimitBytes > 0
+                            ? $"/ {Bytes(Model.MemoryLimitBytes)}"
+                            : (isFa ? "· بدون سقف" : "· no limit"))
+                    </span>
+                </div>
+                @* Only drawn when there is a ceiling to draw it against. A bar with no maximum
+                   is a shape that implies a number nobody set. *@
+                @if (memoryShare.HasShare)
+                {
+                    <span class="metric-track mt-1"><i style="width:@memoryShare.Percent%"></i></span>
+                    @if (memoryShare.IsOver)
+                    {
+                        @* Real, and worth saying: shrinking an app does not shrink the running
+                           container — the new ceiling applies at the next deployment. *@
+                        <p class="mt-1 text-[11px] text-warn">
+                            @(isFa
+                                ? "بالاتر از سقف جدید است؛ با استقرار بعدی اعمال می‌شود."
+                                : "Over the new ceiling — it applies at the next deployment.")
+                        </p>
+                    }
+                }
+            </div>
+
+            <div>
+                <div class="flex items-baseline justify-between text-xs">
+                    <span class="text-ink-muted">CPU</span>
+                    <span class="text-ink">
+                        @(Model.CpuPercent is null ? "—" : $"{Model.CpuPercent:0.#}%")
+                        @(Model.CpuLimit > 0
+                            ? (isFa ? $"از {Model.CpuLimit} هسته" : $"of {Model.CpuLimit} vCPU")
+                            : (isFa ? "· بدون سقف" : "· no limit"))
+                    </span>
+                </div>
+                @if (cpuShare.HasShare)
+                {
+                    <span class="metric-track is-violet mt-1"><i style="width:@cpuShare.Percent%"></i></span>
+                }
+            </div>
+
+            @* Storage, which a tier now comes with. It was on the plan, enforced on create and
+               shown on no page belonging to a resource. *@
+            <div>
+                <div class="flex items-baseline justify-between text-xs">
+                    <span class="text-ink-muted">@(isFa ? "دیسک" : "Disk")</span>
+                    <span class="text-ink">
+                        @Bytes(Model.DiskUsedBytes)
+                        @(Model.DiskLimitBytes > 0
+                            ? $"/ {Bytes(Model.DiskLimitBytes)}"
+                            : (isFa ? "· بدون سقف" : "· no limit"))
+                    </span>
+                </div>
+                @if (diskShare.HasShare)
+                {
+                    <span class="metric-track mt-1"><i style="width:@diskShare.Percent%"></i></span>
+                }
+                @if (Model.DiskCaveat is not null)
+                {
+                    @* An unmeasured volume makes the figure incomplete, not smaller. *@
+                    <p class="mt-1 text-[11px] text-warn">@Model.DiskCaveat</p>
+                }
+            </div>
+        </div>
+
+        @* ---- the same figures over time ----
+           A single latest sample answers "is it alive". It does not answer "is this normal", "when
+           did it start" or "is it creeping up" — and those were only answerable from the monitoring
+           page, which reports the host rather than this container. The dashed line is what the app
+           was allotted, so the gap between the two is the thing being looked at. *@
+        <div class="mt-4 space-y-4 border-t border-line pt-4">
+            <div data-island="metrics-chart"
+                 data-name="mem.used"
+                 data-label="@(isFa ? "حافظه" : "Memory")"
+                 data-color="#818cf8"
+                 data-app-id="@Model.Id"
+                 data-unit="bytes"
+                 data-limit="@Model.MemoryLimitBytes"
+                 data-height="90"></div>
+
+            <div data-island="metrics-chart"
+                 data-name="cpu.percent"
+                 data-label="CPU"
+                 data-color="#34d399"
+                 data-app-id="@Model.Id"
+                 data-unit="percent"
+                 data-limit="@(Model.CpuLimit * 100)"
+                 data-height="90"></div>
+
+            <div data-island="metrics-chart"
+                 data-name="net.rx"
+                 data-label="@(isFa ? "ترافیک ورودی" : "Network in")"
+                 data-color="#f59e0b"
+                 data-app-id="@Model.Id"
+                 data-unit="bytes"
+                 data-height="70"></div>
+        </div>
+    </section>
+</div>
