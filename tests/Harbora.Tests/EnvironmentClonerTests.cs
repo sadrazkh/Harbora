@@ -65,6 +65,20 @@ public class EnvironmentClonerTests
                 return Task.FromResult(QuotaCheck.Deny("CPU quota exceeded."));
             return Task.FromResult(QuotaCheck.Ok);
         }
+
+        /// <summary>
+        /// Only the domain term is modelled — that is what <c>EnvironmentCloner.QuotaRefusalAsync</c>
+        /// computes from the plan rather than taking as an input, and the one this fixture needs a real
+        /// opinion about to prove that term is actually reached.
+        /// </summary>
+        public Task<QuotaCheck> CanAddGovernedResourcesAsync(
+            Guid w, GovernanceQuotaDelta delta, CancellationToken ct)
+        {
+            if (Usage.MaxDomains > 0 && Usage.Domains + delta.Domains > Usage.MaxDomains)
+                return Task.FromResult(QuotaCheck.Deny(
+                    $"This copy needs {delta.Domains} domain(s); {Usage.Domains} / {Usage.MaxDomains} are in use."));
+            return Task.FromResult(QuotaCheck.Ok);
+        }
     }
 
     /// <summary>
@@ -265,8 +279,20 @@ public class EnvironmentClonerTests
         volume.StorageBytes.Should().BeNull("nothing has been written to it, let alone measured");
     }
 
+    /// <summary>
+    /// With no platform root domain configured — the fixture's default — <c>AssignAsync</c> has
+    /// nothing to derive a name from and hands back <c>NoRootDomain</c>, so the copy stays addressless.
+    ///
+    /// <para>
+    /// That used to be the only reason this assertion could pass, which is exactly the problem: a
+    /// fixture that never configures a root domain can't tell "the copy got no address because none
+    /// was configured" apart from "the copy got no address because cloning doesn't give addresses at
+    /// all", the wrong belief this file used to encode. <see cref="A_clone_is_given_its_own_address_not_the_originals"/>
+    /// is the test that a root domain being configured actually changes what a copy gets.
+    /// </para>
+    /// </summary>
     [Fact]
-    public async Task No_domain_is_copied()
+    public async Task With_no_root_domain_configured_the_copy_is_left_addressless()
     {
         var h = Build();
 
@@ -274,8 +300,38 @@ public class EnvironmentClonerTests
         var copy = await h.Db.Apps.Include(a => a.Domains)
             .FirstAsync(a => a.EnvironmentId == outcome.EnvironmentId);
 
-        copy.Domains.Should().BeEmpty("a hostname points at one place");
-        outcome.Plan!.DomainsLeftBehind.Should().Be(1, "and the screen has to say so");
+        copy.Domains.Should().BeEmpty(
+            "the fixture sets no platform root domain, so AssignAsync has nothing to derive a name from");
+        outcome.Plan!.DomainsLeftBehind.Should().Be(1,
+            "and the screen has to say the original's own domain was not carried over");
+    }
+
+    /// <summary>
+    /// The real coverage finding 4 asked for: with a root domain configured, a copy is given an
+    /// address of its own — never the original's, because a hostname points at one place and the copy
+    /// answering on the original's own domain would be two apps racing for one route.
+    /// </summary>
+    [Fact]
+    public async Task A_clone_is_given_its_own_address_not_the_originals()
+    {
+        var h = Build();
+        h.Db.Settings.Add(new Harbora.Domain.Settings.Setting
+        { Key = Harbora.Domain.Settings.SettingKeys.PlatformRootDomain, Value = "apps.example.com" });
+        await h.Db.SaveChangesAsync();
+
+        var outcome = await h.Cloner.CloneAsync(Workspace, h.Source.Id, "Staging", default);
+        var copy = await h.Db.Apps.Include(a => a.Domains)
+            .FirstAsync(a => a.EnvironmentId == outcome.EnvironmentId);
+
+        var domain = copy.Domains.Should().ContainSingle(
+            "a copy is a real app that answers on its own hostname now, the same as any other creation " +
+            "path — before this it was created with no address at all").Subject;
+        domain.Host.Should().Be("api-staging.apps.example.com");
+        domain.Host.Should().NotBe(h.SourceApp.Domains.Single().Host,
+            "a hostname points at one place — the copy answering on the original's own domain would " +
+            "mean two apps racing for one route");
+        domain.IsPrimary.Should().BeTrue();
+        domain.SslEnabled.Should().BeTrue();
     }
 
     [Fact]
@@ -356,6 +412,31 @@ public class EnvironmentClonerTests
     }
 
     // ---- refusals ----
+
+    /// <summary>
+    /// The real path finding 5 asked for: <c>QuotaRefusalAsync</c>'s own <c>Domains:</c> term, exercised
+    /// through a real <c>CloneAsync</c> call rather than re-implemented as a standalone expression that
+    /// could not fail if that term were ever deleted from production.
+    /// </summary>
+    [Fact]
+    public async Task The_domain_the_copy_will_consume_is_weighed_against_the_plan_too()
+    {
+        var h = Build();
+        h.Db.Settings.Add(new Harbora.Domain.Settings.Setting
+        { Key = Harbora.Domain.Settings.SettingKeys.PlatformRootDomain, Value = "apps.example.com" });
+        await h.Db.SaveChangesAsync();
+        // Already at the domain ceiling; the copy's one web app needs one more.
+        h.Quota.Usage = new WorkspaceUsage("Small", Apps: 1, MaxApps: 9, Services: 1, MaxServices: 9,
+            MemoryUsedBytes: 0, MaxMemoryBytes: 0, CpuUsed: 0, MaxCpuCores: 0, Suspended: false,
+            Domains: 1, MaxDomains: 1);
+
+        var outcome = await h.Cloner.CloneAsync(Workspace, h.Source.Id, "Staging", default);
+
+        outcome.Ok.Should().BeFalse(
+            "the plan's one web app needs one more domain, and the workspace is already at its limit");
+        outcome.Reason.Should().Contain("domain");
+        (await h.Db.Environments.CountAsync()).Should().Be(1, "half a copy is worse than none");
+    }
 
     [Fact]
     public async Task The_whole_package_is_weighed_against_the_plan_at_once()

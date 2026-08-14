@@ -252,19 +252,21 @@ public class ClonePlanTests
         ClonePlan.IsAttachedTo([], "db").Should().BeFalse();
 
     /// <summary>
-    /// The plan carries each copy's kind, so the quota estimate can count the addresses the copy will
-    /// consume.
+    /// The plan carries each copy's kind onto <see cref="CloneAppSpec"/>, which is what lets
+    /// <c>EnvironmentCloner.QuotaRefusalAsync</c> tell an addressable copy from one that will never
+    /// consume a domain.
     ///
     /// <para>
-    /// This became load-bearing the moment cloned applications started being given an address. Before
-    /// that they arrived with none, so leaving domains out of the clone's quota estimate was correct.
-    /// Afterwards it was not, and the shape of the mistake is the dangerous one: nothing fails, a
-    /// workspace already at its domain limit simply clones straight past it, and the limit is
-    /// discovered to have been decorative.
+    /// This file proves the plan's shape, not the quota decision built from it — that belongs to
+    /// <c>EnvironmentClonerTests</c>, exercised through a real <c>CloneAsync</c> call, because a plan-only
+    /// assertion that re-derives the same expression production uses cannot fail when production's own
+    /// expression is the thing that breaks. (An earlier version of this test did exactly that: it
+    /// recomputed <c>ServicePlan.CanHaveDomains</c> itself and compared it to a literal count, so it
+    /// stayed green even with the quota's <c>Domains:</c> term deleted outright.)
     /// </para>
     /// </summary>
     [Fact]
-    public void A_plan_carries_each_copys_kind_so_only_the_ones_that_get_an_address_are_counted()
+    public void Each_copys_kind_survives_onto_its_plan_entry()
     {
         var plan = ClonePlan.Of(new CloneRequest("Staging", Project, [], [], [],
             [App("web", kind: ServiceKind.Web),
@@ -273,7 +275,7 @@ public class ClonePlanTests
              App("nightly", kind: ServiceKind.Cron)],
             []));
 
-        plan.Apps.Count(a => Harbora.Infrastructure.Deployments.ServicePlan.CanHaveDomains(a.Kind))
-            .Should().Be(2, "a worker and a cron take no inbound traffic, so neither consumes an address");
+        plan.Apps.Select(a => a.Kind).Should().Equal(
+            ServiceKind.Web, ServiceKind.Static, ServiceKind.Worker, ServiceKind.Cron);
     }
 }
