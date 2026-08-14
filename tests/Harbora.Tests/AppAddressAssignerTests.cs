@@ -1,0 +1,137 @@
+using FluentAssertions;
+using Harbora.Data;
+using Harbora.Domain.Apps;
+using Harbora.Domain.Common;
+using Harbora.Domain.Networking;
+using Harbora.Domain.Settings;
+using Harbora.Infrastructure.Networking;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Xunit;
+
+namespace Harbora.Tests;
+
+/// <summary>
+/// Giving an app its address, against a real database.
+///
+/// The half of the rule that cannot be pure: whether a name is already taken is a question only the
+/// database can answer, and what to do when it is taken is the behaviour this project got wrong —
+/// AppsController skipped the insert and said nothing, so the app was created with no address and no
+/// explanation.
+/// </summary>
+public class AppAddressAssignerTests
+{
+    private static HarboraDbContext NewDb() => new(
+        new DbContextOptionsBuilder<HarboraDbContext>()
+            .UseInMemoryDatabase("addr-" + Guid.NewGuid()).Options);
+
+    private static IConfiguration EmptyConfig() =>
+        new ConfigurationBuilder().AddInMemoryCollection([]).Build();
+
+    private static async Task<HarboraDbContext> DbWithRootDomain(string root)
+    {
+        var db = NewDb();
+        db.Settings.Add(new Setting { Key = SettingKeys.PlatformRootDomain, Value = root });
+        await db.SaveChangesAsync();
+        return db;
+    }
+
+    private static App WebApp(string slug) => new()
+    {
+        Id = Guid.NewGuid(), Name = slug, Slug = slug, Kind = ServiceKind.Web, WorkspaceId = Guid.NewGuid()
+    };
+
+    [Fact]
+    public async Task An_app_is_given_its_address_and_the_address_is_primary()
+    {
+        await using var db = await DbWithRootDomain("apps.example.com");
+        var app = WebApp("shop");
+
+        var decision = await new AppAddressAssigner(db, EmptyConfig())
+            .AssignAsync(app, requested: null, suffix: null, CancellationToken.None);
+
+        decision.Outcome.Should().Be(AppAddressOutcome.Assigned);
+        decision.Host.Should().Be("shop.apps.example.com");
+
+        var added = app.Domains.Should().ContainSingle().Subject;
+        added.Host.Should().Be("shop.apps.example.com");
+        added.IsPrimary.Should().BeTrue("an app's own address is the one its links point at");
+        added.SslEnabled.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_taken_name_produces_a_working_address_and_says_it_was_taken()
+    {
+        await using var db = await DbWithRootDomain("apps.example.com");
+        db.Domains.Add(new DomainName { AppId = Guid.NewGuid(), Host = "shop.apps.example.com" });
+        await db.SaveChangesAsync();
+
+        var app = WebApp("shop");
+        var decision = await new AppAddressAssigner(db, EmptyConfig())
+            .AssignAsync(app, requested: null, suffix: () => "k3f", CancellationToken.None);
+
+        decision.Outcome.Should().Be(AppAddressOutcome.Discriminated,
+            "the outcome is what the caller shows the person — silence here is the defect this replaces");
+        decision.Host.Should().Be("shop-k3f.apps.example.com");
+        app.Domains.Should().ContainSingle().Which.Host.Should().Be("shop-k3f.apps.example.com");
+    }
+
+    [Fact]
+    public async Task A_worker_is_given_no_address_and_no_domain_row()
+    {
+        await using var db = await DbWithRootDomain("apps.example.com");
+        var app = WebApp("mailer");
+        app.Kind = ServiceKind.Worker;
+
+        var decision = await new AppAddressAssigner(db, EmptyConfig())
+            .AssignAsync(app, requested: null, suffix: null, CancellationToken.None);
+
+        decision.Outcome.Should().Be(AppAddressOutcome.KindTakesNoTraffic);
+        app.Domains.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task With_no_root_domain_set_nothing_is_invented()
+    {
+        await using var db = NewDb();
+        var app = WebApp("shop");
+
+        var decision = await new AppAddressAssigner(db, EmptyConfig())
+            .AssignAsync(app, requested: null, suffix: null, CancellationToken.None);
+
+        decision.Outcome.Should().Be(AppAddressOutcome.NoRootDomain);
+        app.Domains.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task When_every_attempt_is_taken_it_says_so_rather_than_adding_nothing_quietly()
+    {
+        await using var db = await DbWithRootDomain("apps.example.com");
+        db.Domains.Add(new DomainName { AppId = Guid.NewGuid(), Host = "shop.apps.example.com" });
+        db.Domains.Add(new DomainName { AppId = Guid.NewGuid(), Host = "shop-same.apps.example.com" });
+        await db.SaveChangesAsync();
+
+        var app = WebApp("shop");
+        var decision = await new AppAddressAssigner(db, EmptyConfig())
+            .AssignAsync(app, requested: null, suffix: () => "same", CancellationToken.None);
+
+        decision.Outcome.Should().Be(AppAddressOutcome.Exhausted);
+        decision.Host.Should().BeNull();
+        app.Domains.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_name_taken_in_another_workspace_still_counts_as_taken()
+    {
+        await using var db = await DbWithRootDomain("apps.example.com");
+        db.Domains.Add(new DomainName { AppId = Guid.NewGuid(), Host = "shop.apps.example.com" });
+        await db.SaveChangesAsync();
+
+        var app = WebApp("shop");
+        var decision = await new AppAddressAssigner(db, EmptyConfig())
+            .AssignAsync(app, requested: null, suffix: () => "k3f", CancellationToken.None);
+
+        decision.Host.Should().Be("shop-k3f.apps.example.com",
+            "DNS is not multi-tenant — two workspaces cannot both answer on one hostname");
+    }
+}
