@@ -96,10 +96,17 @@ of** one-route-per-tab without discarding anything. The reverse is not true.
 | Volumes | `/apps/{id}/volumes` | Today's add/remove; browsing and external access are sub-project D |
 | Deployments | `/apps/{id}/deployments` | Today's history and rollback; the image maximum is sub-project F |
 
-**Databases — four tabs:** Overview · Access (the existing `Access` page) · Usage · Backups.
+**Databases — three tabs:** Overview · Usage · Access (the existing `Access` page).
 
-Databases get a Backups tab and apps do not, because databases are already a backup target today and
-apps are not. The asymmetry is real, not an oversight; it disappears when sub-project E lands.
+> **Corrected during implementation (commit `4514ad5`).** This section originally specified a fourth
+> tab, Backups, on the reasoning that databases are already a backup target and apps are not. Building
+> it showed the reasoning did not survive contact with the route: `BackupsController.Index` takes no
+> filter, so `/backups` is workspace-wide. A tab reading "Backups" on one database's page would have
+> listed every other database's beside it, while every other tab in that strip shows only this one.
+>
+> Nothing was lost. Overview already carries a database-scoped backups panel with its own "view all"
+> link. When a per-database backups view exists, the tab goes back — and that is where sub-project E
+> should put it.
 
 Three placement decisions, each a judgement rather than a detail:
 
