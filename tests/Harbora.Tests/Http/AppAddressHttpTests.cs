@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Networking;
@@ -22,7 +22,7 @@ public class AppAddressHttpTests(HarboraHttpFixture fixture)
 {
     private HarboraWebFactory Panel => fixture.Panel;
 
-    private Guid SeedApp(string slug, ServiceKind kind, string? withDomain)
+    private Guid SeedApp(string slug, ServiceKind kind, string? withDomain, bool ssl = true)
     {
         var app = new App
         {
@@ -42,7 +42,7 @@ public class AppAddressHttpTests(HarboraHttpFixture fixture)
             if (withDomain is not null)
                 db.Domains.Add(new DomainName
                 {
-                    AppId = app.Id, Host = withDomain, SslEnabled = true, ForceHttps = true, IsPrimary = true
+                    AppId = app.Id, Host = withDomain, SslEnabled = ssl, ForceHttps = ssl, IsPrimary = true
                 });
         });
 
@@ -162,5 +162,30 @@ public class AppAddressHttpTests(HarboraHttpFixture fixture)
         // somebody improves the phrasing, which is not what this test is about.
         html.Should().Contain("data-address-state=\"no-traffic\"",
             "an unexplained blank is the promise-without-a-feature this project keeps removing");
+    }
+
+    /// <summary>
+    /// The address link's scheme follows the domain's own SSL setting, the same way the Domains table
+    /// further down the page already does.
+    ///
+    /// <para>
+    /// Without this the block hard-coded <c>https</c>. One page would then show two different schemes
+    /// for one hostname the moment somebody turned SSL off — and the wrong one would be on the link at
+    /// the top, which is the one people actually click.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task An_address_served_without_ssl_is_linked_over_http_not_https()
+    {
+        var id = SeedApp("addr-plain-http", ServiceKind.Web,
+            withDomain: "addr-plain-http.apps.example.com", ssl: false);
+        Panel.GivenUser(fixture.WorkspaceId, "addr-plain@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.207", "addr-plain@example.com");
+
+        var html = await (await client.GetAsync($"/apps/details/{id}")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("href=\"http://addr-plain-http.apps.example.com\"",
+            "an https link to a host that only answers on http is a link that fails");
+        html.Should().NotContain("href=\"https://addr-plain-http.apps.example.com\"");
     }
 }

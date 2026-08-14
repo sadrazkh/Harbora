@@ -498,14 +498,19 @@
             <div class="mb-2 font-semibold">@(isFa ? "آدرس" : "Address")</div>
             @if (primaryDomain is not null)
             {
+                @* The scheme follows SslEnabled, exactly as the Domains table below does. Hard-coding
+                   https here would let one page show two schemes for one hostname the moment somebody
+                   turns SSL off — and the link at the top, the one people actually click, would be
+                   the wrong one. *@
+                var primaryScheme = primaryDomain.SslEnabled ? "https" : "http";
                 <div class="flex flex-wrap items-center gap-2">
-                    <a href="https://@primaryDomain.Host" target="_blank" rel="noopener" dir="ltr"
+                    <a href="@primaryScheme://@primaryDomain.Host" target="_blank" rel="noopener" dir="ltr"
                        class="text-accent-text truncate">@primaryDomain.Host</a>
                     @* Same mechanism as the prebuilt-image reference above: the element's own text is
                        what gets copied, so the control shows the full URL rather than a bare host. *@
                     <code dir="ltr" data-copy-text
                           class="rounded bg-code text-code-ink px-2 py-0.5 text-[11px]"
-                          title="@(isFa ? "برای کپی کلیک کنید" : "Click to copy")">https://@primaryDomain.Host</code>
+                          title="@(isFa ? "برای کپی کلیک کنید" : "Click to copy")">@primaryScheme://@primaryDomain.Host</code>
                 </div>
             }
             else if (!Harbora.Infrastructure.Deployments.ServicePlan.CanHaveDomains(app.Kind))
