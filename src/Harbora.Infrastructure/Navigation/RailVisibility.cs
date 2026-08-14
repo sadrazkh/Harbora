@@ -7,6 +7,14 @@ public enum RailPanel
     /// The shelf of ready-made things offered beside a list — apps on <c>/apps</c>, database engines
     /// on <c>/databases</c>. One preference for both: it is the same "things to create" shelf, just
     /// filled in with whatever the page is a list of.
+    ///
+    /// <para>
+    /// The member name follows <c>Apps/Index.cshtml</c>, where the panel is labelled "Quick start" /
+    /// "شروع سریع". <c>Databases/Index.cshtml</c> draws the same panel under a different label,
+    /// "Quick provision" / "ساخت سریع" — deliberate, not a naming slip: renaming the enum member to
+    /// chase whichever page's label is currently on screen would just move the mismatch, since one
+    /// value backs two labels either way.
+    /// </para>
     /// </summary>
     QuickStart = 0,
 

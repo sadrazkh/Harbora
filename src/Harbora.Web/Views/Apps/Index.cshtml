@@ -89,8 +89,12 @@
                    so this is the only way back once it is gone — it must stay in the toolbar, outside
                    the rail it reopens. Reopens Overview: "the count of what they already have, which
                    is the reason the page exists" (RailPreferences). Quick start keeps its own toggle,
-                   reachable again once the rail is back. *@
-                <form asp-controller="Account" asp-action="SetRail" method="post" class="inline" data-rail-action="SetRail">
+                   reachable again once the rail is back.
+                   Same label and icon as the "Side panel" button on Databases/Index.cshtml, but that
+                   one reopens QuickStart instead — deliberate, not a copy/paste slip. Each list reopens
+                   whichever shelf it actually has; see the note on RailPanel.QuickStart for why the two
+                   pages share one panel underneath. *@
+                <form asp-controller="Account" asp-action="SetRail" method="post" class="inline">
                     @Html.AntiForgeryToken()
                     <input type="hidden" name="panel" value="Overview" />
                     <input type="hidden" name="open" value="true" />

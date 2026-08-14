@@ -52,8 +52,12 @@
         @if (!quickStartOpen)
         {
             @* Do-not-change item 23: closing the rail's only panel folds it away entirely (Task 7),
-               so this is the way back — outside the rail, in the list's own toolbar. *@
-            <form asp-controller="Account" asp-action="SetRail" method="post" class="inline" data-rail-action="SetRail">
+               so this is the way back — outside the rail, in the list's own toolbar.
+               Same label and icon as the "Side panel" button on Apps/Index.cshtml, but that one
+               reopens Overview instead — deliberate, not a copy/paste slip. Each list reopens
+               whichever shelf it actually has; see the note on RailPanel.QuickStart for why the two
+               pages share one panel underneath. *@
+            <form asp-controller="Account" asp-action="SetRail" method="post" class="inline">
                 @Html.AntiForgeryToken()
                 <input type="hidden" name="panel" value="QuickStart" />
                 <input type="hidden" name="open" value="true" />

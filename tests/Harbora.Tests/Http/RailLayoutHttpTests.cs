@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
@@ -46,7 +47,14 @@ public class RailLayoutHttpTests
 
         var html = await client.GetStringAsync("/apps");
 
-        html.Should().Contain("SetRail", "the toolbar control is what reopens it");
+        // Reads the toolbar's own form rather than checking for the literal text "SetRail" — that
+        // text never appears in the rendered page at all (asp-action compiles to an action="…" URL,
+        // not the action name), so the old assertion was satisfied only by a since-removed
+        // data-rail-action="SetRail" test hook with no consumer. This fails the way a deleted button
+        // should: no match, not a string coincidence.
+        var fields = RailTestHelpers.ReopenRailFieldsFrom(html);
+        fields.Should().Contain("panel", "Overview", "the toolbar reopens the panel this list actually has");
+        fields.Should().ContainKey("open").WhoseValue.Should().Be("true", "the control's whole job is to open the panel back up");
     }
 
     [Fact]
@@ -70,7 +78,11 @@ public class RailLayoutHttpTests
 
         var html = await client.GetStringAsync("/databases");
 
-        html.Should().Contain("SetRail", "the toolbar control is what reopens it");
+        // See A_closed_rail_still_offers_its_way_back_on_the_apps_list for why this reads the
+        // toolbar's own form instead of checking for the literal text "SetRail".
+        var fields = RailTestHelpers.ReopenRailFieldsFrom(html);
+        fields.Should().Contain("panel", "QuickStart", "Databases only has the one panel to reopen");
+        fields.Should().ContainKey("open").WhoseValue.Should().Be("true", "the control's whole job is to open the panel back up");
     }
 
     /// <summary>
@@ -122,11 +134,17 @@ public class RailLayoutHttpTests
         var client = await app.SignedInOwnerAsync();
         await app.CloseEveryRailPanelAsync();
 
-        (await client.GetStringAsync("/apps")).Should().NotContain("2xl:w-80", "closed to begin with");
+        var closed = await client.GetStringAsync("/apps");
+        closed.Should().NotContain("2xl:w-80", "closed to begin with");
+
+        // Read out of the page rather than hardcoded: a `panel` value that stopped binding (say,
+        // Views/Apps/Index.cshtml:95 changed from "Overview" to something SetRail cannot parse)
+        // would leave the real button dead while a hardcoded post here kept passing regardless.
+        var fields = RailTestHelpers.ReopenRailFieldsFrom(closed);
 
         var token = await client.AntiforgeryTokenFrom("/apps");
         var reopen = await client.PostFormAsync("/account/rail", token,
-            ("panel", "Overview"), ("open", "true"), ("returnUrl", "/apps"));
+            ("panel", fields["panel"]), ("open", fields["open"]), ("returnUrl", fields["returnUrl"]));
         reopen.StatusCode.Should().Be(HttpStatusCode.Found, "SetRail redirects back to returnUrl on success");
 
         var html = await client.GetStringAsync("/apps");
@@ -207,5 +225,31 @@ internal static class RailTestHelpers
             }
         });
         return Task.CompletedTask;
+    }
+
+    private static readonly Regex ReopenForm = new(
+        """<form[^>]*action="/account/rail"[^>]*>(?<body>[\s\S]*?)</form>""",
+        RegexOptions.Compiled);
+
+    private static readonly Regex HiddenField = new(
+        """<input type="hidden" name="(?<name>[a-zA-Z]+)" value="(?<value>[^"]*)"\s*/>""",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// The toolbar's own way-back form (do-not-change item 23), read off the rendered page rather
+    /// than assumed. A form is matched on its <c>action="/account/rail"</c> rather than on the text
+    /// "SetRail" — the tag helper that builds that URL never writes the action name itself into the
+    /// page, so a literal-text assertion could only ever be satisfied by an unrelated marker.
+    /// Reused by every test that needs to know the control actually works: a value that drifted from
+    /// what <c>AccountController.SetRail</c> expects fails here the same way a deleted button would.
+    /// </summary>
+    public static Dictionary<string, string> ReopenRailFieldsFrom(string html)
+    {
+        var form = ReopenForm.Match(html);
+        form.Success.Should().BeTrue(
+            "the toolbar must offer a form posting to /account/rail once the rail itself has nothing left to fold to");
+
+        return HiddenField.Matches(form.Groups["body"].Value)
+            .ToDictionary(m => m.Groups["name"].Value, m => m.Groups["value"].Value);
     }
 }

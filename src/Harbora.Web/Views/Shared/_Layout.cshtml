@@ -80,8 +80,19 @@
         @{
             var railBuffer = new StringWriter();
             PushWriter(railBuffer);
-            await RenderSectionAsync("RightRail", required: false);
-            PopWriter();
+            // Apps/Index.cshtml's RightRail section awaits Rails.AnyOpenAsync() and two
+            // IsOpenAsync() calls — all three reach the database, so all three can throw. Without
+            // the finally, a throw here would leave the writer stack pushed at a buffer nobody
+            // reads again, and everything this layout renders afterwards would go into it instead
+            // of the response.
+            try
+            {
+                await RenderSectionAsync("RightRail", required: false);
+            }
+            finally
+            {
+                PopWriter();
+            }
             var railHtml = railBuffer.ToString();
         }
         <div class="flex min-h-0 flex-1 flex-col overflow-y-auto 2xl:flex-row">
