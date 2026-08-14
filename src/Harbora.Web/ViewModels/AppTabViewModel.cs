@@ -48,3 +48,26 @@ public sealed class AppOverviewViewModel : AppTabViewModel
 {
     public required Harbora.Domain.Apps.App App { get; init; }
 }
+
+/// <summary>
+/// The Usage tab — today's <c>Details.cshtml</c> "Resources" panel, moved rather than rewritten:
+/// what the app is actually consuming against what it was allotted, and the same figures charted
+/// over time. Narrower than <see cref="AppOverviewViewModel"/> on purpose — Usage never read most of
+/// the entity, only these measurements and the limits they are read against.
+/// </summary>
+public sealed class AppUsageViewModel : AppTabViewModel
+{
+    public double? CpuPercent { get; init; }
+    public double? MemoryUsed { get; init; }
+    public long MemoryLimitBytes { get; init; }
+    public double CpuLimit { get; init; }
+
+    // Not in the brief's field list for this class — see the task report. Without it the disk row
+    // cannot say "X of Y GB" or draw a share bar, which is what the moved markup did before this tab
+    // existed; DiskUsedBytes alone answers "how much" but not "how much of what".
+    public long DiskLimitBytes { get; init; }
+
+    public long? DiskUsedBytes { get; init; }
+    public string? DiskCaveat { get; init; }
+    public DateTimeOffset? MeasuredAt { get; init; }
+}

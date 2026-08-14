@@ -66,6 +66,59 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
     }
 
     /// <summary>
+    /// The Usage tab draws what used to be Overview's "Resources" panel: CPU, memory and disk against
+    /// their limits, plus the same figures charted over time.
+    ///
+    /// <para>
+    /// Task 1's preservation test has no usage-related assertion to move here — its four landmarks
+    /// are the environment variable, the domain, the volume's mount path, and the rollback link; none
+    /// of them are CPU/memory/disk. That is not a landmark this move dropped, since nothing ever
+    /// claimed the figures were on the page in the first place (seeding a <c>MonitoringMetric</c>
+    /// row was never part of <c>SeedAppWithEverything</c>). This test is written fresh instead,
+    /// against the panel's default culture, the same way Task 1 settled on the rollback href rather
+    /// than the translated word.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_usage_tab_shows_what_the_overview_used_to()
+    {
+        var appId = SeedAppWithEverything();
+        Panel.GivenUser(fixture.WorkspaceId, "app-usage-owner@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.182", "app-usage-owner@example.com");
+
+        var usage = await (await client.GetAsync($"/apps/{appId}/usage")).Content.ReadAsStringAsync();
+
+        // Not the visible "CPU" label — the metrics-chart island's own data-name="cpu.percent" is
+        // the one piece of this row that is neither translated nor differently cased, the same
+        // reasoning Task 1 used for the rollback href over the translated word "Rollback".
+        usage.Should().Contain("cpu", "the usage tab is where consumption lives now");
+    }
+
+    /// <summary>
+    /// Every tab is a new entry point, and each one is a new chance to forget the ownership check
+    /// that <c>AppsController.LoadHeaderAsync</c> exists to make impossible to skip.
+    /// </summary>
+    [Fact]
+    public async Task A_tab_of_another_workspaces_app_is_not_found_rather_than_shown()
+    {
+        var foreignApp = new App
+        {
+            WorkspaceId = Guid.CreateVersion7(),
+            ServerId = Guid.CreateVersion7(),
+            Name = "not-yours",
+            Slug = "not-yours",
+            SourceType = AppSourceType.PrebuiltImage,
+            PrebuiltImage = "ghcr.io/example/not-yours:1.0"
+        };
+        Panel.Seed(db => db.Apps.Add(foreignApp));
+        Panel.GivenUser(fixture.WorkspaceId, "app-usage-foreign@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.183", "app-usage-foreign@example.com");
+
+        (await client.GetAsync($"/apps/{foreignApp.Id}/usage")).StatusCode
+            .Should().Be(System.Net.HttpStatusCode.NotFound);
+    }
+
+    /// <summary>
     /// One app carrying one of each landmark the assertions above check for: an environment variable,
     /// a domain, a volume, and a deployment that has succeeded (so the rollback link the deployment
     /// list draws for a non-active successful deployment actually renders).

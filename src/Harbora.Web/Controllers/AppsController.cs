@@ -16,7 +16,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Harbora.Web.Controllers;
 
 [Authorize]
-public sealed class AppsController(
+public sealed partial class AppsController(
     HarboraDbContext db,
     IDeploymentEngine deployEngine,
     IAppOperationsService ops,
@@ -435,27 +435,6 @@ public sealed class AppsController(
                 .OrderBy(a => a.PreviewBranch)
                 .ToListAsync(ct);
 
-        // What it is actually using, against what it is allowed to use. The page showed the limit
-        // nowhere and the usage nowhere, so "is this app out of memory" could only be answered from
-        // the monitoring page — which shows the host, not this container.
-        // The container is named per deployment — old and new coexist during a cutover — so the one
-        // to read is the deployment currently serving, not a name derived from the app alone.
-        var active = app.Deployments.FirstOrDefault(d => d.Id == app.ActiveDeploymentId)
-                     ?? app.Deployments.FirstOrDefault(d => d.Status == DeploymentStatus.Succeeded);
-
-        var containerName = active is null
-            ? Harbora.Infrastructure.Deployments.DeploymentPlanning.LegacyContainerName(app.Slug)
-            : Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.Slug, active.Number);
-
-        var samples = await db.MonitoringMetrics.AsNoTracking()
-            .Where(m => m.ResourceRef == containerName
-                        && (m.Name == "cpu.percent" || m.Name == "mem.used"))
-            .OrderByDescending(m => m.Timestamp).Take(120).ToListAsync(ct);
-
-        ViewBag.CpuPercent = samples.FirstOrDefault(m => m.Name == "cpu.percent")?.Value;
-        ViewBag.MemoryUsed = samples.FirstOrDefault(m => m.Name == "mem.used")?.Value;
-        ViewBag.MeasuredAt = samples.FirstOrDefault()?.Timestamp;
-
         // The sizes this workspace may move between, so the resize control offers the same list the
         // create form did rather than a free-text box.
         ViewBag.Sizes = await SizeChoicesAsync(app.InstanceSizeKey, ct);
@@ -507,12 +486,6 @@ public sealed class AppsController(
         ViewBag.ProtectionAuth = appRoutes.Any(r => r.BasicAuthEnabled && r.BasicAuthUsersEncrypted is not null);
         ViewBag.ProtectionIps = appRoutes.Select(r => r.IpAllowlist).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? "";
         ViewBag.HasRoutes = appRoutes.Count > 0;
-
-        // Disk, alongside memory and CPU. A tier sells storage now, so the page that shows what a
-        // tier gave this app has to show that figure too — and how much of it is gone.
-        var disk = await AppDiskUsageAsync(app.Id, ct);
-        ViewBag.DiskUsed = disk.MeasuredBytes;
-        ViewBag.DiskCaveat = Harbora.Infrastructure.Tenancy.InstanceDisk.Caveat(disk);
 
         // Where this app could go next. An app installed from a ready-made template had no way to
         // move to a newer release at all: the version was pinned at creation and nothing offered
