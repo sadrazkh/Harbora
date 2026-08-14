@@ -27,7 +27,7 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
     [Fact]
     public async Task The_app_page_still_shows_everything_it_showed_before_the_split()
     {
-        var appId = SeedAppWithEverything();
+        var (appId, _) = SeedAppWithEverything();
         Panel.GivenUser(fixture.WorkspaceId, "app-detail-owner@example.com", SystemRole.Owner);
         var client = await Panel.SignedInAs("203.0.113.180", "app-detail-owner@example.com");
 
@@ -35,7 +35,9 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
 
         html.Should().Contain("SEEDED_ENV_KEY", "environment variables are on the page today");
         html.Should().Contain("seeded.example.com", "domains are on the page today");
-        html.Should().Contain("/data/seeded", "the volume's mount path is on the page today");
+        // The volume's mount path moved to the Volumes tab in Task 4 — see
+        // The_volumes_tab_lists_the_apps_storage_and_can_still_add_and_remove — and Overview no
+        // longer loads the Volumes collection at all, so it is not asserted here any more.
         // The rollback link's label is @T["Rollback"] — translated, and this panel's default
         // language is Persian — so the English word would never appear on the page. The route it
         // points at is not translated, and only renders for a succeeded, non-active deployment, so
@@ -51,7 +53,7 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
     [Fact]
     public async Task Every_tab_of_an_app_is_reachable_from_the_page_itself()
     {
-        var appId = SeedAppWithEverything();
+        var (appId, _) = SeedAppWithEverything();
         Panel.GivenUser(fixture.WorkspaceId, "app-tabs-owner@example.com", SystemRole.Owner);
         var client = await Panel.SignedInAs("203.0.113.181", "app-tabs-owner@example.com");
 
@@ -82,7 +84,7 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
     [Fact]
     public async Task The_usage_tab_shows_what_the_overview_used_to()
     {
-        var appId = SeedAppWithEverything();
+        var (appId, _) = SeedAppWithEverything();
         Panel.GivenUser(fixture.WorkspaceId, "app-usage-owner@example.com", SystemRole.Owner);
         var client = await Panel.SignedInAs("203.0.113.182", "app-usage-owner@example.com");
 
@@ -92,6 +94,34 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
         // the one piece of this row that is neither translated nor differently cased, the same
         // reasoning Task 1 used for the rollback href over the translated word "Rollback".
         usage.Should().Contain("cpu", "the usage tab is where consumption lives now");
+    }
+
+    /// <summary>
+    /// The Volumes tab draws what used to be Overview's "Persistent storage" panel: the mounted
+    /// paths, and the forms that add or remove one.
+    ///
+    /// <para>
+    /// Task 1's preservation test asserted the seeded volume's mount path on the Overview page.
+    /// That assertion moves here rather than staying, because Overview no longer loads the Volumes
+    /// collection at all — this tab's own query is now the only place that happens.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_volumes_tab_lists_the_apps_storage_and_can_still_add_and_remove()
+    {
+        var (appId, volumeId) = SeedAppWithEverything();
+        Panel.GivenUser(fixture.WorkspaceId, "app-volumes-owner@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.184", "app-volumes-owner@example.com");
+
+        var html = await (await client.GetAsync($"/apps/{appId}/volumes")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("/data/seeded", "the seeded mount path is this tab's subject");
+        // Not the translated button labels ("Add storage" / "Unmount") — this panel's default
+        // language is Persian, the same reasoning the Rollback and Usage assertions above use. The
+        // Add form's field name and the Remove form's own route (which nothing else on this tab
+        // renders) identify each form regardless of which language rendered the page.
+        html.Should().Contain("name=\"mountPath\"", "adding storage must not be lost in the move");
+        html.Should().Contain($"/apps/{appId}/volumes/{volumeId}/remove", "nor removing it");
     }
 
     /// <summary>
@@ -123,7 +153,8 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
     /// a domain, a volume, and a deployment that has succeeded (so the rollback link the deployment
     /// list draws for a non-active successful deployment actually renders).
     /// </summary>
-    private Guid SeedAppWithEverything()
+    /// <returns>The app's id, and the seeded volume's id (the Volumes tab test needs both).</returns>
+    private (Guid AppId, Guid VolumeId) SeedAppWithEverything()
     {
         var app = new App
         {
@@ -134,6 +165,13 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
             SourceType = AppSourceType.PrebuiltImage,
             PrebuiltImage = "ghcr.io/example/seeded:1.0",
             Status = AppStatus.Running
+        };
+
+        var volume = new Volume
+        {
+            AppId = app.Id,
+            Name = "seeded-volume",
+            MountPath = "/data/seeded"
         };
 
         Panel.Seed(db =>
@@ -154,12 +192,7 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
                 Host = "seeded.example.com"
             });
 
-            db.Volumes.Add(new Volume
-            {
-                AppId = app.Id,
-                Name = "seeded-volume",
-                MountPath = "/data/seeded"
-            });
+            db.Volumes.Add(volume);
 
             // Succeeded and not the app's ActiveDeploymentId (left null here), which is exactly the
             // condition the view's deployment list uses to decide whether to draw a Rollback link.
@@ -174,6 +207,6 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
             });
         });
 
-        return app.Id;
+        return (app.Id, volume.Id);
     }
 }

@@ -416,11 +416,6 @@ public sealed partial class AppsController(
             .Include(a => a.Domains)
             .Include(a => a.Deployments.OrderByDescending(d => d.Number).Take(20))
             .Include(a => a.GitRepository)
-            // Without this the page's Volumes collection is always empty, which is not "this
-            // application has no storage" — it is "nobody asked". The Data button and the storage
-            // panel are both drawn from it, so the entire file browser was invisible on every
-            // application, including the template ones that do have volumes.
-            .Include(a => a.Volumes)
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
@@ -539,7 +534,10 @@ public sealed partial class AppsController(
             SourceType = app.SourceType,
             GitRepositoryFullName = app.GitRepository?.FullName,
             InstanceSizeKey = app.InstanceSizeKey,
-            HasVolumes = app.Volumes.Count > 0,
+            // Overview no longer loads the Volumes collection (that Include moved to the Volumes tab,
+            // which is the whole point of giving it its own route), so the header's "is there a Data
+            // button" question is answered the same way Usage answers it: an existence check.
+            HasVolumes = await db.Volumes.AnyAsync(v => v.AppId == app.Id, ct),
             App = app
         });
     }

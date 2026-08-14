@@ -71,3 +71,14 @@ public sealed class AppUsageViewModel : AppTabViewModel
     public string? DiskCaveat { get; init; }
     public DateTimeOffset? MeasuredAt { get; init; }
 }
+
+/// <summary>
+/// The Volumes tab — today's <c>Details.cshtml</c> "Persistent storage" panel, moved rather than
+/// rewritten: the mounted paths themselves, plus the forms that add and remove one. Narrower than
+/// <see cref="AppOverviewViewModel"/> on purpose — Volumes never read the rest of the entity, only
+/// its own <see cref="Harbora.Domain.Apps.Volume"/> rows.
+/// </summary>
+public sealed class AppVolumesViewModel : AppTabViewModel
+{
+    public IReadOnlyList<Harbora.Domain.Apps.Volume> Volumes { get; init; } = [];
+}

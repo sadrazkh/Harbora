@@ -89,4 +89,35 @@ public sealed partial class AppsController
             MeasuredAt = samples.FirstOrDefault()?.Timestamp
         });
     }
+
+    /// <summary>
+    /// This app's persistent storage — the mounted paths, plus the forms that add and remove one.
+    /// Moved out of Overview rather than rewritten: the same <c>AddVolume</c>/<c>RemoveVolume</c>
+    /// actions, the same antiforgery token, the same route values.
+    /// </summary>
+    [HttpGet("apps/{id:guid}/volumes")]
+    public async Task<IActionResult> Volumes(Guid id, CancellationToken ct)
+    {
+        var app = await LoadHeaderAsync(id, ct);
+        if (app is null) return NotFound();
+
+        var volumes = await db.Volumes.AsNoTracking()
+            .Where(v => v.AppId == id)
+            .OrderBy(v => v.MountPath)
+            .ToListAsync(ct);
+
+        return View(new AppVolumesViewModel
+        {
+            Id = app.Id, Name = app.Name, Slug = app.Slug, Kind = app.Kind, Status = app.Status,
+            CurrentTab = "volumes",
+            SourceType = app.SourceType,
+            GitRepositoryFullName = app.GitRepository?.FullName,
+            InstanceSizeKey = app.InstanceSizeKey,
+            // This tab loads the volumes anyway, so the header's "is there a Data button" question is
+            // answered from the list already in hand rather than a second existence query (contrast
+            // Usage, which never loads the collection and so asks db.Volumes.AnyAsync directly).
+            HasVolumes = volumes.Count > 0,
+            Volumes = volumes,
+        });
+    }
 }
