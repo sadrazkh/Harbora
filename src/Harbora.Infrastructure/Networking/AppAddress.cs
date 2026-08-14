@@ -23,7 +23,14 @@ public enum AppAddressOutcome
     Reserved = 4,
 
     /// <summary>Every discriminated attempt was taken too. Rare, and said out loud rather than skipped.</summary>
-    Exhausted = 5
+    Exhausted = 5,
+
+    /// <summary>
+    /// A name somebody typed was already in use. Refused rather than discriminated onto a name they
+    /// never agreed to — see <see cref="AppAddressAssigner"/>'s <c>AssignAsync</c> for why only a
+    /// <em>typed</em> collision is refused instead of mangled.
+    /// </summary>
+    Taken = 6
 }
 
 /// <summary>The decision, and the reason for it. <see cref="Host"/> is null unless one was settled on.</summary>
@@ -80,10 +87,26 @@ public static class AppAddress
     /// Leftmost, because the certificate is a wildcard for <c>*.apps.example.com</c>. A discriminator
     /// added anywhere else would produce a name that is not covered by it, and the app would answer
     /// with a certificate error rather than a page — a worse outcome than the clash it was solving.
+    ///
+    /// Bounded to <see cref="Harbora.Infrastructure.Projects.PreviewNaming.MaxLabel"/>, the same 63
+    /// characters DNS itself stops a label at: the original label is trimmed to make room for the
+    /// suffix rather than left to grow past the limit, which is how a legal 63-character label became
+    /// an illegal 67-character one before this bound existed. An empty suffix (test-reachable only —
+    /// production's own suffix is always three characters) is left with no trailing dash rather than
+    /// a label ending in one, which DNS also refuses.
     /// </summary>
     public static string Discriminate(string host, string suffix)
     {
         var dot = host.IndexOf('.');
-        return dot < 0 ? $"{host}-{suffix}" : $"{host[..dot]}-{suffix}{host[dot..]}";
+        var label = dot < 0 ? host : host[..dot];
+        var rest = dot < 0 ? "" : host[dot..];
+
+        if (suffix.Length == 0) return $"{label}{rest}";
+
+        var maxLabel = Harbora.Infrastructure.Projects.PreviewNaming.MaxLabel;
+        var room = Math.Max(0, maxLabel - suffix.Length - 1);
+        if (label.Length > room) label = label[..room];
+
+        return $"{label}-{suffix}{rest}";
     }
 }

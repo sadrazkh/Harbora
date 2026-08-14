@@ -48,7 +48,7 @@ public class AppAddressAssignerTests
         var app = WebApp("shop");
 
         var decision = await new AppAddressAssigner(db, EmptyConfig())
-            .AssignAsync(app, requested: null, suffix: null, CancellationToken.None);
+            .AssignAsync(app, requested: null, AppAddressRequestOrigin.Derived, suffix: null, CancellationToken.None);
 
         decision.Outcome.Should().Be(AppAddressOutcome.Assigned);
         decision.Host.Should().Be("shop.apps.example.com");
@@ -68,7 +68,7 @@ public class AppAddressAssignerTests
 
         var app = WebApp("shop");
         var decision = await new AppAddressAssigner(db, EmptyConfig())
-            .AssignAsync(app, requested: null, suffix: () => "k3f", CancellationToken.None);
+            .AssignAsync(app, requested: null, AppAddressRequestOrigin.Derived, suffix: () => "k3f", CancellationToken.None);
 
         decision.Outcome.Should().Be(AppAddressOutcome.Discriminated,
             "the outcome is what the caller shows the person — silence here is the defect this replaces");
@@ -84,7 +84,7 @@ public class AppAddressAssignerTests
         app.Kind = ServiceKind.Worker;
 
         var decision = await new AppAddressAssigner(db, EmptyConfig())
-            .AssignAsync(app, requested: null, suffix: null, CancellationToken.None);
+            .AssignAsync(app, requested: null, AppAddressRequestOrigin.Derived, suffix: null, CancellationToken.None);
 
         decision.Outcome.Should().Be(AppAddressOutcome.KindTakesNoTraffic);
         app.Domains.Should().BeEmpty();
@@ -97,7 +97,7 @@ public class AppAddressAssignerTests
         var app = WebApp("shop");
 
         var decision = await new AppAddressAssigner(db, EmptyConfig())
-            .AssignAsync(app, requested: null, suffix: null, CancellationToken.None);
+            .AssignAsync(app, requested: null, AppAddressRequestOrigin.Derived, suffix: null, CancellationToken.None);
 
         decision.Outcome.Should().Be(AppAddressOutcome.NoRootDomain);
         app.Domains.Should().BeEmpty();
@@ -113,7 +113,7 @@ public class AppAddressAssignerTests
 
         var app = WebApp("shop");
         var decision = await new AppAddressAssigner(db, EmptyConfig())
-            .AssignAsync(app, requested: null, suffix: () => "same", CancellationToken.None);
+            .AssignAsync(app, requested: null, AppAddressRequestOrigin.Derived, suffix: () => "same", CancellationToken.None);
 
         decision.Outcome.Should().Be(AppAddressOutcome.Exhausted);
         decision.Host.Should().BeNull();
@@ -148,7 +148,7 @@ public class AppAddressAssignerTests
         // own — so this is genuinely a cross-tenant name and not the same tenant's.
         var app = WebApp("shop");
         var decision = await new AppAddressAssigner(db, EmptyConfig())
-            .AssignAsync(app, requested: null, suffix: () => "k3f", CancellationToken.None);
+            .AssignAsync(app, requested: null, AppAddressRequestOrigin.Derived, suffix: () => "k3f", CancellationToken.None);
 
         decision.Host.Should().Be("shop-k3f.apps.example.com",
             "DNS is not multi-tenant — two workspaces cannot both answer on one hostname");
@@ -159,10 +159,11 @@ public class AppAddressAssignerTests
     /// <see cref="AssignAsync"/> has always run every <paramref name="requested"/> name through the
     /// same collision check as a derived one, which is exactly what a branch preview's own
     /// <c>PreviewNaming.Host</c> needs: it brings its own name, but not its own exemption from being
-    /// checked against everybody else's.
+    /// checked against everybody else's. A branch preview's name is derived by the platform, not typed
+    /// by a person, so a collision on it is discriminated rather than refused.
     /// </summary>
     [Fact]
-    public async Task A_caller_supplied_name_still_goes_through_the_collision_check()
+    public async Task A_derived_caller_supplied_name_still_goes_through_the_collision_check()
     {
         await using var db = await DbWithRootDomain("apps.example.com");
         db.Domains.Add(new DomainName { AppId = Guid.NewGuid(), Host = "shop-main.apps.example.com" });
@@ -170,10 +171,37 @@ public class AppAddressAssignerTests
 
         var app = WebApp("shop");
         var decision = await new AppAddressAssigner(db, EmptyConfig()).AssignAsync(
-            app, requested: "shop-main.apps.example.com", suffix: () => "k3f", CancellationToken.None);
+            app, requested: "shop-main.apps.example.com", AppAddressRequestOrigin.Derived,
+            suffix: () => "k3f", CancellationToken.None);
 
         decision.Outcome.Should().Be(AppAddressOutcome.Discriminated,
             "branch previews bring their own name and must still not be given one that is taken");
         decision.Host.Should().Be("shop-main-k3f.apps.example.com");
+    }
+
+    /// <summary>
+    /// The typed half of finding 3: <c>shop.mycompany.com</c> discriminated into
+    /// <c>shop-k3f.mycompany.com</c> would be "reachable" only in the sense that a request to it lands
+    /// somewhere — no DNS record points at that name and the platform's wildcard certificate covers
+    /// only names under the platform's own root domain, not a customer's zone. A typed name that
+    /// collides is refused instead, the way <c>AddDomain</c> has always refused it.
+    /// </summary>
+    [Fact]
+    public async Task A_typed_name_that_is_taken_is_refused_rather_than_discriminated_onto_the_customers_own_zone()
+    {
+        await using var db = await DbWithRootDomain("apps.example.com");
+        db.Domains.Add(new DomainName { AppId = Guid.NewGuid(), Host = "shop.mycompany.com" });
+        await db.SaveChangesAsync();
+
+        var app = WebApp("shop");
+        var decision = await new AppAddressAssigner(db, EmptyConfig()).AssignAsync(
+            app, requested: "shop.mycompany.com", AppAddressRequestOrigin.Typed,
+            suffix: () => "k3f", CancellationToken.None);
+
+        decision.Outcome.Should().Be(AppAddressOutcome.Taken,
+            "a typed name is a promise made to the person who typed it, not something to mangle onto a " +
+            "zone with no DNS record for the mangled name and no wildcard certificate to cover it");
+        decision.Host.Should().BeNull();
+        app.Domains.Should().BeEmpty();
     }
 }

@@ -208,7 +208,8 @@ public sealed class PreviewEnvironmentService(
         // previews of one app must not collide by construction — but the checks around it are shared.
         var rootDomain = await addresses.RootDomainAsync(ct);
         await addresses.AssignAsync(
-            preview, PreviewNaming.Host(parent.Slug, branch, rootDomain), suffix: null, ct);
+            preview, PreviewNaming.Host(parent.Slug, branch, rootDomain), AppAddressRequestOrigin.Derived,
+            suffix: null, ct);
 
         db.Apps.Add(preview);
         await creationBilling.SaveAsync(parent.WorkspaceId,

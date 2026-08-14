@@ -262,7 +262,7 @@ public sealed class TemplateDeploymentService(
 
         // Was a hand-built $"{appSlug}.{rootDomain}" with no kind check, no reserved-host check and no
         // collision check — three ways to hand somebody a hostname that answers nothing.
-        await addresses.AssignAsync(app, requested: null, suffix: null, ct);
+        await addresses.AssignAsync(app, requested: null, AppAddressRequestOrigin.Derived, suffix: null, ct);
 
         var governed = await quota.CanAddGovernedResourcesAsync(request.WorkspaceId,
             new GovernanceQuotaDelta(

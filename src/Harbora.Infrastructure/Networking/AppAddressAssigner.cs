@@ -8,6 +8,26 @@ using Microsoft.Extensions.Configuration;
 namespace Harbora.Infrastructure.Networking;
 
 /// <summary>
+/// Where <see cref="AppAddressAssigner.AssignAsync"/>'s <c>requested</c> name came from — decides
+/// what a collision means.
+///
+/// A name a person typed into a form is a promise made to them: refuse rather than mangle it onto a
+/// zone the platform's wildcard certificate does not cover and no DNS record points at. A name the
+/// platform derived — from the slug, or from a branch preview's own <c>PreviewNaming.Host</c> — carries
+/// no such promise, so a collision is discriminated the same way an app with no requested name at all
+/// would be. <c>AssignAsync</c> cannot tell the two apart from the string itself, so every caller
+/// states which one it is bringing.
+/// </summary>
+public enum AppAddressRequestOrigin
+{
+    /// <summary>Computed by the platform. A collision is discriminated.</summary>
+    Derived,
+
+    /// <summary>Typed by a person. A collision is refused — see <see cref="AppAddressOutcome.Taken"/>.</summary>
+    Typed
+}
+
+/// <summary>
 /// Gives an app the address it should have — the one thing every path that creates an app calls.
 ///
 /// There were four such paths and four different answers. AppsController skipped the insert when the
@@ -48,13 +68,15 @@ public sealed class AppAddressAssigner(HarboraDbContext db, IConfiguration confi
     /// <summary>
     /// Decide this app's address and attach it. <paramref name="requested"/> is a name somebody typed,
     /// or a candidate a caller derives itself — branch previews pass their own branch-keyed name here,
-    /// which is why the name is an input and only the checks are shared.
+    /// which is why the name is an input and only the checks are shared. <paramref name="origin"/>
+    /// says which of the two it is, and decides what a collision means for it: see
+    /// <see cref="AppAddressRequestOrigin"/>.
     ///
     /// <paramref name="suffix"/> exists so a test can pin the discriminator. Production passes null and
     /// gets a short random one.
     /// </summary>
     public async Task<AppAddressDecision> AssignAsync(
-        App app, string? requested, Func<string>? suffix, CancellationToken ct)
+        App app, string? requested, AppAddressRequestOrigin origin, Func<string>? suffix, CancellationToken ct)
     {
         var decision = AppAddress.Decide(
             app.Kind, requested, app.Slug, await RootDomainAsync(ct), ReservedFor());
@@ -84,6 +106,13 @@ public sealed class AppAddressAssigner(HarboraDbContext db, IConfiguration confi
                 });
                 return new(host, outcome);
             }
+
+            // A typed name is a promise made to the person who typed it: mangling shop.mycompany.com
+            // into shop-k3f.mycompany.com would put the app on a zone with no DNS record for that name
+            // and no wildcard certificate to cover it — "reachable" would be false. Only a derived name
+            // may be discriminated; see AppAddressRequestOrigin.
+            if (origin == AppAddressRequestOrigin.Typed)
+                return new(null, AppAddressOutcome.Taken);
 
             host = AppAddress.Discriminate(decision.Host!, (suffix ?? NewSuffix)());
             outcome = AppAddressOutcome.Discriminated;

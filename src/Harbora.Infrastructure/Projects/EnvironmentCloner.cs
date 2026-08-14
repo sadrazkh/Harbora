@@ -308,7 +308,7 @@ public sealed class EnvironmentCloner(
             // A cloned app used to arrive with no address at all — the one creation path that had no
             // rule rather than a wrong one. Its slug differs from the original's (spec.Slug), so this
             // does not contend with the app it was copied from.
-            await addresses.AssignAsync(copy, requested: null, suffix: null, ct);
+            await addresses.AssignAsync(copy, requested: null, AppAddressRequestOrigin.Derived, suffix: null, ct);
 
             db.Apps.Add(copy);
         }
@@ -412,6 +412,10 @@ public sealed class EnvironmentCloner(
     /// </summary>
     private async Task<string?> QuotaRefusalAsync(Guid workspaceId, ClonePlan plan, CancellationToken ct)
     {
+        // No root domain configured means AssignAsync hands out NoRootDomain to every copy regardless
+        // of kind, so none of them consumes a domain — counting one per addressable copy anyway would
+        // refuse a clone for a limit it would not actually have touched.
+        var rootDomain = await addresses.RootDomainAsync(ct);
         var governed = await quota.CanAddGovernedResourcesAsync(workspaceId,
             new GovernanceQuotaDelta(
                 Environments: 1,
@@ -419,7 +423,9 @@ public sealed class EnvironmentCloner(
                 // they arrived with none, so leaving domains out of this estimate was correct then and
                 // lets a workspace clone straight past its domain limit today. Counted here with the
                 // rest rather than asked per app, for the reason this method's own docstring gives.
-                Domains: plan.Apps.Count(a => Deployments.ServicePlan.CanHaveDomains(a.Kind)),
+                Domains: string.IsNullOrWhiteSpace(rootDomain)
+                    ? 0
+                    : plan.Apps.Count(a => Deployments.ServicePlan.CanHaveDomains(a.Kind)),
                 Volumes: plan.Apps.Sum(a => a.Volumes.Count)), ct);
         if (!governed.Allowed) return governed.Reason;
 

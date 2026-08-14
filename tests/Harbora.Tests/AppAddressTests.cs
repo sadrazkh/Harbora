@@ -78,4 +78,24 @@ public class AppAddressTests
     {
         AppAddress.Discriminate("shop", "k3f").Should().Be("shop-k3f");
     }
+
+    [Fact]
+    public void A_maximum_length_label_is_trimmed_to_make_room_for_the_suffix_instead_of_exceeding_the_dns_limit()
+    {
+        var label = new string('a', Harbora.Infrastructure.Projects.PreviewNaming.MaxLabel);
+
+        var result = AppAddress.Discriminate($"{label}.apps.example.com", "k3f");
+
+        var resultLabel = result[..result.IndexOf('.')];
+        resultLabel.Length.Should().Be(Harbora.Infrastructure.Projects.PreviewNaming.MaxLabel,
+            "a naive append would grow a legal 63-character label to an illegal 67");
+        resultLabel.Should().EndWith("-k3f");
+    }
+
+    [Fact]
+    public void An_empty_suffix_never_leaves_a_label_ending_in_a_dash()
+    {
+        AppAddress.Discriminate("shop.apps.example.com", "").Should().NotContain("-.",
+            "a label ending in a dash is not a legal DNS label");
+    }
 }
