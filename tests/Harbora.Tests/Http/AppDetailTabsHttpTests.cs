@@ -38,11 +38,9 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
         // The volume's mount path moved to the Volumes tab in Task 4 — see
         // The_volumes_tab_lists_the_apps_storage_and_can_still_add_and_remove — and Overview no
         // longer loads the Volumes collection at all, so it is not asserted here any more.
-        // The rollback link's label is @T["Rollback"] — translated, and this panel's default
-        // language is Persian — so the English word would never appear on the page. The route it
-        // points at is not translated, and only renders for a succeeded, non-active deployment, so
-        // it names the same feature without asserting on a string a Persian UI would never render.
-        html.Should().Contain("/apps/confirmrollback/", "a succeeded deployment offers rollback today");
+        // The deployment history, and the rollback link it offers, moved to the Deployments tab in
+        // Task 5 — see The_deployments_tab_keeps_the_history_and_the_way_back — and Overview no
+        // longer loads the Deployments collection at all, so it is not asserted here any more.
     }
 
     /// <summary>
@@ -122,6 +120,32 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
         // renders) identify each form regardless of which language rendered the page.
         html.Should().Contain("name=\"mountPath\"", "adding storage must not be lost in the move");
         html.Should().Contain($"/apps/{appId}/volumes/{volumeId}/remove", "nor removing it");
+    }
+
+    /// <summary>
+    /// The Deployments tab draws what used to be Overview's "Deployments" panel: the release
+    /// history, and the rollback link a succeeded, inactive entry has always offered.
+    ///
+    /// <para>
+    /// Task 1's preservation test asserted the rollback route on the Overview page. That assertion
+    /// moves here rather than staying, because Overview no longer loads the Deployments collection
+    /// at all — this tab's own query is now the only place that happens.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_deployments_tab_keeps_the_history_and_the_way_back()
+    {
+        var (appId, _) = SeedAppWithEverything();
+        Panel.GivenUser(fixture.WorkspaceId, "app-deployments-owner@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.185", "app-deployments-owner@example.com");
+
+        var html = await (await client.GetAsync($"/apps/{appId}/deployments")).Content.ReadAsStringAsync();
+
+        // Not the translated word "Rollback" — this panel's default language is Persian, the same
+        // reasoning Task 1 used. The route it points at is not translated, and only renders for a
+        // succeeded, non-active deployment, so it names the same feature without asserting on a
+        // string a Persian UI would never render.
+        html.Should().Contain("/apps/confirmrollback/", "rollback is the reason this history is kept");
     }
 
     /// <summary>

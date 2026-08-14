@@ -103,32 +103,6 @@
             </section>
         }
 
-        <details class="advanced-panel" open="@advancedOpen">
-            <summary><span><i data-lucide="rocket" class="h-4 w-4"></i>@T["Deployments"]</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
-            <div class="divide-y divide-line">
-                @if (!app.Deployments.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
-                @foreach (var d in app.Deployments.OrderByDescending(x => x.Number))
-                {
-                    <div class="flex items-center justify-between p-3">
-                        <a href="/deployments/details/@d.Id" class="min-w-0">
-                            <div class="text-sm font-medium">#@d.Number · @d.Trigger</div>
-                            <div class="text-xs text-ink-faint truncate">@(d.CommitMessage ?? d.GitRef) @(d.CommitSha is not null ? "· " + d.CommitSha[..Math.Min(7, d.CommitSha.Length)] : "")</div>
-                        </a>
-                        <div class="flex items-center gap-3">
-                            <partial name="_DeployStatusBadge" model="d.Status" />
-                            @if (d.Status == DeploymentStatus.Succeeded && d.Id != app.ActiveDeploymentId)
-                            {
-                                @* Confirmation step shows the exact commit/image being restored and
-                                   blocks up front if retention already pruned that artifact. *@
-                                <a href="/apps/confirmrollback/@app.Id?deploymentId=@d.Id"
-                                   class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-2 py-1">@T["Rollback"]</a>
-                            }
-                        </div>
-                    </div>
-                }
-            </div>
-        </details>
-
         @* ---- Environment variables ---- *@
         <details class="advanced-panel" open="@advancedOpen">
             <summary><span><i data-lucide="file-code-2" class="h-4 w-4"></i>@T["Environment Variables"]</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>

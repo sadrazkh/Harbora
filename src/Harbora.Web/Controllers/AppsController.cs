@@ -414,7 +414,6 @@ public sealed partial class AppsController(
         var app = await db.Apps
             .Include(a => a.EnvironmentVariables)
             .Include(a => a.Domains)
-            .Include(a => a.Deployments.OrderByDescending(d => d.Number).Take(20))
             .Include(a => a.GitRepository)
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
@@ -1060,7 +1059,10 @@ public sealed partial class AppsController(
         if (!plan.CanRollback)
         {
             TempData["Error"] = plan.Reason;
-            return RedirectToAction(nameof(Details), new { id });
+            // Rollback is only ever reached from the deployment list, which now lives on its own
+            // tab rather than on Overview — same reasoning as AddVolume/RemoveVolume redirecting to
+            // Volumes: land back where the history (and this error) is actually shown.
+            return RedirectToAction(nameof(Deployments), new { id });
         }
 
         Guid newId;
@@ -1074,7 +1076,7 @@ public sealed partial class AppsController(
         {
             // A rollback must never be silently coalesced onto an in-flight deploy — say so.
             TempData["Error"] = ex.Message;
-            return RedirectToAction(nameof(Details), new { id });
+            return RedirectToAction(nameof(Deployments), new { id });
         }
         await audit.LogAsync("app.rollback", "app", id.ToString(), ClientIp,
             metadataJson: $"{{\"toDeploymentId\":\"{deploymentId}\"}}", ct: ct);

@@ -82,3 +82,22 @@ public sealed class AppVolumesViewModel : AppTabViewModel
 {
     public IReadOnlyList<Harbora.Domain.Apps.Volume> Volumes { get; init; } = [];
 }
+
+/// <summary>
+/// The Deployments tab — today's <c>Details.cshtml</c> "Deployments" panel, moved rather than
+/// rewritten: the release history itself, and the rollback link each succeeded, inactive entry
+/// offers. Narrower than <see cref="AppOverviewViewModel"/> on purpose — this tab never read the rest
+/// of the entity, only its own <see cref="Harbora.Domain.Deployments.Deployment"/> rows, and only the
+/// same windowed twenty <c>Details</c> always loaded.
+/// </summary>
+public sealed class AppDeploymentsViewModel : AppTabViewModel
+{
+    public IReadOnlyList<Harbora.Domain.Deployments.Deployment> Deployments { get; init; } = [];
+
+    // Not in the brief's field list for this class — see the task report. The moved markup's
+    // rollback link is drawn for a succeeded deployment that is not the one currently serving, and
+    // that comparison is against the app's ActiveDeploymentId, not against anything on a Deployment
+    // row itself. Without it every succeeded deployment — including the active one — would offer a
+    // rollback to itself.
+    public Guid? ActiveDeploymentId { get; init; }
+}

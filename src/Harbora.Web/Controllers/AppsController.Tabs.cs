@@ -120,4 +120,34 @@ public sealed partial class AppsController
             Volumes = volumes,
         });
     }
+
+    /// <summary>
+    /// This app's release history, and the rollback link the deployment list has always offered a
+    /// succeeded, inactive entry. Moved out of Overview rather than rewritten: the same windowed
+    /// query — <c>OrderByDescending(d =&gt; d.Number).Take(20)</c> — and the same rollback anchors.
+    /// </summary>
+    [HttpGet("apps/{id:guid}/deployments")]
+    public async Task<IActionResult> Deployments(Guid id, CancellationToken ct)
+    {
+        var app = await LoadHeaderAsync(id, ct);
+        if (app is null) return NotFound();
+
+        var deployments = await db.Deployments.AsNoTracking()
+            .Where(d => d.AppId == id)
+            .OrderByDescending(d => d.Number)
+            .Take(20)
+            .ToListAsync(ct);
+
+        return View(new AppDeploymentsViewModel
+        {
+            Id = app.Id, Name = app.Name, Slug = app.Slug, Kind = app.Kind, Status = app.Status,
+            CurrentTab = "deployments",
+            SourceType = app.SourceType,
+            GitRepositoryFullName = app.GitRepository?.FullName,
+            InstanceSizeKey = app.InstanceSizeKey,
+            HasVolumes = await db.Volumes.AnyAsync(v => v.AppId == app.Id, ct),
+            Deployments = deployments,
+            ActiveDeploymentId = app.ActiveDeploymentId,
+        });
+    }
 }
