@@ -69,7 +69,7 @@
         </div>
 
         <div class="resource-footer flex items-center justify-between gap-4">
-            <span>@(isFa ? $"٪{givable} از {Model.Candidates.Count} آدرس می‌گیرند" : $"{givable} of {Model.Candidates.Count} would get an address")</span>
+            <span>@(isFa ? $"{givable} از {Model.Candidates.Count} آدرس می‌گیرند" : $"{givable} of {Model.Candidates.Count} would get an address")</span>
             <form asp-controller="Apps" asp-action="ApplyAddresses" method="post">
                 @Html.AntiForgeryToken()
                 <button type="submit" class="btn-primary">
