@@ -21,6 +21,10 @@ namespace Harbora.Web.Controllers;
 /// Managed backing services (databases/caches). Harbora generates credentials, provisions the
 /// container on the shared network, and can inject connection env into apps on attach.
 /// </summary>
+// A note on the split: DatabasesController.Tabs.cs (Task 6) and DatabaseAccessActions.cs hold the
+// routes that live under this same "databases" prefix. Kept partial rather than split by controller,
+// same reasoning AppsController used: every route below is still /databases/{id}/…, and a second
+// controller class sends the next reader hunting for which one owns a given path.
 [Authorize]
 [Route("databases")]
 public sealed partial class DatabasesController(
@@ -142,10 +146,14 @@ public sealed partial class DatabasesController(
 
             overview = new DatabaseOverviewViewModel
             {
+                Id = selectedRow.Id, Name = selectedRow.Name, Type = selectedRow.Type,
+                Version = selectedRow.Version, Status = selectedRow.Status,
+                Project = selectedRow.Project, Environment = selectedRow.Environment,
+                CanManage = canManage,
+                CurrentTab = "overview",
                 Database = selectedRow,
                 Connection = reveal && canManage ? conn.ConnectionString : conn.ConnectionStringMasked,
                 Reveal = reveal && canManage,
-                CanManage = canManage,
                 Network = network,
                 UsedBy = usingApps,
                 Apps = apps.Select(a => new ResourceOptionViewModel(
@@ -214,12 +222,17 @@ public sealed partial class DatabasesController(
             .Where(s => s.TargetRef == service.Id.ToString() && s.IsEnabled)
             .OrderBy(s => s.NextRunAt).FirstOrDefaultAsync(ct);
 
+        var row = Row(service, metrics, connections);
+
         return new DatabaseOverviewViewModel
         {
-            Database = Row(service, metrics, connections),
+            Id = row.Id, Name = row.Name, Type = row.Type, Version = row.Version, Status = row.Status,
+            Project = row.Project, Environment = row.Environment,
+            CanManage = canManage,
+            CurrentTab = "overview",
+            Database = row,
             Connection = reveal && canManage ? conn.ConnectionString : conn.ConnectionStringMasked,
             Reveal = reveal && canManage,
-            CanManage = canManage,
             Network = network,
             UsedBy = usingApps,
             Apps = apps.Select(a => new ResourceOptionViewModel(

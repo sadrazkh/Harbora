@@ -3,6 +3,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Networking;
+using Harbora.Domain.Services;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -232,5 +233,102 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
         });
 
         return (app.Id, volume.Id);
+    }
+}
+
+/// <summary>
+/// The database detail shell built in Task 6, following the same split as
+/// <see cref="AppDetailTabsHttpTests"/> above — <c>Views/Databases/Details.cshtml</c> becomes a
+/// shell with a tab strip, and Task 6's brief said to extend this file rather than start a second one.
+///
+/// <para>
+/// Unlike the app shell, only Overview and Usage are routes this shell itself renders. Access already
+/// had its own page before this task (<c>Databases/Access</c>) and Backups points at the workspace's
+/// existing <c>/backups</c> surface — the tab strip links to both rather than rebuilding either, so
+/// there is no "the access/backups tab shows what Overview used to" test here the way there is for
+/// Usage: nothing moved into a new view for either of them.
+/// </para>
+/// </summary>
+[Collection(HarboraHttpCollection.Name)]
+public class DatabaseDetailTabsHttpTests(HarboraHttpFixture fixture)
+{
+    private HarboraWebFactory Panel => fixture.Panel;
+
+    /// <summary>
+    /// The shell built in Task 6 draws a strip with a link to every one of a database's screens, on
+    /// the very page (<c>/databases/{id}</c>) that used to be the whole story.
+    /// </summary>
+    [Fact]
+    public async Task Every_tab_of_a_database_is_reachable_from_the_page_itself()
+    {
+        var dbId = SeedManagedDatabase();
+        Panel.GivenUser(fixture.WorkspaceId, "database-tabs-owner@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.190", "database-tabs-owner@example.com");
+
+        var html = await (await client.GetAsync($"/databases/{dbId}")).Content.ReadAsStringAsync();
+
+        // Route fragments rather than the tab labels: the labels are the isFa ternary's Persian
+        // strings by default in this panel, so the untranslated href is what identifies each tab
+        // regardless of which language rendered it — the same reasoning AppDetailTabsHttpTests uses.
+        html.Should().Contain($"/databases/{dbId}/usage", "the Usage tab must be reachable from Overview");
+        html.Should().Contain($"/databases/{dbId}/access", "the Access tab must be reachable from Overview");
+        html.Should().Contain("/backups", "the Backups tab must be reachable from Overview");
+    }
+
+    /// <summary>
+    /// The Usage tab draws what used to be Overview's "this moment" stat-card grid: CPU, memory and
+    /// storage against their limits, how many apps are attached, and the same figures charted over
+    /// time.
+    /// </summary>
+    [Fact]
+    public async Task The_usage_tab_shows_the_databases_consumption()
+    {
+        var dbId = SeedManagedDatabase();
+        Panel.GivenUser(fixture.WorkspaceId, "database-usage-owner@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.191", "database-usage-owner@example.com");
+
+        var usage = await (await client.GetAsync($"/databases/{dbId}/usage")).Content.ReadAsStringAsync();
+
+        // Not the visible "CPU" label — the metrics-chart island's own data-name="cpu.percent" is
+        // the one piece of this row that is neither translated nor differently cased, the same
+        // reasoning the app Usage tab's test uses.
+        usage.Should().Contain("cpu", "the usage tab is where consumption lives now");
+    }
+
+    /// <summary>
+    /// Every tab is a new entry point, and each one is a new chance to forget the ownership check
+    /// that <c>DatabasesController.LoadHeaderAsync</c> exists to make impossible to skip.
+    /// </summary>
+    [Fact]
+    public async Task A_tab_of_another_workspaces_database_is_not_found_rather_than_shown()
+    {
+        var foreignId = SeedManagedDatabase(workspaceId: Guid.CreateVersion7());
+        Panel.GivenUser(fixture.WorkspaceId, "database-usage-foreign@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.192", "database-usage-foreign@example.com");
+
+        (await client.GetAsync($"/databases/{foreignId}/usage")).StatusCode
+            .Should().Be(System.Net.HttpStatusCode.NotFound);
+    }
+
+    /// <summary>One managed database, ready to be looked at through every tab of its own page.</summary>
+    private Guid SeedManagedDatabase(Guid? workspaceId = null)
+    {
+        var service = new ManagedService
+        {
+            WorkspaceId = workspaceId ?? fixture.WorkspaceId,
+            ServerId = Guid.CreateVersion7(),
+            Name = "seeded-db",
+            Type = ManagedServiceType.PostgreSql,
+            Version = "16",
+            Status = ServiceStatus.Running,
+            ContainerName = "harbora-svc-seeded-db",
+            InternalPort = 5432,
+            Username = "harbora",
+            DatabaseName = "seeded_db",
+            VolumeName = "harbora-svc-seeded-db-data",
+        };
+
+        Panel.Seed(db => db.ManagedServices.Add(service));
+        return service.Id;
     }
 }
