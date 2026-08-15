@@ -10,10 +10,15 @@ namespace Harbora.Infrastructure.Storage;
 /// The traps, in the order they bite:
 ///
 /// <list type="bullet">
+/// <item>An absolute path — a leading slash of any kind, including a bare <c>"/"</c>. Refused
+/// outright rather than resolved into the volume root: silently stripping it would answer
+/// <c>"/etc/passwd"</c> by quietly listing the volume's own <c>etc/passwd</c> instead, a different
+/// question than the one that was typed. There is no path above the mount for a leading slash to
+/// honestly mean "start from", and the root has its own spelling — leaving the path out
+/// entirely — so refusing this costs no caller anything.</item>
 /// <item><c>..</c> anywhere in the path, including spelled as a segment after a redundant slash.
 /// Normalising first and checking afterwards is what makes this reliable — checking the raw string
 /// for "<c>..</c>" also rejects a legitimate file called <c>..config</c>.</item>
-/// <item>An absolute path, which silently replaces the root it was supposed to be joined to.</item>
 /// <item>A backslash, which is a separator on the machine an operator is typing from and an
 /// ordinary filename character on the Linux host this ends up running against.</item>
 /// <item>A NUL byte, which ends the string for the C library underneath long after every check
@@ -30,7 +35,11 @@ public static class VolumePath
     /// it is not a path inside the volume.
     ///
     /// An empty input is the root itself and is returned as an empty string — listing the root is
-    /// an ordinary thing to do, and refusing it would mean the browser could never open.
+    /// an ordinary thing to do, and refusing it would mean the browser could never open. A leading
+    /// slash is refused rather than treated the same way: every caller in this codebase builds
+    /// "path" from a previously-normalised value or leaves it out for the root, so nothing here ever
+    /// legitimately sends one, and a caller that types "/etc/passwd" meant something more specific
+    /// than "the root".
     /// </summary>
     public static string? Normalise(string? path)
     {
@@ -45,6 +54,11 @@ public static class VolumePath
         // runs. Refused rather than translated: translating would silently turn one intended
         // filename into a different path.
         if (path.Contains('\\')) return null;
+
+        // An absolute path. Splitting with RemoveEmptyEntries below would otherwise just drop the
+        // leading empty segment and answer as if the path had been relative all along — see the
+        // class doc for why that is the wrong kind of forgiving.
+        if (path.StartsWith('/')) return null;
 
         var segments = new List<string>();
         foreach (var segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
