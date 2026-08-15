@@ -5,6 +5,7 @@ using Harbora.Domain.Billing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
 using Harbora.Domain.Mail;
+using Harbora.Domain.Servers;
 using Harbora.Domain.Services;
 using Harbora.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
@@ -220,13 +221,29 @@ public sealed class BillingTick(
         var sizes = await db.InstanceSizes.IgnoreQueryFilters().AsNoTracking()
             .ToDictionaryAsync(s => s.Key, ct);
 
+        // What each server charges for each tier, read once for the reason the sizes are. The pair is
+        // the key because that is what a price belongs to, and a workload reaches its row through the
+        // ServerId every app and managed service already carries.
+        //
+        // An absent row is not a missing price: it says this server offers the tier at whatever the
+        // tier itself charges, which is what the platform did before this table existed. So an install
+        // where nobody has opened the pricing matrix bills exactly as it billed before.
+        var offers = await db.ServerInstanceOffers.IgnoreQueryFilters().AsNoTracking()
+            .ToDictionaryAsync(o => (o.ServerId, o.InstanceSizeKey), ct);
+
+        // Read only so an unpriced tier can be reported by the name of the host it is unpriced on. A
+        // bare id in that message sends an operator to the database to work out which box to price.
+        var serverNames = await db.Servers.IgnoreQueryFilters().AsNoTracking()
+            .ToDictionaryAsync(s => s.Id, s => s.Name, ct);
+
         foreach (var workspace in workspaces)
         {
             var plan = workspace.PlanId is { } id ? plans.FirstOrDefault(p => p.Id == id) : defaultPlan;
 
             try
             {
-                var hourCostMinor = await ChargeWorkspaceAsync(db, workspace, plan, sizes, billingHour, pass, ct);
+                var hourCostMinor = await ChargeWorkspaceAsync(
+                    db, workspace, plan, sizes, offers, serverNames, billingHour, pass, ct);
 
                 // Deliberately outside the charge and after it. The review has to run for a
                 // workspace that was charged NOTHING this hour as well as for one that was charged,
@@ -485,6 +502,8 @@ public sealed class BillingTick(
         Workspace workspace,
         Plan? plan,
         IReadOnlyDictionary<string, InstanceSize> sizes,
+        IReadOnlyDictionary<(Guid ServerId, string InstanceSizeKey), ServerInstanceOffer> offers,
+        IReadOnlyDictionary<Guid, string> serverNames,
         DateTimeOffset hour,
         Pass pass,
         CancellationToken ct)
@@ -495,7 +514,9 @@ public sealed class BillingTick(
         // to withhold the plan minimum, because the hour's total is then not known.
         var unknowns = 0;
 
-        void Workload(BilledResourceType type, Guid id, string name, string? sizeKey, BilledRunState state)
+        void Workload(
+            BilledResourceType type, Guid id, string name, string? sizeKey, Guid serverId,
+            BilledRunState state)
         {
             if (sizeKey is null || !sizes.TryGetValue(sizeKey, out var size))
             {
@@ -507,15 +528,34 @@ public sealed class BillingTick(
                 return;
             }
 
-            if (BillingRates.ForWorkload(size, state) is not { } rate)
+            // A price now belongs to a (server, tier) pair, so the rate is resolved against the host
+            // this workload is actually on. No row means the server charges whatever the tier does.
+            //
+            // IsOffered is deliberately not consulted: a tier withdrawn from a server stops taking
+            // NEW work and goes on being charged for what is already there. Reading a withdrawal as
+            // an unpriced tier would stop billing every workload on it, silently and in the
+            // platform's favour — see ServerRates and ServerInstanceOffer.IsOffered.
+            offers.TryGetValue((serverId, size.Key), out var offer);
+
+            if (ServerRates.ForWorkload(size, offer, state) is not { } rate)
             {
                 unknowns++;
-                // Per size and state, not per resource. An operator who forgot to price a popular
-                // tier needs one line naming the tier, not one per workload sitting on it.
-                pass.Report($"unpriced-size:{size.Key}:{state}",
-                    $"Instance size \"{size.Key}\" has no price for a {state} workload, so nothing on " +
-                    "it was charged for this hour. Set the rate and the hour can still be backfilled; " +
-                    "set it to 0 if the tier really is free.");
+                // Per size, server and state — not per resource. An operator who forgot to price a
+                // popular tier needs one line naming the tier and the box it is unpriced on, not one
+                // line per workload sitting on it. The server is part of the key because the same
+                // tier can be priced on one host and forgotten on the next, and collapsing the two
+                // would report the first host's mistake and hide the second's.
+                var where = serverNames.TryGetValue(serverId, out var serverName)
+                    ? $"server \"{serverName}\""
+                    // A workload whose ServerId matches no row: the placement is broken as well as
+                    // the price, and saying "server (unknown)" is the honest half of that.
+                    : $"server {serverId} (which no longer exists)";
+
+                pass.Report($"unpriced-size:{serverId}:{size.Key}:{state}",
+                    $"Instance size \"{size.Key}\" has no price for a {state} workload on {where}, so " +
+                    "nothing on it there was charged for this hour. Set the rate — on that server, or " +
+                    "on the tier itself — and the hour can still be backfilled; set it to 0 if it " +
+                    "really is free.");
                 return;
             }
 
@@ -555,7 +595,7 @@ public sealed class BillingTick(
             // Created and Deploying reserve nothing yet: no container, no image on disk, no port.
             if (state is not { } billedState) continue;
 
-            Workload(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, billedState);
+            Workload(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId, billedState);
         }
 
         var services = await db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
@@ -579,7 +619,9 @@ public sealed class BillingTick(
             // counts as an unknown, it would cost the whole workspace its plan minimum for the hour.
             if (state is not { } billedState) continue;
 
-            Workload(BilledResourceType.Service, service.Id, service.Name, service.InstanceSizeKey, billedState);
+            Workload(
+                BilledResourceType.Service, service.Id, service.Name, service.InstanceSizeKey,
+                service.ServerId, billedState);
 
             // The disk the database is sitting on, which nothing else in this pass can reach: a
             // ManagedService carries its own VolumeName and StorageBytes and has no relation to the
