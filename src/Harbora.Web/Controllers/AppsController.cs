@@ -71,6 +71,17 @@ public sealed partial class AppsController(
         ? $"«{host}» پیش‌تر استفاده شده است."
         : $"'{host}' is already in use.";
 
+    /// <summary>
+    /// A typed app slug that another workspace already holds. App slugs are unique across the whole
+    /// platform (HarboraDbContext: <c>HasIndex(x => x.Slug).IsUnique()</c>) because a container is
+    /// named from it and containers are listed host-wide — "that name is taken" on its own would be
+    /// baffling here, since the person can see their own workspace and there is nothing called this
+    /// in it.
+    /// </summary>
+    private string TakenAppSlugRefusal(string slug) => IsFa
+        ? $"«{slug}» قبلاً در پلتفرم استفاده شده است — نام اپ در کل پلتفرم مشترک است، نه فقط در این Workspace؛ در Workspace شما چیزی با این نام نیست."
+        : $"'{slug}' is already taken on this platform — app names are shared across every workspace, not just yours, so there being nothing called '{slug}' in your own workspace doesn't mean it's free.";
+
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         var query = db.Apps.Where(a => a.WorkspaceId == WorkspaceId);
@@ -103,7 +114,7 @@ public sealed partial class AppsController(
             .ToDictionary(
                 a => a.Id,
                 a => Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(
-                    a.Slug, activeNumbers[a.ActiveDeploymentId!.Value]));
+                    a.WorkspaceId, a.Slug, activeNumbers[a.ActiveDeploymentId!.Value]));
         var resourceRefs = metricRefs.Values.Distinct().ToList();
         var metrics = resourceRefs.Count == 0
             ? new List<MonitoringMetric>()
@@ -166,8 +177,21 @@ public sealed partial class AppsController(
     [Authorize(Policy = Capabilities.AppsCreate)]
     public async Task<IActionResult> Create(CreateAppViewModel model, CancellationToken ct)
     {
-        // Auto-derive a unique slug from the name (keeps the form to just "name + source").
-        var slug = await UniqueSlugAsync(Slugify(string.IsNullOrWhiteSpace(model.Slug) ? model.Name : model.Slug!), ct);
+        // Left blank, the slug is auto-derived from the name and auto-suffixed the way it always
+        // was (keeps the form to just "name + source"). Typed by hand, it is a deliberate choice and
+        // is refused rather than silently renamed if the platform-wide namespace already holds it —
+        // see TakenAppSlugRefusal for why the message has to say so.
+        string slug;
+        if (string.IsNullOrWhiteSpace(model.Slug))
+        {
+            slug = await UniqueSlugAsync(Slugify(model.Name), ct);
+        }
+        else
+        {
+            slug = Slugify(model.Slug);
+            if (await db.Apps.IgnoreQueryFilters().AnyAsync(a => a.Slug == slug, ct))
+                ModelState.AddModelError(nameof(model.Slug), TakenAppSlugRefusal(slug));
+        }
 
         var usesRepository = model.SourceType is AppSourceType.GitRepository or AppSourceType.Dockerfile
             or AppSourceType.StaticSite or AppSourceType.DockerCompose;
@@ -586,7 +610,7 @@ public sealed partial class AppsController(
 
         var containerName = latestDeployment is null
             ? Harbora.Infrastructure.Deployments.DeploymentPlanning.LegacyContainerName(app.Slug)
-            : Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.Slug, latestDeployment.Number);
+            : Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.WorkspaceId, app.Slug, latestDeployment.Number);
 
         // ---- specifics: how the container is actually doing right now (B3 Task 3) ----
         //
@@ -1626,10 +1650,16 @@ public sealed partial class AppsController(
         return string.IsNullOrWhiteSpace(slug) ? "app" : slug;
     }
 
+    /// <summary>
+    /// Platform-wide, not per-workspace: app slugs are unique across the whole platform now, so the
+    /// auto-derived candidate has to be checked against every workspace or two apps named "api" in
+    /// different workspaces would both auto-derive to the same slug and the second insert would fail
+    /// on the unique index instead of quietly picking "api-2".
+    /// </summary>
     private async Task<string> UniqueSlugAsync(string baseSlug, CancellationToken ct)
     {
         var slug = baseSlug;
-        for (var n = 2; await db.Apps.AnyAsync(a => a.WorkspaceId == WorkspaceId && a.Slug == slug, ct); n++)
+        for (var n = 2; await db.Apps.IgnoreQueryFilters().AnyAsync(a => a.Slug == slug, ct); n++)
             slug = $"{baseSlug}-{n}";
         return slug;
     }

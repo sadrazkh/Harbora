@@ -301,7 +301,7 @@ public sealed class DeploymentPipeline(
             // schedule successfully every minute underneath that.
             if (!ServicePlan.IsLongRunning(app.Kind))
             {
-                await RetireOldContainersAsync(docker, app.Slug, [], Log, ct);
+                await RetireOldContainersAsync(docker, app.WorkspaceId, app.Slug, [], Log, ct);
 
                 if (deployment.RolledBackFromId is not null)
                     await MarkSupersededAsRolledBackAsync(app.ActiveDeploymentId, deployment.Id, Log, ct);
@@ -331,7 +331,7 @@ public sealed class DeploymentPipeline(
             // Zero-downtime cutover (ADR-007): the new container gets a versioned name and starts
             // ALONGSIDE the currently-serving one. We only retire the old container(s) AFTER the new
             // one is healthy and traffic has been switched — so a failed deploy never drops traffic.
-            var containerName = DeploymentPlanning.ContainerName(app.Slug, deployment.Number);
+            var containerName = DeploymentPlanning.ContainerName(app.WorkspaceId, app.Slug, deployment.Number);
 
             // Decide how the proxy reaches this app. On the local node Traefik joins the tenant
             // network and routes by container name. On a remote node there is no shared overlay, so
@@ -379,10 +379,14 @@ public sealed class DeploymentPipeline(
             {
                 ["harbora.managed"] = "true",
                 ["harbora.app"] = app.Slug,
-                // Slug alone is unique only per workspace (HarboraDbContext: HasIndex(WorkspaceId,
-                // Slug).IsUnique()), and containers are listed host-wide. The id is what
-                // TakenAliasesAsync matches siblings by, so a same-slugged app in a different
-                // workspace cannot be mistaken for a sibling.
+                // Slug alone is unique platform-wide now (HarboraDbContext: HasIndex(x =>
+                // x.Slug).IsUnique()), but containers are listed host-wide and an install where that
+                // migration could not apply keeps the old per-workspace uniqueness — so this is still
+                // the label RetireOldContainersAsync and CurrentContainerId actually match ownership
+                // on (DeploymentPlanning.WorkspaceLabel), not the slug above.
+                [DeploymentPlanning.WorkspaceLabel] = app.WorkspaceId.ToString(),
+                // The id is what TakenAliasesAsync matches siblings by, so a same-slugged app in a
+                // different workspace cannot be mistaken for a sibling.
                 ["harbora.app.id"] = app.Id.ToString(),
                 ["harbora.deployment"] = deployment.Number.ToString()
             };
@@ -411,7 +415,7 @@ public sealed class DeploymentPipeline(
                         HealthDiagnosis.Explain(stackHealth, web.ContainerName));
 
                 await WireProxyAsync(app, upstreamHost, upstreamPort, Log, Record, ct);
-                await RetireOldContainersAsync(docker, app.Slug, keepContainers, Log, ct);
+                await RetireOldContainersAsync(docker, app.WorkspaceId, app.Slug, keepContainers, Log, ct);
 
                 if (deployment.RolledBackFromId is not null)
                     await MarkSupersededAsRolledBackAsync(app.ActiveDeploymentId, deployment.Id, Log, ct);
@@ -481,7 +485,7 @@ public sealed class DeploymentPipeline(
                     (ServicePlan.JoinsInternalNetwork(app.Kind)
                         ? $"Reachable inside this project at {containerName}."
                         : "Not reachable from other services."));
-            await RetireOldContainersAsync(docker, app.Slug, keepContainerName: containerName, Log, ct);
+            await RetireOldContainersAsync(docker, app.WorkspaceId, app.Slug, keepContainerName: containerName, Log, ct);
             if (!server.IsLocal)
             {
                 app.PublishedHostPort = publishPort;
@@ -572,7 +576,7 @@ public sealed class DeploymentPipeline(
             // everything ("never mask the original failure"), so on the cancelled token this looked
             // exactly like a successful cleanup and left the container running.
             await TryRemoveContainerByNameAsync(
-                docker, DeploymentPlanning.ContainerName(app.Slug, deployment.Number), CancellationToken.None);
+                docker, DeploymentPlanning.ContainerName(app.WorkspaceId, app.Slug, deployment.Number), CancellationToken.None);
             // The container is gone, so the port it reserved must go too — otherwise a node loses a
             // port to every failed deploy until the range runs out. The range is per-node and shared
             // by every app on it, so one app's repeatedly-timing-out builds drain it for everybody
@@ -861,7 +865,7 @@ public sealed class DeploymentPipeline(
         // health gate below is what actually decides whether the stack works.
         foreach (var service in stack.Services.OrderByDescending(s => s.DependsOn.Count == 0))
         {
-            var containerName = DeploymentPlanning.ComposeContainerName(app.Slug, service.Name, deployment.Number);
+            var containerName = DeploymentPlanning.ComposeContainerName(app.WorkspaceId, app.Slug, service.Name, deployment.Number);
 
             string image;
             if (service.Build is not null)
@@ -941,7 +945,7 @@ public sealed class DeploymentPipeline(
 
         var web = stack.Web!;
         return (web.Name,
-                DeploymentPlanning.ComposeContainerName(app.Slug, web.Name, deployment.Number),
+                DeploymentPlanning.ComposeContainerName(app.WorkspaceId, app.Slug, web.Name, deployment.Number),
                 web.Port ?? app.ContainerPort,
                 started);
     }
@@ -1150,16 +1154,24 @@ public sealed class DeploymentPipeline(
     /// the app except the just-deployed container (incl. any legacy unversioned container).
     /// </summary>
     private Task RetireOldContainersAsync(
-        IDockerEngine docker, string slug, string keepContainerName, Func<LogStream, string, Task> log, CancellationToken ct) =>
-        RetireOldContainersAsync(docker, slug, new[] { keepContainerName }, log, ct);
+        IDockerEngine docker, Guid workspaceId, string slug, string keepContainerName,
+        Func<LogStream, string, Task> log, CancellationToken ct) =>
+        RetireOldContainersAsync(docker, workspaceId, slug, new[] { keepContainerName }, log, ct);
 
     /// <summary>Stack form: keeps every container of the new set (see <c>ContainersToRetire</c>).</summary>
     private async Task RetireOldContainersAsync(
-        IDockerEngine docker, string slug, IReadOnlyCollection<string> keepContainerNames,
+        IDockerEngine docker, Guid workspaceId, string slug, IReadOnlyCollection<string> keepContainerNames,
         Func<LogStream, string, Task> log, CancellationToken ct)
     {
+        // The legacy bridge's other half (DeploymentPlanning.OwnedByThisWorkspace): a real query, not
+        // a hardcoded true, so an install where the platform-wide slug index could not apply (a
+        // pre-existing duplicate — see the migration) still gets a real answer instead of a
+        // rubber-stamped retirement of a container that might not be this workspace's.
+        var slugExclusive = !await db.Apps.IgnoreQueryFilters()
+            .AnyAsync(a => a.Slug == slug && a.WorkspaceId != workspaceId, ct);
+
         var existing = await docker.ListContainersAsync(DeploymentPlanning.AppLabel, ct);
-        var toRetire = DeploymentPlanning.ContainersToRetire(existing, slug, keepContainerNames);
+        var toRetire = DeploymentPlanning.ContainersToRetire(existing, workspaceId, slug, keepContainerNames, slugExclusive);
         foreach (var id in toRetire)
         {
             await log(LogStream.System, $"Retiring previous container {id[..12]} …");

@@ -78,8 +78,12 @@ public sealed class EnvironmentCloner(
 
         var takenEnvironmentSlugs = await db.Environments
             .Where(e => e.ProjectId == source.ProjectId).Select(e => e.Slug).ToListAsync(ct);
+        // Platform-wide, not just this workspace's: app slugs are unique across every workspace now
+        // (HarboraDbContext: HasIndex(x => x.Slug).IsUnique()), and ClonePlan.Of dedupes the copy's
+        // slug against exactly this set — a workspace-scoped set would let a clone land on a slug
+        // another workspace already holds and fail the unique index instead of picking "-2".
         var takenAppSlugs = await db.Apps
-            .Where(a => a.WorkspaceId == workspaceId).Select(a => a.Slug).ToListAsync(ct);
+            .IgnoreQueryFilters().Select(a => a.Slug).ToListAsync(ct);
         var takenContainers = await db.ManagedServices
             .Where(s => s.WorkspaceId == workspaceId).Select(s => s.ContainerName).ToListAsync(ct);
 

@@ -256,7 +256,11 @@ public sealed class TerminalController(
             {
                 var docker = await engines.ResolveAsync(app.ServerId, ct);
                 var containers = await docker.ListContainersAsync(null, ct);
-                containerId = DeploymentPlanning.CurrentContainerId(containers, app.Slug);
+                // Same legacy bridge RetireOldContainersAsync uses: a container with no workspace
+                // label is only "mine" when nothing else on the platform could hold this slug.
+                var slugExclusive = !await db.Apps.IgnoreQueryFilters()
+                    .AnyAsync(a => a.Slug == app.Slug && a.WorkspaceId != app.WorkspaceId, ct);
+                containerId = DeploymentPlanning.CurrentContainerId(containers, app.WorkspaceId, app.Slug, slugExclusive);
             }
             catch (Exception e)
             {

@@ -74,7 +74,7 @@ public sealed class MetricsCollector(
         var appIds = rules.Select(a => a.AppId!.Value).Distinct().ToList();
         var rows = await db.Apps.IgnoreQueryFilters()
             .Where(a => appIds.Contains(a.Id))
-            .Select(a => new { a.Id, a.Name, a.Slug, a.ActiveDeploymentId, a.MemoryLimitBytes, a.CpuLimit })
+            .Select(a => new { a.Id, a.Name, a.Slug, a.WorkspaceId, a.ActiveDeploymentId, a.MemoryLimitBytes, a.CpuLimit })
             .ToListAsync(ct);
 
         // The samples are keyed by container name, which is slug + deployment number — the same
@@ -94,7 +94,7 @@ public sealed class MetricsCollector(
             r.MemoryLimitBytes,
             r.CpuLimit,
             ContainerName = r.ActiveDeploymentId is { } d && numbers.TryGetValue(d, out var n)
-                ? Deployments.DeploymentPlanning.ContainerName(r.Slug, n)
+                ? Deployments.DeploymentPlanning.ContainerName(r.WorkspaceId, r.Slug, n)
                 : null
         }).ToList();
 

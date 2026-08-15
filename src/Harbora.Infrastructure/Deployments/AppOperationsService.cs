@@ -99,7 +99,7 @@ public sealed class AppOperationsService(
         if (app is null) return;
         var docker = await engineFactory.ResolveAsync(app.ServerId, ct);
 
-        var id = await FindContainerIdAsync(docker, app.Slug, ct);
+        var id = await FindContainerIdAsync(docker, app.WorkspaceId, app.Slug, ct);
         if (id is not null) await docker.RemoveContainerAsync(id, force: true, ct);
         if (removeVolumes)
             foreach (var v in app.Volumes) await docker.RemoveVolumeAsync(v.Name, ct);
@@ -194,16 +194,20 @@ public sealed class AppOperationsService(
     {
         var app = await db.Apps.IgnoreQueryFilters().FirstAsync(a => a.Id == appId, ct);
         var docker = await engineFactory.ResolveAsync(app.ServerId, ct);
-        var id = await FindContainerIdAsync(docker, app.Slug, ct);
+        var id = await FindContainerIdAsync(docker, app.WorkspaceId, app.Slug, ct);
         return (app, docker, id);
     }
 
-    private static async Task<string?> FindContainerIdAsync(IDockerEngine docker, string slug, CancellationToken ct)
+    private async Task<string?> FindContainerIdAsync(IDockerEngine docker, Guid workspaceId, string slug, CancellationToken ct)
     {
-        // Containers are versioned (harbora-{slug}-{n}) for zero-downtime cutover, so match by the
-        // app label rather than an exact name and prefer the running one.
+        // Containers are versioned (harbora-{workspace}-{slug}-{n}) for zero-downtime cutover, so
+        // match by the app label rather than an exact name and prefer the running one — and by the
+        // workspace label, so restart/stop/delete/logs never reach across a slug shared with a
+        // stranger's workspace (the same legacy bridge RetireOldContainersAsync uses).
         var containers = await docker.ListContainersAsync(DeploymentPlanning.AppLabel, ct);
-        return DeploymentPlanning.CurrentContainerId(containers, slug);
+        var slugExclusive = !await db.Apps.IgnoreQueryFilters()
+            .AnyAsync(a => a.Slug == slug && a.WorkspaceId != workspaceId, ct);
+        return DeploymentPlanning.CurrentContainerId(containers, workspaceId, slug, slugExclusive);
     }
 
     /// <summary>

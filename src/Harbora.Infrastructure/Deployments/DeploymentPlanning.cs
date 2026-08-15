@@ -15,8 +15,24 @@ public static class DeploymentPlanning
 {
     public const string AppLabel = "harbora.app";
 
-    /// <summary>Versioned name so old + new can coexist during cutover: harbora-{slug}-{number}.</summary>
-    public static string ContainerName(string slug, int number) => $"harbora-{slug}-{number}";
+    /// <summary>
+    /// Stamped on every container at creation (DeploymentPipeline: the label dictionary built before
+    /// <c>RunContainerAsync</c>). Containers are listed host-wide — <c>harbora.app</c> alone is only
+    /// unique per workspace pre-migration and is never enough on its own to prove ownership — so this
+    /// is what <see cref="ContainersToRetire"/> and <see cref="CurrentContainerId"/> actually match on.
+    /// See <see cref="OwnedByThisWorkspace"/> for the one narrow exception.
+    /// </summary>
+    public const string WorkspaceLabel = "harbora.workspace";
+
+    /// <summary>
+    /// Versioned name so old + new can coexist during cutover: harbora-{workspace}-{slug}-{number}.
+    /// The workspace segment means the name itself cannot collide across tenants even on an install
+    /// where the platform-wide slug index could not be applied (see the migration's own comment) —
+    /// the label match in <see cref="ContainersToRetire"/> is the real guarantee; this is the second
+    /// one, for free, on top of it.
+    /// </summary>
+    public static string ContainerName(Guid workspaceId, string slug, int number) =>
+        $"harbora-{WorkspaceToken(workspaceId)}-{slug}-{number}";
 
     /// <summary>The pre-P4 single-name convention; still retired as an "old" container on upgrade.</summary>
     public static string LegacyContainerName(string slug) => $"harbora-{slug}";
@@ -26,35 +42,80 @@ public static class DeploymentPlanning
     /// container is healthy and traffic has been switched. Matches by the harbora.app label so a
     /// legacy (unversioned) container is retired too.
     /// </summary>
+    /// <param name="slugExclusiveToThisWorkspace">
+    /// Whether any OTHER workspace currently holds an app at <paramref name="slug"/> — see
+    /// <see cref="OwnedByThisWorkspace"/>. The caller asks the database; this method stays a pure
+    /// function of its inputs, which is what keeps it unit-testable without one.
+    /// </param>
     public static IReadOnlyList<string> ContainersToRetire(
-        IEnumerable<ContainerInfo> all, string slug, string keepContainerName) =>
-        ContainersToRetire(all, slug, new[] { keepContainerName });
+        IEnumerable<ContainerInfo> all, Guid workspaceId, string slug, string keepContainerName,
+        bool slugExclusiveToThisWorkspace) =>
+        ContainersToRetire(all, workspaceId, slug, new[] { keepContainerName }, slugExclusiveToThisWorkspace);
 
     /// <summary>
     /// Multi-container form. A Compose stack replaces several containers at once, so the cutover has
     /// to keep the whole new set — retiring per-service would tear down half the stack it just built.
     /// </summary>
     public static IReadOnlyList<string> ContainersToRetire(
-        IEnumerable<ContainerInfo> all, string slug, IReadOnlyCollection<string> keepContainerNames)
+        IEnumerable<ContainerInfo> all, Guid workspaceId, string slug, IReadOnlyCollection<string> keepContainerNames,
+        bool slugExclusiveToThisWorkspace)
     {
         return all
             .Where(c => c.Labels.TryGetValue(AppLabel, out var s) && s == slug)
+            .Where(c => OwnedByThisWorkspace(c, workspaceId, slugExclusiveToThisWorkspace))
             .Where(c => !keepContainerNames.Contains(c.Name))
             .Select(c => c.Id)
             .ToList();
     }
 
-    /// <summary>Versioned name for one service of a Compose stack: harbora-{slug}-{service}-{number}.</summary>
-    public static string ComposeContainerName(string slug, string service, int number) =>
-        $"harbora-{slug}-{service}-{number}";
+    /// <summary>
+    /// Versioned name for one service of a Compose stack:
+    /// harbora-{workspace}-{slug}-{service}-{number}.
+    /// </summary>
+    public static string ComposeContainerName(Guid workspaceId, string slug, string service, int number) =>
+        $"harbora-{WorkspaceToken(workspaceId)}-{slug}-{service}-{number}";
 
     /// <summary>Pick this app's current serving container id: the running one, else any match.</summary>
-    public static string? CurrentContainerId(IEnumerable<ContainerInfo> all, string slug)
+    /// <param name="slugExclusiveToThisWorkspace">See <see cref="ContainersToRetire"/>.</param>
+    public static string? CurrentContainerId(
+        IEnumerable<ContainerInfo> all, Guid workspaceId, string slug, bool slugExclusiveToThisWorkspace)
     {
-        var mine = all.Where(c => c.Labels.TryGetValue(AppLabel, out var s) && s == slug).ToList();
+        var mine = all
+            .Where(c => c.Labels.TryGetValue(AppLabel, out var s) && s == slug)
+            .Where(c => OwnedByThisWorkspace(c, workspaceId, slugExclusiveToThisWorkspace))
+            .ToList();
         return (mine.FirstOrDefault(c => c.State.Equals("running", StringComparison.OrdinalIgnoreCase))
                 ?? mine.FirstOrDefault())?.Id;
     }
+
+    /// <summary>
+    /// Whether a container already known to carry this slug's <see cref="AppLabel"/> belongs to this
+    /// workspace — the fix for the defect where deploying workspace A's "api" force-removed workspace
+    /// B's live "api" container.
+    ///
+    /// A container stamped with <see cref="WorkspaceLabel"/> decides it outright: the id is exact, so
+    /// no same-slugged app anywhere else on the host can be mistaken for this one.
+    ///
+    /// A container with <b>no</b> workspace label predates that stamp — the legacy bridge. It is
+    /// claimed only when <paramref name="slugExclusiveToThisWorkspace"/> says no other workspace holds
+    /// an app at this slug at all, which the platform-wide unique index (HarboraDbContext:
+    /// <c>HasIndex(x => x.Slug).IsUnique()</c>) makes true for every app created after this shipped.
+    /// Treating "no label" as "mine" unconditionally reintroduces the defect exactly; treating it as
+    /// "not mine" unconditionally strands every container running today, holding its port and volumes
+    /// for ever. The bridge closes itself as containers redeploy and pick up the label.
+    /// </summary>
+    private static bool OwnedByThisWorkspace(
+        ContainerInfo container, Guid workspaceId, bool slugExclusiveToThisWorkspace) =>
+        container.Labels.TryGetValue(WorkspaceLabel, out var owner)
+            ? owner == workspaceId.ToString()
+            : slugExclusiveToThisWorkspace;
+
+    /// <summary>
+    /// A short, name-safe token for a workspace id. Docker container names double as their hostname
+    /// on the shared network (<c>upstreamHost</c> in the pipeline), so this stays in the unpunctuated
+    /// hex form rather than the dashed one.
+    /// </summary>
+    private static string WorkspaceToken(Guid workspaceId) => workspaceId.ToString("N");
 
     /// <summary>
     /// The image to re-release on a rollback: the target deployment's built image. Throws if the

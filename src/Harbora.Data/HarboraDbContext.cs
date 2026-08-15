@@ -236,7 +236,13 @@ public class HarboraDbContext : DbContext
 
         b.Entity<App>(e =>
         {
-            e.HasIndex(x => new { x.WorkspaceId, x.Slug }).IsUnique();
+            // Platform-wide, not per-workspace: a container is retired by matching a
+            // harbora.workspace label, but the one narrow bridge for a container that predates that
+            // label falls back to "no other workspace holds this slug" — which this index is what
+            // makes true. Checked against production before this changed: 3 apps, 3 distinct slugs,
+            // so this migration is one index with no rename step, and it fails loudly rather than
+            // silently renaming anything if a duplicate ever exists on another install.
+            e.HasIndex(x => x.Slug).IsUnique();
             e.Property(x => x.Slug).HasMaxLength(63).IsRequired();
             e.HasOne(x => x.GitRepository).WithMany().HasForeignKey(x => x.GitRepositoryId).OnDelete(DeleteBehavior.SetNull);
             e.HasMany(x => x.EnvironmentVariables).WithOne(v => v.App).HasForeignKey(v => v.AppId).OnDelete(DeleteBehavior.Cascade);
