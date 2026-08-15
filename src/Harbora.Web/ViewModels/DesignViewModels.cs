@@ -49,6 +49,14 @@ public sealed record StatusPillModel(string Text, string Tone);
 /// <summary>Shown instead of an empty table, with the one action that fills it.</summary>
 public sealed record EmptyStateModel(string Icon, string Message, string? ActionText = null, string? ActionUrl = null);
 
+/// <summary>
+/// The usage tab's window picker — 1 hour / 24 hours / 7 days, per
+/// <see cref="Harbora.Infrastructure.Monitoring.UsageRangeWindow"/>. One partial shared by the app
+/// and database Usage tabs rather than two copies, so the two cannot drift into offering different
+/// windows or drawing the selected one differently.
+/// </summary>
+public sealed record UsageRangeControlModel(int SelectedMinutes);
+
 /// <summary>A measurement and its label, routed through the honesty gate.</summary>
 public sealed record MetricModel(MetricView View, string Label);
 

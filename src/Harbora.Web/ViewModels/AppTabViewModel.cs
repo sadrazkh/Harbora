@@ -122,6 +122,15 @@ public sealed class AppUsageViewModel : AppTabViewModel
     public long? DiskUsedBytes { get; init; }
     public string? DiskCaveat { get; init; }
     public DateTimeOffset? MeasuredAt { get; init; }
+
+    /// <summary>
+    /// The chart window this render answers, already resolved by
+    /// <see cref="Harbora.Infrastructure.Monitoring.UsageRangeWindow.Clamp"/> — never an arbitrary
+    /// value from the query string, always one of the three the range control offers. Both the
+    /// control's own selected state and the chart islands' initial fetch read this, not
+    /// <c>Request.Query</c> directly.
+    /// </summary>
+    public int SelectedMinutes { get; init; } = Harbora.Infrastructure.Monitoring.UsageRangeWindow.OneHour;
 }
 
 /// <summary>

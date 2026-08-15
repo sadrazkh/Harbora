@@ -21,11 +21,19 @@ const props = defineProps<{
   limit?: number;
   unit?: 'bytes' | 'percent' | 'raw';
   height?: number;
+  // A page with its own range control (the usage tabs) passes the chosen window here and this chart
+  // stops offering its own — one control governing every chart on the page, not several free to
+  // disagree with it and with each other. Omitted, the chart falls back to its own five-button
+  // picker exactly as before (the monitoring dashboard's host chart, which has no page-level control).
+  minutes?: number;
+  lang?: 'en' | 'fa';
 }>();
 
 interface Point { t: number; v: number; }
 const points = ref<Point[]>([]);
-const minutes = ref(60);
+const minutes = ref(props.minutes ?? 60);
+const controlled = props.minutes !== undefined;
+const isFa = props.lang === 'fa';
 const loaded = ref(false);
 const W = 800, PAD = 8;
 const H = props.height ?? 120;
@@ -38,6 +46,11 @@ const WINDOWS = [
   { minutes: 60 * 24 * 7, label: '7d' },
   { minutes: 60 * 24 * 30, label: '30d' },
 ];
+
+// "no data for this period" is not "used nothing" — widen the window past what the store holds and
+// an empty series is the honest answer, not a flat line at zero. Bilingual because it is copy a
+// person reads, the same rule every other label in the panel follows.
+const noDataText = isFa ? 'داده‌ای برای این بازه ثبت نشده است' : 'no data for this period';
 
 async function load() {
   const q = new URLSearchParams({ name: props.name, minutes: String(minutes.value) });
@@ -95,7 +108,9 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
   <div>
     <div class="mb-1 flex flex-wrap items-baseline justify-between gap-2">
       <span class="text-xs text-ink-muted">{{ label }}</span>
-      <span class="flex items-center gap-1">
+      <!-- Hidden when a page-level range control already owns the window (controlled mode) — see
+           the props note above. Uncontrolled charts (the monitoring dashboard) keep this. -->
+      <span v-if="!controlled" class="flex items-center gap-1">
         <button v-for="w in WINDOWS" :key="w.minutes" type="button" @click="pick(w.minutes)"
                 class="rounded px-1.5 py-0.5 text-[10px]"
                 :class="minutes === w.minutes ? 'bg-accent-soft text-accent-text' : 'text-ink-faint hover:text-ink'">
@@ -104,11 +119,14 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
       </span>
     </div>
 
-    <!-- Nothing measured is not nothing used. An empty chart says so rather than drawing a flat
-         line along the bottom, which reads as an idle application. -->
-    <div v-if="loaded && points.length < 2" class="text-xs text-ink-faint" :style="{ lineHeight: H + 'px' }">
-      {{ points.length ? '···' : 'not measured yet' }}
+    <!-- Genuinely no points for the chosen window: distinct from a series that drew, however flat,
+         because "we do not keep that" and "it used nothing" are opposite claims about an app. Not
+         the same branch as the single-point case below — one point is not "no data", it is one
+         sample too few to draw a trend line from. -->
+    <div v-if="loaded && points.length === 0" class="text-xs text-ink-faint" data-empty="true" :style="{ lineHeight: H + 'px' }">
+      {{ noDataText }}
     </div>
+    <div v-else-if="loaded && points.length === 1" class="text-xs text-ink-faint" :style="{ lineHeight: H + 'px' }">···</div>
     <div v-else-if="!loaded" class="text-xs text-ink-faint" :style="{ lineHeight: H + 'px' }">···</div>
 
     <svg v-else :viewBox="`0 0 ${W} ${H}`" preserveAspectRatio="none" class="w-full" :style="{ height: H + 'px' }">

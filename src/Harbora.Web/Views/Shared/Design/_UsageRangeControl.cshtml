@@ -1,0 +1,28 @@
+@model Harbora.Web.ViewModels.UsageRangeControlModel
+@{
+    // Links, not a form or a script — the choice lives in the URL (a plain query-string reload is
+    // both the simplest way to get that and the one that makes the choice survive a reload for free),
+    // and this page has no other query parameter for a relative "?minutes=" href to disturb.
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    (int Minutes, string Label)[] windows =
+    [
+        (Harbora.Infrastructure.Monitoring.UsageRangeWindow.OneHour, isFa ? "۱ ساعت" : "1h"),
+        (Harbora.Infrastructure.Monitoring.UsageRangeWindow.OneDay, isFa ? "۲۴ ساعت" : "24h"),
+        (Harbora.Infrastructure.Monitoring.UsageRangeWindow.OneWeek, isFa ? "۷ روز" : "7d"),
+    ];
+}
+@* data-selected-minutes carries the resolved window as a number a test can assert on directly —
+   the control's own markup, not a sentence that happens to contain a digit somewhere on the page. *@
+<div class="mb-4 flex items-center gap-2" data-usage-range data-selected-minutes="@Model.SelectedMinutes">
+    <span class="text-xs text-ink-muted">@(isFa ? "بازه" : "Range")</span>
+    <span class="flex items-center gap-1">
+        @foreach (var w in windows)
+        {
+            var current = w.Minutes == Model.SelectedMinutes;
+            <a href="?minutes=@w.Minutes"
+               aria-current="@(current ? "true" : null)"
+               class="rounded-lg px-2.5 py-1 text-xs @(current ? "bg-accent-soft text-accent-text" : "text-ink-faint hover:text-ink")">@w.Label</a>
+        }
+    </span>
+</div>
