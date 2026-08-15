@@ -41,6 +41,9 @@ public interface IDockerEngine
     Task<IReadOnlyList<ContainerInfo>> ListContainersAsync(string? labelFilter, CancellationToken ct);
     Task<ContainerStats?> GetStatsAsync(string containerId, CancellationToken ct);
 
+    /// <summary>One container in detail, or null when the engine has no such container.</summary>
+    Task<ContainerDetail?> InspectAsync(string containerNameOrId, CancellationToken ct);
+
     Task EnsureNetworkAsync(string name, CancellationToken ct);
     /// <summary>Attach an existing container to a network (idempotent) — used to give Traefik ingress into per-tenant networks.</summary>
     Task ConnectNetworkAsync(string containerNameOrId, string network, CancellationToken ct);
@@ -127,6 +130,31 @@ public record DockerRunRequest(
     IReadOnlyDictionary<int, int>? AdditionalPublishedPorts = null);
 
 public record ContainerInfo(string Id, string Name, string Image, string State, string Status, IReadOnlyDictionary<string, string> Labels);
+
+/// <summary>
+/// One container, asked about directly.
+///
+/// <see cref="ContainerInfo"/> is what a listing can cheaply say — a state and a status line. This is
+/// what an inspect adds: which image is actually running, how long it has been up, how often it has
+/// restarted, and whether its health check is passing.
+///
+/// Every figure that a runtime may decline to report is nullable, and stays null rather than
+/// defaulting. The reason is the same one <c>RuntimeContainerStats</c> states on the node side: a
+/// zero is a specific claim, and making it because nobody answered is the panel asserting something
+/// it does not know. <paramref name="Healthy"/> in particular is null when no health check is
+/// configured — that is "we were not told how to ask", not "failing".
+/// </summary>
+public record ContainerDetail(
+    string Id,
+    string Name,
+    string Image,
+    string? ImageDigest,
+    string State,
+    string Status,
+    bool? Healthy,
+    int? RestartCount,
+    DateTimeOffset? StartedAt);
+
 public record ImageInfo(string Id, string Tag, DateTimeOffset CreatedAt, long SizeBytes);
 public record ContainerStats(double CpuPercent, long MemoryUsedBytes, long MemoryLimitBytes, long NetRxBytes, long NetTxBytes);
 /// <param name="Architecture">

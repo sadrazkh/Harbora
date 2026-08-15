@@ -1,4 +1,5 @@
-﻿using Docker.DotNet;
+﻿using System.Globalization;
+using Docker.DotNet;
 using Docker.DotNet.Models;
 using Harbora.Application.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -248,6 +249,31 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
             (long)(snapshot.Networks?.Values.Sum(n => (decimal)n.TxBytes) ?? 0));
     }
 
+    public async Task<ContainerDetail?> InspectAsync(string containerNameOrId, CancellationToken ct)
+    {
+        try
+        {
+            var c = await client.Containers.InspectContainerAsync(containerNameOrId, ct);
+
+            var health = c.State?.Health?.Status;
+
+            return new ContainerDetail(
+                c.ID,
+                c.Name?.TrimStart('/') ?? containerNameOrId,
+                c.Config?.Image ?? c.Image,
+                c.Image,
+                c.State?.Status ?? "unknown",
+                c.State?.Status ?? "unknown",
+                // No health check configured is not "unhealthy": it is "we were not told how to
+                // ask". Callers distinguish the two, so null must survive to them.
+                Healthy: health is null ? c.State?.Running : health.Equals("healthy", StringComparison.OrdinalIgnoreCase),
+                RestartCount: (int)c.RestartCount,
+                StartedAt: ParseTimestamp(c.State?.StartedAt));
+        }
+        catch (DockerContainerNotFoundException) { return null; }
+        catch (DockerApiException e) when ((int)e.StatusCode == 404) { return null; }
+    }
+
     public async Task EnsureNetworkAsync(string name, CancellationToken ct)
     {
         var existing = await client.Networks.ListNetworksAsync(
@@ -377,6 +403,11 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
     }
 
     // --- helpers ---
+
+    private static DateTimeOffset? ParseTimestamp(string? value) =>
+        DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed)
+            ? parsed
+            : null;
 
     /// <summary>
     /// Splits an image reference into what Docker's pull API wants: a repository and a tag *or*
