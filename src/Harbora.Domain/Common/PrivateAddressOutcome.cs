@@ -13,5 +13,12 @@ public enum PrivateAddressOutcome
     KindDoesNotJoin = 2,
 
     /// <summary>No slug to build a name from.</summary>
-    NoSlug = 3
+    NoSlug = 3,
+
+    /// <summary>
+    /// This app deploys as a Compose stack: each service already answers to its own name
+    /// (<c>{service}</c>, <c>{service}-{deployment}</c>), so there is no single app-level alias —
+    /// the app's own slug may not even match any of them.
+    /// </summary>
+    ComposeManaged = 4
 }

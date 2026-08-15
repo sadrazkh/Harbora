@@ -569,6 +569,14 @@
                             : "This kind of service does not join the internal network, so it has no private address.")
                     </p>
                 }
+                else if (app.PrivateAddressState == PrivateAddressOutcome.ComposeManaged)
+                {
+                    <p data-private-address-state="compose" class="text-xs text-ink-faint">
+                        @(isFa
+                            ? "این اپ به‌صورت پشتهٔ Compose اجرا می‌شود؛ هر سرویس از قبل نام داخلی خودش را دارد."
+                            : "This app runs as a Compose stack — each service already has its own private name.")
+                    </p>
+                }
                 else
                 {
                     @* Covers both PrivateAddressState == null (has not deployed since this shipped)
