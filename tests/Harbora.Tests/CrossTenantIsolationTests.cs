@@ -167,6 +167,107 @@ public class CrossTenantIsolationTests
             "another app's container must survive an unrelated deploy");
     }
 
+    /// <summary>
+    /// The defect 2026-08-15-unique-app-names-design fixes, and the sharper case
+    /// <see cref="A_deploy_only_ever_touches_its_own_apps_containers"/> above does not cover: that test
+    /// uses two different slugs, which the pre-fix code already got right by accident (the label
+    /// existed but its value never matched). The real defect only showed when two workspaces picked
+    /// the <em>same</em> slug — "api", "web", "app" — because <c>ContainersToRetire</c> matched the
+    /// <c>harbora.app</c> label's value against the slug alone, and that label was only ever unique
+    /// per workspace. A second, unrelated workspace with its own "api" shares this harness's database
+    /// and docker host, exactly as two tenants share one node and one database in production.
+    /// </summary>
+    private static (App App, string ContainerName) AddStrangerWorkspaceApp(
+        PipelineHarness harness, string slug, int number = 1)
+    {
+        var workspace = new Harbora.Domain.Identity.Workspace
+        { Id = Guid.NewGuid(), Name = "Stranger", Slug = "stranger-" + Guid.NewGuid().ToString("N")[..8] };
+        var project = new Harbora.Domain.Projects.Project
+        { Id = Guid.NewGuid(), WorkspaceId = workspace.Id, Name = "Stranger", Slug = "stranger" };
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            Id = Guid.NewGuid(), WorkspaceId = workspace.Id, ProjectId = project.Id,
+            Name = "Production", Slug = "production", IsDefault = true
+        };
+        var app = new App
+        {
+            Id = Guid.NewGuid(), WorkspaceId = workspace.Id, ServerId = harness.Server.Id,
+            EnvironmentId = environment.Id, Name = slug, Slug = slug,
+            SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "nginx:1.27",
+            ContainerPort = 8080, Status = AppStatus.Running
+        };
+
+        harness.Db.Workspaces.Add(workspace);
+        harness.Db.Projects.Add(project);
+        harness.Db.Environments.Add(environment);
+        harness.Db.Apps.Add(app);
+        harness.Db.SaveChanges();
+
+        var containerName = DeploymentPlanning.ContainerName(workspace.Id, slug, number);
+        harness.Docker.SeedContainer(containerName, slug, workspaceId: workspace.Id);
+        return (app, containerName);
+    }
+
+    [Fact]
+    public async Task Deploying_one_workspaces_app_leaves_another_workspaces_identically_slugged_container_running()
+    {
+        using var harness = new PipelineHarness();
+        // The common name that makes this reachable in production — see the design doc.
+        harness.App.Slug = "api";
+        await harness.Db.SaveChangesAsync();
+
+        var (strangerApp, strangerContainer) = AddStrangerWorkspaceApp(harness, "api");
+
+        var deployment = harness.QueueDeployment();
+        var result = await harness.RunAsync(deployment);
+
+        result.Status.Should().Be(DeploymentStatus.Succeeded);
+        harness.Docker.LiveContainerNames.Should().Contain(strangerContainer,
+            "a deploy must never remove a container it does not own — this is the whole point of the " +
+            "fix, in the design doc's own words");
+        harness.Docker.OperationsOn(strangerContainer).Should().NotContain(nameof(FakeDockerEngine.RemoveContainerAsync));
+
+        // And the stranger's app row is undisturbed too — this was never workspace A's to touch.
+        var untouched = await harness.Db.Apps.FindAsync(strangerApp.Id);
+        untouched!.WorkspaceId.Should().NotBe(harness.App.WorkspaceId);
+    }
+
+    /// <summary>
+    /// The counterpart the isolation guarantee must not cost: this workspace's OWN previous "api"
+    /// container is still retired on cutover, identically-slugged stranger notwithstanding. A fix that
+    /// stopped all retirement near a slug collision would trade the cross-tenant leak for a same-tenant
+    /// one — every redeploy leaking its own previous container.
+    ///
+    /// The first deployment runs through the real pipeline, rather than a raw seeded container, so its
+    /// container carries the <c>harbora.workspace</c> label the fixed pipeline actually stamps —
+    /// exactly what lets retirement tell it apart from the stranger's identically-slugged, identically
+    /// unlabelled-to-A container even though neither container's slug is unique on this host.
+    /// </summary>
+    [Fact]
+    public async Task A_workspaces_own_previous_container_is_still_retired_despite_a_strangers_same_slug()
+    {
+        using var harness = new PipelineHarness();
+        harness.App.Slug = "api";
+        await harness.Db.SaveChangesAsync();
+
+        var first = harness.QueueDeployment(number: 1);
+        await harness.RunAsync(first);
+        var firstContainer = harness.ContainerFor(1);
+        harness.Docker.LiveContainerNames.Should().Contain(firstContainer, "the first deploy must have started it");
+
+        var (_, strangerContainer) = AddStrangerWorkspaceApp(harness, "api");
+
+        var second = harness.QueueDeployment(number: 2);
+        var result = await harness.RunAsync(second);
+
+        result.Status.Should().Be(DeploymentStatus.Succeeded);
+        harness.Docker.LiveContainerNames.Should().NotContain(firstContainer,
+            "existing containers must still be retired — a fix that strands every container deployed " +
+            "before it shipped trades one leak for another");
+        harness.Docker.LiveContainerNames.Should().Contain(strangerContainer,
+            "and the stranger's container, sitting right next to it under the same slug, must survive");
+    }
+
     [Fact]
     public async Task Image_retention_never_prunes_another_apps_images()
     {

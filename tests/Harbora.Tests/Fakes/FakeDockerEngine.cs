@@ -172,8 +172,13 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// The owning app's id, carried as <c>harbora.app.id</c> — what the collision check actually
     /// matches siblings by, since the slug label alone is only unique per workspace.
     /// </param>
+    /// <param name="workspaceId">
+    /// Carried as <c>harbora.workspace</c> — what <c>DeploymentPlanning.ContainersToRetire</c> and
+    /// <c>CurrentContainerId</c> actually match ownership on (2026-08-15-unique-app-names-design).
+    /// Null simulates a container that predates that label, exercising the legacy bridge.
+    /// </param>
     public string SeedContainer(string name, string slug, string state = "running",
-        string image = "img:old", string? composeService = null, Guid? appId = null)
+        string image = "img:old", string? composeService = null, Guid? appId = null, Guid? workspaceId = null)
     {
         var id = $"container-{Interlocked.Increment(ref _idSeq):D4}-{name}";
         var labels = new Dictionary<string, string>
@@ -182,6 +187,7 @@ public sealed class FakeDockerEngine : IDockerEngine
             ["harbora.app"] = slug
         };
         if (appId is not null) labels["harbora.app.id"] = appId.Value.ToString();
+        if (workspaceId is not null) labels["harbora.workspace"] = workspaceId.Value.ToString();
         if (composeService is not null) labels["harbora.compose.service"] = composeService;
 
         _containers[id] = new ContainerInfo(id, name, image, state, "Up", labels);
