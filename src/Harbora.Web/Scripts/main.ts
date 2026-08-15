@@ -46,6 +46,10 @@ const islands: Record<string, IslandMounter> = {
       limit: el.dataset.limit ? Number(el.dataset.limit) : undefined,
       unit: (el.dataset.unit as 'bytes' | 'percent' | 'raw' | undefined),
       height: el.dataset.height ? Number(el.dataset.height) : undefined,
+      // Set only by pages with a range control of their own (the usage tabs); everything else keeps
+      // the island's own default window and per-chart picker, unchanged.
+      minutes: el.dataset.minutes ? Number(el.dataset.minutes) : undefined,
+      lang: (el.dataset.lang as 'en' | 'fa' | undefined),
     }).mount(el);
   },
 };
