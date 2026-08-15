@@ -1,0 +1,45 @@
+@model LearnIndexViewModel
+@{
+    ViewData["Title"] = "Learning Centre";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+
+<div class="page-heading">
+    <div>
+        <div class="eyebrow"><i data-lucide="book-open" class="h-3.5 w-3.5"></i>@(isFa ? "راهنما و آموزش" : "Guides & walkthroughs")</div>
+        <h1>@(isFa ? "مرکز آموزش" : "Learning Centre")</h1>
+        <p>@(isFa
+            ? "نه فصل که مرحله‌به‌مرحله نحوهٔ کار با Harbora را نشان می‌دهند — از اولین قدم‌ها تا مدیریت."
+            : "Nine chapters that walk through everything Harbora can do, one screen at a time — from first steps to administration.")</p>
+    </div>
+</div>
+
+@if (Model.Chapters.Count == 0)
+{
+    <div class="empty-state min-h-[28rem]" data-learn-index data-chapter-count="0">
+        <span class="empty-state-icon"><i data-lucide="book-open" class="h-6 w-6"></i></span>
+        <h2>@(isFa ? "فصلی یافت نشد" : "No chapters found")</h2>
+        <p>@(isFa ? "هنوز محتوایی برای نمایش وجود ندارد." : "There is nothing to read yet.")</p>
+    </div>
+}
+else
+{
+    <div class="grid gap-4 md:grid-cols-2 2xl:grid-cols-3" data-learn-index data-chapter-count="@Model.Chapters.Count">
+        @foreach (var chapter in Model.Chapters)
+        {
+            <a href="/learn/@chapter.Slug" class="template-card" data-chapter-slug="@chapter.Slug" data-chapter-number="@chapter.Number">
+                <div class="flex items-center gap-3">
+                    <span class="resource-avatar bg-accent-soft text-xs font-extrabold text-accent-text">@chapter.Number.ToString("00")</span>
+                    <div class="min-w-0">
+                        <h2 class="truncate text-[15px] font-semibold text-ink">@chapter.Title</h2>
+                        <div class="mt-0.5 text-[11px] text-ink-faint">@(isFa ? $"فصل {chapter.Number}" : $"Chapter {chapter.Number}")</div>
+                    </div>
+                </div>
+                <div class="mt-auto flex items-center gap-1.5 pt-4 text-xs font-medium text-accent-text">
+                    @(isFa ? "خواندن فصل" : "Read chapter")
+                    <i data-lucide="arrow-right" class="h-3.5 w-3.5 rtl:rotate-180"></i>
+                </div>
+            </a>
+        }
+    </div>
+}

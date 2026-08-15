@@ -45,7 +45,8 @@ namespace Harbora.Tests;
 /// own address is what separate clients are.</item>
 /// </list>
 /// </summary>
-public sealed class HarboraWebFactory(int? imageRetentionCount = null) : WebApplicationFactory<Program>
+public sealed class HarboraWebFactory(int? imageRetentionCount = null, string? learningChaptersRoot = null)
+    : WebApplicationFactory<Program>
 {
     /// <summary>Header carrying the address the request should appear to come from.</summary>
     public const string RemoteIpHeader = "X-Harbora-Test-Remote-Ip";
@@ -100,6 +101,13 @@ public sealed class HarboraWebFactory(int? imageRetentionCount = null) : WebAppl
         // Deployments tab's rollback-depth marker moving when the depth does.
         if (imageRetentionCount is { } count)
             builder.UseSetting("Runtime:ImageRetentionCount", count.ToString());
+
+        // Overrides where LearningLibrary reads chapters from (DependencyInjection.ResolveChaptersRoot)
+        // — a test proving the renderer's own behaviour (e.g. that raw HTML embedded in a chapter is
+        // never executed) needs a chapter it controls, not one of the nine real ones committed to
+        // docs/tutorial.
+        if (learningChaptersRoot is not null)
+            builder.UseSetting("Learning:ChaptersRoot", learningChaptersRoot);
 
         builder.ConfigureTestServices(services =>
         {
