@@ -27,6 +27,7 @@ namespace Harbora.Web.Controllers;
 public sealed class AppDataController(
     HarboraDbContext db,
     VolumeFileService files,
+    VolumeDownloadTokens downloadTokens,
     Harbora.Infrastructure.Security.ProjectAccessService access,
     IAuditLogger audit,
     ICurrentUser currentUser) : Controller
@@ -101,6 +102,47 @@ public sealed class AppDataController(
         // inline would let them host script on the panel's own origin, which is the session every
         // other tenant is signed in with.
         return File(content, "application/octet-stream", VolumePath.NameOf(normalised));
+    }
+
+    /// <summary>
+    /// Mints a time-limited link to exactly this file — sub-project D4. The link works with no panel
+    /// session at all, so what makes it safe to hand out lives entirely in
+    /// <see cref="VolumeDownloadTokens"/>: single use, self-expiry, a path fixed here at mint time,
+    /// and an app/volume pairing resolved through this workspace's own filtered collection, the same
+    /// way every other action on this controller resolves one.
+    /// </summary>
+    [HttpPost("download-link")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DownloadLink(Guid id, Guid volumeId, string path, CancellationToken ct)
+    {
+        if (!await access.CanTouchAppAsync(id, Capabilities.AppsEnv, ct)) return Forbid();
+
+        var (app, volume, normalised) = await ResolveAsync(id, volumeId, path, ct);
+        if (app is null || volume is null) return NotFound();
+        if (normalised.Length == 0) return NotFound();
+
+        var mint = await downloadTokens.MintAsync(app, volume, normalised, ct);
+        var link = $"{Request.Scheme}://{Request.Host}/dl/{mint.Token}";
+
+        await audit.LogAsync(
+            "app.data_link_minted", "app", $"{app.Name}:{volume.Name}/{normalised}", ClientIp, ct: ct);
+
+        // A Unix timestamp, not a formatted date string: TempData's own serializer round-trips a
+        // date-shaped string back as a boxed DateTime rather than a string, which silently breaks an
+        // `as string` read on the far side of the redirect — and `long` is not one of the types that
+        // serializer accepts at all, so this is an `int`, wide enough for a token that dies an hour
+        // after it is minted.
+        TempData["DownloadLinkExpiresAtUnix"] = checked((int)mint.ExpiresAt.ToUnixTimeSeconds());
+        TempData["DownloadLink"] = link;
+
+        // Not Back(): that helper also writes TempData["Message"], and this redirect has nothing to
+        // say through that key — only through the two above.
+        return RedirectToAction(nameof(Index), new
+        {
+            id,
+            volumeId,
+            path = VolumePath.ParentOf(normalised) ?? string.Empty
+        });
     }
 
     [HttpPost("upload")]
