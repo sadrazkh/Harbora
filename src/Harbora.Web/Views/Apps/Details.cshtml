@@ -628,11 +628,11 @@
                     <dt class="text-ink-faint">@(isFa ? "اندازهٔ نمونه" : "Instance size")</dt>
                     @if (app.InstanceSizeKey is null)
                     {
-                        <dd class="text-ink">@(isFa ? "بدون سقف" : "No limit")</dd>
+                        <dd class="text-ink" data-instance-size-state="no-limit">@(isFa ? "بدون سقف" : "No limit")</dd>
                     }
                     else if (Model.InstanceSize is { } size)
                     {
-                        <dd class="text-ink">
+                        <dd class="text-ink" data-instance-size-state="known">
                             @(isFa ? size.NameFa : size.Name)
                             <span class="text-ink-faint">
                                 · @size.CpuCores.ToString("0.##") @(isFa ? "هسته" : "vCPU")
@@ -645,7 +645,7 @@
                     {
                         @* The key on this app matches no InstanceSize row — its limits are unknown,
                            not zero. Rendering a row of zeroes here would say something false. *@
-                        <dd class="text-ink-faint">@(isFa ? "نامشخص" : "Unknown")</dd>
+                        <dd class="text-ink-faint" data-instance-size-state="unknown">@(isFa ? "نامشخص" : "Unknown")</dd>
                     }
                 </div>
                 <div>
@@ -658,7 +658,7 @@
                 </div>
                 <div class="col-span-2">
                     <dt class="text-ink-faint">@(isFa ? "سرور" : "Server")</dt>
-                    <dd class="text-ink truncate">@(Model.Server?.Name ?? (isFa ? "نامشخص" : "Unknown"))</dd>
+                    <dd class="text-ink truncate" data-spec-server="@(Model.Server?.Name ?? "unknown")">@(Model.Server?.Name ?? (isFa ? "نامشخص" : "Unknown"))</dd>
                 </div>
                 <div class="col-span-2">
                     <dt class="text-ink-faint">@(isFa ? "نام کانتینر" : "Container name")</dt>
@@ -679,7 +679,20 @@
                    and never a hint to just try again. *@
                 <div class="col-span-2">
                     <dt class="text-ink-faint">@(isFa ? "وضعیت زندهٔ کانتینر" : "Live status")</dt>
-                    @if (Model.LiveContainer is { } live)
+                    @if (app.Kind == ServiceKind.Cron)
+                    {
+                        @* A cron service has no long-running container between runs, so there is
+                           nothing here to inspect — that is not the same reason a remote node gives,
+                           and blaming the engine for it would be honest about the symptom and wrong
+                           about the cause. Scheduled runs, above, is where this kind of app's status
+                           actually lives. *@
+                        <dd class="text-ink-faint" data-spec-health="not-applicable">
+                            @(isFa
+                                ? "این اپ یک کار زمان‌بندی‌شده است؛ بین اجراها کانتینر درازمدتی برای بررسی وضعیت وجود ندارد."
+                                : "This app is a scheduled job — there is no long-running container between runs to check the status of.")
+                        </dd>
+                    }
+                    else if (Model.LiveContainer is { } live)
                     {
                         var health = live.Healthy switch { true => "healthy", false => "unhealthy", null => "not-checked" };
                         var healthLabel = (live.Healthy, isFa) switch
@@ -721,11 +734,12 @@
                     @if (Model.LiveContainer?.ImageDigest is { } digest)
                     {
                         <dd class="text-ink font-mono truncate" dir="ltr" data-copy-text
+                            data-spec-digest="@digest"
                             title="@(isFa ? "برای کپی کلیک کنید" : "Click to copy")">@digest</dd>
                     }
                     else
                     {
-                        <dd class="text-ink-faint">@(isFa ? "نامشخص" : "Unknown")</dd>
+                        <dd class="text-ink-faint" data-spec-digest="none">@(isFa ? "نامشخص" : "Unknown")</dd>
                     }
                 </div>
             </dl>
