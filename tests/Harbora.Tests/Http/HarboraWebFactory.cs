@@ -45,7 +45,8 @@ namespace Harbora.Tests;
 /// own address is what separate clients are.</item>
 /// </list>
 /// </summary>
-public sealed class HarboraWebFactory(int? imageRetentionCount = null, string? learningChaptersRoot = null)
+public sealed class HarboraWebFactory(
+    int? imageRetentionCount = null, string? learningChaptersRoot = null, bool backupFeatureEnabled = false)
     : WebApplicationFactory<Program>
 {
     /// <summary>Header carrying the address the request should appear to come from.</summary>
@@ -108,6 +109,11 @@ public sealed class HarboraWebFactory(int? imageRetentionCount = null, string? l
         // docs/tutorial.
         if (learningChaptersRoot is not null)
             builder.UseSetting("Learning:ChaptersRoot", learningChaptersRoot);
+
+        // Off by default (appsettings.json: "Backup": false) — BackupCenterController 404s every
+        // route while it is, on purpose. A test proving something on those routes has to ask for it.
+        if (backupFeatureEnabled)
+            builder.UseSetting("Features:Backup", "true");
 
         builder.ConfigureTestServices(services =>
         {

@@ -745,6 +745,77 @@
             </dl>
         </section>
 
+        @* ---- Instant backup (sub-project E, Task 2) ----
+           "Back up now" beside the address and specifics blocks B1, B2 and B3 built here. It states
+           what it would capture before it does anything — an archive of nothing presented as a
+           success is exactly what this must not be — and a Cron or ReleaseTask app with no running
+           container and no volumes still gets an honest description of what a backup would contain,
+           the same rule B3 settled for health and uptime, rather than a hidden or disabled control. *@
+        <section class="rounded-xl border border-line bg-surface p-4"
+                 data-instant-backup-state="@(Model.HasBackupRepository ? "ready" : "no-repository")"
+                 data-instant-backup-volume-count="@Model.BackupVolumes.Count"
+                 data-instant-backup-env-count="@app.EnvironmentVariables.Count">
+            <div class="mb-2 font-semibold">@(isFa ? "پشتیبان‌گیری فوری" : "Back up now")</div>
+            <p class="text-xs text-ink-faint mb-2">
+                @(isFa ? "این پشتیبان شامل موارد زیر خواهد بود:" : "This backup would include:")
+            </p>
+            <ul class="text-xs text-ink space-y-1 mb-3">
+                @if (Model.BackupVolumes.Count > 0)
+                {
+                    <li>
+                        @(isFa ? "والیوم‌های داده: " : "Data volumes: ")
+                        @for (var i = 0; i < Model.BackupVolumes.Count; i++)
+                        {
+                            var volume = Model.BackupVolumes[i];
+                            <span data-instant-backup-volume="@volume.Name">@volume.Name (@volume.MountPath)</span>@(i < Model.BackupVolumes.Count - 1 ? ", " : "")
+                        }
+                    </li>
+                }
+                else
+                {
+                    @* B3's rule for an empty state, applied here: say what is known, and say when
+                       there is nothing — never hide the control or offer an empty archive as if it
+                       were a real one. A Cron or ReleaseTask app has no running container and
+                       typically no volumes at all, so this is the ordinary case for it, not an error. *@
+                    <li>
+                        @(isFa
+                            ? "بدون والیوم داده — فقط تعریف اپ (و در صورت وجود، ارجاع ایمیج آن) ذخیره می‌شود."
+                            : "No data volumes — only the app's own definition (and its image reference, if it has deployed) would be captured.")
+                    </li>
+                }
+                <li>
+                    @(isFa
+                        ? $"{app.EnvironmentVariables.Count} متغیر محیطی ({app.EnvironmentVariables.Count(e => e.IsSecret)} مورد رمز است و مقدارش وارد پشتیبان نمی‌شود)."
+                        : $"{app.EnvironmentVariables.Count} environment variable(s) ({app.EnvironmentVariables.Count(e => e.IsSecret)} secret, whose value is never included).")
+                </li>
+                <li data-instant-backup-image="@(app.ActiveDeploymentId is null ? "none" : "captured")">
+                    @(app.ActiveDeploymentId is null
+                        ? (isFa
+                            ? "این اپ هنوز دیپلوی نشده، پس ارجاع ایمیجی برای ثبت وجود ندارد."
+                            : "This app has never deployed, so there is no image reference to capture yet.")
+                        : (isFa
+                            ? "ارجاع ایمیج نسخهٔ در حال اجرا"
+                            : "The image reference of the version currently running."))
+                </li>
+            </ul>
+            @if (Model.HasBackupRepository)
+            {
+                <form asp-controller="Apps" asp-action="BackupNow" asp-route-id="@Model.Id" method="post">
+                    @Html.AntiForgeryToken()
+                    <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-sm font-semibold">
+                        @(isFa ? "پشتیبان‌گیری فوری" : "Back up now")
+                    </button>
+                </form>
+            }
+            else
+            {
+                <p class="text-xs text-ink-faint">
+                    @(isFa ? "هنوز مخزن پشتیبانی تنظیم نشده است. " : "No backup repository is set up yet. ")<a
+                        href="/backup-center" class="text-accent-text hover:underline">@(isFa ? "ساخت یکی" : "Set one up")</a>
+                </p>
+            }
+        </section>
+
         @* ---- Domains ----
            The status shown here is probed, not configured: DNS is resolved and a real TLS handshake
            is made. The old "SSL" badge only meant a checkbox was ticked, so a domain that had never

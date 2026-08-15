@@ -137,6 +137,40 @@ public class QuotaRefusalBilingualismTests
         public Task<ProxyApplyResult> ApplyAllAsync(Guid? callerWorkspaceId, CancellationToken ct) => throw NotNeeded();
     }
 
+    /// <summary>
+    /// Sub-project E, Task 2: AppsController now takes a <c>BackupSnapshotService</c> for its
+    /// "Back up now" action, which Start/Restart never reach — a real service still has to be
+    /// constructed (it is a concrete class, not something a controller test can leave null), so its
+    /// own sub-dependencies are every one of these, throwing if anything here ever calls them.
+    /// </summary>
+    private sealed class UnusedBackupDependency :
+        Harbora.Modules.Backup.Contracts.IBackupEngineResolver,
+        Harbora.Modules.Backup.Infrastructure.IRepositoryCredentialReader,
+        Harbora.Modules.Backup.Infrastructure.IBackupTargetResolver,
+        Harbora.Modules.Backup.Contracts.IBackupNotificationService
+    {
+        private static NotSupportedException NotNeeded() =>
+            new("This dependency is not reached by Start/Restart and should not have been called.");
+
+        public Harbora.Modules.Backup.Contracts.IBackupEngine Resolve(
+            Harbora.Modules.Backup.Contracts.BackupEngineKind kind) => throw NotNeeded();
+        public IReadOnlyCollection<Harbora.Modules.Backup.Contracts.BackupEngineKind> Available => throw NotNeeded();
+
+        public Task<string?> GetPasswordAsync(Guid repositoryId, CancellationToken ct) => throw NotNeeded();
+        public Task<Harbora.Modules.Backup.Contracts.RepositoryCredentials?> GetCredentialsAsync(
+            Guid repositoryId, CancellationToken ct) => throw NotNeeded();
+
+        public Harbora.Modules.Backup.Infrastructure.ResolvedTarget Validate(
+            Harbora.Modules.Backup.Contracts.BackupTargetType targetType, string targetRef) => throw NotNeeded();
+        public Task<Harbora.Modules.Backup.Infrastructure.TargetLease> AcquireAsync(
+            Harbora.Modules.Backup.Contracts.BackupTargetType targetType, string targetRef, Guid snapshotId,
+            CancellationToken ct) => throw NotNeeded();
+
+        public Task SendAsync(
+            Harbora.Modules.Backup.Contracts.BackupNotification notification, CancellationToken ct) =>
+            throw NotNeeded();
+    }
+
     private static (HarboraDbContext Db, AppsController Controller, Guid AppId) BuildAppsFixture()
     {
         var workspaceId = Guid.CreateVersion7();
@@ -192,7 +226,12 @@ public class QuotaRefusalBilingualismTests
                     new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
             runtimeOptions: Microsoft.Extensions.Options.Options.Create(
                 new Harbora.Infrastructure.Deployments.HarboraRuntimeOptions()),
-            addresses: new Harbora.Infrastructure.Networking.AppAddressAssigner(db, new ConfigurationBuilder().Build()))
+            addresses: new Harbora.Infrastructure.Networking.AppAddressAssigner(db, new ConfigurationBuilder().Build()),
+            backupSnapshots: new Harbora.Modules.Backup.Infrastructure.BackupSnapshotService(
+                db, new UnusedBackupDependency(), new UnusedBackupDependency(), new UnusedBackupDependency(),
+                new NoopJobQueue(), new UnusedBackupDependency(), currentUser, new SilentAudit(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<
+                    Harbora.Modules.Backup.Infrastructure.BackupSnapshotService>.Instance))
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };

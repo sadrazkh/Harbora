@@ -105,6 +105,21 @@ public sealed class RestoreService(
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // No WorkspaceId filter is written here on purpose — db.BackupSnapshots already carries one
+        // (HarboraDbContext, HasQueryFilter on CurrentWorkspaceId), scoped to whoever the ambient
+        // ICurrentUser is. A snapshot from another workspace is therefore already indistinguishable
+        // from one that does not exist, which is exactly the "not theirs, or not there" answer this
+        // module gives everywhere else (see ProjectAccessService.CanTouchAppAsync's own comment).
+        //
+        // instant-app-backup, sub-project E, Task 1: this is also why a restore cannot be pointed at
+        // a DIFFERENT workspace than the one that owns the snapshot — RestoreRequest and RestoreJob
+        // carry no destination-workspace field, and nothing above unscopes this query. If a future
+        // change adds one — "restore this backup into workspace B" — read this comment first: the
+        // tenant filter above would still confine which snapshot could even be NAMED to the caller's
+        // own workspace, so the field would need the filter relaxed too, and relaxing it here is what
+        // would let one tenant's secrets (an application backup's environment names, a database
+        // dump) be restored into a workspace that never held them. That is not a change to make
+        // without the same secret-handling decision the spec asked for out loud, not inferred later.
         var snapshot = await db.BackupSnapshots
             .FirstOrDefaultAsync(s => s.Id == request.SnapshotId, ct);
 

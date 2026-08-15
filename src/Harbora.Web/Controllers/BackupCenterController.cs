@@ -1,9 +1,14 @@
 using Harbora.Application.Abstractions;
+using Harbora.Data;
+using Harbora.Domain.Common;
+using Harbora.Domain.Deployments;
+using Harbora.Infrastructure.Deployments;
 using Harbora.Modules.Backup.Contracts;
 using Harbora.Modules.Backup.Domain;
 using Harbora.Modules.Backup.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace Harbora.Web.Controllers;
@@ -24,13 +29,15 @@ namespace Harbora.Web.Controllers;
 [Authorize]
 [Route("backup-center")]
 public sealed class BackupCenterController(
+    HarboraDbContext db,
     BackupRepositoryService repositories,
     BackupSnapshotService snapshots,
     BackupPolicyService policies,
     RestoreService restores,
     ICurrentUser currentUser,
     IOptions<BackupFeatureOptions> features,
-    IOptions<BackupModuleOptions> moduleOptions) : Controller
+    IOptions<BackupModuleOptions> moduleOptions,
+    IOptions<HarboraRuntimeOptions> runtimeOptions) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private bool Enabled => features.Value.Backup;
@@ -185,8 +192,57 @@ public sealed class BackupCenterController(
             RepositoryName = repositoryName,
             CurrentPath = path,
             Entries = snapshot.IsRestorable ? await snapshots.BrowseAsync(id, path, ct) : [],
-            RestoreRoot = moduleOptions.Value.RestoreRoot
+            RestoreRoot = moduleOptions.Value.RestoreRoot,
+            RestoreImageIsInstant = await RestoreImageIsInstantAsync(snapshot, ct)
         });
+    }
+
+    /// <summary>
+    /// Sub-project E, Task 3: whether the image this application backup would restore onto is still
+    /// pullable — F's exact question (<c>DeploymentPlanning.RollbackEligibleDeploymentIds</c>,
+    /// <c>2026-08-15-rollback-depth-design</c>), asked about a backup instead of a Deployments-tab
+    /// row, and answered from the same rule so the two can never disagree.
+    ///
+    /// <para>
+    /// Null for anything that is not <see cref="BackupTargetType.Application"/> — the question has no
+    /// meaning for a directory, database or volume backup, none of which name an image at all.
+    /// </para>
+    /// <para>
+    /// The deployment a restore would need is the one <c>ApplicationTargetStager</c> read
+    /// <c>App.ActiveDeploymentId</c> from at backup time, which this method was not given (the file
+    /// carrying it is inside the encrypted archive, not a queryable column — reading it back would
+    /// mean restoring the archive just to look, which is not a GET request's business). It is
+    /// approximated instead as the newest succeeded deployment at or before the snapshot's
+    /// <c>StartedAt</c> — exactly when the stager ran — checked against
+    /// <see cref="DeploymentPlanning.RollbackEligibleDeploymentIds"/> computed from the app's CURRENT
+    /// history, so the answer moves with the pruner rather than needing a second column to agree
+    /// with it. False, not null, when the app no longer exists or never had a succeeded deployment
+    /// before the backup was taken — either way there is no image to call instant.
+    /// </para>
+    /// </summary>
+    private async Task<bool?> RestoreImageIsInstantAsync(BackupSnapshot snapshot, CancellationToken ct)
+    {
+        if (snapshot.TargetType != BackupTargetType.Application) return null;
+        if (!Guid.TryParse(snapshot.TargetRef, out var appId)) return null;
+
+        var app = await db.Apps.AsNoTracking().FirstOrDefaultAsync(a => a.Id == appId, ct);
+        if (app is null) return false;
+
+        var deployments = await db.Deployments.AsNoTracking()
+            .Where(d => d.AppId == appId).ToListAsync(ct);
+
+        var capturedAt = snapshot.StartedAt ?? snapshot.CreatedAt;
+        var captured = deployments
+            .Where(d => d.Status == DeploymentStatus.Succeeded && d.CreatedAt <= capturedAt)
+            .OrderByDescending(d => d.Number)
+            .FirstOrDefault();
+
+        if (captured is null || string.IsNullOrWhiteSpace(captured.ImageTag)) return false;
+
+        var eligible = DeploymentPlanning.RollbackEligibleDeploymentIds(
+            deployments, app.ActiveDeploymentId, runtimeOptions.Value.ImageRetentionCount);
+
+        return eligible.Contains(captured.Id);
     }
 
     /// <summary>
