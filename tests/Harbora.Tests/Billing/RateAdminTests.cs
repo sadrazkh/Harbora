@@ -648,9 +648,10 @@ public class RateAdminTests
             .Select(m => m.Groups["id"].Value)
             .ToList();
 
-        boxes.Should().HaveCount(8,
-            "two price boxes on each of the four forms — a new one must be labelled too, so it has "
-            + "to change this number rather than slip past it");
+        boxes.Should().HaveCount(10,
+            "two price boxes on each of the four plan and size forms, plus the two on the per-server "
+            + "price matrix — a new one must be labelled too, so it has to change this number rather "
+            + "than slip past it");
 
         foreach (var id in boxes)
         {
@@ -661,5 +662,62 @@ public class RateAdminTests
             var end = markup.IndexOf("</label>", at, StringComparison.Ordinal);
             markup[start..end].Should().Contain("isFa ?", $"the label for '{id}' must read in both languages");
         }
+    }
+
+    // ---- the per-server matrix, where an empty box means the opposite of what it means above ------
+
+    [Fact]
+    public void A_per_server_price_box_prints_the_rate_it_would_inherit_inside_itself()
+    {
+        // The one real trap on this page. An empty price box means "not priced" in all four forms
+        // above and "inherit the tier's rate" in the matrix — opposite meanings in identical
+        // controls. A note underneath is not where somebody scanning a grid of them reads the
+        // difference, so each box carries the figure it would inherit as its own placeholder.
+        //
+        // Asserted on the markup because there is nothing else to assert it on: the mistake is a
+        // placeholder somebody deletes while tidying, and no behaviour changes when they do.
+        var markup = Markup;
+
+        var start = markup.IndexOf("asp-action=\"SetServerPrice\"", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(-1, "the per-server price form must exist");
+
+        var form = markup[start..markup.IndexOf("</form>", start, StringComparison.Ordinal)];
+
+        foreach (var box in new[] { "runningRate", "stoppedRate" })
+        {
+            var at = form.IndexOf($"name=\"{box}\"", StringComparison.Ordinal);
+            at.Should().BeGreaterThan(-1, $"the matrix must post '{box}'");
+
+            // The placeholder for that input: from the box's name to the end of its tag.
+            var tag = form[at..form.IndexOf("/>", at, StringComparison.Ordinal)];
+
+            tag.Should().Contain("placeholder=",
+                $"'{box}' must say what leaving it empty would inherit");
+            tag.Should().Contain("global",
+                $"'{box}''s placeholder must name the global rate it falls back to, in English");
+            tag.Should().Contain("سراسری",
+                $"'{box}''s placeholder must name the global rate it falls back to, in Persian");
+        }
+    }
+
+    [Fact]
+    public void Withdrawing_a_tier_from_a_server_posts_a_value_rather_than_an_absence()
+    {
+        // An unchecked checkbox posts nothing at all, so a form with only the checkbox would leave
+        // the action reading a withdrawal out of a missing key — correct by accident of model
+        // binding, and silently wrong the day the parameter gains a different default. The hidden
+        // false in front of it makes "not offered" something somebody sent.
+        var markup = Markup;
+
+        var start = markup.IndexOf("asp-action=\"SetServerPrice\"", StringComparison.Ordinal);
+        var form = markup[start..markup.IndexOf("</form>", start, StringComparison.Ordinal)];
+
+        var hiddenAt = form.IndexOf("type=\"hidden\" name=\"offered\" value=\"false\"", StringComparison.Ordinal);
+        var checkboxAt = form.IndexOf("type=\"checkbox\"", StringComparison.Ordinal);
+
+        hiddenAt.Should().BeGreaterThan(-1, "the form must post a false for an unchecked box");
+        checkboxAt.Should().BeGreaterThan(hiddenAt,
+            "the hidden false has to come FIRST — last value wins, so after the checkbox it would "
+            + "overwrite a tick and no tier could ever be offered");
     }
 }

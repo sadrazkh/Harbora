@@ -93,6 +93,8 @@ public sealed class PlansController(
             StoragePlans = await db.StoragePlans.OrderBy(p => p.SortOrder).ThenBy(p => p.MonthlyPrice).ToListAsync(ct)
         };
 
+        if (IsProvider) vm.ServerPrices = await ReadPriceMatrixAsync(vm.Sizes, ct);
+
         // Who a limit change would already be biting. Shown because lowering a limit does not take
         // anything away — so without this it is a decision whose effect nobody sees.
         //
@@ -109,6 +111,133 @@ public sealed class PlansController(
         }
 
         return View(vm);
+    }
+
+    /// <summary>
+    /// Every server crossed with every tier, and what each pair costs.
+    ///
+    /// <para>
+    /// Built for a server that has no rows at all as readily as for one that has them: an absent row
+    /// is not a gap in the matrix, it is a server offering the tier at the tier's own price, and a
+    /// matrix that only listed the pairs somebody had already priced would give an operator nowhere
+    /// to price the rest.
+    /// </para>
+    /// </summary>
+    private async Task<List<ServerPriceRowViewModel>> ReadPriceMatrixAsync(
+        List<InstanceSize> sizes, CancellationToken ct)
+    {
+        var servers = await db.Servers.AsNoTracking()
+            .OrderByDescending(s => s.IsLocal).ThenBy(s => s.Name).ToListAsync(ct);
+
+        var offers = await db.ServerInstanceOffers.AsNoTracking().ToListAsync(ct);
+
+        return servers.Select(server => new ServerPriceRowViewModel(
+            server.Id, server.Name, server.Hostname, server.IsLocal,
+            sizes.Select(size =>
+            {
+                var offer = offers.FirstOrDefault(o =>
+                    o.ServerId == server.Id && o.InstanceSizeKey == size.Key);
+
+                return new ServerPriceCellViewModel(
+                    size.Key,
+                    string.IsNullOrWhiteSpace(size.Name) ? size.Key : size.Name,
+                    InstanceSizeFamily.Normalise(size.Family),
+                    // No row means offered. A provider who has never opened this screen offers
+                    // everything, which is what the platform did before the table existed.
+                    IsOffered: Harbora.Infrastructure.Billing.ServerRates.OffersNewWork(offer),
+                    offer?.RunningRatePerHourMinor,
+                    offer?.StoppedRatePerHourMinor,
+                    size.RunningRatePerHourMinor,
+                    size.StoppedRatePerHourMinor);
+            }).ToList())).ToList();
+    }
+
+    /// <summary>
+    /// Sets what one server charges for one tier, or takes the tier off that server.
+    ///
+    /// <para>
+    /// <b>An empty box here means "inherit the tier's rate", which is the opposite of what an empty
+    /// box means everywhere else on this screen.</b> There a blank says nobody has priced the thing;
+    /// here it says nobody has overridden it. The two compose without ambiguity — inheriting an
+    /// unpriced tier leaves it unpriced and the hourly pass reports it — but they are identical
+    /// controls with opposite meanings, so the form prints the inherited figure inside the box as its
+    /// placeholder rather than explaining the difference in a note under a grid.
+    /// </para>
+    ///
+    /// <para>
+    /// A row is written even when both boxes are blank and the tier is offered, which looks like
+    /// storing nothing. It is not: the row is what a later withdrawal or price hangs off, and the
+    /// alternative — deleting it — would make "offered at the global price" and "never configured"
+    /// two states an operator cannot tell apart on the screen they configure it from.
+    /// </para>
+    /// </summary>
+    [HttpPost("servers/{serverId:guid}/sizes/{sizeKey}")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.PlansManage)]
+    public async Task<IActionResult> SetServerPrice(
+        Guid serverId, string sizeKey, bool offered, string? runningRate, string? stoppedRate,
+        CancellationToken ct)
+    {
+        if (!IsProvider) return Forbid();
+
+        var server = await db.Servers.FirstOrDefaultAsync(s => s.Id == serverId, ct);
+        if (server is null) return NotFound();
+
+        // Normalised and then checked against a real tier. A row whose key matches no size prices
+        // nothing and would sit in the matrix for ever looking like a decision somebody made.
+        var key = InstanceSizeKey.Normalise(sizeKey);
+        if (key is null || !await db.InstanceSizes.AnyAsync(s => s.Key == key, ct)) return NotFound();
+
+        // Both boxes read before anything is written, the rule the plan and size forms already follow:
+        // a row saved with one rate accepted and the other refused is a price the form said it had
+        // not set.
+        if (ReadRate(runningRate, RunningRateEn, RunningRateFa, out var runningMinor) is { } refusal)
+            return Refuse(refusal);
+        if (ReadRate(stoppedRate, StoppedRateEn, StoppedRateFa, out var stoppedMinor) is { } stoppedRefusal)
+            return Refuse(stoppedRefusal);
+
+        var offer = await db.ServerInstanceOffers
+            .FirstOrDefaultAsync(o => o.ServerId == serverId && o.InstanceSizeKey == key, ct);
+
+        if (offer is null)
+        {
+            offer = new Harbora.Domain.Servers.ServerInstanceOffer
+            {
+                ServerId = serverId,
+                InstanceSizeKey = key
+            };
+            db.ServerInstanceOffers.Add(offer);
+        }
+
+        offer.IsOffered = offered;
+        offer.RunningRatePerHourMinor = runningMinor;
+        offer.StoppedRatePerHourMinor = stoppedMinor;
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("billing.server_size_rates", "server_instance_offer",
+            $"{serverId}:{key}", ClientIp,
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+            {
+                serverId,
+                instanceSizeKey = key,
+                // Null stays null in the record for the reason it stays null in the column: "priced
+                // at nothing" and "inherits the tier" are different decisions to have to defend.
+                runningRatePerHourMinor = offer.RunningRatePerHourMinor,
+                stoppedRatePerHourMinor = offer.StoppedRatePerHourMinor,
+                isOffered = offer.IsOffered
+            }), ct: ct);
+
+        // Says what withdrawing does not do, because that is the half an operator will assume wrongly.
+        TempData["Message"] = offered
+            ? IsFa
+                ? $"قیمت «{key}» روی «{server.Name}» ذخیره شد. از تیک ساعت بعد اعمال می‌شود."
+                : $"'{key}' priced on '{server.Name}'. It applies from the next hourly tick."
+            : IsFa
+                ? $"«{key}» دیگر روی «{server.Name}» ارائه نمی‌شود. آنچه همین حالا آنجا اجرا می‌شود سر جایش می‌ماند و با همان نرخ حساب می‌شود."
+                : $"'{key}' is no longer offered on '{server.Name}'. What is already running there stays, " +
+                  "and goes on being charged at its rate.";
+
+        return RedirectToAction(nameof(Index));
     }
 
     /// <summary>
@@ -305,7 +434,7 @@ public sealed class PlansController(
     [Authorize(Policy = Capabilities.PlansManage)]
     public async Task<IActionResult> CreateSize(
         string key, string name, double cpuCores, long memoryMb, long diskGb, int sortOrder,
-        string? runningRate, string? stoppedRate, CancellationToken ct)
+        string? runningRate, string? stoppedRate, CancellationToken ct, string? family = null)
     {
         var slug = Harbora.Infrastructure.Tenancy.InstanceSizeKey.Normalise(key);
         if (slug is null)
@@ -332,6 +461,11 @@ public sealed class PlansController(
             Key = slug,
             Name = string.IsNullOrWhiteSpace(name) ? slug : name.Trim(),
             NameFa = string.IsNullOrWhiteSpace(name) ? slug : name.Trim(),
+            // Normalised rather than stored as typed: "Memory" on one tier and "memory" on the next
+            // would split one tab of the chooser into two, each holding half the tiers. A family the
+            // form did not offer is kept as its own — the provider may be selling something this
+            // build has no word for, and the chooser shows it under that word.
+            Family = InstanceSizeFamily.Normalise(family),
             CpuCores = cpuCores,
             MemoryBytes = memoryMb * 1024 * 1024,
             DiskBytes = diskGb * 1024 * 1024 * 1024,
@@ -363,7 +497,7 @@ public sealed class PlansController(
     [Authorize(Policy = Capabilities.PlansManage)]
     public async Task<IActionResult> UpdateSize(
         Guid id, string name, double cpuCores, long memoryMb, long diskGb, int sortOrder,
-        string? runningRate, string? stoppedRate, CancellationToken ct)
+        string? runningRate, string? stoppedRate, CancellationToken ct, string? family = null)
     {
         var size = await db.InstanceSizes.FirstOrDefaultAsync(s => s.Id == id, ct);
         if (size is null) return NotFound();
@@ -374,6 +508,9 @@ public sealed class PlansController(
             return Refuse(stoppedRefusal);
 
         size.Name = string.IsNullOrWhiteSpace(name) ? size.Name : name.Trim();
+        // Moving a tier between families changes which tab of the chooser it appears under and
+        // nothing else — no limit, no price and no running instance is touched by it.
+        size.Family = InstanceSizeFamily.Normalise(family);
         size.CpuCores = cpuCores;
         size.MemoryBytes = memoryMb * 1024 * 1024;
         size.DiskBytes = diskGb * 1024 * 1024 * 1024;

@@ -21,13 +21,26 @@
     // resource the hourly meter cannot charge for and an operator has to come back to, and "free"
     // is a decision somebody made. Shown in the lists as well as in the forms, because the whole
     // point of the distinction is that an unpriced tier is visible before a month of it has gone by.
-    string Rate(long? minor) => minor is null
-        ? (isFa ? "قیمت‌گذاری‌نشده" : "not priced")
-        : minor.Value == 0
-            ? (isFa ? "رایگان" : "free")
-            : Harbora.Web.Infrastructure.MinorUnits.Format(minor.Value);
+    //
+    // Now one shared helper rather than a local copy of the rule: the same three outcomes are printed
+    // on the chooser, on both resize controls and on the bill, and a fifth copy is a fifth chance to
+    // lose the distinction.
+    string Rate(long? minor) => Harbora.Web.Infrastructure.RateDisplay.Hourly(minor, isFa);
+
+    // What that rate comes to over an average month, or nothing at all when there is no honest
+    // estimate. Printed only when it is there: a dash beside a real hourly figure would read as
+    // "this tier costs nothing per month".
+    string? Monthly(long? minor) => Harbora.Web.Infrastructure.RateDisplay.Monthly(minor, isFa);
 
     string RateClass(long? minor) => minor is null ? "text-warn" : "text-ink-muted";
+
+    string FamilyLabel(string? key) => Harbora.Infrastructure.Tenancy.InstanceSizeFamily.Label(key, isFa);
+
+    // The families the tiers on offer actually fall into, in the chooser's own order. Built from the
+    // rows rather than from the constant list, so a family the provider invented gets a heading here
+    // exactly as it gets a tab there.
+    var familiesOnOffer = Harbora.Infrastructure.Tenancy.InstanceSizeFamily
+        .Present(Model.Sizes.Select(s => s.Family));
 }
 <h1 class="text-2xl font-bold tracking-tight text-ink mb-1">@(isFa ? "پلن و مصرف" : "Plan &amp; Usage")</h1>
 <p class="text-ink-muted text-sm mb-6">@(isFa ? "پلن فعلی:" : "Current plan:") <span class="text-ink font-medium">@u.PlanName</span>
@@ -159,9 +172,20 @@
             <ul class="mt-3 space-y-1 border-t border-line pt-3 text-sm">
                 <li class="@RateClass(p.BaseRatePerHourMinor)">
                     @(isFa ? "حداقل هزینهٔ هر ساعت:" : "Hourly minimum:") <span dir="ltr">@Rate(p.BaseRatePerHourMinor)</span>
+                    @* The month beside the hour, because a floor per hour is not a figure anybody
+                       budgets in. Absent entirely for an unpriced floor rather than shown as a
+                       nought — see RateDisplay.Monthly. *@
+                    @if (Monthly(p.BaseRatePerHourMinor) is { } floorMonthly)
+                    {
+                        <span class="block text-xs text-ink-faint" dir="ltr">@floorMonthly @(isFa ? "در ماه (تخمینی)" : "/month (estimated)")</span>
+                    }
                 </li>
                 <li class="@RateClass(p.DiskGbHourMinor)">
                     @(isFa ? "دیسک — هر گیگابایت، هر ساعت:" : "Disk — per GB, per hour:") <span dir="ltr">@Rate(p.DiskGbHourMinor)</span>
+                    @if (Monthly(p.DiskGbHourMinor) is { } diskMonthly)
+                    {
+                        <span class="block text-xs text-ink-faint" dir="ltr">@diskMonthly @(isFa ? "در ماه، هر گیگابایت" : "/month per GB")</span>
+                    }
                 </li>
                 @if (p.AllowsOverage)
                 {
@@ -174,26 +198,65 @@
     }
 </div>
 
+@* ---- the tiers on offer ----
+   Grouped by family rather than listed flat, so this page reads the way the chooser it describes
+   does. The headings come from the rows, not from the constant list, so a family the provider
+   invented gets a heading here exactly as it gets a tab there. *@
 <h2 class="text-lg font-semibold text-ink mb-3">@(isFa ? "اندازه‌های منبع" : "Instance sizes")</h2>
-<div class="rounded-xl border border-line bg-surface divide-y divide-line mb-8">
-    @foreach (var s in Model.Sizes)
+<div class="space-y-4 mb-8">
+    @foreach (var family in familiesOnOffer)
     {
-        <div class="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
-            <span class="font-medium">@(isFa ? s.NameFa : s.Name) <span class="text-ink-faint font-mono">@s.Key</span></span>
-            <span class="flex flex-wrap items-center gap-x-3">
-                <span class="text-ink-muted" dir="ltr">@s.CpuCores vCPU · @Mem(s.MemoryBytes) · @Disk(s.DiskBytes)</span>
-                @* A tier with no price hosts every workload on it for nothing, and the hourly tick
-                   says so to nobody. Here it is on the list an operator already reads. *@
-                <span class="@RateClass(s.RunningRatePerHourMinor)">
-                    @(isFa ? "در حال اجرا — هر ساعت:" : "Running — per hour:") <span dir="ltr">@Rate(s.RunningRatePerHourMinor)</span>
+        var inFamily = Model.Sizes
+            .Where(s => Harbora.Infrastructure.Tenancy.InstanceSizeFamily.Normalise(s.Family) == family)
+            .ToList();
+
+        <section class="rounded-xl border border-line bg-surface overflow-hidden">
+            <div class="flex items-baseline justify-between gap-2 border-b border-line bg-surface-2 px-4 py-2.5">
+                <h3 class="text-sm font-semibold text-ink">@FamilyLabel(family)</h3>
+                <span class="text-[11px] text-ink-faint">
+                    @(isFa ? $"{inFamily.Count} اندازه" : inFamily.Count == 1 ? "1 size" : $"{inFamily.Count} sizes")
                 </span>
-                <span class="@RateClass(s.StoppedRatePerHourMinor)">
-                    @(isFa ? "متوقف — هر ساعت:" : "Stopped — per hour:") <span dir="ltr">@Rate(s.StoppedRatePerHourMinor)</span>
-                </span>
-            </span>
-        </div>
+            </div>
+            <div class="divide-y divide-line">
+                @foreach (var s in inFamily)
+                {
+                    <div class="flex flex-wrap items-center justify-between gap-3 p-3 text-sm">
+                        <span class="font-medium">@(isFa ? s.NameFa : s.Name) <span class="text-ink-faint font-mono">@s.Key</span></span>
+                        <span class="flex flex-wrap items-center gap-x-4 gap-y-1">
+                            <span class="text-ink-muted" dir="ltr">@s.CpuCores vCPU · @Mem(s.MemoryBytes) · @Disk(s.DiskBytes)</span>
+                            @* A tier with no price hosts every workload on it for nothing, and the
+                               hourly tick says so to nobody. Here it is on the list an operator
+                               already reads — with the month beside the hour, because an hourly
+                               figure alone is not what a customer is quoted. *@
+                            <span class="@RateClass(s.RunningRatePerHourMinor)">
+                                @(isFa ? "در حال اجرا:" : "Running:")
+                                <span dir="ltr">@Rate(s.RunningRatePerHourMinor)</span>
+                                @if (Monthly(s.RunningRatePerHourMinor) is { } runMonthly)
+                                {
+                                    <span class="text-ink-faint" dir="ltr">(@runMonthly @(isFa ? "در ماه" : "/mo"))</span>
+                                }
+                            </span>
+                            <span class="@RateClass(s.StoppedRatePerHourMinor)">
+                                @(isFa ? "متوقف:" : "Stopped:")
+                                <span dir="ltr">@Rate(s.StoppedRatePerHourMinor)</span>
+                                @if (Monthly(s.StoppedRatePerHourMinor) is { } stopMonthly)
+                                {
+                                    <span class="text-ink-faint" dir="ltr">(@stopMonthly @(isFa ? "در ماه" : "/mo"))</span>
+                                }
+                            </span>
+                        </span>
+                    </div>
+                }
+            </div>
+        </section>
     }
 </div>
+
+<p class="-mt-6 mb-8 text-xs text-ink-faint">
+    @(isFa
+        ? $"رقم ماهانه تخمینی است: نرخ ساعتی × {Harbora.Infrastructure.Billing.MonthlyEstimate.HoursPerMonth} ساعت (یک ماه میانگین). صورت‌حساب واقعی ساعت‌به‌ساعت و بر اساس همان ساعت‌هایی است که منبع روشن یا متوقف بوده."
+        : $"The monthly figure is an estimate: the hourly rate × {Harbora.Infrastructure.Billing.MonthlyEstimate.HoursPerMonth} hours, an average month. The real bill is hourly, for the hours the resource was actually running or stopped.")
+</p>
 
 @if (Model.IsProvider)
 {
@@ -218,6 +281,26 @@
                     <div>
                         <label class="form-label" for="sname-@s.Id">@(isFa ? "نام" : "Name") <code dir="ltr" class="text-[11px] font-normal text-ink-faint">@s.Key</code></label>
                         <input id="sname-@s.Id" name="name" value="@s.Name" class="form-control" />
+                    </div>
+                    @* Which tab of the chooser this tier appears under, and nothing else — no limit,
+                       no price and no running instance is touched by moving it. A family the form does
+                       not offer is kept rather than reset: it is listed as its own option below so
+                       saving the row does not silently reclassify somebody's tier. *@
+                    <div>
+                        <label class="form-label" for="sfam-@s.Id">@(isFa ? "خانواده" : "Family")</label>
+                        @{
+                            var currentFamily = Harbora.Infrastructure.Tenancy.InstanceSizeFamily.Normalise(s.Family);
+                            var familyOptions = Harbora.Infrastructure.Tenancy.InstanceSizeFamily.Known
+                                .Contains(currentFamily)
+                                ? Harbora.Infrastructure.Tenancy.InstanceSizeFamily.Known
+                                : Harbora.Infrastructure.Tenancy.InstanceSizeFamily.Known.Append(currentFamily);
+                        }
+                        <select id="sfam-@s.Id" name="family" class="form-control">
+                            @foreach (var option in familyOptions)
+                            {
+                                <option value="@option" selected="@(option == currentFamily)">@FamilyLabel(option)</option>
+                            }
+                        </select>
                     </div>
                     <div>
                         <label class="form-label" for="scpu-@s.Id">@(isFa ? "هسته" : "vCPU")</label>
@@ -270,6 +353,15 @@
                 <input id="new-size-name" name="name" class="form-control" placeholder="X-Large" />
             </div>
             <div>
+                <label class="form-label" for="new-size-family">@(isFa ? "خانواده" : "Family")</label>
+                <select id="new-size-family" name="family" class="form-control">
+                    @foreach (var option in Harbora.Infrastructure.Tenancy.InstanceSizeFamily.Known)
+                    {
+                        <option value="@option">@FamilyLabel(option)</option>
+                    }
+                </select>
+            </div>
+            <div>
                 <label class="form-label" for="new-size-cpu">@(isFa ? "هسته" : "vCPU")</label>
                 <input id="new-size-cpu" name="cpuCores" type="number" step="0.25" min="0" value="8" class="form-control" dir="ltr" />
             </div>
@@ -305,6 +397,137 @@
                 ? "در جعبه‌های قیمت، خالی یعنی «قیمت‌گذاری‌نشده» — نه رایگان. برای رایگان بودن عمدی، ۰ بنویسید."
                 : "In a price box, empty means 'not priced' — not free. Type 0 for deliberately free.")
         </p>
+    </section>
+}
+
+@if (Model.IsProvider && Model.ServerPrices.Count > 0)
+{
+    @* ---- what each server charges ----
+       A rate used to belong to a tier alone, which is right while every host is interchangeable and
+       wrong the moment one of them is a memory-heavy box that cost twice as much.
+
+       The trap on this screen, said where it bites: an empty price box means "not priced" in every
+       other form above, and means "inherit the tier's rate" here. Those are opposite meanings in
+       identical controls, and a note under a grid is not where somebody scanning one will read the
+       difference — so each empty box prints the figure it would inherit as its own placeholder. *@
+    <section class="mb-8 rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[15px] font-semibold text-ink mb-1">@(isFa ? "قیمت هر سرور" : "What each server charges")</h2>
+        <p class="text-xs text-ink-faint mb-1">
+            @(isFa
+                ? "همان اندازه می‌تواند روی سرورهای مختلف قیمت متفاوتی داشته باشد. جعبهٔ خالی یعنی «همان نرخ سراسری اندازه» — که با معنای خالی در فرم‌های بالا فرق دارد؛ نرخی که به ارث می‌رسد داخل خودِ جعبه نوشته شده است."
+                : "The same tier may cost different money on different servers. An empty box here means \"inherit the tier's own rate\" — which is NOT what an empty box means in the forms above; the figure it would inherit is printed inside the box.")
+        </p>
+        <p class="text-xs text-ink-faint mb-4">
+            @(isFa
+                ? "برداشتن تیک «ارائه می‌شود» فقط جلوی کارهای جدید را می‌گیرد. چیزی که همین حالا آنجا اجرا می‌شود متوقف نمی‌شود و با همان نرخش حساب می‌شود."
+                : "Clearing \"offered\" only stops new work. Nothing already running there is stopped, and it goes on being charged at its rate.")
+        </p>
+
+        <div class="space-y-5">
+            @foreach (var row in Model.ServerPrices)
+            {
+                <div class="rounded-lg border border-line bg-surface-2 p-3">
+                    <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                        <h3 class="text-sm font-semibold text-ink">
+                            @row.Name
+                            <span class="font-mono text-[11px] font-normal text-ink-faint" dir="ltr">@row.Hostname</span>
+                            @if (row.IsLocal)
+                            {
+                                <span class="status-pill bg-accent-soft text-accent-text">@(isFa ? "همین سرور" : "this server")</span>
+                            }
+                        </h3>
+                        @* The families this box actually offers, derived rather than stored. A server
+                           badged "memory-optimised" in a column of its own could contradict the tiers
+                           it offers, and nothing would report the disagreement. *@
+                        @{
+                            var offeredFamilies = Harbora.Infrastructure.Tenancy.InstanceSizeFamily
+                                .Present(row.Cells.Where(c => c.IsOffered).Select(c => c.Family));
+                        }
+                        <span class="flex flex-wrap gap-1">
+                            @if (offeredFamilies.Count == 0)
+                            {
+                                <span class="status-pill bg-warn-soft text-warn">
+                                    @(isFa ? "هیچ اندازه‌ای ارائه نمی‌شود" : "offers nothing")
+                                </span>
+                            }
+                            else
+                            {
+                                @foreach (var family in offeredFamilies)
+                                {
+                                    <span class="status-pill bg-surface text-ink-muted">@FamilyLabel(family)</span>
+                                }
+                            }
+                        </span>
+                    </div>
+
+                    <div class="space-y-2">
+                        @foreach (var cell in row.Cells)
+                        {
+                            <form asp-controller="Plans" asp-action="SetServerPrice"
+                                  asp-route-serverId="@row.ServerId" asp-route-sizeKey="@cell.SizeKey"
+                                  method="post"
+                                  class="grid items-end gap-2 rounded-lg border border-line bg-surface p-2.5 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
+                                @Html.AntiForgeryToken()
+
+                                <div class="min-w-0">
+                                    <div class="truncate text-sm text-ink">
+                                        @cell.SizeName
+                                        <code class="text-[11px] text-ink-faint" dir="ltr">@cell.SizeKey</code>
+                                    </div>
+                                    @* The effective figure, so an operator does not have to resolve
+                                       the precedence in their head across two columns. *@
+                                    <div class="text-[11px] text-ink-faint" dir="ltr">
+                                        @FamilyLabel(cell.Family) ·
+                                        @Harbora.Web.Infrastructure.RateDisplay.HourlyAndMonthly(cell.EffectiveRunningMinor, isFa)
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="form-label" for="offer-@row.ServerId-@cell.SizeKey">
+                                        @(isFa ? "ارائه می‌شود" : "Offered")
+                                    </label>
+                                    @* A hidden false before the checkbox: an unchecked box posts
+                                       nothing at all, and the action would then read the missing value
+                                       as false only by accident of model binding. Said explicitly, so
+                                       withdrawing a tier is a value somebody sent. *@
+                                    <input type="hidden" name="offered" value="false" />
+                                    <input id="offer-@row.ServerId-@cell.SizeKey" type="checkbox"
+                                           name="offered" value="true" checked="@cell.IsOffered"
+                                           class="mt-2 block" />
+                                </div>
+
+                                <div>
+                                    <label class="form-label" for="srun-@row.ServerId-@cell.SizeKey">
+                                        @(isFa ? "در حال اجرا — هر ساعت" : "Running — per hour")
+                                    </label>
+                                    <input id="srun-@row.ServerId-@cell.SizeKey" name="runningRate"
+                                           value="@Harbora.Web.Infrastructure.MinorUnits.Box(cell.RunningMinor)"
+                                           inputmode="decimal" autocomplete="off" class="form-control w-32" dir="ltr"
+                                           placeholder="@(cell.InheritedRunningMinor is { } inheritedRun
+                                               ? $"{Harbora.Web.Infrastructure.MinorUnits.Format(inheritedRun)} ({(isFa ? "سراسری" : "global")})"
+                                               : (isFa ? "سراسری: قیمت‌گذاری‌نشده" : "global: not priced"))" />
+                                </div>
+
+                                <div>
+                                    <label class="form-label" for="sstop-@row.ServerId-@cell.SizeKey">
+                                        @(isFa ? "متوقف — هر ساعت" : "Stopped — per hour")
+                                    </label>
+                                    <div class="flex items-center gap-2">
+                                        <input id="sstop-@row.ServerId-@cell.SizeKey" name="stoppedRate"
+                                               value="@Harbora.Web.Infrastructure.MinorUnits.Box(cell.StoppedMinor)"
+                                               inputmode="decimal" autocomplete="off" class="form-control w-32" dir="ltr"
+                                               placeholder="@(cell.InheritedStoppedMinor is { } inheritedStop
+                                                   ? $"{Harbora.Web.Infrastructure.MinorUnits.Format(inheritedStop)} ({(isFa ? "سراسری" : "global")})"
+                                                   : (isFa ? "سراسری: قیمت‌گذاری‌نشده" : "global: not priced"))" />
+                                        <button class="btn-primary shrink-0 px-3 py-2 text-sm">@(isFa ? "ذخیره" : "Save")</button>
+                                    </div>
+                                </div>
+                            </form>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
     </section>
 }
 
@@ -445,8 +668,12 @@
         <div class="space-y-4">
             @foreach (var p in Model.Plans)
             {
-                <details class="rounded-xl border border-line bg-surface-2" open="@(Model.Plans.Count == 1)">
-                    <summary class="flex cursor-pointer flex-wrap items-center justify-between gap-2 px-4 py-3">
+                @* One open card per plan rather than an accordion. A payment surface that hides what
+                   it charges behind a disclosure triangle makes checking two plans against each other
+                   a matter of remembering the first one — and the figures were already on the summary
+                   line precisely because nobody wanted to open the form to read them. *@
+                <div class="rounded-xl border border-line bg-surface-2">
+                    <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
                         <span class="flex items-center gap-2">
                             <strong class="text-sm text-ink">@(isFa ? p.NameFa : p.Name)</strong>
                             @if (p.IsDefault)
@@ -458,12 +685,17 @@
                                 <span class="status-pill bg-warn-soft text-warn">@(isFa ? "برداشته‌شده" : "withdrawn")</span>
                             }
                         </span>
-                        @* The summary line carries the figures, so the common case — checking a
-                           limit — does not need the form to be opened at all. *@
-                        <span class="text-xs text-ink-muted" dir="ltr">
-                            @Count(p.MaxApps) apps · @Count(p.MaxServices) db · @Mem(p.MaxMemoryBytes) · @Cores(p.MaxCpuCores) vCPU · @Disk(p.MaxDiskBytes)
+                        @* The heading line still carries the figures. It was written when the form
+                           below was folded away, and it earns its place either way: it is the row
+                           somebody scans when comparing plans, and the boxes below are what they
+                           change once they have found the one they meant. *@
+                        <span class="flex flex-wrap items-baseline gap-x-3 text-xs text-ink-muted" dir="ltr">
+                            <span>@Count(p.MaxApps) apps · @Count(p.MaxServices) db · @Mem(p.MaxMemoryBytes) · @Cores(p.MaxCpuCores) vCPU · @Disk(p.MaxDiskBytes)</span>
+                            <span class="@RateClass(p.BaseRatePerHourMinor)">
+                                @Harbora.Web.Infrastructure.RateDisplay.HourlyAndMonthly(p.BaseRatePerHourMinor, isFa)
+                            </span>
                         </span>
-                    </summary>
+                    </div>
 
                     <div class="border-t border-line p-4">
                         <form asp-controller="Plans" asp-action="UpdatePlan" asp-route-id="@p.Id" method="post"
@@ -568,7 +800,7 @@
                             </p>
                         </form>
                     </div>
-                </details>
+                </div>
             }
         </div>
     </section>
