@@ -154,6 +154,20 @@ public sealed class RemoteDockerEngine(
         var res = await Client().PostAsJsonAsync("agent/oneoff", request, Json, ct);
         res.EnsureSuccessStatusCode();
         var doc = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
+
+        // "output" is additive to the v1 contract: an agent built before this fix returns only
+        // exitCode, and its absence here is read as "no output" rather than an error, so an older
+        // agent behaves exactly as it does today instead of throwing. When it is present, replay
+        // it into the caller's log exactly the way a local run streams its container's output —
+        // including a truncation marker line, if the agent had to add one, which is what makes a
+        // one-off that printed too much say so instead of just going quiet.
+        if (log is not null && doc.TryGetProperty("output", out var output) &&
+            output.GetString() is { Length: > 0 } text)
+        {
+            foreach (var line in text.TrimEnd('\n').Split('\n'))
+                log.Report(line);
+        }
+
         return doc.GetProperty("exitCode").GetInt32();
     }
 

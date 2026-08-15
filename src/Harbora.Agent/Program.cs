@@ -118,7 +118,14 @@ app.MapPost("/agent/volumes/ensure", (NameBody b, IDockerEngine e, CancellationT
 app.MapPost("/agent/volumes/remove", (NameBody b, IDockerEngine e, CancellationToken ct) => e.RemoveVolumeAsync(b.Name, ct));
 
 app.MapPost("/agent/oneoff", async (DockerOneOffRequest req, IDockerEngine e, CancellationToken ct) =>
-    Results.Ok(new { exitCode = await e.RunOneOffAsync(req, null, ct) }));
+{
+    // Collected rather than streamed — the v1 agent contract is one request/one response, so the
+    // helper's output rides back as a JSON field alongside the exit code instead of being
+    // discarded. See RemoteDockerEngine.RunOneOffAsync for the panel side of this.
+    var capture = new CapturingProgress(CapturingProgress.DefaultMaxChars);
+    var exitCode = await e.RunOneOffAsync(req, capture, ct);
+    return Results.Ok(new { exitCode, output = capture.Text });
+});
 
 app.Run();
 
