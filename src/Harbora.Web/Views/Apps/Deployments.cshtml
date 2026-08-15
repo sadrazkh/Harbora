@@ -5,16 +5,40 @@
     // being retyped: same href, same condition (succeeded, and not the app's active deployment).
     Layout = "_Shell";
     ViewData["Title"] = Model.Name;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 }
 
 <div class="max-w-2xl">
     <section class="rounded-xl border border-line bg-surface">
         <div class="px-4 py-3 border-b border-line font-semibold">@T["Deployments"]</div>
+        @if (Model.Deployments.Any())
+        {
+            @* Sub-project F: one line, not a bare setting, saying where the instant-rollback line
+               falls and why — HarboraRuntimeOptions.ImageRetentionCount, read once by the controller
+               so this sentence and every row's own marker below can never disagree about the number.
+               data-image-retention-count carries the raw value for tests, since this panel renders
+               Persian by default and a sentence in either language is not what a test should pin. *@
+            <div class="px-4 py-2 border-b border-line text-xs text-ink-faint"
+                 data-image-retention-count="@Model.ImageRetentionCount">
+                @if (Model.ImageRetentionCount > 0)
+                {
+                    @(isFa
+                        ? $"«{Model.ImageRetentionCount}» استقرار اخیر را می‌توان فوراً بازگردانی کرد؛ استقرارهای قدیمی‌تر باید دوباره از مبدأ ساخته و مستقر شوند."
+                        : $"The last {Model.ImageRetentionCount} deployments can be rolled back to instantly; older ones must be redeployed from source.")
+                }
+                else
+                {
+                    @(isFa
+                        ? "نگهداری ایمیج غیرفعال است، پس هر استقراری که هنوز ایمیج دارد را می‌توان فوراً بازگردانی کرد."
+                        : "Image retention is turned off, so every deployment that still has a build image can be rolled back to instantly.")
+                }
+            </div>
+        }
         <div class="divide-y divide-line">
             @if (!Model.Deployments.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
             @foreach (var d in Model.Deployments)
             {
-                <div class="flex items-center justify-between p-3">
+                <div class="flex items-center justify-between p-3" data-deployment-number="@d.Number">
                     <a href="/deployments/details/@d.Id" class="min-w-0">
                         <div class="text-sm font-medium">#@d.Number · @d.Trigger</div>
                         <div class="text-xs text-ink-faint truncate">@(d.CommitMessage ?? d.GitRef) @(d.CommitSha is not null ? "· " + d.CommitSha[..Math.Min(7, d.CommitSha.Length)] : "")</div>
@@ -24,9 +48,23 @@
                         @if (d.Status == DeploymentStatus.Succeeded && d.Id != Model.ActiveDeploymentId)
                         {
                             @* Confirmation step shows the exact commit/image being restored and
-                               blocks up front if retention already pruned that artifact. *@
+                               blocks up front if retention already pruned that artifact. The link
+                               itself stays on every row (do-not-change item 23) — rolling back
+                               further is still possible, it just costs a rebuild — so a deployment
+                               outside the window is marked rather than hidden. data-rollback-depth
+                               is DeploymentPlanning.RollbackEligibleDeploymentIds's own answer, the
+                               exact rule ImagesToPrune prunes by, so this can never disagree with
+                               what the confirm step finds when the link is actually pressed. *@
+                            var instant = Model.InstantRollbackEligibleIds.Contains(d.Id);
                             <a href="/apps/confirmrollback/@Model.Id?deploymentId=@d.Id"
-                               class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-2 py-1">@T["Rollback"]</a>
+                               data-rollback-depth="@(instant ? "instant" : "redeploy")"
+                               class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-2 py-1">
+                                @T["Rollback"]
+                                @if (!instant)
+                                {
+                                    <span class="text-ink-faint">@(isFa ? " (نیاز به استقرار مجدد)" : " (redeploy)")</span>
+                                }
+                            </a>
                         }
                     </div>
                 </div>

@@ -165,4 +165,90 @@ public class ImageRetentionTests
 
         Prune(onNode, history, active: history[1].Id, keep: 5).Should().BeEmpty();
     }
+
+    // ---- RollbackEligibleDeploymentIds (sub-project F: showing the depth ImagesToPrune enforces) ----
+
+    private static IReadOnlySet<Guid> Eligible(IEnumerable<Deployment> history, Guid? active, int keep) =>
+        DeploymentPlanning.RollbackEligibleDeploymentIds(history, active, keep);
+
+    [Fact]
+    public void A_deployment_inside_the_retention_window_is_rollback_eligible()
+    {
+        var history = Enumerable.Range(1, 5).Select(n => Dep(n, $"harbora/blog:build-{n}")).ToList();
+
+        var eligible = Eligible(history, active: history[4].Id, keep: 2);
+
+        eligible.Should().Contain(history[3].Id, "#4 is one of the newest two rollback targets");
+    }
+
+    [Fact]
+    public void A_deployment_outside_the_retention_window_is_not_rollback_eligible()
+    {
+        var history = Enumerable.Range(1, 5).Select(n => Dep(n, $"harbora/blog:build-{n}")).ToList();
+
+        var eligible = Eligible(history, active: history[4].Id, keep: 2);
+
+        eligible.Should().NotContain(history[0].Id, "#1 fell out of a keep-2 window three deployments ago");
+    }
+
+    [Fact]
+    public void The_eligible_set_matches_exactly_what_ImagesToPrune_would_keep()
+    {
+        // The property the design doc insists on: the two must not be able to disagree. Built from
+        // distinct tags so counting deployments and counting tags agree too.
+        var history = Enumerable.Range(1, 6).Select(n => Dep(n, $"harbora/blog:build-{n}")).ToList();
+        var onNode = history.Select(d => Img(d.ImageTag!)).ToList();
+
+        var eligible = Eligible(history, active: history[5].Id, keep: 3);
+        var kept = onNode.Select(i => i.Tag).Except(Prune(onNode, history, active: history[5].Id, keep: 3));
+
+        eligible.Select(id => history.Single(d => d.Id == id).ImageTag)
+            .Should().BeEquivalentTo(kept, "the marker and the pruner are reading the same rule");
+    }
+
+    [Fact]
+    public void Widening_the_configured_retention_moves_which_deployments_are_marked_eligible()
+    {
+        // The line has to follow ImageRetentionCount rather than a literal number: #2 is out of reach
+        // at keep=2 and back in reach the moment the configured depth grows to 4.
+        var history = Enumerable.Range(1, 5).Select(n => Dep(n, $"harbora/blog:build-{n}")).ToList();
+
+        Eligible(history, active: history[4].Id, keep: 2).Should().NotContain(history[1].Id);
+        Eligible(history, active: history[4].Id, keep: 4).Should().Contain(history[1].Id);
+    }
+
+    [Fact]
+    public void A_deployment_with_no_retained_image_is_never_rollback_eligible()
+    {
+        var history = new[] { Dep(1, image: null, DeploymentStatus.Failed), Dep(2, "harbora/blog:build-2") };
+
+        Eligible(history, active: history[1].Id, keep: 5).Should().NotContain(history[0].Id);
+    }
+
+    [Fact]
+    public void A_rolled_back_deployment_still_reachable_by_its_own_shared_tag_is_rollback_eligible()
+    {
+        // Same artifact as A_rollback_reusing_an_image_does_not_shrink_the_window: two rows, one tag.
+        var d1 = Dep(1, "harbora/blog:build-1", DeploymentStatus.RolledBack);
+        var d2 = Dep(2, "harbora/blog:build-1");
+        var history = new[] { d1, d2 };
+
+        Eligible(history, active: d2.Id, keep: 1).Should().Contain(d1.Id,
+            "d1's image is the same tag the active deployment is protecting");
+    }
+
+    [Fact]
+    public void Zero_retention_disables_pruning_entirely_so_every_imaged_deployment_stays_eligible()
+    {
+        // HarboraRuntimeOptions.ImageRetentionCount: "0 disables pruning entirely" — unlike
+        // ImagesToPrune itself (which clamps a direct keep=0 call to "keep the newest one"), the
+        // eligibility marker must mirror what the two real pruning callers actually do when the
+        // option is 0: they never call ImagesToPrune at all, so nothing this deep in history is ever
+        // pruned.
+        var history = Enumerable.Range(1, 9).Select(n => Dep(n, $"harbora/blog:build-{n}")).ToList();
+
+        var eligible = Eligible(history, active: history[8].Id, keep: 0);
+
+        eligible.Should().BeEquivalentTo(history.Select(d => d.Id), "retention is off — nothing is ever pruned");
+    }
 }

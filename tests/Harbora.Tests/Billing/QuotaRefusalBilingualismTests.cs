@@ -190,6 +190,8 @@ public class QuotaRefusalBilingualismTests
             creationBilling: new Harbora.Infrastructure.Billing.ResourceCreationBilling(
                 db, clock, Microsoft.Extensions.Options.Options.Create(
                     new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
+            runtimeOptions: Microsoft.Extensions.Options.Options.Create(
+                new Harbora.Infrastructure.Deployments.HarboraRuntimeOptions()),
             addresses: new Harbora.Infrastructure.Networking.AppAddressAssigner(db, new ConfigurationBuilder().Build()))
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }

@@ -161,4 +161,23 @@ public sealed class AppDeploymentsViewModel : AppTabViewModel
     // row itself. Without it every succeeded deployment — including the active one — would offer a
     // rollback to itself.
     public Guid? ActiveDeploymentId { get; init; }
+
+    // ---- how far back "instant rollback" actually reaches (sub-project F) ----
+
+    /// <summary>
+    /// <see cref="Harbora.Infrastructure.Deployments.HarboraRuntimeOptions.ImageRetentionCount"/>,
+    /// carried here rather than read a second time by the view so the boundary sentence and the
+    /// per-row marker below are always answering about the same configured number.
+    /// </summary>
+    public int ImageRetentionCount { get; init; }
+
+    /// <summary>
+    /// Which of <see cref="Deployments"/> still have their build image, by the exact rule
+    /// <see cref="Harbora.Infrastructure.Deployments.DeploymentPlanning.ImagesToPrune"/> prunes
+    /// against — see <see cref="Harbora.Infrastructure.Deployments.DeploymentPlanning.RollbackEligibleDeploymentIds"/>,
+    /// computed once in the controller so a Rollback link marked "instant" here can never be one the
+    /// pruner has already emptied. A deployment missing from this set still keeps its Rollback link
+    /// (do-not-change item 23): the view marks it as needing a redeploy instead of hiding it.
+    /// </summary>
+    public IReadOnlySet<Guid> InstantRollbackEligibleIds { get; init; } = new HashSet<Guid>();
 }
