@@ -114,8 +114,27 @@ public static class DeploymentPlanning
         int keep)
     {
         var prefix = BuildImagePrefix(imagePrefix, slug);
-        var history = deployments.ToList();
+        var protectedTags = RetainedImageTags(deployments.ToList(), activeDeploymentId, keep);
 
+        return onNode
+            .Select(i => i.Tag)
+            .Where(t => t.StartsWith(prefix, StringComparison.Ordinal))
+            .Where(t => !protectedTags.Contains(t))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>
+    /// The build-image tags <see cref="ImagesToPrune"/> refuses to delete: the active deployment's
+    /// image, plus the newest <paramref name="keep"/> distinct rollback-eligible (Succeeded or
+    /// RolledBack) tags. Pulled out of <see cref="ImagesToPrune"/> itself so a second question — which
+    /// deployment rows the Deployments tab can mark as an instant rollback, see
+    /// <see cref="RollbackEligibleDeploymentIds"/> — asks the pruner's own rule directly instead of a
+    /// second <c>OrderByDescending(...).Take(n)</c> that could quietly drift from it.
+    /// </summary>
+    private static HashSet<string> RetainedImageTags(
+        IReadOnlyCollection<Deployment> history, Guid? activeDeploymentId, int keep)
+    {
         var protectedTags = new HashSet<string>(StringComparer.Ordinal);
 
         // Never prune what is serving traffic right now.
@@ -134,12 +153,40 @@ public static class DeploymentPlanning
             .Take(Math.Max(1, keep));
 
         foreach (var tag in rollbackTargets) protectedTags.Add(tag);
+        return protectedTags;
+    }
 
-        return onNode
-            .Select(i => i.Tag)
-            .Where(t => t.StartsWith(prefix, StringComparison.Ordinal))
-            .Where(t => !protectedTags.Contains(t))
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+    /// <summary>
+    /// Which of this app's deployments can still be rolled back to without a rebuild — the same
+    /// question <see cref="ImagesToPrune"/> answers about images sitting on a node, asked per
+    /// deployment row instead so the Deployments tab can mark each one (doc
+    /// 2026-08-15-rollback-depth-design, sub-project F). Derived, not stored: a second source of truth
+    /// for "does this still have its image" would drift from the pruner, and the drift would show as a
+    /// Rollback link that lies about whether it can work.
+    /// </summary>
+    /// <param name="deployments">This app's deployment history, any order.</param>
+    /// <param name="activeDeploymentId">The deployment currently serving traffic.</param>
+    /// <param name="keep">
+    /// <see cref="HarboraRuntimeOptions.ImageRetentionCount"/>. <c>&lt;= 0</c> means retention is off
+    /// ("0 disables pruning entirely" — both production callers of <see cref="ImagesToPrune"/> skip
+    /// calling it in that case), so nothing is ever pruned and every deployment that still carries an
+    /// image tag is an instant rollback.
+    /// </param>
+    public static IReadOnlySet<Guid> RollbackEligibleDeploymentIds(
+        IEnumerable<Deployment> deployments, Guid? activeDeploymentId, int keep)
+    {
+        var history = deployments as IReadOnlyCollection<Deployment> ?? deployments.ToList();
+
+        if (keep <= 0)
+            return history
+                .Where(d => !string.IsNullOrWhiteSpace(d.ImageTag))
+                .Select(d => d.Id)
+                .ToHashSet();
+
+        var retainedTags = RetainedImageTags(history, activeDeploymentId, keep);
+        return history
+            .Where(d => !string.IsNullOrWhiteSpace(d.ImageTag) && retainedTags.Contains(d.ImageTag!))
+            .Select(d => d.Id)
+            .ToHashSet();
     }
 }
