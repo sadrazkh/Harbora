@@ -4,6 +4,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Networking;
+using Harbora.Infrastructure.Networking;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -312,6 +313,10 @@ public sealed class DeploymentPipeline(
                 // Cleared so the next tick recomputes from the schedule as it stands now — a deploy
                 // that changed the expression must not keep firing at the old time.
                 app.NextRunAt = null;
+                // Neither kind in this branch ever starts a long-lived container, so nothing can
+                // answer to a private name — recorded explicitly rather than left null, which the
+                // page would otherwise read as "not deployed since this shipped" for ever.
+                app.PrivateAddressState = PrivateAddressOutcome.KindDoesNotJoin;
                 await SetStatus(DeploymentStatus.Succeeded);
                 await Log(LogStream.System,
                     $"✅ Deployment #{deployment.Number} succeeded. " +
@@ -374,6 +379,11 @@ public sealed class DeploymentPipeline(
             {
                 ["harbora.managed"] = "true",
                 ["harbora.app"] = app.Slug,
+                // Slug alone is unique only per workspace (HarboraDbContext: HasIndex(WorkspaceId,
+                // Slug).IsUnique()), and containers are listed host-wide. The id is what
+                // TakenAliasesAsync matches siblings by, so a same-slugged app in a different
+                // workspace cannot be mistaken for a sibling.
+                ["harbora.app.id"] = app.Id.ToString(),
                 ["harbora.deployment"] = deployment.Number.ToString()
             };
 
@@ -408,6 +418,11 @@ public sealed class DeploymentPipeline(
 
                 app.ActiveDeploymentId = deployment.Id;
                 app.Status = AppStatus.Running;
+                // Not KindDoesNotJoin: a stack's services DO join the network and answer to names —
+                // just not to the app's own slug. Each service already carries its own alias
+                // (StartComposeStackAsync, above), so there is no single app-level name to report,
+                // and the app's slug may not even match any of them.
+                app.PrivateAddressState = PrivateAddressOutcome.ComposeManaged;
                 await SetStatus(DeploymentStatus.Succeeded);
                 await Log(LogStream.System,
                     $"✅ Deployment #{deployment.Number} succeeded ({composeStack.Services.Count} services).");
@@ -422,12 +437,24 @@ public sealed class DeploymentPipeline(
             // container's own start-up, where a failed migration takes the site down with it.
             await RunReleaseTaskAsync(docker, app, imageTag, network, env, Log, LogFromEngine, ct);
 
+            // The compose path twenty lines below has always done this; the ordinary path never did,
+            // so an app was reachable only as harbora-{slug}-{number} — a name that changes every
+            // time it ships. An ambiguous alias is withheld rather than registered: docker balances
+            // between every container answering to a name, so a duplicate silently sends a share of
+            // the calls to a stranger.
+            var privateAddress = PrivateAddress.Decide(app.Kind, app.Slug, await TakenAliasesAsync(docker, app, ct));
+
             await Log(LogStream.System, $"Starting container {containerName} …");
             var containerId = await docker.RunContainerAsync(new DockerRunRequest(
                 imageTag, containerName, network, env, labels,
                 app.Volumes.Select(v => (v.Name, v.MountPath, v.ReadOnly)).ToList(),
                 containerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath,
-                Command: null, PublishToHostPort: publishPort), ct);
+                Command: null, PublishToHostPort: publishPort,
+                NetworkAliases: privateAddress.HasAlias ? [privateAddress.Alias!] : null), ct);
+            // Recorded only once the container that would answer to it actually exists — assigning it
+            // alongside the decision above would let a failure between here and there (the run call
+            // itself throwing, e.g.) flush a state describing a container that was never started.
+            app.PrivateAddressState = privateAddress.Outcome;
 
             // A container is created on one network; the rest are attached now. Both are needed
             // only while the platform moves to per-environment networks (see NetworkPlan).
@@ -613,6 +640,58 @@ public sealed class DeploymentPipeline(
         return placement is null
             ? null
             : Networking.EnvironmentNetwork.For(placement.ProjectSlug, placement.Slug, environmentId);
+    }
+
+    /// <summary>
+    /// Every short name already answered to on this app's network by somebody else.
+    ///
+    /// Two authorities, because neither holds both halves. Which apps share an environment is the
+    /// database's fact. What their compose services are called exists only on the containers —
+    /// ComposeFile is parsed from the repository at deploy time and never stored — so the
+    /// harbora.compose.service label is the only place that name survives.
+    ///
+    /// Matched by <c>harbora.app.id</c>, not the <c>harbora.app</c> slug label: a slug is unique only
+    /// per workspace (<c>HasIndex(WorkspaceId, Slug).IsUnique()</c>), but containers are listed
+    /// host-wide, so a same-slugged app in an unrelated workspace would otherwise be mistaken for a
+    /// sibling and cost this app its address over a collision that could never actually happen.
+    ///
+    /// Only a running container counts. <c>ListContainersAsync</c> lists every container regardless
+    /// of state, and a stopped one holds no DNS record — nothing answers to its alias — so letting it
+    /// block would deny a live app its name for ever over a corpse (Stop leaves containers behind
+    /// rather than removing them).
+    ///
+    /// The database read sits inside the same guard as the Docker call: a failure to answer yields an
+    /// empty set, which withholds nothing — the alias is registered and the deployment proceeds.
+    /// Refusing a shortcut because either was briefly unreachable would trade a rare wrong-target risk
+    /// for a common lost-feature one. A cancelled token is not "briefly unreachable" and passes
+    /// through rather than being read as such.
+    /// </summary>
+    private async Task<IReadOnlyCollection<string>> TakenAliasesAsync(IDockerEngine docker, App app, CancellationToken ct)
+    {
+        if (app.EnvironmentId is not { } environmentId) return [];
+
+        try
+        {
+            var siblingIds = await db.Apps
+                .Where(a => a.EnvironmentId == environmentId && a.Id != app.Id)
+                .Select(a => a.Id.ToString())
+                .ToListAsync(ct);
+
+            if (siblingIds.Count == 0) return [];
+
+            var containers = await docker.ListContainersAsync("harbora.compose.service", ct);
+            return containers
+                .Where(c => c.State.Equals("running", StringComparison.OrdinalIgnoreCase)
+                    && c.Labels.TryGetValue("harbora.app.id", out var ownerId)
+                    && siblingIds.Contains(ownerId))
+                .Select(c => c.Labels["harbora.compose.service"])
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Could not read compose service names for {Slug}; registering its alias unchecked.", app.Slug);
+            return [];
+        }
     }
 
     private async Task<string> AcquireImageAsync(

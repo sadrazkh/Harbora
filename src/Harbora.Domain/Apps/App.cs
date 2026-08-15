@@ -107,6 +107,15 @@ public class App : BaseEntity
 
     // --- Runtime config ---
     public int ContainerPort { get; set; } = 80;   // port the app listens on inside the container
+
+    /// <summary>
+    /// What the last deployment did about this app's private name, so the page can say "no address,
+    /// and here is why" instead of showing a blank. Recomputing it on render would need a live Docker
+    /// call per app, and would answer for the network as it is now rather than as it was when this app
+    /// last shipped.
+    /// </summary>
+    public PrivateAddressOutcome? PrivateAddressState { get; set; }
+
     /// <summary>Host port a remote node publishes the container on, so Traefik can route to it cross-node.</summary>
     public int? PublishedHostPort { get; set; }
     public int? DesiredReplicas { get; set; } = 1;
