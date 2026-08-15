@@ -16,6 +16,12 @@ public static class TestPaths
     /// </summary>
     public static string DocsRoot { get; } = Find(Path.Combine("docs", "tutorial"));
 
+    /// <summary>
+    /// The repository root — where <c>Dockerfile</c>, <c>.dockerignore</c> and <c>Harbora.slnx</c> all
+    /// live. Found by the same upward walk as the others, anchored on a file rather than a directory.
+    /// </summary>
+    public static string RepoRoot { get; } = FindContaining("Harbora.slnx");
+
     /// <summary>Walks up from the test output directory until <paramref name="relativePath"/> exists.</summary>
     private static string Find(string relativePath)
     {
@@ -28,5 +34,18 @@ public static class TestPaths
         }
 
         throw new DirectoryNotFoundException($"Could not locate {relativePath} from the test output directory.");
+    }
+
+    /// <summary>Walks up from the test output directory until it finds one containing <paramref name="fileName"/>.</summary>
+    private static string FindContaining(string fileName)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, fileName))) return directory.FullName;
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not locate {fileName} from the test output directory.");
     }
 }
