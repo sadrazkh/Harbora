@@ -124,6 +124,7 @@ public class HarboraDbContext : DbContext
 
     public DbSet<Harbora.Domain.Storage.StorageBucket> StorageBuckets => Set<Harbora.Domain.Storage.StorageBucket>();
     public DbSet<Harbora.Domain.Storage.StoragePlan> StoragePlans => Set<Harbora.Domain.Storage.StoragePlan>();
+    public DbSet<Harbora.Domain.Storage.VolumeDownloadToken> VolumeDownloadTokens => Set<Harbora.Domain.Storage.VolumeDownloadToken>();
     public DbSet<Harbora.Domain.Tenancy.UsageRecord> UsageRecords => Set<Harbora.Domain.Tenancy.UsageRecord>();
 
     public DbSet<Harbora.Domain.Billing.Wallet> Wallets => Set<Harbora.Domain.Billing.Wallet>();
@@ -473,6 +474,23 @@ public class HarboraDbContext : DbContext
         });
 
         b.Entity<Harbora.Domain.Storage.StoragePlan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
+
+        // Deliberately NOT workspace-filtered, unlike StorageBucket just above. The route that
+        // redeems this token runs with no session and so no workspace in scope at all — a filter
+        // here would make every redemption match nothing, which is the same failure mode the AI
+        // gateway's key lookup and the node channel already avoid for the same reason. The tenant
+        // check happens once, at mint time, through the app's own filtered collection; this table is
+        // reached afterwards by the token's hash alone.
+        b.Entity<Harbora.Domain.Storage.VolumeDownloadToken>(e =>
+        {
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.Property(x => x.TokenHash).HasMaxLength(64).IsRequired();
+            // 1024, matching VolumePath.MaxLength — the longest path VolumePath.Normalise ever hands
+            // back, so nothing this column stores can be longer than what was validated.
+            e.Property(x => x.Path).HasMaxLength(1024).IsRequired();
+            e.HasOne<App>().WithMany().HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<Volume>().WithMany().HasForeignKey(x => x.VolumeId).OnDelete(DeleteBehavior.Cascade);
+        });
         b.Entity<Harbora.Domain.Tenancy.Plan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
         b.Entity<Harbora.Domain.Tenancy.UsageRecord>(e => e.HasIndex(x => new { x.WorkspaceId, x.Period }).IsUnique());
         b.Entity<AuditLog>(e => e.HasIndex(x => x.CreatedAt));
