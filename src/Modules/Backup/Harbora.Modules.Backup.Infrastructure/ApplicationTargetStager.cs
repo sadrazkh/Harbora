@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Domain.Deployments;
 using Harbora.Modules.Backup.Domain;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -76,6 +77,15 @@ public sealed class ApplicationTargetStager(
             .Include(a => a.Volumes)
             .FirstAsync(a => a.Id == appId, ct);
 
+        // Not a navigation property — ActiveDeploymentId is a plain FK, the same way every other
+        // reader of it (RollbackPlanner, MonitoringController, DeploymentReconciler) resolves it: a
+        // second query rather than an Include. A cron or release-task app, or one that has never
+        // successfully deployed, has none — that is reported, not treated as a staging failure.
+        var activeDeployment = app.ActiveDeploymentId is { } activeDeploymentId
+            ? await db.Deployments.IgnoreQueryFilters().AsNoTracking()
+                .FirstOrDefaultAsync(d => d.Id == activeDeploymentId, ct)
+            : null;
+
         var stageName = BackupStagingLayout.ApplicationDirectory(snapshotId);
         var stagePath = Path.Combine(_options.StagingDirectory, stageName);
 
@@ -92,7 +102,7 @@ public sealed class ApplicationTargetStager(
             Cleanup(stagePath);
             Directory.CreateDirectory(stagePath);
 
-            await WriteMetadataAsync(app, stagePath, ct);
+            await WriteMetadataAsync(app, activeDeployment, stagePath, ct);
 
             foreach (var volume in app.Volumes)
             {
@@ -147,9 +157,21 @@ public sealed class ApplicationTargetStager(
     /// DATABASE_PASSWORD, set it" is a small inconvenience; a database password quietly living in
     /// six restored snapshots is not.
     /// </para>
+    /// <para>
+    /// <b>The secret rule, settled (instant-app-backup, sub-project E, task 1):</b> this file — and
+    /// everything else <see cref="StageAsync"/> stages beside it under
+    /// <see cref="VolumesDirectoryName"/> — is tarred and then AES-GCM encrypted by
+    /// <c>HarboraNativeBackupEngine</c> before it ever leaves the staging directory
+    /// (<c>ArchiveCipher</c>, keyed from the platform master key). So everything written here already
+    /// travels inside that encryption, never beside it. Secret values go further than that guarantee
+    /// requires: they are not staged at all, encrypted or not, for the copy-and-restore-elsewhere
+    /// reason above. Nothing about the encrypted archive changes which workspace may restore it —
+    /// that is a property of who can name the snapshot (<c>BackupSnapshot.WorkspaceId</c>, enforced
+    /// by <c>HarboraDbContext</c>'s query filter), not of what this method writes.
+    /// </para>
     /// </summary>
     private static async Task WriteMetadataAsync(
-        Harbora.Domain.Apps.App app, string stagePath, CancellationToken ct)
+        Harbora.Domain.Apps.App app, Deployment? activeDeployment, string stagePath, CancellationToken ct)
     {
         var metadata = new
         {
@@ -172,6 +194,18 @@ public sealed class ApplicationTargetStager(
                 app.ReleaseCommand,
                 app.Command,
                 app.CronExpression
+            },
+
+            // What a restore would pull to recreate the container. Read from the deployment
+            // currently serving traffic rather than App.PrebuiltImage, which is empty for anything
+            // built from git — the image that actually ran was decided at build time, not here. Null
+            // for an app that has never had a deployment reach ActiveDeploymentId (a fresh cron or
+            // release-task app, or one whose only attempt failed before cutover): reported as
+            // missing, not guessed at.
+            image = new
+            {
+                app.ActiveDeploymentId,
+                ImageTag = activeDeployment?.ImageTag
             },
 
             deployment = new

@@ -3,6 +3,7 @@ using FluentAssertions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
+using Harbora.Domain.Deployments;
 using Harbora.Domain.Networking;
 using Harbora.Modules.Backup.Infrastructure;
 using Harbora.Tests.Fakes;
@@ -90,6 +91,30 @@ public sealed class ApplicationBackupTests : IDisposable
 
     private static Volume Vol(string name, string mount = "/data") =>
         new() { Name = name, MountPath = mount };
+
+    /// <summary>
+    /// Points the app at a deployment the way <c>DeploymentPipeline</c> does on cutover — a row in
+    /// <c>Deployments</c> plus <c>App.ActiveDeploymentId</c> — rather than adding an ImageTag column
+    /// to App itself, since that is not how a real active deployment is recorded.
+    /// </summary>
+    private Deployment AddActiveDeployment(App app, string imageTag)
+    {
+        var deployment = new Deployment
+        {
+            AppId = app.Id,
+            WorkspaceId = app.WorkspaceId,
+            Number = 1,
+            Status = DeploymentStatus.Succeeded,
+            Trigger = DeploymentTrigger.GitPush,
+            ImageTag = imageTag,
+            TriggeredByUserId = Guid.CreateVersion7()
+        };
+
+        _db.Deployments.Add(deployment);
+        app.ActiveDeploymentId = deployment.Id;
+        _db.SaveChanges();
+        return deployment;
+    }
 
     private async Task<JsonElement> MetadataOfAsync(string stagePath)
     {
@@ -186,6 +211,44 @@ public sealed class ApplicationBackupTests : IDisposable
         volume.GetProperty("MountPath").GetString().Should().Be("/var/lib/data");
         // Where the data is inside the snapshot, so a restore does not have to guess.
         volume.GetProperty("dataPath").GetString().Should().Be("volumes/storefront_data");
+    }
+
+    // --- what to restore onto: the image reference ----------------------------------------------
+
+    /// <summary>
+    /// The data and the definition are useless without something to run them in. App.PrebuiltImage
+    /// only exists for SourceType.PrebuiltImage — a git-built app has none — so the reference has to
+    /// come from the deployment that is actually serving traffic right now.
+    /// </summary>
+    [Fact]
+    public async Task Captures_the_image_reference_of_the_deployment_currently_serving_traffic()
+    {
+        AddApp(Vol("storefront_data"));
+        var app = await _db.Apps.FirstAsync();
+        AddActiveDeployment(app, "harbora/storefront:build-42");
+
+        await using var lease = await _stager.StageAsync(app.Id, _snapshot, default);
+        var metadata = await MetadataOfAsync(lease.SourcePath!);
+
+        metadata.GetProperty("image").GetProperty("ImageTag").GetString()
+            .Should().Be("harbora/storefront:build-42");
+    }
+
+    /// <summary>
+    /// A cron or release-task app, or one whose only deployment ever failed, has never had anything
+    /// cut over to it. The backup must say so plainly rather than omitting the field or crashing.
+    /// </summary>
+    [Fact]
+    public async Task An_app_that_has_never_deployed_has_no_image_reference_to_capture()
+    {
+        AddApp();
+        var app = await _db.Apps.FirstAsync();
+        app.ActiveDeploymentId.Should().BeNull("nothing has deployed this app yet");
+
+        await using var lease = await _stager.StageAsync(app.Id, _snapshot, default);
+        var metadata = await MetadataOfAsync(lease.SourcePath!);
+
+        metadata.GetProperty("image").GetProperty("ImageTag").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Fact]
