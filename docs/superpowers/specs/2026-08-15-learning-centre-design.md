@@ -24,31 +24,36 @@ time.
 
 ---
 
-## A blocker that must be settled before a single image is served
+## The image rule, and a correction to an earlier draft of this spec
 
-**31 of the 61 images in `docs/tutorial/img/` are raw captures**, not `*.annotated.png`.
+**An earlier version of this document claimed 31 raw captures were sitting in the repository and made
+removing them step one of G. That was wrong**, and the error is worth recording because it is easy to
+repeat: it counted the **working directory** rather than the repository.
 
-This project has a standing rule that only annotated captures belong in the repository, and the
-reason is recorded: **the raw panel screenshots leaked a webhook secret once.** Raw captures are
-whole-screen shots of a working panel, so they carry whatever was on screen.
+The repository holds **30 images, all `*.annotated.png`**. `git ls-files docs/tutorial/img/` returns
+no raw file. `.gitignore:42` already carries the rule, with its reason written above it — raw captures
+are whole-screen shots of a working panel and carry webhook secrets, object-storage keys and account
+emails — plus a negation so annotated copies still commit:
 
-Serving them from inside the product would take a repository problem and turn it into a published
-one, on a page whose whole purpose is that customers look at it.
+```
+docs/tutorial/img/*.png
+!docs/tutorial/img/*.annotated.png
+```
 
-**So step one of G is not a feature.** It is:
+Commit `739b5868`, *"Keep the raw tutorial captures out of the repository"*, did this work already.
+The raw files on a developer's disk are local leftovers that git correctly ignores.
 
-1. Establish which of the 31 raw files are still referenced by a chapter.
-2. Decide, per file, whether an annotated version exists to use instead.
-3. Remove from the repository the raw captures that should never have been committed, and re-take
-   what the guides genuinely need in a form that is safe to publish.
-4. Only then serve images at all.
+**The guard is still worth building, for the reason that actually applies.** Those leftovers exist in
+working directories, and a Learning Centre that serves "every png under `img/`" would pick them up
+from the working tree at build or publish time — turning a local artefact into a published one
+without anything in git ever looking wrong.
 
-**And the Learning Centre must serve only `*.annotated.png`, enforced by a test rather than by
-discipline.** A rule that lives in somebody's memory is the rule that gets broken by the next person
-adding a chapter — this programme has now watched that happen five times with four different rules.
+**So: the panel serves only `*.annotated.png`, enforced by a test.** Provable by dropping a raw file
+into the directory and watching the test fail. A rule that lives only in `.gitignore` protects the
+repository and not the render path, and those are different questions.
 
-**This is a data-handling decision, not a security review**, which remains out of scope. What is
-being decided is which files the product publishes.
+**This is a data-handling decision, not a security review**, which remains out of scope. What is being
+decided is which files the product publishes.
 
 ---
 
@@ -81,7 +86,7 @@ address block, a private address, a specifics card, a usage window and a rollbac
 
 **Several of the 30 annotated images are already wrong.** So the order within G is:
 
-1. The image safety pass above.
+1. The render-path guard above — the panel serves only annotated captures.
 2. The chapter rendering and the Help control — these do not depend on any image being current.
 3. Re-taking the captures the changes invalidated, last.
 
