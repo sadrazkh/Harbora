@@ -116,7 +116,7 @@ public class PrivateAddressPipelineTests
 
         result.Status.Should().Be(DeploymentStatus.Succeeded);
 
-        var containerName = DeploymentPlanning.ComposeContainerName(harness.App.Slug, "web", deployment.Number);
+        var containerName = DeploymentPlanning.ComposeContainerName(harness.App.WorkspaceId, harness.App.Slug, "web", deployment.Number);
         AliasesOf(harness, containerName).Should().Equal(["web", $"web-{deployment.Number}"],
             "StartComposeStackAsync has always registered exactly these two; a change that reused " +
             "the ordinary path's single-alias logic here would break every stack silently");

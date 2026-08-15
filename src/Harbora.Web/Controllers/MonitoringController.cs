@@ -241,7 +241,7 @@ public sealed class MonitoringController(
     {
         var app = await db.Apps.AsNoTracking()
             .Where(a => a.Id == appId)
-            .Select(a => new { a.ServerId, a.Slug, a.ActiveDeploymentId })
+            .Select(a => new { a.ServerId, a.WorkspaceId, a.Slug, a.ActiveDeploymentId })
             .FirstOrDefaultAsync(ct);
 
         if (app is null) return (Guid.Empty, null);
@@ -251,7 +251,7 @@ public sealed class MonitoringController(
             .Where(d => d.Id == deploymentId).Select(d => (int?)d.Number).FirstOrDefaultAsync(ct);
 
         return (app.ServerId, number is { } n
-            ? Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.Slug, n)
+            ? Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.WorkspaceId, app.Slug, n)
             : null);
     }
 }

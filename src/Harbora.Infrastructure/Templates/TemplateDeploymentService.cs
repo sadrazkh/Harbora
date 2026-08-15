@@ -343,12 +343,18 @@ public sealed class TemplateDeploymentService(
         _ => throw new InvalidOperationException($"The template requires unsupported service \"{value}\".")
     };
 
+    /// <summary>
+    /// Platform-wide, not per-workspace: app slugs are unique across the whole platform, so this has
+    /// to check every workspace's apps or two stacks named "api" deployed from two different
+    /// workspaces would both derive the same slug and the second one would fail the unique index
+    /// instead of quietly landing on "api-2".
+    /// </summary>
     private async Task<string> UniqueAppSlugAsync(Guid workspaceId, string name, CancellationToken ct)
     {
         var basis = ProjectService.Slugify(name);
         if (basis.Length == 0) basis = "app";
         var candidate = basis;
-        for (var n = 2; await db.Apps.AnyAsync(a => a.WorkspaceId == workspaceId && a.Slug == candidate, ct); n++)
+        for (var n = 2; await db.Apps.IgnoreQueryFilters().AnyAsync(a => a.Slug == candidate, ct); n++)
             candidate = $"{basis}-{n}";
         return candidate;
     }

@@ -177,7 +177,7 @@ public sealed class PipelineHarness : IDisposable
         App.Status = AppStatus.Running;
         Db.SaveChanges();
 
-        Docker.SeedContainer(DeploymentPlanning.ContainerName(App.Slug, number), App.Slug, image: image);
+        Docker.SeedContainer(DeploymentPlanning.ContainerName(App.WorkspaceId, App.Slug, number), App.Slug, image: image);
         // A deployment that really ran left its image on the node too — rollback depends on it.
         if (!string.IsNullOrWhiteSpace(image)) Docker.SeedImage(image);
         return previous;
@@ -286,7 +286,7 @@ public sealed class PipelineHarness : IDisposable
     }
 
     /// <summary>The container name a given deployment number gets.</summary>
-    public string ContainerFor(int number) => DeploymentPlanning.ContainerName(App.Slug, number);
+    public string ContainerFor(int number) => DeploymentPlanning.ContainerName(App.WorkspaceId, App.Slug, number);
 
     public void Dispose()
     {

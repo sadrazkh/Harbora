@@ -194,7 +194,7 @@ public class AppSpecificsHttpTests(HarboraHttpFixture fixture)
                 ImageTag = "harbora/seeded:build-7"
             });
         });
-        return (app.Id, DeploymentPlanning.ContainerName(slug, 7));
+        return (app.Id, DeploymentPlanning.ContainerName(app.WorkspaceId, slug, 7));
     }
 
     [Fact]

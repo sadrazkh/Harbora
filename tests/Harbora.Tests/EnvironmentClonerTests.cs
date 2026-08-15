@@ -535,6 +535,37 @@ public class EnvironmentClonerTests
         (await h.Db.Environments.CountAsync()).Should().Be(1);
     }
 
+    /// <summary>
+    /// App slugs are unique across the whole platform (HarboraDbContext:
+    /// <c>HasIndex(x => x.Slug).IsUnique()</c>) — 2026-08-15-unique-app-names-design. Before that,
+    /// <c>EnvironmentCloner.PlanAsync</c> only read this workspace's own apps into the taken-slug set
+    /// it hands to <c>ClonePlan.Of</c>, so a slug another workspace already held was invisible and the
+    /// clone would try to insert a duplicate and fail the unique index instead of landing on "-2" the
+    /// way <c>ClonePlan.Of</c>'s own <c>Unique()</c> already knows how to do.
+    /// </summary>
+    [Fact]
+    public async Task A_clones_app_slug_dodges_one_another_workspace_already_holds()
+    {
+        var h = Build();
+        // A completely unrelated workspace's app already sits at the exact slug this clone would
+        // otherwise land on ("api" + "-staging").
+        h.Db.Apps.Add(new App
+        {
+            WorkspaceId = Guid.CreateVersion7(), ServerId = Server, Name = "Somebody else's api",
+            Slug = "api-staging", SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "nginx:1",
+            ContainerPort = 80, Status = AppStatus.Running
+        });
+        await h.Db.SaveChangesAsync();
+
+        var outcome = await h.Cloner.CloneAsync(Workspace, h.Source.Id, "Staging", default);
+
+        outcome.Ok.Should().BeTrue(outcome.Reason);
+        var copy = await h.Db.Apps.FirstAsync(a => a.EnvironmentId == outcome.EnvironmentId);
+        copy.Slug.Should().Be("api-staging-2",
+            "\"api-staging\" is already taken by a different workspace's app, and dodging it only " +
+            "works if EnvironmentCloner hands ClonePlan.Of a platform-wide taken-slug set");
+    }
+
     [Fact]
     public async Task An_empty_environment_is_refused_rather_than_copied_into_nothing()
     {

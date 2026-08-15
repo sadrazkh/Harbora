@@ -66,7 +66,7 @@ public sealed partial class AppsController
 
         var containerName = active is null
             ? Harbora.Infrastructure.Deployments.DeploymentPlanning.LegacyContainerName(app.Slug)
-            : Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.Slug, active.Number);
+            : Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.WorkspaceId, app.Slug, active.Number);
 
         var samples = await db.MonitoringMetrics.AsNoTracking()
             .Where(m => m.ResourceRef == containerName

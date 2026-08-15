@@ -300,7 +300,7 @@ public class UsageRangeHttpTests(HarboraHttpFixture fixture)
             db.Apps.Add(app);
             db.Deployments.Add(deployment);
         });
-        return (app.Id, DeploymentPlanning.ContainerName(slug, 1), serverId);
+        return (app.Id, DeploymentPlanning.ContainerName(app.WorkspaceId, slug, 1), serverId);
     }
 
     private Guid SeedManagedDatabase(string name)
