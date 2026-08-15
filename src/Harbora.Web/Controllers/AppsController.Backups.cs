@@ -71,4 +71,61 @@ public sealed partial class AppsController
 
         return RedirectToAction(nameof(Details), new { id });
     }
+
+    /// <summary>
+    /// Queues a Docker-volume snapshot of one of this app's volumes — sub-project D1, the row-level
+    /// sibling of <see cref="BackupNow"/> above. Same module, same queueing call, same repository
+    /// choice and the same guard; only the target type, the target ref and the tab it lands back on
+    /// differ.
+    ///
+    /// <para>
+    /// <paramref name="volumeId"/> is resolved through <em>this</em> app's own <c>Volumes</c>
+    /// collection, loaded from the same tenant-filtered <c>App</c> query <c>RemoveVolume</c> already
+    /// uses — never through a volume id or name read bare off the route. A volume belongs to an app
+    /// and an app belongs to a workspace; skipping that chain and trusting the route directly is the
+    /// exact shape of the cross-tenant defect fixed in 6b0f91a.
+    /// </para>
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/volumes/{volumeId:guid}/backup")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.BackupsRun)]
+    public async Task<IActionResult> BackupVolumeNow(Guid id, Guid volumeId, CancellationToken ct)
+    {
+        // Not theirs, or not there — same answer, same reason as BackupNow above.
+        if (!await access.CanTouchAppAsync(id, Capabilities.BackupsRun, ct)) return NotFound();
+
+        var app = await db.Apps.Include(a => a.Volumes)
+            .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        var volume = app.Volumes.FirstOrDefault(v => v.Id == volumeId);
+        if (volume is null) return NotFound();
+
+        var repository = await db.BackupRepositories.AsNoTracking()
+            .Where(r => r.WorkspaceId == WorkspaceId && r.IsEnabled)
+            .OrderBy(r => r.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (repository is null)
+        {
+            TempData["Error"] = IsFa
+                ? "هنوز مخزن پشتیبانی تنظیم نشده است. ابتدا در مرکز پشتیبان یکی بسازید."
+                : "No backup repository is set up yet. Create one in the Backup Center first.";
+            return RedirectToAction(nameof(Volumes), new { id });
+        }
+
+        // TargetRef is the volume's own Docker name, exactly what BackupTargetResolver.StageVolumeAsync
+        // mounts — the module was never told a volume id, only a name it already validates and stages.
+        var result = await backupSnapshots.QueueAsync(
+            WorkspaceId, repository.Id, BackupTargetType.DockerVolume, volume.Name,
+            policyId: null, BackupTrigger.Manual, ct);
+
+        TempData[result.Succeeded ? "Message" : "Error"] = result.Succeeded
+            ? (IsFa
+                ? "پشتیبان‌گیری در صف قرار گرفت و در پس‌زمینه اجرا می‌شود."
+                : "Backup queued. It runs in the background.")
+            : result.Error;
+
+        return RedirectToAction(nameof(Volumes), new { id });
+    }
 }

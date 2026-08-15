@@ -30,18 +30,45 @@
             <div class="space-y-2">
                 @foreach (var volume in Model.Volumes)
                 {
-                    <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 p-2.5">
+                    // Sub-project D1: a missing entry means this volume has never completed a backup —
+                    // rendered as a sentence below, never as a blank line that reads as a bug (the same
+                    // rule B3 settled for health and uptime, and E settled for backup contents).
+                    var lastBackupAt = Model.LastBackupAt.TryGetValue(volume.Name, out var at) ? at : null;
+
+                    <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 p-2.5"
+                         data-volume-backup-state="@(lastBackupAt is null ? "never" : "backed-up")">
                         <span class="min-w-0">
                             <code dir="ltr" class="block truncate text-sm text-ink">@volume.MountPath</code>
                             <small class="text-[11px] text-ink-faint">
                                 @(volume.StorageBytes is { } bytes
                                     ? Harbora.Infrastructure.Tenancy.ByteSize.Measured(bytes)
                                     : (isFa ? "اندازه‌گیری نشده" : "not measured"))
+                                ·
+                                <span data-volume-last-backup="@(lastBackupAt?.ToString("O") ?? "")">
+                                    @(lastBackupAt is { } backedUpAt
+                                        ? (isFa
+                                            ? $"آخرین پشتیبان {Dates.Ago(backedUpAt, DateTimeOffset.UtcNow, isFa)}"
+                                            : $"Last backed up {Dates.Ago(backedUpAt, DateTimeOffset.UtcNow, isFa)}")
+                                        : (isFa ? "هرگز پشتیبان‌گیری نشده" : "Never backed up"))
+                                </span>
                             </small>
                         </span>
                         <span class="flex items-center gap-2">
                             <a href="/apps/@Model.Id/data?volumeId=@volume.Id"
                                class="text-[11px] text-accent-text hover:underline">@(isFa ? "فایل‌ها" : "Files")</a>
+                            @if (Model.HasBackupRepository)
+                            {
+                                <form asp-controller="Apps" asp-action="BackupVolumeNow" asp-route-id="@Model.Id" asp-route-volumeId="@volume.Id" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <button class="text-[11px] text-accent-text hover:underline">@(isFa ? "پشتیبان‌گیری" : "Back up now")</button>
+                                </form>
+                            }
+                            else
+                            {
+                                <span class="text-[11px] text-ink-faint" title="@(isFa ? "هنوز مخزن پشتیبانی تنظیم نشده است." : "No backup repository is set up yet.")">
+                                    @(isFa ? "بدون مخزن پشتیبان" : "No backup repository")
+                                </span>
+                            }
                             <form asp-controller="Apps" asp-action="RemoveVolume" asp-route-id="@Model.Id" asp-route-volumeId="@volume.Id" method="post"
                                   onsubmit="return confirm('@(isFa ? "این مسیر دیگر وصل نشود؟ داده‌ها روی سرور می‌مانند." : "Stop mounting this path? The data stays on the server.")');">
                                 @Html.AntiForgeryToken()

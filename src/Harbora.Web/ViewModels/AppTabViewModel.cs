@@ -164,6 +164,30 @@ public sealed class AppUsageViewModel : AppTabViewModel
 public sealed class AppVolumesViewModel : AppTabViewModel
 {
     public IReadOnlyList<Harbora.Domain.Apps.Volume> Volumes { get; init; } = [];
+
+    // ---- back up one volume (sub-project D1) ----
+    //
+    // Sub-project E's "Back up now" card names what a repository-less workspace cannot do rather
+    // than hiding the control; this tab does the row-level version of the same thing, so a missing
+    // entry here has to be read as "never backed up", never as a blank that looks like a bug — the
+    // same rule B3 settled for health and uptime and E settled for backup contents.
+
+    /// <summary>
+    /// Whether the workspace has an enabled backup repository the module can queue a snapshot into.
+    /// False withholds only the button, not the row — see <see cref="AppOverviewViewModel.HasBackupRepository"/>
+    /// for why that split matters.
+    /// </summary>
+    public bool HasBackupRepository { get; init; }
+
+    /// <summary>
+    /// When each volume was last backed up, keyed by <see cref="Harbora.Domain.Apps.Volume.Name"/> —
+    /// the same string a <see cref="Harbora.Modules.Backup.Contracts.BackupTargetType.DockerVolume"/>
+    /// snapshot's <c>TargetRef</c> already carries, so no join table is needed to connect the two. A
+    /// volume with no entry has never completed a backup; the view renders that as a sentence, not a
+    /// blank.
+    /// </summary>
+    public IReadOnlyDictionary<string, DateTimeOffset?> LastBackupAt { get; init; } =
+        new Dictionary<string, DateTimeOffset?>();
 }
 
 /// <summary>
