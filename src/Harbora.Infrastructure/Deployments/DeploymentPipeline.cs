@@ -4,6 +4,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Networking;
+using Harbora.Infrastructure.Networking;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -422,12 +423,21 @@ public sealed class DeploymentPipeline(
             // container's own start-up, where a failed migration takes the site down with it.
             await RunReleaseTaskAsync(docker, app, imageTag, network, env, Log, LogFromEngine, ct);
 
+            // The compose path twenty lines below has always done this; the ordinary path never did,
+            // so an app was reachable only as harbora-{slug}-{number} — a name that changes every
+            // time it ships. An ambiguous alias is withheld rather than registered: docker balances
+            // between every container answering to a name, so a duplicate silently sends a share of
+            // the calls to a stranger.
+            var privateAddress = PrivateAddress.Decide(app.Kind, app.Slug, await TakenAliasesAsync(docker, app, ct));
+            app.PrivateAddressState = privateAddress.Outcome;
+
             await Log(LogStream.System, $"Starting container {containerName} …");
             var containerId = await docker.RunContainerAsync(new DockerRunRequest(
                 imageTag, containerName, network, env, labels,
                 app.Volumes.Select(v => (v.Name, v.MountPath, v.ReadOnly)).ToList(),
                 containerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath,
-                Command: null, PublishToHostPort: publishPort), ct);
+                Command: null, PublishToHostPort: publishPort,
+                NetworkAliases: privateAddress.HasAlias ? [privateAddress.Alias!] : null), ct);
 
             // A container is created on one network; the rest are attached now. Both are needed
             // only while the platform moves to per-environment networks (see NetworkPlan).
@@ -613,6 +623,44 @@ public sealed class DeploymentPipeline(
         return placement is null
             ? null
             : Networking.EnvironmentNetwork.For(placement.ProjectSlug, placement.Slug, environmentId);
+    }
+
+    /// <summary>
+    /// Every short name already answered to on this app's network by somebody else.
+    ///
+    /// Two authorities, because neither holds both halves. Which apps share an environment is the
+    /// database's fact. What their compose services are called exists only on the containers —
+    /// ComposeFile is parsed from the repository at deploy time and never stored — so the
+    /// harbora.compose.service label is the only place that name survives.
+    ///
+    /// A failure to answer yields an empty set, which withholds nothing: the alias is registered and
+    /// the deployment proceeds. Refusing a shortcut because Docker was briefly unreachable would trade
+    /// a rare wrong-target risk for a common lost-feature one.
+    /// </summary>
+    private async Task<IReadOnlyCollection<string>> TakenAliasesAsync(IDockerEngine docker, App app, CancellationToken ct)
+    {
+        if (app.EnvironmentId is not { } environmentId) return [];
+
+        var siblingSlugs = await db.Apps
+            .Where(a => a.EnvironmentId == environmentId && a.Id != app.Id)
+            .Select(a => a.Slug)
+            .ToListAsync(ct);
+
+        if (siblingSlugs.Count == 0) return [];
+
+        try
+        {
+            var containers = await docker.ListContainersAsync("harbora.compose.service", ct);
+            return containers
+                .Where(c => c.Labels.TryGetValue("harbora.app", out var owner) && siblingSlugs.Contains(owner))
+                .Select(c => c.Labels["harbora.compose.service"])
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not read compose service names for {Slug}; registering its alias unchecked.", app.Slug);
+            return [];
+        }
     }
 
     private async Task<string> AcquireImageAsync(
