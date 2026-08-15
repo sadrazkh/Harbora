@@ -1,0 +1,74 @@
+@model LearnChapterViewModel
+@{
+    ViewData["Title"] = Model.Chapter.Title;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+
+<div class="page-heading">
+    <div>
+        <a href="/learn" class="eyebrow" data-learn-back>
+            <i data-lucide="corner-left-up" class="h-3.5 w-3.5"></i>
+            @(isFa ? "مرکز آموزش" : "Learning Centre")
+        </a>
+        <h1>@Model.Chapter.Title</h1>
+        <p>@(isFa
+            ? $"فصل {Model.Chapter.Number} از {Model.Chapters.Count}"
+            : $"Chapter {Model.Chapter.Number} of {Model.Chapters.Count}")</p>
+    </div>
+</div>
+
+@* The chapters are written in Persian and are not translated (spec: "content, not UI copy") — so the
+   rendered body always reads RTL, independent of which language is chosen for the chrome around it
+   (isFa above governs only that chrome). *@
+<article class="resource-shell learn-chapter-content p-6" dir="rtl" data-chapter-slug="@Model.Chapter.Slug">
+    @* LearningLibrary renders with Markdig's DisableHtml() (LearningLibraryTests /
+       LearnHttpTests pin this), so raw markup embedded in a chapter arrives here already inert —
+       Html.Raw is safe on this specific string for exactly that reason, not in general. *@
+    @Html.Raw(Model.Html)
+</article>
+
+@* No @section Styles hook exists on _Layout (only RightRail and Scripts are rendered) — an inline
+   <style> here is the same idiom Views/Databases/AccessRecovered.cshtml uses for page-local rules
+   that do not belong in the shared Tailwind build. Scoped to .learn-chapter-content so it cannot
+   leak onto the rest of the panel. *@
+<style>
+    .learn-chapter-content { line-height: 1.85; }
+    .learn-chapter-content h1 { font-size: 1.35rem; font-weight: 700; margin: 0 0 1rem; }
+    .learn-chapter-content h2 { font-size: 1.1rem; font-weight: 700; margin: 2rem 0 .75rem; }
+    .learn-chapter-content h3 { font-size: .95rem; font-weight: 600; margin: 1.5rem 0 .5rem; }
+    .learn-chapter-content p { margin: 0 0 1rem; }
+    .learn-chapter-content ul, .learn-chapter-content ol { margin: 0 0 1rem 1.5rem; }
+    .learn-chapter-content li { margin: 0 0 .35rem; }
+    .learn-chapter-content img { max-width: 100%; border-radius: .75rem; border: 1px solid rgb(var(--line, 226 232 240)); margin: 1rem 0; }
+    .learn-chapter-content code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .85em; }
+    .learn-chapter-content pre { overflow-x: auto; border-radius: .75rem; padding: .85rem 1rem; margin: 0 0 1rem; }
+    .learn-chapter-content pre code { font-size: .8em; }
+    .learn-chapter-content blockquote { margin: 0 0 1rem; padding-inline-start: 1rem; border-inline-start: 3px solid currentColor; opacity: .85; }
+    .learn-chapter-content table { width: 100%; border-collapse: collapse; margin: 0 0 1rem; }
+    .learn-chapter-content th, .learn-chapter-content td { text-align: start; padding: .5rem .75rem; border-bottom: 1px solid rgb(var(--line, 226 232 240)); }
+    .detail-link.is-current { color: rgb(var(--accent, 99 102 241)); font-weight: 600; }
+</style>
+
+@section RightRail {
+    <section class="rail-panel">
+        <div class="rail-panel-header">
+            <span class="rail-icon bg-accent-soft text-accent-text"><i data-lucide="book-open" class="h-4 w-4"></i></span>
+            <h2>@(isFa ? "همهٔ فصل‌ها" : "All chapters")</h2>
+        </div>
+        <ul class="space-y-1 text-sm">
+            @foreach (var chapter in Model.Chapters)
+            {
+                var isCurrent = chapter.Slug == Model.Chapter.Slug;
+                <li>
+                    <a href="/learn/@chapter.Slug" class="detail-link @(isCurrent ? "is-current" : "")" data-chapter-slug="@chapter.Slug">
+                        <span>@chapter.Number.ToString("00") · @chapter.Title</span>
+                        @if (isCurrent)
+                        {
+                            <i data-lucide="check" class="h-3.5 w-3.5 text-accent-text"></i>
+                        }
+                    </a>
+                </li>
+            }
+        </ul>
+    </section>
+}

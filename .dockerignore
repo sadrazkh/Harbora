@@ -7,3 +7,7 @@
 .idea
 **/.env
 *.md
+# The blanket *.md rule above would otherwise drop the tutorial chapters from the build context
+# before the Dockerfile's own COPY ever runs — the Learning Centre would ship the img/ folder with
+# none of the text next to it. See docs/tutorial/*.md, which the Dockerfile now copies at runtime.
+!docs/tutorial/*.md

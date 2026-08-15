@@ -1,0 +1,20 @@
+@{
+    ViewData["Title"] = "Learning Centre";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+
+@* Reached only when LearningLibrary.ReadAsync answered null for the requested slug — a chapter that
+   does not exist, never an exception (LearnController.Chapter). Distinct from the platform's generic
+   error/{code} page: that one only offers a way back to the dashboard, and a Help control that lands
+   here (Task 3) should offer a way into the thing it was trying to open instead. *@
+<div class="empty-state min-h-[24rem]" data-learn-chapter-missing>
+    <span class="empty-state-icon"><i data-lucide="search-x" class="h-6 w-6"></i></span>
+    <h2>@(isFa ? "این فصل پیدا نشد" : "This chapter does not exist")</h2>
+    <p>@(isFa
+        ? "شاید عنوان فصل تغییر کرده یا لینک اشتباه است. از فهرست فصل‌ها ادامه دهید."
+        : "The chapter may have been renamed, or the link is wrong. Continue from the list of chapters instead.")</p>
+    <a href="/learn" class="btn-primary" data-learn-index-link>
+        <i data-lucide="book-open" class="h-4 w-4"></i>
+        @(isFa ? "مرکز آموزش" : "Learning Centre")
+    </a>
+</div>

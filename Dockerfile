@@ -28,6 +28,13 @@ WORKDIR /app
 # curl is required by the container healthcheck (and is what you reach for first when debugging).
 RUN apt-get update && apt-get install -y --no-install-recommends libssl3 curl && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app ./
+# The Learning Centre (Harbora.Infrastructure/Learning/LearningLibrary.cs) reads these chapters off
+# disk at runtime rather than compiling them in, so every chapter test passes locally — docs/tutorial
+# exists on the disk every test runs from — whether or not this line is here. Landed next to the
+# published DLL, so it sits directly under the content root the same way ResolveChaptersRoot's
+# shipped default (Learning:ChaptersRoot = docs/tutorial) expects. LearningCentreDockerImageTests
+# pins this line so the next Dockerfile edit cannot drop it unnoticed.
+COPY docs/tutorial ./docs/tutorial
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "Harbora.Web.dll"]

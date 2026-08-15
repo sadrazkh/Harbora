@@ -1,12 +1,21 @@
 ﻿@using Microsoft.AspNetCore.Mvc.Localization
 @inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @using Harbora.Infrastructure.Navigation
+@using Harbora.Infrastructure.Learning
 @using Harbora.Web.Infrastructure
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var groups = NavigationMap.VisibleTo(NavigationCapabilities.For(User));
     var identity = User.Identity?.Name ?? "Harbora";
     var initial = identity.Trim()[..1].ToUpperInvariant();
+
+    // Which tutorial chapter explains the screen this request is actually on — see HelpMap for the
+    // longest-prefix matching that lets an app's volumes tab differ from the rest of the app page. No
+    // match is an honest answer, not a guess: the control below still opens the index rather than
+    // 404ing or opening chapter one (spec: "an unhelpful Help button is worse than a missing one").
+    var helpChapterSlug = HelpMap.ChapterFor(Context.Request.Path.Value ?? "/");
+    var helpHref = helpChapterSlug is null ? "/learn" : $"/learn/{helpChapterSlug}";
+    var helpState = helpChapterSlug is null ? "index" : "chapter";
 
     string ItemLabel(string key) => (key, isFa) switch
     {
@@ -61,6 +70,15 @@
             <a href="/templates"><span class="menu-icon bg-warn-soft text-warn"><i data-lucide="sparkles" class="h-4 w-4"></i></span><span><strong>@(isFa ? "پروژهٔ آماده" : "Template project")</strong><small>@(isFa ? "استک کامل" : "Complete stack")</small></span></a>
         </div>
     </div>
+
+    @* Context-aware: HelpMap resolves the request path to a chapter slug above, and this only ever
+       renders the honest outcome of that lookup — the chapter for the current screen, or the index
+       with data-help-state="index" when there is none. Never chapter one as a fallback guess. *@
+    <a href="@helpHref" data-help-control data-help-state="@helpState"
+       class="rounded-lg p-2 text-ink-muted hover:bg-surface-2"
+       title="@(isFa ? "راهنما" : "Help")" aria-label="@(isFa ? "راهنما" : "Help")">
+        <i data-lucide="circle-help" class="h-4.5 w-4.5"></i>
+    </a>
 
     @* AlertsController only exposes POST routes — alert management itself lives at the bottom of
        /monitoring, so the bell goes there rather than to a page that does not exist. *@
