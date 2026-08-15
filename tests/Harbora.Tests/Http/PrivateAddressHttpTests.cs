@@ -78,6 +78,21 @@ public class PrivateAddressHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task A_compose_stack_is_told_its_services_already_carry_their_own_names()
+    {
+        var id = SeedApp("priv-stack", ServiceKind.Web, PrivateAddressOutcome.ComposeManaged);
+        Panel.GivenUser(fixture.WorkspaceId, "priv-stack@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.214", "priv-stack@example.com");
+
+        var html = await (await client.GetAsync($"/apps/details/{id}")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-private-address-state=\"compose\"");
+        html.Should().NotContain("http://priv-stack:",
+            "the app's own slug is not one of the stack's registered aliases — showing it as if it " +
+            "were would be a guess dressed up as an address");
+    }
+
+    [Fact]
     public async Task An_app_that_has_not_deployed_since_this_shipped_is_not_shown_an_address_it_does_not_have()
     {
         var id = SeedApp("priv-unknown", ServiceKind.Web, state: null);

@@ -139,6 +139,19 @@ public sealed class PipelineHarness : IDisposable
         return this;
     }
 
+    /// <summary>
+    /// Switches the app to a Compose source and writes the given file into the fake checkout, so
+    /// <c>StartComposeStackAsync</c> — not the single-container path — is what a test exercises.
+    /// </summary>
+    public PipelineHarness WithComposeFile(string yaml)
+    {
+        if (App.GitRepositoryId is null) WithGitSource();
+        App.SourceType = AppSourceType.DockerCompose;
+        File.WriteAllText(Path.Combine(_workDir, "docker-compose.yml"), yaml);
+        Db.SaveChanges();
+        return this;
+    }
+
     /// <summary>Turns on the HTTP health probe (off by default so tests opt in explicitly).</summary>
     public PipelineHarness WithHealthPath(string path = "/healthz")
     {

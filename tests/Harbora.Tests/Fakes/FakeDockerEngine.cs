@@ -167,8 +167,12 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// the only place the name survives — ComposeFile is parsed at deploy time and never stored — so
     /// it is what the collision check reads.
     /// </param>
+    /// <param name="appId">
+    /// The owning app's id, carried as <c>harbora.app.id</c> — what the collision check actually
+    /// matches siblings by, since the slug label alone is only unique per workspace.
+    /// </param>
     public string SeedContainer(string name, string slug, string state = "running",
-        string image = "img:old", string? composeService = null)
+        string image = "img:old", string? composeService = null, Guid? appId = null)
     {
         var id = $"container-{Interlocked.Increment(ref _idSeq):D4}-{name}";
         var labels = new Dictionary<string, string>
@@ -176,6 +180,7 @@ public sealed class FakeDockerEngine : IDockerEngine
             ["harbora.managed"] = "true",
             ["harbora.app"] = slug
         };
+        if (appId is not null) labels["harbora.app.id"] = appId.Value.ToString();
         if (composeService is not null) labels["harbora.compose.service"] = composeService;
 
         _containers[id] = new ContainerInfo(id, name, image, state, "Up", labels);
