@@ -11,14 +11,26 @@ Sub-project **D**, the last of the ten. A `f92c1cd`…`c41dd13` precede it.
 The ask was four things: browse a volume, upload and download files, reach it from outside, and back
 up a single volume.
 
-**This is the first of the ten where most of it genuinely does not exist.** Eight sub-projects in a
-row found the capability already present and unreachable; D breaks that streak, and it is worth saying
-so plainly rather than hunting for a hidden implementation that is not there.
+> **CORRECTED 2026-08-16, and the correction is the important part of this document.**
+>
+> The paragraph that stood here said D was the first of the ten where most of it genuinely does not
+> exist. **That was wrong.** `AppDataController` (`src/Harbora.Web/Controllers/AppDataController.cs`,
+> routed at `apps/{id:guid}/data`) already offers browse, download, upload, save, delete and
+> create-folder over `VolumeFileService`, using the same `RunOneOffAsync` primitive and the same
+> `alpine:3.20` helper this spec proposed to introduce. `Views/Apps/_Shell.cshtml:45` already links to
+> it from every app tab.
+>
+> So **D2 and D3 were already built.** The tenth time this programme has found a capability present,
+> and the third time the author of a spec was the one who did not check.
+>
+> **How it was missed, because the method matters more than the fact:** the search was for
+> `BrowseVolume` and `FileBrowser` — the names the feature *would* have had. It lives under `AppData`.
+> Searching for the name you expect finds only the code you already imagined.
 
 | Part | What exists today |
 |---|---|
-| Browse | **Nothing.** No controller, no view, no file listing anywhere |
-| Upload / download | **Nothing** |
+| Browse | **Already built** — `AppDataController` + `VolumeFileService`, linked from every app tab |
+| Upload / download | **Already built** — same controller: `upload`, `download`, `save`, `delete`, `folder` |
 | External access | **Nothing for volumes.** SFTP exists only as a backup *destination* — where archives are sent — not as a way into a customer's data |
 | Per-volume backup | **Wired.** `BackupTargetType.DockerVolume = 1`, with `ValidateVolume` and `StageVolumeAsync` in `BackupTargetResolver` (`:99`, `:116`) |
 
@@ -28,9 +40,9 @@ so plainly rather than hunting for a hidden implementation that is not there.
 
 | | Sub-project | What it delivers |
 |---|---|---|
-| **D1** | **Back up one volume** ← ready now | The button for a capability that already works |
-| D2 | See what is in there | A read-only listing: names, sizes, dates. No writing |
-| D3 | Get files in and out | Download, then upload — in that order |
+| **D1** | **Back up one volume** — done, merged `378ecfe` | The button for a capability that already works |
+| ~~D2~~ | ~~See what is in there~~ | **Withdrawn — already exists.** See the correction above |
+| ~~D3~~ | ~~Get files in and out~~ | **Withdrawn — already exists.** Same controller |
 | D4 | Reach it from outside | A time-bounded external route to one volume |
 
 **D1 is first and is small**, exactly like sub-project E turned out to be: the target type is wired, so
