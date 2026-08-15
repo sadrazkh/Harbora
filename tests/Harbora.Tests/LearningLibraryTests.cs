@@ -89,6 +89,26 @@ public class LearningLibraryTests
     }
 
     [Fact]
+    public void An_annotated_captures_resolved_path_sits_inside_the_image_directory()
+    {
+        var library = Library();
+
+        var resolved = library.ResolveImagePath("01-dashboard.annotated.png");
+
+        resolved.Should().NotBeNull();
+        Path.GetFullPath(resolved!).Should().Be(
+            Path.GetFullPath(Path.Combine(TestPaths.DocsRoot, "img", "01-dashboard.annotated.png")),
+            "the controller reads exactly the file MayServeImage just approved, not one it reconstructs itself");
+    }
+
+    [Fact]
+    public void A_refused_images_resolved_path_is_null_rather_than_a_guess_at_where_it_might_be()
+    {
+        Library().ResolveImagePath("01-dashboard.png").Should().BeNull();
+        Library().ResolveImagePath("../secrets.annotated.png").Should().BeNull();
+    }
+
+    [Fact]
     public async Task A_chapter_that_does_not_exist_reads_as_null_rather_than_throwing()
     {
         var reading = async () => await Library().ReadAsync("no-such-chapter");

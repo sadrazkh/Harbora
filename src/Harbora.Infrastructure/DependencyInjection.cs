@@ -9,6 +9,7 @@ using Harbora.Infrastructure.Proxy;
 using Harbora.Infrastructure.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Harbora.Infrastructure;
 
@@ -286,7 +287,50 @@ public static class DependencyInjection
         // Raises the SSL-expiry alert the rule engine has always offered but nothing ever fired.
         services.AddHostedService<Monitoring.CertificateWatcher>();
 
+        // The Learning Centre: the nine tutorial chapters in docs/tutorial, rendered on request (see
+        // Learning.LearningLibrary). Left unregistered by the task that built the library, because
+        // only its first consumer — the controller — knows the production root to give it, and that
+        // root is not the same path in every place this runs it from.
+        services.AddSingleton(sp => new Learning.LearningLibrary(ResolveChaptersRoot(config, sp)));
+
         return services;
+    }
+
+    /// <summary>
+    /// Where <c>docs/tutorial</c> is, which is not the same answer in a dev run and in the container.
+    ///
+    /// <para>
+    /// The shipped default, <c>docs/tutorial</c>, is relative to the content root and is correct for
+    /// the container: the Dockerfile's runtime stage copies the chapters to sit right next to the
+    /// published DLL, so the content root IS the directory that holds them. A <c>dotnet run</c> from
+    /// <c>src/Harbora.Web</c> has a content root two levels below the repository root the chapters
+    /// actually live under, so that relative path resolves to nothing there — in which case this
+    /// walks upward from the content root looking for <c>docs/tutorial</c>, the same search
+    /// <c>TestPaths</c> uses to find it for a test run. <c>Learning:ChaptersRoot</c> is left
+    /// configurable (rooted or relative) for any layout that fits neither.
+    /// </para>
+    /// </summary>
+    private static string ResolveChaptersRoot(IConfiguration config, IServiceProvider sp)
+    {
+        var env = sp.GetRequiredService<IHostEnvironment>();
+        var configured = config["Learning:ChaptersRoot"] ?? Path.Combine("docs", "tutorial");
+        var primary = Path.IsPathRooted(configured) ? configured : Path.Combine(env.ContentRootPath, configured);
+
+        if (Directory.Exists(primary)) return primary;
+
+        var directory = new DirectoryInfo(env.ContentRootPath);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, "docs", "tutorial");
+            if (Directory.Exists(candidate)) return candidate;
+            directory = directory.Parent;
+        }
+
+        // Neither resolved: return the configured path anyway rather than throwing here. Chapters()
+        // then fails loudly on the first request that reaches it, which is diagnosable from the logs
+        // — throwing during service construction would instead take the whole panel down at boot for
+        // a docs folder nothing else in the panel depends on.
+        return primary;
     }
 
     private static string? Coalesce(params string?[] values) =>

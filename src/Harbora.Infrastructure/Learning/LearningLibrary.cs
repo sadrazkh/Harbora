@@ -99,12 +99,27 @@ public sealed class LearningLibrary
     /// that climbs out with <c>..</c> is refused before anything is combined into a real path, because
     /// the failure mode is the same one: a name from outside deciding where a read lands.
     /// </summary>
-    public bool MayServeImage(string fileName)
-    {
-        if (string.IsNullOrWhiteSpace(fileName)) return false;
-        if (!fileName.EndsWith(".annotated.png", StringComparison.Ordinal)) return false;
+    public bool MayServeImage(string fileName) => Guard(fileName).Allowed;
 
-        return PathGuard.ResolveWithin(_imgRoot, fileName).Allowed;
+    /// <summary>
+    /// The resolved path to <paramref name="fileName"/> inside the image directory, or null when
+    /// <see cref="MayServeImage"/> would refuse it. The controller's only way to turn a requested file
+    /// name into a path it may actually read — reusing the same check rather than reconstructing the
+    /// path itself, which would be a second place the guard could be gotten wrong.
+    /// </summary>
+    public string? ResolveImagePath(string fileName)
+    {
+        var check = Guard(fileName);
+        return check.Allowed ? check.ResolvedPath : null;
+    }
+
+    private PathCheck Guard(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return PathCheck.Fail(PathRejection.Empty);
+        if (!fileName.EndsWith(".annotated.png", StringComparison.Ordinal))
+            return PathCheck.Fail(PathRejection.InvalidCharacter);
+
+        return PathGuard.ResolveWithin(_imgRoot, fileName);
     }
 
     private static string ReadTitle(string path)
