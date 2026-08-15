@@ -3,6 +3,13 @@
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var message = TempData["Message"] as string;
     var error = TempData["Error"] as string;
+    var downloadLink = TempData["DownloadLink"] as string;
+    var downloadLinkExpiresAtUnix = TempData["DownloadLinkExpiresAtUnix"] as int?;
+    var downloadLinkExpiresAtInstant = downloadLinkExpiresAtUnix is { } unix
+        ? DateTimeOffset.FromUnixTimeSeconds(unix)
+        : (DateTimeOffset?)null;
+    var downloadLinkExpiresAtRaw = downloadLinkExpiresAtInstant?.ToString("O") ?? string.Empty;
+    var downloadLinkExpiresAt = downloadLinkExpiresAtInstant?.LocalDateTime.ToString(Dates.Stamp) ?? string.Empty;
     var volume = Model.Volumes.FirstOrDefault(v => v.Id == Model.SelectedVolumeId);
 
     string Size(long bytes) => Harbora.Infrastructure.Tenancy.ByteSize.Format(bytes, "—");
@@ -24,6 +31,21 @@
 
 @if (message is not null) { <div class="alert-success mb-4">@message</div> }
 @if (error is not null) { <div class="alert-danger mb-4">@error</div> }
+
+@if (downloadLink is not null)
+{
+    <div class="alert-success mb-4" data-download-link="@downloadLink" data-download-link-expires="@downloadLinkExpiresAtRaw">
+        <p>@(isFa
+            ? "پیوند دانلود یک‌بارمصرف ساخته شد؛ بدون ورود به پنل هم کار می‌کند:"
+            : "A one-time download link was created; it works without signing in to the panel:")</p>
+        <code dir="ltr" class="block break-all">@downloadLink</code>
+        <p class="mt-1 text-[11px] text-ink-faint">
+            @(isFa
+                ? $"تا {downloadLinkExpiresAt} معتبر است و فقط یک‌بار قابل استفاده است — بار دوم دیگر کار نمی‌کند."
+                : $"Valid until {downloadLinkExpiresAt}, and works exactly once — a second attempt with it will not.")
+        </p>
+    </div>
+}
 
 @if (Model.Volumes.Count == 0)
 {
@@ -133,6 +155,13 @@ else
                                         {
                                             <a href="/apps/@Model.AppId/data/download?volumeId=@volume.Id&amp;path=@Uri.EscapeDataString(full)"
                                                title="@(isFa ? "دانلود" : "Download")"><i data-lucide="download" class="h-4 w-4"></i></a>
+
+                                            <form asp-action="DownloadLink" asp-route-id="@Model.AppId" method="post" class="inline">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="volumeId" value="@volume.Id" />
+                                                <input type="hidden" name="path" value="@full" />
+                                                <button title="@(isFa ? "ساخت پیوند دانلود موقت" : "Create a temporary download link")"><i data-lucide="link" class="h-4 w-4"></i></button>
+                                            </form>
 
                                             @if (!Model.IsReadOnly && entry.SizeBytes <= 512 * 1024)
                                             {

@@ -135,6 +135,10 @@ public static class DependencyInjection
         // Who is actually using a database — needed before deleting one, and by the architecture view.
         services.AddScoped<Services.ServiceUsageService>();
         services.AddScoped<Storage.VolumeFileService>();
+        // Mints and redeems the one-time links that reach one file in a volume with no panel
+        // session; the sweeper retires spent and expired rows the way AdminerSweeper does.
+        services.AddScoped<Storage.VolumeDownloadTokens>();
+        services.AddHostedService<Storage.VolumeDownloadTokenSweeper>();
         services.Configure<Storage.ObjectStorageOptions>(
             config.GetSection(Storage.ObjectStorageOptions.SectionName));
         services.AddScoped<Storage.ObjectStorageAdmin>();
