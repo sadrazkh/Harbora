@@ -47,6 +47,44 @@ public abstract class AppTabViewModel
 public sealed class AppOverviewViewModel : AppTabViewModel
 {
     public required Harbora.Domain.Apps.App App { get; init; }
+
+    // ---- specifics: what the panel already stores about size, placement and the live version ----
+    //
+    // B3 Task 1. Overview said almost nothing about what the app actually is beyond the prebuilt
+    // image reference, so this carries the rest of what was already on the row: the size, the
+    // replica count, the port, where it runs, the container it runs as, and the version currently
+    // live. Task 2 adds a Docker inspect capability; Task 3 uses it for health and uptime — neither
+    // belongs here.
+
+    /// <summary>
+    /// The resolved size for <c>App.InstanceSizeKey</c>, or null when the key matches no row.
+    /// That is not the same as "no limit" — it means the panel does not know this app's limits, and
+    /// has to say so rather than render a row of zeroes that reads as "unlimited".
+    /// </summary>
+    public Harbora.Domain.Tenancy.InstanceSize? InstanceSize { get; init; }
+
+    /// <summary>How many container instances this app is configured to run.</summary>
+    public int Replicas { get; init; }
+
+    /// <summary>The port the app listens on inside its own container.</summary>
+    public int ContainerPort { get; init; }
+
+    /// <summary>The server this app is placed on, or null if that row no longer exists.</summary>
+    public Harbora.Domain.Servers.Server? Server { get; init; }
+
+    /// <summary>
+    /// The name of the container the app's current deployment runs as — versioned when there has
+    /// been one, the pre-versioning legacy name otherwise. The name somebody would look for on the
+    /// host, either way.
+    /// </summary>
+    public string ContainerName { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The deployment currently serving traffic, falling back to the most recent succeeded one, or
+    /// null when this app has never deployed. An app with no deployment has no live version — that
+    /// is "none", not a blank field.
+    /// </summary>
+    public Harbora.Domain.Deployments.Deployment? LatestDeployment { get; init; }
 }
 
 /// <summary>

@@ -17,6 +17,27 @@
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     // The Message/Error banner now renders once in _Shell.cshtml, above every tab — not here.
     // TempData is consumed on read, so a second read site here would just find it already gone.
+
+    // ---- specifics card helpers ----
+    // Zero means "no ceiling" on every InstanceSize limit column, the same convention the resize
+    // form's "No limit" option already reads.
+    string SpecBytes(long value) => value <= 0
+        ? (isFa ? "بدون سقف" : "no limit")
+        : value < 1024L * 1024 * 1024
+            ? $"{value / 1024.0 / 1024:0.#} MB"
+            : $"{value / 1024.0 / 1024 / 1024:0.##} GB";
+
+    // What "the live version" means depends on how the deployment got its bits: a Git-tracked app
+    // has a commit, an image-tagged one only has the tag. Deployment #N is the last resort — every
+    // deployment has a number, so this never falls through to nothing at all.
+    var specVersion = Model.LatestDeployment switch
+    {
+        null => "none",
+        { CommitSha.Length: > 0 } d => d.CommitSha![..Math.Min(7, d.CommitSha.Length)],
+        { ImageTag.Length: > 0 } d => d.ImageTag!,
+        { GitRef.Length: > 0 } d => d.GitRef!,
+        var d => $"#{d.Number}"
+    };
 }
 
 <div class="grid lg:grid-cols-3 gap-6">
@@ -590,6 +611,66 @@
                     </p>
                 }
             </div>
+        </section>
+
+        @* ---- Specifics ----
+           What the panel already stored about this app, read out loud instead of left for someone
+           to piece together from the resize form, the deployment list and the domains table: its
+           size and limits, how many replicas, which port, where it runs, the container it runs as,
+           and the version currently live. A sibling of Address, not a new visual language. *@
+        <section class="rounded-xl border border-line bg-surface p-4"
+                 data-spec-size="@(app.InstanceSizeKey ?? "none")" data-spec-replicas="@Model.Replicas"
+                 data-spec-port="@Model.ContainerPort" data-spec-container="@Model.ContainerName"
+                 data-spec-version="@specVersion">
+            <div class="mb-2 font-semibold">@(isFa ? "مشخصات" : "Specifics")</div>
+            <dl class="grid grid-cols-2 gap-x-3 gap-y-2.5 text-xs">
+                <div class="col-span-2">
+                    <dt class="text-ink-faint">@(isFa ? "اندازهٔ نمونه" : "Instance size")</dt>
+                    @if (app.InstanceSizeKey is null)
+                    {
+                        <dd class="text-ink">@(isFa ? "بدون سقف" : "No limit")</dd>
+                    }
+                    else if (Model.InstanceSize is { } size)
+                    {
+                        <dd class="text-ink">
+                            @(isFa ? size.NameFa : size.Name)
+                            <span class="text-ink-faint">
+                                · @size.CpuCores.ToString("0.##") @(isFa ? "هسته" : "vCPU")
+                                · @SpecBytes(size.MemoryBytes) @(isFa ? "حافظه" : "memory")
+                                · @SpecBytes(size.DiskBytes) @(isFa ? "دیسک" : "disk")
+                            </span>
+                        </dd>
+                    }
+                    else
+                    {
+                        @* The key on this app matches no InstanceSize row — its limits are unknown,
+                           not zero. Rendering a row of zeroes here would say something false. *@
+                        <dd class="text-ink-faint">@(isFa ? "نامشخص" : "Unknown")</dd>
+                    }
+                </div>
+                <div>
+                    <dt class="text-ink-faint">@(isFa ? "تکرار" : "Replicas")</dt>
+                    <dd class="text-ink">@Model.Replicas</dd>
+                </div>
+                <div>
+                    <dt class="text-ink-faint">@(isFa ? "پورت" : "Port")</dt>
+                    <dd class="text-ink font-mono" dir="ltr">@Model.ContainerPort</dd>
+                </div>
+                <div class="col-span-2">
+                    <dt class="text-ink-faint">@(isFa ? "سرور" : "Server")</dt>
+                    <dd class="text-ink truncate">@(Model.Server?.Name ?? (isFa ? "نامشخص" : "Unknown"))</dd>
+                </div>
+                <div class="col-span-2">
+                    <dt class="text-ink-faint">@(isFa ? "نام کانتینر" : "Container name")</dt>
+                    <dd class="text-ink font-mono truncate" dir="ltr">@Model.ContainerName</dd>
+                </div>
+                <div class="col-span-2">
+                    <dt class="text-ink-faint">@(isFa ? "نسخهٔ در حال اجرا" : "Live version")</dt>
+                    <dd class="text-ink font-mono truncate" dir="ltr">
+                        @(specVersion == "none" ? (isFa ? "هنوز دیپلوی نشده" : "Never deployed") : specVersion)
+                    </dd>
+                </div>
+            </dl>
         </section>
 
         @* ---- Domains ----
