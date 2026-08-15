@@ -148,6 +148,8 @@ public sealed partial class AppsController
             .Take(20)
             .ToListAsync(ct);
 
+        var retentionCount = runtimeOptions.Value.ImageRetentionCount;
+
         return View(new AppDeploymentsViewModel
         {
             Id = app.Id, Name = app.Name, Slug = app.Slug, Kind = app.Kind, Status = app.Status,
@@ -158,6 +160,11 @@ public sealed partial class AppsController
             HasVolumes = await db.Volumes.AnyAsync(v => v.AppId == app.Id, ct),
             Deployments = deployments,
             ActiveDeploymentId = app.ActiveDeploymentId,
+            ImageRetentionCount = retentionCount,
+            // Same inputs, same rule ImagesToPrune prunes by (Phase C) — derived here, not stored, so
+            // a Rollback link marked "instant" on the tab can never be one the pruner already emptied.
+            InstantRollbackEligibleIds = Harbora.Infrastructure.Deployments.DeploymentPlanning
+                .RollbackEligibleDeploymentIds(deployments, app.ActiveDeploymentId, retentionCount),
         });
     }
 }

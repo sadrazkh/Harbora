@@ -45,7 +45,7 @@ namespace Harbora.Tests;
 /// own address is what separate clients are.</item>
 /// </list>
 /// </summary>
-public sealed class HarboraWebFactory : WebApplicationFactory<Program>
+public sealed class HarboraWebFactory(int? imageRetentionCount = null) : WebApplicationFactory<Program>
 {
     /// <summary>Header carrying the address the request should appear to come from.</summary>
     public const string RemoteIpHeader = "X-Harbora-Test-Remote-Ip";
@@ -94,6 +94,12 @@ public sealed class HarboraWebFactory : WebApplicationFactory<Program>
         builder.UseSetting("Harbora:MasterKey", MasterKey);
         builder.UseSetting("Harbora:DataProtectionKeysPath", Path.Combine(_stateDirectory, "keys"));
         builder.UseSetting("Harbora:WorkDir", Path.Combine(_stateDirectory, "work"));
+
+        // Overrides HarboraRuntimeOptions.ImageRetentionCount (default 5) for tests that need to
+        // prove a behaviour follows the configured depth rather than that literal default — e.g. the
+        // Deployments tab's rollback-depth marker moving when the depth does.
+        if (imageRetentionCount is { } count)
+            builder.UseSetting("Runtime:ImageRetentionCount", count.ToString());
 
         builder.ConfigureTestServices(services =>
         {

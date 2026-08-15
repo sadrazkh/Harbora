@@ -40,6 +40,7 @@ public sealed partial class AppsController(
     IConfiguration config,
     ICurrentUser currentUser,
     Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling,
+    Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Deployments.HarboraRuntimeOptions> runtimeOptions,
     AppAddressAssigner addresses) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
