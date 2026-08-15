@@ -118,8 +118,20 @@ public sealed class BillingSuspension(
     IManagedServiceEngine databases,
     IOptions<BillingOptions> options,
     ILogger<BillingSuspension> logger,
-    Harbora.Application.Abstractions.ISystemClock? clock = null)
+    Harbora.Application.Abstractions.ISystemClock? clock = null,
+    Harbora.Application.Abstractions.IFunctionEventBus? functionEvents = null)
 {
+    /// <summary>
+    /// Tells subscribing functions that a workspace stopped or started again — the two moments a
+    /// provider most often wants to automate around. Optional so the tests that drive this class
+    /// directly need no bus.
+    /// </summary>
+    private Task PublishAsync(string key, Domain.Identity.Workspace workspace, CancellationToken ct) =>
+        functionEvents?.PublishAsync(
+            Domain.Functions.FunctionEvent.Create(key, workspace.Id, workspace.Name,
+                ("workspace", workspace.Slug), ("reason", workspace.SuspendedReason.ToString())), ct)
+        ?? Task.CompletedTask;
+
     /// <summary>
     /// Suspends a workspace for an empty balance: blocks its deploys, writes down what was running,
     /// and stops it.
@@ -387,6 +399,10 @@ public sealed class BillingSuspension(
                 "try it once more.");
         }
 
+        // Told after the workloads are down, not before: a function that reacts to a suspension is
+        // reacting to one that has actually happened.
+        await PublishAsync(Domain.Functions.FunctionEvents.WorkspaceSuspended, workspace, ct);
+
         return report.Result(suspended: true, appsStopped: stopped, databasesStopped: databasesStopped);
     }
 
@@ -575,6 +591,12 @@ public sealed class BillingSuspension(
         }
 
         await db.SaveChangesAsync(ct);
+
+        // Only when the suspension actually lifted. A resume that left workloads stranded has not
+        // resumed anything, and saying otherwise to a function is how an automation acts on a
+        // workspace that is still down.
+        if (!workspace.IsSuspended)
+            await PublishAsync(Domain.Functions.FunctionEvents.WorkspaceResumed, workspace, ct);
 
         return report.Result(
             workspace.IsSuspended, appsStarted: started, databasesStarted: databasesStarted);

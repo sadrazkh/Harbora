@@ -1,0 +1,126 @@
+@model FunctionAppDetailsViewModel
+@using Harbora.Domain.Functions
+@using Harbora.Infrastructure.Functions
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+
+    string TriggerLabel(FunctionTrigger t) => (t, isFa) switch
+    {
+        (FunctionTrigger.Http, true) => "HTTP", (FunctionTrigger.Http, false) => "HTTP",
+        (FunctionTrigger.Cron, true) => "زمان‌بندی", (FunctionTrigger.Cron, false) => "Schedule",
+        (_, true) => "رویداد", _ => "Event"
+    };
+}
+
+<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <div class="min-w-0">
+        <div class="text-xs text-ink-faint"><a href="/functions" class="hover:text-ink">@(isFa ? "فانکشن‌ها" : "Functions")</a></div>
+        <h1 class="truncate text-2xl font-bold tracking-tight text-ink">@Model.Name</h1>
+        <p class="text-sm text-ink-muted">
+            @FunctionStarters.Label(Model.Runtime)
+            @if (Model.Host is { Length: > 0 })
+            {
+                <span> · <a href="https://@Model.Host" target="_blank" rel="noopener" class="text-accent-text hover:underline" dir="ltr">@Model.Host</a></span>
+            }
+        </p>
+    </div>
+    <div class="flex flex-wrap items-center gap-3">
+        <a href="/functions/@Model.Id/new" class="btn-secondary inline-flex items-center gap-2">
+            <i data-lucide="plus" class="h-4 w-4"></i>@(isFa ? "فانکشن" : "Function")
+        </a>
+        <form method="post" action="/functions/@Model.Id/publish">
+            @Html.AntiForgeryToken()
+            @* Disabled rather than hidden: an app with no functions cannot be published, and the
+               pipeline refuses it anyway — the greyed button says why before it is pressed. *@
+            <button class="btn-primary inline-flex items-center gap-2 px-5 py-2.5 disabled:opacity-50"
+                    disabled="@(Model.Functions.Count == 0)">
+                <i data-lucide="rocket" class="h-4 w-4"></i>@(isFa ? "انتشار" : "Publish")
+            </button>
+        </form>
+    </div>
+</div>
+
+@if (msg is not null) {<div class="mb-4 rounded-lg border border-ok bg-ok-soft px-4 py-2 text-sm text-ok">@msg</div>}
+@if (err is not null) {<div class="mb-4 rounded-lg border border-danger bg-danger-soft px-4 py-2 text-sm text-danger">@err</div>}
+
+@if (Model.Functions.Any(f => f.HasUnpublishedChanges))
+{
+    <div class="mb-5 rounded-xl border border-warn bg-warn-soft px-4 py-3 text-sm text-warn">
+        @(isFa
+            ? "تغییرهای ذخیره‌شده هنوز اجرا نمی‌شوند. «انتشار» ایمیج را دوباره می‌سازد و همه‌ی فانکشن‌ها را با هم به‌روز می‌کند."
+            : "Saved changes are not running yet. Publish rebuilds the image and updates every function together.")
+    </div>
+}
+
+<div class="overflow-hidden rounded-2xl border border-line bg-surface shadow-panel">
+    <table class="w-full text-sm">
+        <thead class="bg-surface-2 text-xs uppercase tracking-wide text-ink-faint">
+            <tr>
+                <th class="px-5 py-3 text-start">@(isFa ? "نام" : "Name")</th>
+                <th class="px-5 py-3 text-start">@(isFa ? "تریگر" : "Trigger")</th>
+                <th class="px-5 py-3 text-start">@(isFa ? "آدرس / زمان‌بندی" : "Where / when")</th>
+                <th class="px-5 py-3 text-start">@(isFa ? "وضعیت" : "State")</th>
+                <th class="px-5 py-3"></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var fn in Model.Functions)
+        {
+            <tr class="border-t border-line">
+                <td class="px-5 py-3">
+                    <a href="/functions/@Model.Id/@fn.Id" class="font-medium text-ink hover:text-accent-text">@fn.Name</a>
+                    <div class="text-xs text-ink-faint" dir="ltr">@fn.Slug</div>
+                </td>
+                <td class="px-5 py-3 text-ink-muted">@TriggerLabel(fn.Trigger)</td>
+                <td class="px-5 py-3 text-ink-muted" dir="ltr">
+                    @switch (fn.Trigger)
+                    {
+                        case FunctionTrigger.Http:
+                            <code class="text-xs">/@fn.Route</code>
+                            break;
+                        case FunctionTrigger.Cron:
+                            <code class="text-xs">@fn.CronExpression</code>
+                            @if (fn.NextRunAt is { } next)
+                            {
+                                <div class="text-[11px] text-ink-faint">@(isFa ? "بعدی:" : "next:") @next.LocalDateTime.ToString(Dates.Stamp)</div>
+                            }
+                            break;
+                        default:
+                            <code class="text-xs">@fn.EventKey</code>
+                            break;
+                    }
+                </td>
+                <td class="px-5 py-3">
+                    @if (!fn.IsEnabled)
+                    {
+                        <span class="rounded-md bg-surface-2 px-2 py-0.5 text-xs text-ink-faint">@(isFa ? "خاموش" : "off")</span>
+                    }
+                    else if (fn.HasUnpublishedChanges)
+                    {
+                        <span class="rounded-md bg-warn-soft px-2 py-0.5 text-xs text-warn">@(isFa ? "منتشرنشده" : "unpublished")</span>
+                    }
+                    else
+                    {
+                        <span class="rounded-md bg-ok-soft px-2 py-0.5 text-xs text-ok">@(isFa ? "زنده" : "live")</span>
+                    }
+                </td>
+                <td class="px-5 py-3 text-end">
+                    <form method="post" action="/functions/@Model.Id/@fn.Id/delete"
+                          onsubmit="return confirm('@(isFa ? "این فانکشن حذف شود؟" : "Delete this function?")');">
+                        @Html.AntiForgeryToken()
+                        <button class="text-xs text-ink-faint underline hover:text-danger">@(isFa ? "حذف" : "Delete")</button>
+                    </form>
+                </td>
+            </tr>
+        }
+        @if (Model.Functions.Count == 0)
+        {
+            <tr><td colspan="5" class="px-5 py-8 text-center text-ink-faint">
+                @(isFa ? "هیچ فانکشنی نیست." : "No functions yet.")
+            </td></tr>
+        }
+        </tbody>
+    </table>
+</div>

@@ -55,6 +55,9 @@ builder.Services.AddSyncModule(builder.Configuration);
 builder.Services.AddScoped<IDeploymentLogStream, SignalRDeploymentLogStream>();
 builder.Services.AddScoped<Harbora.Web.Infrastructure.PanelModeProvider>();
 builder.Services.AddScoped<Harbora.Web.Infrastructure.RailPreferences>();
+// Views ask this whether something is locked. Scoped so one request resolves entitlements once,
+// however many controls on the page are gated by them.
+builder.Services.AddScoped<Harbora.Web.Infrastructure.FeatureView>();
 
 // Which logos ship in this build. A singleton because the answer cannot change while the process
 // runs, and the alternative was a filesystem stat per tile per request.

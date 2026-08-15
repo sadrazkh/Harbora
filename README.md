@@ -418,6 +418,20 @@ apps on it; there is no in-place conversion.
   against the panel's own CA; revoke, rotate and re-enroll from the UI. The panel sends **named verbs
   from a fixed allowlist**, never a shell command. Silent update with rollback, drain before update,
   and a safe uninstaller that asks whether to keep the workloads.
+- **Functions**: write code in the panel — **C#, JavaScript or Python** — and it runs, with no
+  repository, no Dockerfile and no `git push`. One **function app** hosts many functions (the Azure
+  shape), so twenty ten-line functions cost one nano-sized app-hour rather than twenty. Three
+  triggers: an **HTTP** route, a **cron schedule**, and **platform events** (a deployment finishing
+  or failing, a crash, a failed backup, a threshold, a low balance, a git push or tag, a workspace
+  or member change). Publishing generates the whole build context and hands it to the ordinary
+  deployment pipeline, so live logs, health checks, zero-downtime cutover, rollback, quotas and
+  metering are the ones every other app already gets — and a compile error shows up in the build log
+  at publish time. Every invocation the platform makes itself is recorded: trigger, status, duration.
+- **Feature entitlements**: the owner decides who each sellable feature is for, per **plan** and per
+  **workspace**. A workspace without it still **sees** it — greyed, with a lock, and a page saying
+  who can switch it on — because a tier nobody can see is a tier nobody asks to buy. Every lock is
+  enforced server-side; the greyed control is a courtesy on top of the refusal. Provider console:
+  **Platform → Features**.
 - **Multi-tenant PaaS**: plans, instance sizes, quotas, capacity-aware scheduler, provider console,
   per-tenant network isolation, usage metering.
 - **UI/UX**: premium Tailwind dashboard, dark mode, RTL/LTR, PWA (installable + offline shell), bilingual.
@@ -497,6 +511,15 @@ dotnet run --project src/Harbora.Web                             # auto-migrates
   carrying an archive between two machines needs a transport Harbora does not have. Harbora refuses
   before it starts rather than writing an archive onto a disk it cannot read back. Plan for it in
   [docs/disaster-recovery.md](docs/disaster-recovery.md).
+- **Functions have never been built on a machine with Docker.** The generator, the routing, the
+  triggers, the entitlement checks and the refusals are covered by tests; what no test on the
+  development machine can cover is `docker build` actually producing the three host images and a
+  container answering. The first publish on a real server is the step that proves it, and until one
+  has been done, treat the three runtimes as unproven rather than shipped.
+- **Functions do not scale to zero and are not billed per request.** The host runs like any other
+  app and is metered by the hour — the answer this platform already settled on for a self-hosted
+  single-VPS product. Nor do they install packages: each host has what its base image ships, and a
+  function that needs npm or NuGet is an ordinary application.
 - **The AI service is a preview.** Everything around it is built and tested — plans, keys, routing,
   rate limits, metering, SSRF checks — but no request has ever been made to a real model provider
   from this codebase, so nothing has proven the last hop. It is labelled *Preview* in the panel and

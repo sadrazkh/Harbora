@@ -132,6 +132,15 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Billing.BillingRun> BillingRuns => Set<Harbora.Domain.Billing.BillingRun>();
     public DbSet<Harbora.Domain.Billing.BillingVoucher> BillingVouchers => Set<Harbora.Domain.Billing.BillingVoucher>();
 
+    /// <summary>
+    /// Who is entitled to which feature. Platform configuration rather than tenant data, and
+    /// deliberately unfiltered — see <see cref="Harbora.Domain.Features.FeatureGrant"/>.
+    /// </summary>
+    public DbSet<Harbora.Domain.Features.FeatureGrant> FeatureGrants => Set<Harbora.Domain.Features.FeatureGrant>();
+
+    public DbSet<Harbora.Domain.Functions.FunctionDefinition> FunctionDefinitions => Set<Harbora.Domain.Functions.FunctionDefinition>();
+    public DbSet<Harbora.Domain.Functions.FunctionInvocation> FunctionInvocations => Set<Harbora.Domain.Functions.FunctionInvocation>();
+
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
@@ -491,6 +500,43 @@ public class HarboraDbContext : DbContext
             e.HasOne<App>().WithMany().HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<Volume>().WithMany().HasForeignKey(x => x.VolumeId).OnDelete(DeleteBehavior.Cascade);
         });
+        // Entitlements. No workspace query filter here, and that is the decision rather than an
+        // omission: these rows are platform configuration read by the cron scheduler and the event
+        // bus, neither of which has a session. A filtered table read without one comes back empty,
+        // and empty reads as "nobody is entitled to anything" — the failure that looks like success.
+        b.Entity<Harbora.Domain.Features.FeatureGrant>(e =>
+        {
+            e.HasIndex(x => new { x.Scope, x.TargetId, x.FeatureKey }).IsUnique();
+            e.Property(x => x.FeatureKey).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Note).HasMaxLength(500);
+        });
+
+        b.Entity<Harbora.Domain.Functions.FunctionDefinition>(e =>
+        {
+            // Unique inside the app, not platform-wide: the slug is an address within one host, and
+            // two customers both having a "webhook" function is the normal case.
+            e.HasIndex(x => new { x.AppId, x.Slug }).IsUnique();
+            e.HasIndex(x => x.NextRunAt);
+            e.Property(x => x.Name).HasMaxLength(120).IsRequired();
+            e.Property(x => x.Slug).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Route).HasMaxLength(200);
+            e.Property(x => x.CronExpression).HasMaxLength(120);
+            e.Property(x => x.EventKey).HasMaxLength(64);
+            e.HasOne<App>().WithMany().HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        });
+
+        b.Entity<Harbora.Domain.Functions.FunctionInvocation>(e =>
+        {
+            // The history page reads one function's most recent runs, and the sweeper deletes the
+            // oldest across all of them; both are this index.
+            e.HasIndex(x => new { x.FunctionId, x.StartedAt });
+            e.Property(x => x.Error).HasMaxLength(1000);
+            e.HasOne<Harbora.Domain.Functions.FunctionDefinition>().WithMany()
+                .HasForeignKey(x => x.FunctionId).OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        });
+
         b.Entity<Harbora.Domain.Tenancy.Plan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
         b.Entity<Harbora.Domain.Tenancy.UsageRecord>(e => e.HasIndex(x => new { x.WorkspaceId, x.Period }).IsUnique());
         b.Entity<AuditLog>(e => e.HasIndex(x => x.CreatedAt));

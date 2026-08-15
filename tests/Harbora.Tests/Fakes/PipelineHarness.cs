@@ -273,6 +273,9 @@ public sealed class PipelineHarness : IDisposable
             Microsoft.Extensions.Options.Options.Create(new Harbora.Infrastructure.Nodes.NodeAgentControlPlaneOptions()),
             Microsoft.Extensions.Options.Options.Create(Options),
             NullLogger<Harbora.Infrastructure.Nodes.NodeIngressRouter>.Instance),
+        // Nothing here subscribes to platform events; the null bus says so out loud rather than
+        // leaving a nullable dependency that would swallow publishing in production too.
+        Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
         NullLogger<DeploymentPipeline>.Instance);
 
     /// <summary>Shared with the pipeline, so a test can assert on what it bound.</summary>

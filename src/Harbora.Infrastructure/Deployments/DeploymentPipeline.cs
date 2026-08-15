@@ -31,6 +31,7 @@ public sealed class DeploymentPipeline(
     IOptions<HarboraRuntimeOptions> options,
     HostPortAllocator hostPorts,
     Nodes.NodeIngressRouter ingressRouter,
+    IFunctionEventBus functionEvents,
     ILogger<DeploymentPipeline> logger)
 {
     private readonly HarboraRuntimeOptions _opt = options.Value;
@@ -504,6 +505,16 @@ public sealed class DeploymentPipeline(
             await SetStatus(DeploymentStatus.Succeeded);
             await Log(LogStream.System, $"✅ Deployment #{deployment.Number} succeeded.");
 
+            // The code in the image is now the code in the database, so the editor stops saying
+            // "edited, not published" — the one sentence on that page a person acts on.
+            await MarkFunctionsPublishedAsync(app, ct);
+            await functionEvents.PublishAsync(
+                Domain.Functions.FunctionEvent.Create(
+                    Domain.Functions.FunctionEvents.DeploymentSucceeded, app.WorkspaceId, app.Slug,
+                    ("app", app.Slug), ("deployment", deployment.Number.ToString()),
+                    ("commit", deployment.CommitSha)),
+                ct);
+
             // Only after the deployment is recorded as succeeded — pruning is housekeeping and must
             // never be able to turn a live, working deployment into a failure. Ordering is half of
             // that; the other half is the success-tail catch below, because this still logs on `ct`
@@ -624,6 +635,15 @@ public sealed class DeploymentPipeline(
                 () => notifications.NotifyAsync(app.WorkspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical,
                     $"Deploy failed: {app.Name} #{deployment.Number}", reason, CancellationToken.None),
                 "alert rules");
+            // A fourth surface, and the same rule as the three above it: on its own token-free call,
+            // guarded, so a customer's event handler cannot cost this deployment its failure record.
+            await TellSomebody(
+                () => functionEvents.PublishAsync(
+                    Domain.Functions.FunctionEvent.Create(
+                        Domain.Functions.FunctionEvents.DeploymentFailed, app.WorkspaceId, app.Slug,
+                        ("app", app.Slug), ("deployment", deployment.Number.ToString()), ("reason", reason)),
+                    CancellationToken.None),
+                "function subscribers");
         }
     }
 
@@ -760,6 +780,9 @@ public sealed class DeploymentPipeline(
             case AppSourceType.Upload:
                 // The app is upload-only and nothing was pushed — BuildFromUploadAsync explains how.
                 return await BuildFromUploadAsync(docker, app, deployment, imageTag, buildLog, log, forceStatic: false, ct);
+
+            case AppSourceType.InlineCode:
+                return await BuildFromInlineCodeAsync(docker, app, deployment, imageTag, buildLog, log, ct);
 
             case AppSourceType.DockerCompose:
                 // Multi-service Compose orchestration is planned (see docs/overhaul/12 P7+) but not
@@ -1033,6 +1056,84 @@ public sealed class DeploymentPipeline(
     }
 
     /// <summary>
+    /// Clears the "edited since it was published" flag on a function app's functions.
+    ///
+    /// <para>
+    /// Only on success, and only for the rows as they were when the build started — a function edited
+    /// while this deployment was building has genuinely not been published, and marking it clean here
+    /// would tell the person their unsaved-to-production change is live.
+    /// </para>
+    /// </summary>
+    private async Task MarkFunctionsPublishedAsync(App app, CancellationToken ct)
+    {
+        if (app.SourceType != AppSourceType.InlineCode || _codeReadAt is not { } readAt) return;
+
+        var functions = await db.FunctionDefinitions.IgnoreQueryFilters()
+            .Where(f => f.AppId == app.Id && f.HasUnpublishedChanges)
+            .ToListAsync(ct);
+
+        foreach (var fn in functions.Where(f => f.UpdatedAt <= readAt))
+            fn.HasUnpublishedChanges = false;
+    }
+
+    /// <summary>
+    /// The instant this deployment read the code it built, so an edit that arrived while the image
+    /// was building can be told from one that is in it. Null until a function app is built.
+    /// </summary>
+    private DateTimeOffset? _codeReadAt;
+
+    /// <summary>
+    /// Writes a function app's rows out as a source tree and builds it.
+    ///
+    /// <para>
+    /// The whole of "code typed into the panel, running in a container" is this method plus
+    /// <see cref="Functions.FunctionProject"/>: once the files exist, this takes the identical path a
+    /// Git checkout does, so a function app health-checks, cuts over, rolls back and streams logs
+    /// with no code that knows what a function is.
+    /// </para>
+    /// </summary>
+    private async Task<string> BuildFromInlineCodeAsync(
+        IDockerEngine docker, App app, Deployment deployment, string imageTag,
+        IProgress<string> buildLog, Func<LogStream, string, Task> log, CancellationToken ct)
+    {
+        if (app.FunctionRuntime is not { } runtime)
+            throw new InvalidOperationException(
+                "This function app has no runtime. Delete it and create it again choosing C#, JavaScript or Python.");
+
+        // Unfiltered: the pipeline runs on the job worker with no session, and a filtered read here
+        // would find no functions and publish an empty host that answers 404 to everything.
+        _codeReadAt = clock.UtcNow;
+        var functions = await db.FunctionDefinitions.IgnoreQueryFilters()
+            .Where(f => f.AppId == app.Id)
+            .ToListAsync(ct);
+
+        if (functions.Count == 0)
+            throw new InvalidOperationException(
+                "This function app has no functions yet. Add one on the app's Code tab, then publish.");
+
+        var workDir = Path.Combine(_opt.WorkDir, app.Slug, deployment.Number.ToString());
+        if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true);
+        Directory.CreateDirectory(workDir);
+
+        var port = app.ContainerPort <= 0 ? Functions.FunctionProject.DefaultPort : app.ContainerPort;
+        var generated = Functions.FunctionProject.Generate(runtime, functions, port);
+        foreach (var file in generated)
+        {
+            var target = Path.Combine(workDir, file.Path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            await File.WriteAllTextAsync(target, file.Content, ct);
+        }
+
+        await log(LogStream.System,
+            $"Generated a {runtime} host for {functions.Count} function(s).");
+
+        // forceStatic is false and the generated context always contains Dockerfile.harbora, which
+        // the app's DockerfilePath names — so stack detection is never consulted for a function app.
+        return await BuildFromSourceAsync(docker, app, deployment, imageTag, workDir,
+                                          buildLog, log, forceStatic: false, ct);
+    }
+
+    /// <summary>
     /// Everything after the source exists on disk: pick the Dockerfile (or generate one from a
     /// detected stack) and build the image. Shared by the Git and upload paths so both get identical
     /// build behaviour.
@@ -1085,10 +1186,20 @@ public sealed class DeploymentPipeline(
             new DockerBuildRequest(contextPath, dockerfile, imageTag, buildArgs), buildLog, ct);
     }
 
-    private Dictionary<string, string> BuildEnv(App app) =>
-        app.EnvironmentVariables.ToDictionary(
+    private Dictionary<string, string> BuildEnv(App app)
+    {
+        var env = app.EnvironmentVariables.ToDictionary(
             e => e.Key,
             e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
+
+        // A function host refuses an unsigned invocation, so the secret has to reach the container —
+        // and it is injected here rather than stored as an ordinary variable so nobody can rename,
+        // reveal or delete it from the environment page and lock the scheduler out of its own app.
+        if (app.SourceType == AppSourceType.InlineCode && app.FunctionInvokeSecret is { Length: > 0 } secret)
+            env[Functions.FunctionProject.SecretEnvVar] = SafeUnprotect(secret);
+
+        return env;
+    }
 
     /// <summary>
     /// After a rollback cuts over, flag the deployment it displaced as <see cref="DeploymentStatus.RolledBack"/>.

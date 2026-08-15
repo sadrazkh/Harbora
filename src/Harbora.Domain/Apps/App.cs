@@ -1,4 +1,5 @@
 ﻿using Harbora.Domain.Common;
+using Harbora.Domain.Functions;
 using Harbora.Domain.Git;
 using Harbora.Domain.Networking;
 using Harbora.Domain.Deployments;
@@ -60,6 +61,29 @@ public class App : BaseEntity
 
     /// <summary>Computed by the cron runner so a due job can be found without re-parsing everything.</summary>
     public DateTimeOffset? NextRunAt { get; set; }
+
+    /// <summary>
+    /// Which host image runs this app's inline code, for <see cref="AppSourceType.InlineCode"/> —
+    /// null for every other kind of app.
+    ///
+    /// <para>
+    /// Here rather than on a table of its own for the same reason <see cref="CronExpression"/> is: a
+    /// function app is an app, and giving it a parallel entity would mean re-earning deploy history,
+    /// rollback, env vars, domains, quotas and metering that already work on this one.
+    /// </para>
+    /// </summary>
+    public FunctionRuntime? FunctionRuntime { get; set; }
+
+    /// <summary>
+    /// Shared secret the panel presents when it invokes a function on a schedule or an event. Stored
+    /// through <c>ISecretProtector</c> like every other credential.
+    ///
+    /// <para>
+    /// It exists because the invocation door is inside the tenant's own network: without it, any
+    /// container a customer runs beside their function app could fire that app's cron handlers.
+    /// </para>
+    /// </summary>
+    public string? FunctionInvokeSecret { get; set; }
 
     public Guid ServerId { get; set; }
 

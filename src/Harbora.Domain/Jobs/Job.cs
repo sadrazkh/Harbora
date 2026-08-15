@@ -20,7 +20,15 @@ public enum JobKind
     RepositoryHealthCheck = 8,
 
     // Appended: persisted enum values are never renumbered. The target is a BillingRun row.
-    BillingHour = 9
+    BillingHour = 9,
+
+    /// <summary>
+    /// One call of one function, on a schedule or because something happened. The target is the
+    /// <c>FunctionInvocation</c> row, which already holds what to send — so the queue keeps carrying
+    /// nothing but a kind and an id, and a scheduled call still fires after a restart that landed
+    /// between the tick and the request.
+    /// </summary>
+    FunctionInvoke = 10
 }
 
 public enum JobStatus

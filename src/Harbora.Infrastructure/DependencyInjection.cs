@@ -264,6 +264,19 @@ public static class DependencyInjection
         // deployment that never configured an agent cannot quietly report tunnels it never made.
         services.AddSingleton<Application.Abstractions.INodeAgentClient, Nodes.FakeNodeAgentClient>();
 
+        // Who is entitled to which feature. Scoped rather than singleton because it memoises per
+        // instance, and a memo that outlived the request would keep serving a grant the owner just
+        // revoked.
+        services.AddScoped<IFeatureGate, Features.FeatureGate>();
+
+        // Functions: code written in the panel. The generator turns rows into a build context, the
+        // invoker knocks on a running host, and the scheduler decides when it should.
+        services.AddScoped<Functions.FunctionAppService>();
+        services.AddScoped<IFunctionInvoker, Functions.FunctionInvoker>();
+        services.AddScoped<IFunctionEventBus, Functions.FunctionEventBus>();
+        services.AddScoped<IJobHandler, Functions.FunctionInvokeJobHandler>();
+        services.AddHostedService<Functions.FunctionCronScheduler>();
+
         // Tenancy quotas + node capacity (PaaS).
         services.AddScoped<IQuotaService, Tenancy.QuotaService>();
         services.AddScoped<INodeCapacityService, Tenancy.NodeCapacityService>();

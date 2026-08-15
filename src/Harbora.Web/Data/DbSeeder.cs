@@ -214,6 +214,35 @@ public sealed class DbSeeder(HarboraDbContext db)
         }
         await db.SaveChangesAsync();
 
+        // The provider's own plan gets every feature; the customer plans get whatever each feature
+        // ships as, which for anything sellable is Locked.
+        //
+        // Seeded rather than special-cased in the resolver: "the owner sees everything" as a rule in
+        // code would be a second answer to who is entitled to what, unreachable from the console that
+        // is supposed to be the only one. As a row it shows up in the grid, and the owner can take it
+        // away again — which is the whole point of the grid.
+        if (await db.Plans.FirstOrDefaultAsync(p => p.IsDefault) is { } providerPlan)
+        {
+            foreach (var feature in Harbora.Domain.Features.PlatformFeatures.All)
+            {
+                var already = await db.FeatureGrants.AnyAsync(g =>
+                    g.Scope == Harbora.Domain.Features.FeatureScope.Plan
+                    && g.TargetId == providerPlan.Id
+                    && g.FeatureKey == feature.Key);
+                if (already) continue;
+
+                db.FeatureGrants.Add(new Harbora.Domain.Features.FeatureGrant
+                {
+                    Scope = Harbora.Domain.Features.FeatureScope.Plan,
+                    TargetId = providerPlan.Id,
+                    FeatureKey = feature.Key,
+                    State = Harbora.Domain.Features.FeatureState.Enabled,
+                    Note = "Seeded: the provider's own plan."
+                });
+            }
+            await db.SaveChangesAsync();
+        }
+
         // Ensure existing workspaces point at the default plan. Tracked rather than ExecuteUpdate:
         // this is a handful of rows on a path that runs once per boot, and ExecuteUpdate is a
         // relational-only statement — it was the single line that made the whole startup sequence,

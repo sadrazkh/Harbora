@@ -77,29 +77,29 @@ mountDeployProgress();
 import {
     createIcons, Activity, AlertTriangle, Archive, ArrowRight, ArrowUpLeft, ArrowUpRight, Bell,
     BookOpen, Box, Boxes, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp,
-    CircleCheck, CircleCheckBig, CircleHelp, CloudUpload, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard,
+    CircleCheck, CircleCheckBig, CircleHelp, CloudUpload, Code, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard,
     Cuboid, Database, DatabaseZap, Download, ExternalLink, File, FileCode2, FileJson2, Folder,
     FolderLock, FolderOpen, Gauge, GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound,
-    Languages, Layers, Layers3, LayoutDashboard, Link, LockKeyhole, LogOut, Mail, Menu, Monitor, Moon, Network,
+    Languages, Layers, Layers3, LayoutDashboard, Link, Lock, LockKeyhole, LogOut, Mail, Menu, Monitor, Moon, Network,
     PanelLeftClose, PanelRight, Pause, Pencil, Play, Plug, PlugZap, Plus, RefreshCw, Rocket, RotateCw, Route,
     Ruler, ScrollText, Search, SearchX, Server, Settings, Settings2, Shapes, ShieldAlert,
     ShieldCheck, SlidersHorizontal, Sparkles, SquareArrowOutUpRight, SquareTerminal, Star, Sun,
-    ServerCog, Table2, Terminal, TerminalSquare, Trash2, TrendingUp, TriangleAlert, UploadCloud,
-    UserPlus, Users, Wallet,
+    ServerCog, Table2, Terminal, TerminalSquare, ToggleRight, Trash2, TrendingUp, TriangleAlert,
+    UploadCloud, UserPlus, Users, Wallet,
 } from 'lucide';
 
 const usedIcons = {
     Activity, AlertTriangle, Archive, ArrowRight, ArrowUpLeft, ArrowUpRight, Bell, BookOpen, Box,
     Boxes, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleCheck,
-    CircleCheckBig, CircleHelp, CloudUpload, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard, Cuboid,
+    CircleCheckBig, CircleHelp, CloudUpload, Code, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard, Cuboid,
     Database, DatabaseZap, Download, ExternalLink, File, FileCode2, FileJson2, Folder, FolderLock,
     FolderOpen, Gauge, GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound, Languages,
-    Layers, Layers3, LayoutDashboard, Link, LockKeyhole, LogOut, Mail, Menu, Monitor, Moon, Network,
+    Layers, Layers3, LayoutDashboard, Link, Lock, LockKeyhole, LogOut, Mail, Menu, Monitor, Moon, Network,
     PanelLeftClose, PanelRight, Pause, Pencil, Play, Plug, PlugZap, Plus, RefreshCw, Rocket, RotateCw, Route,
     Ruler, ScrollText, Search, SearchX, Server, Settings, Settings2, Shapes, ShieldAlert,
     ShieldCheck, SlidersHorizontal, Sparkles, SquareArrowOutUpRight, SquareTerminal, Star, Sun,
-    ServerCog, Table2, Terminal, TerminalSquare, Trash2, TrendingUp, TriangleAlert, UploadCloud,
-    UserPlus, Users, Wallet,
+    ServerCog, Table2, Terminal, TerminalSquare, ToggleRight, Trash2, TrendingUp, TriangleAlert,
+    UploadCloud, UserPlus, Users, Wallet,
 };
 
 function renderIcons() {

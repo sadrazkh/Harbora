@@ -53,7 +53,11 @@ public enum AppSourceType
     // Appended (value 6) so existing persisted values stay stable. Source arrives by upload from a
     // developer's machine (`harbora deploy`) rather than being pulled by the server — the app is
     // created first and code is pushed to it afterwards, with no Git remote in between.
-    Upload = 6
+    Upload = 6,
+    // Appended (value 7). The source is rows in this database: a function app's code is typed into
+    // the panel, and publishing generates the whole build context from those rows. There is no
+    // checkout, no upload and no third machine that has to be reachable.
+    InlineCode = 7
 }
 
 public enum AppStatus
