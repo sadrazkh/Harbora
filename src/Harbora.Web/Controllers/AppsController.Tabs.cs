@@ -1,5 +1,6 @@
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
+using Harbora.Modules.Backup.Contracts;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -116,6 +117,27 @@ public sealed partial class AppsController
             .OrderBy(v => v.MountPath)
             .ToListAsync(ct);
 
+        // Sub-project D1: "back up now" per row, and when each volume was last backed up. Matched by
+        // Volume.Name — the same string BackupTargetType.DockerVolume snapshots carry as TargetRef —
+        // rather than by any join table, because that name is already the one thing a volume backup
+        // and a Volume row agree on. Only a terminal, restorable run counts: Pending/Preparing/Running
+        // has not backed anything up yet, and a volume behind such a row must still read "never".
+        var volumeNames = volumes.Select(v => v.Name).ToList();
+        var lastBackupAt = volumeNames.Count == 0
+            ? new Dictionary<string, DateTimeOffset?>()
+            : await db.BackupSnapshots.AsNoTracking()
+                .Where(s => s.WorkspaceId == WorkspaceId
+                    && s.TargetType == BackupTargetType.DockerVolume
+                    && volumeNames.Contains(s.TargetRef)
+                    && (s.Status == BackupSnapshotStatus.Completed
+                        || s.Status == BackupSnapshotStatus.CompletedWithWarnings))
+                .GroupBy(s => s.TargetRef)
+                .Select(g => new { Name = g.Key, LastAt = g.Max(s => s.CompletedAt) })
+                .ToDictionaryAsync(x => x.Name, x => x.LastAt, ct);
+
+        var hasBackupRepository = await db.BackupRepositories.AsNoTracking()
+            .AnyAsync(r => r.WorkspaceId == WorkspaceId && r.IsEnabled, ct);
+
         return View(new AppVolumesViewModel
         {
             Id = app.Id, Name = app.Name, Slug = app.Slug, Kind = app.Kind, Status = app.Status,
@@ -128,6 +150,8 @@ public sealed partial class AppsController
             // Usage, which never loads the collection and so asks db.Volumes.AnyAsync directly).
             HasVolumes = volumes.Count > 0,
             Volumes = volumes,
+            HasBackupRepository = hasBackupRepository,
+            LastBackupAt = lastBackupAt,
         });
     }
 
