@@ -68,7 +68,7 @@ public class VolumeFileCommandTests
     public void A_listing_is_read_into_entries()
     {
         var entries = VolumeFileCommands.ParseListing(
-            "f|1024|1700000000|logo.png\nd|0|1700000001|uploads\n");
+            "f|1024|1700000000|logo.png\nd|0|1700000001|uploads\n").Entries;
 
         entries.Should().HaveCount(2);
         entries[0].Name.Should().Be("uploads");
@@ -83,7 +83,7 @@ public class VolumeFileCommandTests
         // Decided here rather than in the view, so the list somebody sees cannot be ordered
         // differently from the links drawn beside it.
         var entries = VolumeFileCommands.ParseListing(
-            "f|1|1|beta.txt\nd|0|1|zeta\nf|1|1|Alpha.txt\nd|0|1|admin\n");
+            "f|1|1|beta.txt\nd|0|1|zeta\nf|1|1|Alpha.txt\nd|0|1|admin\n").Entries;
 
         entries.Select(e => e.Name).Should().Equal("admin", "zeta", "Alpha.txt", "beta.txt");
     }
@@ -93,7 +93,7 @@ public class VolumeFileCommandTests
     {
         // "report|final.txt" is a legal filename. Splitting on every separator would truncate it to
         // "report", and the download link beside it would point at a file that does not exist.
-        var entries = VolumeFileCommands.ParseListing("f|10|1700000000|report|final.txt\n");
+        var entries = VolumeFileCommands.ParseListing("f|10|1700000000|report|final.txt\n").Entries;
 
         entries.Should().ContainSingle().Which.Name.Should().Be("report|final.txt");
     }
@@ -112,8 +112,36 @@ public class VolumeFileCommandTests
     public void A_line_that_makes_no_sense_is_skipped_rather_than_guessed_at(string line)
     {
         // The alternative is an entry with an invented name or size appearing in a file list, which
-        // somebody then clicks.
-        VolumeFileCommands.ParseListing(line).Should().BeEmpty();
+        // somebody then clicks. None of these shapes is the truncation marker either, so the listing
+        // is not flagged as cut short just because a line was unreadable.
+        var listing = VolumeFileCommands.ParseListing(line);
+
+        listing.Entries.Should().BeEmpty();
+        listing.Truncated.Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_truncation_marker_flags_the_listing_without_being_read_as_a_bogus_entry()
+    {
+        // What CapturingProgress appends once a remote one-off's captured output hits its 1 MiB
+        // bound. It carries no "|" at all, so before this fix it fell into the same bucket as any
+        // other unparseable line — skipped, with nothing left behind to say the listing was cut
+        // short. That silence is exactly what this test rules out.
+        var listing = VolumeFileCommands.ParseListing(
+            "f|10|1700000000|kept.txt\n... [output truncated: exceeded 1048576 characters]\n");
+
+        listing.Truncated.Should().BeTrue();
+        listing.Entries.Should().ContainSingle().Which.Name.Should().Be("kept.txt");
+    }
+
+    [Fact]
+    public void A_listing_with_no_truncation_marker_is_not_flagged_as_truncated()
+    {
+        // The other half of the same guarantee: a listing that always claimed to be partial would
+        // be no more honest than one that never did.
+        var listing = VolumeFileCommands.ParseListing("f|10|1700000000|whole.txt\n");
+
+        listing.Truncated.Should().BeFalse();
     }
 
     [Fact]
@@ -121,7 +149,7 @@ public class VolumeFileCommandTests
     {
         // FromUnixTimeSeconds(0) shows every such file as modified in 1970 and sorts them all to
         // one end, which reads as data rather than as a gap.
-        var entries = VolumeFileCommands.ParseListing("f|10|notatime|x.txt\nf|10|0|y.txt\n");
+        var entries = VolumeFileCommands.ParseListing("f|10|notatime|x.txt\nf|10|0|y.txt\n").Entries;
 
         entries.Should().HaveCount(2);
         entries.Should().OnlyContain(e => e.ModifiedAt == null);
@@ -133,7 +161,7 @@ public class VolumeFileCommandTests
         // A directory's own inode size is not the size of what is in it, and showing it beside real
         // file sizes invites the reader to add them up.
         VolumeFileCommands.ParseListing("d|4096|1700000000|uploads\n")
-            .Should().ContainSingle().Which.SizeBytes.Should().Be(0);
+            .Entries.Should().ContainSingle().Which.SizeBytes.Should().Be(0);
     }
 
     [Theory]
@@ -142,7 +170,10 @@ public class VolumeFileCommandTests
     [InlineData("   ")]
     public void An_empty_directory_lists_nothing_rather_than_failing(string? output)
     {
-        VolumeFileCommands.ParseListing(output).Should().BeEmpty();
+        var listing = VolumeFileCommands.ParseListing(output);
+
+        listing.Entries.Should().BeEmpty();
+        listing.Truncated.Should().BeFalse();
     }
 
     [Fact]
@@ -154,7 +185,7 @@ public class VolumeFileCommandTests
         // the same trap had already been documented twice elsewhere.
         var header = new string([(char)1, (char)0, (char)0, (char)0, (char)0, (char)0, (char)0, (char)30]);
 
-        var entries = VolumeFileCommands.ParseListing(header + "f|21|1700000000|note.txt");
+        var entries = VolumeFileCommands.ParseListing(header + "f|21|1700000000|note.txt").Entries;
 
         entries.Should().ContainSingle();
         entries[0].Name.Should().Be("note.txt");
@@ -226,6 +257,6 @@ public class VolumeFileCommandTests
     public void Windows_line_endings_do_not_become_part_of_a_filename()
     {
         VolumeFileCommands.ParseListing("f|10|1700000000|x.txt\r\n")
-            .Should().ContainSingle().Which.Name.Should().Be("x.txt");
+            .Entries.Should().ContainSingle().Which.Name.Should().Be("x.txt");
     }
 }

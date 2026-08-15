@@ -16,7 +16,6 @@ public class VolumePathTests
 {
     [Theory]
     [InlineData("data/uploads/logo.png", "data/uploads/logo.png")]
-    [InlineData("/data/uploads", "data/uploads")]
     [InlineData("data//uploads///x", "data/uploads/x")]
     [InlineData("./data/./x", "data/x")]
     [InlineData("data/uploads/", "data/uploads")]
@@ -29,9 +28,24 @@ public class VolumePathTests
     public void The_root_is_a_path()
     {
         // Listing the root is the first thing the browser does. Refusing it would mean it never
-        // opens at all.
+        // opens at all. The root is spelled by leaving the path out — an empty string — not by
+        // sending a slash; see below for why a leading slash is refused rather than treated as
+        // another way of asking for the same thing.
         VolumePath.Normalise("").Should().BeEmpty();
-        VolumePath.Normalise("/").Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("/")]
+    [InlineData("/data/uploads")]
+    [InlineData("/etc/passwd")]
+    public void A_leading_slash_is_refused_rather_than_silently_stripped(string typed)
+    {
+        // Stripping it would answer "/etc/passwd" by quietly looking inside the volume's own
+        // "etc/passwd" — a different question than the one that was typed, answered as if it were
+        // the same one. No caller in this codebase ever sends a leading slash: every "path" this
+        // reaches is either built from a value this function already normalised, or left out
+        // entirely for the root, so refusing this breaks nothing that works today.
+        VolumePath.Normalise(typed).Should().BeNull();
     }
 
     [Theory]

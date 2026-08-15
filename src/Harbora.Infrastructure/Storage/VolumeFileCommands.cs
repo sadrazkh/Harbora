@@ -1,3 +1,5 @@
+using Harbora.Infrastructure.Docker;
+
 namespace Harbora.Infrastructure.Storage;
 
 /// <summary>One thing inside a volume.</summary>
@@ -6,6 +8,27 @@ namespace Harbora.Infrastructure.Storage;
 /// <param name="SizeBytes">Size in bytes; meaningless for a directory and reported as 0.</param>
 /// <param name="ModifiedAt">Last modification, or null when the runtime gave something unreadable.</param>
 public sealed record VolumeEntry(string Name, bool IsDirectory, long SizeBytes, DateTimeOffset? ModifiedAt);
+
+/// <summary>
+/// What a directory listing came back as: the entries <see cref="VolumeFileCommands.ParseListing"/>
+/// could make sense of, and whether the helper's own output was cut off before it finished.
+///
+/// Carried as one value rather than as entries plus a side channel, so nothing that reads a listing
+/// can see the entries without also seeing whether they are all of them — the fix this type exists
+/// for is exactly a case where that second half went missing.
+/// </summary>
+/// <param name="Entries">Directories first, then by name — see <see cref="VolumeFileCommands.ParseListing"/>.</param>
+/// <param name="Truncated">
+/// True when the output carried <see cref="CapturingProgress.TruncationMarkerPrefix"/> — the helper
+/// had more to print than the 1 MiB bound allowed, so this listing may be missing entries the
+/// directory actually has.
+/// </param>
+public sealed record VolumeListing(IReadOnlyList<VolumeEntry> Entries, bool Truncated)
+{
+    /// <summary>Nothing was captured — a directory that does not exist, or a helper that failed to
+    /// run at all. Not truncated: there is no output here that could have been cut short.</summary>
+    public static readonly VolumeListing Empty = new([], false);
+}
 
 /// <summary>
 /// The commands that read and write inside a volume, and the parser for what they print.
@@ -132,14 +155,29 @@ public static class VolumeFileCommands
     private static readonly char[] FrameBytes =
         Enumerable.Range(0, 32).Select(c => (char)c).ToArray();
 
-    public static IReadOnlyList<VolumeEntry> ParseListing(string? output)
+    public static VolumeListing ParseListing(string? output)
     {
-        if (string.IsNullOrWhiteSpace(output)) return [];
+        if (string.IsNullOrWhiteSpace(output)) return VolumeListing.Empty;
 
         var entries = new List<VolumeEntry>();
+        var truncated = false;
 
         foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
+            // Only the leading control bytes go — see below — before anything else runs on the
+            // line, so the truncation marker is recognised whether or not framing sits in front of
+            // it. In practice it never does: the marker is appended straight to the buffer by
+            // CapturingProgress, not printed by the container, so it carries no frame. Checked
+            // first because the marker has no "|" in it at all — the split below would just count
+            // it among the unparseable rows below, and the caller would never learn the listing
+            // stopped early.
+            var trimmed = line.TrimStart(FrameBytes).TrimEnd('\r');
+            if (trimmed.StartsWith(CapturingProgress.TruncationMarkerPrefix, StringComparison.Ordinal))
+            {
+                truncated = true;
+                continue;
+            }
+
             // Exactly three splits, so everything after the third separator is the name — a
             // filename may legitimately contain one, and splitting on all of them would truncate it.
             // Docker frames the output of a container with no TTY: every line arrives with a few
@@ -151,7 +189,7 @@ public static class VolumeFileCommands
             // Only the leading ones go. Stripping every control character would also edit a
             // filename that legitimately contains one, and this listing is what the download link
             // beside it is built from.
-            var parts = line.TrimStart(FrameBytes).TrimEnd('\r').Split('|', 4);
+            var parts = trimmed.Split('|', 4);
             if (parts.Length != 4) continue;
 
             var isDirectory = parts[0] == "d";
@@ -173,9 +211,11 @@ public static class VolumeFileCommands
 
         // Directories first, then by name — the order every file browser uses, decided here so the
         // page cannot sort it differently from the download links it draws.
-        return entries
+        var ordered = entries
             .OrderByDescending(e => e.IsDirectory)
             .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        return new VolumeListing(ordered, truncated);
     }
 }
