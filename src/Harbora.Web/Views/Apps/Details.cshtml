@@ -528,6 +528,60 @@
                         href="/apps/addresses" class="text-accent-text hover:underline">@(isFa ? "دادن آدرس" : "Give it one")</a>
                 </p>
             }
+
+            @* ---- Private address ----
+               The name this app's neighbours — other containers on the same environment network —
+               can reach it by. Never a link: it resolves only inside that network, so a click from a
+               browser outside it would just fail. The null state is the one that matters: an app
+               that has not deployed since this shipped has no alias registered yet, and showing one
+               anyway would be the same placeholder-address mistake the public block above exists to
+               avoid. *@
+            <div class="mt-3 pt-3 border-t border-line">
+                <div class="text-[11px] text-ink-faint mb-1">
+                    @(isFa ? "نام داخلی (بین سرویس‌ها)" : "Private address (service-to-service)")
+                </div>
+                @if (app.PrivateAddressState == PrivateAddressOutcome.Registered && !string.IsNullOrWhiteSpace(app.Slug))
+                {
+                    @* Same copy mechanism as the public address and the prebuilt-image reference
+                       above: the element's own text is what gets copied. *@
+                    <code dir="ltr" data-copy-text
+                          class="rounded bg-code text-code-ink px-2 py-0.5 text-[11px]"
+                          title="@(isFa ? "برای کپی کلیک کنید" : "Click to copy")">@Harbora.Infrastructure.Networking.PrivateAddress.Url(app.Slug, app.ContainerPort)</code>
+                    <p class="mt-1 text-[11px] text-ink-faint">
+                        @(isFa
+                            ? "فقط از داخل شبکهٔ همین محیط در دسترس است."
+                            : "Reachable only from inside this environment's network.")
+                    </p>
+                }
+                else if (app.PrivateAddressState == PrivateAddressOutcome.Ambiguous)
+                {
+                    <p data-private-address-state="ambiguous" class="text-xs text-ink-faint">
+                        @(isFa
+                            ? "سرویس دیگری در همین محیط از قبل به این نام پاسخ می‌دهد، پس این نام به این اپ داده نشد."
+                            : "Another service in this environment already answers to that name, so it was withheld from this app.")
+                    </p>
+                }
+                else if (app.PrivateAddressState == PrivateAddressOutcome.KindDoesNotJoin)
+                {
+                    <p data-private-address-state="no-join" class="text-xs text-ink-faint">
+                        @(isFa
+                            ? "این نوع سرویس به شبکهٔ داخلی نمی‌پیوندد، پس نام داخلی ندارد."
+                            : "This kind of service does not join the internal network, so it has no private address.")
+                    </p>
+                }
+                else
+                {
+                    @* Covers both PrivateAddressState == null (has not deployed since this shipped)
+                       and the defensive PrivateAddressOutcome.NoSlug case — Slug is a required field
+                       on App, so NoSlug should not occur in practice. Either way, no alias was ever
+                       registered, so none is shown. *@
+                    <p data-private-address-state="unknown" class="text-xs text-ink-faint">
+                        @(isFa
+                            ? "این نام در دیپلوی بعدی تعیین می‌شود."
+                            : "This name will be assigned on the next deploy.")
+                    </p>
+                }
+            </div>
         </section>
 
         @* ---- Domains ----
