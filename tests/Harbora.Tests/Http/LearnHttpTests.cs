@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.RegularExpressions;
 using FluentAssertions;
+using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
 using Harbora.Domain.Settings;
@@ -28,6 +29,26 @@ public class LearnHttpTests(HarboraHttpFixture fixture)
     private static LearningLibrary RealLibrary() => new(TestPaths.DocsRoot);
 
     private static readonly Regex ChapterCardCount = new("data-chapter-slug=\"", RegexOptions.Compiled);
+
+    /// <summary>Minimal app row — the same shape <c>AppAddressHttpTests.SeedApp</c> uses, without a
+    /// domain this suite never looks at.</summary>
+    private Guid SeedApp(string slug)
+    {
+        var app = new App
+        {
+            WorkspaceId = fixture.WorkspaceId,
+            ServerId = Guid.CreateVersion7(),
+            Name = slug,
+            Slug = slug,
+            Kind = ServiceKind.Web,
+            SourceType = AppSourceType.PrebuiltImage,
+            PrebuiltImage = "ghcr.io/example/seeded:1.0",
+            Status = AppStatus.Running
+        };
+
+        Panel.Seed(db => db.Apps.Add(app));
+        return app.Id;
+    }
 
     [Fact]
     public async Task An_unauthenticated_visitor_is_sent_to_sign_in_rather_than_shown_the_chapters()
@@ -167,5 +188,63 @@ public class LearnHttpTests(HarboraHttpFixture fixture)
         {
             tempChapters.Delete(recursive: true);
         }
+    }
+
+    // ---- the topbar's Help control (HelpMap) ----
+
+    [Fact]
+    public async Task An_app_page_offers_the_help_control_for_the_applications_chapter()
+    {
+        var appId = SeedApp("learn-help-app-page");
+        Panel.GivenUser(fixture.WorkspaceId, "learn-help-app@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.227", "learn-help-app@example.com");
+        var expectedSlug = HelpMap.ChapterFor($"/apps/details/{appId}");
+        expectedSlug.Should().NotBeNull("an app page is exactly the screen HelpMap exists to answer for");
+
+        var html = await (await client.GetAsync($"/apps/details/{appId}")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-help-state=\"chapter\"",
+            "a mapped screen's Help control must say so rather than looking identical to an unmapped one");
+        html.Should().Contain($"href=\"/learn/{expectedSlug}\"",
+            "the Help control must open the chapter HelpMap actually resolved for this request path");
+    }
+
+    /// <summary>
+    /// The mechanism the whole sub-project rests on, proven over real HTTP rather than only against
+    /// <see cref="HelpMap.ChapterFor"/> directly: the volumes tab and the rest of the app page share
+    /// the <c>/apps</c> prefix but must not share a Help target, or "longest prefix wins" would be
+    /// true of the map and false of the control built on it.
+    /// </summary>
+    [Fact]
+    public async Task The_volumes_tab_offers_a_different_help_chapter_than_the_rest_of_the_app_page()
+    {
+        var appId = SeedApp("learn-help-app-volumes");
+        Panel.GivenUser(fixture.WorkspaceId, "learn-help-volumes@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.228", "learn-help-volumes@example.com");
+        var overviewSlug = HelpMap.ChapterFor($"/apps/details/{appId}");
+        var volumesSlug = HelpMap.ChapterFor($"/apps/{appId}/volumes");
+        volumesSlug.Should().NotBe(overviewSlug, "otherwise this test would not be exercising longest-prefix at all");
+
+        var html = await (await client.GetAsync($"/apps/{appId}/volumes")).Content.ReadAsStringAsync();
+
+        html.Should().Contain($"href=\"/learn/{volumesSlug}\"",
+            "the volumes tab's own screen, not the app page's overview, decides which chapter is offered");
+    }
+
+    [Fact]
+    public async Task A_screen_with_no_mapped_chapter_opens_the_index_and_says_so()
+    {
+        Panel.GivenUser(fixture.WorkspaceId, "learn-help-unmapped@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.229", "learn-help-unmapped@example.com");
+        // /workspaces carries no HelpMap entry (LearningCensusTests pins that directly) — the honest
+        // gap this test exists to prove the control handles without 404ing or opening chapter one.
+        HelpMap.ChapterFor("/workspaces").Should().BeNull();
+
+        var html = await (await client.GetAsync("/workspaces")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-help-state=\"index\"",
+            "an unmapped screen's Help control must mark itself as the index fallback, not look like a hit");
+        html.Should().Contain("href=\"/learn\"",
+            "the honest answer for a screen with no chapter is the index, not a guess at the closest one");
     }
 }

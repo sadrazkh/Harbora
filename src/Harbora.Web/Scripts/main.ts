@@ -77,7 +77,7 @@ mountDeployProgress();
 import {
     createIcons, Activity, AlertTriangle, Archive, ArrowRight, ArrowUpLeft, ArrowUpRight, Bell,
     BookOpen, Box, Boxes, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp,
-    CircleCheck, CircleCheckBig, CloudUpload, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard,
+    CircleCheck, CircleCheckBig, CircleHelp, CloudUpload, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard,
     Cuboid, Database, DatabaseZap, Download, ExternalLink, File, FileCode2, FileJson2, Folder,
     FolderLock, FolderOpen, Gauge, GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound,
     Languages, Layers, Layers3, LayoutDashboard, Link, LockKeyhole, LogOut, Mail, Menu, Monitor, Moon, Network,
@@ -91,7 +91,7 @@ import {
 const usedIcons = {
     Activity, AlertTriangle, Archive, ArrowRight, ArrowUpLeft, ArrowUpRight, Bell, BookOpen, Box,
     Boxes, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleCheck,
-    CircleCheckBig, CloudUpload, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard, Cuboid,
+    CircleCheckBig, CircleHelp, CloudUpload, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard, Cuboid,
     Database, DatabaseZap, Download, ExternalLink, File, FileCode2, FileJson2, Folder, FolderLock,
     FolderOpen, Gauge, GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound, Languages,
     Layers, Layers3, LayoutDashboard, Link, LockKeyhole, LogOut, Mail, Menu, Monitor, Moon, Network,
