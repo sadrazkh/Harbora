@@ -99,6 +99,28 @@ public sealed class AppOverviewViewModel : AppTabViewModel
     /// </para>
     /// </summary>
     public Harbora.Application.Abstractions.ContainerDetail? LiveContainer { get; init; }
+
+    // ---- instant backup (sub-project E, Task 2) ----
+    //
+    // "Back up now" has to say what it would capture before it does anything — an archive of nothing
+    // presented as a success is exactly the failure the spec calls out. Volumes and environment
+    // variables live off this app's App.EnvironmentVariables (already loaded by Details) and this
+    // list; the image reference is read the same way ApplicationTargetStager itself reads it — off
+    // App.ActiveDeploymentId — so the card and the stager can never disagree about whether one exists.
+
+    /// <summary>
+    /// This app's volumes, loaded here rather than assumed from <see cref="AppTabViewModel.HasVolumes"/>
+    /// so the card can name them instead of just knowing there are some.
+    /// </summary>
+    public IReadOnlyList<Harbora.Domain.Apps.Volume> BackupVolumes { get; init; } = [];
+
+    /// <summary>
+    /// Whether the workspace has an enabled backup repository the module can queue a snapshot into.
+    /// False is not "hide the control" — B3's rule for an empty state applies here too: the card says
+    /// what it would capture regardless, and only the action itself is withheld until there is
+    /// somewhere for it to go.
+    /// </summary>
+    public bool HasBackupRepository { get; init; }
 }
 
 /// <summary>

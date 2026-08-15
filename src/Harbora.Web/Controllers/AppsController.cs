@@ -41,7 +41,8 @@ public sealed partial class AppsController(
     ICurrentUser currentUser,
     Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling,
     Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Deployments.HarboraRuntimeOptions> runtimeOptions,
-    AppAddressAssigner addresses) : Controller
+    AppAddressAssigner addresses,
+    Harbora.Modules.Backup.Infrastructure.BackupSnapshotService backupSnapshots) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -619,6 +620,18 @@ public sealed partial class AppsController(
         // this into a 500 for a page that otherwise has everything it needs.
         var liveContainer = await TryInspectAsync(app.ServerId, containerName, ct);
 
+        // ---- what "Back up now" would capture (sub-project E, Task 2) ----
+        //
+        // Loaded here, not assumed: the card names these volumes rather than just knowing there are
+        // some, so the query that used to be a bare AnyAsync now keeps the rows.
+        var backupVolumes = await db.Volumes.AsNoTracking()
+            .Where(v => v.AppId == app.Id)
+            .OrderBy(v => v.MountPath)
+            .ToListAsync(ct);
+
+        var hasBackupRepository = await db.BackupRepositories.AsNoTracking()
+            .AnyAsync(r => r.WorkspaceId == WorkspaceId && r.IsEnabled, ct);
+
         // The Overview tab, wrapped for the shared shell: _Shell.cshtml is typed to AppTabViewModel,
         // so what reaches View() has to be an instance of it rather than the raw entity Details used
         // to receive directly.
@@ -633,10 +646,11 @@ public sealed partial class AppsController(
             SourceType = app.SourceType,
             GitRepositoryFullName = app.GitRepository?.FullName,
             InstanceSizeKey = app.InstanceSizeKey,
-            // Overview no longer loads the Volumes collection (that Include moved to the Volumes tab,
-            // which is the whole point of giving it its own route), so the header's "is there a Data
-            // button" question is answered the same way Usage answers it: an existence check.
-            HasVolumes = await db.Volumes.AnyAsync(v => v.AppId == app.Id, ct),
+            // Overview no longer loads the Volumes collection as an Include (that moved to the
+            // Volumes tab, which is the whole point of giving it its own route) — but the instant
+            // backup card below needs the rows anyway, so the header's "is there a Data button"
+            // question is answered from the same list rather than a second existence query.
+            HasVolumes = backupVolumes.Count > 0,
             App = app,
             InstanceSize = instanceSize,
             Replicas = app.DesiredReplicas ?? 1,
@@ -644,7 +658,9 @@ public sealed partial class AppsController(
             Server = server,
             ContainerName = containerName,
             LatestDeployment = latestDeployment,
-            LiveContainer = liveContainer
+            LiveContainer = liveContainer,
+            BackupVolumes = backupVolumes,
+            HasBackupRepository = hasBackupRepository
         });
     }
 
