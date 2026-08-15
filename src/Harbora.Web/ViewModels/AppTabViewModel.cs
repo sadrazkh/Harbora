@@ -85,6 +85,20 @@ public sealed class AppOverviewViewModel : AppTabViewModel
     /// is "none", not a blank field.
     /// </summary>
     public Harbora.Domain.Deployments.Deployment? LatestDeployment { get; init; }
+
+    /// <summary>
+    /// What the engine said about <see cref="ContainerName"/> just now — how long it has been up,
+    /// how often it has restarted, whether its health check passes, and the digest of the image it
+    /// is actually running. B3 Task 2's capability, asked here.
+    ///
+    /// <para>
+    /// One nullable record rather than loose fields, because null is itself the state this exists to
+    /// carry: a throw, a timeout, or an engine that simply cannot answer (today, always true for a
+    /// remote node — its agent has no inspect verb yet) all collapse to the same "we do not know",
+    /// which the card renders as unknown rather than as a zero nobody actually reported.
+    /// </para>
+    /// </summary>
+    public Harbora.Application.Abstractions.ContainerDetail? LiveContainer { get; init; }
 }
 
 /// <summary>

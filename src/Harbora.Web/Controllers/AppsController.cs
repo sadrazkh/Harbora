@@ -587,6 +587,13 @@ public sealed partial class AppsController(
             ? Harbora.Infrastructure.Deployments.DeploymentPlanning.LegacyContainerName(app.Slug)
             : Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.Slug, latestDeployment.Number);
 
+        // ---- specifics: how the container is actually doing right now (B3 Task 3) ----
+        //
+        // An enrichment, not the page: TryInspectAsync below swallows a throw, a timeout, and a
+        // remote node's "no inspect verb yet" the same way, so Docker being slow or busy never turns
+        // this into a 500 for a page that otherwise has everything it needs.
+        var liveContainer = await TryInspectAsync(app.ServerId, containerName, ct);
+
         // The Overview tab, wrapped for the shared shell: _Shell.cshtml is typed to AppTabViewModel,
         // so what reaches View() has to be an instance of it rather than the raw entity Details used
         // to receive directly.
@@ -611,8 +618,44 @@ public sealed partial class AppsController(
             ContainerPort = app.ContainerPort,
             Server = server,
             ContainerName = containerName,
-            LatestDeployment = latestDeployment
+            LatestDeployment = latestDeployment,
+            LiveContainer = liveContainer
         });
+    }
+
+    /// <summary>
+    /// Asks the app's engine what its container is doing right now, tolerating everything short of
+    /// the caller's own cancellation.
+    ///
+    /// <para>
+    /// The specifics card is an enrichment of the app page, not the page itself: an engine that
+    /// throws, hangs, or (a remote node, today, always) simply has no inspect command to answer with
+    /// must not turn "how is this app doing" into a 500 for "can I see this app at all". Every one of
+    /// those outcomes collapses to null here, which the view already knows how to render as unknown.
+    /// </para>
+    /// </summary>
+    private async Task<ContainerDetail?> TryInspectAsync(Guid serverId, string containerName, CancellationToken ct)
+    {
+        try
+        {
+            using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            bounded.CancelAfter(TimeSpan.FromSeconds(5));
+            var docker = await engines.ResolveAsync(serverId, bounded.Token);
+            return await docker.InspectAsync(containerName, bounded.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Our own bound fired, not the request being aborted — the slow engine this method
+            // exists to survive.
+            logger.LogWarning(
+                "Inspecting container {Container} for app specifics timed out.", containerName);
+            return null;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            logger.LogWarning(e, "Could not inspect container {Container} for app specifics.", containerName);
+            return null;
+        }
     }
 
     /// <summary>

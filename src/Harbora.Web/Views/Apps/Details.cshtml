@@ -670,6 +670,64 @@
                         @(specVersion == "none" ? (isFa ? "هنوز دیپلوی نشده" : "Never deployed") : specVersion)
                     </dd>
                 </div>
+                @* ---- live status ----
+                   B3 Task 3. What the engine says the container is doing right now: how long it has
+                   been up, how often it has restarted, whether its health check passes. A null
+                   LiveContainer means nobody could ask — a throw, a timeout, or (today, always) a
+                   remote node, whose agent has no inspect verb yet. For that whole class of apps
+                   this is the ordinary, permanent state, so the copy says "unknown", never a zero
+                   and never a hint to just try again. *@
+                <div class="col-span-2">
+                    <dt class="text-ink-faint">@(isFa ? "وضعیت زندهٔ کانتینر" : "Live status")</dt>
+                    @if (Model.LiveContainer is { } live)
+                    {
+                        var health = live.Healthy switch { true => "healthy", false => "unhealthy", null => "not-checked" };
+                        var healthLabel = (live.Healthy, isFa) switch
+                        {
+                            (true, true) => "سالم",
+                            (true, false) => "Healthy",
+                            (false, true) => "ناسالم",
+                            (false, false) => "Unhealthy",
+                            // Not the same as unhealthy: no health check was configured, so the
+                            // engine was never asked to judge this container.
+                            (null, true) => "بدون بررسی سلامت",
+                            (null, false) => "Not checked"
+                        };
+                        var restartsValue = live.RestartCount?.ToString() ?? "unknown";
+                        var restartsLabel = live.RestartCount is { } n
+                            ? (isFa ? $"{n} بار ری‌استارت" : n == 1 ? "1 restart" : $"{n} restarts")
+                            : (isFa ? "تعداد ری‌استارت نامشخص" : "restart count unknown");
+                        var uptimeLabel = live.StartedAt is { } startedAt
+                            ? (isFa
+                                ? $"شروع {Harbora.Web.Infrastructure.Dates.Ago(startedAt, DateTimeOffset.UtcNow, true)}"
+                                : $"started {Harbora.Web.Infrastructure.Dates.Ago(startedAt, DateTimeOffset.UtcNow, false)}")
+                            : (isFa ? "زمان شروع نامشخص" : "start time unknown");
+                        <dd class="text-ink" data-spec-health="@health" data-spec-restarts="@restartsValue">
+                            @healthLabel
+                            <span class="text-ink-faint">· @uptimeLabel · @restartsLabel</span>
+                        </dd>
+                    }
+                    else
+                    {
+                        <dd class="text-ink-faint" data-spec-health="unknown">
+                            @(isFa
+                                ? "موتور کانتینر پاسخی نداد. برای برخی اپ‌ها — مثلاً آن‌هایی که روی یک نود دیگر اجرا می‌شوند — این وضعیت همیشگی است، نه یک اتفاق موقت."
+                                : "The container engine did not answer. For some apps — for example ones running on a remote node — that is the permanent state, not a one-off glitch.")
+                        </dd>
+                    }
+                </div>
+                <div class="col-span-2">
+                    <dt class="text-ink-faint">@(isFa ? "دایجست ایمیج در حال اجرا" : "Running image digest")</dt>
+                    @if (Model.LiveContainer?.ImageDigest is { } digest)
+                    {
+                        <dd class="text-ink font-mono truncate" dir="ltr" data-copy-text
+                            title="@(isFa ? "برای کپی کلیک کنید" : "Click to copy")">@digest</dd>
+                    }
+                    else
+                    {
+                        <dd class="text-ink-faint">@(isFa ? "نامشخص" : "Unknown")</dd>
+                    }
+                </div>
             </dl>
         </section>
 
