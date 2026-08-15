@@ -254,24 +254,45 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         try
         {
             var c = await client.Containers.InspectContainerAsync(containerNameOrId, ct);
-
-            var health = c.State?.Health?.Status;
-
-            return new ContainerDetail(
-                c.ID,
-                c.Name?.TrimStart('/') ?? containerNameOrId,
-                c.Config?.Image ?? c.Image,
-                c.Image,
-                c.State?.Status ?? "unknown",
-                c.State?.Status ?? "unknown",
-                // No health check configured is not "unhealthy": it is "we were not told how to
-                // ask". Callers distinguish the two, so null must survive to them.
-                Healthy: health is null ? c.State?.Running : health.Equals("healthy", StringComparison.OrdinalIgnoreCase),
-                RestartCount: (int)c.RestartCount,
-                StartedAt: ParseTimestamp(c.State?.StartedAt));
+            return MapDetail(c, containerNameOrId);
         }
         catch (DockerContainerNotFoundException) { return null; }
         catch (DockerApiException e) when ((int)e.StatusCode == 404) { return null; }
+    }
+
+    /// <summary>
+    /// Turns Docker's inspect response into <see cref="ContainerDetail"/>. Pulled out of
+    /// <see cref="InspectAsync"/> so the mapping is reachable from a test without a Docker daemon —
+    /// every field on <see cref="ContainerInspectResponse"/> used here is a plain settable property,
+    /// so a test builds one directly rather than standing up a real container.
+    /// </summary>
+    internal static ContainerDetail MapDetail(ContainerInspectResponse c, string fallbackName)
+    {
+        var health = c.State?.Health?.Status;
+
+        return new ContainerDetail(
+            c.ID,
+            c.Name?.TrimStart('/') ?? fallbackName,
+            c.Config?.Image ?? c.Image,
+            c.Image,
+            c.State?.Status ?? "unknown",
+            // The inspect API has no formatted status line ("Up 3 hours") the way the list API
+            // does — ContainerState carries only the short state word, in Status. So this really is
+            // the same value as State above, not a slip: there is nothing else to put here without
+            // computing an uptime string ourselves, which Dates.Ago already does for the view from
+            // StartedAt. Left duplicated rather than invented.
+            c.State?.Status ?? "unknown",
+            // No health check configured is not "unhealthy": it is "we were not told how to
+            // ask". Callers distinguish the two, so null must survive to them. (Unlike the node
+            // runtime's identical-looking line, this does NOT fall back to c.State.Running — that
+            // would turn "nobody checked" into an affirmative "healthy" for the common case of a
+            // container with no HEALTHCHECK. The node's Healthy feeds deployer placement decisions,
+            // where "running with no health check" is arguably "fit to serve"; this one feeds a
+            // health badge on a page a person reads, where it would just be wrong. The two are
+            // meant to differ now.)
+            Healthy: health is null ? null : health.Equals("healthy", StringComparison.OrdinalIgnoreCase),
+            RestartCount: (int)c.RestartCount,
+            StartedAt: ParseTimestamp(c.State?.StartedAt));
     }
 
     public async Task EnsureNetworkAsync(string name, CancellationToken ct)
@@ -404,10 +425,17 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
 
     // --- helpers ---
 
-    private static DateTimeOffset? ParseTimestamp(string? value) =>
-        DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed)
-            ? parsed
-            : null;
+    private static DateTimeOffset? ParseTimestamp(string? value)
+    {
+        if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
+            return null;
+
+        // Docker reports "0001-01-01T00:00:00Z" (Go's zero time) for a container that was created
+        // but never started — TryParse accepts that string just fine, so without this check a
+        // container sitting in "created" would report a real year-1 StartedAt and the view would
+        // render an uptime of hundreds of thousands of days instead of "start time unknown".
+        return parsed.Year <= 1 ? null : parsed;
+    }
 
     /// <summary>
     /// Splits an image reference into what Docker's pull API wants: a repository and a tag *or*

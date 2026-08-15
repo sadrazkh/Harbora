@@ -6,11 +6,15 @@ using Xunit;
 namespace Harbora.Tests;
 
 /// <summary>
-/// Asking the engine about one container.
+/// Asking <see cref="FakeDockerEngine"/> about one container — that it faithfully echoes back
+/// whatever a test seeded into it, and answers null for anything it was never told about.
 ///
-/// The panel could list containers and read a State and a Status string, and that was all — so
-/// "how long has this been up" and "which image is actually running" had no source at all. The node
-/// agent has extracted both since it was written; this is the same question asked of the local engine.
+/// This is deliberately narrow: it exercises only <see cref="FakeDockerEngine.InspectAsync"/>, a
+/// dictionary lookup, so it says nothing about whether a real engine's own inspect-response mapping
+/// is correct. That mapping — including the no-health-check case this file used to claim coverage
+/// of without ever reaching the code that decides it — is tested directly against
+/// <see cref="Harbora.Infrastructure.Docker.DockerEngine.MapDetail"/> in
+/// <see cref="DockerEngineInspectMappingTests"/>.
 /// </summary>
 public class ContainerDetailTests
 {
@@ -44,7 +48,7 @@ public class ContainerDetailTests
     }
 
     [Fact]
-    public async Task A_container_with_no_health_check_reports_unknown_rather_than_unhealthy()
+    public async Task A_fake_engine_seeded_with_no_health_check_echoes_healthy_as_null()
     {
         var engine = new FakeDockerEngine();
         engine.SeedDetail("harbora-worker-1", new ContainerDetail(
@@ -55,7 +59,7 @@ public class ContainerDetailTests
         var detail = await engine.InspectAsync("harbora-worker-1", CancellationToken.None);
 
         detail!.Healthy.Should().BeNull(
-            "no health check configured is not 'unhealthy' — it is 'we were not told how to ask', " +
-            "the distinction DockerContainerRuntime already makes explicitly");
+            "the fake returns exactly what was seeded — a null Healthy stays null through the " +
+            "TryGetValue this test actually exercises");
     }
 }
