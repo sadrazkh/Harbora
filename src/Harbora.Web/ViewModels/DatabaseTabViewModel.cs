@@ -85,4 +85,10 @@ public sealed class DatabaseUsageViewModel : DatabaseTabViewModel
     /// being split out to stay behind on Overview.
     /// </summary>
     public int LinkedApps { get; init; }
+
+    /// <summary>
+    /// The chart window this render answers — see <see cref="AppUsageViewModel.SelectedMinutes"/>,
+    /// which this mirrors for the same reason the two Usage tabs share one range control design.
+    /// </summary>
+    public int SelectedMinutes { get; init; } = Harbora.Infrastructure.Monitoring.UsageRangeWindow.OneHour;
 }

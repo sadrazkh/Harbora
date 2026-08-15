@@ -38,12 +38,21 @@ public sealed partial class AppsController
     /// against its own ceiling, plus the same figures charted over time. Moved out of Overview
     /// rather than rewritten: the measurement logic already treats "never sampled" as its own state
     /// rather than a zero (do-not-change item 18), and moving it verbatim is what keeps that true.
+    ///
+    /// <para>
+    /// <paramref name="minutes"/> is the chart window, taken as an action parameter and clamped by
+    /// <see cref="Harbora.Infrastructure.Monitoring.UsageRangeWindow.Clamp"/> rather than read from
+    /// <c>Request.Query</c> in the view — an arbitrary value from the URL must not reach the range
+    /// control or the chart islands unvalidated.
+    /// </para>
     /// </summary>
     [HttpGet("apps/{id:guid}/usage")]
-    public async Task<IActionResult> Usage(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Usage(Guid id, int? minutes, CancellationToken ct)
     {
         var app = await LoadHeaderAsync(id, ct);
         if (app is null) return NotFound();
+
+        var selectedMinutes = Harbora.Infrastructure.Monitoring.UsageRangeWindow.Clamp(minutes);
 
         // The container is named per deployment — old and new coexist during a cutover — so the one
         // to read is the deployment currently serving, not a name derived from the app alone.
@@ -86,7 +95,8 @@ public sealed partial class AppsController
             DiskLimitBytes = app.DiskLimitBytes,
             DiskUsedBytes = disk.MeasuredBytes,
             DiskCaveat = Harbora.Infrastructure.Tenancy.InstanceDisk.Caveat(disk),
-            MeasuredAt = samples.FirstOrDefault()?.Timestamp
+            MeasuredAt = samples.FirstOrDefault()?.Timestamp,
+            SelectedMinutes = selectedMinutes
         });
     }
 

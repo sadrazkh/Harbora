@@ -41,12 +41,20 @@ public sealed partial class DatabasesController
     /// ceiling, how many apps are attached, and the same figures charted over time. Moved out of
     /// Overview rather than rewritten: the same "this moment" grid and the same two metrics-chart
     /// islands, reading the same <see cref="Row"/> helper the list and Overview already use.
+    ///
+    /// <para>
+    /// <paramref name="minutes"/> mirrors <c>AppsController.Usage</c>'s own parameter — taken here,
+    /// clamped to the three offered windows, and put on the view model rather than read from
+    /// <c>Request.Query</c> in Razor.
+    /// </para>
     /// </summary>
     [HttpGet("{id:guid}/usage")]
-    public async Task<IActionResult> Usage(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Usage(Guid id, int? minutes, CancellationToken ct)
     {
         var service = await LoadHeaderAsync(id, ct);
         if (service is null) return NotFound();
+
+        var selectedMinutes = Harbora.Infrastructure.Monitoring.UsageRangeWindow.Clamp(minutes);
 
         var canManage = await access.CanTouchServiceAsync(service.Id, Capabilities.DatabasesManage, ct);
 
@@ -78,6 +86,7 @@ public sealed partial class DatabasesController
             StorageMeasuredAt = row.StorageMeasuredAt,
             DiskLimitBytes = service.DiskLimitBytes,
             LinkedApps = row.LinkedApps,
+            SelectedMinutes = selectedMinutes,
         });
     }
 }
