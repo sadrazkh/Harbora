@@ -23,6 +23,15 @@ public sealed class CapturingProgress(int maxChars) : IProgress<string>
     /// </summary>
     public const int DefaultMaxChars = 1024 * 1024;
 
+    /// <summary>
+    /// The start of the marker line <see cref="Report"/> appends once the bound is hit. Exposed so a
+    /// parser reading this output back — <c>VolumeFileCommands.ParseListing</c> today — can recognise
+    /// the line as "the listing stopped here" instead of treating it as just another row it cannot
+    /// make sense of and silently dropping it, which is the same "looks complete, isn't" defect this
+    /// class exists to close, one layer up.
+    /// </summary>
+    public const string TruncationMarkerPrefix = "... [output truncated:";
+
     private readonly StringBuilder _text = new();
     private readonly Lock _gate = new();
     private bool _truncated;
@@ -35,7 +44,7 @@ public sealed class CapturingProgress(int maxChars) : IProgress<string>
 
             if (_text.Length + value.Length + 1 > maxChars)
             {
-                _text.Append("... [output truncated: exceeded ").Append(maxChars).Append(" characters]\n");
+                _text.Append(TruncationMarkerPrefix).Append(" exceeded ").Append(maxChars).Append(" characters]\n");
                 _truncated = true;
                 return;
             }

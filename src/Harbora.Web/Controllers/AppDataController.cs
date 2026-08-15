@@ -68,12 +68,14 @@ public sealed class AppDataController(
         // A path that is not one is not an error page: it is somebody following a stale link, and
         // the root is the honest place to put them.
         var normalised = VolumePath.Normalise(path) ?? string.Empty;
+        var listing = await files.ListAsync(app.ServerId, volume.Name, normalised, ct);
 
         model = model with
         {
             Path = normalised,
             Parent = VolumePath.ParentOf(normalised),
-            Entries = await files.ListAsync(app.ServerId, volume.Name, normalised, ct),
+            Entries = listing.Entries,
+            Truncated = listing.Truncated,
             IsReadOnly = volume.ReadOnly
         };
 

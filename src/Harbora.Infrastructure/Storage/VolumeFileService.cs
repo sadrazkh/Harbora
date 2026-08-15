@@ -35,7 +35,7 @@ public sealed class VolumeFileService(
     /// </summary>
     public const long MaxFileBytes = 32L * 1024 * 1024;
 
-    public async Task<IReadOnlyList<VolumeEntry>> ListAsync(
+    public async Task<VolumeListing> ListAsync(
         Guid serverId, string volumeName, string normalisedPath, CancellationToken ct)
     {
         var output = new StringBuilder();
@@ -47,7 +47,7 @@ public sealed class VolumeFileService(
         // A directory that is not there and a directory that is empty both list nothing. The
         // caller cannot act differently on the two, and inventing an error for the first would
         // make a volume that has not been written to yet look broken.
-        return exit == 0 ? VolumeFileCommands.ParseListing(output.ToString()) : [];
+        return exit == 0 ? VolumeFileCommands.ParseListing(output.ToString()) : VolumeListing.Empty;
     }
 
     /// <summary>The bytes of one file, or null when it could not be read.</summary>

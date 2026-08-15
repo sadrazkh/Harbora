@@ -50,7 +50,21 @@ else
 
     @if (volume is not null)
     {
-        <div class="rounded-xl border border-line bg-surface shadow-panel">
+        <div class="rounded-xl border border-line bg-surface shadow-panel"
+             data-listing-state="@(Model.Truncated ? "truncated" : "complete")">
+            @if (Model.Truncated)
+            {
+                @* The helper's own output hit CapturingProgress's 1 MiB bound before the listing
+                   finished — see VolumeFileCommands.ParseListing. Entries below are real, but the
+                   directory may hold more than is shown, and saying nothing here would be exactly
+                   the "looks complete, isn't" defect this whole fix exists to close. *@
+                <div class="alert-warning m-4">
+                    <i data-lucide="triangle-alert" class="h-4 w-4 shrink-0"></i>
+                    <span>@(isFa
+                        ? "این فهرست ناقص است؛ خروجی کمکی پیش از پایان یافتن لیست بریده شد. ممکن است فایل‌های بیشتری اینجا باشند که نشان داده نشده‌اند."
+                        : "This listing is incomplete — the helper's output was cut off before it finished. There may be more files here than are shown.")</span>
+                </div>
+            }
             @* Where we are, and every step back. The root is always reachable in one click, which
                matters most when somebody is several folders deep and lost. *@
             <div class="flex flex-wrap items-center gap-1 border-b border-line px-5 py-3 text-xs">

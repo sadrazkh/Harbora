@@ -21,6 +21,14 @@ public sealed record AppDataViewModel
     public IReadOnlyList<VolumeEntry> Entries { get; init; } = [];
     public bool IsReadOnly { get; init; }
 
+    /// <summary>
+    /// True when the helper's own output was cut off before the listing finished — see
+    /// <see cref="Harbora.Infrastructure.Storage.VolumeListing.Truncated"/>. <see cref="Entries"/> may
+    /// then be missing files the directory actually has, and the page has to say so rather than let a
+    /// partial listing pass as a complete one.
+    /// </summary>
+    public bool Truncated { get; init; }
+
     /// <summary>Each path segment with the path that reaches it, for the breadcrumb.</summary>
     public IReadOnlyList<(string Name, string Path)> Crumbs
     {
