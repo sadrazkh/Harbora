@@ -60,6 +60,10 @@ public sealed class HarboraWebFactory : WebApplicationFactory<Program>
     /// <summary>Records what the API and the UI asked the deploy engine to do.</summary>
     public RecordingDeploymentEngine Deployments { get; } = new();
 
+    /// <summary>What the panel is told when it asks a container how it is doing — seeded per test,
+    /// answering null for anything nobody seeded, the same as the real engines do.</summary>
+    public Fakes.FakeDockerEngine Docker { get; } = new();
+
     /// <summary>
     /// How many background workers were taken out, and what was left behind. Asserted by the smoke
     /// test: if the registration idiom in <c>DependencyInjection</c> ever changes shape, this harness
@@ -98,6 +102,9 @@ public sealed class HarboraWebFactory : WebApplicationFactory<Program>
 
             services.RemoveAll<IDeploymentEngine>();
             services.AddSingleton<IDeploymentEngine>(Deployments);
+
+            services.RemoveAll<IDockerEngine>();
+            services.AddSingleton<IDockerEngine>(Docker);
 
             services.AddSingleton<IStartupFilter, RemoteIpFromHeader>();
         });

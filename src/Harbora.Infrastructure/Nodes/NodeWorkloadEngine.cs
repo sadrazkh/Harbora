@@ -346,6 +346,20 @@ public sealed class NodeWorkloadEngine(
             cpu, memory, sample.MemoryLimitBytes ?? 0, sample.NetRxBytes ?? 0, sample.NetTxBytes ?? 0);
     }
 
+    /// <summary>
+    /// Not available yet. <c>DockerContainerRuntime.InspectAsync</c> on the node agent already reads
+    /// image digest, restart count, started-at and the nullable health status — the capability
+    /// exists — but the node command catalog (<see cref="NodeContracts.NodeCommands"/>) has no verb
+    /// that hands that shape back to the control plane: <c>GetWorkloadStatus</c> is the nearest
+    /// existing route, and it aggregates across every container in a workload into a non-nullable
+    /// <c>Healthy</c> bool with no digest at all, which is not this contract. Rather than force that
+    /// mismatch into a <see cref="ContainerDetail"/> and lose the "unknown" health state this record
+    /// exists to carry, this returns null — the honest "we cannot ask a v1 node this yet" — until a
+    /// dedicated inspect verb is added to the node contract.
+    /// </summary>
+    public Task<ContainerDetail?> InspectAsync(string containerNameOrId, CancellationToken ct) =>
+        Task.FromResult<ContainerDetail?>(null);
+
     // --- logs ---
 
     public async Task<string> GetLogsAsync(string containerId, int tailLines, CancellationToken ct)

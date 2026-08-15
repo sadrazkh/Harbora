@@ -136,6 +136,13 @@ public sealed class RemoteDockerEngine(
         return await res.Content.ReadFromJsonAsync<ContainerStats>(ct);
     }
 
+    public async Task<ContainerDetail?> InspectAsync(string containerNameOrId, CancellationToken ct)
+    {
+        var res = await Client().GetAsync($"agent/containers/{containerNameOrId}/inspect", ct);
+        if (!res.IsSuccessStatusCode) return null;
+        return await res.Content.ReadFromJsonAsync<ContainerDetail>(ct);
+    }
+
     public Task EnsureNetworkAsync(string name, CancellationToken ct) => PostJson("agent/networks/ensure", new { name }, ct);
     public Task ConnectNetworkAsync(string containerNameOrId, string network, CancellationToken ct) =>
         PostJson("agent/networks/connect", new { container = containerNameOrId, network }, ct);

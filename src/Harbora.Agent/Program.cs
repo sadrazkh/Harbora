@@ -65,6 +65,9 @@ app.MapGet("/agent/containers", (string? label, IDockerEngine e, CancellationTok
 app.MapGet("/agent/containers/{id}/stats", async (string id, IDockerEngine e, CancellationToken ct) =>
     await e.GetStatsAsync(id, ct) is { } s ? Results.Ok(s) : Results.NotFound());
 
+app.MapGet("/agent/containers/{id}/inspect", async (string id, IDockerEngine e, CancellationToken ct) =>
+    await e.InspectAsync(id, ct) is { } d ? Results.Ok(d) : Results.NotFound());
+
 app.MapPost("/agent/containers/run", async (DockerRunRequest req, IDockerEngine e, CancellationToken ct) =>
     Results.Ok(new { id = await e.RunContainerAsync(req, ct) }));
 

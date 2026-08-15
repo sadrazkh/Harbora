@@ -30,6 +30,7 @@ public sealed class FakeDockerEngine : IDockerEngine
     private readonly object _gate = new();
     private readonly ConcurrentDictionary<string, ContainerInfo> _containers = new();
     private readonly ConcurrentDictionary<string, ImageInfo> _images = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ContainerDetail> _details = new(StringComparer.Ordinal);
     private int _idSeq;
 
     /// <summary>Every operation, in the order it happened.</summary>
@@ -187,6 +188,14 @@ public sealed class FakeDockerEngine : IDockerEngine
         return id;
     }
 
+    /// <summary>Seeds what <see cref="InspectAsync"/> answers for a container name — tests must never
+    /// construct the expected detail inside the assertion itself.</summary>
+    public FakeDockerEngine SeedDetail(string name, ContainerDetail detail)
+    {
+        _details[name] = detail;
+        return this;
+    }
+
     private void Record(string operation, string target)
     {
         lock (_gate) _calls.Add(new Call(operation, target));
@@ -334,6 +343,14 @@ public sealed class FakeDockerEngine : IDockerEngine
     {
         ct.ThrowIfCancellationRequested();
         return Task.FromResult<ContainerStats?>(null);
+    }
+
+    /// <summary>Whatever was seeded for this name with <see cref="SeedDetail"/>, or null — a
+    /// container the fake has never heard of answers the same way the real engines do.</summary>
+    public Task<ContainerDetail?> InspectAsync(string containerNameOrId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(_details.TryGetValue(containerNameOrId, out var detail) ? detail : null);
     }
 
     public Task EnsureNetworkAsync(string name, CancellationToken ct)
