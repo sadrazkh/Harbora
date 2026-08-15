@@ -75,6 +75,14 @@ public sealed class SnapshotBrowserViewModel
     public IReadOnlyList<EngineEntry> Entries { get; init; } = [];
     public string RestoreRoot { get; init; } = "";
 
+    /// <summary>
+    /// Sub-project E, Task 3, in sub-project F's own vocabulary
+    /// (<c>DeploymentPlanning.RollbackEligibleDeploymentIds</c>): whether the image this backup would
+    /// restore onto is still one the pruner has kept. Null when <see cref="Snapshot"/> did not target
+    /// an application — the question has no meaning for a directory, database or volume backup.
+    /// </summary>
+    public bool? RestoreImageIsInstant { get; init; }
+
     /// <summary>Breadcrumb segments, each with the path that reaches it.</summary>
     public IReadOnlyList<(string Name, string Path)> Breadcrumbs
     {

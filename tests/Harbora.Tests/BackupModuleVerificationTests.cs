@@ -754,6 +754,7 @@ public sealed class BackupModuleVerificationTests : IDisposable
     private BackupCenterController Center(bool enabled = true)
     {
         var controller = new BackupCenterController(
+            _db,
             new BackupRepositoryService(_db, new SingleEngineResolver(_engine),
                 new PassthroughProtector(), new SilentAuditLog(), new TestCaller(_workspace),
                 NullLogger<BackupRepositoryService>.Instance),
@@ -762,7 +763,8 @@ public sealed class BackupModuleVerificationTests : IDisposable
             Restores(),
             new TestCaller(_workspace),
             Options.Create(new BackupFeatureOptions { Backup = enabled }),
-            Options.Create(_options))
+            Options.Create(_options),
+            Options.Create(new Harbora.Infrastructure.Deployments.HarboraRuntimeOptions()))
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

@@ -102,6 +102,32 @@
     <section class="rounded-xl border border-line bg-surface p-5">
         <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "بازگردانی" : "Restore")</h2>
 
+        @* ---- image eligibility (sub-project E, Task 3) ----
+           A backup naming an image nobody can pull restores into nothing, and the moment to say so
+           is here — before the form below is even filled in, not after it is submitted. Borrows F's
+           own vocabulary (DeploymentPlanning.RollbackEligibleDeploymentIds: "instant" / "redeploy")
+           rather than inventing a second one for the same fact. Absent for anything that did not
+           target an application — the question has no meaning for a directory, database or volume
+           backup. *@
+        @if (Model.RestoreImageIsInstant is { } instant)
+        {
+            <div class="mb-3 rounded-lg border px-3 py-2 text-xs @(instant ? "border-ok bg-ok-soft text-ok" : "border-warn bg-warn-soft text-warn")"
+                 data-restore-image-state="@(instant ? "instant" : "redeploy")">
+                @if (instant)
+                {
+                    @(isFa
+                        ? "ایمیجی که این پشتیبان به آن نیاز دارد هنوز نگه‌داشته شده و بازگردانی می‌تواند فوراً روی آن اجرا شود."
+                        : "The image this backup would restore onto is still retained — this can run as an instant restore.")
+                }
+                else
+                {
+                    @(isFa
+                        ? "ایمیجی که این پشتیبان زمان گرفتنش به آن نیاز داشت دیگر نگه‌داشته نشده (یا اپ مربوطه دیگر وجود ندارد)؛ داده‌ها بازمی‌گردند اما اجرای دوباره نیاز به استقرار مجدد از مبدأ دارد."
+                        : "The image this backup needed at the time it was taken is no longer retained (or the app it names no longer exists) — the data can still be restored, but running it again needs a redeploy from source.")
+                }
+            </div>
+        }
+
         <form asp-action="Restore" method="post" class="space-y-3">
             @Html.AntiForgeryToken()
             <input type="hidden" name="snapshotId" value="@Model.Snapshot.Id" />
