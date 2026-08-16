@@ -44,6 +44,21 @@ public interface IDockerEngine
     /// <summary>One container in detail, or null when the engine has no such container.</summary>
     Task<ContainerDetail?> InspectAsync(string containerNameOrId, CancellationToken ct);
 
+    /// <summary>
+    /// How long this container has run and how often it has restarted, or null when the engine has no
+    /// such container or declines to answer.
+    ///
+    /// <para>
+    /// Separate from <see cref="InspectAsync"/> deliberately, and narrower on purpose: a v1 node
+    /// refuses <c>InspectAsync</c> outright because it cannot honestly fill the image digest and the
+    /// tri-state health <see cref="ContainerDetail"/> promises (see <c>NodeWorkloadEngine.InspectAsync</c>'s
+    /// own doc comment for why). But it already carries both of these two figures on every
+    /// workload-status answer, so the uptime/restart series does not have to wait on that larger
+    /// question — it asks for exactly the two fields every engine can answer honestly today.
+    /// </para>
+    /// </summary>
+    Task<ContainerLifecycle?> GetLifecycleAsync(string containerNameOrId, CancellationToken ct);
+
     Task EnsureNetworkAsync(string name, CancellationToken ct);
     /// <summary>Attach an existing container to a network (idempotent) — used to give Traefik ingress into per-tenant networks.</summary>
     Task ConnectNetworkAsync(string containerNameOrId, string network, CancellationToken ct);
@@ -154,6 +169,14 @@ public record ContainerDetail(
     bool? Healthy,
     int? RestartCount,
     DateTimeOffset? StartedAt);
+
+/// <summary>
+/// The two figures a lifecycle series tracks, and nothing else — see
+/// <see cref="IDockerEngine.GetLifecycleAsync"/> for why this is not just a narrower
+/// <see cref="ContainerDetail"/>. Both null-when-unknown for the same reason every figure on that
+/// record is: a zero here is a specific claim, not a stand-in for "nobody answered".
+/// </summary>
+public record ContainerLifecycle(int? RestartCount, DateTimeOffset? StartedAt);
 
 public record ImageInfo(string Id, string Tag, DateTimeOffset CreatedAt, long SizeBytes);
 public record ContainerStats(double CpuPercent, long MemoryUsedBytes, long MemoryLimitBytes, long NetRxBytes, long NetTxBytes);

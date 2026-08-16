@@ -444,6 +444,7 @@ public sealed class NodeSchedulingTests : IDisposable
         public Task<IReadOnlyList<ContainerInfo>> ListContainersAsync(string? f, CancellationToken ct) => Task.FromResult<IReadOnlyList<ContainerInfo>>([]);
         public Task<ContainerStats?> GetStatsAsync(string id, CancellationToken ct) => Task.FromResult<ContainerStats?>(null);
         public Task<ContainerDetail?> InspectAsync(string id, CancellationToken ct) => Task.FromResult<ContainerDetail?>(null);
+        public Task<ContainerLifecycle?> GetLifecycleAsync(string id, CancellationToken ct) => Task.FromResult<ContainerLifecycle?>(null);
         public Task EnsureNetworkAsync(string name, CancellationToken ct) => Task.CompletedTask;
         public Task ConnectNetworkAsync(string container, string network, CancellationToken ct) => Task.CompletedTask;
         public Task EnsureVolumeAsync(string name, CancellationToken ct) => Task.CompletedTask;

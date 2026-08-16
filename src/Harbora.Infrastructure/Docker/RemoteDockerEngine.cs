@@ -143,6 +143,14 @@ public sealed class RemoteDockerEngine(
         return await res.Content.ReadFromJsonAsync<ContainerDetail>(ct);
     }
 
+    /// <summary>The same inspect the agent already answers — no cheaper call exists for this engine
+    /// either, so this projects the two lifecycle fields rather than adding a second round trip.</summary>
+    public async Task<ContainerLifecycle?> GetLifecycleAsync(string containerNameOrId, CancellationToken ct)
+    {
+        var detail = await InspectAsync(containerNameOrId, ct);
+        return detail is null ? null : new ContainerLifecycle(detail.RestartCount, detail.StartedAt);
+    }
+
     public Task EnsureNetworkAsync(string name, CancellationToken ct) => PostJson("agent/networks/ensure", new { name }, ct);
     public Task ConnectNetworkAsync(string containerNameOrId, string network, CancellationToken ct) =>
         PostJson("agent/networks/connect", new { container = containerNameOrId, network }, ct);

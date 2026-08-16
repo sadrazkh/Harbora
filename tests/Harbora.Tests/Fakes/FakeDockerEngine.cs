@@ -359,6 +359,16 @@ public sealed class FakeDockerEngine : IDockerEngine
         return Task.FromResult(_details.TryGetValue(containerNameOrId, out var detail) ? detail : null);
     }
 
+    /// <summary>Projects whatever <see cref="SeedDetail"/> seeded — a test that wants "the engine
+    /// declined to answer" for lifecycle purposes just seeds no detail, same as for InspectAsync.</summary>
+    public Task<ContainerLifecycle?> GetLifecycleAsync(string containerNameOrId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(_details.TryGetValue(containerNameOrId, out var detail)
+            ? new ContainerLifecycle(detail.RestartCount, detail.StartedAt)
+            : null);
+    }
+
     public Task EnsureNetworkAsync(string name, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();

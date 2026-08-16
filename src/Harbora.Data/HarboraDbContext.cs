@@ -102,6 +102,7 @@ public class HarboraDbContext : DbContext
         Set<Harbora.Modules.Sync.Domain.SyncConflict>();
     public DbSet<MonitoringMetric> MonitoringMetrics => Set<MonitoringMetric>();
     public DbSet<MetricRollup> MetricRollups => Set<MetricRollup>();
+    public DbSet<ContainerLifecycleCursor> ContainerLifecycleCursors => Set<ContainerLifecycleCursor>();
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
     public DbSet<AppTemplateVersion> AppTemplateVersions => Set<AppTemplateVersion>();
@@ -386,6 +387,13 @@ public class HarboraDbContext : DbContext
         // PeriodStart first — would make every read scan the whole window and filter.
         b.Entity<MetricRollup>(e =>
             e.HasIndex(x => new { x.ServerId, x.Name, x.ResourceRef, x.Period, x.PeriodStart }));
+
+        // One cursor per container per server — the collector loads its whole set for a server in one
+        // query and looks each container up by name, so this is the index that query actually uses.
+        // Unique because two cursors for the same container would leave the delta computation reading
+        // (and updating) whichever one it happened to find first.
+        b.Entity<ContainerLifecycleCursor>(e =>
+            e.HasIndex(x => new { x.ServerId, x.ResourceRef }).IsUnique());
 
         b.Entity<AppTemplate>(e => e.HasIndex(x => x.Key).IsUnique());
 

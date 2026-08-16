@@ -261,6 +261,17 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
     }
 
     /// <summary>
+    /// The two lifecycle figures, read the same way <see cref="InspectAsync"/> reads the rest of
+    /// them — there is no cheaper call on the local engine, so this is a thin projection rather than
+    /// a second Docker request.
+    /// </summary>
+    public async Task<ContainerLifecycle?> GetLifecycleAsync(string containerNameOrId, CancellationToken ct)
+    {
+        var detail = await InspectAsync(containerNameOrId, ct);
+        return detail is null ? null : new ContainerLifecycle(detail.RestartCount, detail.StartedAt);
+    }
+
+    /// <summary>
     /// Turns Docker's inspect response into <see cref="ContainerDetail"/>. Pulled out of
     /// <see cref="InspectAsync"/> so the mapping is reachable from a test without a Docker daemon —
     /// every field on <see cref="ContainerInspectResponse"/> used here is a plain settable property,

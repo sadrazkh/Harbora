@@ -360,6 +360,37 @@ public sealed class NodeWorkloadEngine(
     public Task<ContainerDetail?> InspectAsync(string containerNameOrId, CancellationToken ct) =>
         Task.FromResult<ContainerDetail?>(null);
 
+    /// <summary>
+    /// Answered from <c>GetWorkloadStatus</c> — no new verb, unlike <see cref="InspectAsync"/> above.
+    /// That method refuses to answer at all because it cannot fill the digest and tri-state health
+    /// <see cref="ContainerDetail"/> promises; this one asks for exactly the two fields
+    /// <see cref="WorkloadStatus"/> already carries on every status answer, so a lifecycle series does
+    /// not have to wait on the larger question <c>InspectAsync</c>'s own comment leaves open.
+    /// </summary>
+    public async Task<ContainerLifecycle?> GetLifecycleAsync(string containerNameOrId, CancellationToken ct)
+    {
+        var outcome = await commands.SendAsync(
+            nodeId, NodeContracts.NodeCommands.GetWorkloadStatus,
+            new WorkloadRequest { TenantId = PlatformTenant, WorkloadId = containerNameOrId },
+            // A fresh read every time, the same reasoning GetStatsAsync above states: replaying an
+            // idempotency key would hand back a status from a minute ago as though it were now.
+            idempotencyKey: $"lifecycle:{nodeId}:{containerNameOrId}:{DateTimeOffset.UtcNow:yyyyMMddHHmmss}",
+            tenantScope: PlatformTenant,
+            ct: ct);
+
+        // Deliberately not thrown — an older agent or an unreachable node must not turn a lifecycle
+        // sample into a collector-wide failure. Null already means "not measured" to every caller.
+        if (!outcome.Succeeded) return null;
+
+        var status = outcome.ResultAs<WorkloadStatus>();
+        // "absent" is what GetWorkloadStatusHandler answers for a workload id it does not recognise
+        // (a stale container name from a redeploy, say) — there is nothing to report a restart count
+        // against, so this reads the same as the engine never having heard of it.
+        if (status is null || status.State == "absent") return null;
+
+        return new ContainerLifecycle(status.RestartCount, status.StartedAt);
+    }
+
     // --- logs ---
 
     public async Task<string> GetLogsAsync(string containerId, int tailLines, CancellationToken ct)
