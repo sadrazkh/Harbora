@@ -367,6 +367,45 @@
                         </dd>
                     }
                 </div>
+                @* ---- uptime + restart history (Phase 6 M3) ----
+                   Unlike the live status card above, this is a real window: how much of the last 30
+                   days this container was actually observed running, from the app.up/app.restarts
+                   series LifecycleHistory maintains, not a figure read from the engine this instant.
+                   An app with nothing collected reports unknown, never a fabricated 100%. *@
+                <div class="col-span-2">
+                    <dt class="text-ink-faint">@(isFa ? "پایداری (۳۰ روز اخیر)" : "Uptime (last 30 days)")</dt>
+                    @{
+                        var uptimeView = Harbora.Infrastructure.Monitoring.MetricDisplay.For(Model.UptimePercent30d, "%");
+                    }
+                    @if (app.Kind == ServiceKind.Cron)
+                    {
+                        <dd class="text-ink-faint" data-spec-uptime-percent="not-applicable">
+                            @(isFa
+                                ? "این اپ یک کار زمان‌بندی‌شده است؛ پایداری کانتینر برای آن معنا ندارد."
+                                : "This app is a scheduled job — container uptime does not apply to it.")
+                        </dd>
+                    }
+                    else if (uptimeView.HasData)
+                    {
+                        var restartsLabel = Model.RestartCount30d is { } r
+                            ? (isFa ? $"{r} بار ری‌استارت" : r == 1 ? "1 restart" : $"{r} restarts")
+                            : (isFa ? "تعداد ری‌استارت نامشخص" : "restart count unknown");
+                        <dd class="text-ink"
+                            data-spec-uptime-percent="@Model.UptimePercent30d?.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)"
+                            data-spec-restart-count-30d="@(Model.RestartCount30d?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown")">
+                            @uptimeView.Text
+                            <span class="text-ink-faint">· @restartsLabel @(isFa ? "در ۳۰ روز اخیر" : "in the last 30 days")</span>
+                        </dd>
+                    }
+                    else
+                    {
+                        <dd class="text-ink-faint" data-spec-uptime-percent="unknown">
+                            @(isFa
+                                ? "هنوز داده‌ای برای این کانتینر جمع‌آوری نشده است."
+                                : "Nothing has been collected for this container yet.")
+                        </dd>
+                    }
+                </div>
                 <div class="col-span-2">
                     <dt class="text-ink-faint">@(isFa ? "دایجست ایمیج در حال اجرا" : "Running image digest")</dt>
                     @if (Model.LiveContainer?.ImageDigest is { } digest)

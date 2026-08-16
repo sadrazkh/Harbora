@@ -42,7 +42,8 @@ public sealed partial class AppsController(
     Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling,
     Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Deployments.HarboraRuntimeOptions> runtimeOptions,
     AppAddressAssigner addresses,
-    Harbora.Modules.Backup.Infrastructure.BackupSnapshotService backupSnapshots) : Controller
+    Harbora.Modules.Backup.Infrastructure.BackupSnapshotService backupSnapshots,
+    Harbora.Infrastructure.Monitoring.LifecycleHistory lifecycle) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -621,6 +622,15 @@ public sealed partial class AppsController(
         // this into a 500 for a page that otherwise has everything it needs.
         var liveContainer = await TryInspectAsync(app.ServerId, containerName, ct);
 
+        // ---- uptime percent + restart history (M3) ----
+        //
+        // Read from the app.up/app.restarts series LifecycleHistory maintains — a real window, not a
+        // live-only number. An app with nothing collected against this container name (never
+        // deployed, or between deployments) reports unknown for both, never a fabricated 100%/0.
+        var lifecycleSince = DateTimeOffset.UtcNow.AddDays(-30);
+        var uptimePercent30d = await lifecycle.UptimePercentAsync(app.ServerId, containerName, lifecycleSince, DateTimeOffset.UtcNow, ct);
+        var restartCount30d = await lifecycle.RestartCountAsync(app.ServerId, containerName, lifecycleSince, DateTimeOffset.UtcNow, ct);
+
         // ---- what "Back up now" would capture (sub-project E, Task 2) ----
         //
         // Loaded here, not assumed: the card names these volumes rather than just knowing there are
@@ -660,6 +670,8 @@ public sealed partial class AppsController(
             ContainerName = containerName,
             LatestDeployment = latestDeployment,
             LiveContainer = liveContainer,
+            UptimePercent30d = uptimePercent30d,
+            RestartCount30d = restartCount30d,
             BackupVolumes = backupVolumes,
             HasBackupRepository = hasBackupRepository
         });

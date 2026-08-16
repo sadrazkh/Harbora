@@ -100,6 +100,27 @@ public sealed class AppOverviewViewModel : AppTabViewModel
     /// </summary>
     public Harbora.Application.Abstractions.ContainerDetail? LiveContainer { get; init; }
 
+    // ---- uptime percent + restart history (Phase 6 M3) ----
+    //
+    // A real window rather than the live-only figures above: LiveContainer's restart count and
+    // started-at are read from the engine right now and say nothing about last week. These come from
+    // the app.up/app.restarts series instead, so the panel can answer "how reliable has this actually
+    // been" rather than only "is it up this instant".
+
+    /// <summary>
+    /// The fraction of the last 30 days this app's container was observed running, 0-100, or null
+    /// when nothing was ever collected for it — an app with no samples is unknown, never a fabricated
+    /// 100%. See <see cref="Harbora.Infrastructure.Monitoring.LifecycleHistory.UptimePercentAsync"/>.
+    /// </summary>
+    public double? UptimePercent30d { get; init; }
+
+    /// <summary>
+    /// Restarts attributed to the last 30 days, or null alongside <see cref="UptimePercent30d"/> when
+    /// nothing was ever collected. Zero is a real, measured answer — an app that has genuinely never
+    /// restarted reports 0, not unknown.
+    /// </summary>
+    public int? RestartCount30d { get; init; }
+
     // ---- instant backup (sub-project E, Task 2) ----
     //
     // "Back up now" has to say what it would capture before it does anything — an archive of nothing

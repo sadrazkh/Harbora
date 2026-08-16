@@ -6,6 +6,17 @@
     var err = TempData["Error"] as string;
     string Pct(double? d) => d is null ? "" : d.Value.ToString("0.#");
     string Gb(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
+    // RestartRate is not a percentage of an allocation the way the other two metrics are — the
+    // summary line has to say so rather than appending "%" to a restart count.
+    string ThresholdSummary(Harbora.Domain.Monitoring.Alert a, string? appName) => a.Metric switch
+    {
+        AlertMetric.RestartRate => isFa
+            ? $"روی «{appName}» · بیش از {Pct(a.ThresholdPercent)} بار ری‌استارت در {a.SustainedMinutes} دقیقه"
+            : $"watches {appName} · more than {Pct(a.ThresholdPercent)} restart(s) in {a.SustainedMinutes}m",
+        _ => isFa
+            ? $"روی «{appName}» · {(a.Metric == AlertMetric.CpuPercent ? "CPU" : "حافظه")} ≥ {Pct(a.ThresholdPercent)}٪ به مدت {a.SustainedMinutes} دقیقه"
+            : $"watches {appName} · {a.Metric} ≥ {Pct(a.ThresholdPercent)}% for {a.SustainedMinutes}m"
+    };
     string HealthClass(string s) => s.ToLower() switch
     {
         "running" => "bg-ok/15 text-ok",
@@ -181,9 +192,7 @@
               @if (hasThreshold)
               {
                   <p class="mt-1 text-xs text-ink-faint" data-alert-threshold-summary>
-                      @(isFa
-                          ? $"روی «{watchedApp?.Name}» · {(a.Metric == AlertMetric.CpuPercent ? "CPU" : "حافظه")} ≥ {Pct(a.ThresholdPercent)}٪ به مدت {a.SustainedMinutes} دقیقه"
-                          : $"watches {watchedApp?.Name} · {a.Metric} ≥ {Pct(a.ThresholdPercent)}% for {a.SustainedMinutes}m")
+                      @ThresholdSummary(a, watchedApp?.Name)
                   </p>
               }
               @if (a.LastError is not null)
@@ -252,8 +261,9 @@
                                   <option value="" selected="@(a.Metric is null)">@(isFa ? "— بدون سنجه —" : "— no metric —")</option>
                                   <option value="MemoryPercent" selected="@(a.Metric == AlertMetric.MemoryPercent)">@(isFa ? "حافظه" : "Memory")</option>
                                   <option value="CpuPercent" selected="@(a.Metric == AlertMetric.CpuPercent)">CPU</option>
+                                  <option value="RestartRate" selected="@(a.Metric == AlertMetric.RestartRate)">@(isFa ? "نرخ ری‌استارت" : "Restart rate")</option>
                               </select>
-                              <input name="thresholdPercent" type="number" min="1" max="100" value="@Pct(a.ThresholdPercent)" placeholder="@(isFa ? "٪ آستانه" : "% threshold")"
+                              <input name="thresholdPercent" type="number" min="1" max="1000" step="1" value="@Pct(a.ThresholdPercent)" placeholder="@(isFa ? "٪ آستانه / تعداد" : "% threshold / count")"
                                      class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                               <input name="sustainedMinutes" type="number" min="0" max="1440" value="@a.SustainedMinutes" placeholder="@(isFa ? "دقیقه" : "minutes")"
                                      class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
@@ -320,16 +330,17 @@
                         <option value="" selected>@(isFa ? "— بدون سنجه —" : "— no metric —")</option>
                         <option value="MemoryPercent">@(isFa ? "حافظه" : "Memory")</option>
                         <option value="CpuPercent">CPU</option>
+                        <option value="RestartRate">@(isFa ? "نرخ ری‌استارت" : "Restart rate")</option>
                     </select>
-                    <input name="thresholdPercent" type="number" min="1" max="100" placeholder="@(isFa ? "٪ آستانه" : "% threshold")"
+                    <input name="thresholdPercent" type="number" min="1" max="1000" step="1" placeholder="@(isFa ? "٪ آستانه / تعداد" : "% threshold / count")"
                            class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                     <input name="sustainedMinutes" type="number" min="0" max="1440" value="5" placeholder="@(isFa ? "دقیقه" : "minutes")"
                            class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
                 </div>
                 <p class="mt-2 text-xs text-ink-faint">
                     @(isFa
-                        ? "درصد از سهم خودِ اپ. باید در تمام بازه بالای خط بماند — یک نمونهٔ گذرا هشدار نمی‌دهد."
-                        : "Percentage of the app's own allocation. It must hold above the line for the whole window — a passing spike says nothing.")
+                        ? "برای CPU/حافظه: درصد از سهم خودِ اپ که باید در تمام بازه بالای خط بماند — یک نمونهٔ گذرا هشدار نمی‌دهد. برای نرخ ری‌استارت: تعداد دفعات ری‌استارت در بازهٔ زمانی (دقیقه) به‌جای درصد."
+                        : "For CPU/memory: percentage of the app's own allocation, held for the whole window — a passing spike says nothing. For restart rate: a plain restart count within the window (in minutes), not a percentage.")
                 </p>
             </details>
 
