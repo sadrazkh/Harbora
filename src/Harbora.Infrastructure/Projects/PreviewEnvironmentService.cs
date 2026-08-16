@@ -215,7 +215,7 @@ public sealed class PreviewEnvironmentService(
         await creationBilling.SaveAsync(parent.WorkspaceId,
             [new Billing.CreatedBillableResource(
                 Domain.Billing.BilledResourceType.App,
-                preview.Id, preview.Name, preview.InstanceSizeKey)], ct);
+                preview.Id, preview.Name, preview.InstanceSizeKey, preview.ServerId)], ct);
 
         if (PreviewPolicy.Advice(config) is { } advice)
             logger.LogInformation("Preview {Slug}: {Advice}", preview.Slug, advice);

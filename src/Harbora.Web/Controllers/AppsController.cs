@@ -385,7 +385,8 @@ public sealed partial class AppsController(
         try
         {
             await creationBilling.SaveAsync(WorkspaceId,
-                [new(Harbora.Domain.Billing.BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey)], ct);
+                [new(Harbora.Domain.Billing.BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey,
+                    app.ServerId)], ct);
         }
         catch (Harbora.Infrastructure.Billing.CreationPaymentRequiredException ex)
         {
@@ -494,9 +495,9 @@ public sealed partial class AppsController(
                 .OrderBy(a => a.PreviewBranch)
                 .ToListAsync(ct);
 
-        // The sizes this workspace may move between, so the resize control offers the same list the
-        // create form did rather than a free-text box.
-        ViewBag.Sizes = await SizeChoicesAsync(app.InstanceSizeKey, ct);
+        // The resize control is the SizePicker view component now, which resolves the tiers this
+        // workspace may move between itself — pinned to the host the app already runs on, because a
+        // resize does not move a workload. Nothing reads a size list off ViewBag here any more.
 
         // The databases this application is wired to, and the ones it could be.
         //
@@ -1556,19 +1557,14 @@ public sealed partial class AppsController(
         ViewBag.QuickStarts = (await FeaturedCardsAsync(6, ct))
             .Concat(quickStarts.Where(t => t.IsManagedService).Take(4)).ToList();
 
-        ViewBag.Servers = await db.Servers.OrderByDescending(s => s.IsLocal).ThenBy(s => s.Name)
-            .Select(s => new SelectListItem(s.IsLocal ? s.Name + " (local)" : s.Name, s.Id.ToString())).ToListAsync(ct);
+        // The server list and the size list used to be built here for two dropdowns on the form. The
+        // SizePicker view component asks those questions itself now — including which servers this
+        // workspace's plan may place on and which tiers it allows — so building them again here would
+        // be six queries a request whose answers nothing reads.
 
-        // Offer only the instance sizes this workspace's plan allows.
-        var plan = await db.Workspaces.Where(w => w.Id == WorkspaceId).Select(w => w.PlanId).FirstOrDefaultAsync(ct) is { } pid
-            ? await db.Plans.FirstOrDefaultAsync(p => p.Id == pid, ct)
-            : await db.Plans.FirstOrDefaultAsync(p => p.IsDefault, ct);
-        var allowed = plan is null || string.IsNullOrWhiteSpace(plan.AllowedSizeKeys)
-            ? null
-            : plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        // The platform default, preselected. Without one, every create form started at "no ceiling",
-        // which is the option nobody picks on purpose and the one that costs the most.
+        // The platform default, still needed: it is what the chooser opens on. Without one, every
+        // create form started at "no ceiling", which is the option nobody picks on purpose and the one
+        // that costs the most.
         var defaultSize = await db.Settings.IgnoreQueryFilters()
             .Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.DefaultInstanceSize)
             .Select(s => s.Value).FirstOrDefaultAsync(ct);
@@ -1579,16 +1575,6 @@ public sealed partial class AppsController(
                 .Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.PreviewsDefault)
                 .Select(s => s.Value).FirstOrDefaultAsync(ct),
             "true", StringComparison.OrdinalIgnoreCase);
-
-        var sizes = await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct);
-        ViewBag.Sizes = sizes
-            .Where(s => allowed is null || allowed.Contains(s.Key))
-            .Select(s => new SelectListItem(
-                Harbora.Infrastructure.Tenancy.InstanceSizeLabel.For(
-                    s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes,
-                    s.RunningRatePerHourMinor, creationBilling.Currency), s.Key,
-                string.Equals(s.Key, defaultSize, StringComparison.OrdinalIgnoreCase)))
-            .ToList();
     }
 
     /// <summary>

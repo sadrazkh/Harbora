@@ -3179,6 +3179,42 @@ namespace Harbora.Data.Migrations
                     b.ToTable("Servers");
                 });
 
+            modelBuilder.Entity("Harbora.Domain.Servers.ServerInstanceOffer", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("InstanceSizeKey")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<bool>("IsOffered")
+                        .HasColumnType("boolean");
+
+                    b.Property<long?>("RunningRatePerHourMinor")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid>("ServerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long?>("StoppedRatePerHourMinor")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ServerId", "InstanceSizeKey")
+                        .IsUnique();
+
+                    b.ToTable("ServerInstanceOffers");
+                });
+
             modelBuilder.Entity("Harbora.Domain.Services.DatabaseAccessAudit", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3756,6 +3792,10 @@ namespace Harbora.Data.Migrations
 
                     b.Property<long>("DiskBytes")
                         .HasColumnType("bigint");
+
+                    b.Property<string>("Family")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<bool>("IsBuiltIn")
                         .HasColumnType("boolean");
@@ -4837,6 +4877,15 @@ namespace Harbora.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Server");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Servers.ServerInstanceOffer", b =>
+                {
+                    b.HasOne("Harbora.Domain.Servers.Server", null)
+                        .WithMany()
+                        .HasForeignKey("ServerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Harbora.Domain.Services.DatabaseAccessGrant", b =>

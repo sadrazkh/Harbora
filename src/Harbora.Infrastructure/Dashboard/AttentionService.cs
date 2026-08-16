@@ -3,6 +3,7 @@ using Harbora.Data;
 using System.Reflection;
 using Harbora.Domain.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Harbora.Infrastructure.Dashboard;
 
@@ -13,7 +14,8 @@ namespace Harbora.Infrastructure.Dashboard;
 /// on DNS and TLS for every domain is a dashboard nobody opens. The certificate facts come from the
 /// daily watcher, which does perform real handshakes and records what it found.
 /// </summary>
-public sealed class AttentionService(HarboraDbContext db, ISystemClock clock)
+public sealed class AttentionService(
+    HarboraDbContext db, ISystemClock clock, IOptions<Monitoring.MonitoringOptions> monitoringOptions)
 {
     /// <summary>How far back a failure still counts as news.</summary>
     private static readonly TimeSpan RecentWindow = TimeSpan.FromDays(7);
@@ -89,23 +91,28 @@ public sealed class AttentionService(HarboraDbContext db, ISystemClock clock)
 
         var disk = await DiskRatioAsync(ct);
 
-        return AttentionRules.Build(new AttentionFacts
-        {
-            FailedDeployments = failedDeployments.Select(d => (d.App, d.Id, d.ErrorMessage)).ToList(),
-            CrashedApps = crashed.Select(a => (a.Name, a.Id)).ToList(),
-            FailedBackups = failedBackups.Select(b =>
-                (string.IsNullOrWhiteSpace(b.TargetRef) ? b.Type.ToString() : b.TargetRef, b.ErrorMessage)).ToList(),
-            BrokenChannels =
-                brokenAlerts.Select(a => (a.Name, ChannelKind.Alert, a.LastError!))
-                    .Concat(brokenDeliveries.Select(d => (d.Name, ChannelKind.BackupDelivery, d.LastError!)))
-                    .ToList(),
-            CertificateProblems = certificates.Select(c => DescribeCertificate(c.Host, c.Status, c.ExpiresAt, c.LastError)).ToList(),
-            DiskUsedRatio = disk,
-            UpdateAvailableTag = isOperator ? await NewerReleaseAsync(ct) : null,
-            NeverDeployed = neverDeployed.Select(a => (a.Name, a.Id)).ToList(),
-            HasAnyApp = appIds.Count > 0,
-            HasAnyBackupSchedule = await db.BackupSchedules.AnyAsync(s => s.WorkspaceId == workspaceId && s.IsEnabled, ct)
-        });
+        return AttentionRules.Build(
+            new AttentionFacts
+            {
+                FailedDeployments = failedDeployments.Select(d => (d.App, d.Id, d.ErrorMessage)).ToList(),
+                CrashedApps = crashed.Select(a => (a.Name, a.Id)).ToList(),
+                FailedBackups = failedBackups.Select(b =>
+                    (string.IsNullOrWhiteSpace(b.TargetRef) ? b.Type.ToString() : b.TargetRef, b.ErrorMessage)).ToList(),
+                BrokenChannels =
+                    brokenAlerts.Select(a => (a.Name, ChannelKind.Alert, a.LastError!))
+                        .Concat(brokenDeliveries.Select(d => (d.Name, ChannelKind.BackupDelivery, d.LastError!)))
+                        .ToList(),
+                CertificateProblems = certificates.Select(c => DescribeCertificate(c.Host, c.Status, c.ExpiresAt, c.LastError)).ToList(),
+                DiskUsedRatio = disk,
+                UpdateAvailableTag = isOperator ? await NewerReleaseAsync(ct) : null,
+                NeverDeployed = neverDeployed.Select(a => (a.Name, a.Id)).ToList(),
+                HasAnyApp = appIds.Count > 0,
+                HasAnyBackupSchedule = await db.BackupSchedules.AnyAsync(s => s.WorkspaceId == workspaceId && s.IsEnabled, ct)
+            },
+            // Same figure the disk-warning alert and the monitoring page's own banner use — see
+            // MonitoringOptions.DiskWarnRatio for why all three deliberately read one configured
+            // number rather than each carrying its own copy.
+            monitoringOptions.Value.DiskWarnRatio);
     }
 
     /// <summary>

@@ -84,8 +84,8 @@ import {
     PanelLeftClose, PanelRight, Pause, Pencil, Play, Plug, PlugZap, Plus, RefreshCw, Rocket, RotateCw, Route,
     Ruler, ScrollText, Search, SearchX, Server, Settings, Settings2, Shapes, ShieldAlert,
     ShieldCheck, SlidersHorizontal, Sparkles, SquareArrowOutUpRight, SquareTerminal, Star, Sun,
-    ServerCog, Table2, Terminal, TerminalSquare, ToggleRight, Trash2, TrendingUp, TriangleAlert,
-    UploadCloud, UserPlus, Users, Wallet,
+    ServerCog, ServerOff, Table2, Terminal, TerminalSquare, ToggleRight, Trash2, TrendingUp,
+    TriangleAlert, UploadCloud, UserPlus, Users, Wallet,
 } from 'lucide';
 
 const usedIcons = {
@@ -98,8 +98,8 @@ const usedIcons = {
     PanelLeftClose, PanelRight, Pause, Pencil, Play, Plug, PlugZap, Plus, RefreshCw, Rocket, RotateCw, Route,
     Ruler, ScrollText, Search, SearchX, Server, Settings, Settings2, Shapes, ShieldAlert,
     ShieldCheck, SlidersHorizontal, Sparkles, SquareArrowOutUpRight, SquareTerminal, Star, Sun,
-    ServerCog, Table2, Terminal, TerminalSquare, ToggleRight, Trash2, TrendingUp, TriangleAlert,
-    UploadCloud, UserPlus, Users, Wallet,
+    ServerCog, ServerOff, Table2, Terminal, TerminalSquare, ToggleRight, Trash2, TrendingUp,
+    TriangleAlert, UploadCloud, UserPlus, Users, Wallet,
 };
 
 function renderIcons() {

@@ -143,4 +143,36 @@ public class ThresholdRuleTests
         ThresholdRule.MayRepeat(Now.AddMinutes(-5), Now).Should().BeFalse();
         ThresholdRule.MayRepeat(Now - ThresholdRule.RepeatAfter, Now).Should().BeTrue();
     }
+
+    [Fact]
+    public void Omitting_the_repeat_window_falls_back_to_the_shipped_default()
+    {
+        // Every call site that does not carry a configured MonitoringOptions.ThresholdRepeatAfterHours
+        // — this file's own tests included — must see exactly the old, hardcoded hour.
+        ThresholdRule.MayRepeat(Now.AddMinutes(-30), Now).Should().BeFalse("thirty minutes is under the default hour");
+        ThresholdRule.MayRepeat(Now.AddHours(-1), Now).Should().BeTrue("a full hour has passed");
+    }
+
+    [Fact]
+    public void A_configured_repeat_window_shorter_than_the_default_allows_an_earlier_repeat()
+    {
+        // The whole point of MonitoringOptions.ThresholdRepeatAfterHours: an operator who wants a
+        // noisier nag can have one, without waiting for MayRepeat's caller to be rewritten.
+        var tenMinutes = TimeSpan.FromMinutes(10);
+
+        ThresholdRule.MayRepeat(Now.AddMinutes(-5), Now, tenMinutes).Should()
+            .BeFalse("five minutes is under the configured ten");
+        ThresholdRule.MayRepeat(Now.AddMinutes(-11), Now, tenMinutes).Should()
+            .BeTrue("eleven minutes has passed the configured ten, though not the shipped hour");
+    }
+
+    [Fact]
+    public void A_configured_repeat_window_longer_than_the_default_delays_a_repeat_that_would_otherwise_fire()
+    {
+        var threeHours = TimeSpan.FromHours(3);
+
+        ThresholdRule.MayRepeat(Now - ThresholdRule.RepeatAfter, Now, threeHours).Should()
+            .BeFalse("the shipped hour has passed but the configured three hours has not");
+        ThresholdRule.MayRepeat(Now.AddHours(-3), Now, threeHours).Should().BeTrue();
+    }
 }

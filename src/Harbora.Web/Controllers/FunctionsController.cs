@@ -168,8 +168,12 @@ public sealed class FunctionsController(
         db.Apps.Add(app);
         try
         {
+            // The server is named, not defaulted: a price belongs to a (server, tier) pair, so a
+            // function app that prepaid the global rate would be charged its host's rate every hour
+            // afterwards — a bill that does not reconcile against its own first line.
             await creationBilling.SaveAsync(WorkspaceId,
-                [new(Harbora.Domain.Billing.BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey)], ct);
+                [new(Harbora.Domain.Billing.BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey,
+                    app.ServerId)], ct);
         }
         catch (Harbora.Infrastructure.Billing.CreationPaymentRequiredException ex)
         {

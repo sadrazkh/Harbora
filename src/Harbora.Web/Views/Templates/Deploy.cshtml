@@ -130,17 +130,20 @@
             @if (Model.Sizes.Count > 0)
             {
                 <div>
-                    <label class="form-label" for="size-select">@(isFa ? "اندازه منبع" : "Instance size")</label>
-                    <select id="size-select" name="Input.InstanceSizeKey" class="form-control">
-                        @foreach (var size in Model.Sizes)
-                        {
-                            <option value="@size.Value" selected="@size.Selected">@size.Text</option>
-                        }
-                    </select>
+                    <label class="form-label">@(isFa ? "سرور و اندازه" : "Server and size")</label>
+                    @* The same chooser the create form uses, so a stack is priced where an app is.
+                       This form posts a nested field, which is why the field name is a parameter of
+                       the component rather than something it assumes. *@
+                    @await Component.InvokeAsync("SizePicker", new
+                    {
+                        sizeField = "Input.InstanceSizeKey",
+                        selectedSize = Model.Sizes.FirstOrDefault(s => s.Selected)?.Value,
+                        allowNoLimit = false
+                    })
                     <p class="mt-1 text-xs text-ink-faint">
                         @(isFa
-                            ? "برای برنامه و هر دیتابیس همراه، یک ساعت همان لحظه کم می‌شود؛ اگر مجموع موجودی کافی نباشد هیچ‌کدام ساخته نمی‌شوند."
-                            : "Every app and database in the stack prepays one hour; if the combined balance is insufficient, none are created.")
+                            ? "برای برنامه و هر دیتابیس همراه، یک ساعت همان لحظه کم می‌شود؛ اگر مجموع موجودی کافی نباشد هیچ‌کدام ساخته نمی‌شوند. رقم هر کارت برای یک منبع است."
+                            : "Every app and database in the stack prepays one hour; if the combined balance is insufficient, none are created. Each card's figure is for one resource.")
                     </p>
                 </div>
             }

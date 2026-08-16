@@ -4,6 +4,7 @@ using Harbora.Domain.Servers;
 using Harbora.Domain.Templates;
 using Harbora.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
+using Fam = Harbora.Infrastructure.Tenancy.InstanceSizeFamily;
 
 namespace Harbora.Web.Data;
 
@@ -154,15 +155,27 @@ public sealed class DbSeeder(HarboraDbContext db)
         const long GB = 1024 * MB;
         foreach (var s in new[]
         {
-            new InstanceSize { Key = "nano",   Name = "Nano",   NameFa = "نانو",   CpuCores = 0.25, MemoryBytes = 256 * MB,  DiskBytes = 5 * GB,  IsBuiltIn = true, SortOrder = 1 },
-            new InstanceSize { Key = "micro",  Name = "Micro",  NameFa = "میکرو",  CpuCores = 0.5,  MemoryBytes = 512 * MB,  DiskBytes = 10 * GB, IsBuiltIn = true, SortOrder = 2 },
-            new InstanceSize { Key = "small",  Name = "Small",  NameFa = "کوچک",   CpuCores = 1,    MemoryBytes = 1024 * MB, DiskBytes = 20 * GB, IsBuiltIn = true, SortOrder = 3 },
-            new InstanceSize { Key = "medium", Name = "Medium", NameFa = "متوسط",  CpuCores = 2,    MemoryBytes = 2048 * MB, DiskBytes = 40 * GB, IsBuiltIn = true, SortOrder = 4 },
-            new InstanceSize { Key = "large",  Name = "Large",  NameFa = "بزرگ",   CpuCores = 4,    MemoryBytes = 4096 * MB, DiskBytes = 80 * GB, IsBuiltIn = true, SortOrder = 5 },
+            new InstanceSize { Key = "nano",   Name = "Nano",   NameFa = "نانو",   Family = Fam.General, CpuCores = 0.25, MemoryBytes = 256 * MB,  DiskBytes = 5 * GB,  IsBuiltIn = true, SortOrder = 1 },
+            new InstanceSize { Key = "micro",  Name = "Micro",  NameFa = "میکرو",  Family = Fam.General, CpuCores = 0.5,  MemoryBytes = 512 * MB,  DiskBytes = 10 * GB, IsBuiltIn = true, SortOrder = 2 },
+            new InstanceSize { Key = "small",  Name = "Small",  NameFa = "کوچک",   Family = Fam.General, CpuCores = 1,    MemoryBytes = 1024 * MB, DiskBytes = 20 * GB, IsBuiltIn = true, SortOrder = 3 },
+            new InstanceSize { Key = "medium", Name = "Medium", NameFa = "متوسط",  Family = Fam.General, CpuCores = 2,    MemoryBytes = 2048 * MB, DiskBytes = 40 * GB, IsBuiltIn = true, SortOrder = 4 },
+            new InstanceSize { Key = "large",  Name = "Large",  NameFa = "بزرگ",   Family = Fam.General, CpuCores = 4,    MemoryBytes = 4096 * MB, DiskBytes = 80 * GB, IsBuiltIn = true, SortOrder = 5 },
         })
         {
             var existing = await db.InstanceSizes.FirstOrDefaultAsync(x => x.Key == s.Key);
             if (existing is null) { db.InstanceSizes.Add(s); continue; }
+
+            // Written onto every tier whose family is still blank, Harbora's own or not. Unlike the
+            // disk backfill below, this is not a decision about somebody's tier — a blank family
+            // already READS as general everywhere (InstanceSizeFamily.Normalise says so), so writing
+            // it down changes no behaviour and only makes the row say what the code already believes.
+            // The reason to write it at all is the provider's form: a select cannot show "blank" as a
+            // choice without adding a fifth option that means the first one.
+            if (string.IsNullOrWhiteSpace(existing.Family)) existing.Family = Fam.General;
+
+            // No optimised tiers are seeded. A new size arrives unpriced, and an unpriced tier on a
+            // customer's chooser is a card that cannot be bought — so which specialist tiers to sell
+            // is the provider's decision, made on the size form, not one this seeder makes for them.
 
             // Backfilled onto the built-in tiers that predate the column, because a tier whose
             // storage reads as "no ceiling" is what every tier looked like before and shows the

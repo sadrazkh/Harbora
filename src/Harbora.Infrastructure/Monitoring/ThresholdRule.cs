@@ -68,10 +68,19 @@ public static class ThresholdRule
     /// Whether enough time has passed to say this again. A breach that persists is still one
     /// problem; repeating it every collector tick is how a channel becomes noise.
     /// </summary>
-    public static bool MayRepeat(DateTimeOffset? lastFiredAt, DateTimeOffset now) =>
-        lastFiredAt is not { } last || now - last >= RepeatAfter;
+    /// <param name="repeatAfter">
+    /// How long to wait before repeating. Defaults to <see cref="RepeatAfter"/> — an installation's
+    /// configured value (<c>MonitoringOptions.ThresholdRepeatAfterHours</c>) is passed explicitly by
+    /// the collector; callers that do not care about that knob get the shipped default for free.
+    /// </param>
+    public static bool MayRepeat(DateTimeOffset? lastFiredAt, DateTimeOffset now, TimeSpan? repeatAfter = null) =>
+        lastFiredAt is not { } last || now - last >= (repeatAfter ?? RepeatAfter);
 
-    /// <summary>An hour, which is long enough to stop a flood and short enough to still be a nag.</summary>
+    /// <summary>
+    /// An hour, which is long enough to stop a flood and short enough to still be a nag. Also the
+    /// shipped default for <c>MonitoringOptions.ThresholdRepeatAfterHours</c> — kept here, rather than
+    /// duplicated as a literal in the options class, so the two can never drift apart.
+    /// </summary>
     public static readonly TimeSpan RepeatAfter = TimeSpan.FromHours(1);
 
     /// <summary>The severity a threshold breach carries — a warning, not an outage.</summary>

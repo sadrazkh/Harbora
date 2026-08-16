@@ -390,6 +390,68 @@
   .source-check { @apply absolute end-3 top-3 hidden text-accent-text; }
   .source-card:has(input:checked) .source-check,
   .database-engine-card:has(input:checked) .source-check { @apply block; }
+  /* ---- the shared size chooser ----
+     Selectable cards rather than a dropdown, because the thing being chosen carries five facts —
+     processor, memory, disk, an hourly price and a monthly estimate — and a <select> can show one
+     line of text.
+
+     A refused card is dimmed but still legible and still says why. `pointer-events: none` is
+     deliberately NOT used: the reason has to be selectable text so somebody can quote it when they
+     ask their provider about it. The disabled input is what actually refuses the choice. */
+  .size-picker { @apply space-y-4; }
+  .size-picker-step { @apply rounded-xl border border-line bg-surface p-4; }
+  .size-picker-legend { @apply mb-3; }
+  .size-picker-legend strong { @apply block text-xs font-semibold text-ink; }
+  .size-picker-legend small { @apply mt-0.5 block text-[10px] leading-4 text-ink-faint; }
+  .size-picker-note { @apply text-[10px] leading-4 text-ink-faint; }
+  .size-picker-servers { @apply grid gap-2 sm:grid-cols-2 xl:grid-cols-3; }
+  .size-server-card { @apply relative flex cursor-pointer flex-col rounded-xl border border-line bg-surface-2 p-3 pe-9 hover:border-accent/30; }
+  .size-server-card:has(input:checked) { @apply border-accent bg-accent-soft/50 ring-1 ring-accent/15; }
+  .size-server-head { @apply flex flex-wrap items-center gap-2; }
+  .size-server-head strong { @apply text-xs font-semibold text-ink; }
+  .size-server-host { @apply mt-0.5 block truncate text-[10px] text-ink-faint; }
+  .size-server-families { @apply mt-2 flex flex-wrap gap-1; }
+  .size-server-families > span { @apply rounded-full bg-surface px-2 py-0.5 text-[10px] text-ink-muted; }
+  .size-server-meta { @apply mt-2 block text-[10px] text-ink-muted; }
+  .size-server-from { @apply mt-1 block text-[10px] text-ink-muted; }
+  .size-server-from em { @apply not-italic text-ink-faint; }
+  .size-server-refused { @apply mt-2 block text-[10px] leading-4 text-warn; }
+  .size-family-tabs { @apply mb-3 flex flex-wrap gap-1.5; }
+  .size-family-tab { @apply cursor-pointer; }
+  .size-family-tab > span { @apply inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-2 px-3 py-1.5 text-[11px] text-ink-muted; }
+  .size-family-tab > span > em { @apply not-italic text-[10px] text-ink-faint; }
+  .size-family-tab:has(input:checked) > span { @apply border-accent bg-accent-soft/60 text-accent-text; }
+  .size-tier-grid { @apply grid gap-2 sm:grid-cols-2 xl:grid-cols-3; }
+  .size-tier-card { @apply relative flex cursor-pointer flex-col rounded-xl border border-line bg-surface-2 p-3 pe-9 hover:border-accent/30; }
+  .size-tier-card:has(input:checked) { @apply border-accent bg-accent-soft/50 ring-1 ring-accent/15; }
+  .size-tier-name { @apply flex flex-wrap items-baseline gap-1.5 text-xs font-semibold text-ink; }
+  .size-tier-name > code { @apply text-[10px] font-normal text-ink-faint; }
+  .size-tier-specs { @apply mt-1 block text-[10px] leading-4 text-ink-muted; }
+  .size-tier-disk { @apply text-ink-faint; }
+  .size-tier-price { @apply mt-2 flex items-baseline gap-1; }
+  .size-tier-price > strong { @apply text-sm font-semibold text-ink; }
+  .size-tier-price > small { @apply text-[10px] text-ink-faint; }
+  .size-tier-monthly { @apply block text-[11px] text-accent-text; }
+  .size-tier-monthly > small { @apply text-[10px] text-ink-faint; }
+  .size-tier-stopped { @apply mt-1 block text-[10px] text-ink-faint; }
+  .size-tier-refused { @apply mt-2 block text-[10px] leading-4 text-warn; }
+  /* One rule for both kinds of refused card. The cursor changes because nothing here responds to a
+     click, and the border goes dashed so a refused card cannot be mistaken for a selected one. */
+  .size-server-card.is-refused,
+  .size-tier-card.is-refused { @apply cursor-not-allowed border-dashed opacity-60 hover:border-line; }
+
+  /* `hidden` has to be spelled out here, and this is not belt-and-braces.
+     The cards above set `display: flex`, and an author rule beats the user agent's
+     `[hidden] { display: none }` — so the family filter set the property on four cards and every one
+     of them stayed on screen. The panels escaped it only because they set no display of their own,
+     which is luck rather than design, so they are named too.
+     Only a browser shows this: the markup is right, the script runs, the attribute lands, and the
+     .NET build and every markup test pass. */
+  .size-picker-tiers[hidden],
+  .size-server-card[hidden],
+  .size-tier-card[hidden] { @apply hidden; }
+  .size-server-card:has(input:checked) .source-check,
+  .size-tier-card:has(input:checked) .source-check { @apply block; }
   .form-field { @apply block min-w-0; }
   .form-field > span { @apply mb-1.5 block text-xs font-medium text-ink; }
   .form-field > small { @apply mt-1 block text-[10px] leading-4 text-ink-faint; }

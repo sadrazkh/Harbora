@@ -32,6 +32,64 @@ public interface IBackupEngine
 
     /// <summary>Apply retention rules (delete artifacts + rows past the keep window/count).</summary>
     Task EnforceRetentionAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Remove one backup: the stored artifact first, then the row.
+    ///
+    /// <para>
+    /// That order, and it matters. The row is the only record of where the artifact is, so dropping it
+    /// first and then failing to reach the destination leaves bytes nobody can find, name or account
+    /// for — and on a paid destination, bytes that are charged for indefinitely. A destination that
+    /// refuses the delete therefore leaves the row alone and says so, which is a state somebody can
+    /// retry.
+    /// </para>
+    ///
+    /// <para>
+    /// Deleting the last copy of something is what retention already does on a timer; this is the same
+    /// operation asked for by hand, so the caller owns the confirmation.
+    /// </para>
+    /// </summary>
+    Task DeleteAsync(Guid backupId, CancellationToken ct);
+
+    /// <summary>
+    /// Store an archive somebody uploaded as a backup of <paramref name="targetRef"/>, and return the
+    /// new backup's id.
+    ///
+    /// <para>
+    /// <b>The bytes are stored exactly as given.</b> Not re-encrypted and not repackaged: an artifact
+    /// downloaded from Harbora is already in its stored form, so passing it through the encryption
+    /// step again would wrap it twice and no restore would read it. The checksum is taken over what is
+    /// actually written, which is what verification later recomputes.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Nothing here judges whether the archive is a real Harbora artifact.</b> It cannot: the file
+    /// may be encrypted, and inspecting it would mean decrypting it. The row is recorded as an import
+    /// and left unverified, so the panel can offer the dry run that answers the question honestly
+    /// rather than implying an answer by having accepted the upload.
+    /// </para>
+    /// </summary>
+    Task<Guid> ImportAsync(
+        Guid workspaceId,
+        Domain.Common.BackupType type,
+        string targetRef,
+        Guid destinationId,
+        string fileName,
+        Stream content,
+        CancellationToken ct);
+
+    /// <summary>
+    /// Write a small probe to a destination and delete it again. Null means it worked; anything else is
+    /// the reason it did not, in a sentence.
+    ///
+    /// <para>
+    /// A real round trip rather than a settings check, because every way a destination fails —
+    /// credentials, a bucket that is not there, a directory nothing may write to, a host key that does
+    /// not match — looks identical to a correct form until something is actually sent. Finding out at
+    /// the first real backup means finding out when the backup was needed.
+    /// </para>
+    /// </summary>
+    Task<string?> TestDestinationAsync(Guid destinationId, CancellationToken ct);
 }
 
 /// <summary>

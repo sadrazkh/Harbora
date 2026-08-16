@@ -10,8 +10,6 @@
         await PanelModes.GetAsync(), !ViewData.ModelState.IsValid);
 
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
-    var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
-    var servers = ViewBag.Servers as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
     var environments = ViewBag.Environments as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
     var quickStarts = ViewBag.QuickStarts as IReadOnlyList<TemplateCatalogItemViewModel> ?? [];
 
@@ -157,6 +155,30 @@
             </div>
         </section>
 
+        @* The size and the server, as cards. They were two dropdowns folded inside Advanced below,
+           which put the two facts that decide the bill among the hardest things on the page to find.
+           `allowNoLimit: false` — creation never offers "no ceiling", because a workload with no tier
+           has no rate and the meter reports it as unpriced for as long as it runs. *@
+        <section class="create-section">
+            <div class="section-heading">
+                <div>
+                    <h2><span>3</span>@(isFa ? "سرور و اندازه" : "Server and size")</h2>
+                    <p>
+                        @(isFa
+                            ? "هزینهٔ یک ساعت اجرا همان لحظه از موجودی کم می‌شود؛ اگر کافی نباشد چیزی ساخته نمی‌شود."
+                            : "One running hour is charged immediately; if the balance is insufficient, nothing is created.")
+                    </p>
+                </div>
+            </div>
+            @await Component.InvokeAsync("SizePicker", new
+            {
+                sizeField = nameof(Model.InstanceSizeKey),
+                serverField = nameof(Model.ServerId),
+                selectedSize = ViewBag.DefaultSize as string,
+                allowNoLimit = false
+            })
+        </section>
+
         <partial name="Design/_AdvancedStart" model="@(new AdvancedSectionModel(
             isFa ? "تنظیمات Runtime و Build" : "Runtime and build settings", advancedOpen))" />
             <div class="grid gap-4 border-t border-line p-5 md:grid-cols-2">
@@ -167,8 +189,9 @@
                 <label data-panel="DockerCompose" class="form-field"><span>Compose file path</span><input asp-for="ComposeFilePath" placeholder="compose.yml (auto-detected)" class="form-control" dir="ltr" /><small>@(isFa ? "خالی بگذارید تا نام‌های استاندارد پیدا شوند." : "Leave blank to detect standard file names.")</small></label>
                 <label class="form-field"><span>@(isFa ? "نوع سرویس" : "Service type")</span><select asp-for="Kind" data-service-kind class="form-control">@foreach (var k in Enum.GetValues<Harbora.Domain.Common.ServiceKind>()){<option value="@k" data-help="@Harbora.Infrastructure.Deployments.ServicePlan.Describe(k)">@k</option>}</select><small data-kind-help></small></label>
                 <label class="form-field"><span>@(isFa ? "پورت داخلی" : "Container port")</span><input asp-for="ContainerPort" type="number" min="1" max="65535" class="form-control" /></label>
-                @if (sizes.Count > 0) { <label class="form-field"><span>@(isFa ? "اندازه منبع" : "Instance size")</span><select asp-for="InstanceSizeKey" asp-items="sizes" class="form-control"></select><small>@(isFa ? "هزینه یک ساعت اجرا همان لحظه از موجودی کم می‌شود؛ اگر کافی نباشد چیزی ساخته نمی‌شود." : "One running hour is charged immediately; if the balance is insufficient, nothing is created.")</small></label> }
-                @if (servers.Count > 1) { <label class="form-field"><span>@T["Servers"]</span><select asp-for="ServerId" asp-items="servers" class="form-control"></select></label> }
+                @* The size and the server were two dropdowns here, folded inside Advanced — which put
+                   the two facts that decide the bill among the hardest things on the page to find.
+                   They are now one card chooser in a step of their own below. *@
                 <label class="form-field md:col-span-2"><span>@(isFa ? "دستور پیش از انتشار" : "Release command")</span><input asp-for="ReleaseCommand" placeholder="dotnet ef database update" class="form-control" dir="ltr" /><small>@(isFa ? "اگر شکست بخورد، ترافیک روی نسخه فعلی می‌ماند." : "If it fails, traffic stays on the current version.")</small></label>
                 <label data-cron-only class="form-field hidden"><span>@(isFa ? "دستور اجرا" : "Command to run")</span><input asp-for="Command" placeholder="php artisan schedule:run" class="form-control" dir="ltr" /></label>
                 <label data-cron-only class="form-field hidden"><span>@(isFa ? "زمان‌بندی Cron" : "Cron schedule")</span><input asp-for="CronExpression" placeholder="0 3 * * *" class="form-control" dir="ltr" /></label>

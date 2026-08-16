@@ -294,6 +294,11 @@ public static class DependencyInjection
         // Monitoring + notifications.
         services.AddHttpClient();
         services.Configure<Notifications.NotificationOptions>(config.GetSection("Notifications"));
+        // The disk ratio, the disk-alert interval, the threshold repeat window, and the dashboard's
+        // own backup-staleness figure — see Monitoring.MonitoringOptions for why that last one is
+        // deliberately not the same number as VerificationSchedule.StaleAfter or
+        // StorageMeasurer.StaleAfter.
+        services.Configure<Monitoring.MonitoringOptions>(config.GetSection(Monitoring.MonitoringOptions.SectionName));
         services.AddScoped<INotificationService, Notifications.NotificationService>();
         // Survives the collector's per-pass scope, so a recurring condition alerts once per interval.
         services.AddSingleton<Monitoring.AlertThrottle>();

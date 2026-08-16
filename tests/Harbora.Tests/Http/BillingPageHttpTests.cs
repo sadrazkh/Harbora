@@ -92,15 +92,35 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
         var page = await (await client.GetAsync("/billing?month=2026-07")).Content.ReadAsStringAsync();
 
         page.Should().Contain("bill-me-api", "the name is copied onto the line, not joined back to the app");
-        page.Should().Contain("2 / 3", "two hours running and three stopped is the question being answered");
+        // Two hours running and three stopped is still the question being answered. The card says it
+        // in words now, where the table printed "2 / 3" and left the reader to work out which was
+        // which — so the assertion moves to the attributes the card carries for exactly this.
+        //
+        // Not on the words themselves, in either language: this panel renders Persian by default, and
+        // Razor's encoder writes interpolated non-ASCII out as numeric character references, so the
+        // Persian copy is not a string that appears in the response at all. Pinning the English would
+        // pin the test to a language the fixture does not use.
+        page.Should().Contain(@"data-cost-running-hours=""2""")
+            .And.Contain(@"data-cost-stopped-hours=""3""");
+
         // 2 × 1000 + 3 × 100 minor units is -2300 in the ledger's own convention — negative is money
         // out — and that sign is exactly right for the reconciliation note further down this same
-        // page. It is wrong under a column headed "Cost": a customer who asked "this app was on for
-        // ten hours, what did it cost me" did not ask for a minus sign in front of the answer. The
-        // view flips it at render, nowhere near the arithmetic WalletServiceTests' own reconciliation
-        // test still depends on.
+        // page. It is wrong under a heading that says "cost": a customer who asked "this app was on
+        // for ten hours, what did it cost me" did not ask for a minus sign in front of the answer.
+        // The view flips it at render, nowhere near the arithmetic WalletServiceTests' own
+        // reconciliation test still depends on.
         page.Should().Contain("23.00", "2 × 1000 + 3 × 100 minor units, converted once at the view boundary")
-            .And.NotContain("-23.00", "a cost column reads as a positive amount, not the ledger's own negative sign");
+            .And.NotContain("-23.00", "a cost reads as a positive amount, not the ledger's own negative sign");
+
+        // And the figure the customer asked this screen for: what a month at this rate comes to. 2300
+        // minor over five charged hours averages 460 an hour, and 460 × 730 is 335,800 — 3,358.00.
+        //
+        // An average rather than the newest rate on the lines, which is the whole point of it: this app
+        // ran at 1000 an hour and sat stopped at 100, so "the rate" is neither of those two figures.
+        page.Should().Contain("4.60", "the average hour, 2300 minor units over five charged hours")
+            .And.Contain("3,358.00", "the month that average implies")
+            .And.Contain(@"data-cost-monthly=""335800""",
+                "the estimate is carried as minor units too, so a copy change cannot hide a wrong one");
     }
 
     [Fact]
