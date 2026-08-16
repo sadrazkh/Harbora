@@ -191,7 +191,7 @@ public sealed class MailPlatformService(
         try
         {
             await creationBilling.SaveAsync(workspaceId,
-                [new(BilledResourceType.MailDomain, row.Id, name, null, rate)], ct);
+                [new(BilledResourceType.MailDomain, row.Id, name, null, ServerId: null, rate)], ct);
             await reservation.CommitAsync(ct);
             return new(true);
         }
@@ -275,7 +275,7 @@ public sealed class MailPlatformService(
         // A third-party domain has a zero Harbora rate, but still passes the same funded-account
         // gate as every other resource. Zero balance must not become a back door around tenancy.
         await creationBilling.SaveAsync(workspaceId,
-            [new(BilledResourceType.MailDomain, row.Id, name, null, 0)], ct);
+            [new(BilledResourceType.MailDomain, row.Id, name, null, ServerId: null, 0)], ct);
         await reservation.CommitAsync(ct);
         return new(true);
     }
@@ -318,7 +318,7 @@ public sealed class MailPlatformService(
         try
         {
             await creationBilling.SaveAsync(workspaceId,
-                [new(BilledResourceType.Mailbox, row.Id, localPart + "@" + domain.Domain, null, rate)], ct);
+                [new(BilledResourceType.Mailbox, row.Id, localPart + "@" + domain.Domain, null, ServerId: null, rate)], ct);
             await reservation.CommitAsync(ct);
             return new(true, Secret: password);
         }

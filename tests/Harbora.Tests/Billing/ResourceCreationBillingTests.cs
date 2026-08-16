@@ -41,7 +41,7 @@ public sealed class ResourceCreationBillingTests
         db.Apps.Add(app);
 
         var act = () => Billing(db).SaveAsync(workspaceId,
-            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey)], default);
+            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId)], default);
 
         var error = await act.Should().ThrowAsync<CreationPaymentRequiredException>();
         error.Which.Message.Should().Contain("no resource was created");
@@ -62,7 +62,7 @@ public sealed class ResourceCreationBillingTests
         db.Apps.Add(app);
 
         var charged = await Billing(db).SaveAsync(workspaceId,
-            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey)], default);
+            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId)], default);
 
         charged.Should().Be(125);
         db.ChangeTracker.Clear();
@@ -84,7 +84,7 @@ public sealed class ResourceCreationBillingTests
         var id = Guid.CreateVersion7();
 
         var charged = await Billing(db).SaveAsync(workspaceId,
-            [new(BilledResourceType.MailDomain, id, "example.com", null, 80)], default);
+            [new(BilledResourceType.MailDomain, id, "example.com", null, ServerId: null, 80)], default);
 
         charged.Should().Be(80);
         (await db.Wallets.IgnoreQueryFilters().SingleAsync()).BalanceMinor.Should().Be(420);
@@ -101,7 +101,7 @@ public sealed class ResourceCreationBillingTests
         var (workspaceId, _) = Seed(db, balance: 500, rate: 125);
 
         var act = () => Billing(db).SaveAsync(workspaceId,
-            [new(BilledResourceType.Mailbox, Guid.CreateVersion7(), "hello@example.com", null)], default);
+            [new(BilledResourceType.Mailbox, Guid.CreateVersion7(), "hello@example.com", null, ServerId: null)], default);
 
         await act.Should().ThrowAsync<CreationPaymentRequiredException>();
         (await db.Wallets.IgnoreQueryFilters().SingleAsync()).BalanceMinor.Should().Be(500);
@@ -125,8 +125,8 @@ public sealed class ResourceCreationBillingTests
 
         var act = () => Billing(db).SaveAsync(workspaceId,
             [
-                new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey),
-                new(BilledResourceType.Service, service.Id, service.Name, service.InstanceSizeKey)
+                new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId),
+                new(BilledResourceType.Service, service.Id, service.Name, service.InstanceSizeKey, service.ServerId)
             ], default);
 
         await act.Should().ThrowAsync<CreationPaymentRequiredException>();
@@ -146,7 +146,7 @@ public sealed class ResourceCreationBillingTests
         db.Apps.Add(app);
 
         await Billing(db).SaveAsync(workspaceId,
-            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey)], default);
+            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId)], default);
         db.ChangeTracker.Clear();
 
         await Harness.Tick(db).ChargeHourAsync(
@@ -168,7 +168,7 @@ public sealed class ResourceCreationBillingTests
         db.Apps.Add(app);
 
         await Billing(db).SaveAsync(workspaceId,
-            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey)], default);
+            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId)], default);
         db.ChangeTracker.Clear();
 
         var gate = new BillingGate(
@@ -193,7 +193,7 @@ public sealed class ResourceCreationBillingTests
         db.Apps.Add(app);
 
         var act = () => Billing(db).SaveAsync(workspaceId,
-            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey)], default);
+            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId)], default);
 
         (await act.Should().ThrowAsync<CreationPaymentRequiredException>())
             .Which.Message.Should().Contain("no running hourly price");
@@ -219,7 +219,7 @@ public sealed class ResourceCreationBillingTests
         db.Apps.Add(app);
 
         var act = () => Billing(db).SaveAsync(workspaceId,
-            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey)], default);
+            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId)], default);
 
         (await act.Should().ThrowAsync<CreationPaymentRequiredException>())
             .Which.Message.Should().Contain("monthly spend limit");
@@ -280,12 +280,87 @@ public sealed class ResourceCreationBillingTests
         return (workspace.Id, size);
     }
 
-    private static App App(Guid workspaceId, string sizeKey) => new()
+    private static App App(Guid workspaceId, string sizeKey, Guid? serverId = null) => new()
     {
         WorkspaceId = workspaceId,
         Name = "app",
         Slug = Guid.NewGuid().ToString("N"),
         InstanceSizeKey = sizeKey,
+        ServerId = serverId ?? Guid.Empty,
         Status = AppStatus.Created
     };
+
+    // ---- the first hour is prepaid at the rate of the host it landed on --------------------------
+
+    /// <summary>A server carrying a price of its own for one tier.</summary>
+    private static Guid PricedServer(Harbora.Data.HarboraDbContext db, string sizeKey, long? running)
+    {
+        var server = new Harbora.Domain.Servers.Server { Name = "premium", Hostname = "premium" };
+        db.Add(server);
+        db.Add(new Harbora.Domain.Servers.ServerInstanceOffer
+        {
+            ServerId = server.Id,
+            InstanceSizeKey = sizeKey,
+            RunningRatePerHourMinor = running
+        });
+        db.SaveChanges();
+        return server.Id;
+    }
+
+    [Fact]
+    public async Task The_first_hour_is_prepaid_at_what_the_chosen_server_charges()
+    {
+        // This gate and the hourly pass have to agree. Prepaying the global rate while the pass
+        // charges the server's leaves a bill that does not reconcile against its own first line —
+        // and nothing reports it, because both halves look right on their own.
+        await using var db = Harness.SystemContext();
+        var (workspaceId, size) = Seed(db, balance: 10_000, rate: 100);
+        var serverId = PricedServer(db, size.Key, running: 400);
+
+        var app = App(workspaceId, size.Key, serverId);
+        db.Apps.Add(app);
+
+        var charged = await Billing(db).SaveAsync(workspaceId,
+            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId)], default);
+
+        charged.Should().Be(400);
+        (await db.Wallets.IgnoreQueryFilters().SingleAsync()).BalanceMinor.Should().Be(9_600);
+    }
+
+    [Fact]
+    public async Task A_tier_priced_only_on_the_chosen_server_can_be_created_rather_than_refused()
+    {
+        // Before the offer table was consulted here this was refused as unpriced, while the hourly
+        // pass would have charged it happily — so a provider could introduce a price on one box and
+        // then find that nobody was able to buy it.
+        await using var db = Harness.SystemContext();
+        var (workspaceId, size) = Seed(db, balance: 10_000, rate: null);
+        var serverId = PricedServer(db, size.Key, running: 250);
+
+        var app = App(workspaceId, size.Key, serverId);
+        db.Apps.Add(app);
+
+        var charged = await Billing(db).SaveAsync(workspaceId,
+            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId)], default);
+
+        charged.Should().Be(250);
+    }
+
+    [Fact]
+    public async Task A_tier_unpriced_on_the_chosen_server_and_globally_is_still_refused()
+    {
+        // The guard the offer lookup must not have loosened. A row that overrides nothing inherits an
+        // unpriced tier, and an unpriced tier is still not something a customer may buy.
+        await using var db = Harness.SystemContext();
+        var (workspaceId, size) = Seed(db, balance: 10_000, rate: null);
+        var serverId = PricedServer(db, size.Key, running: null);
+
+        var app = App(workspaceId, size.Key, serverId);
+        db.Apps.Add(app);
+
+        var act = () => Billing(db).SaveAsync(workspaceId,
+            [new(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId)], default);
+
+        await act.Should().ThrowAsync<CreationPaymentRequiredException>();
+    }
 }

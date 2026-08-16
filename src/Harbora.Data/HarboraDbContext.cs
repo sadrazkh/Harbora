@@ -122,6 +122,12 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Tenancy.Plan> Plans => Set<Harbora.Domain.Tenancy.Plan>();
     public DbSet<Harbora.Domain.Tenancy.InstanceSize> InstanceSizes => Set<Harbora.Domain.Tenancy.InstanceSize>();
 
+    /// <summary>
+    /// What each server charges for each tier. Unscoped by workspace on purpose: it is the
+    /// provider's price list, read by the hourly pass and by every tenant's chooser alike.
+    /// </summary>
+    public DbSet<ServerInstanceOffer> ServerInstanceOffers => Set<ServerInstanceOffer>();
+
     public DbSet<Harbora.Domain.Storage.StorageBucket> StorageBuckets => Set<Harbora.Domain.Storage.StorageBucket>();
     public DbSet<Harbora.Domain.Storage.StoragePlan> StoragePlans => Set<Harbora.Domain.Storage.StoragePlan>();
     public DbSet<Harbora.Domain.Storage.VolumeDownloadToken> VolumeDownloadTokens => Set<Harbora.Domain.Storage.VolumeDownloadToken>();
@@ -459,6 +465,25 @@ public class HarboraDbContext : DbContext
         });
         b.Entity<Setting>(e => e.HasIndex(x => x.Key).IsUnique());
         b.Entity<Harbora.Domain.Tenancy.InstanceSize>(e => e.HasIndex(x => x.Key).IsUnique());
+
+        b.Entity<ServerInstanceOffer>(e =>
+        {
+            // One row per server per tier. Two rows for the same pair would each claim a price and
+            // whichever the dictionary happened to keep would decide the bill — a disagreement no
+            // screen would show, because both rows look correct on their own.
+            e.HasIndex(x => new { x.ServerId, x.InstanceSizeKey }).IsUnique();
+
+            // Bounded to the same length a tier's key is, so a key that fits in InstanceSize.Key
+            // always fits here. Without it the two could diverge and a long key would be silently
+            // truncated on one side of the join.
+            e.Property(x => x.InstanceSizeKey)
+                .HasMaxLength(Harbora.Domain.Tenancy.InstanceSize.KeyMaxLength);
+
+            // Deleting a server takes its price list with it. The rows name a server that no longer
+            // exists otherwise, and the pricing matrix would list a host nobody can place on.
+            e.HasOne<Server>().WithMany().HasForeignKey(x => x.ServerId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
 
         b.Entity<Harbora.Domain.Storage.StorageBucket>(e =>
         {

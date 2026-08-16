@@ -122,7 +122,31 @@ public sealed record ResourceCost(
     string Name,
     int RunningHours,
     int StoppedHours,
-    long TotalMinor);
+    long TotalMinor)
+{
+    /// <summary>Every hour this resource was charged for, whichever state it was in.</summary>
+    public int Hours => RunningHours + StoppedHours;
+
+    /// <summary>
+    /// What an hour of this resource averaged over the period, or <c>null</c> when it was charged for
+    /// no hours at all.
+    ///
+    /// <para>
+    /// The average actually charged rather than a rate read off the newest line. A rate can change
+    /// mid-month, and a resource can spend part of it running and part stopped at a different rate —
+    /// so the newest line's figure would describe one hour of the month and be presented as the
+    /// month's. This is arithmetic on what the ledger really took.
+    /// </para>
+    ///
+    /// <para>
+    /// Null, not zero, when there are no hours: the disk and plan-minimum lines carry none — a disk
+    /// is held rather than switched on — and dividing by nothing to get a nought would put an hourly
+    /// rate on a line that has no hours. That is the same "unread is not empty" rule the rest of this
+    /// codebase keeps.
+    /// </para>
+    /// </summary>
+    public long? AverageHourlyMinor => Hours > 0 ? Math.Abs(TotalMinor) / Hours : null;
+}
 
 /// <summary>
 /// Money in, and the bill that says where the money went.

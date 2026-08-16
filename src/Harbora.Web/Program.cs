@@ -56,6 +56,11 @@ builder.Services.AddScoped<IDeploymentLogStream, SignalRDeploymentLogStream>();
 builder.Services.AddScoped<Harbora.Web.Infrastructure.PanelModeProvider>();
 builder.Services.AddScoped<Harbora.Web.Infrastructure.RailPreferences>();
 
+// The size chooser's rules — a plan's pool, its allowed tiers, a host's free capacity, a host's
+// withdrawal of a tier and whether the pair is priced at all — assembled once rather than written
+// into each of the four forms that ask them.
+builder.Services.AddScoped<Harbora.Web.Infrastructure.SizePickerService>();
+
 // Which logos ship in this build. A singleton because the answer cannot change while the process
 // runs, and the alternative was a filesystem stat per tile per request.
 builder.Services.AddSingleton<Harbora.Web.Infrastructure.TemplateLogoSet>();

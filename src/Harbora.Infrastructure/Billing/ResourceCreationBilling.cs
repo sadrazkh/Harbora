@@ -4,16 +4,30 @@ using Harbora.Data;
 using Harbora.Domain.Billing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
+using Harbora.Domain.Servers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace Harbora.Infrastructure.Billing;
 
+/// <param name="ServerId">
+/// Which host this resource was placed on, so the first hour is prepaid at the rate that host
+/// charges. Null for a resource that has no host — a mail domain or mailbox, which carries its own
+/// <paramref name="DirectRatePerHourMinor"/> snapshot instead.
+///
+/// <para>
+/// Deliberately not defaulted. A price belongs to a (server, tier) pair now, and a call site that
+/// forgot to say where it placed the workload would prepay the global rate while every hour after it
+/// was charged the server's — a discrepancy visible only as a bill that does not reconcile against
+/// its own first line.
+/// </para>
+/// </param>
 public sealed record CreatedBillableResource(
     BilledResourceType Type,
     Guid Id,
     string Name,
     string? InstanceSizeKey,
+    Guid? ServerId,
     long? DirectRatePerHourMinor = null);
 
 /// <summary>A customer-facing refusal raised before a billable resource is persisted.</summary>
@@ -72,6 +86,15 @@ public sealed class ResourceCreationBilling(
         var sizes = await db.InstanceSizes.IgnoreQueryFilters().AsNoTracking()
             .Where(s => keys.Contains(s.Key)).ToDictionaryAsync(s => s.Key, StringComparer.OrdinalIgnoreCase, ct);
 
+        // What the hosts these resources landed on charge for those tiers. Read for the same reason
+        // the hourly pass reads it: a price belongs to a (server, tier) pair, and prepaying the first
+        // hour at the global rate while every hour after it is charged the server's rate would leave
+        // a bill that does not reconcile against its own first line.
+        var serverIds = resources.Select(r => r.ServerId).OfType<Guid>().Distinct().ToList();
+        var offers = await db.ServerInstanceOffers.IgnoreQueryFilters().AsNoTracking()
+            .Where(o => serverIds.Contains(o.ServerId) && keys.Contains(o.InstanceSizeKey))
+            .ToDictionaryAsync(o => (o.ServerId, o.InstanceSizeKey), ct);
+
         var priced = new List<(CreatedBillableResource Resource, long Rate)>(resources.Count);
         var total = 0L;
         foreach (var resource in resources)
@@ -98,7 +121,15 @@ public sealed class ResourceCreationBilling(
                 || !sizes.TryGetValue(resource.InstanceSizeKey, out var size))
                 throw Unpriced(resource.Name);
 
-            if (size.RunningRatePerHourMinor is not { } rate || rate < 0)
+            // Resolved through the host, exactly as the hourly pass resolves it: the server's rate if
+            // it set one, otherwise the tier's. That is also what lets a provider sell a tier they
+            // priced only on one box — which the tier-only lookup used to refuse as unpriced while
+            // the meter went on charging it happily.
+            ServerInstanceOffer? offer = null;
+            if (resource.ServerId is { } serverId)
+                offers.TryGetValue((serverId, size.Key), out offer);
+
+            if (ServerRates.ForWorkload(size, offer, BilledRunState.Running) is not { } rate || rate < 0)
                 throw Unpriced(resource.Name);
 
             try { total = checked(total + rate); }

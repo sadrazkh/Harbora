@@ -9,9 +9,35 @@ namespace Harbora.Domain.Tenancy;
 /// </summary>
 public class InstanceSize : BaseEntity
 {
+    /// <summary>
+    /// How long a key may be. Docker-ish and URL-safe, and short enough to read on a card.
+    ///
+    /// <para>
+    /// It lives here rather than beside the normaliser that enforces it because the schema needs it
+    /// too: <c>ServerInstanceOffer.InstanceSizeKey</c> is bounded to the same length so a key that
+    /// fits in this column always fits there, and the data layer cannot reach into infrastructure to
+    /// ask. Two constants would be free to drift, and the drift would truncate a key on one side of a
+    /// join only.
+    /// </para>
+    /// </summary>
+    public const int KeyMaxLength = 32;
+
     public string Key { get; set; } = string.Empty;      // "nano", "micro", "small"…
     public string Name { get; set; } = string.Empty;
     public string NameFa { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Which kind of machine this tier is — general purpose, or weighted towards processor, memory or
+    /// disk. Empty reads as general purpose, which is what every tier predating this column is; the
+    /// vocabulary, the labels and that reading all live in <c>InstanceSizeFamily</c>.
+    ///
+    /// <para>
+    /// A family belongs to the tier and not to the server hosting it, so a server's "optimised for
+    /// memory" badge is derived from the tiers it offers rather than stored a second time where the
+    /// two could disagree.
+    /// </para>
+    /// </summary>
+    public string Family { get; set; } = string.Empty;
 
     public double CpuCores { get; set; }                 // e.g. 0.25, 0.5, 1, 2
     public long MemoryBytes { get; set; }

@@ -1,0 +1,333 @@
+@model Harbora.Web.ViewModels.SizePickerModel
+@using Harbora.Web.ViewModels
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    string Mem(long b) => Harbora.Infrastructure.Tenancy.ByteSize.Format(b, "—");
+    string FamilyLabel(string key) => Harbora.Infrastructure.Tenancy.InstanceSizeFamily.Label(key, isFa);
+
+    // Why a card is refused, said on the card. A disabled control that does not explain itself is
+    // worse than a hidden one: the reader can see the thing they want and is told nothing about how
+    // to get it.
+    string Reason(SizeUnavailable why) => (why, isFa) switch
+    {
+        (SizeUnavailable.ServerOffline, true) => "این سرور متصل نیست",
+        (SizeUnavailable.ServerOffline, false) => "this server is not connected",
+        (SizeUnavailable.NoCapacity, true) => "ظرفیت آزاد کافی ندارد",
+        (SizeUnavailable.NoCapacity, false) => "not enough free capacity",
+        (SizeUnavailable.NotOfferedHere, true) => "روی این سرور ارائه نمی‌شود",
+        (SizeUnavailable.NotOfferedHere, false) => "not offered on this server",
+        (SizeUnavailable.NotInPlan, true) => "در پلن شما نیست",
+        (SizeUnavailable.NotInPlan, false) => "not in your plan",
+        (SizeUnavailable.NotPriced, true) => "هنوز قیمت‌گذاری نشده — از ارائه‌دهنده بخواهید",
+        (SizeUnavailable.NotPriced, false) => "not priced yet — ask your provider",
+        (SizeUnavailable.NothingOffered, true) => "هیچ اندازه‌ای اینجا در دسترس نیست",
+        (SizeUnavailable.NothingOffered, false) => "no size is available here",
+        _ => string.Empty
+    };
+
+    // The id prefix keeps two pickers on one page from sharing radio ids. Nothing does that today;
+    // an id collision is silent and makes one picker's label select the other's card.
+    var uid = "sp-" + Guid.NewGuid().ToString("N")[..8];
+}
+
+@if (!Model.HasAnything)
+{
+    @* No host at all is an empty state rather than an empty grid. It happens when a plan is pinned to
+       a pool nothing is in — which is a provider's mistake, and one the customer can only report. *@
+    <partial name="Design/_EmptyState" model="@(new EmptyStateModel("server-off",
+        isFa
+            ? "هیچ سروری برای این فضای کاری در دسترس نیست. با ارائه‌دهنده تماس بگیرید."
+            : "No server is available to this workspace. Please contact your provider."))" />
+}
+else
+{
+<div class="size-picker" data-size-picker>
+    @if (Model.ShowServerStep)
+    {
+        <div class="size-picker-step">
+            <div class="size-picker-legend">
+                <strong>@(isFa ? "سرور" : "Server")</strong>
+                <small>@(isFa ? "اندازه‌ها و قیمت‌ها بر اساس سرور تفاوت دارند." : "The sizes on offer, and their prices, differ per server.")</small>
+            </div>
+            <div class="size-picker-servers">
+                @foreach (var server in Model.Servers)
+                {
+                    <label class="size-server-card @(server.Selectable ? "" : "is-refused")"
+                           data-picker-server-card="@server.ServerId"
+                           data-picker-server-state="@server.Unavailable">
+                        <input class="sr-only" type="radio" name="@Model.ServerFieldName" value="@server.ServerId"
+                               data-picker-server="@server.ServerId"
+                               checked="@(server.ServerId == Model.SelectedServerId)"
+                               disabled="@(!server.Selectable)" />
+                        <span class="size-server-head">
+                            <strong>@server.Name</strong>
+                            @if (server.IsLocal)
+                            {
+                                <span class="status-pill bg-accent-soft text-accent-text">@(isFa ? "همین سرور" : "this server")</span>
+                            }
+                        </span>
+                        <code class="size-server-host" dir="ltr">@server.Hostname</code>
+
+                        @* Derived from the tiers it offers, not stored — a badge in a column of its
+                           own could contradict the offers and nothing would report it. *@
+                        @if (server.Families.Count > 0)
+                        {
+                            <span class="size-server-families">
+                                @foreach (var family in server.Families)
+                                {
+                                    <span>@FamilyLabel(family)</span>
+                                }
+                            </span>
+                        }
+
+                        @if (server.Selectable)
+                        {
+                            <span class="size-server-meta" dir="ltr">
+                                @Mem(server.FreeMemoryBytes) @(isFa ? "حافظهٔ آزاد" : "free") ·
+                                @server.FreeCpu.ToString("0.##") vCPU
+                            </span>
+                            @if (Harbora.Web.Infrastructure.RateDisplay.Monthly(server.FromRunningRateMinor, isFa) is { } cheapest)
+                            {
+                                <span class="size-server-from" dir="ltr">
+                                    @(isFa ? "از" : "from")
+                                    @Harbora.Web.Infrastructure.RateDisplay.Hourly(server.FromRunningRateMinor, isFa)@(isFa ? " در ساعت" : "/hour")
+                                    <em>@cheapest@(isFa ? " در ماه" : "/month")</em>
+                                </span>
+                            }
+                        }
+                        else
+                        {
+                            <span class="size-server-refused">@Reason(server.Unavailable)</span>
+                        }
+                        <i data-lucide="circle-check" class="source-check h-4 w-4"></i>
+                    </label>
+                }
+            </div>
+        </div>
+    }
+    else if (Model.ServerFieldName is not null && Model.Servers.Count == 1)
+    {
+        @* One host: no cards to choose between, but the field still has to be posted or the form
+           would fall back to whatever the scheduler picked — on an install where that is the only
+           option anyway, but silently rather than because there was one answer. *@
+        <input type="hidden" name="@Model.ServerFieldName" value="@Model.Servers[0].ServerId" />
+    }
+
+    @foreach (var server in Model.Servers)
+    {
+        var families = Harbora.Infrastructure.Tenancy.InstanceSizeFamily
+            .Present(server.Tiers.Select(t => t.Family));
+        var openFamily = server.Tiers.FirstOrDefault(t => t.Key == Model.SelectedSizeKey)?.Family
+            ?? families.FirstOrDefault(f => server.Tiers.Any(t => t.Family == f && t.Selectable))
+            ?? families.FirstOrDefault();
+
+        @* Every host's tiers are rendered, and the script shows one host's at a time. Rendered rather
+           than fetched so the whole control works with no JavaScript at all: without it every host's
+           tiers are visible and the radios still post the right pair. *@
+        <div class="size-picker-step size-picker-tiers"
+             data-picker-panel="@server.ServerId"
+             hidden="@(Model.ShowServerStep && server.ServerId != Model.SelectedServerId)">
+
+            @if (families.Count > 1)
+            {
+                <div class="size-family-tabs" role="tablist">
+                    @foreach (var family in families)
+                    {
+                        var count = server.Tiers.Count(t => t.Family == family);
+                        <label class="size-family-tab">
+                            <input class="sr-only" type="radio" name="@(uid + "-family-" + server.ServerId)"
+                                   value="@family" data-picker-family="@family"
+                                   checked="@(family == openFamily)" />
+                            <span>@FamilyLabel(family) <em>@count</em></span>
+                        </label>
+                    }
+                </div>
+            }
+
+            <div class="size-tier-grid">
+                @if (Model.AllowNoLimit)
+                {
+                    @* Offered on the resize controls only. It is the state a resource created before
+                       tiers existed is already in, so hiding it would make saving that form quietly
+                       impose a ceiling nobody asked for. *@
+                    <label class="size-tier-card">
+                        <input class="sr-only" type="radio" name="@Model.SizeFieldName" value=""
+                               checked="@string.IsNullOrEmpty(Model.SelectedSizeKey)" />
+                        <span class="size-tier-name">@(isFa ? "بدون سقف" : "No limit")</span>
+                        <span class="size-tier-specs">
+                            @(isFa ? "هرچه سرور دارد" : "whatever the host has")
+                        </span>
+                        <i data-lucide="circle-check" class="source-check h-4 w-4"></i>
+                    </label>
+                }
+
+                @foreach (var tier in server.Tiers)
+                {
+                    <label class="size-tier-card @(tier.Selectable ? "" : "is-refused")"
+                           data-picker-tier="@tier.Key"
+                           data-picker-tier-state="@tier.Unavailable"
+                           data-picker-tier-family="@tier.Family">
+                        <input class="sr-only" type="radio" name="@Model.SizeFieldName" value="@tier.Key"
+                               checked="@(tier.Key == Model.SelectedSizeKey && server.ServerId == Model.SelectedServerId)"
+                               disabled="@(!tier.Selectable)" />
+                        <span class="size-tier-name">
+                            @tier.Name
+                            <code dir="ltr">@tier.Key</code>
+                        </span>
+                        <span class="size-tier-specs" dir="ltr">
+                            @tier.CpuCores.ToString("0.##") vCPU · @Mem(tier.MemoryBytes)
+                            @if (tier.DiskBytes > 0)
+                            {
+                                <text> · @Mem(tier.DiskBytes) </text><span class="size-tier-disk">@(isFa ? "دیسک" : "disk")</span>
+                            }
+                        </span>
+
+                        @if (tier.Selectable)
+                        {
+                            <span class="size-tier-price" dir="ltr">
+                                <strong>@Harbora.Web.Infrastructure.RateDisplay.Hourly(tier.RunningRateMinor, isFa)</strong>
+                                <small>@(isFa ? "در ساعت" : "/hour")</small>
+                            </span>
+                            @if (Harbora.Web.Infrastructure.RateDisplay.Monthly(tier.RunningRateMinor, isFa) is { } monthly)
+                            {
+                                @* The estimate, with the sign that makes it one. A month is 28 to 31
+                                   days and this assumes every hour of it is spent running. *@
+                                <span class="size-tier-monthly" dir="ltr">@monthly<small>@(isFa ? " در ماه (تخمینی)" : "/month est.")</small></span>
+                            }
+                            @if (tier.StoppedRateMinor is { } stopped && stopped != tier.RunningRateMinor)
+                            {
+                                <span class="size-tier-stopped" dir="ltr">
+                                    @(isFa ? "متوقف:" : "stopped:")
+                                    @Harbora.Web.Infrastructure.RateDisplay.Hourly(stopped, isFa)@(isFa ? " در ساعت" : "/hour")
+                                </span>
+                            }
+                        }
+                        else
+                        {
+                            <span class="size-tier-refused">@Reason(tier.Unavailable)</span>
+                        }
+                        <i data-lucide="circle-check" class="source-check h-4 w-4"></i>
+                    </label>
+                }
+            </div>
+        </div>
+    }
+
+    <p class="size-picker-note">
+        @(isFa
+            ? $"رقم ماهانه تخمینی است: نرخ ساعتی × {Harbora.Infrastructure.Billing.MonthlyEstimate.HoursPerMonth} ساعت. صورت‌حساب واقعی ساعتی است و فقط برای همان ساعت‌هایی که منبع روشن یا متوقف بوده حساب می‌شود."
+            : $"The monthly figure is an estimate: the hourly rate × {Harbora.Infrastructure.Billing.MonthlyEstimate.HoursPerMonth} hours. The real bill is hourly, and only for the hours the resource is actually running or stopped.")
+    </p>
+</div>
+
+@* Filtering only. Every host's tiers and every family's cards are already in the page, so a reader
+   with no JavaScript sees all of them and the radios still post a valid pair — this narrows the view,
+   it does not enable the control. *@
+<script>
+(() => {
+    const root = document.currentScript.previousElementSibling?.closest('[data-size-picker]')
+        || document.querySelector('[data-size-picker]');
+    if (!root) return;
+
+    const panels = [...root.querySelectorAll('[data-picker-panel]')];
+
+    function showFamily(panel) {
+        const chosen = panel.querySelector('[data-picker-family]:checked')?.value;
+        if (!chosen) return;
+        panel.querySelectorAll('[data-picker-tier-family]').forEach(card => {
+            card.hidden = card.dataset.pickerTierFamily !== chosen;
+        });
+    }
+
+    // Serialised rather than interpolated bare: the field name comes from the caller, and Razor's
+    // encoder is not a JavaScript string escaper. The same idiom the create form's own script uses.
+    const sizeField = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.SizeFieldName));
+
+    /// Which tier is chosen right now, and which family tab is open — read before the panels move so
+    /// they can be carried onto the host being switched to.
+    function currentChoice() {
+        const shown = panels.find(panel => !panel.hidden);
+        return {
+            sizeKey: shown?.querySelector(`input[name="${sizeField}"]:checked`)?.value ?? null,
+            family: shown?.querySelector('[data-picker-family]:checked')?.value ?? null
+        };
+    }
+
+    function showServer(carry) {
+        const chosen = root.querySelector('[data-picker-server]:checked')?.value;
+        if (!chosen) return;
+
+        panels.forEach(panel => {
+            panel.hidden = panel.dataset.pickerPanel !== chosen;
+
+            // A hidden panel's size must not stay checked: two panels each holding one would post
+            // whichever the browser serialised last, which is the one the reader cannot see. The
+            // family radios are per panel and never posted, so they are left alone.
+            if (panel.hidden) {
+                panel.querySelectorAll('input[type=radio]:checked').forEach(radio => {
+                    if (radio.dataset.pickerFamily === undefined) radio.checked = false;
+                });
+            }
+        });
+
+        const shown = panels.find(panel => !panel.hidden);
+        if (!shown || !carry) return;
+
+        // Keep the family tab the reader had opened, when this host has that family at all. Without
+        // it, choosing "memory-optimised" and then switching host drops you back on "general" — the
+        // tab groups are per panel, so each host reverts to its own default.
+        if (carry.family) {
+            const tab = shown.querySelector(`[data-picker-family][value="${carry.family}"]`);
+            if (tab) tab.checked = true;
+        }
+        showFamily(shown);
+
+        // And keep the tier, or pick one. Clearing the hidden panels above is what stops an ambiguous
+        // post; on its own it also means switching host silently leaves NO size chosen, and the form
+        // would submit an empty one — accepted by the binder, refused much later by the create gate.
+        // So: the same tier if this host offers it, otherwise the first one on the open tab, and if
+        // the host offers nothing at all, nothing — which is what its "no size available" card says.
+        const candidates = [...shown.querySelectorAll('input[type=radio]')]
+            .filter(radio => radio.dataset.pickerFamily === undefined && !radio.disabled);
+
+        const same = carry.sizeKey
+            ? candidates.find(radio => radio.value === carry.sizeKey)
+            : null;
+        const firstOnTab = candidates.find(radio =>
+            radio.closest('[data-picker-tier-family]')?.hidden === false);
+
+        (same ?? firstOnTab ?? candidates[0])?.click();
+    }
+
+    root.querySelectorAll('[data-picker-server]').forEach(radio =>
+        radio.addEventListener('change', () => {
+            // Read before the panels move — afterwards the choice being carried has already gone.
+            const carry = carried;
+            showServer(carry);
+            carried = currentChoice();
+        }));
+
+    panels.forEach(panel => {
+        panel.querySelectorAll('[data-picker-family]').forEach(radio =>
+            radio.addEventListener('change', () => {
+                showFamily(panel);
+                carried = currentChoice();
+            }));
+        showFamily(panel);
+    });
+
+    // Remembered across a switch rather than read during it: the `change` handler runs after the
+    // browser has already moved the checked state onto the new host's radio, so by then the panel the
+    // reader was looking at is no longer the one `currentChoice` would find.
+    let carried = currentChoice();
+
+    root.querySelectorAll('input[type=radio]').forEach(radio => {
+        if (radio.dataset.pickerFamily === undefined && !radio.dataset.pickerServer)
+            radio.addEventListener('change', () => { carried = currentChoice(); });
+    });
+
+    if (root.querySelector('[data-picker-server]')) showServer(null);
+})();
+</script>
+}

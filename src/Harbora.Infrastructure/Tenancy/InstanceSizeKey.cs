@@ -10,8 +10,15 @@ namespace Harbora.Infrastructure.Tenancy;
 /// </summary>
 public static class InstanceSizeKey
 {
-    /// <summary>Docker-ish and URL-safe, and short enough to read in a dropdown.</summary>
-    public const int MaxLength = 32;
+    /// <summary>
+    /// Docker-ish and URL-safe, and short enough to read in a dropdown.
+    ///
+    /// <para>
+    /// The figure lives on the entity, because the schema bounds two columns to it and the data layer
+    /// cannot reach in here to ask for it. This is the name the normaliser and its tests use.
+    /// </para>
+    /// </summary>
+    public const int MaxLength = Harbora.Domain.Tenancy.InstanceSize.KeyMaxLength;
 
     /// <summary>
     /// The key to store, or null when what was typed cannot become one.

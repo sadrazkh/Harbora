@@ -319,10 +319,10 @@ public sealed class EnvironmentCloner(
 
         var billable = created.Select(x => new Billing.CreatedBillableResource(
                 Domain.Billing.BilledResourceType.Service,
-                x.Row.Id, x.Row.Name, x.Row.InstanceSizeKey))
+                x.Row.Id, x.Row.Name, x.Row.InstanceSizeKey, x.Row.ServerId))
             .Concat(attachments.Select(x => new Billing.CreatedBillableResource(
                 Domain.Billing.BilledResourceType.App,
-                x.Copy.Id, x.Copy.Name, x.Copy.InstanceSizeKey)))
+                x.Copy.Id, x.Copy.Name, x.Copy.InstanceSizeKey, x.Copy.ServerId)))
             .ToList();
         try
         {
