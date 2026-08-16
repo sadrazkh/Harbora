@@ -579,4 +579,104 @@ public class EnvironmentClonerTests
         outcome.Ok.Should().BeFalse();
         (await h.Db.Environments.CountAsync()).Should().Be(1);
     }
+
+    // ---- function apps ----
+
+    /// <summary>
+    /// Adds a function app to the source environment. Separate from <c>Build</c> so every existing
+    /// assertion about "one app, one service" keeps meaning what it meant.
+    /// </summary>
+    private static App AddFunctionApp(Harness h)
+    {
+        var app = new App
+        {
+            WorkspaceId = Workspace, EnvironmentId = h.Source.Id, ServerId = Server,
+            Name = "hooks", Slug = "hooks", SourceType = AppSourceType.InlineCode,
+            FunctionRuntime = Harbora.Domain.Functions.FunctionRuntime.Python,
+            FunctionInvokeSecret = "the-original-secret",
+            ContainerPort = 8080, Status = AppStatus.Running
+        };
+        h.Db.Apps.Add(app);
+        h.Db.FunctionDefinitions.Add(new Harbora.Domain.Functions.FunctionDefinition
+        {
+            AppId = app.Id, WorkspaceId = Workspace, Name = "nightly", Slug = "nightly",
+            Trigger = Harbora.Domain.Functions.FunctionTrigger.Cron, CronExpression = "0 3 * * *",
+            Code = "def run(req, ctx):\n    return 'ok'", IsEnabled = true,
+            HasUnpublishedChanges = false, NextRunAt = DateTimeOffset.UtcNow.AddHours(1)
+        });
+        h.Db.SaveChanges();
+        return app;
+    }
+
+    [Fact]
+    public async Task A_cloned_function_app_brings_its_functions_with_it()
+    {
+        // Copying the shell and leaving the functions behind produced an app that looked like a
+        // function app on every page and answered 404 to everything the original answered.
+        var h = Build();
+        AddFunctionApp(h);
+
+        var outcome = await h.Cloner.CloneAsync(Workspace, h.Source.Id, "Staging", default);
+
+        outcome.Ok.Should().BeTrue(outcome.Reason);
+        var copy = await h.Db.Apps.IgnoreQueryFilters()
+            .FirstAsync(a => a.EnvironmentId == outcome.EnvironmentId && a.SourceType == AppSourceType.InlineCode);
+
+        var functions = await h.Db.FunctionDefinitions.IgnoreQueryFilters()
+            .Where(f => f.AppId == copy.Id).ToListAsync();
+
+        functions.Should().ContainSingle().Which.Slug.Should().Be("nightly");
+        functions[0].Code.Should().Contain("return 'ok'");
+    }
+
+    [Fact]
+    public async Task A_cloned_function_app_keeps_its_runtime()
+    {
+        // Without it the copy is SourceType.InlineCode with no runtime — an app the pipeline has
+        // nothing to generate from, so it can never be published.
+        var h = Build();
+        AddFunctionApp(h);
+
+        var outcome = await h.Cloner.CloneAsync(Workspace, h.Source.Id, "Staging", default);
+
+        var copy = await h.Db.Apps.IgnoreQueryFilters()
+            .FirstAsync(a => a.EnvironmentId == outcome.EnvironmentId && a.SourceType == AppSourceType.InlineCode);
+
+        copy.FunctionRuntime.Should().Be(Harbora.Domain.Functions.FunctionRuntime.Python);
+    }
+
+    [Fact]
+    public async Task A_cloned_function_app_gets_an_invoke_secret_of_its_own()
+    {
+        // The same rule as a cloned database's password: a staging copy holding production's secret
+        // is a staging copy that can fire production's schedules.
+        var h = Build();
+        var origin = AddFunctionApp(h);
+
+        var outcome = await h.Cloner.CloneAsync(Workspace, h.Source.Id, "Staging", default);
+
+        var copy = await h.Db.Apps.IgnoreQueryFilters()
+            .FirstAsync(a => a.EnvironmentId == outcome.EnvironmentId && a.SourceType == AppSourceType.InlineCode);
+
+        copy.FunctionInvokeSecret.Should().NotBeNullOrEmpty();
+        copy.FunctionInvokeSecret.Should().NotBe(origin.FunctionInvokeSecret);
+    }
+
+    [Fact]
+    public async Task A_cloned_function_starts_unpublished_and_unscheduled()
+    {
+        // Nothing has been built for the copy, and a due time carried over belongs to the original's
+        // history — it would fire the copy before its first publish.
+        var h = Build();
+        AddFunctionApp(h);
+
+        var outcome = await h.Cloner.CloneAsync(Workspace, h.Source.Id, "Staging", default);
+
+        var copy = await h.Db.Apps.IgnoreQueryFilters()
+            .FirstAsync(a => a.EnvironmentId == outcome.EnvironmentId && a.SourceType == AppSourceType.InlineCode);
+        var fn = await h.Db.FunctionDefinitions.IgnoreQueryFilters().FirstAsync(f => f.AppId == copy.Id);
+
+        fn.HasUnpublishedChanges.Should().BeTrue();
+        fn.NextRunAt.Should().BeNull();
+    }
 }

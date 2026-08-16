@@ -264,13 +264,51 @@ public sealed class EnvironmentCloner(
                 CpuLimit = spec.CpuLimit,
                 TemplateId = origin.TemplateId,
                 TemplateVersionId = origin.TemplateVersionId,
+                // Which language the copy's host is built from. Without it a cloned function app
+                // carried SourceType.InlineCode and no runtime — an app that looked like a function
+                // app on every page and could never be published, because the pipeline has nothing
+                // to generate from.
+                FunctionRuntime = origin.FunctionRuntime,
                 CreatedAt = now
 
                 // Deliberately not copied: PreviewsEnabled and the preview columns (a copy of a
                 // service should not start spawning environments of its own), ActiveDeploymentId
-                // and NextRunAt (they name the original's history), and PublishedHostPort (it names
-                // a port on the original's node).
+                // and NextRunAt (they name the original's history), PublishedHostPort (it names
+                // a port on the original's node), and FunctionInvokeSecret — a copy gets a new one
+                // below, for the same reason every cloned database gets a new password.
             };
+
+            // The functions themselves. An environment clone is meant to reproduce the environment,
+            // and a function app is its functions: copying the shell and leaving them behind would
+            // produce a staging copy that answers 404 to everything production answers.
+            if (origin.SourceType == AppSourceType.InlineCode)
+            {
+                CloneFunctionSecret(copy);
+
+                var functions = await db.FunctionDefinitions.IgnoreQueryFilters()
+                    .Where(f => f.AppId == origin.Id)
+                    .ToListAsync(ct);
+
+                foreach (var fn in functions)
+                    db.FunctionDefinitions.Add(new Domain.Functions.FunctionDefinition
+                    {
+                        AppId = copy.Id,
+                        WorkspaceId = workspaceId,
+                        Name = fn.Name,
+                        Slug = fn.Slug,
+                        Trigger = fn.Trigger,
+                        Route = fn.Route,
+                        CronExpression = fn.CronExpression,
+                        EventKey = fn.EventKey,
+                        Code = fn.Code,
+                        IsEnabled = fn.IsEnabled,
+                        // Nothing has been built for the copy yet, and its schedule starts from now
+                        // rather than inheriting a due time that belongs to the original's history.
+                        HasUnpublishedChanges = true,
+                        NextRunAt = null,
+                        CreatedAt = now
+                    });
+            }
 
             attachments.Add((copy, plan.Services
                 .Where(s => ClonePlan.IsAttachedTo(
@@ -350,6 +388,18 @@ public sealed class EnvironmentCloner(
 
         return CloneOutcome.Created(environment.Id, plan);
     }
+
+    /// <summary>
+    /// Gives a copied function app an invoke secret of its own.
+    ///
+    /// <para>
+    /// New rather than copied, for the same reason every cloned database gets a new password: the
+    /// secret is what lets the panel fire a function, and two apps sharing one means the staging
+    /// copy's secret opens production's door.
+    /// </para>
+    /// </summary>
+    private void CloneFunctionSecret(App copy) =>
+        copy.FunctionInvokeSecret = protector.Protect(Functions.FunctionInvokeSecret.Mint());
 
     /// <summary>
     /// Rewrites the attach variables inside the new environment, matching each copied application

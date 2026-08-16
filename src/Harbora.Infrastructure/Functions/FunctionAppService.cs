@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
@@ -42,8 +41,7 @@ public sealed class FunctionAppService(HarboraDbContext db, ISecretProtector pro
     {
         if (!string.IsNullOrEmpty(app.FunctionInvokeSecret)) return false;
 
-        app.FunctionInvokeSecret = protector.Protect(
-            Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant());
+        app.FunctionInvokeSecret = protector.Protect(FunctionInvokeSecret.Mint());
         return true;
     }
 
