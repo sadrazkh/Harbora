@@ -38,6 +38,37 @@ public static class ServiceCatalog
 {
     private static string Mask(string s) => "••••••";
 
+    /// <summary>
+    /// The connection string in the shape an ADO.NET provider parses, under the two names a
+    /// framework finds on its own.
+    ///
+    /// <c>DATABASE_URL</c> is a URI, and every ADO.NET provider — Npgsql, MySqlConnector,
+    /// SqlClient — parses only <c>keyword=value</c>. So an attach used to hand a .NET application
+    /// five variables it does not read and none it does: it fell back to appsettings.json, which in
+    /// a container says <c>Host=localhost</c>, and died at the health check with a stack trace that
+    /// named neither the database nor the attach.
+    ///
+    /// <c>ConnectionStrings__DefaultConnection</c> is not a convention Harbora invented: .NET's
+    /// configuration reads environment variables and maps <c>__</c> to <c>:</c>, so this overrides
+    /// <c>ConnectionStrings:DefaultConnection</c> with no code change, no rebuild, and no secret
+    /// written into a file. An application whose key is spelled differently reads
+    /// <c>DATABASE_DSN</c> instead, or copies it under its own name — which is what the app page
+    /// now says out loud.
+    /// </summary>
+    private static Dictionary<string, string> Dsn(string value) => new()
+    {
+        ["DATABASE_DSN"] = value,
+        ["ConnectionStrings__DefaultConnection"] = value
+    };
+
+    /// <summary>Npgsql spelling. Host/Username — not Server/User ID, which it rejects.</summary>
+    private static Dictionary<string, string> PostgresDsn(ServiceCreds c) =>
+        Dsn($"Host={c.Host};Port={c.Port};Database={c.Database};Username={c.User};Password={c.Password}");
+
+    /// <summary>MySqlConnector spelling, shared by MySQL and MariaDB.</summary>
+    private static Dictionary<string, string> MySqlDsn(ServiceCreds c) =>
+        Dsn($"Server={c.Host};Port={c.Port};Database={c.Database};User ID={c.User};Password={c.Password}");
+
     public static readonly IReadOnlyDictionary<ManagedServiceType, ServiceDefinition> All =
         new Dictionary<ManagedServiceType, ServiceDefinition>
         {
@@ -49,7 +80,7 @@ public static class ServiceCatalog
                 Env = c => new() { ["POSTGRES_USER"] = c.User, ["POSTGRES_PASSWORD"] = c.Password, ["POSTGRES_DB"] = c.Database },
                 Conn = c => ($"postgresql://{c.User}:{c.Password}@{c.Host}:{c.Port}/{c.Database}",
                              $"postgresql://{c.User}:{Mask(c.Password)}@{c.Host}:{c.Port}/{c.Database}"),
-                AttachEnv = c => new()
+                AttachEnv = c => new(PostgresDsn(c))
                 {
                     ["DATABASE_URL"] = $"postgresql://{c.User}:{c.Password}@{c.Host}:{c.Port}/{c.Database}",
                     ["PGHOST"] = c.Host, ["PGPORT"] = c.Port.ToString(), ["PGUSER"] = c.User,
@@ -67,7 +98,7 @@ public static class ServiceCatalog
                 },
                 Conn = c => ($"mysql://{c.User}:{c.Password}@{c.Host}:{c.Port}/{c.Database}",
                              $"mysql://{c.User}:{Mask(c.Password)}@{c.Host}:{c.Port}/{c.Database}"),
-                AttachEnv = c => new()
+                AttachEnv = c => new(MySqlDsn(c))
                 {
                     ["DATABASE_URL"] = $"mysql://{c.User}:{c.Password}@{c.Host}:{c.Port}/{c.Database}",
                     ["MYSQL_HOST"] = c.Host, ["MYSQL_PORT"] = c.Port.ToString(),
@@ -85,7 +116,7 @@ public static class ServiceCatalog
                 },
                 Conn = c => ($"mysql://{c.User}:{c.Password}@{c.Host}:{c.Port}/{c.Database}",
                              $"mysql://{c.User}:{Mask(c.Password)}@{c.Host}:{c.Port}/{c.Database}"),
-                AttachEnv = c => new()
+                AttachEnv = c => new(MySqlDsn(c))
                 {
                     ["DATABASE_URL"] = $"mysql://{c.User}:{c.Password}@{c.Host}:{c.Port}/{c.Database}",
                     ["DB_HOST"] = c.Host, ["DB_PORT"] = c.Port.ToString(),
