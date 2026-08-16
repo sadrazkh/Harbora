@@ -25,7 +25,8 @@ public class ErrorPageTests
             new DbContextOptionsBuilder<HarboraDbContext>().UseInMemoryDatabase("err-" + Guid.NewGuid()).Options);
 
         return new HomeController(db, new FakeDockerEngine(),
-            new Harbora.Infrastructure.Dashboard.AttentionService(db, new FixedClock()),
+            new Harbora.Infrastructure.Dashboard.AttentionService(db, new FixedClock(),
+                Microsoft.Extensions.Options.Options.Create(new Harbora.Infrastructure.Monitoring.MonitoringOptions())),
             new Harbora.Infrastructure.Monitoring.NetworkHistory(db),
             new Harbora.Tests.Fakes.FakeManagedServiceEngine(),
             new AnonymousUser(), NullLogger<HomeController>.Instance)

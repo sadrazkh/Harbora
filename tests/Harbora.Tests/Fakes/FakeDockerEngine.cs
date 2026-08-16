@@ -439,10 +439,18 @@ public sealed class FakeDockerEngine : IDockerEngine
         string containerId, IReadOnlyList<string> command, int columns, int rows, CancellationToken ct) =>
         throw new NotSupportedException();
 
+    /// <summary>Total disk <see cref="GetHostInfoAsync"/> reports. Defaults to the original fixed 100 GB.</summary>
+    public long TotalDiskBytes { get; set; } = 100L << 30;
+
+    /// <summary>Free disk <see cref="GetHostInfoAsync"/> reports. Defaults to the original fixed 50 GB
+    /// (50% used) — settable so a test can drive the disk-warning threshold either side of a
+    /// configured ratio without inventing a second fake.</summary>
+    public long FreeDiskBytes { get; set; } = 50L << 30;
+
     public Task<HostInfo> GetHostInfoAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new HostInfo(4, 8L << 30, 100L << 30, 50L << 30, "fake", _containers.Count));
+        return Task.FromResult(new HostInfo(4, 8L << 30, TotalDiskBytes, FreeDiskBytes, "fake", _containers.Count));
     }
 
     private string NameOf(string containerId) =>
