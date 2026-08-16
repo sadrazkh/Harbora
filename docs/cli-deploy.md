@@ -146,6 +146,33 @@ harbora deploy my-app \
 
 Exit code is `0` on success and non-zero on failure, so it gates a pipeline directly.
 
+### Databases: what your app should read
+
+Attaching a database writes its credentials into the application's environment. Which names depends
+on the engine, and the application page lists them under **“How your app reads these”** — that list
+is generated from the catalog, so it is never out of date.
+
+Two of them are worth knowing before you get there:
+
+| Variable | Shape | Who reads it |
+|---|---|---|
+| `DATABASE_URL` | URI — `postgresql://user:pass@host:5432/db` | Node, Python, Ruby, Go, most scripting runtimes |
+| `DATABASE_DSN` | Keywords — `Host=…;Port=…;Database=…;Username=…;Password=…` | .NET and anything else on ADO.NET |
+| `ConnectionStrings__DefaultConnection` | Same as `DATABASE_DSN` | .NET, with no code change at all |
+
+**On .NET there is nothing to do.** Configuration reads environment variables and maps `__` to `:`,
+so `ConnectionStrings__DefaultConnection` overrides whatever `appsettings.json` holds. If your app
+spells the key differently — `ConnectionStrings:Default`, say — add one variable named
+`ConnectionStrings__Default` holding the value of `DATABASE_DSN`.
+
+> Don't hand `DATABASE_URL` to .NET. It is a URI, and every ADO.NET provider parses only
+> `keyword=value`. An app given the URI starts, fails its first query, and the deployment dies at
+> the health check with a stack trace about the driver — which names neither the database nor the
+> attach that was supposed to supply it.
+
+Redis and the brokers have no connection string; they are reached by URL (`REDIS_URL`, `AMQP_URL`,
+`NATS_URL`). Redeploy after attaching — variables are applied at release, not while a container runs.
+
 ---
 
 ## 5. `harbora.yml`
@@ -385,3 +412,4 @@ while True:
 | Upload is huge / slow | `node_modules` or build output is being packed | Add a `.dockerignore`, or `ignore:` entries |
 | `--branch` deploys stale code | It archives **committed** content | Commit, or use `--push` for the working folder |
 | `Upload … was cut off by the server` | The server refused before reading the body — usually an app name it doesn't recognise, or a token that can't deploy | Run `harbora deploy` and pick from the list; check the token's permissions in the panel |
+| Build succeeds, health check times out, driver stack trace in the log | The app is reaching the database in `appsettings.json` (`localhost`), not the attached one | Attach the database, then read `ConnectionStrings__DefaultConnection` or copy `DATABASE_DSN` under your own key — see *Databases: what your app should read* |

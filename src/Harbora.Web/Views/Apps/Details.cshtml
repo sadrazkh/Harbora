@@ -649,6 +649,73 @@
                         }
                     </p>
                 }
+
+                @* ---- what to read from the application ----
+                   Attaching is one click, and then the developer was on their own: nothing said
+                   which variables had appeared, so the answer was "read the source, or guess". A
+                   .NET application guessed wrong in the expensive way — it read
+                   ConnectionStrings:Default, the attach wrote PGHOST, and the deployment died at
+                   the health check with a stack trace naming neither the database nor the attach.
+
+                   Names only. This page is visible to anybody with read access to the application;
+                   the values live behind the database's own page. *@
+                <details class="mt-3 rounded-lg border border-line bg-surface-2 p-2.5">
+                    <summary class="cursor-pointer text-xs font-medium text-ink">
+                        @(isFa ? "اپ چطور این‌ها را می‌خواند؟" : "How your app reads these")
+                    </summary>
+
+                    @foreach (var link in attached)
+                    {
+                        var keys = Harbora.Infrastructure.Services.AttachGuidance.KeysFor(link.Type);
+                        var dotNet = Harbora.Infrastructure.Services.AttachGuidance.WritesConnectionString(link.Type);
+
+                        <div class="mt-2.5 border-t border-line pt-2.5 first:border-0 first:pt-0">
+                            <div class="text-xs font-medium text-ink" dir="ltr">@link.Name <span class="text-ink-faint">· @link.Type</span></div>
+
+                            @if (dotNet)
+                            {
+                                <p class="mt-1 text-[11px] leading-5 text-ink-faint">
+                                    @(isFa
+                                        ? "برای .NET کاری لازم نیست — کانفیگ متغیرهای محیطی را می‌خواند و «__» را به «:» تبدیل می‌کند، پس این یکی مقدار appsettings.json را override می‌کند:"
+                                        : "On .NET there is nothing to do — configuration reads environment variables and maps “__” to “:”, so this one overrides appsettings.json:")
+                                    <code dir="ltr" class="ms-1">@Harbora.Infrastructure.Services.AttachGuidance.DotNetKey</code>
+                                </p>
+                                <p class="mt-1 text-[11px] leading-5 text-ink-faint">
+                                    @(isFa
+                                        ? "اگر کلید اپ شما اسم دیگری دارد (مثلاً ConnectionStrings:Default)، یک متغیر با همان اسم بسازید و مقدار این را در آن بگذارید:"
+                                        : "If your app spells the key differently (say ConnectionStrings:Default), add a variable with that name holding the value of:")
+                                    <code dir="ltr" class="ms-1">@Harbora.Infrastructure.Services.AttachGuidance.DsnKey</code>
+                                </p>
+                                <p class="mt-1 text-[11px] leading-5 text-ink-faint">
+                                    @(isFa
+                                        ? "DATABASE_URL را مستقیم به .NET ندهید — آن URI است و درایورهای ADO.NET فقط keyword=value می‌فهمند."
+                                        : "Don’t hand DATABASE_URL to .NET — it is a URI, and ADO.NET providers only parse keyword=value.")
+                                </p>
+                            }
+                            else
+                            {
+                                <p class="mt-1 text-[11px] leading-5 text-ink-faint">
+                                    @(isFa
+                                        ? "این سرویس با URL خوانده می‌شود، نه با connection string."
+                                        : "This service is reached by URL rather than a connection string.")
+                                </p>
+                            }
+
+                            <p class="mt-1.5 flex flex-wrap gap-1">
+                                @foreach (var key in keys)
+                                {
+                                    <code dir="ltr" class="rounded bg-surface px-1 py-0.5 text-[10px] text-ink-faint">@key</code>
+                                }
+                            </p>
+                        </div>
+                    }
+
+                    <p class="mt-2.5 border-t border-line pt-2 text-[11px] leading-5 text-ink-faint">
+                        @(isFa
+                            ? "مقادیر اینجا نشان داده نمی‌شوند؛ صفحهٔ خود دیتابیس آن‌ها را دارد. بعد از هر تغییر، اپ را دوباره دیپلوی کنید."
+                            : "Values are not shown here — the database’s own page has them. Redeploy the application after any change.")
+                    </p>
+                </details>
             }
 
             @if (available.Count > 0)
