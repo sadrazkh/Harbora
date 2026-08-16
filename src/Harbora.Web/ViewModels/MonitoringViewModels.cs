@@ -14,7 +14,14 @@ public sealed class MonitoringDashboardViewModel
     public int ContainersRunning { get; set; }
     public double CpuPercent { get; set; }
 
-    public bool DiskWarning => DiskTotal > 0 && (double)DiskUsed / DiskTotal >= 0.85;
+    /// <summary>
+    /// The configured fraction of disk that counts as a problem
+    /// (<c>MonitoringOptions.DiskWarnRatio</c>). Defaulted to today's shipped constant so a view or
+    /// test that never sets it keeps the old behaviour; the controller always sets it from options.
+    /// </summary>
+    public double DiskWarnRatio { get; set; } = 0.85;
+
+    public bool DiskWarning => DiskTotal > 0 && (double)DiskUsed / DiskTotal >= DiskWarnRatio;
 
     public List<AppHealth> Apps { get; set; } = new();
     public List<Deployment> RecentDeploys { get; set; } = new();

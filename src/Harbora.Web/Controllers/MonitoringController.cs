@@ -5,6 +5,7 @@ using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Harbora.Web.Controllers;
 
@@ -21,6 +22,7 @@ public sealed class MonitoringController(
     Harbora.Infrastructure.Security.ProjectAccessService access,
     Harbora.Infrastructure.Maintenance.DiskCleanupService cleanup,
     IAuditLogger audit,
+    IOptions<Harbora.Infrastructure.Monitoring.MonitoringOptions> monitoringOptions,
     ILogger<MonitoringController> logger) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -76,7 +78,8 @@ public sealed class MonitoringController(
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         ViewData["Title"] = "Monitoring";
-        var vm = new MonitoringDashboardViewModel();
+        var options = monitoringOptions.Value;
+        var vm = new MonitoringDashboardViewModel { DiskWarnRatio = options.DiskWarnRatio };
 
         // Container states, keyed by app slug (best-effort; Docker may be down).
         var containerState = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -118,20 +121,29 @@ public sealed class MonitoringController(
         vm.FailedDeploys = await db.Deployments
             .CountAsync(d => d.App!.WorkspaceId == WorkspaceId && d.Status == DeploymentStatus.Failed, ct);
 
-        // Backup warning: most recent backup failed, or none in the last 48h.
+        // Backup warning: most recent backup failed, or none within the configured staleness window
+        // (MonitoringOptions.BackupStalenessHours — the dashboard's own figure; VerificationSchedule
+        // and StorageMeasurer each carry a different backup-staleness number for a different question
+        // and are deliberately untouched by this setting).
         var lastBackup = await db.Backups.Where(b => b.WorkspaceId == WorkspaceId)
             .OrderByDescending(b => b.CreatedAt).FirstOrDefaultAsync(ct);
         if (lastBackup is null)
         {
-            vm.BackupWarning = true; vm.BackupWarningText = "No backups yet.";
+            vm.BackupWarning = true;
+            vm.BackupWarningText = IsFa ? "هنوز پشتیبانی گرفته نشده است." : "No backups yet.";
         }
         else if (lastBackup.Status == BackupStatus.Failed)
         {
-            vm.BackupWarning = true; vm.BackupWarningText = "Most recent backup failed.";
+            vm.BackupWarning = true;
+            vm.BackupWarningText = IsFa ? "آخرین پشتیبان‌گیری ناموفق بود." : "Most recent backup failed.";
         }
-        else if (lastBackup.FinishedAt is { } finished && DateTimeOffset.UtcNow - finished > TimeSpan.FromHours(48))
+        else if (lastBackup.FinishedAt is { } finished && DateTimeOffset.UtcNow - finished > options.BackupStaleness)
         {
-            vm.BackupWarning = true; vm.BackupWarningText = "No successful backup in the last 48 hours.";
+            vm.BackupWarning = true;
+            var hours = (int)Math.Round(options.BackupStaleness.TotalHours);
+            vm.BackupWarningText = IsFa
+                ? $"در {hours} ساعت گذشته پشتیبان‌گیری موفقی انجام نشده است."
+                : $"No successful backup in the last {hours} hours.";
         }
 
         vm.Domains = await db.Domains.Where(d => d.App!.WorkspaceId == WorkspaceId).ToListAsync(ct);

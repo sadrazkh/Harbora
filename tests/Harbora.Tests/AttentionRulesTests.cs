@@ -162,6 +162,28 @@ public class AttentionRulesTests
     }
 
     [Fact]
+    public void A_configured_disk_ratio_lower_than_the_default_flags_a_disk_the_default_would_ignore()
+    {
+        // MonitoringOptions.DiskWarnRatio is the number AttentionService actually passes; the shipped
+        // 0.85 default here is only what a caller gets for free when it passes none.
+        var facts = new AttentionFacts { HasAnyApp = true, HasAnyBackupSchedule = true, DiskUsedRatio = 0.70 };
+
+        AttentionRules.Build(facts).Should().BeEmpty("70% is under the shipped default of 85%");
+        AttentionRules.Build(facts, diskWarnRatio: 0.60).Should()
+            .ContainSingle("70% is over the configured 60%, even though it is under the shipped default");
+    }
+
+    [Fact]
+    public void A_configured_disk_ratio_higher_than_the_default_quiets_a_disk_the_default_would_flag()
+    {
+        var facts = new AttentionFacts { HasAnyApp = true, HasAnyBackupSchedule = true, DiskUsedRatio = 0.90 };
+
+        AttentionRules.Build(facts).Should().ContainSingle("90% is over the shipped default of 85%");
+        AttentionRules.Build(facts, diskWarnRatio: 0.95).Should()
+            .BeEmpty("90% is under the configured 95%, even though it is over the shipped default");
+    }
+
+    [Fact]
     public void A_workspace_with_apps_and_no_backup_schedule_is_nudged_once()
     {
         var items = AttentionRules.Build(new AttentionFacts { HasAnyApp = true, HasAnyBackupSchedule = false });

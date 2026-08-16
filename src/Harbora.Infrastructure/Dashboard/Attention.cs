@@ -105,7 +105,17 @@ public sealed record AttentionFacts
 /// </summary>
 public static class AttentionRules
 {
-    /// <summary>Disk is a platform-wide problem: past this, deploys and backups start failing.</summary>
+    /// <summary>
+    /// Disk is a platform-wide problem: past this, deploys and backups start failing.
+    ///
+    /// <para>
+    /// This is <see cref="Build"/>'s fallback default, used only when no ratio is supplied. The value
+    /// an installation actually sees comes from <c>Monitoring:DiskWarnRatio</c>
+    /// (<see cref="Harbora.Infrastructure.Monitoring.MonitoringOptions"/>), passed in by
+    /// <see cref="AttentionService"/> — the same figure the disk-warning alert and the monitoring
+    /// page's own banner read, so all three agree once it is configured.
+    /// </para>
+    /// </summary>
     public const double DiskWarnRatio = 0.85;
 
     /// <summary>Beyond this the list stops being a list and becomes a wall.</summary>
@@ -160,7 +170,12 @@ public static class AttentionRules
         UpdateTitle, UpdateDetail, UpdateAction
     ];
 
-    public static IReadOnlyList<AttentionItem> Build(AttentionFacts facts)
+    /// <param name="diskWarnRatio">
+    /// The configured fraction of disk that counts as a problem. Defaults to <see cref="DiskWarnRatio"/>
+    /// for a caller that does not pass one; <see cref="AttentionService"/> always passes the
+    /// installation's configured value.
+    /// </param>
+    public static IReadOnlyList<AttentionItem> Build(AttentionFacts facts, double diskWarnRatio = DiskWarnRatio)
     {
         var items = new List<AttentionItem>();
 
@@ -233,7 +248,7 @@ public static class AttentionRules
                 ActionUrl = kind == ChannelKind.BackupDelivery ? "/backups" : "/monitoring"
             });
 
-        if (facts.DiskUsedRatio >= DiskWarnRatio)
+        if (facts.DiskUsedRatio >= diskWarnRatio)
             items.Add(new()
             {
                 Level = AttentionLevel.Warning,

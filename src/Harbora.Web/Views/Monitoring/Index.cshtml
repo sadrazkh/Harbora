@@ -3,6 +3,8 @@
     ViewData["Title"] = "Monitoring";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+    string Pct(double? d) => d is null ? "" : d.Value.ToString("0.#");
     string Gb(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
     string HealthClass(string s) => s.ToLower() switch
     {
@@ -21,13 +23,14 @@
 </div>
 
 @if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
+@if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
 @if (!Model.DockerAvailable)
 {
     <div class="mb-4 rounded-lg bg-warn-soft border border-warn text-warn px-4 py-2 text-sm">@(isFa ? "دسترسی به Docker daemon نیست — سنجه‌های زنده متوقف‌اند." : "Docker daemon unreachable — live metrics paused.")</div>
 }
 @if (Model.DiskWarning)
 {
-    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">⚠ @(isFa ? "فضای دیسک رو به اتمام است" : "Disk space is running low") — @Gb(Model.DiskUsed) / @Gb(Model.DiskTotal)</div>
+    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm" data-disk-warning data-disk-warn-ratio="@Model.DiskWarnRatio.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)">⚠ @(isFa ? "فضای دیسک رو به اتمام است" : "Disk space is running low") — @Gb(Model.DiskUsed) / @Gb(Model.DiskTotal)</div>
 }
 @if (User.IsInRole("Owner") || User.IsInRole("Admin"))
 {
@@ -42,7 +45,7 @@
 }
 @if (Model.BackupWarning)
 {
-    <div class="mb-4 rounded-lg bg-warn-soft border border-warn text-warn px-4 py-2 text-sm">⚠ @Model.BackupWarningText</div>
+    <div class="mb-4 rounded-lg bg-warn-soft border border-warn text-warn px-4 py-2 text-sm" data-backup-warning>⚠ @Model.BackupWarningText</div>
 }
 
 @{
@@ -145,11 +148,21 @@
         }
         @foreach (var a in Model.Alerts)
         {
+            var watchedApp = a.AppId is { } watchedId ? Model.Apps.FirstOrDefault(x => x.Id == watchedId) : null;
+            var hasThreshold = a.AppId is not null && a.Metric is not null && a.ThresholdPercent is not null;
             @* A channel that is failing says so here, rather than only in the panel logs — the person
-               who needs to know is the one looking at this list. *@
-            <div class="rounded-lg bg-surface-2 px-3 py-2 text-sm">
+               who needs to know is the one looking at this list. A disabled rule stays in this list
+               too — deleting used to be the only way off it, and that is the defect this page fixes. *@
+            <div class="rounded-lg bg-surface-2 px-3 py-2 text-sm@(a.IsEnabled ? "" : " opacity-60")"
+                 data-alert-row data-alert-id="@a.Id" data-alert-enabled="@(a.IsEnabled ? "true" : "false")"
+                 data-alert-metric="@(a.Metric?.ToString() ?? "")" data-alert-app-id="@(a.AppId?.ToString() ?? "")"
+                 data-alert-threshold-percent="@Pct(a.ThresholdPercent)">
               <div class="flex items-center justify-between">
                 <span>@a.Name <span class="text-ink-faint">· @a.Channel · ≥@a.MinSeverity</span>
+                    @if (!a.IsEnabled)
+                    {
+                        <span class="text-xs text-ink-faint">· @(isFa ? "غیرفعال" : "disabled")</span>
+                    }
                     @if (a.LastError is not null)
                     {
                         <span class="text-xs text-danger">· @(isFa ? "ناموفق" : "failing")</span>
@@ -160,14 +173,96 @@
                     }
                 </span>
                 <div class="flex items-center gap-2">
+                    <form asp-controller="Alerts" asp-action="Toggle" asp-route-id="@a.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-accent-text" aria-label="@(isFa ? $"تغییر وضعیت {a.Name}" : $"Toggle alert {a.Name}")">@(a.IsEnabled ? (isFa ? "غیرفعال کردن" : "disable") : (isFa ? "فعال کردن" : "enable"))</button></form>
                     <form asp-controller="Alerts" asp-action="Test" asp-route-id="@a.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-accent-text">@(isFa ? "آزمایش" : "test")</button></form>
                     <form asp-controller="Alerts" asp-action="Delete" asp-route-id="@a.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف هشدار {a.Name}" : $"Delete alert {a.Name}")">✕</button></form>
                 </div>
               </div>
+              @if (hasThreshold)
+              {
+                  <p class="mt-1 text-xs text-ink-faint" data-alert-threshold-summary>
+                      @(isFa
+                          ? $"روی «{watchedApp?.Name}» · {(a.Metric == AlertMetric.CpuPercent ? "CPU" : "حافظه")} ≥ {Pct(a.ThresholdPercent)}٪ به مدت {a.SustainedMinutes} دقیقه"
+                          : $"watches {watchedApp?.Name} · {a.Metric} ≥ {Pct(a.ThresholdPercent)}% for {a.SustainedMinutes}m")
+                  </p>
+              }
               @if (a.LastError is not null)
               {
                   <p class="mt-1 text-xs text-danger/90 break-all">@a.LastError</p>
               }
+
+              <details class="mt-2">
+                  <summary class="cursor-pointer text-xs text-accent-text">@(isFa ? "ویرایش" : "edit")</summary>
+                  <form asp-controller="Alerts" asp-action="Edit" asp-route-id="@a.Id" method="post" class="mt-3 grid sm:grid-cols-2 gap-3" data-alert-form>
+                      @Html.AntiForgeryToken()
+                      <input name="name" value="@a.Name" placeholder="Name" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                      <select name="channel" data-alert-channel class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                          <option value="Telegram" selected="@(a.Channel == AlertChannel.Telegram)">Telegram</option>
+                          <option value="Discord" selected="@(a.Channel == AlertChannel.Discord)">Discord</option>
+                          <option value="Webhook" selected="@(a.Channel == AlertChannel.Webhook)">Custom webhook</option>
+                          <option value="Email" selected="@(a.Channel == AlertChannel.Email)">Email</option>
+                      </select>
+                      <select name="minSeverity" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                          <option value="Info" selected="@(a.MinSeverity == AlertSeverity.Info)">Info</option>
+                          <option value="Warning" selected="@(a.MinSeverity == AlertSeverity.Warning)">Warning</option>
+                          <option value="Critical" selected="@(a.MinSeverity == AlertSeverity.Critical)">Critical</option>
+                      </select>
+                      <div></div>
+
+                      <div data-ch="Telegram" class="grid grid-cols-2 gap-2 sm:col-span-2">
+                          <input name="telegramToken" placeholder="@(isFa ? "بدون تغییر — خالی بگذارید تا حفظ شود" : "unchanged — leave blank to keep")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                          <input name="telegramChatId" placeholder="@(isFa ? "بدون تغییر — خالی بگذارید تا حفظ شود" : "unchanged — leave blank to keep")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                      </div>
+                      <div data-ch="Discord Webhook" class="sm:col-span-2" style="display:none">
+                          <input name="webhookUrl" placeholder="@(isFa ? "بدون تغییر — خالی بگذارید تا حفظ شود" : "unchanged — leave blank to keep")" class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                      </div>
+                      <div data-ch="Email" class="grid grid-cols-2 gap-2 sm:col-span-2" style="display:none">
+                          <input name="smtpHost" placeholder="@(isFa ? "بدون تغییر" : "unchanged")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                          <input name="smtpPort" type="number" placeholder="@(isFa ? "بدون تغییر" : "unchanged")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                          <input name="smtpUser" placeholder="@(isFa ? "بدون تغییر" : "unchanged")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                          <input name="smtpPassword" type="password" placeholder="@(isFa ? "بدون تغییر" : "unchanged")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                          <input name="emailFrom" placeholder="@(isFa ? "بدون تغییر" : "unchanged")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                          <input name="emailTo" placeholder="@(isFa ? "بدون تغییر" : "unchanged")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                      </div>
+                      <p class="sm:col-span-2 text-xs text-ink-faint">
+                          @(isFa
+                              ? "مقصد کانال (توکن یا آدرس) فقط با نوشتن مقدار تازه در همین‌جا تغییر می‌کند؛ خالی بماند یعنی همان مقدار قبلی حفظ می‌شود."
+                              : "The channel's target only changes if you type a new value here — leave it blank and the stored one is kept.")
+                      </p>
+
+                      <div class="sm:col-span-2 flex flex-wrap gap-3 text-sm">
+                          <label class="flex items-center gap-1"><input type="checkbox" name="onDeployFailed" value="true" checked="@a.OnDeployFailed"> deploy failed</label>
+                          <label class="flex items-center gap-1"><input type="checkbox" name="onAppCrashed" value="true" checked="@a.OnAppCrashed"> app crashed</label>
+                          <label class="flex items-center gap-1"><input type="checkbox" name="onSslExpiring" value="true" checked="@a.OnSslExpiring"> SSL expiring</label>
+                          <label class="flex items-center gap-1"><input type="checkbox" name="onDiskWarning" value="true" checked="@a.OnDiskWarning"> disk warning</label>
+                          <label class="flex items-center gap-1"><input type="checkbox" name="onBackupFailed" value="true" checked="@a.OnBackupFailed"> backup failed</label>
+                      </div>
+
+                      <details class="sm:col-span-2" open="@hasThreshold">
+                          <summary class="cursor-pointer text-sm text-accent-text">@(isFa ? "یا: هشدار روی مصرف یک اپ" : "Or: alert on one app's usage")</summary>
+                          <div class="mt-3 grid gap-2 sm:grid-cols-4">
+                              <select name="appId" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                                  <option value="">@(isFa ? "— بدون اپ —" : "— no app —")</option>
+                                  @foreach (var app in Model.Apps)
+                                  {
+                                      <option value="@app.Id" selected="@(a.AppId == app.Id)">@app.Name</option>
+                                  }
+                              </select>
+                              <select name="metric" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                                  <option value="" selected="@(a.Metric is null)">@(isFa ? "— بدون سنجه —" : "— no metric —")</option>
+                                  <option value="MemoryPercent" selected="@(a.Metric == AlertMetric.MemoryPercent)">@(isFa ? "حافظه" : "Memory")</option>
+                                  <option value="CpuPercent" selected="@(a.Metric == AlertMetric.CpuPercent)">CPU</option>
+                              </select>
+                              <input name="thresholdPercent" type="number" min="1" max="100" value="@Pct(a.ThresholdPercent)" placeholder="@(isFa ? "٪ آستانه" : "% threshold")"
+                                     class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                              <input name="sustainedMinutes" type="number" min="0" max="1440" value="@a.SustainedMinutes" placeholder="@(isFa ? "دقیقه" : "minutes")"
+                                     class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                          </div>
+                      </details>
+
+                      <div><button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@(isFa ? "ذخیره تغییرات" : "Save changes")</button></div>
+                  </form>
+              </details>
             </div>
         }
     </div>
@@ -222,6 +317,7 @@
                         }
                     </select>
                     <select name="metric" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                        <option value="" selected>@(isFa ? "— بدون سنجه —" : "— no metric —")</option>
                         <option value="MemoryPercent">@(isFa ? "حافظه" : "Memory")</option>
                         <option value="CpuPercent">CPU</option>
                     </select>
