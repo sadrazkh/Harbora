@@ -231,7 +231,8 @@ public class QuotaRefusalBilingualismTests
                 db, new UnusedBackupDependency(), new UnusedBackupDependency(), new UnusedBackupDependency(),
                 new NoopJobQueue(), new UnusedBackupDependency(), currentUser, new SilentAudit(),
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<
-                    Harbora.Modules.Backup.Infrastructure.BackupSnapshotService>.Instance))
+                    Harbora.Modules.Backup.Infrastructure.BackupSnapshotService>.Instance),
+            lifecycle: new Harbora.Infrastructure.Monitoring.LifecycleHistory(db))
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
