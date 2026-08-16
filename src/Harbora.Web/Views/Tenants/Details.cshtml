@@ -130,6 +130,61 @@
     <p class="mt-2 text-xs text-ink-faint">@(isFa ? "مبنای صورتحساب مصرفی؛ هر ۱۵ دقیقه از روی منابع متعهدِ اپ‌های در حال اجرا انباشته می‌شود." : "Billing basis; accrued every 15 min from the committed resources of running apps.")</p>
 </div>
 
+@* Resolved for this tenant, not read off their plan: an override is exactly the thing an operator
+   forgets they set, and a page showing the plan's answer would hide it. Changing one posts to the
+   same endpoint the features console uses, so there is one writer. *@
+<div class="rounded-xl border border-line bg-surface p-5 mb-6">
+    <div class="mb-3 flex items-center justify-between">
+        <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "قابلیت‌ها" : "Features")</h2>
+        <a href="/features/admin" class="text-xs text-accent-text hover:underline">@(isFa ? "کنسول قابلیت‌ها" : "Features console")</a>
+    </div>
+    <div class="space-y-2">
+        @foreach (var feature in Model.Features)
+        {
+            <form method="post" action="/features/admin/set" class="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-surface-2 px-4 py-2.5">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="scope" value="@((int)Harbora.Domain.Features.FeatureScope.Workspace)" />
+                <input type="hidden" name="targetId" value="@Model.WorkspaceId" />
+                <input type="hidden" name="featureKey" value="@feature.Key" />
+                <input type="hidden" name="returnUrl" value="/tenants/@Model.WorkspaceId" />
+                <div class="min-w-44">
+                    <div class="text-sm font-medium text-ink">@feature.Name</div>
+                    <div class="text-[11px] text-ink-faint">
+                        @(feature.DecidedBy switch
+                        {
+                            Harbora.Domain.Features.FeatureDecision.Workspace => isFa ? "استثنای همین ورک‌اسپیس" : "exception for this workspace",
+                            Harbora.Domain.Features.FeatureDecision.Plan => isFa ? "از روی پلن" : "from the plan",
+                            _ => isFa ? "پیش‌فرض محصول" : "shipped default"
+                        })
+                    </div>
+                </div>
+                <select name="state" class="form-control max-w-52">
+                    @foreach (var option in new[]
+                    {
+                        Harbora.Domain.Features.FeatureState.Inherit,
+                        Harbora.Domain.Features.FeatureState.Enabled,
+                        Harbora.Domain.Features.FeatureState.Locked,
+                        Harbora.Domain.Features.FeatureState.Hidden
+                    })
+                    {
+                        <option value="@((int)option)"
+                                selected="@(feature.DecidedBy == Harbora.Domain.Features.FeatureDecision.Workspace && feature.State == option)">
+                            @(option switch
+                            {
+                                Harbora.Domain.Features.FeatureState.Inherit => isFa ? "طبق پلن" : "Follow the plan",
+                                Harbora.Domain.Features.FeatureState.Enabled => isFa ? "فعال" : "Enabled",
+                                Harbora.Domain.Features.FeatureState.Locked => isFa ? "قفل (دیده می‌شود)" : "Locked (visible)",
+                                _ => isFa ? "پنهان" : "Hidden"
+                            })
+                        </option>
+                    }
+                </select>
+                <button class="rounded-lg bg-surface-2 px-4 py-1.5 text-xs hover:bg-surface">@(isFa ? "ذخیره" : "Save")</button>
+            </form>
+        }
+    </div>
+</div>
+
 <div class="grid lg:grid-cols-3 gap-6">
     <section class="lg:col-span-2 rounded-xl border border-line bg-surface overflow-hidden">
         <div class="px-4 py-3 border-b border-line font-semibold">@(isFa ? "اعضا" : "Members")</div>

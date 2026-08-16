@@ -40,8 +40,53 @@ public sealed class FunctionCronScheduler(
         {
             try { await TickAsync(stoppingToken); }
             catch (Exception ex) { logger.LogError(ex, "Function cron tick failed."); }
+
+            try { await SettleAbandonedAsync(stoppingToken); }
+            catch (Exception ex) { logger.LogError(ex, "Settling abandoned function invocations failed."); }
         }
         while (await timer.WaitForNextTickAsync(stoppingToken));
+    }
+
+    /// <summary>
+    /// How long a queued call may stay queued before it is written off. Generous on purpose: the
+    /// queue is concurrency-limited, so a burst legitimately waits, and settling a call that is
+    /// merely behind would record a failure for a request that then succeeds.
+    /// </summary>
+    public static readonly TimeSpan AbandonedAfter = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Writes off calls that were queued and never made.
+    ///
+    /// <para>
+    /// Without this a row whose job died with the process reads as "queued" for ever, and the
+    /// history page — the one thing that answers "is this function still firing?" — fills with calls
+    /// that are neither running nor finished. The row is the only place that can say so, because by
+    /// the time anybody looks the job is gone.
+    /// </para>
+    /// </summary>
+    public async Task<int> SettleAbandonedAsync(CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+        var clock = scope.ServiceProvider.GetRequiredService<ISystemClock>();
+        var now = clock.UtcNow;
+
+        var abandoned = await db.FunctionInvocations.IgnoreQueryFilters()
+            .Where(i => i.CompletedAt == null && i.StartedAt < now - AbandonedAfter)
+            .ToListAsync(ct);
+        if (abandoned.Count == 0) return 0;
+
+        foreach (var invocation in abandoned)
+        {
+            invocation.CompletedAt = now;
+            invocation.Succeeded = false;
+            invocation.Error = "The panel restarted before this call was made.";
+            invocation.UpdatedAt = now;
+        }
+
+        await db.SaveChangesAsync(ct);
+        logger.LogWarning("Settled {Count} function invocation(s) that were queued and never made.", abandoned.Count);
+        return abandoned.Count;
     }
 
     /// <summary>One pass over every scheduled function. Public because it is this service's behaviour.</summary>

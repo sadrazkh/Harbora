@@ -427,6 +427,7 @@ apps on it; there is no in-place conversion.
   deployment pipeline, so live logs, health checks, zero-downtime cutover, rollback, quotas and
   metering are the ones every other app already gets — and a compile error shows up in the build log
   at publish time. Every invocation the platform makes itself is recorded: trigger, status, duration.
+  Guide: **[docs/functions.md](docs/functions.md)**.
 - **Feature entitlements**: the owner decides who each sellable feature is for, per **plan** and per
   **workspace**. A workspace without it still **sees** it — greyed, with a lock, and a page saying
   who can switch it on — because a tier nobody can see is a tier nobody asks to buy. Every lock is

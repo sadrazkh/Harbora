@@ -55,6 +55,18 @@ public sealed class RetentionOptions
     public int CronRunDays { get; set; } = 90;
 
     /// <summary>
+    /// Every call of a function the platform made itself — a schedule firing, an event arriving.
+    ///
+    /// <para>
+    /// The highest-frequency table this sweeper owns: a function on a one-minute schedule writes
+    /// 1,440 rows a day on its own, so it is bounded far more tightly than build logs. Thirty days is
+    /// long enough to answer "when did this stop running, and what did it say", which is the whole
+    /// reason the rows exist.
+    /// </para>
+    /// </summary>
+    public int FunctionInvocationDays { get; set; } = 30;
+
+    /// <summary>
     /// What the panel asked each node to do. The node detail page shows the last 30 and the admin
     /// API returns the last 25, so 90 days is already far more than anything reads.
     /// </summary>

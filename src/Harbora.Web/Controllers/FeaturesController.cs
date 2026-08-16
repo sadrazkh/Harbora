@@ -108,8 +108,15 @@ public sealed class FeaturesController(
     [HttpPost("admin/set")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.PlatformManage)]
+    /// <param name="returnUrl">
+    /// Where to go back to. The tenant page posts here so there is one writer rather than two, and
+    /// sending an operator to the console after they changed something on a customer's page would
+    /// lose their place. Local URLs only — <see cref="Url.IsLocalUrl"/> — because a return address
+    /// taken from a form is otherwise an open redirect.
+    /// </param>
     public async Task<IActionResult> Set(
-        FeatureScope scope, Guid targetId, string featureKey, FeatureState state, string? note, CancellationToken ct)
+        FeatureScope scope, Guid targetId, string featureKey, FeatureState state, string? note,
+        string? returnUrl, CancellationToken ct)
     {
         if (PlatformFeatures.Find(featureKey) is null) return NotFound();
 
@@ -156,6 +163,8 @@ public sealed class FeaturesController(
             ct: ct);
 
         TempData["Message"] = IsFa ? "ذخیره شد." : "Saved.";
-        return RedirectToAction(nameof(Admin));
+        return returnUrl is { Length: > 0 } && Url.IsLocalUrl(returnUrl)
+            ? Redirect(returnUrl)
+            : RedirectToAction(nameof(Admin));
     }
 }

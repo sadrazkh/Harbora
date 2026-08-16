@@ -17,6 +17,7 @@ public static class RetentionTables
     public const string DeploymentLogs = "DeploymentLogs";
     public const string AuditLogs = "AuditLogs";
     public const string CronRuns = "CronRuns";
+    public const string FunctionInvocations = "FunctionInvocations";
     public const string NodeCommands = "NodeCommands";
     public const string NodeEvents = "NodeEvents";
     public const string IdempotencyRecords = "IdempotencyRecords";
@@ -200,6 +201,12 @@ public sealed class DataRetentionSweeper(
 
         await SweepAgedTableAsync<Domain.Apps.CronRun>(RetentionTables.CronRuns, nameof(RetentionOptions.CronRunDays), config.CronRunDays,
             cutoff => Task.FromResult(RetentionRule.CronRunsToDelete(cutoff)));
+
+        // The highest-frequency table here: one row per scheduled or event-driven call, so a
+        // one-minute function writes 1,440 a day by itself.
+        await SweepAgedTableAsync<Domain.Functions.FunctionInvocation>(
+            RetentionTables.FunctionInvocations, nameof(RetentionOptions.FunctionInvocationDays), config.FunctionInvocationDays,
+            cutoff => Task.FromResult(RetentionRule.FunctionInvocationsToDelete(cutoff)));
 
         await SweepAgedTableAsync<Domain.Nodes.NodeCommandRecord>(RetentionTables.NodeCommands, nameof(RetentionOptions.NodeCommandDays), config.NodeCommandDays,
             cutoff => Task.FromResult(RetentionRule.NodeCommandsToDelete(cutoff)));

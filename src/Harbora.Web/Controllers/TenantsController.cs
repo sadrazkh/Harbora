@@ -25,6 +25,7 @@ public sealed partial class TenantsController(
     ICurrentUser currentUser,
     IAuditLogger audit,
     Harbora.Infrastructure.Billing.BillingSuspension suspension,
+    IFeatureGate features,
     Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Billing.BillingOptions> billing) : Controller
 {
     /// <summary>
@@ -561,6 +562,17 @@ public sealed partial class TenantsController(
 
         var reconciliation = await wallet.ReconcileAsync(ws.Id, ct);
 
+        // Resolved for this tenant rather than read off their plan: an override is exactly the thing
+        // an operator forgets they set, and a page showing the plan's answer would hide it.
+        var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+        var verdicts = await features.EvaluateAllAsync(ws.Id, ct);
+        var entitlements = Harbora.Domain.Features.PlatformFeatures.All
+            .Select(f => new TenantFeature(
+                f.Key, f.Name(isFa), f.Pitch(isFa),
+                verdicts.TryGetValue(f.Key, out var v) ? v.State : f.Default,
+                verdicts.TryGetValue(f.Key, out var d) ? d.DecidedBy : Harbora.Domain.Features.FeatureDecision.ShippedDefault))
+            .ToList();
+
         return View(new TenantDetailsViewModel
         {
             WorkspaceId = ws.Id, Name = ws.Name, Slug = ws.Slug, IsDefault = ws.IsDefault, Suspended = ws.IsSuspended,
@@ -574,7 +586,8 @@ public sealed partial class TenantsController(
             CpuCoreHours = metered?.CpuCoreHours ?? 0,
             AppCountPeak = metered?.AppCountPeak ?? 0,
             PeriodLabel = period.ToString("yyyy-MM"),
-            Members = members
+            Members = members,
+            Features = entitlements
         });
     }
 

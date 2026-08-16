@@ -108,6 +108,7 @@ public class TenantsControllerCreditTests
         // holds one directly, and TenantsControllerResumeTests drives that.
         var controller = new TenantsController(
             db, new Hasher(), new Quota(), wallet, new Caller(), audit, suspension: null!,
+            features: null!,
             billing: Microsoft.Extensions.Options.Options.Create(new Harbora.Infrastructure.Billing.BillingOptions()))
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }

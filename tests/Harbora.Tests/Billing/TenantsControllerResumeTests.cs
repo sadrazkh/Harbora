@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
@@ -237,7 +237,7 @@ public class TenantsControllerResumeTests
             NullLogger<BillingSuspension>.Instance);
 
         var controller = new TenantsController(
-            context, null!, null!, null!, null!, null!, suspension, null!)
+            context, null!, null!, null!, null!, null!, suspension, null!, null!)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };
