@@ -122,20 +122,22 @@ terminal or a server — the same treatment, and for the same reason, that `Depl
 gets: these are the rules users will argue with.
 
 ```
-AppChoice.Resolve(typedSlug, apps, interactive, yes) → (RemoteApp? Current, bool NeedsPrompt, string? Error)
+AppChoice.Resolve(typedSlug, apps, interactive, yes) → (RemoteApp? Current, bool NeedsPrompt, string? Problem)
 ```
 
 `Current` is the app the typed name resolved to, or null when nothing matched. When `NeedsPrompt` is
 true the caller shows the list with `Current` first and labelled, and takes the answer; when it is
-false, `Current` is the app to deploy and `Error` — set only when `Current` is null — is the message
-to print before giving up.
+false, `Current` is the app to deploy. `Problem` says what was wrong with the name given — printed
+either way, and fatal only when there is nothing to prompt with and nothing was resolved.
 
 Tests, in `tests/Harbora.Tests`:
 
-1. **Regression, and the reason this spec exists.** A typed slug of `Kousar-kolie` against an app
-   whose slug is `kousar-kolie` produces an upload to `apps/kousar-kolie/deploy/archive`. Asserted
-   against the request URI seen by a stub `HttpMessageHandler` — `ApiClient`'s handler-injecting
-   constructor exists for exactly this.
+1. **Regression, and the reason this spec exists.** A typed slug of `Kousar-kolie` resolves to an app
+   whose `Slug` is `kousar-kolie`, and the upload addresses `apps/kousar-kolie/deploy/archive` —
+   asserted against the request URI seen by a stub `HttpMessageHandler`, which `ApiClient`'s
+   handler-injecting constructor exists for. The step between the two is closed structurally rather
+   than by a test: the deploy helpers take a `RemoteApp`, not a `string slug`, so the typed string
+   has no path to a URL at all.
 2. `--yes` and a non-interactive console each suppress the prompt; neither changes which app is
    chosen.
 3. The current app is first in the offered order, and is the only one labelled.
