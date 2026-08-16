@@ -44,12 +44,16 @@ public sealed class CertificateWatcher(
         while (await timer.WaitForNextTickAsync(stoppingToken));
     }
 
-    private async Task CheckAllAsync(CancellationToken ct)
+    /// <summary>Internal rather than private — "did this pass open/close the right incident" is a
+    /// rule worth exercising directly rather than waiting a day to observe, the same reasoning
+    /// <see cref="Backups.BackupVerifier.VerifyOneAsync"/> already gives for its own visibility.</summary>
+    internal async Task CheckAllAsync(CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
         var inspector = scope.ServiceProvider.GetRequiredService<IDomainInspector>();
         var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
+        var incidents = scope.ServiceProvider.GetRequiredService<IncidentService>();
         var clock = scope.ServiceProvider.GetRequiredService<ISystemClock>();
 
         // Only domains we actually issue certificates for; one with SSL off has nothing to expire.
@@ -69,10 +73,20 @@ public sealed class CertificateWatcher(
             await RecordAsync(db, domain.Host, status, clock.UtcNow, ct);
 
             if (CertificateAlert.Evaluate(domain.Host, domain.Name,
-                    status.Probe.CertificateExpiresAt, clock.UtcNow) is not { } alert) continue;
+                    status.Probe.CertificateExpiresAt, clock.UtcNow) is not { } alert)
+            {
+                // Re-evaluated daily, same as the breach above: this pass already knows the answer is
+                // "no longer close to expiring" the moment it gets here, whether that is because the
+                // certificate renewed or because SSL was turned off — either way there is nothing left
+                // to warn about for this host.
+                await incidents.ResolveAsync(domain.WorkspaceId, AlertEvent.SslExpiring, domain.Host, clock.UtcNow, ct);
+                continue;
+            }
 
             logger.LogWarning("Certificate for {Host} expires {Expiry:yyyy-MM-dd}.",
                 domain.Host, status.Probe.CertificateExpiresAt);
+            await incidents.OpenAsync(domain.WorkspaceId, AlertEvent.SslExpiring, domain.Host,
+                alert.Severity, alert.Headline, alert.Detail, clock.UtcNow, ct);
             await notifications.NotifyAsync(domain.WorkspaceId, AlertEvent.SslExpiring,
                 alert.Severity, alert.Headline, alert.Detail, ct);
         }

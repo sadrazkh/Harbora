@@ -49,7 +49,7 @@ public class MetricsCollectorOptionsTests
         db.SaveChanges();
 
         var collector = new MetricsCollector(
-            db, factory, notifications, throttle, clock, rollups,
+            db, factory, notifications, new IncidentService(db), throttle, clock, rollups,
             Options.Create(options ?? new MonitoringOptions()), NullLogger<MetricsCollector>.Instance);
 
         return new Harness(collector, db, engine, notifications, clock, server);

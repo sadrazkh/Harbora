@@ -81,4 +81,16 @@ public sealed class MonitoringOptions
     /// internal because their only reader is inside this assembly.
     /// </summary>
     public TimeSpan BackupStaleness => TimeSpan.FromHours(Math.Max(0, BackupStalenessHours));
+
+    /// <summary>
+    /// The bounded backstop close (2026-08-16 monitoring-alerting spec §M4, decision 2): an incident
+    /// nobody acknowledges, and whose condition is never observed clearing — the shape of a deploy or
+    /// backup failure, which never resolves on its own — closes anyway once it has stood open this
+    /// long, rather than staying open for ever. A condition that keeps recurring is unaffected: each
+    /// tick that still observes it refreshes <c>AlertIncident.LastObservedAt</c>, but the clock this
+    /// bound is measured against is <c>OpenedAt</c>, deliberately — see <c>IncidentService.ExpireStaleAsync</c>.
+    /// </summary>
+    public double IncidentAutoExpireDays { get; set; } = 14;
+
+    internal TimeSpan IncidentAutoExpireAfter => TimeSpan.FromDays(Math.Max(1, IncidentAutoExpireDays));
 }

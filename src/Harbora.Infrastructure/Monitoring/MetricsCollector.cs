@@ -16,6 +16,7 @@ public sealed class MetricsCollector(
     HarboraDbContext db,
     IServerEngineFactory engineFactory,
     INotificationService notifications,
+    IncidentService incidents,
     AlertThrottle throttle,
     ISystemClock clock,
     MetricsRollupService rollups,
@@ -43,6 +44,12 @@ public sealed class MetricsCollector(
         // window it needs is well inside retention.
         try { await EvaluateThresholdsAsync(now, ct); }
         catch (Exception ex) { logger.LogWarning(ex, "Evaluating per-application thresholds failed."); }
+
+        // The bounded backstop for every incident kind, not only the ones this collector opens: a
+        // deploy or backup failure nobody acknowledges has no other way to close, and this pass is
+        // the one piece of the platform already running on a timer with nothing else asking it to.
+        try { await incidents.ExpireStaleAsync(now, _options.IncidentAutoExpireAfter, ct); }
+        catch (Exception ex) { logger.LogWarning(ex, "Expiring stale incidents failed."); }
 
         // Summarise BEFORE pruning, never the other way round. Getting that order wrong loses the
         // history silently: the charts keep working, on data quietly missing a week.
@@ -182,8 +189,20 @@ public sealed class MetricsCollector(
             {
                 // Cleared: the next breach is news again rather than waiting out the repeat window.
                 if (rule.ThresholdFiredAt is not null) rule.ThresholdFiredAt = null;
+                // The free close (2026-08-16 spec §M4): this line already recognised a cleared
+                // threshold and, until now, discarded the fact. Wired here rather than reimplemented —
+                // the incident for this rule closes the moment the same evaluation that used to just
+                // null ThresholdFiredAt runs. Subject is the rule's own id: one Alert row is already
+                // exactly one (app, metric) pair, so it doubles as the condition's identity.
+                await incidents.ResolveAsync(rule.WorkspaceId, AlertEvent.ThresholdBreached, rule.Id.ToString(), now, ct);
                 continue;
             }
+
+            // Opened (or refreshed, if already open) every tick the condition holds, independent of
+            // the repeat window below: that window governs how often a channel is pinged, not how
+            // long the incident stays open.
+            await incidents.OpenAsync(rule.WorkspaceId, AlertEvent.ThresholdBreached, rule.Id.ToString(),
+                ThresholdRule.Severity, subject, body, now, ct);
 
             if (!ThresholdRule.MayRepeat(rule.ThresholdFiredAt, now, _options.ThresholdRepeatAfter)) continue;
 
@@ -221,8 +240,8 @@ public sealed class MetricsCollector(
             server.Status = ServerStatus.Online;
             server.LastHeartbeatAt = now;
 
-            if (host.TotalDiskBytes > 0 && (double)diskUsed / host.TotalDiskBytes >= _options.DiskWarnRatio)
-                await MaybeDiskAlert(server, diskUsed, host.TotalDiskBytes, now, ct);
+            if (host.TotalDiskBytes > 0)
+                await UpdateDiskIncidentsAsync(server, diskUsed, host.TotalDiskBytes, now, ct);
         }
         catch (Exception ex)
         {
@@ -379,26 +398,61 @@ public sealed class MetricsCollector(
                 var how = observed == ObservedAppState.CrashLooping
                     ? "keeps crashing and being restarted"
                     : "exited unexpectedly";
+                await incidents.OpenAsync(app.WorkspaceId, AlertEvent.AppCrashed, app.Id.ToString(),
+                    AlertSeverity.Critical, $"App crashed: {app.Name}", $"The container for '{app.Name}' {how}.", now, ct);
                 await notifications.NotifyAsync(app.WorkspaceId, AlertEvent.AppCrashed, AlertSeverity.Critical,
                     $"App crashed: {app.Name}", $"The container for '{app.Name}' {how}.", ct);
             }
             else if (wasCrashed)
             {
                 logger.LogInformation("App {Slug} recovered; status returned to Running.", app.Slug);
+                // The free close (2026-08-16 spec §M4): this line already recognised a recovered app
+                // and, until now, only logged the fact to nobody. Wired here rather than reimplemented.
+                await incidents.ResolveAsync(app.WorkspaceId, AlertEvent.AppCrashed, app.Id.ToString(), now, ct);
             }
         }
     }
 
-    private async Task MaybeDiskAlert(
+    /// <summary>
+    /// Opens or resolves a disk-warning incident for every workspace whose rule watches this node's
+    /// disk — the same audience <see cref="MaybeDiskAlert"/> has always notified (see its own note:
+    /// that audience is wider than it should be, and M4 does not change it) — independent of the
+    /// hourly notification throttle inside <see cref="MaybeDiskAlert"/>: the throttle governs how
+    /// often a channel is pinged, not how long the incident stays open. Disk is grouped with the
+    /// per-app threshold and app-crash conditions as one this collector re-evaluates and therefore
+    /// already sees clear, every 30 seconds, on its own.
+    /// </summary>
+    private async Task UpdateDiskIncidentsAsync(
         Domain.Servers.Server server, long used, long total, DateTimeOffset now, CancellationToken ct)
+    {
+        var workspaceIds = await db.Alerts.Where(a => a.IsEnabled && a.OnDiskWarning)
+            .Select(a => a.WorkspaceId).Distinct().ToListAsync(ct);
+
+        var ratio = (double)used / total;
+        if (ratio >= _options.DiskWarnRatio)
+        {
+            var pct = (int)(ratio * 100);
+            foreach (var wsId in workspaceIds)
+                await incidents.OpenAsync(wsId, AlertEvent.DiskWarning, server.Id.ToString(),
+                    AlertSeverity.Warning, "Low disk space", $"Disk usage on {server.Name} is at {pct}%.", now, ct);
+
+            await MaybeDiskAlert(server, workspaceIds, pct, now, ct);
+        }
+        else
+        {
+            foreach (var wsId in workspaceIds)
+                await incidents.ResolveAsync(wsId, AlertEvent.DiskWarning, server.Id.ToString(), now, ct);
+        }
+    }
+
+    private async Task MaybeDiskAlert(
+        Domain.Servers.Server server, IReadOnlyList<Guid> workspaceIds, int pct, DateTimeOffset now, CancellationToken ct)
     {
         // Once per interval per node (an hour by default), so a full disk doesn't spam every tick —
         // and so one node filling up doesn't silence the warning for every other node.
         if (!throttle.ShouldFire($"disk:{server.Id}", now, _options.DiskAlertInterval)) return;
 
-        var pct = (int)((double)used / total * 100);
-        foreach (var wsId in await db.Alerts.Where(a => a.IsEnabled && a.OnDiskWarning)
-                     .Select(a => a.WorkspaceId).Distinct().ToListAsync(ct))
+        foreach (var wsId in workspaceIds)
         {
             await notifications.NotifyAsync(wsId, AlertEvent.DiskWarning, AlertSeverity.Warning,
                 "Low disk space", $"Disk usage on {server.Name} is at {pct}%.", ct);

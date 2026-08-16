@@ -46,7 +46,7 @@ public class ContainerLifecycleCollectionTests
         db.SaveChanges();
 
         var collector = new MetricsCollector(
-            db, factory, notifications, throttle, clock, rollups,
+            db, factory, notifications, new IncidentService(db), throttle, clock, rollups,
             Options.Create(new MonitoringOptions()), NullLogger<MetricsCollector>.Instance);
 
         return new Harness(collector, db, engine, clock, server);
