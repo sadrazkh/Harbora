@@ -130,25 +130,53 @@ public sealed class MetricsCollector(
             var app = apps.FirstOrDefault(a => a.Id == rule.AppId);
             if (app is null || string.IsNullOrEmpty(app.ContainerName)) continue;
 
-            (string Series, double Allocation) watched = rule.Metric == AlertMetric.CpuPercent
-                ? ("cpu.percent", app.CpuLimit * 100)
-                : ("mem.used", app.MemoryLimitBytes);
-            var (series, allocation) = watched;
+            bool breached;
+            string subject, body;
 
-            // No allocation means no percentage. Alerting on an unlimited app would be inventing a
-            // ceiling nobody set.
-            if (allocation <= 0) continue;
+            if (rule.Metric == AlertMetric.RestartRate)
+            {
+                // Not a percentage of anything, and not a "held for the whole window" question
+                // either — ThresholdRule.Breached exists for a value sustained across a window, and a
+                // restart count is a total accumulated across one, so it does not apply here. See the
+                // doc comment on AlertMetric.RestartRate for the field reuse this reads.
+                var window = TimeSpan.FromMinutes(Math.Max(1, rule.SustainedMinutes));
+                var restarts = raw
+                    .Where(m => m.ResourceRef == app.ContainerName && m.Name == "app.restarts"
+                                && m.Timestamp > now - window && m.Timestamp <= now)
+                    .Sum(m => m.Value);
 
-            var samples = raw
-                .Where(m => m.ResourceRef == app.ContainerName && m.Name == series)
-                .Select(m => new MetricSample(
-                    m.Timestamp,
-                    AllocationReading.Of(m.Value, allocation) is { Kind: AllocationKind.Known } r ? r.Percent : null))
-                .ToList();
+                breached = restarts >= rule.ThresholdPercent!.Value;
+                subject = $"{app.Name}: {restarts:0} restart(s) in {rule.SustainedMinutes} minute(s)";
+                body = $"{app.Name} has restarted {restarts:0} time(s) in the last {rule.SustainedMinutes} " +
+                       $"minute(s) — at or above the configured {rule.ThresholdPercent:0}.";
+            }
+            else
+            {
+                (string Series, double Allocation) watched = rule.Metric == AlertMetric.CpuPercent
+                    ? ("cpu.percent", app.CpuLimit * 100)
+                    : ("mem.used", app.MemoryLimitBytes);
+                var (series, allocation) = watched;
 
-            var breached = ThresholdRule.Breached(
-                samples, rule.ThresholdPercent!.Value,
-                TimeSpan.FromMinutes(Math.Max(0, rule.SustainedMinutes)), now);
+                // No allocation means no percentage. Alerting on an unlimited app would be inventing a
+                // ceiling nobody set.
+                if (allocation <= 0) continue;
+
+                var samples = raw
+                    .Where(m => m.ResourceRef == app.ContainerName && m.Name == series)
+                    .Select(m => new MetricSample(
+                        m.Timestamp,
+                        AllocationReading.Of(m.Value, allocation) is { Kind: AllocationKind.Known } r ? r.Percent : null))
+                    .ToList();
+
+                breached = ThresholdRule.Breached(
+                    samples, rule.ThresholdPercent!.Value,
+                    TimeSpan.FromMinutes(Math.Max(0, rule.SustainedMinutes)), now);
+
+                var unit = rule.Metric == AlertMetric.CpuPercent ? "CPU" : "memory";
+                subject = $"{app.Name}: {unit} above {rule.ThresholdPercent:0}%";
+                body = $"{app.Name} has held above {rule.ThresholdPercent:0}% of its {unit} allocation " +
+                       $"for {rule.SustainedMinutes} minute(s).";
+            }
 
             if (!breached)
             {
@@ -161,13 +189,9 @@ public sealed class MetricsCollector(
 
             rule.ThresholdFiredAt = now;
 
-            var unit = rule.Metric == AlertMetric.CpuPercent ? "CPU" : "memory";
             // Through this rule specifically. Broadcasting a threshold to every channel in the
             // workspace would tell people who never asked about this app.
-            await notifications.NotifyRuleAsync(rule.Id, ThresholdRule.Severity,
-                $"{app.Name}: {unit} above {rule.ThresholdPercent:0}%",
-                $"{app.Name} has held above {rule.ThresholdPercent:0}% of its {unit} allocation " +
-                $"for {rule.SustainedMinutes} minute(s).", ct);
+            await notifications.NotifyRuleAsync(rule.Id, ThresholdRule.Severity, subject, body, ct);
         }
 
         await db.SaveChangesAsync(ct);
@@ -210,6 +234,14 @@ public sealed class MetricsCollector(
         try
         {
             var containers = await docker.ListContainersAsync("harbora.app", ct);
+
+            // This server's restart cursors, loaded once rather than per container — see
+            // ContainerLifecycleCursor for why this bookkeeping exists at all rather than the raw
+            // counter becoming a sample.
+            var cursors = await db.ContainerLifecycleCursors
+                .Where(x => x.ServerId == server.Id)
+                .ToDictionaryAsync(x => x.ResourceRef, ct);
+
             double totalCpu = 0;
             long totalRx = 0, totalTx = 0, totalMemory = 0;
             // Whether anything was actually read this tick. Docker's stats call fails intermittently,
@@ -219,6 +251,12 @@ public sealed class MetricsCollector(
             var measured = 0;
             foreach (var c in containers.Where(c => c.State.Equals("running", StringComparison.OrdinalIgnoreCase)))
             {
+                // Known running from the listing itself, independent of whether the stats probe or
+                // the lifecycle call below succeed — an app is not "unmeasured" for uptime purposes
+                // just because one of those two timed out this tick.
+                samples.Add(Metric(server.Id, "app.up", c.Name, 1, now));
+                await RecordRestartDeltaAsync(server.Id, c.Name, docker, cursors, samples, now, ct);
+
                 var stats = await docker.GetStatsAsync(c.Id, ct);
                 if (stats is null) continue;
                 totalCpu += stats.CpuPercent;
@@ -249,6 +287,13 @@ public sealed class MetricsCollector(
                 samples.Add(Metric(server.Id, "net.tx", null, totalTx, now));
             }
 
+            // A container this platform manages but did not just find running: stopped, exited,
+            // crash-looping between restarts. Known, not unmeasured — the listing answered, and this
+            // is what it said — so it is exactly as real an "app.up" observation as a running one,
+            // and skipping it would silently bias uptime upward by only ever recording the good half.
+            foreach (var c in containers.Where(c => !c.State.Equals("running", StringComparison.OrdinalIgnoreCase)))
+                samples.Add(Metric(server.Id, "app.up", c.Name, 0, now));
+
             await ReconcileAppStatusesAsync(containers, now, ct);
         }
         catch (Exception ex)
@@ -257,6 +302,51 @@ public sealed class MetricsCollector(
         }
 
         db.MonitoringMetrics.AddRange(samples);
+    }
+
+    /// <summary>
+    /// Turns this tick's restart count into a sample, via the cursor that remembers last tick's —
+    /// see <see cref="ContainerLifecycleCursor"/> and <see cref="RestartDelta"/> for why neither the
+    /// raw counter nor a naive subtraction is what gets written.
+    /// </summary>
+    private async Task RecordRestartDeltaAsync(
+        Guid serverId, string containerName, IDockerEngine docker,
+        Dictionary<string, ContainerLifecycleCursor> cursors, List<MonitoringMetric> samples,
+        DateTimeOffset now, CancellationToken ct)
+    {
+        ContainerLifecycle? lifecycle;
+        try { lifecycle = await docker.GetLifecycleAsync(containerName, ct); }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Restart lifecycle unavailable for {Container}.", containerName);
+            return;
+        }
+
+        // The engine answered but declined this specific figure (an older node agent, say) — unknown
+        // stays unknown rather than becoming a fabricated zero-restart tick.
+        if (lifecycle?.RestartCount is not { } restarts) return;
+
+        if (cursors.TryGetValue(containerName, out var cursor))
+        {
+            var delta = RestartDelta.Between(cursor.LastRestartCount, restarts);
+            samples.Add(Metric(serverId, "app.restarts", containerName, delta, now));
+            cursor.LastRestartCount = restarts;
+            cursor.ObservedAt = now;
+            cursor.UpdatedAt = now;
+        }
+        else
+        {
+            // First time this container has been seen: there is no baseline to attribute a delta
+            // against yet, so none is written — only the baseline itself, for the next tick to diff
+            // against. Writing a zero here would claim "zero restarts since we started watching",
+            // which is a different fact from "we just started watching".
+            var fresh = new ContainerLifecycleCursor
+            {
+                ServerId = serverId, ResourceRef = containerName, LastRestartCount = restarts, ObservedAt = now
+            };
+            db.ContainerLifecycleCursors.Add(fresh);
+            cursors[containerName] = fresh;
+        }
     }
 
     /// <summary>

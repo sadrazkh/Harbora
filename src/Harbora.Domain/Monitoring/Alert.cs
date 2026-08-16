@@ -33,12 +33,19 @@ public class Alert : BaseEntity
     /// <summary>Which figure to watch. Null when this is not a threshold rule.</summary>
     public AlertMetric? Metric { get; set; }
 
-    /// <summary>The line, as a percentage of the application's own allocation.</summary>
+    /// <summary>
+    /// The line. A percentage of the application's own allocation for <see cref="AlertMetric.CpuPercent"/>
+    /// and <see cref="AlertMetric.MemoryPercent"/> — for <see cref="AlertMetric.RestartRate"/> it is
+    /// repurposed as a plain restart count, because a restart has no allocation to be a percentage of.
+    /// </summary>
     public double? ThresholdPercent { get; set; }
 
     /// <summary>
-    /// How long it must hold before anyone is told. A container touches 100% CPU on every start;
-    /// alerting on one sample fills a channel with noise, and a muted channel reports nothing.
+    /// How long it must hold before anyone is told, for <see cref="AlertMetric.CpuPercent"/> and
+    /// <see cref="AlertMetric.MemoryPercent"/>: a container touches 100% CPU on every start, and
+    /// alerting on one sample fills a channel with noise. For <see cref="AlertMetric.RestartRate"/>
+    /// this is repurposed as the rolling window restarts are counted over instead — "in the last N
+    /// minutes" rather than "held for N minutes".
     /// </summary>
     public int SustainedMinutes { get; set; } = 5;
 

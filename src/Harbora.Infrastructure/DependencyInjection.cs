@@ -190,6 +190,9 @@ public static class DependencyInjection
         // Turns the stored cumulative counters into a rate — see NetworkThroughput for why a
         // restart has to read as a gap rather than a spike.
         services.AddScoped<Monitoring.NetworkHistory>();
+        // Uptime percent and restart totals from the app.up/app.restarts series — see LifecycleHistory
+        // for why a restart rollup's Average alone is not the number to show.
+        services.AddScoped<Monitoring.LifecycleHistory>();
 
         // The AI gateway. The adapter is registered against the interface so a second provider
         // shape can be added without touching the routing or metering above it.
