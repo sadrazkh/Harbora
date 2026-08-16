@@ -69,8 +69,12 @@ public static class Interactive
         return chosen;
     }
 
-    /// <summary>Which app to deploy, when the folder and the command line did not say.</summary>
-    public static RemoteApp? ChooseApp(IReadOnlyList<RemoteApp> apps)
+    /// <summary>
+    /// Which app to deploy. Offered on every interactive deploy, the way CapRover does it, rather
+    /// than only when nothing named one — a name written into a file months ago is exactly the thing
+    /// worth showing somebody before 3 MB goes to it.
+    /// </summary>
+    public static RemoteApp? ChooseApp(IReadOnlyList<RemoteApp> apps, RemoteApp? current = null)
     {
         if (apps.Count == 0)
         {
@@ -83,8 +87,10 @@ public static class Interactive
             new SelectionPrompt<RemoteApp>()
                 .Title("Which app do you want to deploy?")
                 .PageSize(15)
-                .UseConverter(a => $"{a.Slug} [grey]({a.Name} · {a.Status})[/]")
-                .AddChoices(apps));
+                .UseConverter(a => ReferenceEquals(a, current)
+                    ? $"{a.Slug} [grey]({a.Name} · {a.Status})[/] [green](current)[/]"
+                    : $"{a.Slug} [grey]({a.Name} · {a.Status})[/]")
+                .AddChoices(AppChoice.Order(apps, current)));
     }
 
     /// <summary>
@@ -113,6 +119,40 @@ public static class Interactive
             // Not being able to save the answer is not a reason to fail a deploy that worked.
             AnsiConsole.MarkupLine($"[grey]Could not write {ProjectConfig.DefaultFileName}: {Markup.Escape(ex.Message)}[/]");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Offers to point an existing <c>harbora.yml</c> at the app that was actually chosen.
+    ///
+    /// RememberApp deliberately never overwrites, which is right for a decision the project has
+    /// already made — but it is how a wrong name became permanent: the first deploy wrote
+    /// <c>app: Kousar-kolie</c>, the server only answers to <c>kousar-kolie</c>, and every later run
+    /// in that folder repeated the same hidden 404. Asking is the difference between the two cases.
+    /// </summary>
+    public static void OfferSlugUpdate(string dir, string slug)
+    {
+        var path = ProjectConfig.Locate(dir);
+        if (path is null || !IsAvailable) return;
+
+        var existing = ProjectConfig.Load(dir).App;
+        if (string.Equals(existing, slug, StringComparison.Ordinal)) return;
+
+        var file = Path.GetFileName(path);
+        var was = string.IsNullOrWhiteSpace(existing) ? "no app" : existing!;
+        if (!AnsiConsole.Confirm(
+                $"{file} says [yellow]{Markup.Escape(was)}[/]. Update it to [green]{Markup.Escape(slug)}[/]?"))
+            return;
+
+        try
+        {
+            ProjectConfig.RewriteAppSlug(path, slug);
+            AnsiConsole.MarkupLine($"[grey]Updated {file}[/]");
+        }
+        catch (Exception ex)
+        {
+            // Not being able to save the answer is not a reason to fail a deploy that worked.
+            AnsiConsole.MarkupLine($"[grey]Could not update {file}: {Markup.Escape(ex.Message)}[/]");
         }
     }
 }

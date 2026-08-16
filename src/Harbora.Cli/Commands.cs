@@ -185,6 +185,9 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         [CommandOption("--push"), Description("Upload this folder's code instead of letting the server pull from Git")]
         public bool Push { get; init; }
 
+        [CommandOption("-y|--yes"), Description("Don't ask which app — use the one already configured")]
+        public bool Yes { get; init; }
+
         [CommandOption("--path <PATH>"), Description("Folder to deploy (default: current directory)")]
         public string? Path { get; init; }
 
@@ -241,44 +244,25 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         }
 
 
-        if (string.IsNullOrWhiteSpace(slug))
-        {
-            // Nothing said which app. Everything needed to answer is already here, so ask instead of
-            // failing with "App not found." — which named neither the problem nor the way out.
-            if (!Interactive.IsAvailable)
-            {
-                AnsiConsole.MarkupLine("[red]No app specified[/] — pass one, or add [yellow]app:[/] to harbora.yml.");
-                if (apps.Count > 0)
-                    AnsiConsole.MarkupLine($"[grey]Available:[/] {Markup.Escape(string.Join(", ", apps.Select(a => a.Slug)))}");
-                return 1;
-            }
+        // A name that does not exist is the same situation as no name at all — the list is already
+        // in hand, so offer it rather than making someone go and look the slug up.
+        var choice = AppChoice.Resolve(slug, apps, Interactive.IsAvailable, settings.Yes);
+        if (choice.Problem is not null)
+            AnsiConsole.MarkupLine($"[yellow]![/] {Markup.Escape(choice.Problem)}");
 
-            var picked = Interactive.ChooseApp(apps);
-            if (picked is null) return 1;
-            slug = picked.Slug;
-
-        }
-
-        var app = apps.FirstOrDefault(a => a.Slug.Equals(slug, StringComparison.OrdinalIgnoreCase));
+        var app = choice.NeedsPrompt ? Interactive.ChooseApp(apps, choice.Current) : choice.Current;
         if (app is null)
         {
-            AnsiConsole.MarkupLine($"[yellow]![/] No app called [bold]{Markup.Escape(slug!)}[/] on this account.");
-
-            // A name that does not exist is the same situation as no name at all — the list is
-            // already in hand, so offer it rather than making someone go and look the slug up.
-            if (!Interactive.IsAvailable || apps.Count == 0)
-            {
-                if (apps.Count > 0)
-                    AnsiConsole.MarkupLine($"[grey]Available:[/] {Markup.Escape(string.Join(", ", apps.Select(a => a.Slug)))}");
-                else
-                    AnsiConsole.MarkupLine("[grey]This account has no apps yet. Create one in the panel first.[/]");
-                return 1;
-            }
-
-            app = Interactive.ChooseApp(apps);
-            if (app is null) return 1;
-            slug = app.Slug;
+            if (apps.Count > 0)
+                AnsiConsole.MarkupLine(
+                    $"[grey]Available:[/] {Markup.Escape(string.Join(", ", apps.Select(a => a.Slug)))}");
+            return 1;
         }
+
+        // From here the app is the only thing that names itself. The string the user typed matched an
+        // app case-insensitively; the server compares ordinally, so sending it back is a 404 — and one
+        // that arrives mid-upload, where it reads as a broken stream.
+        slug = app.Slug;
 
         var plan = DeployPlan.Decide(
             settings.Image, settings.Tar, settings.Branch, settings.Tag ?? settings.Ref,
@@ -287,11 +271,15 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
 
         // Save the answer so this folder never has to be asked — or told — again. Whether the app was
         // picked from a list or typed once on the command line, repeating it is work the CLI can do.
-        // RememberApp never overwrites: a project that already has a config has already decided.
-        if (Interactive.RememberApp(dir, slug!, api.Server))
+        // RememberApp never overwrites: a project that already has a config has already decided. When
+        // it does have one and the choice differs, ask rather than leaving behind a name the server
+        // does not answer to — that is how one typo became permanent.
+        if (Interactive.RememberApp(dir, slug, api.Server))
             AnsiConsole.MarkupLine(
                 $"[grey]Wrote {ProjectConfig.DefaultFileName} — next time just run[/] harbora deploy");
-        
+        else if (!settings.Yes)
+            Interactive.OfferSlugUpdate(dir, slug);
+
 
         AnsiConsole.MarkupLine($"[grey]Mode:[/] {plan.Mode} [grey]({plan.Reason})[/]");
 
@@ -300,11 +288,11 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         {
             deploymentId = plan.Mode switch
             {
-                DeployMode.Image        => await DeployImageAsync(api, slug, plan.Value!),
-                DeployMode.PushTarball  => await UploadAsync(api, slug, plan.Value!, deleteAfter: false),
-                DeployMode.PushGitBranch => await PushBranchAsync(api, slug, dir, plan.Value!, config, ct),
-                DeployMode.PushFolder   => await PushFolderAsync(api, slug, dir, config, ct),
-                _                       => await TriggerAsync(api, slug, plan.Value)
+                DeployMode.Image        => await DeployImageAsync(api, app, plan.Value!),
+                DeployMode.PushTarball  => await UploadAsync(api, app, plan.Value!, deleteAfter: false),
+                DeployMode.PushGitBranch => await PushBranchAsync(api, app, dir, plan.Value!, config, ct),
+                DeployMode.PushFolder   => await PushFolderAsync(api, app, dir, config, ct),
+                _                       => await TriggerAsync(api, app, plan.Value)
             };
         }
         catch (FileNotFoundException ex)
@@ -320,29 +308,33 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         return settings.Follow && !settings.NoFollow ? await StreamLogs(api, deploymentId, ct) : 0;
     }
 
-    private static async Task<string?> TriggerAsync(ApiClient api, string slug, string? gitRef)
+    // Every one of these takes the app rather than a slug. The name a user typed is for finding an
+    // app, never for addressing one: `Kousar-kolie` found `kousar-kolie` here and was then sent to a
+    // server that compares ordinally. Taking a RemoteApp makes that mistake unspellable.
+
+    private static async Task<string?> TriggerAsync(ApiClient api, RemoteApp app, string? gitRef)
     {
-        var res = await api.PostAsync($"apps/{slug}/deploy", new { gitRef });
+        var res = await api.PostAsync($"apps/{app.Slug}/deploy", new { gitRef });
         return res.GetProperty("deploymentId").GetString();
     }
 
-    private static async Task<string?> DeployImageAsync(ApiClient api, string slug, string image)
+    private static async Task<string?> DeployImageAsync(ApiClient api, RemoteApp app, string image)
     {
         AnsiConsole.MarkupLine($"[grey]Releasing image[/] {image}");
-        var res = await api.PostAsync($"apps/{slug}/deploy", new { image });
+        var res = await api.PostAsync($"apps/{app.Slug}/deploy", new { image });
         return res.GetProperty("deploymentId").GetString();
     }
 
     /// <summary>Packs the folder and streams it to the server.</summary>
     private static async Task<string?> PushFolderAsync(
-        ApiClient api, string slug, string dir, ProjectConfig config, CancellationToken ct)
+        ApiClient api, RemoteApp app, string dir, ProjectConfig config, CancellationToken ct)
     {
         if (!Directory.Exists(dir)) throw new FileNotFoundException($"Folder not found: {dir}");
 
         var packed = await SourcePacker.PackAsync(dir, config, ct);
         AnsiConsole.MarkupLine(
             $"[grey]Packed[/] {packed.Files} files ({packed.Bytes / 1024.0 / 1024:0.#} MB) [grey]from[/] {dir}");
-        return await UploadAsync(api, slug, packed.ArchivePath, deleteAfter: true);
+        return await UploadAsync(api, app, packed.ArchivePath, deleteAfter: true);
     }
 
     /// <summary>
@@ -350,7 +342,7 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
     /// the working tree: deploying uncommitted edits is how "works on my machine" reaches production.
     /// </summary>
     private static async Task<string?> PushBranchAsync(
-        ApiClient api, string slug, string dir, string branch, ProjectConfig config, CancellationToken ct)
+        ApiClient api, RemoteApp app, string dir, string branch, ProjectConfig config, CancellationToken ct)
     {
         if (!Directory.Exists(System.IO.Path.Combine(dir, ".git")))
             throw new FileNotFoundException($"--branch needs a git repository; {dir} is not one.");
@@ -364,16 +356,16 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         }
 
         AnsiConsole.MarkupLine($"[grey]Archived committed content of[/] {branch}");
-        return await UploadAsync(api, slug, archive, deleteAfter: true);
+        return await UploadAsync(api, app, archive, deleteAfter: true);
     }
 
-    private static async Task<string?> UploadAsync(ApiClient api, string slug, string archivePath, bool deleteAfter)
+    private static async Task<string?> UploadAsync(ApiClient api, RemoteApp app, string archivePath, bool deleteAfter)
     {
         if (!File.Exists(archivePath)) throw new FileNotFoundException($"Archive not found: {archivePath}");
         try
         {
             AnsiConsole.MarkupLine($"[grey]Uploading[/] {new FileInfo(archivePath).Length / 1024.0 / 1024:0.#} MB…");
-            var res = await api.PostFileAsync($"apps/{slug}/deploy/archive", archivePath);
+            var res = await api.PostFileAsync($"apps/{app.Slug}/deploy/archive", archivePath);
             return res.GetProperty("deploymentId").GetString();
         }
         finally
