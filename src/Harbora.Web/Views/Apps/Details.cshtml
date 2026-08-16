@@ -47,17 +47,17 @@
 {
     <section class="rounded-xl border border-warn bg-amber-950/20 p-4 mb-6">
         <div class="font-semibold mb-1">@(isFa ? "این یک پیش‌نمایش است" : "This is a preview")</div>
-                <div class="text-xs text-ink-muted">
-                    @(isFa ? "شاخهٔ" : "Branch") <code class="text-ink">@app.PreviewBranch</code>
-                    @(isFa ? "از" : "of") <a asp-action="Details" asp-route-id="@parentId" class="text-accent-text">@(isFa ? "سرویس اصلی" : "the parent service")</a>.
-                </div>
-                <div class="text-[11px] text-ink-faint mt-2">
-                    @(isFa
-                        ? $"سکرت‌ها از سرویس اصلی کپی نشده‌اند. اگر شاخه حذف شود یا {PreviewPolicy.IdleLifetime.TotalDays:0} روز push نگیرد، این سرویس و داده‌هایش برداشته می‌شوند."
-                        : $"Secrets were not copied from the parent. If the branch is deleted, or goes {PreviewPolicy.IdleLifetime.TotalDays:0} days without a push, this service and its data are removed.")
-                </div>
-            </section>
-        }
+        <div class="text-xs text-ink-muted">
+            @(isFa ? "شاخهٔ" : "Branch") <code class="text-ink">@app.PreviewBranch</code>
+            @(isFa ? "از" : "of") <a asp-action="Details" asp-route-id="@parentId" class="text-accent-text">@(isFa ? "سرویس اصلی" : "the parent service")</a>.
+        </div>
+        <div class="text-[11px] text-ink-faint mt-2">
+            @(isFa
+                ? $"سکرت‌ها از سرویس اصلی کپی نشده‌اند. اگر شاخه حذف شود یا {PreviewPolicy.IdleLifetime.TotalDays:0} روز push نگیرد، این سرویس و داده‌هایش برداشته می‌شوند."
+                : $"Secrets were not copied from the parent. If the branch is deleted, or goes {PreviewPolicy.IdleLifetime.TotalDays:0} days without a push, this service and its data are removed.")
+        </div>
+    </section>
+}
 
 @* The wide column carries what needs width — the addresses, the specifics, the tier cards,
    the domain list, the variables — and the aside carries the controls and the summaries. It
@@ -383,40 +383,34 @@
             </dl>
         </section>
 
-        @{
-            var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
-        }
         @* ---- instance size ----
            What this app is actually consuming against these limits now lives on the Usage tab; this
            is only the control that changes them. *@
-        @if (sizes.Count > 0)
-        {
-            <section class="rounded-xl border border-line bg-surface p-4">
-                <div class="mb-3 font-semibold">@(isFa ? "اندازهٔ نمونه" : "Instance size")</div>
-                <form asp-controller="Apps" asp-action="Resize" asp-route-id="@app.Id" method="post" class="space-y-3">
-                    @Html.AntiForgeryToken()
-                    @* Cards rather than a dropdown, so what a tier costs is visible before the choice
-                       rather than after the bill — and pinned to the host this app already runs on,
-                       because a resize does not move a workload. "No limit" IS offered here, unlike on
-                       creation: it is the state an app made before tiers existed is already in, so
-                       leaving it out would make saving this form impose a ceiling nobody asked for. *@
-                    @await Component.InvokeAsync("SizePicker", new
-                    {
-                        sizeField = "instanceSizeKey",
-                        selectedSize = app.InstanceSizeKey,
-                        selectedServer = app.ServerId,
-                        pinnedServer = app.ServerId,
-                        allowNoLimit = true
-                    })
-                    <button class="btn-secondary w-full justify-center py-2 text-sm">@(isFa ? "تغییر اندازه" : "Change size")</button>
-                    <p class="text-[11px] leading-4 text-ink-faint">
-                        @(isFa
-                            ? "سقف روی کانتینر است، پس با استقرار بعدی اعمال می‌شود."
-                            : "The ceiling belongs to the container, so it applies on the next deployment.")
-                    </p>
-                </form>
-            </section>
-        }
+        <section class="rounded-xl border border-line bg-surface p-4">
+            <div class="mb-3 font-semibold">@(isFa ? "اندازهٔ نمونه" : "Instance size")</div>
+            <form asp-controller="Apps" asp-action="Resize" asp-route-id="@app.Id" method="post" class="space-y-3">
+                @Html.AntiForgeryToken()
+                @* Cards rather than a dropdown, so what a tier costs is visible before the choice
+                   rather than after the bill — and pinned to the host this app already runs on,
+                   because a resize does not move a workload. "No limit" IS offered here, unlike on
+                   creation: it is the state an app made before tiers existed is already in, so
+                   leaving it out would make saving this form impose a ceiling nobody asked for. *@
+                @await Component.InvokeAsync("SizePicker", new
+                {
+                    sizeField = "instanceSizeKey",
+                    selectedSize = app.InstanceSizeKey,
+                    selectedServer = app.ServerId,
+                    pinnedServer = app.ServerId,
+                    allowNoLimit = true
+                })
+                <button class="btn-secondary w-full justify-center py-2 text-sm">@(isFa ? "تغییر اندازه" : "Change size")</button>
+                <p class="text-[11px] leading-4 text-ink-faint">
+                    @(isFa
+                        ? "سقف روی کانتینر است، پس با استقرار بعدی اعمال می‌شود."
+                        : "The ceiling belongs to the container, so it applies on the next deployment.")
+                </p>
+            </form>
+        </section>
 
         @* ---- Domains ----
            The status shown here is probed, not configured: DNS is resolved and a real TLS handshake

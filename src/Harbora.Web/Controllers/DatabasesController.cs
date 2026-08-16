@@ -242,7 +242,6 @@ public sealed partial class DatabasesController(
             Backups = backups,
             NextBackupAt = schedule?.NextRunAt,
             BackupIntervalHours = schedule?.IntervalHours,
-            Sizes = await SizeChoicesAsync(service.InstanceSizeKey, ct),
             RunningImage = service.RunningImage,
             InstanceSizeKey = service.InstanceSizeKey,
             ServerId = service.ServerId,
@@ -253,28 +252,6 @@ public sealed partial class DatabasesController(
         };
     }
 
-    /// <summary>The sizes this workspace's plan allows, with the current one preselected.</summary>
-    private async Task<List<SelectListItem>> SizeChoicesAsync(string? current, CancellationToken ct)
-    {
-        var plan = await db.Workspaces.Where(w => w.Id == WorkspaceId)
-                .Select(w => w.PlanId).FirstOrDefaultAsync(ct) is { } planId
-            ? await db.Plans.FirstOrDefaultAsync(p => p.Id == planId, ct)
-            : await db.Plans.FirstOrDefaultAsync(p => p.IsDefault, ct);
-
-        var allowed = plan is null || string.IsNullOrWhiteSpace(plan.AllowedSizeKeys)
-            ? null
-            : plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        return (await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct))
-            .Where(s => allowed is null || allowed.Contains(s.Key))
-            .Select(s => new SelectListItem(
-                Harbora.Infrastructure.Tenancy.InstanceSizeLabel.For(
-                    s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes,
-                    s.RunningRatePerHourMinor, creationBilling.Currency), s.Key,
-                string.Equals(s.Key, current, StringComparison.OrdinalIgnoreCase)))
-            .ToList();
-    }
 
     /// <summary>One row, built the same way for the list and for a database's own page.</summary>
     private static DatabaseRowViewModel Row(
@@ -786,10 +763,6 @@ public sealed partial class DatabasesController(
     {
         ViewBag.Catalog = await ServiceCatalogReader.EffectiveAsync(db, engine, ct);
 
-        // The same list the application form offers. Only shown when there is a choice to make.
-        ViewBag.Servers = await db.Servers.OrderByDescending(s => s.IsLocal).ThenBy(s => s.Name)
-            .Select(s => new SelectListItem(s.IsLocal ? s.Name + " (local)" : s.Name, s.Id.ToString()))
-            .ToListAsync(ct);
         var environmentQuery = db.Environments.AsNoTracking().Where(e => e.WorkspaceId == WorkspaceId);
         if (await access.VisibleProjectIdsAsync(ct) is { } visible)
             environmentQuery = environmentQuery.Where(e => visible.Contains(e.ProjectId));
@@ -799,29 +772,10 @@ public sealed partial class DatabasesController(
             .Select(e => new SelectListItem($"{e.Project!.Name} · {e.Name}", e.Id.ToString()))
             .ToListAsync(ct);
 
-        // The same list the application form offers, filtered by the same plan. A database that can
-        // be any size while the app beside it is capped is not a plan, it is a suggestion.
-        var plan = await db.Workspaces.Where(w => w.Id == WorkspaceId)
-                .Select(w => w.PlanId).FirstOrDefaultAsync(ct) is { } planId
-            ? await db.Plans.FirstOrDefaultAsync(p => p.Id == planId, ct)
-            : await db.Plans.FirstOrDefaultAsync(p => p.IsDefault, ct);
-
-        var allowed = plan is null || string.IsNullOrWhiteSpace(plan.AllowedSizeKeys)
-            ? null
-            : plan.AllowedSizeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var defaultSize = await db.Settings.IgnoreQueryFilters()
-            .Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.DefaultInstanceSize)
-            .Select(s => s.Value).FirstOrDefaultAsync(ct);
-
-        ViewBag.Sizes = (await db.InstanceSizes.Where(s => s.IsEnabled).OrderBy(s => s.SortOrder).ToListAsync(ct))
-            .Where(s => allowed is null || allowed.Contains(s.Key))
-            .Select(s => new SelectListItem(
-                Harbora.Infrastructure.Tenancy.InstanceSizeLabel.For(
-                    s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes), s.Key,
-                string.Equals(s.Key, defaultSize, StringComparison.OrdinalIgnoreCase)))
-            .ToList();
+        // The server list and the tier list, and the plan lookup that filtered them, all used to be
+        // built here for two dropdowns. The SizePicker view component asks those questions itself —
+        // the plan's pool, the plan's allowed tiers, each host's free capacity and what the pair costs
+        // — so repeating them here would be queries a request whose answers nothing reads.
     }
 
 

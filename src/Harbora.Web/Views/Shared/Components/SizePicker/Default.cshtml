@@ -53,7 +53,9 @@ else
             <div class="size-picker-servers">
                 @foreach (var server in Model.Servers)
                 {
-                    <label class="size-server-card @(server.Selectable ? "" : "is-refused")">
+                    <label class="size-server-card @(server.Selectable ? "" : "is-refused")"
+                           data-picker-server-card="@server.ServerId"
+                           data-picker-server-state="@server.Unavailable">
                         <input class="sr-only" type="radio" name="@Model.ServerFieldName" value="@server.ServerId"
                                data-picker-server="@server.ServerId"
                                checked="@(server.ServerId == Model.SelectedServerId)"
@@ -163,6 +165,8 @@ else
                 @foreach (var tier in server.Tiers)
                 {
                     <label class="size-tier-card @(tier.Selectable ? "" : "is-refused")"
+                           data-picker-tier="@tier.Key"
+                           data-picker-tier-state="@tier.Unavailable"
                            data-picker-tier-family="@tier.Family">
                         <input class="sr-only" type="radio" name="@Model.SizeFieldName" value="@tier.Key"
                                checked="@(tier.Key == Model.SelectedSizeKey && server.ServerId == Model.SelectedServerId)"

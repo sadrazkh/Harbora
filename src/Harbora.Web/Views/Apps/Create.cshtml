@@ -10,8 +10,6 @@
         await PanelModes.GetAsync(), !ViewData.ModelState.IsValid);
 
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
-    var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
-    var servers = ViewBag.Servers as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
     var environments = ViewBag.Environments as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
     var quickStarts = ViewBag.QuickStarts as IReadOnlyList<TemplateCatalogItemViewModel> ?? [];
 

@@ -3,14 +3,12 @@
     ViewData["Title"] = "Create database";
     var catalog = ViewBag.Catalog as IReadOnlyList<Harbora.Application.Abstractions.ServiceCatalogEntry> ?? [];
     var environments = ViewBag.Environments as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
-    var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var versionMap = catalog.ToDictionary(c => c.Type.ToString(), c => c.Versions);
     var portMap = catalog.ToDictionary(c => c.Type.ToString(), c => c.InternalPort);
     // The shared rule, so a broker added to the catalogue gets its own mark here too rather than
     // the generic database one.
     string Key(ManagedServiceType type) => Harbora.Infrastructure.Services.ServiceTypeKey.For(type);
-    var servers = ViewBag.Servers as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
 }
 
 <nav class="breadcrumb mb-4" aria-label="breadcrumb"><a href="/databases">@T["Databases"]</a><i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i><span>@(isFa ? "ساخت سرویس" : "Create service")</span></nav>
@@ -43,17 +41,36 @@
                 @if (environments.Count > 0)
                 {
                     <label class="form-field md:col-span-2"><span>@(isFa ? "پروژه و محیط" : "Project environment")</span><select asp-for="EnvironmentId" asp-items="environments" class="form-control"></select><small>@(isFa ? "این انتخاب شبکه خصوصی و اپ‌های قابل اتصال را تعیین می‌کند." : "This determines the private network and which apps can attach.")</small></label>
-
-                <label class="form-field"><span>@(isFa ? "اندازه منبع" : "Instance size")</span><select asp-for="InstanceSizeKey" asp-items="sizes" class="form-control"></select><small>@(isFa ? "هزینه یک ساعت اجرا همان لحظه کم می‌شود؛ با موجودی ناکافی دیتابیس ساخته نمی‌شود." : "One running hour is charged immediately; an insufficient balance creates no database.")</small></label>
-
-                @* Only when there is a choice. Databases used to be pinned to the control plane's
-                   own machine with no way to say otherwise. *@
-                @if (servers.Count > 1)
-                {
-                    <label class="form-field"><span>@(isFa ? "سرور" : "Server")</span><select asp-for="ServerId" asp-items="servers" class="form-control"></select><small>@(isFa ? "خالی بگذارید تا خودکار روی سروری با بیشترین ظرفیت آزاد ساخته شود." : "Leave it and the scheduler picks the machine with the most free capacity.")</small></label>
-                }
                 }
             </div>
+        </section>
+
+        @* ---- server and size ----
+           Its own section, and outside the environments test above. The size and server controls used
+           to sit INSIDE it, so a workspace with no project environment got neither: the form posted no
+           InstanceSizeKey, the database was created on no tier, and the hourly pass then reported it as
+           a resource it could not price. Nothing said so at the time.
+
+           Cards rather than two dropdowns, for the reason the application form has them: a tier now
+           costs different money on different hosts, and a <select> cannot show that. *@
+        <section class="create-section">
+            <div class="section-heading">
+                <div>
+                    <h2>@(isFa ? "سرور و اندازه" : "Server and size")</h2>
+                    <p>
+                        @(isFa
+                            ? "هزینهٔ یک ساعت اجرا همان لحظه کم می‌شود؛ با موجودی ناکافی دیتابیسی ساخته نمی‌شود."
+                            : "One running hour is charged immediately; an insufficient balance creates no database.")
+                    </p>
+                </div>
+            </div>
+            @await Component.InvokeAsync("SizePicker", new
+            {
+                sizeField = nameof(Model.InstanceSizeKey),
+                serverField = nameof(Model.ServerId),
+                selectedSize = Model.InstanceSizeKey,
+                allowNoLimit = false
+            })
         </section>
 
         <section class="create-section">

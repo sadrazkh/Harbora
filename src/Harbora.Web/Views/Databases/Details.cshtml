@@ -167,7 +167,7 @@ else if (moving)
             </p>
         }
 
-        @if (Model.CanManage && Model.Sizes.Count > 0)
+        @if (Model.CanManage)
         {
             <form asp-action="Resize" asp-route-id="@db.Id" method="post" class="mt-3 space-y-2">
                 @Html.AntiForgeryToken()
