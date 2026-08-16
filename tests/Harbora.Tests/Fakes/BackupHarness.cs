@@ -74,7 +74,7 @@ public sealed class BackupHarness : IDisposable
 
     public BackupEngine Engine() => new(
         Db, Engines, Storage, new PassthroughProtector(), Jobs,
-        Notifications, Delivery(), Clock, Options.AsOptions(),
+        Notifications, new Harbora.Infrastructure.Monitoring.IncidentService(Db), Delivery(), Clock, Options.AsOptions(),
         Microsoft.Extensions.Options.Options.Create(Runtime),
         NullLogger<BackupEngine>.Instance);
 

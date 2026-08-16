@@ -25,6 +25,7 @@ public sealed class DeploymentPipeline(
     ISecretProtector protector,
     ISecretRedactor redactor,
     INotificationService notifications,
+    Monitoring.IncidentService incidents,
     IBillingGate billing,
     IHttpClientFactory httpFactory,
     ISystemClock clock,
@@ -613,6 +614,15 @@ public sealed class DeploymentPipeline(
             // Putting it in front of the save that was already being made costs nothing and means
             // the row no longer depends on anything after this point working at all.
             var failureLine = Stage(LogStream.System, $"❌ Deployment failed: {reason}");
+            // Queued here for the same reason as the log line above it, ahead of the save: a deploy
+            // failure never resolves on its own — the next deploy succeeding is a different fact about
+            // a different attempt — so this incident's only way to close is a person acknowledging it
+            // or the bounded auto-expiry backstop. Subject is this deployment's own id, so a retry
+            // that fails again opens a second, independently-closeable incident rather than reopening
+            // one someone already dismissed.
+            await incidents.OpenAsync(app.WorkspaceId, AlertEvent.DeployFailed, deploymentId.ToString(),
+                AlertSeverity.Critical, $"Deploy failed: {app.Name} #{deployment.Number}", reason, clock.UtcNow,
+                CancellationToken.None);
             // The durable half. Saving under the cancelled token threw before the row was written,
             // the transition above was dropped with the scope, and the deployment stayed in flight
             // for ever — and QueueDeploymentAsync coalesces onto an in-flight deployment, so every

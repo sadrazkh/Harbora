@@ -222,6 +222,41 @@ public class LowBalanceAlertTests
         LowBalance(told).Should().HaveCount(2);
     }
 
+    // --- the incident it opens (2026-08-16 monitoring-alerting spec §M4) --------------------
+
+    [Fact]
+    public async Task A_low_balance_warning_opens_an_incident_scoped_to_the_workspace_itself()
+    {
+        await using var db = Harness.SystemContext();
+        var ws = SeedTenant(db, "tenant", balanceMinor: Threshold - 500);
+
+        await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        var incident = db.AlertIncidents.AsNoTracking().Should().ContainSingle().Subject;
+        incident.WorkspaceId.Should().Be(ws);
+        incident.Condition.Should().Be(AlertEvent.LowBalance);
+        incident.SubjectRef.Should().BeNull("the workspace itself is the whole subject of a low-balance incident");
+        incident.ClosedAt.Should().BeNull("nothing re-evaluates a low-balance incident; only a person or the expiry backstop closes it");
+    }
+
+    [Fact]
+    public async Task A_second_warning_for_the_same_still_low_workspace_refreshes_the_open_incident_rather_than_opening_another()
+    {
+        // Money arriving re-arms the WARNING (see the test above this section), but the balance never
+        // left the window here — so this is the ordinary "still low, told again" case, and it must
+        // stay one row, not accumulate a fresh incident on every re-arm.
+        await using var db = Harness.SystemContext();
+        var ws = SeedTenant(db, "tenant", balanceMinor: Threshold - 500);
+
+        await Harness.Tick(db).ChargeHourAsync(Hour, default);
+        SetBalance(db, ws, Threshold * 10); // clear of the window: re-arms
+        await Harness.Tick(db).ChargeHourAsync(Hour.AddHours(1), default);
+        SetBalance(db, ws, Threshold - 200); // back inside it: warns again
+        await Harness.Tick(db).ChargeHourAsync(Hour.AddHours(2), default);
+
+        db.AlertIncidents.AsNoTracking().Count(i => i.WorkspaceId == ws).Should().Be(1);
+    }
+
     [Fact]
     public async Task The_balance_the_customer_was_warned_at_is_what_gets_written_down()
     {

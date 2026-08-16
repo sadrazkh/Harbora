@@ -208,6 +208,7 @@ public sealed class BillingTick(
         // notifications up" into a pass that charges everybody, warns nobody, and reports success —
         // the exact failure this warning exists to prevent, arriving through the container.
         var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
+        var incidents = scope.ServiceProvider.GetRequiredService<Monitoring.IncidentService>();
 
         var workspaces = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
             .Where(w => w.DeletedAt == null).ToListAsync(ct);
@@ -250,7 +251,7 @@ public sealed class BillingTick(
                 // because "nothing is running it down any more" is what re-arms a warning already
                 // sent. Folded into ChargeWorkspaceAsync it would sit behind that method's several
                 // early returns and never see the case it exists for.
-                await ReviewLowBalanceAsync(db, notifications, workspace, hourCostMinor, pass, ct);
+                await ReviewLowBalanceAsync(db, notifications, incidents, workspace, hourCostMinor, pass, ct);
             }
             // Shutdown is not a billing failure. Without the guard, stopping the panel mid-pass
             // records one failure per remaining tenant for a run that was simply asked to stop.
@@ -878,6 +879,7 @@ public sealed class BillingTick(
     private async Task ReviewLowBalanceAsync(
         HarboraDbContext db,
         INotificationService notifications,
+        Monitoring.IncidentService incidents,
         Workspace workspace,
         long hourCostMinor,
         Pass pass,
@@ -908,6 +910,16 @@ public sealed class BillingTick(
             if (verdict != LowBalanceVerdict.Warn) return;
 
             var (title, body) = LowBalanceMessage(workspace.Name, wallet.BalanceMinor, hourCostMinor);
+
+            // Opened rather than resolved anywhere: the balance climbing back out of the window only
+            // clears the wallet's own warned marker above (Rearm) — a separate mechanism from the
+            // three M4 closes — so this incident closes only by a person acknowledging it or by the
+            // bounded auto-expiry backstop, the same as a deploy or backup failure never recovering
+            // on its own. Subject is null: the workspace itself is the whole subject here.
+            await incidents.OpenAsync(workspace.Id, AlertEvent.LowBalance, null,
+                AlertSeverity.Warning, title, body, clock.UtcNow, ct);
+            await db.SaveChangesAsync(ct);
+
             var rulesReached = await notifications.NotifyAsync(
                 workspace.Id, AlertEvent.LowBalance, AlertSeverity.Warning, title, body, ct);
 

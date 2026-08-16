@@ -47,6 +47,7 @@ public sealed class BackupVerifier(IServiceScopeFactory scopeFactory, ILogger<Ba
         var engine = scope.ServiceProvider.GetRequiredService<BackupEngine>();
         var clock = scope.ServiceProvider.GetRequiredService<ISystemClock>();
         var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
+        var incidents = scope.ServiceProvider.GetRequiredService<Monitoring.IncidentService>();
 
         var candidates = await db.Backups.IgnoreQueryFilters()
             .Where(b => b.Status == BackupStatus.Completed)
@@ -59,7 +60,15 @@ public sealed class BackupVerifier(IServiceScopeFactory scopeFactory, ILogger<Ba
 
         if (result.IsRestorable) return;
 
-        // Worth interrupting someone for: this is a backup they believe they have.
+        // Worth interrupting someone for: this is a backup they believe they have. Opens rather than
+        // stays a notification-only fact, for the same reason a failed backup does anywhere else in
+        // this file: a restore check never re-runs itself, so nothing will ever observe this clear —
+        // only a person acknowledging it, or the bounded auto-expiry backstop, closes it.
+        await incidents.OpenAsync(due.WorkspaceId, AlertEvent.BackupFailed, due.Id.ToString(),
+            AlertSeverity.Critical, "A backup would not restore",
+            $"The most recent {due.Type} backup of '{due.TargetRef}' failed its restore check. " +
+            $"{result.Reason} Take a fresh backup and check it before relying on this one.", clock.UtcNow, ct);
+        await db.SaveChangesAsync(ct);
         await notifications.NotifyAsync(due.WorkspaceId, AlertEvent.BackupFailed, AlertSeverity.Critical,
             "A backup would not restore",
             $"The most recent {due.Type} backup of '{due.TargetRef}' failed its restore check. " +

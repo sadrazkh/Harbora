@@ -191,6 +191,11 @@ internal static class Harness
         // is the shape where a warning nobody receives reports itself as sent.
         services.AddSingleton<INotificationService>(notifications ?? new RecordingNotificationService());
 
+        // Opens the LowBalance incident alongside the notification above. Scoped is fine over the
+        // singleton context registered above it: IncidentService's own lifetime just tracks whatever
+        // scope resolves it, and every scope here shares the one HarboraDbContext instance regardless.
+        services.AddScoped<Harbora.Infrastructure.Monitoring.IncidentService>();
+
         // Registered for every tick, and registered per scope, both for reasons the notification
         // line above gives. Per scope because that is what production does: the sweep resolves a
         // suspension of its own for each workspace it stops, so a workspace whose stop fell over

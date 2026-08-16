@@ -41,6 +41,7 @@ public sealed class BackupEngine(
     ISecretProtector protector,
     IJobQueue jobs,
     INotificationService notifications,
+    Monitoring.IncidentService incidents,
     BackupDeliveryService delivery,
     ISystemClock clock,
     IOptions<BackupOptions> options,
@@ -151,6 +152,14 @@ public sealed class BackupEngine(
             // token that just fired throws before the row is written. The backup would then read
             // Running for ever, which the Backup Center shows as a target still being protected.
             // Same idiom as JobWorker.SettleAsync and BackupSnapshotService's cancelled path.
+            //
+            // The incident opens here too, ahead of the save, for the same reason DeploymentPipeline's
+            // own failure path does: a failed backup never resolves on its own — the next backup
+            // succeeding is a different fact about a different run — so this is the only close it will
+            // ever get short of a person acknowledging it or the bounded auto-expiry backstop. Subject
+            // is this backup's own id, so a retry that fails again is a second, independent incident.
+            await incidents.OpenAsync(backup.WorkspaceId, AlertEvent.BackupFailed, backup.Id.ToString(),
+                AlertSeverity.Warning, $"Backup failed: {backup.Type}", ex.Message, clock.UtcNow, CancellationToken.None);
             await db.SaveChangesAsync(CancellationToken.None);
             await notifications.NotifyAsync(backup.WorkspaceId, AlertEvent.BackupFailed, AlertSeverity.Warning,
                 $"Backup failed: {backup.Type}", ex.Message, ct);

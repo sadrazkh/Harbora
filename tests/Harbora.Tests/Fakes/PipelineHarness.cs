@@ -256,6 +256,7 @@ public sealed class PipelineHarness : IDisposable
         // guarantee about secrets, and a fake that redacts nothing cannot show it holding.
         new Harbora.Infrastructure.Security.SecretRedactor(),
         Notifications,
+        new Harbora.Infrastructure.Monitoring.IncidentService(Db),
         Gate,
         Http,
         Clock,

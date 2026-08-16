@@ -149,6 +149,8 @@ public sealed class BackupVerifyJobHandler(
 /// </summary>
 public sealed class BackupNotificationService(
     INotificationService notifications,
+    HarboraDbContext db,
+    Harbora.Infrastructure.Monitoring.IncidentService incidents,
     ILogger<BackupNotificationService> logger) : IBackupNotificationService
 {
     public async Task SendAsync(BackupNotification notification, CancellationToken cancellationToken)
@@ -170,6 +172,15 @@ public sealed class BackupNotificationService(
             await notifications.NotifyAsync(
                 notification.WorkspaceId, AlertEvent.BackupFailed, severity,
                 notification.Title, notification.Detail, cancellationToken);
+
+            // Opened the same way the legacy backup engine opens one for its own failures: nothing in
+            // this module re-checks a finished snapshot or a finished sync, so this closes only by a
+            // person acknowledging it or by the bounded auto-expiry backstop. Subject is whichever of
+            // the notification's own ids names the thing that actually failed.
+            var subjectRef = (notification.SnapshotId ?? notification.RepositoryId ?? notification.PolicyId)?.ToString();
+            await incidents.OpenAsync(notification.WorkspaceId, AlertEvent.BackupFailed, subjectRef,
+                severity, notification.Title, notification.Detail, DateTimeOffset.UtcNow, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
         }
         catch (Exception ex)
         {
