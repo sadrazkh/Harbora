@@ -40,8 +40,33 @@
     };
 }
 
-<div class="grid lg:grid-cols-3 gap-6">
-    <div class="lg:col-span-2 space-y-6">
+@* A preview says so, and says what of. Otherwise it looks like an ordinary service that somebody
+   will be surprised to find gone in a week. Above the grid rather than in a column: it is about the
+   whole app, which is where the database page puts its version-drift warnings too. *@
+@if (app.PreviewOfAppId is { } parentId)
+{
+    <section class="rounded-xl border border-warn bg-amber-950/20 p-4 mb-6">
+        <div class="font-semibold mb-1">@(isFa ? "این یک پیش‌نمایش است" : "This is a preview")</div>
+                <div class="text-xs text-ink-muted">
+                    @(isFa ? "شاخهٔ" : "Branch") <code class="text-ink">@app.PreviewBranch</code>
+                    @(isFa ? "از" : "of") <a asp-action="Details" asp-route-id="@parentId" class="text-accent-text">@(isFa ? "سرویس اصلی" : "the parent service")</a>.
+                </div>
+                <div class="text-[11px] text-ink-faint mt-2">
+                    @(isFa
+                        ? $"سکرت‌ها از سرویس اصلی کپی نشده‌اند. اگر شاخه حذف شود یا {PreviewPolicy.IdleLifetime.TotalDays:0} روز push نگیرد، این سرویس و داده‌هایش برداشته می‌شوند."
+                        : $"Secrets were not copied from the parent. If the branch is deleted, or goes {PreviewPolicy.IdleLifetime.TotalDays:0} days without a push, this service and its data are removed.")
+                </div>
+            </section>
+        }
+
+@* The wide column carries what needs width — the addresses, the specifics, the tier cards,
+   the domain list, the variables — and the aside carries the controls and the summaries. It
+   was the other way round: thirteen panels were stacked in the narrow third of a
+   lg:grid-cols-3 while the two wide columns held a cron list and an environment table, so
+   every table on the page wrapped and most of the screen was empty. The shape is the one
+   Databases/Details.cshtml already uses. *@
+<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+    <div class="min-w-0 space-y-6">
         @* ---- Scheduled runs ----
            For a cron service this is the app: there is no container to look at between runs, so
            "did it run, did it work, what did it say" can only be answered from history. It leads,
@@ -118,393 +143,6 @@
                             }
                         </div>
                     }
-                </div>
-            </section>
-        }
-
-        @* ---- Environment variables ---- *@
-        <details class="advanced-panel" open="@advancedOpen">
-            <summary><span><i data-lucide="file-code-2" class="h-4 w-4"></i>@T["Environment Variables"]</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
-            <div class="divide-y divide-line">
-                @if (!app.EnvironmentVariables.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
-                @foreach (var e in app.EnvironmentVariables.OrderBy(x => x.Key))
-                {
-                    <div class="flex items-center justify-between p-3 text-sm font-mono">
-                        <span class="text-ink">@e.Key @if (e.IsSecret){<span class="text-[10px] not-italic rounded bg-surface-2 px-1 text-warn font-sans">secret</span>}@if (e.AvailableAtBuild){<span class="text-[10px] rounded bg-surface-2 px-1 text-info font-sans">build</span>}</span>
-                        <div class="flex items-center gap-2">
-                            <span class="text-ink-faint">@(e.IsSecret ? "••••••" : e.Value)</span>
-                            <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@app.Id" asp-route-envId="@e.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف متغیر {e.Key}" : $"Delete variable {e.Key}")">✕</button></form>
-                        </div>
-                    </div>
-                }
-            </div>
-            <form asp-controller="Apps" asp-action="AddEnv" asp-route-id="@app.Id" method="post" class="p-3 border-t border-line grid grid-cols-1 sm:grid-cols-6 gap-2">
-                @Html.AntiForgeryToken()
-                <input name="key" placeholder="KEY" class="sm:col-span-2 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm font-mono" />
-                <input name="value" placeholder="value" class="sm:col-span-2 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm font-mono" />
-                <label class="flex items-center gap-1 text-xs"><input type="checkbox" name="isSecret" value="true"> secret</label>
-                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-sm font-semibold">+ @T["Save"]</button>
-            </form>
-        </details>
-    </div>
-
-    <div class="space-y-6">
-        @{
-            var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
-        }
-        @* ---- databases ----
-           The page said nothing about them at all: the only way to attach one was to know to open
-           each database in turn, and nothing here listed what this application was already using.
-           So "one app, several databases" was supported by everything except the screen somebody
-           would try it on. *@
-        @{
-            var links = ViewBag.Databases as List<AppDatabaseLinkViewModel> ?? [];
-            var attached = links.Where(l => l.Attached).ToList();
-            var available = links.Where(l => !l.Attached).ToList();
-            var here = Context.Request.Path + Context.Request.QueryString;
-        }
-        <section class="rounded-xl border border-line bg-surface p-4">
-            <div class="mb-3 font-semibold">@(isFa ? "دیتابیس‌ها" : "Databases")</div>
-
-            @if (attached.Count == 0)
-            {
-                <p class="text-xs text-ink-faint">@(isFa ? "به هیچ دیتابیسی وصل نیست." : "Not connected to any database.")</p>
-            }
-            else
-            {
-                <div class="space-y-2">
-                    @foreach (var link in attached)
-                    {
-                        <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 p-2.5">
-                            <span class="min-w-0">
-                                <a href="/databases/@link.Id" class="block truncate text-sm text-ink hover:text-accent-text" dir="ltr">@link.Name</a>
-                                <small class="text-[11px] text-ink-faint">@link.Type</small>
-                            </span>
-                            <form asp-controller="Databases" asp-action="Detach" asp-route-id="@link.Id" method="post">
-                                @Html.AntiForgeryToken()
-                                <input type="hidden" name="appId" value="@app.Id" />
-                                <input type="hidden" name="returnUrl" value="@here" />
-                                <button class="text-[11px] text-ink-faint hover:text-danger">@(isFa ? "جدا کن" : "Detach")</button>
-                            </form>
-                        </div>
-                    }
-                </div>
-
-                @if (attached.Count > 1)
-                {
-                    @* Which variable holds which. Every database also writes a prefixed copy of its
-                       own names; the plain ones go to whichever database asked for them first, so
-                       two of the same engine share nothing. The prefix is shown rather than a whole
-                       variable name, because the names differ per engine — writing
-                       "PREFIX_DATABASE_URL" beside a Redis would name a variable it never sets. *@
-                    <p class="mt-2 text-[11px] leading-5 text-ink-faint">
-                        @(isFa
-                            ? "هر دیتابیس یک نسخهٔ پیشونددار از متغیرهای خودش هم می‌نویسد. نام‌های ساده به اولی می‌رسد که آن‌ها را خواسته باشد:"
-                            : "Each database also writes a prefixed copy of its own variables. The plain names go to whichever asked for them first:")
-                        @foreach (var link in attached)
-                        {
-                            <code dir="ltr" class="ms-1">@(link.Prefix)*</code>
-                        }
-                    </p>
-                }
-            }
-
-            @if (available.Count > 0)
-            {
-                <form asp-controller="Databases" asp-action="Attach" method="post" class="mt-3 space-y-2">
-                    @Html.AntiForgeryToken()
-                    <input type="hidden" name="appId" value="@app.Id" />
-                    <input type="hidden" name="returnUrl" value="@here" />
-                    <select name="id" class="form-control text-sm">
-                        @foreach (var link in available)
-                        {
-                            <option value="@link.Id">@link.Name · @link.Type</option>
-                        }
-                    </select>
-                    <button class="btn-secondary w-full justify-center text-sm">@(isFa ? "اتصال دیتابیس" : "Attach a database")</button>
-                </form>
-                <p class="mt-1 text-[11px] text-ink-faint">
-                    @(isFa
-                        ? "بعد از اتصال، اپ را دوباره دیپلوی کنید تا متغیرها اعمال شوند."
-                        : "Redeploy the application afterwards to apply the variables.")
-                </p>
-            }
-            else if (attached.Count == 0)
-            {
-                <p class="mt-2 text-[11px] text-ink-faint">
-                    @(isFa
-                        ? "در این محیط دیتابیسی نیست. دیتابیس فقط داخل شبکهٔ خصوصی همان محیط وصل می‌شود."
-                        : "There is no database in this environment. One can only attach inside its own private network.")
-                </p>
-            }
-
-            @* ---- the ones it cannot reach ----
-               An environment is a private network, so a database in another one cannot be attached:
-               the hostname would not resolve. That was explained and left there — the person could
-               see the refusal and had nowhere to go with it, while the move sat on a page in
-               Advanced mode that most people never open. *@
-            @{ var elsewhere = ViewBag.Elsewhere as List<AppDatabaseElsewhereViewModel> ?? []; }
-            @if (elsewhere.Count > 0)
-            {
-                <details class="mt-3 rounded-lg border border-line bg-surface-2 p-2.5">
-                    <summary class="cursor-pointer text-[11px] text-ink-muted">
-                        @(isFa
-                            ? $"{elsewhere.Count} دیتابیس در محیط‌های دیگر"
-                            : $"{elsewhere.Count} database(s) in other environments")
-                    </summary>
-                    <p class="mt-2 text-[11px] leading-5 text-ink-faint">
-                        @(isFa
-                            ? "هر محیط یک شبکهٔ خصوصی جداست، پس این‌ها را نمی‌شود از اینجا وصل کرد — نام میزبانشان از این شبکه پیدا نمی‌شود. یا این اپ را به آن محیط ببرید، یا دیتابیس تازه‌ای در همین محیط بسازید."
-                            : "Each environment is its own private network, so these cannot be attached from here — their hostname does not resolve on this one. Either move this application there, or create a database in this environment.")
-                    </p>
-                    <div class="mt-2 space-y-1.5">
-                        @foreach (var other in elsewhere)
-                        {
-                            <div class="flex flex-wrap items-center justify-between gap-2">
-                                <span class="min-w-0 text-[11px]">
-                                    <span class="text-ink" dir="ltr">@other.Name</span>
-                                    <span class="text-ink-faint">· @other.Where</span>
-                                </span>
-                                @* Straight to the screen that says what the move would break. It is
-                                   a confirmation rather than a button because moving a service to
-                                   another network severs every connection it already has. *@
-                                <a href="/networks/move?appId=@app.Id&amp;targetEnvironmentId=@other.EnvironmentId"
-                                   class="whitespace-nowrap text-[11px] text-accent-text hover:underline">
-                                    @(isFa ? "بردن اپ به آنجا" : "Move the app there")
-                                </a>
-                            </div>
-                        }
-                    </div>
-                </details>
-            }
-        </section>
-
-        @* ---- instance size ----
-           What this app is actually consuming against these limits now lives on the Usage tab; this
-           is only the control that changes them. *@
-        @if (sizes.Count > 0)
-        {
-            <section class="rounded-xl border border-line bg-surface p-4">
-                <div class="mb-3 font-semibold">@(isFa ? "اندازهٔ نمونه" : "Instance size")</div>
-                <form asp-controller="Apps" asp-action="Resize" asp-route-id="@app.Id" method="post" class="space-y-2">
-                    @Html.AntiForgeryToken()
-                    <select name="instanceSizeKey" class="form-control text-sm">
-                        <option value="">@(isFa ? "بدون سقف" : "No limit")</option>
-                        @foreach (var size in sizes)
-                        {
-                            <option value="@size.Value" selected="@size.Selected">@size.Text</option>
-                        }
-                    </select>
-                    <button class="btn-secondary w-full justify-center py-2 text-sm">@(isFa ? "تغییر اندازه" : "Change size")</button>
-                    <p class="text-[11px] leading-4 text-ink-faint">
-                        @(isFa
-                            ? "سقف روی کانتینر است، پس با استقرار بعدی اعمال می‌شود."
-                            : "The ceiling belongs to the container, so it applies on the next deployment.")
-                    </p>
-                </form>
-            </section>
-        }
-
-        @* ---- The version this came from, and where it can go ----
-           An app installed from a ready-made template had its version pinned at creation and
-           nothing offered another, so "update n8n" meant deleting it and starting again. *@
-        @{
-            var currentVersion = ViewBag.CurrentVersion as Harbora.Domain.Templates.AppTemplateVersion;
-            var updates = ViewBag.UpdateVersions as List<Harbora.Domain.Templates.AppTemplateVersion> ?? [];
-        }
-        @if (app.TemplateId is not null)
-        {
-            <section class="rounded-xl border border-line bg-surface p-4">
-                <div class="mb-2 font-semibold">@(isFa ? "نسخه" : "Version")</div>
-
-                <div class="text-xs text-ink-muted">
-                    @(currentVersion is null
-                        ? (isFa ? "نسخهٔ این نصب ثبت نشده است." : "This installation's version was not recorded.")
-                        : (isFa ? $"در حال اجرا: {currentVersion.Version}" : $"Running {currentVersion.Version}"))
-                </div>
-
-                @if (!string.IsNullOrWhiteSpace(app.PrebuiltImage))
-                {
-                    @* The exact reference, so somebody who would rather run it themselves can take
-                       it. It is what actually gets pulled, digest and all. *@
-                    <code dir="ltr" class="mt-2 block break-all rounded bg-code text-code-ink px-2 py-1 text-[11px]"
-                          data-copy-text>@app.PrebuiltImage</code>
-                }
-
-                @if (updates.Count > 0)
-                {
-                    <form asp-controller="Apps" asp-action="UpdateVersion" asp-route-id="@app.Id" method="post" class="mt-3 space-y-2">
-                        @Html.AntiForgeryToken()
-                        <select name="versionId" class="form-control text-sm" data-version-choice>
-                            @foreach (var version in updates)
-                            {
-                                <option value="@version.Id"
-                                        data-warning="@(isFa && !string.IsNullOrWhiteSpace(version.MigrationWarningsFa) ? version.MigrationWarningsFa : version.MigrationWarnings)">
-                                    @version.Version
-                                </option>
-                            }
-                        </select>
-
-                        @* Shown before the button is pressed, not after. A migration warning that
-                           arrives with the result is a warning about something already done. *@
-                        <p class="hidden text-[11px] leading-4 text-warn" data-version-warning></p>
-
-                        <button class="btn-secondary w-full justify-center py-2 text-sm">
-                            <i data-lucide="arrow-up-right" class="h-4 w-4"></i>@(isFa ? "به‌روزرسانی" : "Update")
-                        </button>
-                        <p class="text-[11px] leading-4 text-ink-faint">
-                            @(isFa
-                                ? "مثل هر استقرار دیگری اجرا می‌شود: سلامت‌سنجی و امکان بازگشت."
-                                : "Runs as a normal deployment: health gate and rollback.")
-                        </p>
-                    </form>
-                }
-                else
-                {
-                    <p class="mt-2 text-[11px] text-ink-faint">
-                        @(isFa ? "نسخهٔ تازه‌تری ارائه نشده است." : "No newer version is offered.")
-                    </p>
-                }
-            </section>
-        }
-
-        @* ---- A release tag of your own ----
-           The curated list is what Harbora vouches for. This is for the release somebody has read the
-           project's changelog about and wants today. *@
-        @{
-            var repository = ViewBag.Repository as string;
-            var currentTag = ViewBag.CurrentTag as string;
-        }
-        @if (!string.IsNullOrWhiteSpace(repository))
-        {
-            <section class="rounded-xl border border-line bg-surface p-4">
-                <div class="mb-2 font-semibold">@(isFa ? "تگ دلخواه" : "A release tag of your own")</div>
-                <p class="text-[11px] leading-4 text-ink-faint">
-                    @(isFa
-                        ? "هر تگی از همین مخزن. پیش از ذخیره به digest تبدیل می‌شود، پس اگر تگ وجود نداشته باشد چیزی تغییر نمی‌کند."
-                        : "Any tag from this repository. It is resolved to a digest before anything is stored, so a tag that does not exist changes nothing.")
-                </p>
-                <code dir="ltr" class="mt-2 block break-all rounded bg-code text-code-ink px-2 py-1 text-[11px]" data-copy-text>@repository</code>
-
-                <form asp-controller="Apps" asp-action="UpdateTag" asp-route-id="@app.Id" method="post" class="mt-3 space-y-2">
-                    @Html.AntiForgeryToken()
-                    <input name="tag" value="@currentTag" dir="ltr" class="form-control text-sm"
-                           placeholder="@(isFa ? "مثلاً 1.70.1" : "e.g. 1.70.1")" />
-                    <button class="btn-secondary w-full justify-center py-2 text-sm">
-                        <i data-lucide="rocket" class="h-4 w-4"></i>@(isFa ? "استقرار این تگ" : "Deploy this tag")
-                    </button>
-                </form>
-            </section>
-        }
-
-        @* ---- Release task ----
-           Shown because it runs on every deploy and can fail one. Set at create time and then
-           invisible, it is a command nobody remembers is there until it breaks a release. *@
-        @if (!string.IsNullOrWhiteSpace(app.ReleaseCommand))
-        {
-            <section class="rounded-xl border border-line bg-surface p-4">
-                <div class="font-semibold mb-2">@(isFa ? "دستور پیش از انتشار" : "Release task")</div>
-                <code dir="ltr" class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs">@app.ReleaseCommand</code>
-                <p class="text-[11px] text-ink-faint mt-2">
-                    @(isFa
-                        ? "پیش از راه‌اندازی نسخهٔ جدید اجرا می‌شود. اگر شکست بخورد، نسخهٔ فعلی همچنان سرویس می‌دهد."
-                        : "Runs before the new version starts. If it fails, the current version keeps serving.")
-                </p>
-            </section>
-        }
-
-        @* ---- Git auto-deploy ---- *@
-        @if (app.GitRepository is not null)
-        {
-            <section class="rounded-xl border border-line bg-surface p-4">
-                <div class="font-semibold mb-2">@(isFa ? "استقرار خودکار (Git)" : "Auto-deploy (Git)")</div>
-                <div class="text-xs text-ink-muted mb-2">
-                    @(isFa ? "با هر push به" : "On push to") <code class="text-ink">@(app.GitRef ?? app.GitRepository.DefaultBranch)</code>
-                    @(app.AutoDeployOnPush
-                        ? (isFa ? "خودکار دیپلوی می‌شود ✓" : "auto-deploys ✓")
-                        : (isFa ? "غیرفعال است" : "is off"))
-                </div>
-                <div class="text-xs text-ink-muted">@(isFa ? "آدرس Webhook (در تنظیمات مخزن قرار دهید):" : "Webhook URL (add it in your repo settings):")</div>
-                <code class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs mt-1">@Context.Request.Scheme://@Context.Request.Host/webhooks/git/@app.GitRepository.Id</code>
-                <div class="text-xs text-ink-muted mt-2">
-                    @(isFa ? "سکرت:" : "Secret:")
-                    @if (ViewBag.RevealWebhookSecret == true)
-                    {
-                        <code class="text-ink break-all">@app.GitRepository.WebhookSecret</code>
-                    }
-                    else
-                    {
-                        @* Only on a click, like the Git page and the storage keys. *@
-                        <code class="text-ink-faint">••••••••</code>
-                        <a href="/apps/details/@app.Id?revealSecret=true" class="text-accent-text hover:underline">@(isFa ? "نمایش" : "Reveal")</a>
-                    }
-                </div>
-                <p class="text-[11px] text-ink-faint mt-2">@(isFa ? "Content-Type را application/json بگذارید. GitHub/Gitea با امضای HMAC و GitLab با هدر توکن تأیید می‌شوند." : "Use Content-Type application/json. GitHub/Gitea verify by HMAC; GitLab by token header.")</p>
-            </section>
-
-            @* ---- Branch previews ----
-               Shown next to auto-deploy because they are the same mechanism pointed at a different
-               branch. A preview is a real service on a real address, so it is listed rather than
-               left to be discovered in the app list looking like something somebody created. *@
-            @if (app.PreviewOfAppId is null)
-            {
-                var previews = ViewBag.Previews as List<Harbora.Domain.Apps.App> ?? [];
-                <section class="rounded-xl border border-line bg-surface p-4">
-                    <div class="flex items-center justify-between gap-2 mb-2">
-                        <div class="font-semibold">@(isFa ? "پیش‌نمایش شاخه‌ها" : "Branch previews")</div>
-                        <form method="post" asp-action="TogglePreviews" asp-route-id="@app.Id">
-                            @Html.AntiForgeryToken()
-                            <button type="submit" class="text-xs rounded-lg px-3 py-1 border @(app.PreviewsEnabled ? "border-ok text-ok" : "border-line-strong text-ink-muted")">
-                                @(app.PreviewsEnabled ? (isFa ? "روشن ✓" : "On ✓") : (isFa ? "خاموش" : "Off"))
-                            </button>
-                        </form>
-                    </div>
-
-                    <p class="text-xs text-ink-muted">
-                        @(isFa
-                            ? "هر push روی شاخه‌ای غیر از شاخهٔ اصلی، محیط و آدرس مخصوص خودش را می‌گیرد. سکرت‌ها کپی نمی‌شوند — برای هر پیش‌نمایش جداگانه تنظیم کنید."
-                            : "A push to any branch other than the tracked one gets an environment and address of its own. Secrets are not copied — set them per preview.")
-                    </p>
-                    <p class="text-[11px] text-ink-faint mt-1">
-                        @(isFa
-                            ? $"پیش‌نمایشی که {PreviewPolicy.IdleLifetime.TotalDays:0} روز push نگیرد یا شاخه‌اش حذف شود، خودش برداشته می‌شود."
-                            : $"A preview whose branch is deleted, or which goes {PreviewPolicy.IdleLifetime.TotalDays:0} days without a push, is removed on its own.")
-                    </p>
-
-                    @if (previews.Count > 0)
-                    {
-                        <div class="mt-3 divide-y divide-line border-t border-line">
-                            @foreach (var preview in previews)
-                            {
-                                <div class="py-2 flex items-center justify-between gap-2 text-sm">
-                                    <a asp-action="Details" asp-route-id="@preview.Id" class="text-accent-text truncate">@preview.PreviewBranch</a>
-                                    <span class="text-xs text-ink-faint shrink-0">
-                                        @(preview.PreviewLastPushedAt is { } pushed
-                                            ? (isFa ? $"آخرین push: {pushed.LocalDateTime:yyyy-MM-dd}" : $"last push {pushed.LocalDateTime:yyyy-MM-dd}")
-                                            : "—")
-                                    </span>
-                                </div>
-                            }
-                        </div>
-                    }
-                </section>
-            }
-        }
-
-        @* A preview says so, and says what of. Otherwise it looks like an ordinary service that
-           somebody will be surprised to find gone in a week. *@
-        @if (app.PreviewOfAppId is { } parentId)
-        {
-            <section class="rounded-xl border border-warn bg-amber-950/20 p-4">
-                <div class="font-semibold mb-1">@(isFa ? "این یک پیش‌نمایش است" : "This is a preview")</div>
-                <div class="text-xs text-ink-muted">
-                    @(isFa ? "شاخهٔ" : "Branch") <code class="text-ink">@app.PreviewBranch</code>
-                    @(isFa ? "از" : "of") <a asp-action="Details" asp-route-id="@parentId" class="text-accent-text">@(isFa ? "سرویس اصلی" : "the parent service")</a>.
-                </div>
-                <div class="text-[11px] text-ink-faint mt-2">
-                    @(isFa
-                        ? $"سکرت‌ها از سرویس اصلی کپی نشده‌اند. اگر شاخه حذف شود یا {PreviewPolicy.IdleLifetime.TotalDays:0} روز push نگیرد، این سرویس و داده‌هایش برداشته می‌شوند."
-                        : $"Secrets were not copied from the parent. If the branch is deleted, or goes {PreviewPolicy.IdleLifetime.TotalDays:0} days without a push, this service and its data are removed.")
                 </div>
             </section>
         }
@@ -745,76 +383,40 @@
             </dl>
         </section>
 
-        @* ---- Instant backup (sub-project E, Task 2) ----
-           "Back up now" beside the address and specifics blocks B1, B2 and B3 built here. It states
-           what it would capture before it does anything — an archive of nothing presented as a
-           success is exactly what this must not be — and a Cron or ReleaseTask app with no running
-           container and no volumes still gets an honest description of what a backup would contain,
-           the same rule B3 settled for health and uptime, rather than a hidden or disabled control. *@
-        <section class="rounded-xl border border-line bg-surface p-4"
-                 data-instant-backup-state="@(Model.HasBackupRepository ? "ready" : "no-repository")"
-                 data-instant-backup-volume-count="@Model.BackupVolumes.Count"
-                 data-instant-backup-env-count="@app.EnvironmentVariables.Count">
-            <div class="mb-2 font-semibold">@(isFa ? "پشتیبان‌گیری فوری" : "Back up now")</div>
-            <p class="text-xs text-ink-faint mb-2">
-                @(isFa ? "این پشتیبان شامل موارد زیر خواهد بود:" : "This backup would include:")
-            </p>
-            <ul class="text-xs text-ink space-y-1 mb-3">
-                @if (Model.BackupVolumes.Count > 0)
-                {
-                    <li>
-                        @(isFa ? "والیوم‌های داده: " : "Data volumes: ")
-                        @for (var i = 0; i < Model.BackupVolumes.Count; i++)
-                        {
-                            var volume = Model.BackupVolumes[i];
-                            <span data-instant-backup-volume="@volume.Name">@volume.Name (@volume.MountPath)</span>@(i < Model.BackupVolumes.Count - 1 ? ", " : "")
-                        }
-                    </li>
-                }
-                else
-                {
-                    @* B3's rule for an empty state, applied here: say what is known, and say when
-                       there is nothing — never hide the control or offer an empty archive as if it
-                       were a real one. A Cron or ReleaseTask app has no running container and
-                       typically no volumes at all, so this is the ordinary case for it, not an error. *@
-                    <li>
-                        @(isFa
-                            ? "بدون والیوم داده — فقط تعریف اپ (و در صورت وجود، ارجاع ایمیج آن) ذخیره می‌شود."
-                            : "No data volumes — only the app's own definition (and its image reference, if it has deployed) would be captured.")
-                    </li>
-                }
-                <li>
-                    @(isFa
-                        ? $"{app.EnvironmentVariables.Count} متغیر محیطی ({app.EnvironmentVariables.Count(e => e.IsSecret)} مورد رمز است و مقدارش وارد پشتیبان نمی‌شود)."
-                        : $"{app.EnvironmentVariables.Count} environment variable(s) ({app.EnvironmentVariables.Count(e => e.IsSecret)} secret, whose value is never included).")
-                </li>
-                <li data-instant-backup-image="@(app.ActiveDeploymentId is null ? "none" : "captured")">
-                    @(app.ActiveDeploymentId is null
-                        ? (isFa
-                            ? "این اپ هنوز دیپلوی نشده، پس ارجاع ایمیجی برای ثبت وجود ندارد."
-                            : "This app has never deployed, so there is no image reference to capture yet.")
-                        : (isFa
-                            ? "ارجاع ایمیج نسخهٔ در حال اجرا"
-                            : "The image reference of the version currently running."))
-                </li>
-            </ul>
-            @if (Model.HasBackupRepository)
-            {
-                <form asp-controller="Apps" asp-action="BackupNow" asp-route-id="@Model.Id" method="post">
+        @{
+            var sizes = ViewBag.Sizes as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
+        }
+        @* ---- instance size ----
+           What this app is actually consuming against these limits now lives on the Usage tab; this
+           is only the control that changes them. *@
+        @if (sizes.Count > 0)
+        {
+            <section class="rounded-xl border border-line bg-surface p-4">
+                <div class="mb-3 font-semibold">@(isFa ? "اندازهٔ نمونه" : "Instance size")</div>
+                <form asp-controller="Apps" asp-action="Resize" asp-route-id="@app.Id" method="post" class="space-y-3">
                     @Html.AntiForgeryToken()
-                    <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-sm font-semibold">
-                        @(isFa ? "پشتیبان‌گیری فوری" : "Back up now")
-                    </button>
+                    @* Cards rather than a dropdown, so what a tier costs is visible before the choice
+                       rather than after the bill — and pinned to the host this app already runs on,
+                       because a resize does not move a workload. "No limit" IS offered here, unlike on
+                       creation: it is the state an app made before tiers existed is already in, so
+                       leaving it out would make saving this form impose a ceiling nobody asked for. *@
+                    @await Component.InvokeAsync("SizePicker", new
+                    {
+                        sizeField = "instanceSizeKey",
+                        selectedSize = app.InstanceSizeKey,
+                        selectedServer = app.ServerId,
+                        pinnedServer = app.ServerId,
+                        allowNoLimit = true
+                    })
+                    <button class="btn-secondary w-full justify-center py-2 text-sm">@(isFa ? "تغییر اندازه" : "Change size")</button>
+                    <p class="text-[11px] leading-4 text-ink-faint">
+                        @(isFa
+                            ? "سقف روی کانتینر است، پس با استقرار بعدی اعمال می‌شود."
+                            : "The ceiling belongs to the container, so it applies on the next deployment.")
+                    </p>
                 </form>
-            }
-            else
-            {
-                <p class="text-xs text-ink-faint">
-                    @(isFa ? "هنوز مخزن پشتیبانی تنظیم نشده است. " : "No backup repository is set up yet. ")<a
-                        href="/backup-center" class="text-accent-text hover:underline">@(isFa ? "ساخت یکی" : "Set one up")</a>
-                </p>
-            }
-        </section>
+            </section>
+        }
 
         @* ---- Domains ----
            The status shown here is probed, not configured: DNS is resolved and a real TLS handshake
@@ -893,6 +495,417 @@
             }
         </section>
 
+        @* ---- Git auto-deploy ---- *@
+        @if (app.GitRepository is not null)
+        {
+            <section class="rounded-xl border border-line bg-surface p-4">
+                <div class="font-semibold mb-2">@(isFa ? "استقرار خودکار (Git)" : "Auto-deploy (Git)")</div>
+                <div class="text-xs text-ink-muted mb-2">
+                    @(isFa ? "با هر push به" : "On push to") <code class="text-ink">@(app.GitRef ?? app.GitRepository.DefaultBranch)</code>
+                    @(app.AutoDeployOnPush
+                        ? (isFa ? "خودکار دیپلوی می‌شود ✓" : "auto-deploys ✓")
+                        : (isFa ? "غیرفعال است" : "is off"))
+                </div>
+                <div class="text-xs text-ink-muted">@(isFa ? "آدرس Webhook (در تنظیمات مخزن قرار دهید):" : "Webhook URL (add it in your repo settings):")</div>
+                <code class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs mt-1">@Context.Request.Scheme://@Context.Request.Host/webhooks/git/@app.GitRepository.Id</code>
+                <div class="text-xs text-ink-muted mt-2">
+                    @(isFa ? "سکرت:" : "Secret:")
+                    @if (ViewBag.RevealWebhookSecret == true)
+                    {
+                        <code class="text-ink break-all">@app.GitRepository.WebhookSecret</code>
+                    }
+                    else
+                    {
+                        @* Only on a click, like the Git page and the storage keys. *@
+                        <code class="text-ink-faint">••••••••</code>
+                        <a href="/apps/details/@app.Id?revealSecret=true" class="text-accent-text hover:underline">@(isFa ? "نمایش" : "Reveal")</a>
+                    }
+                </div>
+                <p class="text-[11px] text-ink-faint mt-2">@(isFa ? "Content-Type را application/json بگذارید. GitHub/Gitea با امضای HMAC و GitLab با هدر توکن تأیید می‌شوند." : "Use Content-Type application/json. GitHub/Gitea verify by HMAC; GitLab by token header.")</p>
+            </section>
+
+            @* ---- Branch previews ----
+               Shown next to auto-deploy because they are the same mechanism pointed at a different
+               branch. A preview is a real service on a real address, so it is listed rather than
+               left to be discovered in the app list looking like something somebody created. *@
+            @if (app.PreviewOfAppId is null)
+            {
+                var previews = ViewBag.Previews as List<Harbora.Domain.Apps.App> ?? [];
+                <section class="rounded-xl border border-line bg-surface p-4">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <div class="font-semibold">@(isFa ? "پیش‌نمایش شاخه‌ها" : "Branch previews")</div>
+                        <form method="post" asp-action="TogglePreviews" asp-route-id="@app.Id">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="text-xs rounded-lg px-3 py-1 border @(app.PreviewsEnabled ? "border-ok text-ok" : "border-line-strong text-ink-muted")">
+                                @(app.PreviewsEnabled ? (isFa ? "روشن ✓" : "On ✓") : (isFa ? "خاموش" : "Off"))
+                            </button>
+                        </form>
+                    </div>
+
+                    <p class="text-xs text-ink-muted">
+                        @(isFa
+                            ? "هر push روی شاخه‌ای غیر از شاخهٔ اصلی، محیط و آدرس مخصوص خودش را می‌گیرد. سکرت‌ها کپی نمی‌شوند — برای هر پیش‌نمایش جداگانه تنظیم کنید."
+                            : "A push to any branch other than the tracked one gets an environment and address of its own. Secrets are not copied — set them per preview.")
+                    </p>
+                    <p class="text-[11px] text-ink-faint mt-1">
+                        @(isFa
+                            ? $"پیش‌نمایشی که {PreviewPolicy.IdleLifetime.TotalDays:0} روز push نگیرد یا شاخه‌اش حذف شود، خودش برداشته می‌شود."
+                            : $"A preview whose branch is deleted, or which goes {PreviewPolicy.IdleLifetime.TotalDays:0} days without a push, is removed on its own.")
+                    </p>
+
+                    @if (previews.Count > 0)
+                    {
+                        <div class="mt-3 divide-y divide-line border-t border-line">
+                            @foreach (var preview in previews)
+                            {
+                                <div class="py-2 flex items-center justify-between gap-2 text-sm">
+                                    <a asp-action="Details" asp-route-id="@preview.Id" class="text-accent-text truncate">@preview.PreviewBranch</a>
+                                    <span class="text-xs text-ink-faint shrink-0">
+                                        @(preview.PreviewLastPushedAt is { } pushed
+                                            ? (isFa ? $"آخرین push: {pushed.LocalDateTime:yyyy-MM-dd}" : $"last push {pushed.LocalDateTime:yyyy-MM-dd}")
+                                            : "—")
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </section>
+            }
+        }
+
+        @* ---- Environment variables ---- *@
+        <details class="advanced-panel" open="@advancedOpen">
+            <summary><span><i data-lucide="file-code-2" class="h-4 w-4"></i>@T["Environment Variables"]</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
+            <div class="divide-y divide-line">
+                @if (!app.EnvironmentVariables.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
+                @foreach (var e in app.EnvironmentVariables.OrderBy(x => x.Key))
+                {
+                    <div class="flex items-center justify-between p-3 text-sm font-mono">
+                        <span class="text-ink">@e.Key @if (e.IsSecret){<span class="text-[10px] not-italic rounded bg-surface-2 px-1 text-warn font-sans">secret</span>}@if (e.AvailableAtBuild){<span class="text-[10px] rounded bg-surface-2 px-1 text-info font-sans">build</span>}</span>
+                        <div class="flex items-center gap-2">
+                            <span class="text-ink-faint">@(e.IsSecret ? "••••••" : e.Value)</span>
+                            <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@app.Id" asp-route-envId="@e.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف متغیر {e.Key}" : $"Delete variable {e.Key}")">✕</button></form>
+                        </div>
+                    </div>
+                }
+            </div>
+            <form asp-controller="Apps" asp-action="AddEnv" asp-route-id="@app.Id" method="post" class="p-3 border-t border-line grid grid-cols-1 sm:grid-cols-6 gap-2">
+                @Html.AntiForgeryToken()
+                <input name="key" placeholder="KEY" class="sm:col-span-2 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm font-mono" />
+                <input name="value" placeholder="value" class="sm:col-span-2 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm font-mono" />
+                <label class="flex items-center gap-1 text-xs"><input type="checkbox" name="isSecret" value="true"> secret</label>
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-sm font-semibold">+ @T["Save"]</button>
+            </form>
+        </details>
+    </div>
+
+    <aside class="space-y-6">
+        @* ---- databases ----
+           The page said nothing about them at all: the only way to attach one was to know to open
+           each database in turn, and nothing here listed what this application was already using.
+           So "one app, several databases" was supported by everything except the screen somebody
+           would try it on. *@
+        @{
+            var links = ViewBag.Databases as List<AppDatabaseLinkViewModel> ?? [];
+            var attached = links.Where(l => l.Attached).ToList();
+            var available = links.Where(l => !l.Attached).ToList();
+            var here = Context.Request.Path + Context.Request.QueryString;
+        }
+        <section class="rounded-xl border border-line bg-surface p-4">
+            <div class="mb-3 font-semibold">@(isFa ? "دیتابیس‌ها" : "Databases")</div>
+
+            @if (attached.Count == 0)
+            {
+                <p class="text-xs text-ink-faint">@(isFa ? "به هیچ دیتابیسی وصل نیست." : "Not connected to any database.")</p>
+            }
+            else
+            {
+                <div class="space-y-2">
+                    @foreach (var link in attached)
+                    {
+                        <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 p-2.5">
+                            <span class="min-w-0">
+                                <a href="/databases/@link.Id" class="block truncate text-sm text-ink hover:text-accent-text" dir="ltr">@link.Name</a>
+                                <small class="text-[11px] text-ink-faint">@link.Type</small>
+                            </span>
+                            <form asp-controller="Databases" asp-action="Detach" asp-route-id="@link.Id" method="post">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="appId" value="@app.Id" />
+                                <input type="hidden" name="returnUrl" value="@here" />
+                                <button class="text-[11px] text-ink-faint hover:text-danger">@(isFa ? "جدا کن" : "Detach")</button>
+                            </form>
+                        </div>
+                    }
+                </div>
+
+                @if (attached.Count > 1)
+                {
+                    @* Which variable holds which. Every database also writes a prefixed copy of its
+                       own names; the plain ones go to whichever database asked for them first, so
+                       two of the same engine share nothing. The prefix is shown rather than a whole
+                       variable name, because the names differ per engine — writing
+                       "PREFIX_DATABASE_URL" beside a Redis would name a variable it never sets. *@
+                    <p class="mt-2 text-[11px] leading-5 text-ink-faint">
+                        @(isFa
+                            ? "هر دیتابیس یک نسخهٔ پیشونددار از متغیرهای خودش هم می‌نویسد. نام‌های ساده به اولی می‌رسد که آن‌ها را خواسته باشد:"
+                            : "Each database also writes a prefixed copy of its own variables. The plain names go to whichever asked for them first:")
+                        @foreach (var link in attached)
+                        {
+                            <code dir="ltr" class="ms-1">@(link.Prefix)*</code>
+                        }
+                    </p>
+                }
+            }
+
+            @if (available.Count > 0)
+            {
+                <form asp-controller="Databases" asp-action="Attach" method="post" class="mt-3 space-y-2">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="appId" value="@app.Id" />
+                    <input type="hidden" name="returnUrl" value="@here" />
+                    <select name="id" class="form-control text-sm">
+                        @foreach (var link in available)
+                        {
+                            <option value="@link.Id">@link.Name · @link.Type</option>
+                        }
+                    </select>
+                    <button class="btn-secondary w-full justify-center text-sm">@(isFa ? "اتصال دیتابیس" : "Attach a database")</button>
+                </form>
+                <p class="mt-1 text-[11px] text-ink-faint">
+                    @(isFa
+                        ? "بعد از اتصال، اپ را دوباره دیپلوی کنید تا متغیرها اعمال شوند."
+                        : "Redeploy the application afterwards to apply the variables.")
+                </p>
+            }
+            else if (attached.Count == 0)
+            {
+                <p class="mt-2 text-[11px] text-ink-faint">
+                    @(isFa
+                        ? "در این محیط دیتابیسی نیست. دیتابیس فقط داخل شبکهٔ خصوصی همان محیط وصل می‌شود."
+                        : "There is no database in this environment. One can only attach inside its own private network.")
+                </p>
+            }
+
+            @* ---- the ones it cannot reach ----
+               An environment is a private network, so a database in another one cannot be attached:
+               the hostname would not resolve. That was explained and left there — the person could
+               see the refusal and had nowhere to go with it, while the move sat on a page in
+               Advanced mode that most people never open. *@
+            @{ var elsewhere = ViewBag.Elsewhere as List<AppDatabaseElsewhereViewModel> ?? []; }
+            @if (elsewhere.Count > 0)
+            {
+                <details class="mt-3 rounded-lg border border-line bg-surface-2 p-2.5">
+                    <summary class="cursor-pointer text-[11px] text-ink-muted">
+                        @(isFa
+                            ? $"{elsewhere.Count} دیتابیس در محیط‌های دیگر"
+                            : $"{elsewhere.Count} database(s) in other environments")
+                    </summary>
+                    <p class="mt-2 text-[11px] leading-5 text-ink-faint">
+                        @(isFa
+                            ? "هر محیط یک شبکهٔ خصوصی جداست، پس این‌ها را نمی‌شود از اینجا وصل کرد — نام میزبانشان از این شبکه پیدا نمی‌شود. یا این اپ را به آن محیط ببرید، یا دیتابیس تازه‌ای در همین محیط بسازید."
+                            : "Each environment is its own private network, so these cannot be attached from here — their hostname does not resolve on this one. Either move this application there, or create a database in this environment.")
+                    </p>
+                    <div class="mt-2 space-y-1.5">
+                        @foreach (var other in elsewhere)
+                        {
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <span class="min-w-0 text-[11px]">
+                                    <span class="text-ink" dir="ltr">@other.Name</span>
+                                    <span class="text-ink-faint">· @other.Where</span>
+                                </span>
+                                @* Straight to the screen that says what the move would break. It is
+                                   a confirmation rather than a button because moving a service to
+                                   another network severs every connection it already has. *@
+                                <a href="/networks/move?appId=@app.Id&amp;targetEnvironmentId=@other.EnvironmentId"
+                                   class="whitespace-nowrap text-[11px] text-accent-text hover:underline">
+                                    @(isFa ? "بردن اپ به آنجا" : "Move the app there")
+                                </a>
+                            </div>
+                        }
+                    </div>
+                </details>
+            }
+        </section>
+
+        @* ---- The version this came from, and where it can go ----
+           An app installed from a ready-made template had its version pinned at creation and
+           nothing offered another, so "update n8n" meant deleting it and starting again. *@
+        @{
+            var currentVersion = ViewBag.CurrentVersion as Harbora.Domain.Templates.AppTemplateVersion;
+            var updates = ViewBag.UpdateVersions as List<Harbora.Domain.Templates.AppTemplateVersion> ?? [];
+        }
+        @if (app.TemplateId is not null)
+        {
+            <section class="rounded-xl border border-line bg-surface p-4">
+                <div class="mb-2 font-semibold">@(isFa ? "نسخه" : "Version")</div>
+
+                <div class="text-xs text-ink-muted">
+                    @(currentVersion is null
+                        ? (isFa ? "نسخهٔ این نصب ثبت نشده است." : "This installation's version was not recorded.")
+                        : (isFa ? $"در حال اجرا: {currentVersion.Version}" : $"Running {currentVersion.Version}"))
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(app.PrebuiltImage))
+                {
+                    @* The exact reference, so somebody who would rather run it themselves can take
+                       it. It is what actually gets pulled, digest and all. *@
+                    <code dir="ltr" class="mt-2 block break-all rounded bg-code text-code-ink px-2 py-1 text-[11px]"
+                          data-copy-text>@app.PrebuiltImage</code>
+                }
+
+                @if (updates.Count > 0)
+                {
+                    <form asp-controller="Apps" asp-action="UpdateVersion" asp-route-id="@app.Id" method="post" class="mt-3 space-y-2">
+                        @Html.AntiForgeryToken()
+                        <select name="versionId" class="form-control text-sm" data-version-choice>
+                            @foreach (var version in updates)
+                            {
+                                <option value="@version.Id"
+                                        data-warning="@(isFa && !string.IsNullOrWhiteSpace(version.MigrationWarningsFa) ? version.MigrationWarningsFa : version.MigrationWarnings)">
+                                    @version.Version
+                                </option>
+                            }
+                        </select>
+
+                        @* Shown before the button is pressed, not after. A migration warning that
+                           arrives with the result is a warning about something already done. *@
+                        <p class="hidden text-[11px] leading-4 text-warn" data-version-warning></p>
+
+                        <button class="btn-secondary w-full justify-center py-2 text-sm">
+                            <i data-lucide="arrow-up-right" class="h-4 w-4"></i>@(isFa ? "به‌روزرسانی" : "Update")
+                        </button>
+                        <p class="text-[11px] leading-4 text-ink-faint">
+                            @(isFa
+                                ? "مثل هر استقرار دیگری اجرا می‌شود: سلامت‌سنجی و امکان بازگشت."
+                                : "Runs as a normal deployment: health gate and rollback.")
+                        </p>
+                    </form>
+                }
+                else
+                {
+                    <p class="mt-2 text-[11px] text-ink-faint">
+                        @(isFa ? "نسخهٔ تازه‌تری ارائه نشده است." : "No newer version is offered.")
+                    </p>
+                }
+            </section>
+        }
+
+        @* ---- A release tag of your own ----
+           The curated list is what Harbora vouches for. This is for the release somebody has read the
+           project's changelog about and wants today. *@
+        @{
+            var repository = ViewBag.Repository as string;
+            var currentTag = ViewBag.CurrentTag as string;
+        }
+        @if (!string.IsNullOrWhiteSpace(repository))
+        {
+            <section class="rounded-xl border border-line bg-surface p-4">
+                <div class="mb-2 font-semibold">@(isFa ? "تگ دلخواه" : "A release tag of your own")</div>
+                <p class="text-[11px] leading-4 text-ink-faint">
+                    @(isFa
+                        ? "هر تگی از همین مخزن. پیش از ذخیره به digest تبدیل می‌شود، پس اگر تگ وجود نداشته باشد چیزی تغییر نمی‌کند."
+                        : "Any tag from this repository. It is resolved to a digest before anything is stored, so a tag that does not exist changes nothing.")
+                </p>
+                <code dir="ltr" class="mt-2 block break-all rounded bg-code text-code-ink px-2 py-1 text-[11px]" data-copy-text>@repository</code>
+
+                <form asp-controller="Apps" asp-action="UpdateTag" asp-route-id="@app.Id" method="post" class="mt-3 space-y-2">
+                    @Html.AntiForgeryToken()
+                    <input name="tag" value="@currentTag" dir="ltr" class="form-control text-sm"
+                           placeholder="@(isFa ? "مثلاً 1.70.1" : "e.g. 1.70.1")" />
+                    <button class="btn-secondary w-full justify-center py-2 text-sm">
+                        <i data-lucide="rocket" class="h-4 w-4"></i>@(isFa ? "استقرار این تگ" : "Deploy this tag")
+                    </button>
+                </form>
+            </section>
+        }
+
+        @* ---- Release task ----
+           Shown because it runs on every deploy and can fail one. Set at create time and then
+           invisible, it is a command nobody remembers is there until it breaks a release. *@
+        @if (!string.IsNullOrWhiteSpace(app.ReleaseCommand))
+        {
+            <section class="rounded-xl border border-line bg-surface p-4">
+                <div class="font-semibold mb-2">@(isFa ? "دستور پیش از انتشار" : "Release task")</div>
+                <code dir="ltr" class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs">@app.ReleaseCommand</code>
+                <p class="text-[11px] text-ink-faint mt-2">
+                    @(isFa
+                        ? "پیش از راه‌اندازی نسخهٔ جدید اجرا می‌شود. اگر شکست بخورد، نسخهٔ فعلی همچنان سرویس می‌دهد."
+                        : "Runs before the new version starts. If it fails, the current version keeps serving.")
+                </p>
+            </section>
+        }
+
+        @* ---- Instant backup (sub-project E, Task 2) ----
+           "Back up now" beside the address and specifics blocks B1, B2 and B3 built here. It states
+           what it would capture before it does anything — an archive of nothing presented as a
+           success is exactly what this must not be — and a Cron or ReleaseTask app with no running
+           container and no volumes still gets an honest description of what a backup would contain,
+           the same rule B3 settled for health and uptime, rather than a hidden or disabled control. *@
+        <section class="rounded-xl border border-line bg-surface p-4"
+                 data-instant-backup-state="@(Model.HasBackupRepository ? "ready" : "no-repository")"
+                 data-instant-backup-volume-count="@Model.BackupVolumes.Count"
+                 data-instant-backup-env-count="@app.EnvironmentVariables.Count">
+            <div class="mb-2 font-semibold">@(isFa ? "پشتیبان‌گیری فوری" : "Back up now")</div>
+            <p class="text-xs text-ink-faint mb-2">
+                @(isFa ? "این پشتیبان شامل موارد زیر خواهد بود:" : "This backup would include:")
+            </p>
+            <ul class="text-xs text-ink space-y-1 mb-3">
+                @if (Model.BackupVolumes.Count > 0)
+                {
+                    <li>
+                        @(isFa ? "والیوم‌های داده: " : "Data volumes: ")
+                        @for (var i = 0; i < Model.BackupVolumes.Count; i++)
+                        {
+                            var volume = Model.BackupVolumes[i];
+                            <span data-instant-backup-volume="@volume.Name">@volume.Name (@volume.MountPath)</span>@(i < Model.BackupVolumes.Count - 1 ? ", " : "")
+                        }
+                    </li>
+                }
+                else
+                {
+                    @* B3's rule for an empty state, applied here: say what is known, and say when
+                       there is nothing — never hide the control or offer an empty archive as if it
+                       were a real one. A Cron or ReleaseTask app has no running container and
+                       typically no volumes at all, so this is the ordinary case for it, not an error. *@
+                    <li>
+                        @(isFa
+                            ? "بدون والیوم داده — فقط تعریف اپ (و در صورت وجود، ارجاع ایمیج آن) ذخیره می‌شود."
+                            : "No data volumes — only the app's own definition (and its image reference, if it has deployed) would be captured.")
+                    </li>
+                }
+                <li>
+                    @(isFa
+                        ? $"{app.EnvironmentVariables.Count} متغیر محیطی ({app.EnvironmentVariables.Count(e => e.IsSecret)} مورد رمز است و مقدارش وارد پشتیبان نمی‌شود)."
+                        : $"{app.EnvironmentVariables.Count} environment variable(s) ({app.EnvironmentVariables.Count(e => e.IsSecret)} secret, whose value is never included).")
+                </li>
+                <li data-instant-backup-image="@(app.ActiveDeploymentId is null ? "none" : "captured")">
+                    @(app.ActiveDeploymentId is null
+                        ? (isFa
+                            ? "این اپ هنوز دیپلوی نشده، پس ارجاع ایمیجی برای ثبت وجود ندارد."
+                            : "This app has never deployed, so there is no image reference to capture yet.")
+                        : (isFa
+                            ? "ارجاع ایمیج نسخهٔ در حال اجرا"
+                            : "The image reference of the version currently running."))
+                </li>
+            </ul>
+            @if (Model.HasBackupRepository)
+            {
+                <form asp-controller="Apps" asp-action="BackupNow" asp-route-id="@Model.Id" method="post">
+                    @Html.AntiForgeryToken()
+                    <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-sm font-semibold">
+                        @(isFa ? "پشتیبان‌گیری فوری" : "Back up now")
+                    </button>
+                </form>
+            }
+            else
+            {
+                <p class="text-xs text-ink-faint">
+                    @(isFa ? "هنوز مخزن پشتیبانی تنظیم نشده است. " : "No backup repository is set up yet. ")<a
+                        href="/backup-center" class="text-accent-text hover:underline">@(isFa ? "ساخت یکی" : "Set one up")</a>
+                </p>
+            }
+        </section>
+
         @* ---- Danger zone ---- *@
         <section class="rounded-xl border border-danger bg-red-950/10 p-4">
             <div class="font-semibold text-danger mb-1">@(isFa ? "منطقه‌ی خطر" : "Danger zone")</div>
@@ -904,8 +917,9 @@
                 <button class="rounded-lg bg-danger-soft hover:bg-danger-soft text-danger px-4 py-2 text-sm font-semibold">🗑 @(isFa ? "حذف اپ" : "Delete app")</button>
             </form>
         </section>
-    </div>
+    </aside>
 </div>
+
 
 @section Scripts {
 <script>
