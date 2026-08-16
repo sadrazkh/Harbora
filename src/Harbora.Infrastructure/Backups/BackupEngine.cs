@@ -549,6 +549,143 @@ public sealed class BackupEngine(
         await db.SaveChangesAsync(ct);
     }
 
+    /// <inheritdoc />
+    public async Task DeleteAsync(Guid backupId, CancellationToken ct)
+    {
+        var backup = await db.Backups.Include(b => b.Destination).FirstOrDefaultAsync(b => b.Id == backupId, ct);
+        if (backup is null) return;
+
+        // The artifact first, and the row only if that worked. The row is the only record of where the
+        // bytes are, so dropping it first and then failing to reach the destination leaves an artifact
+        // nobody can find, name or account for — on a paid destination, one that goes on being charged
+        // for. Retention above tolerates that failure because it is a sweeper with more chances; a
+        // person who pressed delete is owed the truth about whether it happened.
+        if (backup is { Destination: not null, ArtifactPath: not null })
+            await storage.DeleteAsync(backup.Destination, backup.ArtifactPath, ct);
+
+        db.Backups.Remove(backup);
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "Backup {Id} ({Type} of {Target}) was deleted by hand.", backup.Id, backup.Type, backup.TargetRef);
+    }
+
+    /// <inheritdoc />
+    public async Task<Guid> ImportAsync(
+        Guid workspaceId, BackupType type, string targetRef, Guid destinationId,
+        string fileName, Stream content, CancellationToken ct)
+    {
+        var destination = await db.BackupDestinations
+            .FirstOrDefaultAsync(d => d.Id == destinationId && d.WorkspaceId == workspaceId, ct)
+            ?? throw new InvalidOperationException("The destination does not belong to this workspace.");
+
+        Directory.CreateDirectory(_opt.StagingDir);
+
+        // The uploaded name never becomes a path. It came from a browser and is the one string here
+        // somebody else chose, so only its file-name part survives — and that only to keep an extension
+        // a restore may read.
+        var safeName = Path.GetFileName(fileName);
+        if (string.IsNullOrWhiteSpace(safeName))
+            throw new InvalidOperationException("The uploaded file has no name.");
+
+        var stamp = BackupRunIdentity.StampFor(clock.UtcNow, Guid.CreateVersion7());
+        var key = $"imported-{stamp}-{safeName}";
+        var stagedPath = Path.Combine(_opt.StagingDir, key);
+
+        await using (var file = File.Create(stagedPath))
+            await content.CopyToAsync(file, ct);
+
+        try
+        {
+            // Deliberately NOT through ProtectArtifactAsync. A downloaded artifact is already in its
+            // stored form, so encrypting it again would wrap it twice and nothing would restore it. The
+            // checksum is over the bytes that actually land, which is what verification recomputes.
+            var checksum = await Sha256Async(stagedPath, ct);
+            var (artifactRef, size) = await storage.PutFileAsync(destination, key, stagedPath, ct);
+
+            var backup = new Backup
+            {
+                WorkspaceId = workspaceId,
+                DestinationId = destinationId,
+                Type = type,
+                TargetRef = targetRef,
+                // Completed because the artifact is stored and downloadable, which is all this status
+                // has ever claimed. Whether it would RESTORE is a different question, and the field
+                // below leaves it open rather than answering it by having accepted the upload.
+                Status = BackupStatus.Completed,
+                ArtifactPath = artifactRef,
+                SizeBytes = size,
+                Checksum = checksum,
+                StartedAt = clock.UtcNow,
+                FinishedAt = clock.UtcNow,
+                // Not scheduled: nothing ran on a timer. Counting an import towards a schedule's
+                // retention would let one upload prune the automatic backups it sits beside.
+                IsScheduled = false,
+                // Null on purpose — "not checked yet", not "checked and fine". Harbora has no idea what
+                // is in this file; the panel offers the dry run that finds out.
+                VerifiedRestorable = null,
+                VerificationNote = "Imported from an uploaded file; never verified."
+            };
+            db.Backups.Add(backup);
+            await db.SaveChangesAsync(ct);
+
+            logger.LogInformation(
+                "Backup {Id} was imported from an uploaded file for {Type} of {Target}.",
+                backup.Id, type, targetRef);
+
+            return backup.Id;
+        }
+        finally
+        {
+            // The staging copy goes whether the publish worked or not: a failed import must not leave
+            // somebody's archive sitting in a shared directory.
+            if (File.Exists(stagedPath))
+                try { File.Delete(stagedPath); } catch { /* best effort, as everywhere else here */ }
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<string?> TestDestinationAsync(Guid destinationId, CancellationToken ct)
+    {
+        var destination = await db.BackupDestinations.AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == destinationId, ct);
+        if (destination is null) return "The destination no longer exists.";
+
+        Directory.CreateDirectory(_opt.StagingDir);
+
+        // A name of its own each time. Two operators testing one destination at the same moment would
+        // otherwise write and delete each other's probe, and one of them would be told it failed.
+        var key = $"harbora-probe-{Guid.CreateVersion7():N}.txt";
+        var probePath = Path.Combine(_opt.StagingDir, key);
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                probePath,
+                "Harbora wrote this to check it can reach this destination, then deleted it.\n", ct);
+
+            var (artifactRef, _) = await storage.PutFileAsync(destination, key, probePath, ct);
+
+            // Deleted even though it is a few bytes. A destination that slowly fills with probes is one
+            // somebody eventually cleans up by hand — and the delete is half of what is being tested
+            // anyway, since a write that cannot be undone is not a working destination.
+            await storage.DeleteAsync(destination, artifactRef, ct);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            // The message, not a verdict of our own. "Could not connect" sends an operator to check a
+            // network that is fine, when the real answer was a bucket name with a typo in it.
+            logger.LogWarning(ex, "Backup destination {Id} failed its round-trip test.", destinationId);
+            return ex.Message;
+        }
+        finally
+        {
+            if (File.Exists(probePath))
+                try { File.Delete(probePath); } catch { /* best effort */ }
+        }
+    }
+
     // --- integrity, encryption + dry run ---
 
     /// <summary>
