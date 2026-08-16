@@ -28,7 +28,9 @@ public sealed class UsersController(
     Harbora.Application.Abstractions.ISystemClock clock,
     Harbora.Infrastructure.Notifications.PlatformMailer mailer,
     IQuotaService quota,
-    Harbora.Infrastructure.Security.AccountSessionService sessions) : Controller
+    Harbora.Infrastructure.Security.AccountSessionService sessions,
+    ISecretProtector protector,
+    IJobQueue jobs) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
@@ -180,29 +182,25 @@ public sealed class UsersController(
             ExpiresAt = clock.UtcNow + Harbora.Infrastructure.Security.PasswordReset.Lifetime,
             CreatedAt = clock.UtcNow
         });
+        var link = $"{Request.Scheme}://{Request.Host}/account/reset?token={token}";
+        // §7 Q3(b): queued onto N1's outbox rather than sent inline. The account is created either
+        // way — always was, since the account row is saved before this point — so there is no longer
+        // a "created but the email failed" branch to report: queuing (unlike a synchronous send)
+        // practically cannot fail on its own, and a channel refusal is now retried three times rather
+        // than lost the moment it happens.
+        var delivery = Harbora.Infrastructure.Notifications.OutboxMail.Queue(
+            db, protector, NotificationDeliveryPurpose.PlatformInvite, email,
+            IsFa ? "دعوت به Harbora" : "You are invited to Harbora",
+            IsFa
+                ? $"برایتان حسابی ساخته شده. با این لینک رمزتان را بگذارید (تا یک ساعت معتبر است):\n{link}"
+                : $"An account has been created for you. Set your password with this link (valid for one hour):\n{link}");
+
         await db.SaveChangesAsync(ct);
         await quotaReservation.CommitAsync(ct);
-
-        var link = $"{Request.Scheme}://{Request.Host}/account/reset?token={token}";
-        try
-        {
-            await mailer.SendAsync(email,
-                IsFa ? "دعوت به Harbora" : "You are invited to Harbora",
-                IsFa
-                    ? $"برایتان حسابی ساخته شده. با این لینک رمزتان را بگذارید (تا یک ساعت معتبر است):\n{link}"
-                    : $"An account has been created for you. Set your password with this link (valid for one hour):\n{link}",
-                ct);
-        }
-        catch (Exception e) when (e is not OperationCanceledException)
-        {
-            // The account exists either way; a failed email is a fact the administrator standing
-            // at this form can act on right now.
-            await audit.LogAsync("user.invited", "user", email, ClientIp, ct: ct);
-            return Back((IsFa ? $"حساب ساخته شد ولی ایمیل نرفت: " : "The account was created but the email failed: ") + e.Message, error: true);
-        }
+        await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, ct);
 
         await audit.LogAsync("user.invited", "user", email, ClientIp, ct: ct);
-        return Back(IsFa ? $"دعوت‌نامه به {email} رفت." : $"An invitation went to {email}.");
+        return Back(IsFa ? $"دعوت‌نامه به {email} صف شد." : $"An invitation to {email} has been queued.");
     }
 
     [HttpPost("{id:guid}/role")]

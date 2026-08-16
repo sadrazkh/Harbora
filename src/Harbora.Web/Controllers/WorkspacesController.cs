@@ -24,7 +24,9 @@ public sealed class WorkspacesController(
     PlatformMailer mailer,
     IAuditLogger audit,
     Harbora.Application.Abstractions.ISystemClock clock,
-    Harbora.Infrastructure.Billing.BillingSuspension suspension) : Controller
+    Harbora.Infrastructure.Billing.BillingSuspension suspension,
+    ISecretProtector protector,
+    IJobQueue jobs) : Controller
 {
     private Guid UserId => currentUser.UserId ?? Guid.Empty;
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -152,19 +154,22 @@ public sealed class WorkspacesController(
                 .Where(w => w.Id == WorkspaceId).Select(w => w.Name).SingleAsync(ct);
             if (await mailer.IsConfiguredAsync(ct))
             {
-                try
-                {
-                    await mailer.SendAsync(issued.Invitation.Email,
-                        IsFa ? $"دعوت به {workspaceName}" : $"Invitation to {workspaceName}",
-                        IsFa
-                            ? $"برای پیوستن به ورک‌اسپیس {workspaceName} این لینک را تا ۷ روز آینده باز کنید:\n{link}"
-                            : $"Open this link within seven days to join {workspaceName}:\n{link}", ct);
-                    TempData["Message"] = IsFa ? "دعوت‌نامه ارسال شد؛ لینک هم فقط همین بار نمایش داده می‌شود." : "Invitation sent; the link is also shown this once.";
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    TempData["Error"] = (IsFa ? "ایمیل ارسال نشد؛ لینک را دستی بفرستید: " : "Email failed; send the link manually: ") + ex.Message;
-                }
+                // §7 Q3(b): queued onto N1's outbox rather than sent inline, so a slow or down SMTP
+                // server no longer holds this request open. The link above is shown regardless — the
+                // form's escape hatch never depended on the email actually working, and it still
+                // doesn't now that "sent" has become "queued".
+                var delivery = OutboxMail.Queue(db, protector, NotificationDeliveryPurpose.WorkspaceInvite,
+                    issued.Invitation.Email,
+                    IsFa ? $"دعوت به {workspaceName}" : $"Invitation to {workspaceName}",
+                    IsFa
+                        ? $"برای پیوستن به ورک‌اسپیس {workspaceName} این لینک را تا ۷ روز آینده باز کنید:\n{link}"
+                        : $"Open this link within seven days to join {workspaceName}:\n{link}",
+                    WorkspaceId);
+                await db.SaveChangesAsync(ct);
+                await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, ct);
+                TempData["Message"] = IsFa
+                    ? "دعوت‌نامه صف شد؛ لینک هم فقط همین بار نمایش داده می‌شود."
+                    : "Invitation queued; the link is also shown this once.";
             }
             else
                 TempData["Message"] = IsFa ? "دعوت ساخته شد؛ چون SMTP تنظیم نیست لینک را کپی کنید." : "Invitation created. SMTP is not configured, so copy the link.";

@@ -27,7 +27,8 @@ public sealed class AccountController(
     IDataProtectionProvider dataProtection,
     Harbora.Web.Infrastructure.PanelModeProvider panelModes,
     WorkspaceAccountService workspaceAccounts,
-    AccountSessionService sessions) : Controller
+    AccountSessionService sessions,
+    IJobQueue jobs) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
 
@@ -171,26 +172,20 @@ public sealed class AccountController(
                 ExpiresAt = clock.UtcNow + Harbora.Infrastructure.Security.PasswordReset.Lifetime,
                 CreatedAt = clock.UtcNow
             });
-            await db.SaveChangesAsync(ct);
-
             var link = $"{Request.Scheme}://{Request.Host}/account/reset?token={token}";
-            try
-            {
-                await mailer.SendAsync(user.Email,
-                    IsFa ? "بازنشانی رمز Harbora" : "Reset your Harbora password",
-                    IsFa
-                        ? $"برای گذاشتن رمز تازه این لینک را باز کنید (تا یک ساعت معتبر است):\n{link}\n\nاگر شما درخواست نکرده‌اید، این ایمیل را نادیده بگیرید."
-                        : $"Open this link to set a new password (valid for one hour):\n{link}\n\nIf you did not ask for this, ignore this email.",
-                    ct);
-            }
-            catch (Exception e) when (e is not OperationCanceledException)
-            {
-                // The page still says "a link is on its way" — saying otherwise would leak that the
-                // account exists. The operator finds the real failure where operators look.
-                Response.HttpContext.RequestServices
-                    .GetRequiredService<ILogger<AccountController>>()
-                    .LogWarning(e, "Password-reset email could not be sent.");
-            }
+            // §7 Q3(b): joins the same outbox N1 built for alert deliveries — one delivery path, one
+            // retry story, one record, rather than a synchronous SmtpClient call whose only trace was
+            // a caught-and-logged exception. The anti-enumeration behaviour is unchanged: this page
+            // says "a link is on its way" whether the address exists or the send later fails, because
+            // queuing (unlike a synchronous send) practically cannot fail on its own.
+            var delivery = Harbora.Infrastructure.Notifications.OutboxMail.Queue(
+                db, protector, NotificationDeliveryPurpose.PasswordReset, user.Email,
+                IsFa ? "بازنشانی رمز Harbora" : "Reset your Harbora password",
+                IsFa
+                    ? $"برای گذاشتن رمز تازه این لینک را باز کنید (تا یک ساعت معتبر است):\n{link}\n\nاگر شما درخواست نکرده‌اید، این ایمیل را نادیده بگیرید."
+                    : $"Open this link to set a new password (valid for one hour):\n{link}\n\nIf you did not ask for this, ignore this email.");
+            await db.SaveChangesAsync(ct);
+            await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, ct);
 
             await audit.LogAsync("user.password_reset_requested", "user", user.Id.ToString(), ClientIp,
                 actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
@@ -360,28 +355,26 @@ public sealed class AccountController(
         return Redirect("/account/verify-pending");
     }
 
+    /// <summary>
+    /// Queues the verification email onto N1's outbox (§7 Q3(b)) rather than sending it inline. The
+    /// return value is now "was it queued", not "did it arrive" — nothing reading it today inspected
+    /// more than that anyway.
+    /// </summary>
     private async Task<bool> SendVerificationAsync(User user, CancellationToken ct)
     {
         if (!await mailer.IsConfiguredAsync(ct)) return false;
         var (token, row) = sessions.IssueVerification(user.Id);
         db.EmailVerificationTokens.Add(row);
-        await db.SaveChangesAsync(ct);
         var link = $"{Request.Scheme}://{Request.Host}/account/verify?token={token}";
-        try
-        {
-            await mailer.SendAsync(user.Email,
-                IsFa ? "تأیید ایمیل Harbora" : "Verify your Harbora email",
-                IsFa
-                    ? $"برای تأیید ایمیل این لینک را باز کنید (تا ۲۴ ساعت معتبر است):\n{link}"
-                    : $"Open this link to verify your email (valid for 24 hours):\n{link}", ct);
-            return true;
-        }
-        catch (Exception e) when (e is not OperationCanceledException)
-        {
-            HttpContext.RequestServices.GetRequiredService<ILogger<AccountController>>()
-                .LogWarning(e, "Email-verification message could not be sent.");
-            return false;
-        }
+        var delivery = Harbora.Infrastructure.Notifications.OutboxMail.Queue(
+            db, protector, NotificationDeliveryPurpose.EmailVerification, user.Email,
+            IsFa ? "تأیید ایمیل Harbora" : "Verify your Harbora email",
+            IsFa
+                ? $"برای تأیید ایمیل این لینک را باز کنید (تا ۲۴ ساعت معتبر است):\n{link}"
+                : $"Open this link to verify your email (valid for 24 hours):\n{link}");
+        await db.SaveChangesAsync(ct);
+        await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, ct);
+        return true;
     }
 
     // ---- The second step ----
