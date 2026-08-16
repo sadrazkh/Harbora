@@ -30,7 +30,7 @@
 }
 @if (Model.DiskWarning)
 {
-    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">⚠ @(isFa ? "فضای دیسک رو به اتمام است" : "Disk space is running low") — @Gb(Model.DiskUsed) / @Gb(Model.DiskTotal)</div>
+    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm" data-disk-warning data-disk-warn-ratio="@Model.DiskWarnRatio.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)">⚠ @(isFa ? "فضای دیسک رو به اتمام است" : "Disk space is running low") — @Gb(Model.DiskUsed) / @Gb(Model.DiskTotal)</div>
 }
 @if (User.IsInRole("Owner") || User.IsInRole("Admin"))
 {
@@ -45,7 +45,7 @@
 }
 @if (Model.BackupWarning)
 {
-    <div class="mb-4 rounded-lg bg-warn-soft border border-warn text-warn px-4 py-2 text-sm">⚠ @Model.BackupWarningText</div>
+    <div class="mb-4 rounded-lg bg-warn-soft border border-warn text-warn px-4 py-2 text-sm" data-backup-warning>⚠ @Model.BackupWarningText</div>
 }
 
 @{

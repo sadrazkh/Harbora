@@ -40,7 +40,7 @@ MUTANTS = [
      'ActionUrl = "/monitoring"'),
 
     ("the disk threshold is gone",
-     "if (facts.DiskUsedRatio >= DiskWarnRatio)",
+     "if (facts.DiskUsedRatio >= diskWarnRatio)",
      "if (facts.DiskUsedRatio >= 0)"),
 
     ("the disk percentage is inverted free space",

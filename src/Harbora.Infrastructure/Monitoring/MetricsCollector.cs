@@ -4,6 +4,7 @@ using Harbora.Domain.Common;
 using Harbora.Domain.Monitoring;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Harbora.Infrastructure.Monitoring;
 
@@ -18,12 +19,13 @@ public sealed class MetricsCollector(
     AlertThrottle throttle,
     ISystemClock clock,
     MetricsRollupService rollups,
+    IOptions<MonitoringOptions> options,
     ILogger<MetricsCollector> logger) : IMetricsCollector
 {
-    private const double DiskWarnRatio = 0.85;
+    private readonly MonitoringOptions _options = options.Value;
+
     /// <summary>How long raw samples are kept. Beyond this, the summaries answer instead.</summary>
     private static readonly TimeSpan Retention = MetricRollups.RawRetention;
-    private static readonly TimeSpan DiskAlertInterval = TimeSpan.FromHours(1);
 
     public async Task CollectAsync(CancellationToken ct)
     {
@@ -47,8 +49,23 @@ public sealed class MetricsCollector(
         try { await rollups.RunAsync(ct); }
         catch (Exception ex) { logger.LogError(ex, "Rolling up metrics failed; raw samples were kept."); return; }
 
+        // ExecuteDeleteAsync is one statement that never loads a row, which matters here: this table
+        // is every sample of every metric. The InMemory provider the unit tests use does not
+        // implement it (DataRetentionSweeper.DeleteAsync hit the same gap and documents the same
+        // fix), so there is a fallback for a non-relational provider — which rows is the identical
+        // predicate on both paths, so there is no behaviour a test can pass that the real provider
+        // would fail.
         var cutoff = now - Retention;
-        await db.MonitoringMetrics.Where(m => m.Timestamp < cutoff).ExecuteDeleteAsync(ct);
+        var doomed = db.MonitoringMetrics.Where(m => m.Timestamp < cutoff);
+        if (db.Database.IsRelational())
+        {
+            await doomed.ExecuteDeleteAsync(ct);
+        }
+        else
+        {
+            var expired = await doomed.ToListAsync(ct);
+            if (expired.Count > 0) db.MonitoringMetrics.RemoveRange(expired);
+        }
         await db.SaveChangesAsync(ct);
     }
 
@@ -140,7 +157,7 @@ public sealed class MetricsCollector(
                 continue;
             }
 
-            if (!ThresholdRule.MayRepeat(rule.ThresholdFiredAt, now)) continue;
+            if (!ThresholdRule.MayRepeat(rule.ThresholdFiredAt, now, _options.ThresholdRepeatAfter)) continue;
 
             rule.ThresholdFiredAt = now;
 
@@ -180,7 +197,7 @@ public sealed class MetricsCollector(
             server.Status = ServerStatus.Online;
             server.LastHeartbeatAt = now;
 
-            if (host.TotalDiskBytes > 0 && (double)diskUsed / host.TotalDiskBytes >= DiskWarnRatio)
+            if (host.TotalDiskBytes > 0 && (double)diskUsed / host.TotalDiskBytes >= _options.DiskWarnRatio)
                 await MaybeDiskAlert(server, diskUsed, host.TotalDiskBytes, now, ct);
         }
         catch (Exception ex)
@@ -285,9 +302,9 @@ public sealed class MetricsCollector(
     private async Task MaybeDiskAlert(
         Domain.Servers.Server server, long used, long total, DateTimeOffset now, CancellationToken ct)
     {
-        // Once per hour per node, so a full disk doesn't spam every tick — and so one node filling
-        // up doesn't silence the warning for every other node.
-        if (!throttle.ShouldFire($"disk:{server.Id}", now, DiskAlertInterval)) return;
+        // Once per interval per node (an hour by default), so a full disk doesn't spam every tick —
+        // and so one node filling up doesn't silence the warning for every other node.
+        if (!throttle.ShouldFire($"disk:{server.Id}", now, _options.DiskAlertInterval)) return;
 
         var pct = (int)((double)used / total * 100);
         foreach (var wsId in await db.Alerts.Where(a => a.IsEnabled && a.OnDiskWarning)
