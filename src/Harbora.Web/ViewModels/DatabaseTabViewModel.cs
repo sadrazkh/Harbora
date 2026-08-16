@@ -50,11 +50,18 @@ public sealed class DatabaseOverviewViewModel : DatabaseTabViewModel
     /// <summary>The resource plans this workspace may move between, current one preselected.</summary>
     public IReadOnlyList<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> Sizes { get; init; } = [];
 
+
     /// <summary>What the container is actually running, so version drift can be shown.</summary>
     public string? RunningImage { get; init; }
 
     /// <summary>The resource plan, or null for a database created before they had one.</summary>
     public string? InstanceSizeKey { get; init; }
+
+    /// <summary>
+    /// The host it runs on. Read by the resize control, which pins the chooser to this server: a
+    /// tier's price now depends on where it runs, and a resize does not move a workload.
+    /// </summary>
+    public Guid ServerId { get; init; }
     public long MemoryLimitBytes { get; init; }
     public double CpuLimit { get; init; }
 

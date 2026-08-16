@@ -176,7 +176,8 @@ public sealed class TemplateDeploymentService(
         {
             await creationBilling.SaveAsync(request.WorkspaceId,
                 createdServices.Select(s => new Billing.CreatedBillableResource(
-                    Domain.Billing.BilledResourceType.Service, s.Id, s.Name, s.InstanceSizeKey)).ToList(), ct);
+                    Domain.Billing.BilledResourceType.Service, s.Id, s.Name, s.InstanceSizeKey,
+                    s.ServerId)).ToList(), ct);
             foreach (var service in createdServices) await managedServices.QueueProvisionAsync(service.Id, ct);
             return new TemplateDeployResult(project.Id, null, createdServices.Single().Id, null, 0);
         }
@@ -273,9 +274,9 @@ public sealed class TemplateDeploymentService(
 
         db.Apps.Add(app);
         var createdResources = createdServices.Select(s => new Billing.CreatedBillableResource(
-                Domain.Billing.BilledResourceType.Service, s.Id, s.Name, s.InstanceSizeKey))
+                Domain.Billing.BilledResourceType.Service, s.Id, s.Name, s.InstanceSizeKey, s.ServerId))
             .Append(new Billing.CreatedBillableResource(
-                Domain.Billing.BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey))
+                Domain.Billing.BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId))
             .ToList();
         await creationBilling.SaveAsync(request.WorkspaceId, createdResources, ct);
         await quotaReservation.CommitAsync(ct);

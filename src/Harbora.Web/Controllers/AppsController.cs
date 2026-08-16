@@ -385,7 +385,8 @@ public sealed partial class AppsController(
         try
         {
             await creationBilling.SaveAsync(WorkspaceId,
-                [new(Harbora.Domain.Billing.BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey)], ct);
+                [new(Harbora.Domain.Billing.BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey,
+                    app.ServerId)], ct);
         }
         catch (Harbora.Infrastructure.Billing.CreationPaymentRequiredException ex)
         {

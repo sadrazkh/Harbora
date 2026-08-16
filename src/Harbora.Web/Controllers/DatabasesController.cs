@@ -245,6 +245,7 @@ public sealed partial class DatabasesController(
             Sizes = await SizeChoicesAsync(service.InstanceSizeKey, ct),
             RunningImage = service.RunningImage,
             InstanceSizeKey = service.InstanceSizeKey,
+            ServerId = service.ServerId,
             MemoryLimitBytes = service.MemoryLimitBytes,
             DiskLimitBytes = service.DiskLimitBytes,
             CpuLimit = service.CpuLimit,
@@ -409,7 +410,7 @@ public sealed partial class DatabasesController(
         {
             await creationBilling.SaveAsync(WorkspaceId,
                 [new(Harbora.Domain.Billing.BilledResourceType.Service,
-                    service.Id, service.Name, service.InstanceSizeKey)], ct);
+                    service.Id, service.Name, service.InstanceSizeKey, service.ServerId)], ct);
         }
         catch (Harbora.Infrastructure.Billing.CreationPaymentRequiredException ex)
         {
