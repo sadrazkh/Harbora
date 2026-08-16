@@ -127,6 +127,38 @@ public sealed class ProjectConfig
         return config;
     }
 
+    /// <summary>
+    /// Points an existing config at a different app, by replacing the value on the one line that
+    /// names it. Deliberately not a regeneration: a project that has grown <c>dockerfile:</c>,
+    /// <c>context:</c>, <c>ignore:</c> or <c>dockerfileLines:</c> must not lose them to a file the
+    /// CLI rebuilt from the two fields it happens to care about.
+    ///
+    /// A trailing comment on the app line does not survive; nothing else is touched.
+    /// </summary>
+    public static void RewriteAppSlug(string path, string slug)
+    {
+        var lines = File.ReadAllLines(path);
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = StripComment(lines[i]);
+            if (line.Length == 0 || char.IsWhiteSpace(line[0])) continue;   // nested: not the app name
+
+            var colon = line.IndexOf(':');
+            if (colon <= 0) continue;
+
+            if (line[..colon].Trim().ToLowerInvariant() is not ("app" or "name")) continue;
+
+            // Keep the key exactly as written — `name:` is the documented alias, and a file that
+            // uses it should keep using it.
+            lines[i] = $"{line[..colon]}: {slug}";
+            File.WriteAllLines(path, lines);
+            return;
+        }
+
+        File.WriteAllLines(path, [.. lines, $"app: {slug}"]);
+    }
+
     private static string StripComment(string line)
     {
         var hash = line.IndexOf('#');
