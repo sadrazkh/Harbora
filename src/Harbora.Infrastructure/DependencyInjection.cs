@@ -303,6 +303,10 @@ public static class DependencyInjection
         // StorageMeasurer.StaleAfter.
         services.Configure<Monitoring.MonitoringOptions>(config.GetSection(Monitoring.MonitoringOptions.SectionName));
         services.AddScoped<INotificationService, Notifications.NotificationService>();
+        // N1 (2026-08-16 notification-system spec): the job body for one queued NotificationDelivery.
+        // Registered as an IJobHandler so JobDispatcher finds it without the core referencing this
+        // namespace by name — the same seam the backup module and function invocations already use.
+        services.AddScoped<IJobHandler, Notifications.NotificationDeliveryJobHandler>();
         // Opens, resolves, acknowledges and expires AlertIncident rows — the "things that fire also
         // stop firing" half of monitoring, kept separate from NotificationService because a resolve is
         // not a notification (see the type doc).

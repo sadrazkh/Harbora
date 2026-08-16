@@ -24,6 +24,8 @@ public static class RetentionTables
     public const string PasswordResetTokens = "PasswordResetTokens";
     public const string UserSessions = "UserSessions";
     public const string EmailVerificationTokens = "EmailVerificationTokens";
+    public const string AlertIncidents = "AlertIncidents";
+    public const string NotificationDeliveries = "NotificationDeliveries";
 }
 
 /// <summary>
@@ -230,6 +232,17 @@ public sealed class DataRetentionSweeper(
             () => Task.FromResult(RetentionRule.UserSessionsToDelete(now)));
         await SweepTableAsync<Domain.Identity.EmailVerificationToken>(RetentionTables.EmailVerificationTokens,
             () => Task.FromResult(RetentionRule.EmailVerificationTokensToDelete(now)));
+
+        // N1/M4 (2026-08-16 notification-system spec): the retention knob AlertIncident shipped
+        // without, and the delivery log's own table.
+        await SweepAgedTableAsync<Domain.Monitoring.AlertIncident>(
+            RetentionTables.AlertIncidents, nameof(RetentionOptions.AlertIncidentDays), config.AlertIncidentDays,
+            cutoff => Task.FromResult(RetentionRule.AlertIncidentsToDelete(cutoff)));
+
+        await SweepAgedTableAsync<Domain.Notifications.NotificationDelivery>(
+            RetentionTables.NotificationDeliveries, nameof(RetentionOptions.NotificationDeliveryDays),
+            config.NotificationDeliveryDays,
+            cutoff => Task.FromResult(RetentionRule.NotificationDeliveriesToDelete(cutoff)));
 
         var result = new RetentionSweepResult(deleted, keptForever, failures);
 

@@ -1,3 +1,4 @@
+using System.Net.Mail;
 using System.Net.Sockets;
 using Harbora.Domain.Jobs;
 
@@ -65,6 +66,11 @@ public static class JobExecutionPolicy
         JobKind.RepositoryHealthCheck => TimeSpan.FromMinutes(5),
         JobKind.BillingHour => TimeSpan.FromMinutes(30),
 
+        // One channel attempt, bounded by NotificationOptions.DeliveryTimeout (10s by default) well
+        // inside this. Generous anyway, the same way every deadline here is: this is the backstop
+        // behind that budget, not a competing one.
+        JobKind.NotificationDelivery => TimeSpan.FromMinutes(2),
+
         // A kind appended to the enum without a deadline still gets one. "For ever" is the defect
         // this class exists to remove, so it cannot be the default.
         _ => TimeSpan.FromHours(1)
@@ -99,6 +105,12 @@ public static class JobExecutionPolicy
         // retry here would create a second retry loop with a different clock.
         JobKind.BillingHour => 1,
 
+        // §7 Q4(a): widened here rather than given a second retry mechanism on the delivery row
+        // itself — one notion of "how many times do we try". Three because R-13's own worked example
+        // is a transient 502; one attempt was the defect this exists to fix, and a channel still
+        // refusing after three, thirty-one minutes apart, is not going to be fixed by a fourth.
+        JobKind.NotificationDelivery => 3,
+
         // Unknown work is assumed to have side effects, which is the safe assumption to be wrong about.
         _ => 1
     };
@@ -121,6 +133,31 @@ public static class JobExecutionPolicy
         IOException => true,
         TimeoutException => true,
 
+        // §7 Q4(a): the channel senders' own verdict — a 5xx or the delivery's timeout budget, both
+        // worth a second attempt; a 4xx, which is not (see NotificationChannelException's own doc).
+        Notifications.NotificationChannelException ex => ex.IsRetryable,
+
+        // The platform's own SMTP, for the same reason: most SmtpException codes are the server
+        // having a bad moment (mailbox busy, insufficient storage, "try again"); a handful are the
+        // message itself being refused for good, and retrying those buries the one useful line.
+        SmtpException ex => !IsPermanentSmtpFailure(ex.StatusCode),
+
+        _ => false
+    };
+
+    /// <summary>
+    /// The classic permanent SMTP replies — a mailbox that does not exist, a domain the server will
+    /// never deliver to, a message it has already rejected outright. Everything else
+    /// <see cref="SmtpStatusCode"/> can carry (busy, out of space, a generic failure) is at least
+    /// plausibly transient, and the safer wrong guess is one more attempt, not a message given up on
+    /// after a single try.
+    /// </summary>
+    private static bool IsPermanentSmtpFailure(SmtpStatusCode code) => code switch
+    {
+        SmtpStatusCode.MailboxUnavailable => true,
+        SmtpStatusCode.MailboxNameNotAllowed => true,
+        SmtpStatusCode.UserNotLocalTryAlternatePath => true,
+        SmtpStatusCode.TransactionFailed => true,
         _ => false
     };
 

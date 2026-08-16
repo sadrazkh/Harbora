@@ -164,4 +164,12 @@ public interface INotificationService
     /// returned 404" instead of "sent".
     /// </summary>
     Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct);
+
+    /// <summary>
+    /// One attempt at one queued <c>NotificationDelivery</c> row (N1, 2026-08-16 notification-system
+    /// spec) — the job body <c>NotificationDeliveryJobHandler</c> runs. Updates the row regardless of
+    /// outcome and rethrows on failure, so the job worker's own retry/backoff policy decides whether
+    /// it runs again.
+    /// </summary>
+    Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct);
 }

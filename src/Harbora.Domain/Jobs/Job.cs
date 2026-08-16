@@ -28,7 +28,15 @@ public enum JobKind
     /// nothing but a kind and an id, and a scheduled call still fires after a restart that landed
     /// between the tick and the request.
     /// </summary>
-    FunctionInvoke = 10
+    FunctionInvoke = 10,
+
+    /// <summary>
+    /// One attempt at one <c>NotificationDelivery</c> row (N1, 2026-08-16 notification-system spec).
+    /// The target is the delivery row, which already holds the channel/recipient, subject and
+    /// encrypted body — the same reason <see cref="FunctionInvoke"/>'s target is a row rather than a
+    /// payload. Appended, never renumbered.
+    /// </summary>
+    NotificationDelivery = 11
 }
 
 public enum JobStatus

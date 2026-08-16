@@ -191,6 +191,10 @@ public sealed class RecordingNotificationService : INotificationService
         ct.ThrowIfCancellationRequested();
         return Task.FromResult(NotificationResult.Ok);
     }
+
+    /// <summary>Not exercised by the pipeline tests this fake serves — they raise through
+    /// NotifyAsync/NotifyRuleAsync, never by running a queued delivery's job body directly.</summary>
+    public Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct) => Task.CompletedTask;
 }
 
 public sealed class FixedClock(DateTimeOffset now) : ISystemClock

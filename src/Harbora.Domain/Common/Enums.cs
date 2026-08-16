@@ -287,6 +287,52 @@ public enum IncidentClosedReason
     Expired = 2
 }
 
+/// <summary>
+/// What one <c>NotificationDelivery</c> row was for (N1, 2026-08-16 notification-system spec §5).
+/// <see cref="AlertDispatch"/> is a matched <c>Alert</c> rule's channel; every other member is a
+/// transactional message that used to be sent inline from a controller and now shares the same
+/// durable row, retry and delivery log.
+/// </summary>
+public enum NotificationDeliveryPurpose
+{
+    /// <summary>A message handed to one matched <c>Alert</c> rule's channel.</summary>
+    AlertDispatch = 0,
+
+    /// <summary>
+    /// The workspace has no alert rule at all for this event, so the message went to its admins by
+    /// email instead of nowhere — closing §3's "way two" (nothing seeds an alert rule, so a workspace
+    /// that never visited the alerts page hears nothing).
+    /// </summary>
+    NoRecipientFallback = 1,
+
+    PasswordReset = 2,
+    EmailVerification = 3,
+    WorkspaceInvite = 4,
+    PlatformInvite = 5
+}
+
+/// <summary>
+/// What happened to one <c>NotificationDelivery</c> row. Persisted by value — never renumber.
+/// </summary>
+public enum NotificationDeliveryStatus
+{
+    /// <summary>Queued; not yet attempted, or waiting out a retry backoff.</summary>
+    Pending = 0,
+
+    /// <summary>The channel accepted it.</summary>
+    Sent = 1,
+
+    /// <summary>Every attempt this kind of work is allowed was refused, or the refusal was terminal.</summary>
+    Failed = 2,
+
+    /// <summary>
+    /// Never attempted because there was nowhere to send it — no SMTP configured, most commonly.
+    /// Distinct from <see cref="Failed"/>: a channel that refused a real attempt is a different fact
+    /// from one that was never asked, and doc 09 §6 asks for this to never look like an exception.
+    /// </summary>
+    Suppressed = 3
+}
+
 public enum ServerStatus
 {
     Unknown = 0,

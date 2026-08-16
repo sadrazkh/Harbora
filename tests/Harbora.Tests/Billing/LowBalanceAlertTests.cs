@@ -494,6 +494,9 @@ public class LowBalanceAlertTests
 
         public Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct) =>
             throw new NotSupportedException();
+
+        public Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     [Fact]
@@ -575,18 +578,33 @@ public class LowBalanceAlertTests
     /// exactly when <c>HttpWorkspaceScope.IsUnscoped</c> is true and the filters are inert.
     /// </para>
     /// </summary>
-    private static NotificationService RealNotifications(BillingContext db, HttpMessageHandler handler)
+    private static (NotificationService Service, NotificationQueueScope Scope) RealNotifications(
+        BillingContext db, HttpMessageHandler handler)
     {
         var own = Harness.SystemContext(db.Store);
+        var scope = new NotificationQueueScope(db.Store, Harness.Clock);
 
-        return new NotificationService(
+        var service = new NotificationService(
             own,
             new PassthroughProtector(),
             new SingleHandlerFactory(handler),
             new PlatformMailer(own, new PassthroughProtector(), NullLogger<PlatformMailer>.Instance),
             Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
+            scope.Factory,
+            Harness.Clock,
             Options.Create(new NotificationOptions { DeliveryTimeoutSeconds = 10 }),
             NullLogger<NotificationService>.Instance);
+        return (service, scope);
+    }
+
+    /// <summary>Runs every job the tick's own notify calls queued (N1) — standing in for the job
+    /// worker so a test can watch a low-balance warning reach the channel it was queued for.</summary>
+    private static async Task RunQueuedDeliveriesAsync(NotificationService service, BillingContext db)
+    {
+        var pending = await db.NotificationDeliveries
+            .Where(d => d.Status == Harbora.Domain.Common.NotificationDeliveryStatus.Pending)
+            .OrderBy(d => d.CreatedAt).Select(d => d.Id).ToListAsync();
+        foreach (var id in pending) await service.ExecuteQueuedDeliveryAsync(id, default);
     }
 
     /// <summary>An enabled webhook rule that takes anything the platform sends it.</summary>
@@ -616,8 +634,9 @@ public class LowBalanceAlertTests
         SeedTenant(db, "tenant", balanceMinor: Threshold - 500);
 
         var handler = new Responder();
-        var result = await Harness.Tick(db, notifications: RealNotifications(db, handler))
-            .ChargeHourAsync(Hour, default);
+        var (notifications, scope) = RealNotifications(db, handler);
+        using var _ = scope;
+        var result = await Harness.Tick(db, notifications: notifications).ChargeHourAsync(Hour, default);
 
         handler.Calls.Should().Be(0, "the fixture is only worth anything if there really is no rule");
         result.Failures.Should().ContainSingle()
@@ -635,8 +654,10 @@ public class LowBalanceAlertTests
         SeedAlertRule(db, ws);
 
         var handler = new Responder();
-        var result = await Harness.Tick(db, notifications: RealNotifications(db, handler))
-            .ChargeHourAsync(Hour, default);
+        var (notifications, scope) = RealNotifications(db, handler);
+        using var _ = scope;
+        var result = await Harness.Tick(db, notifications: notifications).ChargeHourAsync(Hour, default);
+        await RunQueuedDeliveriesAsync(notifications, db);
 
         handler.Calls.Should().Be(1);
         result.Failures.Should().BeEmpty();
@@ -651,8 +672,9 @@ public class LowBalanceAlertTests
         // service and a real rule rather than the recording fake, because the fake records the call
         // this test is asking about the far side of.
         var workspaceId = Guid.CreateVersion7();
+        var store = "low-balance-delivery-" + Guid.NewGuid();
         await using var db = new HarboraDbContext(new DbContextOptionsBuilder<HarboraDbContext>()
-            .UseInMemoryDatabase("low-balance-delivery-" + Guid.NewGuid()).Options);
+            .UseInMemoryDatabase(store).Options);
 
         db.Alerts.Add(new Alert
         {
@@ -666,19 +688,33 @@ public class LowBalanceAlertTests
         await db.SaveChangesAsync();
 
         var handler = new Responder();
+        using var scope = new NotificationQueueScope(store);
         var service = new NotificationService(
             db,
             new PassthroughProtector(),
             new SingleHandlerFactory(handler),
             new PlatformMailer(db, new PassthroughProtector(), NullLogger<PlatformMailer>.Instance),
             Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
+            scope.Factory,
+            new FixedClock(),
             Options.Create(new NotificationOptions { DeliveryTimeoutSeconds = 10 }),
             NullLogger<NotificationService>.Instance);
 
         await service.NotifyAsync(workspaceId, AlertEvent.LowBalance, AlertSeverity.Warning,
             "Balance running low", "body", default);
+        await RunQueuedDeliveriesAsync(service, db);
 
         handler.Calls.Should().Be(1);
+    }
+
+    /// <summary>Drives every job a single test's own service queued — the overload for tests that
+    /// build a bare HarboraDbContext rather than a BillingContext.</summary>
+    private static async Task RunQueuedDeliveriesAsync(NotificationService service, HarboraDbContext db)
+    {
+        var pending = await db.NotificationDeliveries
+            .Where(d => d.Status == Harbora.Domain.Common.NotificationDeliveryStatus.Pending)
+            .OrderBy(d => d.CreatedAt).Select(d => d.Id).ToListAsync();
+        foreach (var id in pending) await service.ExecuteQueuedDeliveryAsync(id, default);
     }
 
     [Fact]
@@ -688,8 +724,9 @@ public class LowBalanceAlertTests
         // NotificationService.Matches for why — so severity and IsEnabled are the whole of the
         // control a customer has, and they have to actually work.
         var workspaceId = Guid.CreateVersion7();
+        var store = "low-balance-severity-" + Guid.NewGuid();
         await using var db = new HarboraDbContext(new DbContextOptionsBuilder<HarboraDbContext>()
-            .UseInMemoryDatabase("low-balance-severity-" + Guid.NewGuid()).Options);
+            .UseInMemoryDatabase(store).Options);
 
         db.Alerts.Add(new Alert
         {
@@ -703,12 +740,15 @@ public class LowBalanceAlertTests
         await db.SaveChangesAsync();
 
         var handler = new Responder();
+        using var scope = new NotificationQueueScope(store);
         var service = new NotificationService(
             db,
             new PassthroughProtector(),
             new SingleHandlerFactory(handler),
             new PlatformMailer(db, new PassthroughProtector(), NullLogger<PlatformMailer>.Instance),
             Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
+            scope.Factory,
+            new FixedClock(),
             Options.Create(new NotificationOptions { DeliveryTimeoutSeconds = 10 }),
             NullLogger<NotificationService>.Instance);
 

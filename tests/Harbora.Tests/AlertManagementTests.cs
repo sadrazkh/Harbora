@@ -43,6 +43,9 @@ public class AlertManagementTests
 
         public Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct)
             => Task.FromResult(NotificationResult.Ok);
+
+        public Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct)
+            => Task.CompletedTask;
     }
 
     private static (AlertsController Controller, HarboraDbContext Db) Build(Guid? userWorkspace = null)

@@ -105,6 +105,8 @@ public class HarboraDbContext : DbContext
     public DbSet<ContainerLifecycleCursor> ContainerLifecycleCursors => Set<ContainerLifecycleCursor>();
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AlertIncident> AlertIncidents => Set<AlertIncident>();
+    public DbSet<Harbora.Domain.Notifications.NotificationDelivery> NotificationDeliveries =>
+        Set<Harbora.Domain.Notifications.NotificationDelivery>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
     public DbSet<AppTemplateVersion> AppTemplateVersions => Set<AppTemplateVersion>();
     public DbSet<Harbora.Domain.Ai.AiProvider> AiProviders => Set<Harbora.Domain.Ai.AiProvider>();
@@ -407,6 +409,24 @@ public class HarboraDbContext : DbContext
         {
             e.HasIndex(x => new { x.WorkspaceId, x.Condition, x.SubjectRef, x.ClosedAt });
             e.HasIndex(x => new { x.WorkspaceId, x.ClosedAt, x.OpenedAt });
+        });
+
+        // N1 (2026-08-16 notification-system spec): a delivery row. Deliberately NOT
+        // workspace-filtered, like Job — a null WorkspaceId (every transactional purpose) would
+        // otherwise pass an "own it or nothing" filter for every tenant at once, which is worse than
+        // no filter. The delivery log on /monitoring and the retention sweep both filter explicitly.
+        b.Entity<Harbora.Domain.Notifications.NotificationDelivery>(e =>
+        {
+            e.Property(x => x.Subject).HasMaxLength(200);
+            // Longer than Alert.LastError's 400: this is the whole message body, and a transactional
+            // one carries a link. Encrypted, so the stored length already includes that overhead.
+            e.Property(x => x.EncryptedBody).HasMaxLength(4000);
+            e.Property(x => x.RecipientAddress).HasMaxLength(256);
+            e.Property(x => x.LastError).HasMaxLength(2048);
+
+            // The delivery log's own read: one workspace's rows, newest first. NotificationDeliveryJobHandler
+            // reads by Id (the primary key) and needs no index of its own.
+            e.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
         });
 
         b.Entity<AppTemplate>(e => e.HasIndex(x => x.Key).IsUnique());

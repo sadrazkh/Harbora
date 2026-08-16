@@ -24,7 +24,8 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 namespace Harbora.Tests;
 
 /// <summary>
-/// The nightly sweeper that keeps the nine unbounded tables bounded (HARBORA-0012).
+/// The nightly sweeper that keeps the unbounded tables bounded (HARBORA-0012), extended by N1/M4
+/// (2026-08-16 notification-system spec) to cover AlertIncident and NotificationDelivery.
 ///
 /// <para>
 /// Every clock here is fixed. A retention test that slept would be testing the scheduler, which is
@@ -179,6 +180,35 @@ public class DataRetentionSweeperTests
             new EmailVerificationToken { UserId = Guid.NewGuid(), TokenHash = "verify-old", ExpiresAt = Now.AddMinutes(-1) },
             new EmailVerificationToken { UserId = Guid.NewGuid(), TokenHash = "verify-new", ExpiresAt = Now.AddMinutes(1) });
 
+        // N1/M4 (2026-08-16 notification-system spec).
+        db.AlertIncidents.AddRange(
+            new Harbora.Domain.Monitoring.AlertIncident
+            {
+                WorkspaceId = workspaceId, Condition = AlertEvent.DiskWarning, Severity = AlertSeverity.Warning,
+                Title = "old", Body = "old", OpenedAt = Now.AddDays(-92), LastObservedAt = Now.AddDays(-92),
+                ClosedAt = Now.AddDays(-91), ClosedReason = IncidentClosedReason.Resolved
+            },
+            new Harbora.Domain.Monitoring.AlertIncident
+            {
+                WorkspaceId = workspaceId, Condition = AlertEvent.DiskWarning, Severity = AlertSeverity.Warning,
+                Title = "new", Body = "new", OpenedAt = Now.AddDays(-90), LastObservedAt = Now.AddDays(-90),
+                ClosedAt = Now.AddDays(-89), ClosedReason = IncidentClosedReason.Resolved
+            });
+
+        db.NotificationDeliveries.AddRange(
+            new Harbora.Domain.Notifications.NotificationDelivery
+            {
+                WorkspaceId = workspaceId, Purpose = NotificationDeliveryPurpose.AlertDispatch,
+                Channel = AlertChannel.Webhook, Subject = "old", Status = NotificationDeliveryStatus.Sent,
+                CreatedAt = Now.AddDays(-91)
+            },
+            new Harbora.Domain.Notifications.NotificationDelivery
+            {
+                WorkspaceId = workspaceId, Purpose = NotificationDeliveryPurpose.AlertDispatch,
+                Channel = AlertChannel.Webhook, Subject = "new", Status = NotificationDeliveryStatus.Sent,
+                CreatedAt = Now.AddDays(-89)
+            });
+
         await db.SaveChangesAsync();
     }
 
@@ -204,12 +234,14 @@ public class DataRetentionSweeperTests
         db.EmailVerificationTokens.Should().ContainSingle().Which.TokenHash.Should().Be("verify-new");
         db.FunctionInvocations.IgnoreQueryFilters().Should().ContainSingle()
             .Which.CompletedAt.Should().Be(Now.AddDays(-29));
+        db.AlertIncidents.IgnoreQueryFilters().Should().ContainSingle().Which.Title.Should().Be("new");
+        db.NotificationDeliveries.Should().ContainSingle().Which.Subject.Should().Be("new");
 
-        // Ten tables, one row each — and the sweep says so, rather than reporting a bare total
+        // Twelve tables, one row each — and the sweep says so, rather than reporting a bare total
         // that could hide a table it never reached.
-        result.Deleted.Should().HaveCount(10);
+        result.Deleted.Should().HaveCount(12);
         result.Deleted.Values.Should().AllSatisfy(n => n.Should().Be(1));
-        result.TotalDeleted.Should().Be(10);
+        result.TotalDeleted.Should().Be(12);
     }
 
     [Fact]
@@ -227,8 +259,8 @@ public class DataRetentionSweeperTests
         result.Failures.Should().ContainKey(RetentionTables.NodeEvents);
         result.Failures[RetentionTables.NodeEvents].Should().Contain("relation is locked");
 
-        // The other nine still ran.
-        result.Deleted.Should().HaveCount(9);
+        // The other eleven still ran.
+        result.Deleted.Should().HaveCount(11);
         result.Deleted.Should().NotContainKey(RetentionTables.NodeEvents);
         db.DeploymentLogs.Should().ContainSingle();
         db.AuditLogs.Should().ContainSingle();
@@ -254,7 +286,7 @@ public class DataRetentionSweeperTests
         result.Failures.Should().BeEmpty();
         result.KeptForever.Should().Contain(RetentionTables.DeploymentLogs);
         db.DeploymentLogs.Should().HaveCount(2, "a span too long to be a date means keep, not delete");
-        result.Deleted.Should().HaveCount(9, "every other table was still swept");
+        result.Deleted.Should().HaveCount(11, "every other table was still swept");
     }
 
     [Fact]
@@ -427,5 +459,44 @@ public class DataRetentionSweeperTests
         await NewSweeper(db).SweepAsync(CancellationToken.None);
 
         db.DeploymentLogs.Should().ContainSingle().Which.Message.Should().Be("what is running now");
+    }
+
+    [Fact]
+    public async Task An_open_incident_survives_however_old_it_is()
+    {
+        // RetentionRule.AlertIncidentsToDelete only ever considers ClosedAt != null. An open incident
+        // is the current state of a condition — read by the bell badge and the timeline — and must
+        // never be swept out from under them just because it has stood open a long time.
+        using var db = new HarboraDbContext(NewOptions());
+        db.AlertIncidents.Add(new Harbora.Domain.Monitoring.AlertIncident
+        {
+            WorkspaceId = Guid.NewGuid(), Condition = AlertEvent.DeployFailed, Severity = AlertSeverity.Critical,
+            Title = "still open", Body = "still open", OpenedAt = Now.AddDays(-400), LastObservedAt = Now.AddDays(-400)
+        });
+        await db.SaveChangesAsync();
+
+        await NewSweeper(db).SweepAsync(CancellationToken.None);
+
+        db.AlertIncidents.IgnoreQueryFilters().Should().ContainSingle().Which.Title.Should().Be("still open");
+    }
+
+    [Fact]
+    public async Task A_pending_delivery_survives_however_old_it_is()
+    {
+        // RetentionRule.NotificationDeliveriesToDelete only ever considers a terminal status. A
+        // Pending row is either not yet attempted or waiting out a retry backoff, and a queued Job
+        // still holds its id — sweeping it would leave that job with nothing to claim.
+        using var db = new HarboraDbContext(NewOptions());
+        db.NotificationDeliveries.Add(new Harbora.Domain.Notifications.NotificationDelivery
+        {
+            WorkspaceId = Guid.NewGuid(), Purpose = NotificationDeliveryPurpose.AlertDispatch,
+            Channel = AlertChannel.Webhook, Subject = "still pending",
+            Status = NotificationDeliveryStatus.Pending, CreatedAt = Now.AddDays(-400)
+        });
+        await db.SaveChangesAsync();
+
+        await NewSweeper(db).SweepAsync(CancellationToken.None);
+
+        db.NotificationDeliveries.Should().ContainSingle().Which.Subject.Should().Be("still pending");
     }
 }

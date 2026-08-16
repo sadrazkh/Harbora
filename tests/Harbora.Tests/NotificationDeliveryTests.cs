@@ -45,12 +45,13 @@ public class NotificationDeliveryTests
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
     }
 
-    private static (NotificationService Service, HarboraDbContext Db, Alert Rule) Build(
+    private static (NotificationService Service, HarboraDbContext Db, Alert Rule, NotificationQueueScope Scope) Build(
         HttpMessageHandler handler, AlertChannel channel = AlertChannel.Webhook,
         string target = """{"Url":"https://hooks.example.com/abc"}""", double timeoutSeconds = 10)
     {
+        var store = "notify-" + Guid.NewGuid();
         var db = new HarboraDbContext(new DbContextOptionsBuilder<HarboraDbContext>()
-            .UseInMemoryDatabase("notify-" + Guid.NewGuid()).Options);
+            .UseInMemoryDatabase(store).Options);
 
         var rule = new Alert
         {
@@ -60,16 +61,37 @@ public class NotificationDeliveryTests
         db.Alerts.Add(rule);
         db.SaveChanges();
 
+        var scope = new NotificationQueueScope(store);
         var service = new NotificationService(db, new PassthroughProtector(),
             new SingleHandlerFactory(handler),
             new Harbora.Infrastructure.Notifications.PlatformMailer(
                 db, new PassthroughProtector(),
                 NullLogger<Harbora.Infrastructure.Notifications.PlatformMailer>.Instance),
             Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
+            scope.Factory,
+            new FixedClock(),
             Microsoft.Extensions.Options.Options.Create(
                 new NotificationOptions { DeliveryTimeoutSeconds = timeoutSeconds }),
             NullLogger<NotificationService>.Instance);
-        return (service, db, rule);
+        return (service, db, rule, scope);
+    }
+
+    /// <summary>
+    /// Runs every job <see cref="NotificationService.NotifyAsync"/>/<c>NotifyRuleAsync</c> queued for
+    /// <paramref name="workspace"/>, oldest first — standing in for the job worker so a test can watch
+    /// a queued delivery all the way to a channel without standing up <c>JobWorker</c> itself.
+    /// </summary>
+    private static async Task RunQueuedDeliveriesAsync(NotificationService service, HarboraDbContext db, Guid? workspace = null)
+    {
+        var pending = await db.NotificationDeliveries
+            .Where(d => d.Status == NotificationDeliveryStatus.Pending && (workspace == null || d.WorkspaceId == workspace))
+            .OrderBy(d => d.CreatedAt)
+            .Select(d => d.Id)
+            .ToListAsync();
+
+        foreach (var id in pending)
+            try { await service.ExecuteQueuedDeliveryAsync(id, default); }
+            catch { /* a retryable failure rethrows by design — the test reads the row, not the throw */ }
     }
 
     // ---- the target the panel actually stores ----
@@ -86,7 +108,7 @@ public class NotificationDeliveryTests
     {
         var handler = new Responder(HttpStatusCode.OK);
         var stored = System.Text.Json.JsonSerializer.Serialize(new { url = "https://hooks.example.com/abc" });
-        var (service, _, rule) = Build(handler, AlertChannel.Webhook, stored);
+        var (service, _, rule, _) = Build(handler, AlertChannel.Webhook, stored);
 
         var result = await service.SendTestAsync(rule.Id, default);
 
@@ -99,7 +121,7 @@ public class NotificationDeliveryTests
     {
         var handler = new Responder(HttpStatusCode.OK);
         var stored = System.Text.Json.JsonSerializer.Serialize(new { botToken = "123:abc", chatId = "-100" });
-        var (service, _, rule) = Build(handler, AlertChannel.Telegram, stored);
+        var (service, _, rule, _) = Build(handler, AlertChannel.Telegram, stored);
 
         var result = await service.SendTestAsync(rule.Id, default);
 
@@ -112,7 +134,7 @@ public class NotificationDeliveryTests
     {
         var handler = new Responder(HttpStatusCode.NoContent);
         var stored = System.Text.Json.JsonSerializer.Serialize(new { url = "https://discord.com/api/webhooks/1/x" });
-        var (service, _, rule) = Build(handler, AlertChannel.Discord, stored);
+        var (service, _, rule, _) = Build(handler, AlertChannel.Discord, stored);
 
         (await service.SendTestAsync(rule.Id, default)).Delivered.Should().BeTrue();
     }
@@ -120,7 +142,7 @@ public class NotificationDeliveryTests
     [Fact]
     public async Task A_webhook_that_accepts_the_message_is_reported_as_delivered()
     {
-        var (service, db, rule) = Build(new Responder(HttpStatusCode.OK));
+        var (service, db, rule, _) = Build(new Responder(HttpStatusCode.OK));
 
         var result = await service.SendTestAsync(rule.Id, default);
 
@@ -133,7 +155,7 @@ public class NotificationDeliveryTests
     public async Task A_webhook_that_answers_404_is_not_reported_as_sent()
     {
         // The bug in one line: this used to be indistinguishable from success.
-        var (service, db, rule) = Build(new Responder(HttpStatusCode.NotFound, "no such hook"));
+        var (service, db, rule, _) = Build(new Responder(HttpStatusCode.NotFound, "no such hook"));
 
         var result = await service.SendTestAsync(rule.Id, default);
 
@@ -147,7 +169,7 @@ public class NotificationDeliveryTests
     {
         // Seen live: a 404 from a panel route returned a full themed page, and the alert message
         // became "...404 Not Found — <!DOCTYPE html>". The status is the useful part.
-        var (service, _, rule) = Build(new Responder(HttpStatusCode.NotFound, "<!DOCTYPE html><html>…"));
+        var (service, _, rule, _) = Build(new Responder(HttpStatusCode.NotFound, "<!DOCTYPE html><html>…"));
 
         var result = await service.SendTestAsync(rule.Id, default);
 
@@ -158,7 +180,7 @@ public class NotificationDeliveryTests
     [Fact]
     public async Task A_server_error_from_the_channel_is_a_failure_too()
     {
-        var (service, _, rule) = Build(new Responder(HttpStatusCode.InternalServerError));
+        var (service, _, rule, _) = Build(new Responder(HttpStatusCode.InternalServerError));
 
         (await service.SendTestAsync(rule.Id, default)).Delivered.Should().BeFalse();
     }
@@ -166,7 +188,7 @@ public class NotificationDeliveryTests
     [Fact]
     public async Task Telegram_rejecting_the_chat_id_is_surfaced()
     {
-        var (service, _, rule) = Build(
+        var (service, _, rule, _) = Build(
             new Responder(HttpStatusCode.BadRequest, """{"ok":false,"description":"chat not found"}"""),
             AlertChannel.Telegram, """{"BotToken":"123:abc","ChatId":"-100"}""");
 
@@ -177,13 +199,40 @@ public class NotificationDeliveryTests
     }
 
     [Fact]
-    public async Task A_failure_is_recorded_on_the_rule_so_the_page_can_show_it()
+    public async Task NotifyAsync_queues_a_pending_delivery_rather_than_dispatching_inline()
     {
-        // Logs are not where the person configuring alerts is looking.
-        var (service, db, rule) = Build(new Responder(HttpStatusCode.Forbidden));
+        // N1: the channel attempt moved onto the job queue. NotifyAsync's own job is matching and
+        // writing the durable row down — not calling the handler, which the test would otherwise
+        // have no way to tell apart from a synchronous dispatch that just happened to be fast.
+        var handler = new Responder(HttpStatusCode.Forbidden);
+        var (service, db, rule, _) = Build(handler);
 
         await service.NotifyAsync(Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical, "t", "b", default);
 
+        handler.Calls.Should().Be(0, "the attempt has not happened yet — only been queued");
+        var delivery = await db.NotificationDeliveries.SingleAsync();
+        delivery.AlertId.Should().Be(rule.Id);
+        delivery.Status.Should().Be(NotificationDeliveryStatus.Pending);
+        delivery.Purpose.Should().Be(NotificationDeliveryPurpose.AlertDispatch);
+        (await db.Jobs.SingleAsync()).Kind.Should().Be(Harbora.Domain.Jobs.JobKind.NotificationDelivery);
+    }
+
+    [Fact]
+    public async Task A_failure_is_recorded_on_the_delivery_row_once_the_queued_job_runs()
+    {
+        // Logs are not where the person configuring alerts is looking, and now — the durable row, not
+        // Alert.LastError, is the record N1 promises.
+        var (service, db, rule, _) = Build(new Responder(HttpStatusCode.Forbidden));
+
+        await service.NotifyAsync(Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical, "t", "b", default);
+        await RunQueuedDeliveriesAsync(service, db);
+
+        var delivery = await db.NotificationDeliveries.SingleAsync();
+        delivery.Status.Should().Be(NotificationDeliveryStatus.Failed, "403 is terminal — never retried");
+        delivery.LastError.Should().Contain("403");
+        delivery.Attempts.Should().Be(1);
+
+        // Alert.LastError stays as the convenience mirror the alerts page already renders.
         var stored = await db.Alerts.FirstAsync();
         stored.LastError.Should().Contain("403");
         stored.LastAttemptAt.Should().NotBeNull();
@@ -195,7 +244,7 @@ public class NotificationDeliveryTests
         // Same rule, same context: an earlier version of this test built a second context for the
         // recovery, which meant it never actually watched an error being cleared.
         var handler = new Responder(HttpStatusCode.NotFound);
-        var (service, db, rule) = Build(handler);
+        var (service, db, rule, _) = Build(handler);
 
         await service.SendTestAsync(rule.Id, default);
         (await db.Alerts.FirstAsync()).LastError.Should().NotBeNull();
@@ -218,13 +267,15 @@ public class NotificationDeliveryTests
     public async Task A_rule_that_took_the_notification_is_counted()
     {
         var handler = new Responder(HttpStatusCode.OK);
-        var (service, _, _) = Build(handler);
+        var (service, db, _, _) = Build(handler);
 
         var reached = await service.NotifyAsync(
             Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical, "t", "b", default);
 
         reached.Should().Be(1);
-        handler.Calls.Should().Be(1);
+        await RunQueuedDeliveriesAsync(service, db);
+        handler.Calls.Should().Be(1, "the queued job is what actually reaches the channel");
+        (await db.NotificationDeliveries.SingleAsync()).Status.Should().Be(NotificationDeliveryStatus.Sent);
     }
 
     [Fact]
@@ -234,7 +285,7 @@ public class NotificationDeliveryTests
         // only channel has this event unticked hears nothing, and counting it would tell the caller
         // somebody was told — the same fault the count exists to close, one layer further down.
         var handler = new Responder(HttpStatusCode.OK);
-        var (service, db, rule) = Build(handler);
+        var (service, db, rule, _) = Build(handler);
 
         rule.OnDeployFailed = false;
         await db.SaveChangesAsync();
@@ -244,18 +295,29 @@ public class NotificationDeliveryTests
 
         reached.Should().Be(0);
         handler.Calls.Should().Be(0, "the count has to agree with what actually went out");
+        (await db.NotificationDeliveries.CountAsync()).Should().Be(0, "an opt-out is a choice, not the absence of any rule");
     }
 
     [Fact]
     public async Task An_unreachable_channel_never_throws_into_the_caller()
     {
-        // A deploy reporting its own failure must not fail again because the alert channel is down.
-        var (service, _, _) = Build(new ThrowingHandler());
+        // A deploy reporting its own failure must not fail again because the alert channel is down —
+        // true today because NotifyAsync only enqueues; the actual attempt happens on the job queue,
+        // whose own worker is what must survive a throwing channel (JobWorker's own tests cover that).
+        var (service, db, _, _) = Build(new ThrowingHandler());
 
         var notify = async () => await service.NotifyAsync(
             Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical, "t", "b", default);
 
         await notify.Should().NotThrowAsync();
+
+        // The queued job body itself DOES rethrow — that is what lets JobExecutionPolicy's retry
+        // decide what happens next (§7 Q4) — but it still leaves the row saying what happened rather
+        // than an unhandled exception.
+        var deliveryId = (await db.NotificationDeliveries.SingleAsync()).Id;
+        var run = async () => await service.ExecuteQueuedDeliveryAsync(deliveryId, default);
+        await run.Should().ThrowAsync<HttpRequestException>();
+        (await db.NotificationDeliveries.SingleAsync()).LastError.Should().NotBeNull();
     }
 
     [Fact]
@@ -268,7 +330,7 @@ public class NotificationDeliveryTests
     {
         // The SSRF guard must run first: reaching a link-local address is the request we must not send.
         var handler = new Responder(HttpStatusCode.OK);
-        var (service, _, rule) = Build(handler, AlertChannel.Webhook, """{"Url":"http://169.254.169.254/latest/meta-data/"}""");
+        var (service, _, rule, _) = Build(handler, AlertChannel.Webhook, """{"Url":"http://169.254.169.254/latest/meta-data/"}""");
 
         var result = await service.SendTestAsync(rule.Id, default);
 
@@ -281,7 +343,7 @@ public class NotificationDeliveryTests
     {
         // The deploy pipeline awaits this. Left unbounded it waits on the handler's 100-second
         // default, per alert rule, before it can report the failure that triggered the alert.
-        var (service, db, rule) = Build(new HangingHandler(), timeoutSeconds: 0.15);
+        var (service, db, rule, _) = Build(new HangingHandler(), timeoutSeconds: 0.15);
 
         var started = System.Diagnostics.Stopwatch.StartNew();
         var result = await service.SendTestAsync(rule.Id, default);

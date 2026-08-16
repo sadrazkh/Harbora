@@ -253,4 +253,38 @@ public static class RetentionRule
 
     public static Expression<Func<EmailVerificationToken, bool>> EmailVerificationTokensToDelete(DateTimeOffset now) =>
         token => token.ExpiresAt < now;
+
+    /// <summary>
+    /// Closed incidents whose close is past the cutoff (2026-08-16 notification-system spec, N1 —
+    /// the retention knob M4 shipped the table without).
+    ///
+    /// <para>
+    /// <b>Safety.</b> An incident with <c>ClosedAt == null</c> is still open — the current state of a
+    /// condition, read by the bell badge and the timeline — and is never a candidate however old
+    /// <c>OpenedAt</c> is. Age is measured from the close, not the open, for the same reason a cron
+    /// run's age is measured from its finish: a long-standing incident is judged by when it stopped
+    /// mattering, not by when it started.
+    /// </para>
+    /// </summary>
+    public static Expression<Func<Domain.Monitoring.AlertIncident, bool>> AlertIncidentsToDelete(
+        DateTimeOffset cutoff) =>
+        incident => incident.ClosedAt != null && incident.ClosedAt < cutoff;
+
+    /// <summary>
+    /// Terminal notification deliveries past the cutoff (2026-08-16 notification-system spec, N1).
+    ///
+    /// <para>
+    /// <b>Safety.</b> <c>Pending</c> is not history — it is either a delivery that has not been
+    /// attempted yet or one waiting out a retry backoff, and <c>NotificationDeliveryJobHandler</c>
+    /// still holds its id in a queued <c>Job</c> row. Only <c>Sent</c>, <c>Failed</c> and
+    /// <c>Suppressed</c> are terminal, the same three-way split <c>Job.IsTerminal</c> already uses.
+    /// Age is measured from <c>CreatedAt</c>, when the row was queued, matching the audit log's own
+    /// choice for the same reason: nothing about a delivery's own lifecycle marks a "finished at" the
+    /// way a cron run or a function invocation does.
+    /// </para>
+    /// </summary>
+    public static Expression<Func<Domain.Notifications.NotificationDelivery, bool>>
+        NotificationDeliveriesToDelete(DateTimeOffset cutoff) =>
+        delivery => delivery.CreatedAt < cutoff
+                    && delivery.Status != Domain.Common.NotificationDeliveryStatus.Pending;
 }

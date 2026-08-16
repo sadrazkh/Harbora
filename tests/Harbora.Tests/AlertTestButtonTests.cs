@@ -46,6 +46,9 @@ public class AlertTestButtonTests
             Sent++;
             return Task.FromResult(result);
         }
+
+        public Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct)
+            => Task.CompletedTask;
     }
 
     private static (AlertsController Controller, Alert Rule, StubNotifications Notifications) Build(

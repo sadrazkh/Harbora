@@ -86,6 +86,23 @@ public sealed class RetentionOptions
     public int PasswordResetTokenDays { get; set; } = 7;
 
     /// <summary>
+    /// Closed <c>AlertIncident</c> rows. M4 shipped this table three days before N1 without a knob
+    /// here — "the R-14 shape, in a table three days old" — so it grew without bound like every other
+    /// table this sweeper exists for. An <i>open</i> incident is never a candidate whatever this says:
+    /// the sweep only ever considers <c>ClosedAt != null</c>, the same "not history yet" guard every
+    /// other rule in <c>RetentionRule</c> applies. Ninety days follows doc 14's figure for events.
+    /// </summary>
+    public int AlertIncidentDays { get; set; } = 90;
+
+    /// <summary>
+    /// <c>NotificationDelivery</c> rows (N1). A row still <c>Pending</c> — waiting out a retry backoff
+    /// — is never a candidate, the same "not history yet" guard as everywhere else; only a delivery
+    /// that has reached <c>Sent</c>, <c>Failed</c> or <c>Suppressed</c> is history. Ninety days follows
+    /// doc 14's figure for deliveries.
+    /// </summary>
+    public int NotificationDeliveryDays { get; set; } = 90;
+
+    /// <summary>
     /// The hour (UTC, 0–23) the nightly sweep runs at. Defaults to 03:00 UTC.
     ///
     /// <para>
