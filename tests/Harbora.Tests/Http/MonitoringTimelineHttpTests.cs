@@ -155,4 +155,50 @@ public class MonitoringTimelineHttpTests(HarboraHttpFixture fixture)
         Panel.Read(db => db.AlertIncidents.IgnoreQueryFilters().Single(i => i.Id == incidentId))
             .ClosedAt.Should().BeNull("a rule in another workspace cannot be acknowledged from this session");
     }
+
+    [Fact]
+    public async Task The_monitoring_page_shows_the_delivery_log_by_data_attribute_in_the_default_Persian_panel()
+    {
+        // N1 (2026-08-16 notification-system spec): the delivery log beside the alert rules. The
+        // panel renders Persian by default in tests, so this asserts on values and data- attributes
+        // rather than on English prose that would never appear.
+        var failedId = Guid.CreateVersion7();
+        var sentId = Guid.CreateVersion7();
+
+        Panel.Seed(db =>
+        {
+            db.NotificationDeliveries.Add(new Harbora.Domain.Notifications.NotificationDelivery
+            {
+                Id = failedId, WorkspaceId = fixture.WorkspaceId,
+                Purpose = NotificationDeliveryPurpose.AlertDispatch, Channel = AlertChannel.Webhook,
+                Subject = "Deploy failed: api #9", EncryptedBody = "x",
+                Status = NotificationDeliveryStatus.Failed, Attempts = 3,
+                LastError = "Webhook returned 502 Bad Gateway"
+            });
+            db.NotificationDeliveries.Add(new Harbora.Domain.Notifications.NotificationDelivery
+            {
+                Id = sentId, WorkspaceId = fixture.WorkspaceId,
+                Purpose = NotificationDeliveryPurpose.NoRecipientFallback, Channel = AlertChannel.Email,
+                RecipientAddress = "admin@example.com", Subject = "Disk warning", EncryptedBody = "x",
+                Status = NotificationDeliveryStatus.Sent, Attempts = 1
+            });
+        });
+        Panel.GivenUser(fixture.WorkspaceId, "delivery-log-view@example.com", Harbora.Domain.Common.SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.244", "delivery-log-view@example.com");
+
+        var html = await (await client.GetAsync("/monitoring")).Content.ReadAsStringAsync();
+
+        html.Should().Contain($"data-delivery-id=\"{failedId}\"");
+        html.Should().Contain("data-delivery-status=\"Failed\"");
+        html.Should().Contain("data-delivery-purpose=\"AlertDispatch\"");
+        html.Should().Contain("data-delivery-attempts=\"3\"");
+        html.Should().Contain("502 Bad Gateway");
+
+        html.Should().Contain($"data-delivery-id=\"{sentId}\"");
+        html.Should().Contain("data-delivery-status=\"Sent\"");
+        html.Should().Contain("data-delivery-purpose=\"NoRecipientFallback\"");
+
+        // Persian is the default. "ناموفق" (failed) is the status label on the failed row.
+        html.Should().Contain("&#x646;&#x627;&#x645;&#x648;&#x641;&#x642;", "the Persian \"failed\" status label");
+    }
 }

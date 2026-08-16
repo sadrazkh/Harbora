@@ -157,6 +157,13 @@ public sealed class MonitoringController(
         vm.Incidents = await db.AlertIncidents.Where(i => i.WorkspaceId == WorkspaceId)
             .OrderByDescending(i => i.OpenedAt).Take(20).ToListAsync(ct);
 
+        // N1 (2026-08-16 notification-system spec): the delivery log lives beside the alert rules,
+        // where LastError was already rendered. NotificationDelivery carries no workspace filter of
+        // its own (like Job) — explicit here for the same reason every other tenant-scoped read on
+        // this page already is one.
+        vm.Deliveries = await db.NotificationDeliveries.Where(d => d.WorkspaceId == WorkspaceId)
+            .OrderByDescending(d => d.CreatedAt).Take(20).ToListAsync(ct);
+
         return View(vm);
     }
 

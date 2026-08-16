@@ -45,6 +45,44 @@
         (IncidentClosedReason.Expired, true) => "منقضی شد", (IncidentClosedReason.Expired, false) => "expired",
         _ => r.ToString()
     };
+    // N1 (2026-08-16 notification-system spec): the delivery log. Pending/Sent/Failed/Suppressed —
+    // the same four-way split NotificationDeliveryStatus itself carries, so a row's own colour never
+    // has to be reasoned about separately from its meaning.
+    string DeliveryStatusLabel(Harbora.Domain.Common.NotificationDeliveryStatus s) => (s, isFa) switch
+    {
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Pending, true) => "در صف",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Pending, false) => "pending",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Sent, true) => "ارسال شد",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Sent, false) => "sent",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Failed, true) => "ناموفق",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Failed, false) => "failed",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Suppressed, true) => "ارسال نشد",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Suppressed, false) => "suppressed",
+        _ => s.ToString()
+    };
+    string DeliveryPurposeLabel(Harbora.Domain.Common.NotificationDeliveryPurpose p) => (p, isFa) switch
+    {
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.AlertDispatch, true) => "قانون هشدار",
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.AlertDispatch, false) => "alert rule",
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.NoRecipientFallback, true) => "بدون قانون هشدار — به مدیران",
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.NoRecipientFallback, false) => "no alert rule — sent to admins",
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.PasswordReset, true) => "بازنشانی رمز عبور",
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.PasswordReset, false) => "password reset",
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.EmailVerification, true) => "تأیید ایمیل",
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.EmailVerification, false) => "email verification",
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.WorkspaceInvite, true) => "دعوت به ورک‌اسپیس",
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.WorkspaceInvite, false) => "workspace invite",
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.PlatformInvite, true) => "دعوت به پلتفرم",
+        (Harbora.Domain.Common.NotificationDeliveryPurpose.PlatformInvite, false) => "platform invite",
+        _ => p.ToString()
+    };
+    string DeliveryStatusClass(Harbora.Domain.Common.NotificationDeliveryStatus s) => s switch
+    {
+        Harbora.Domain.Common.NotificationDeliveryStatus.Sent => "bg-ok/15 text-ok",
+        Harbora.Domain.Common.NotificationDeliveryStatus.Failed => "bg-danger/15 text-danger",
+        Harbora.Domain.Common.NotificationDeliveryStatus.Suppressed => "bg-slate-500/15 text-ink-faint",
+        _ => "bg-slate-500/15 text-ink"
+    };
 }
 @{
     var monitoringHeader = new Harbora.Web.ViewModels.PageHeaderModel(
@@ -424,6 +462,47 @@
             <div><button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Save"]</button></div>
         </form>
     </details>
+</section>
+
+<!-- Delivery log (N1, 2026-08-16 notification-system spec): one durable row per (message x
+     destination), beside the rules whose channels they went out on — LastError above is a
+     convenience mirror of the newest row here, not the record any more. -->
+<section id="deliveries" class="rounded-xl border border-line bg-surface mt-6 p-5">
+    <h2 class="text-[15px] font-semibold text-ink mb-3 flex items-center gap-2">
+        <i data-lucide="send" class="h-4 w-4"></i>
+        @(isFa ? "گزارش ارسال اعلان‌ها" : "Notification delivery log")
+    </h2>
+    <div class="space-y-2">
+        @if (Model.Deliveries.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("send",
+                isFa ? "هنوز اعلانی صف نشده است." : "No deliveries queued yet."))" />
+        }
+        @foreach (var d in Model.Deliveries)
+        {
+            <div class="rounded-lg bg-surface-2 px-3 py-2 text-sm"
+                 data-delivery-row data-delivery-id="@d.Id" data-delivery-status="@d.Status"
+                 data-delivery-purpose="@d.Purpose" data-delivery-channel="@d.Channel"
+                 data-delivery-attempts="@d.Attempts">
+                <div class="flex items-center justify-between gap-2">
+                    <span>
+                        <strong>@d.Subject</strong>
+                        <span class="text-ink-faint">· @DeliveryPurposeLabel(d.Purpose) · @d.Channel</span>
+                    </span>
+                    <span class="rounded-full px-2 py-0.5 text-xs shrink-0 @DeliveryStatusClass(d.Status)" data-delivery-status-label>
+                        @DeliveryStatusLabel(d.Status)
+                    </span>
+                </div>
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa ? $"تلاش‌ها: {d.Attempts}" : $"attempts: {d.Attempts}")
+                </p>
+                @if (d.LastError is not null)
+                {
+                    <p class="mt-1 text-xs text-danger/90 break-all" data-delivery-last-error>@d.LastError</p>
+                }
+            </div>
+        }
+    </div>
 </section>
 
 @section Scripts {
