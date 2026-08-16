@@ -61,6 +61,7 @@ public class MonitoringControllerBackupStalenessTests
 
         return new MonitoringController(
             db, new FakeDockerEngine(), new StubUser(), access, cleanup, new SilentAudit(),
+            new Harbora.Infrastructure.Monitoring.IncidentService(db), new FixedClock(),
             Options.Create(options ?? new MonitoringOptions()), NullLogger<MonitoringController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }

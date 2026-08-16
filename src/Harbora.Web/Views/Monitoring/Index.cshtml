@@ -23,6 +23,28 @@
         "exited" or "crashed" or "failed" => "bg-danger/15 text-danger",
         _ => "bg-slate-500/15 text-ink"
     };
+    // Reuses AlertEvent — the same vocabulary the notification router matches on — so a condition's
+    // name reads the same here as it does in the rule that watches for it.
+    string ConditionLabel(AlertEvent c) => (c, isFa) switch
+    {
+        (AlertEvent.DeployFailed, true) => "استقرار ناموفق", (AlertEvent.DeployFailed, false) => "Deploy failed",
+        (AlertEvent.AppCrashed, true) => "خرابی برنامه", (AlertEvent.AppCrashed, false) => "App crashed",
+        (AlertEvent.SslExpiring, true) => "انقضای گواهی SSL", (AlertEvent.SslExpiring, false) => "SSL expiring",
+        (AlertEvent.DiskWarning, true) => "هشدار فضای دیسک", (AlertEvent.DiskWarning, false) => "Disk warning",
+        (AlertEvent.BackupFailed, true) => "پشتیبان‌گیری ناموفق", (AlertEvent.BackupFailed, false) => "Backup failed",
+        (AlertEvent.ThresholdBreached, true) => "عبور از آستانه", (AlertEvent.ThresholdBreached, false) => "Threshold breached",
+        (AlertEvent.LowBalance, true) => "موجودی کم", (AlertEvent.LowBalance, false) => "Low balance",
+        _ => c.ToString()
+    };
+    // The one interesting fact an incident that only says "closed" would have lost — see
+    // IncidentClosedReason's own doc comment for why each of the three is worded the way it is.
+    string ReasonLabel(IncidentClosedReason r) => (r, isFa) switch
+    {
+        (IncidentClosedReason.Resolved, true) => "به‌طور خودکار برطرف شد", (IncidentClosedReason.Resolved, false) => "resolved automatically",
+        (IncidentClosedReason.Acknowledged, true) => "تأیید شد", (IncidentClosedReason.Acknowledged, false) => "acknowledged",
+        (IncidentClosedReason.Expired, true) => "منقضی شد", (IncidentClosedReason.Expired, false) => "expired",
+        _ => r.ToString()
+    };
 }
 @{
     var monitoringHeader = new Harbora.Web.ViewModels.PageHeaderModel(
@@ -143,6 +165,61 @@
             <div class="flex items-center justify-between p-3 text-sm">
                 <span class="font-mono">@d.Host</span>
                 <span class="text-xs @(d.SslEnabled ? "text-ok" : "text-ink-muted")">@(d.SslEnabled ? "🔒 Let's Encrypt" : (isFa ? "بدون SSL" : "no SSL"))</span>
+            </div>
+        }
+    </div>
+</section>
+
+<!-- Incident timeline: things that fired, and — where it has happened — how they stopped firing. -->
+<section id="timeline" class="rounded-xl border border-line bg-surface mt-6 p-5">
+    <div class="flex items-center justify-between mb-3">
+        <h2 class="text-[15px] font-semibold text-ink flex items-center gap-2">
+            <i data-lucide="history" class="h-4 w-4"></i>
+            @(isFa ? "جدول زمانی رخدادها" : "Incident timeline")
+        </h2>
+        @{ var openCount = Model.Incidents.Count(i => i.ClosedAt is null); }
+        @if (openCount > 0)
+        {
+            <span class="rounded-full bg-danger/15 px-2 py-0.5 text-xs text-danger" data-open-incident-count="@openCount">
+                @openCount @(isFa ? "باز" : "open")
+            </span>
+        }
+    </div>
+    <div class="space-y-2">
+        @if (Model.Incidents.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("history",
+                isFa ? "هنوز رخدادی ثبت نشده است." : "No incidents yet."))" />
+        }
+        @foreach (var incident in Model.Incidents)
+        {
+            var isOpen = incident.ClosedAt is null;
+            <div class="rounded-lg bg-surface-2 px-3 py-2 text-sm"
+                 data-incident-row data-incident-id="@incident.Id"
+                 data-incident-condition="@incident.Condition" data-incident-subject="@(incident.SubjectRef ?? "")"
+                 data-incident-open="@(isOpen ? "true" : "false")"
+                 data-incident-closed-reason="@(incident.ClosedReason?.ToString() ?? "")">
+                <div class="flex items-center justify-between gap-2">
+                    <span>
+                        <strong>@ConditionLabel(incident.Condition)</strong>
+                        <span class="text-ink-faint">· @incident.Title</span>
+                    </span>
+                    <div class="flex shrink-0 items-center gap-2">
+                        @if (isOpen)
+                        {
+                            <span class="rounded-full bg-danger/15 px-2 py-0.5 text-xs text-danger">@(isFa ? "باز" : "open")</span>
+                            <form asp-controller="Monitoring" asp-action="AcknowledgeIncident" asp-route-id="@incident.Id" method="post">
+                                @Html.AntiForgeryToken()
+                                <button class="text-xs text-accent-text" aria-label="@(isFa ? $"تأیید {incident.Title}" : $"Acknowledge {incident.Title}")">@(isFa ? "تأیید" : "acknowledge")</button>
+                            </form>
+                        }
+                        else
+                        {
+                            <span class="rounded-full bg-ok/15 px-2 py-0.5 text-xs text-ok" data-incident-reason-label>@ReasonLabel(incident.ClosedReason!.Value)</span>
+                        }
+                    </div>
+                </div>
+                <p class="mt-1 text-xs text-ink-faint break-all">@incident.Body</p>
             </div>
         }
     </div>

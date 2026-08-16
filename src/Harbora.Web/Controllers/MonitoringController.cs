@@ -22,6 +22,8 @@ public sealed class MonitoringController(
     Harbora.Infrastructure.Security.ProjectAccessService access,
     Harbora.Infrastructure.Maintenance.DiskCleanupService cleanup,
     IAuditLogger audit,
+    Harbora.Infrastructure.Monitoring.IncidentService incidents,
+    ISystemClock clock,
     IOptions<Harbora.Infrastructure.Monitoring.MonitoringOptions> monitoringOptions,
     ILogger<MonitoringController> logger) : Controller
 {
@@ -148,7 +150,32 @@ public sealed class MonitoringController(
 
         vm.Domains = await db.Domains.Where(d => d.App!.WorkspaceId == WorkspaceId).ToListAsync(ct);
         vm.Alerts = await db.Alerts.Where(a => a.WorkspaceId == WorkspaceId).ToListAsync(ct);
+
+        // Newest first, open or closed — "what happened last night" is the whole point of this list.
+        // Explicit WorkspaceId rather than relying on the ambient filter, the same defensive style
+        // every other tenant-scoped read on this page already uses.
+        vm.Incidents = await db.AlertIncidents.Where(i => i.WorkspaceId == WorkspaceId)
+            .OrderByDescending(i => i.OpenedAt).Take(20).ToListAsync(ct);
+
         return View(vm);
+    }
+
+    /// <summary>
+    /// A person closes an incident by hand — the only close a deploy or backup failure ever gets,
+    /// since neither one resolves on its own. Valid even for an incident whose condition is still
+    /// breaching: see <c>IncidentService.AcknowledgeAsync</c> for why that is correct rather than a
+    /// bug.
+    /// </summary>
+    [HttpPost("incidents/{id:guid}/acknowledge")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Harbora.Domain.Authorization.Capabilities.AlertsManage)]
+    public async Task<IActionResult> AcknowledgeIncident(Guid id, CancellationToken ct)
+    {
+        var closed = await incidents.AcknowledgeAsync(WorkspaceId, id, clock.UtcNow, ct);
+        TempData[closed ? "Message" : "Error"] = closed
+            ? (IsFa ? "رخداد تأیید و بسته شد." : "Incident acknowledged and closed.")
+            : (IsFa ? "آن رخداد یافت نشد یا از قبل بسته شده است." : "That incident was not found, or is already closed.");
+        return RedirectToAction(nameof(Index));
     }
 
     /// <summary>

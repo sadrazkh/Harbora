@@ -81,8 +81,12 @@
     </a>
 
     @* AlertsController only exposes POST routes — alert management itself lives at the bottom of
-       /monitoring, so the bell goes there rather than to a page that does not exist. *@
-    <a href="/monitoring#alerts" class="hidden rounded-lg p-2 text-ink-muted hover:bg-surface-2 md:block" title="@(isFa ? "هشدارها" : "Alerts")"><i data-lucide="bell" class="h-4.5 w-4.5"></i></a>
+       /monitoring, so the bell goes there rather than to a page that does not exist. The badge is
+       what open incidents this workspace has right now — see OpenIncidentsViewComponent. *@
+    <a href="/monitoring#timeline" class="relative hidden rounded-lg p-2 text-ink-muted hover:bg-surface-2 md:block" title="@(isFa ? "هشدارها" : "Alerts")">
+        <i data-lucide="bell" class="h-4.5 w-4.5"></i>
+        @await Component.InvokeAsync("OpenIncidents")
+    </a>
 
     <div class="hidden items-center rounded-lg bg-surface-2 p-0.5 xl:flex" role="group" aria-label="@T["Theme"]">
         @foreach (var (value, icon, label) in new[] { ("system", "monitor", T["System"].Value), ("light", "sun", T["Light"].Value), ("dark", "moon", T["Dark"].Value) })

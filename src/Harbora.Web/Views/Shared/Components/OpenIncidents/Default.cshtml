@@ -1,0 +1,6 @@
+@model Harbora.Web.Components.OpenIncidentsViewComponent.Model
+@if (Model.OpenCount > 0)
+{
+    <span class="absolute -end-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none text-white"
+          data-open-incidents-count="@Model.OpenCount">@(Model.OpenCount > 99 ? "99+" : Model.OpenCount.ToString())</span>
+}

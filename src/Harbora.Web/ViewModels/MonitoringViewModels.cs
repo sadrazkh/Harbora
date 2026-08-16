@@ -32,6 +32,10 @@ public sealed class MonitoringDashboardViewModel
 
     public List<DomainName> Domains { get; set; } = new();
     public List<Alert> Alerts { get; set; } = new();
+
+    /// <summary>Newest first, open or closed — the timeline of what fired and, where it has
+    /// happened, how it stopped firing (2026-08-16 monitoring-alerting spec §M4).</summary>
+    public List<AlertIncident> Incidents { get; set; } = new();
 }
 
 public sealed record AppHealth(string Name, string Slug, string Status, string? LastDeployStatus, string ContainerState)
