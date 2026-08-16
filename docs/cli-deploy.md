@@ -81,8 +81,19 @@ says nothing at all if the panel is older than this endpoint or the version cann
 harbora deploy        # deploys, then streams the build log
 ```
 
-With no `harbora.yml` and no app name, it lists your apps and asks which to deploy, then writes
-`harbora.yml` so the next run needs nothing. `harbora init` still writes the fuller commented file.
+Every interactive deploy shows your apps and asks which one, the way CapRover does. The app from
+`harbora.yml` (or the command line) is listed **first** and marked `(current)`, so pressing Enter
+deploys where you deployed last. Pick a different one and the CLI offers to update `harbora.yml` —
+rewriting only the `app:` line, so the rest of your config survives.
+
+Pass `--yes` to skip the question; it is skipped automatically when there is no terminal, so CI
+behaves exactly as before. With no `harbora.yml` and no app name, the CLI writes `harbora.yml` after
+you choose, so the next run needs nothing. `harbora init` still writes the fuller commented file.
+
+> The name is matched case-insensitively, but what gets deployed is the app's own slug. The server
+> compares slugs exactly, so `harbora deploy My-App` against an app called `my-app` is a 404 — and
+> one that arrives while the upload is still in flight, which used to surface as
+> *"Error while copying content to a stream."*
 
 ### Every deploy mode
 
@@ -90,6 +101,7 @@ With no `harbora.yml` and no app name, it lists your apps and asks which to depl
 |---|---|
 | `harbora deploy` | Packs the current folder, uploads it, builds on the server |
 | `harbora deploy --push` | Same, forced — even inside a Git repository |
+| `harbora deploy --yes` | Uses the configured app without asking (implied in CI) |
 | `harbora deploy --path ./web` | Deploys a different folder |
 | `harbora deploy --tar dist.tar.gz` | Uploads an archive you already built |
 | `harbora deploy --branch main` | Uploads a branch's **committed** content (`git archive`) |
@@ -372,3 +384,4 @@ while True:
 | Deploy succeeds but the app 502s | The app isn't listening on the configured container port | Bind to `process.env.PORT` (auto-detected builds set it) |
 | Upload is huge / slow | `node_modules` or build output is being packed | Add a `.dockerignore`, or `ignore:` entries |
 | `--branch` deploys stale code | It archives **committed** content | Commit, or use `--push` for the working folder |
+| `Upload … was cut off by the server` | The server refused before reading the body — usually an app name it doesn't recognise, or a token that can't deploy | Run `harbora deploy` and pick from the list; check the token's permissions in the panel |

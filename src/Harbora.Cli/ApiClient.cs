@@ -56,7 +56,27 @@ public sealed class ApiClient
 
         // Uploading + building can take minutes; the default 100s timeout would cut it short.
         using var request = new HttpRequestMessage(HttpMethod.Post, "api/v1/" + path) { Content = content };
-        var res = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead);
+
+        // Let the server refuse before the body is on the wire. The archive endpoint answers 404 or
+        // 403 without reading the body, and without this the rejection arrives mid-upload: the write
+        // fails, and the caller is told about a stream instead of about an app name.
+        request.Headers.ExpectContinue = true;
+
+        HttpResponseMessage res;
+        try
+        {
+            res = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead);
+        }
+        catch (HttpRequestException ex)
+        {
+            // Expect: is a courtesy, not a guarantee — a proxy may drop it, and the server may still
+            // reject mid-body. Name the request that failed; "Error while copying content to a
+            // stream." on its own sent a real deploy round twice with nothing to go on.
+            throw new HttpRequestException(
+                $"Upload to {path} was cut off by the server — most often the app name is not one the "
+                + $"server recognises, or the token cannot deploy. ({ex.Message})", ex);
+        }
+
         return await ReadAsync(res);
     }
 

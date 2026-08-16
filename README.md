@@ -278,6 +278,7 @@ so stack auto-detection, zero-downtime cutover and rollback all behave identical
 | `--push` | Always upload this folder, even in a Git repo |
 | `--path <dir>` | Push a different folder than the current one |
 | `--ref <branch>` / `--tag <v1.0>` | Deploy from Git instead (never uploads) |
+| `--yes` | Don't ask which app — use the one in `harbora.yml` (implied in CI) |
 
 **What is not uploaded.** `.dockerignore` is honoured first (it is what the build actually reads),
 then `.gitignore`. On top of that these are always skipped, even with no ignore file:
