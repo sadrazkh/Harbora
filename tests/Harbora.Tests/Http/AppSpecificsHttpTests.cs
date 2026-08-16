@@ -266,6 +266,68 @@ public class AppSpecificsHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task An_apps_page_shows_the_thirty_day_uptime_percent_and_restart_count_from_the_collected_series()
+    {
+        // The controller asks for a fixed 30-day window, and MetricRollups.BestSourceFor(30 days)
+        // answers with hourly rollups (30 days sits inside the 31-day hourly retention) — raw samples
+        // are never what this page reads, even for an app collected five minutes ago. So this seeds a
+        // completed hour's rollup directly, the same shape the real rollup service would have already
+        // produced, rather than raw MonitoringMetric rows the page would not look at.
+        var (appId, containerName) = SeedDeployedApp("spec-history");
+        var app = Panel.Read(db => db.Apps.First(a => a.Id == appId));
+        var hour = Harbora.Infrastructure.Monitoring.MetricRollups.HourOf(DateTimeOffset.UtcNow.AddHours(-2));
+        Panel.Seed(db =>
+        {
+            db.MetricRollups.Add(new Harbora.Domain.Monitoring.MetricRollup
+            {
+                ServerId = app.ServerId, Name = "app.up", ResourceRef = containerName,
+                Period = Harbora.Domain.Monitoring.RollupPeriod.Hour, PeriodStart = hour,
+                Minimum = 0, Maximum = 1, Average = 2.0 / 3, SampleCount = 3
+            });
+            db.MetricRollups.Add(new Harbora.Domain.Monitoring.MetricRollup
+            {
+                ServerId = app.ServerId, Name = "app.restarts", ResourceRef = containerName,
+                Period = Harbora.Domain.Monitoring.RollupPeriod.Hour, PeriodStart = hour,
+                Minimum = 0, Maximum = 1, Average = 1.0 / 3, SampleCount = 3
+            });
+        });
+
+        Panel.GivenUser(fixture.WorkspaceId, "spec-history@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.228", "spec-history@example.com");
+
+        var html = await (await client.GetAsync($"/apps/details/{appId}")).Content.ReadAsStringAsync();
+
+        // Two of three ticks were up: 66.7%. The Persian panel still formats the number itself with
+        // invariant digits — MetricDisplay is deliberate about that — so this is not an encoded string.
+        html.Should().Contain("data-spec-uptime-percent=\"66.7\"",
+            "two of three collected ticks were up, and this is a real window, not a live-only figure");
+        // Average x SampleCount recovers the true total (1.0/3 x 3 = 1), not the bare Average (0.33,
+        // which would round to 0 and silently hide the one restart that actually happened).
+        html.Should().Contain("data-spec-restart-count-30d=\"1\"",
+            "the rollup's Average recombined with its SampleCount, not the Average alone");
+        // The Persian "in the last 30 days" trailer, since the panel renders fa by default in tests
+        // (encoded the same way the rest of this file's Persian assertions are — see the size test).
+        html.Should().Contain("&#x62F;&#x631; &#x6F3;&#x6F0; &#x631;&#x648;&#x632; &#x627;&#x62E;&#x6CC;&#x631;",
+            "the Persian trailer confirms this rendered fa, the panel's test default");
+    }
+
+    [Fact]
+    public async Task An_apps_page_with_nothing_collected_shows_unknown_uptime_rather_than_a_fabricated_hundred_percent()
+    {
+        var (appId, _) = SeedDeployedApp("spec-history-silent");
+        // No MonitoringMetric rows seeded for this container at all.
+
+        Panel.GivenUser(fixture.WorkspaceId, "spec-history-silent@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.229", "spec-history-silent@example.com");
+
+        var html = await (await client.GetAsync($"/apps/details/{appId}")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-spec-uptime-percent=\"unknown\"");
+        html.Should().NotContain("data-spec-uptime-percent=\"100\"",
+            "nothing was ever collected for this container — that is not the same as a perfect record");
+    }
+
+    [Fact]
     public async Task A_cron_apps_page_says_there_is_no_container_to_check_rather_than_blaming_the_engine()
     {
         var app = new App
