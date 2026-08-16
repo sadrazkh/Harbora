@@ -104,6 +104,7 @@ public class HarboraDbContext : DbContext
     public DbSet<MetricRollup> MetricRollups => Set<MetricRollup>();
     public DbSet<ContainerLifecycleCursor> ContainerLifecycleCursors => Set<ContainerLifecycleCursor>();
     public DbSet<Alert> Alerts => Set<Alert>();
+    public DbSet<AlertIncident> AlertIncidents => Set<AlertIncident>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
     public DbSet<AppTemplateVersion> AppTemplateVersions => Set<AppTemplateVersion>();
     public DbSet<Harbora.Domain.Ai.AiProvider> AiProviders => Set<Harbora.Domain.Ai.AiProvider>();
@@ -394,6 +395,19 @@ public class HarboraDbContext : DbContext
         // (and updating) whichever one it happened to find first.
         b.Entity<ContainerLifecycleCursor>(e =>
             e.HasIndex(x => new { x.ServerId, x.ResourceRef }).IsUnique());
+
+        // Two different questions, two different indexes. IncidentService.OpenAsync/ResolveAsync ask
+        // "is this exact condition, on this exact subject, already open?" on every collector tick —
+        // WorkspaceId, Condition and SubjectRef are equality columns there, ClosedAt narrows to the
+        // (usually singular) open row. The timeline and the bell badge ask a different question —
+        // "what does this workspace have open, newest first?" — which is WorkspaceId and ClosedAt
+        // equality with OpenedAt as the one ranged/sorted column, so it goes last for the same reason
+        // MetricRollup's own index puts PeriodStart last.
+        b.Entity<AlertIncident>(e =>
+        {
+            e.HasIndex(x => new { x.WorkspaceId, x.Condition, x.SubjectRef, x.ClosedAt });
+            e.HasIndex(x => new { x.WorkspaceId, x.ClosedAt, x.OpenedAt });
+        });
 
         b.Entity<AppTemplate>(e => e.HasIndex(x => x.Key).IsUnique());
 
@@ -935,6 +949,7 @@ public class HarboraDbContext : DbContext
         b.Entity<Harbora.Modules.Sync.Domain.SyncConflict>()
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Alert>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<AlertIncident>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<GitProvider>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<WorkspaceMember>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<WorkspaceInvitation>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);

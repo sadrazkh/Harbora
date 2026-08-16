@@ -267,6 +267,26 @@ public enum AlertMetric
     RestartRate = 2
 }
 
+/// <summary>
+/// Which of the three ways an <c>AlertIncident</c> stopped firing (2026-08-16
+/// monitoring-alerting spec §M4, decision 2 — no single one of the three is complete on its own).
+/// </summary>
+public enum IncidentClosedReason
+{
+    /// <summary>Whatever raised the condition observed it clear on its own — a threshold dropping
+    /// back under the line, a crashed app coming back, disk freeing up, a certificate renewing.</summary>
+    Resolved = 0,
+
+    /// <summary>A person closed it by hand. The only way a deploy or backup failure ever closes:
+    /// neither one "recovers" — the next deploy or backup succeeding is a different fact about a
+    /// different attempt — so the fix, if there was one, happened somewhere this panel cannot see.</summary>
+    Acknowledged = 1,
+
+    /// <summary>Nobody touched it and nothing observed it clear, so the bounded backstop closed it
+    /// rather than leaving it open for ever.</summary>
+    Expired = 2
+}
+
 public enum ServerStatus
 {
     Unknown = 0,

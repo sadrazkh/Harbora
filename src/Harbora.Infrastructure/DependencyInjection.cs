@@ -303,6 +303,10 @@ public static class DependencyInjection
         // StorageMeasurer.StaleAfter.
         services.Configure<Monitoring.MonitoringOptions>(config.GetSection(Monitoring.MonitoringOptions.SectionName));
         services.AddScoped<INotificationService, Notifications.NotificationService>();
+        // Opens, resolves, acknowledges and expires AlertIncident rows — the "things that fire also
+        // stop firing" half of monitoring, kept separate from NotificationService because a resolve is
+        // not a notification (see the type doc).
+        services.AddScoped<Monitoring.IncidentService>();
         // Survives the collector's per-pass scope, so a recurring condition alerts once per interval.
         services.AddSingleton<Monitoring.AlertThrottle>();
         // Summarises finished hours and days so history outlives the raw samples.
