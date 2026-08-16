@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
@@ -65,6 +65,7 @@ public class NotificationDeliveryTests
             new Harbora.Infrastructure.Notifications.PlatformMailer(
                 db, new PassthroughProtector(),
                 NullLogger<Harbora.Infrastructure.Notifications.PlatformMailer>.Instance),
+            Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
             Microsoft.Extensions.Options.Options.Create(
                 new NotificationOptions { DeliveryTimeoutSeconds = timeoutSeconds }),
             NullLogger<NotificationService>.Instance);

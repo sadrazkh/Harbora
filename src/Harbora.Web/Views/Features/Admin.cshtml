@@ -1,0 +1,138 @@
+@model FeatureAdminViewModel
+@using Harbora.Domain.Features
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    ViewData["Title"] = isFa ? "قابلیت‌ها" : "Features";
+    var msg = TempData["Message"] as string;
+
+    string StateLabel(FeatureState state) => (state, isFa) switch
+    {
+        (FeatureState.Inherit, true) => "پیش‌فرض",   (FeatureState.Inherit, false) => "Default",
+        (FeatureState.Enabled, true) => "فعال",      (FeatureState.Enabled, false) => "Enabled",
+        (FeatureState.Locked,  true) => "قفل (دیده می‌شود)", (FeatureState.Locked, false) => "Locked (visible)",
+        _ => isFa ? "پنهان" : "Hidden"
+    };
+}
+
+<div class="mb-6">
+    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "قابلیت‌ها" : "Features")</h1>
+    <p class="text-sm text-ink-muted">
+        @(isFa
+            ? "تعیین کنید هر قابلیت برای چه کسانی فعال باشد. «قفل» یعنی مشتری آن را می‌بیند اما نمی‌تواند استفاده کند."
+            : "Decide who each feature is for. \"Locked\" means the customer sees it and cannot use it.")
+    </p>
+</div>
+
+@if (msg is not null) {<div class="mb-4 rounded-lg border border-ok bg-ok-soft px-4 py-2 text-sm text-ok">@msg</div>}
+
+@foreach (var feature in Model.Features)
+{
+    <section class="mb-8 rounded-2xl border border-line bg-surface p-5 shadow-panel">
+        <div class="mb-4">
+            <h2 class="font-semibold text-ink">@feature.Name(isFa)</h2>
+            <p class="text-sm text-ink-muted">@feature.Pitch(isFa)</p>
+            <p class="mt-1 text-xs text-ink-faint" dir="ltr">
+                @feature.Key · @(isFa ? "پیش‌فرض:" : "shipped default:") @StateLabel(feature.Default)
+            </p>
+        </div>
+
+        <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-faint">@(isFa ? "بر اساس پلن" : "By plan")</h3>
+        <div class="space-y-2">
+            @foreach (var plan in Model.Plans)
+            {
+                <form method="post" action="/features/admin/set" class="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-surface-2 px-4 py-2.5">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="scope" value="@((int)FeatureScope.Plan)" />
+                    <input type="hidden" name="targetId" value="@plan.PlanId" />
+                    <input type="hidden" name="featureKey" value="@feature.Key" />
+                    <span class="min-w-40 text-sm font-medium text-ink">
+                        @plan.Label(isFa)
+                        @if (plan.IsDefault) {<span class="ms-1 text-[10px] text-ink-faint">@(isFa ? "(پیش‌فرض)" : "(default)")</span>}
+                    </span>
+                    <select name="state" class="form-control max-w-52">
+                        @foreach (var option in new[] { FeatureState.Inherit, FeatureState.Enabled, FeatureState.Locked, FeatureState.Hidden })
+                        {
+                            <option value="@((int)option)" selected="@(plan.States[feature.Key] == option)">@StateLabel(option)</option>
+                        }
+                    </select>
+                    <button class="btn-secondary px-4 py-1.5 text-sm">@(isFa ? "ذخیره" : "Save")</button>
+                </form>
+            }
+        </div>
+
+        <h3 class="mb-2 mt-6 text-xs font-semibold uppercase tracking-wide text-ink-faint">
+            @(isFa ? "استثنا برای یک ورک‌اسپیس" : "Exception for one workspace")
+        </h3>
+
+        @* An exception outranks the plan. It is the answer to "turn it on for this one customer",
+           which is the request a plan-only model cannot serve without inventing a plan per customer. *@
+        <form method="post" action="/features/admin/set" class="flex flex-wrap items-end gap-3 rounded-xl border border-line bg-surface-2 px-4 py-3">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="scope" value="@((int)FeatureScope.Workspace)" />
+            <input type="hidden" name="featureKey" value="@feature.Key" />
+            <label class="form-field min-w-56">
+                <span>@(isFa ? "ورک‌اسپیس" : "Workspace")</span>
+                <select name="targetId" class="form-control" required>
+                    @foreach (var workspace in Model.Workspaces)
+                    {
+                        <option value="@workspace.Id">@workspace.Name (@workspace.Slug)</option>
+                    }
+                </select>
+            </label>
+            <label class="form-field max-w-52">
+                <span>@(isFa ? "وضعیت" : "State")</span>
+                <select name="state" class="form-control">
+                    @foreach (var option in new[] { FeatureState.Enabled, FeatureState.Locked, FeatureState.Hidden, FeatureState.Inherit })
+                    {
+                        <option value="@((int)option)">@StateLabel(option)</option>
+                    }
+                </select>
+            </label>
+            <label class="form-field min-w-56 flex-1">
+                <span>@(isFa ? "دلیل (اختیاری)" : "Reason (optional)")</span>
+                <input name="note" maxlength="500" class="form-control"
+                       placeholder="@(isFa ? "مثلاً: مشتری آزمایشی" : "e.g. pilot customer")" />
+            </label>
+            <button class="btn-primary px-5 py-2">@(isFa ? "اعمال" : "Apply")</button>
+        </form>
+
+        @{ var rows = Model.Overrides.Where(o => o.FeatureKey == feature.Key).ToList(); }
+        @if (rows.Count > 0)
+        {
+            <div class="mt-3 overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="text-xs uppercase tracking-wide text-ink-faint">
+                        <tr>
+                            <th class="py-2 text-start">@(isFa ? "ورک‌اسپیس" : "Workspace")</th>
+                            <th class="py-2 text-start">@(isFa ? "وضعیت" : "State")</th>
+                            <th class="py-2 text-start">@(isFa ? "دلیل" : "Reason")</th>
+                            <th class="py-2 text-start"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var row in rows)
+                    {
+                        <tr class="border-t border-line">
+                            <td class="py-2 text-ink">@row.WorkspaceName</td>
+                            <td class="py-2 text-ink-muted">@StateLabel(row.State)</td>
+                            <td class="py-2 text-ink-faint">@row.Note</td>
+                            <td class="py-2 text-end">
+                                <form method="post" action="/features/admin/set">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="scope" value="@((int)FeatureScope.Workspace)" />
+                                    <input type="hidden" name="targetId" value="@row.WorkspaceId" />
+                                    <input type="hidden" name="featureKey" value="@feature.Key" />
+                                    <input type="hidden" name="state" value="@((int)FeatureState.Inherit)" />
+                                    <button class="text-xs text-ink-faint underline hover:text-ink">
+                                        @(isFa ? "برگرداندن به پلن" : "Back to plan")
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}

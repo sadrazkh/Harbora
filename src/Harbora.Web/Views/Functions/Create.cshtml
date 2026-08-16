@@ -1,0 +1,58 @@
+@model FunctionAppFormViewModel
+@using Harbora.Domain.Functions
+@using Harbora.Infrastructure.Functions
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+
+<div class="mx-auto max-w-2xl">
+    <h1 class="mb-1 text-2xl font-bold tracking-tight text-ink">@(isFa ? "فانکشن‌اپ تازه" : "New function app")</h1>
+    <p class="mb-6 text-sm text-ink-muted">
+        @(isFa
+            ? "یک کانتینر میزبان که چند فانکشن را با هم اجرا می‌کند — هزینه‌ی ساعتی روی همین میزبان حساب می‌شود، نه روی تک‌تک فانکشن‌ها."
+            : "One host container running many functions together — the hourly cost is the host's, not each function's.")
+    </p>
+
+    <form method="post" action="/functions/new" class="space-y-5 rounded-2xl border border-line bg-surface p-6 shadow-panel">
+        @Html.AntiForgeryToken()
+        <div asp-validation-summary="All" class="text-sm text-danger"></div>
+
+        <label class="form-field">
+            <span>@(isFa ? "نام" : "Name")</span>
+            <input name="Name" value="@Model.Form.Name" required maxlength="60" class="form-control"
+                   placeholder="@(isFa ? "مثلاً: webhooks" : "e.g. webhooks")" />
+        </label>
+
+        <fieldset>
+            <legend class="mb-2 text-sm font-medium text-ink">@(isFa ? "زبان" : "Language")</legend>
+            @* One language per app, as in Azure: the host is a single image, and mixing runtimes in
+               it would mean shipping three interpreters to run one ten-line function. *@
+            <div class="grid gap-3 sm:grid-cols-3">
+                @foreach (var runtime in new[] { FunctionRuntime.CSharp, FunctionRuntime.JavaScript, FunctionRuntime.Python })
+                {
+                    <label class="flex cursor-pointer items-center gap-2.5 rounded-xl border border-line bg-surface-2 px-4 py-3 text-sm has-[:checked]:border-accent has-[:checked]:bg-accent-soft">
+                        <input type="radio" name="Runtime" value="@((int)runtime)" checked="@(Model.Form.Runtime == runtime)" />
+                        <span class="font-medium text-ink">@FunctionStarters.Label(runtime)</span>
+                    </label>
+                }
+            </div>
+        </fieldset>
+
+        <label class="form-field">
+            <span>@(isFa ? "اندازه" : "Size")</span>
+            <select name="InstanceSizeKey" class="form-control">
+                @foreach (var size in Model.Sizes)
+                {
+                    <option value="@size.Key" selected="@(Model.Form.InstanceSizeKey == size.Key)">
+                        @size.Name — @(size.MemoryBytes / 1024 / 1024) MB · @size.CpuCores vCPU
+                    </option>
+                }
+            </select>
+        </label>
+
+        <div class="flex items-center gap-3 border-t border-line pt-5">
+            <button class="btn-primary px-5 py-2.5">@(isFa ? "ساخت" : "Create")</button>
+            <a href="/functions" class="btn-secondary">@(isFa ? "انصراف" : "Cancel")</a>
+        </div>
+    </form>
+</div>

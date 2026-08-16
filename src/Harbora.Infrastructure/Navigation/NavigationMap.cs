@@ -1,4 +1,5 @@
 ﻿using Harbora.Domain.Authorization;
+using Harbora.Domain.Features;
 using Harbora.Domain.Identity;
 
 namespace Harbora.Infrastructure.Navigation;
@@ -10,9 +11,26 @@ namespace Harbora.Infrastructure.Navigation;
 /// True for a destination that only belongs in Advanced mode. Simple mode hides it; it is never
 /// removed, and the route behind it keeps working for anyone who has the link.
 /// </param>
+/// <param name="Feature">
+/// The entitlement this destination belongs to, or null for one every workspace has.
+///
+/// <para>
+/// A capability and a feature are filtered differently on purpose. A capability the caller does not
+/// have is <b>hidden</b>, because there is nothing to offer them — that is the rule this map has
+/// always followed. An entitlement they do not have is <b>shown locked</b>, because the entire point
+/// of selling a tier is that a customer can see what they are not getting and ask for it. Only
+/// <c>Hidden</c> takes an entry away, and that is the operator saying they do not sell it at all.
+/// </para>
+/// </param>
 public sealed record NavItem(
     string Key, string Controller, string Action, string Icon,
-    string? Capability = null, bool Advanced = false);
+    string? Capability = null, bool Advanced = false, string? Feature = null);
+
+/// <summary>One destination as it should be drawn: the item, and whether it is reachable.</summary>
+public sealed record NavEntry(NavItem Item, bool Locked);
+
+/// <summary>A group whose items carry their locked state.</summary>
+public sealed record NavRow(string Key, IReadOnlyList<NavEntry> Entries);
 
 /// <summary>A labelled run of destinations.</summary>
 public sealed record NavGroup(string Key, IReadOnlyList<NavItem> Items);
@@ -88,6 +106,9 @@ public static class NavigationMap
             new("audit", "Audit", "Index", "scroll-text", Advanced: true)
         ]),
         new("build", [
+            // Sits under Build rather than Deploy: writing the code is the act, and the deploy that
+            // follows is Harbora's business rather than the author's.
+            new("functions", "Functions", "Index", "code", Feature: Harbora.Domain.Features.PlatformFeatures.Functions),
             new("templates", "Templates", "Index", "shapes"),
             // Deciding which versions customers are offered is a different job from installing one.
             new("template-versions", "TemplateVersions", "Index", "layers", Capabilities.PlatformManage, Advanced: true),
@@ -101,6 +122,9 @@ public static class NavigationMap
             new("servers", "Servers", "Index", "server", Capabilities.ServersManage),
             new("nodes", "Nodes", "Index", "cpu", Capabilities.ServersManage),
             new("plans", "Plans", "Index", "credit-card", Capabilities.PlansManage),
+            // Who each feature is for. Beside Plans because that is where the decision is usually
+            // being made, and it is the plan grid that this page edits.
+            new("feature-admin", "Features", "Admin", "toggle-right", Capabilities.PlatformManage),
             new("tenants", "Tenants", "Index", "building-2", Capabilities.TenantsManage),
             new("settings", "Settings", "Index", "settings"),
             // How the platform behaves for everybody, as opposed to the preferences on /settings.
@@ -142,5 +166,38 @@ public static class NavigationMap
                     .ToList()
             })
             .Where(group => group.Items.Count > 0)
+            .ToList();
+
+    /// <summary>
+    /// The same filter, plus entitlements — and this is the one the sidebar draws.
+    ///
+    /// <para>
+    /// The difference from every other filter here is that it does not only remove. An entitlement
+    /// the workspace lacks comes back <b>present and locked</b>, because a customer who cannot see
+    /// what they are not buying cannot ask for it. Only <see cref="FeatureState.Hidden"/> removes an
+    /// entry, and that is the operator saying they do not sell it at all.
+    /// </para>
+    /// </summary>
+    /// <param name="featureState">
+    /// The verdict for one feature key. Anything that is not <see cref="FeatureState.Enabled"/> or
+    /// <see cref="FeatureState.Hidden"/> — including a key nothing knows about — draws as locked,
+    /// which fails towards showing a door that does not open rather than hiding one that does.
+    /// </param>
+    public static IReadOnlyList<NavRow> Draw(
+        IReadOnlyList<NavGroup> groups,
+        Func<string, bool> hasCapability,
+        PanelMode mode,
+        Func<string, FeatureState> featureState) =>
+        VisibleTo(groups, hasCapability, mode)
+            .Select(group => new NavRow(group.Key, group.Items
+                .Select(item => new
+                {
+                    Item = item,
+                    State = item.Feature is null ? FeatureState.Enabled : featureState(item.Feature)
+                })
+                .Where(x => x.State != FeatureState.Hidden)
+                .Select(x => new NavEntry(x.Item, Locked: x.State != FeatureState.Enabled))
+                .ToList()))
+            .Where(row => row.Entries.Count > 0)
             .ToList();
 }

@@ -55,6 +55,9 @@ builder.Services.AddSyncModule(builder.Configuration);
 builder.Services.AddScoped<IDeploymentLogStream, SignalRDeploymentLogStream>();
 builder.Services.AddScoped<Harbora.Web.Infrastructure.PanelModeProvider>();
 builder.Services.AddScoped<Harbora.Web.Infrastructure.RailPreferences>();
+// Views ask this whether something is locked. Scoped so one request resolves entitlements once,
+// however many controls on the page are gated by them.
+builder.Services.AddScoped<Harbora.Web.Infrastructure.FeatureView>();
 
 // The size chooser's rules — a plan's pool, its allowed tiers, a host's free capacity, a host's
 // withdrawal of a tier and whether the pair is priced at all — assembled once rather than written

@@ -145,6 +145,22 @@ public static class RetentionRule
         run => run.FinishedAt != null && run.FinishedAt < cutoff;
 
     /// <summary>
+    /// Finished function invocations whose finish is past the cutoff.
+    ///
+    /// <para>
+    /// <b>Safety.</b> The same rule as a cron run's, for the same reason: a row with no
+    /// <c>CompletedAt</c> is not history, it is a call that has been queued and not yet made. Its job
+    /// still holds the row id, so deleting one would leave <c>FunctionInvoker.ExecuteAsync</c> with
+    /// nothing to execute and nowhere to record that it could not — a call that vanishes rather than
+    /// fails. Age is measured from the completion, so a slow call is judged by when it stopped
+    /// mattering. Abandoned rows do not accumulate either: <c>FunctionCronScheduler</c> settles them.
+    /// </para>
+    /// </summary>
+    public static Expression<Func<Domain.Functions.FunctionInvocation, bool>> FunctionInvocationsToDelete(
+        DateTimeOffset cutoff) =>
+        invocation => invocation.CompletedAt != null && invocation.CompletedAt < cutoff;
+
+    /// <summary>
     /// Node commands that have finished, were issued before the cutoff, and are not part of the
     /// database-access grant ledger.
     ///

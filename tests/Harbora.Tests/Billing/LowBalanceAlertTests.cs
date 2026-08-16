@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
@@ -549,6 +549,7 @@ public class LowBalanceAlertTests
             new PassthroughProtector(),
             new SingleHandlerFactory(handler),
             new PlatformMailer(own, new PassthroughProtector(), NullLogger<PlatformMailer>.Instance),
+            Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
             Options.Create(new NotificationOptions { DeliveryTimeoutSeconds = 10 }),
             NullLogger<NotificationService>.Instance);
     }
@@ -635,6 +636,7 @@ public class LowBalanceAlertTests
             new PassthroughProtector(),
             new SingleHandlerFactory(handler),
             new PlatformMailer(db, new PassthroughProtector(), NullLogger<PlatformMailer>.Instance),
+            Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
             Options.Create(new NotificationOptions { DeliveryTimeoutSeconds = 10 }),
             NullLogger<NotificationService>.Instance);
 
@@ -671,6 +673,7 @@ public class LowBalanceAlertTests
             new PassthroughProtector(),
             new SingleHandlerFactory(handler),
             new PlatformMailer(db, new PassthroughProtector(), NullLogger<PlatformMailer>.Instance),
+            Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
             Options.Create(new NotificationOptions { DeliveryTimeoutSeconds = 10 }),
             NullLogger<NotificationService>.Instance);
 

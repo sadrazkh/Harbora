@@ -22,8 +22,20 @@ public sealed partial class WorkspaceAccountService(
     ProjectService projects,
     ISystemClock clock,
     IOptions<BillingOptions> billing,
-    IQuotaService? quota = null)
+    IQuotaService? quota = null,
+    IFunctionEventBus? functionEvents = null)
 {
+    /// <summary>
+    /// Tells subscribing functions, when there is a bus to tell. Optional for the same reason the
+    /// quota service is: this type is constructed directly by tests and by first-run setup, and
+    /// neither should have to build an event bus to create a workspace.
+    /// </summary>
+    private Task PublishAsync(string key, Guid workspaceId, string? subject,
+        (string Key, string? Value)[] data, CancellationToken ct) =>
+        functionEvents?.PublishAsync(
+            Domain.Functions.FunctionEvent.Create(key, workspaceId, subject, data), ct)
+        ?? Task.CompletedTask;
+
     public async Task<Workspace> EnsurePersonalWorkspaceAsync(User user, CancellationToken ct)
     {
         var existing = await db.Workspaces.IgnoreQueryFilters()
@@ -94,6 +106,8 @@ public sealed partial class WorkspaceAccountService(
         });
         await db.SaveChangesAsync(ct);
         await projects.EnsureDefaultEnvironmentAsync(workspace.Id, ct);
+        await PublishAsync(Domain.Functions.FunctionEvents.WorkspaceCreated, workspace.Id, workspace.Name,
+            [("workspace", workspace.Slug), ("personal", personal ? "true" : "false")], ct);
         return workspace;
     }
 
@@ -143,6 +157,9 @@ public sealed partial class WorkspaceAccountService(
         db.WorkspaceInvitations.Add(row);
         await db.SaveChangesAsync(ct);
         await reservation.CommitAsync(ct);
+        // The address is what an onboarding function needs; the token deliberately never leaves here.
+        await PublishAsync(Domain.Functions.FunctionEvents.MemberInvited, workspaceId, email,
+            [("email", email), ("role", role.ToString())], ct);
         return new(row, token);
     }
 
@@ -195,6 +212,8 @@ public sealed partial class WorkspaceAccountService(
         invitation.AcceptedByUserId = user.Id;
         await db.SaveChangesAsync(ct);
         await reservation.CommitAsync(ct);
+        await PublishAsync(Domain.Functions.FunctionEvents.MemberJoined, invitation.WorkspaceId, user.Email,
+            [("email", user.Email), ("role", invitation.Role.ToString())], ct);
         return invitation.Workspace!;
     }
 

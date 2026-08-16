@@ -22,6 +22,7 @@ public sealed class GitWebhookProcessor(
     HarboraDbContext db,
     IDeploymentEngine deployEngine,
     Projects.PreviewEnvironmentService previews,
+    IFunctionEventBus functionEvents,
     ILogger<GitWebhookProcessor> logger) : IGitWebhookProcessor
 {
     public async Task<WebhookResult> ProcessAsync(Guid repositoryId, WebhookRequest request, CancellationToken ct)
@@ -86,6 +87,18 @@ public sealed class GitWebhookProcessor(
                 // webhook (other apps in the same push must still deploy). The push is audited below.
             }
         }
+
+        // Functions subscribed to a push or a tag hear about it whether or not it deployed anything:
+        // "a tag arrived and nothing was configured to deploy it" is exactly the case somebody writes
+        // a function to notice.
+        foreach (var workspaceId in apps.Select(a => a.WorkspaceId).Distinct())
+            await functionEvents.PublishAsync(
+                Domain.Functions.FunctionEvent.Create(
+                    ev.IsTag ? Domain.Functions.FunctionEvents.GitTag : Domain.Functions.FunctionEvents.GitPush,
+                    workspaceId, repo.FullName,
+                    ("repository", repo.FullName), ("ref", ev.RefName), ("sha", ev.Sha),
+                    ("deployments", queued.ToString())),
+                ct);
 
         db.AuditLogs.Add(new AuditLog
         {

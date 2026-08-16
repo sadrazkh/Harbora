@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
 using Harbora.Application.Abstractions;
@@ -72,7 +72,9 @@ public class GitWebhookScopeTests
             HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes(body))).ToLowerInvariant();
 
         var processor = new GitWebhookProcessor(
-            db, new NoDeployments(), previews: null!, NullLogger<GitWebhookProcessor>.Instance);
+            db, new NoDeployments(), previews: null!,
+            Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
+            NullLogger<GitWebhookProcessor>.Instance);
 
         var result = await processor.ProcessAsync(repositoryId,
             new WebhookRequest(body, GitHubSignature256: "sha256=" + signature, null, null, "push", null),
@@ -120,7 +122,9 @@ public class GitWebhookScopeTests
             HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes(body))).ToLowerInvariant();
 
         var processor = new GitWebhookProcessor(
-            db, new NoDeployments(), previews: null!, NullLogger<GitWebhookProcessor>.Instance);
+            db, new NoDeployments(), previews: null!,
+            Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
+            NullLogger<GitWebhookProcessor>.Instance);
 
         var result = await processor.ProcessAsync(repositoryId,
             new WebhookRequest(body, "sha256=" + signature, null, null, "push", null),

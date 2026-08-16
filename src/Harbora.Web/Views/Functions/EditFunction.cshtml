@@ -1,0 +1,170 @@
+@model FunctionEditViewModel
+@using Harbora.Domain.Functions
+@using Harbora.Infrastructure.Functions
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var isNew = Model.FunctionId is null;
+    var extension = FunctionStarters.Extension(Model.Runtime);
+}
+
+<div class="mb-5">
+    <div class="text-xs text-ink-faint">
+        <a href="/functions" class="hover:text-ink">@(isFa ? "فانکشن‌ها" : "Functions")</a> ·
+        <a href="/functions/@Model.AppId" class="hover:text-ink">@Model.AppName</a>
+    </div>
+    <h1 class="text-2xl font-bold tracking-tight text-ink">
+        @(isNew ? (isFa ? "فانکشن تازه" : "New function") : Model.Form.Name)
+    </h1>
+</div>
+
+<form method="post" action="/functions/@Model.AppId/save" class="grid gap-5 xl:grid-cols-3">
+    @Html.AntiForgeryToken()
+    @if (Model.FunctionId is { } id) { <input type="hidden" name="functionId" value="@id" /> }
+
+    <div class="space-y-4 xl:col-span-2">
+        <div asp-validation-summary="All" class="text-sm text-danger"></div>
+
+        <div class="rounded-2xl border border-line bg-surface p-4 shadow-panel">
+            <div class="mb-2 flex items-center justify-between">
+                <span class="text-xs font-medium uppercase tracking-wide text-ink-faint" dir="ltr">
+                    @(string.IsNullOrWhiteSpace(Model.Form.Name) ? "function" : FunctionSlug.Normalise(Model.Form.Name)).@extension
+                </span>
+                <span class="text-xs text-ink-faint">@FunctionStarters.Label(Model.Runtime)</span>
+            </div>
+            @* A plain textarea, monospace and LTR whatever the panel's direction is — code is not
+               prose, and an RTL editor mangles it. It is deliberately not a heavyweight editor
+               component: this panel ships its JavaScript itself, and a syntax highlighter is a
+               megabyte of download for a page most customers open twice. *@
+            <textarea name="Code" rows="22" spellcheck="false" dir="ltr" required
+                      class="w-full resize-y rounded-xl border border-line bg-canvas p-4 font-mono text-[13px] leading-relaxed text-ink focus:border-accent focus:outline-none">@Model.Form.Code</textarea>
+        </div>
+
+        @if (Model.Runs is { Count: > 0 })
+        {
+            <div class="overflow-hidden rounded-2xl border border-line bg-surface shadow-panel">
+                <div class="border-b border-line px-4 py-3 text-sm font-semibold text-ink">
+                    @(isFa ? "اجراهای اخیر" : "Recent runs")
+                </div>
+                <table class="w-full text-sm">
+                    <tbody>
+                    @foreach (var run in Model.Runs)
+                    {
+                        <tr class="border-t border-line">
+                            @* Second precision: two runs of the same schedule inside one minute is the
+                               case somebody is looking at this table to understand. *@
+                            <td class="px-4 py-2 text-xs text-ink-muted" dir="ltr">@run.StartedAt.LocalDateTime.ToString(Dates.Precise)</td>
+                            <td class="px-4 py-2 text-xs text-ink-faint">@run.Trigger</td>
+                            <td class="px-4 py-2 text-xs">
+                                @if (run.StillRunning)
+                                {
+                                    <span class="text-ink-faint">@(isFa ? "در صف" : "queued")</span>
+                                }
+                                else if (run.Succeeded)
+                                {
+                                    <span class="text-ok">@run.StatusCode @(run.DurationMs)ms</span>
+                                }
+                                else
+                                {
+                                    <span class="text-danger">@(run.StatusCode?.ToString() ?? "—") @run.Error</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+
+    <aside class="space-y-4">
+        <div class="space-y-4 rounded-2xl border border-line bg-surface p-5 shadow-panel">
+            <label class="form-field">
+                <span>@(isFa ? "نام" : "Name")</span>
+                <input name="Name" value="@Model.Form.Name" required maxlength="60" class="form-control"
+                       placeholder="@(isFa ? "مثلاً: send-report" : "e.g. send-report")" />
+            </label>
+
+            <label class="form-field">
+                <span>@(isFa ? "تریگر" : "Trigger")</span>
+                <select name="Trigger" class="form-control" data-trigger>
+                    <option value="@((int)FunctionTrigger.Http)" selected="@(Model.Form.Trigger == FunctionTrigger.Http)">HTTP</option>
+                    <option value="@((int)FunctionTrigger.Cron)" selected="@(Model.Form.Trigger == FunctionTrigger.Cron)">@(isFa ? "زمان‌بندی" : "Schedule")</option>
+                    <option value="@((int)FunctionTrigger.Event)" selected="@(Model.Form.Trigger == FunctionTrigger.Event)">@(isFa ? "رویداد" : "Event")</option>
+                </select>
+            </label>
+
+            <label class="form-field" data-when="@((int)FunctionTrigger.Http)">
+                <span>@(isFa ? "مسیر (اختیاری)" : "Route (optional)")</span>
+                <input name="Route" value="@Model.Form.Route" class="form-control font-mono" dir="ltr"
+                       placeholder="@(isFa ? "خالی = نام فانکشن" : "blank = the function name")" />
+            </label>
+
+            <label class="form-field" data-when="@((int)FunctionTrigger.Cron)">
+                <span>@(isFa ? "زمان‌بندی (cron پنج‌بخشی)" : "Schedule (five-field cron)")</span>
+                <input name="CronExpression" value="@Model.Form.CronExpression" class="form-control font-mono" dir="ltr"
+                       placeholder="0 3 * * *" />
+            </label>
+
+            <label class="form-field" data-when="@((int)FunctionTrigger.Event)">
+                <span>@(isFa ? "رویداد" : "Event")</span>
+                <select name="EventKey" class="form-control">
+                    @foreach (var group in Model.Events.GroupBy(e => e.Group))
+                    {
+                        <optgroup label="@group.Key">
+                            @foreach (var evt in group)
+                            {
+                                <option value="@evt.Key" selected="@(Model.Form.EventKey == evt.Key)">@evt.Name(isFa)</option>
+                            }
+                        </optgroup>
+                    }
+                </select>
+            </label>
+
+            <label class="flex items-center gap-2.5 text-sm text-ink">
+                <input type="checkbox" name="IsEnabled" value="true" checked="@Model.Form.IsEnabled" />
+                <span>@(isFa ? "فعال" : "Enabled")</span>
+            </label>
+            <input type="hidden" name="IsEnabled" value="false" />
+
+            <div class="flex items-center gap-3 border-t border-line pt-4">
+                <button class="btn-primary px-5 py-2.5">@(isFa ? "ذخیره" : "Save")</button>
+                <a href="/functions/@Model.AppId" class="btn-secondary">@(isFa ? "انصراف" : "Cancel")</a>
+            </div>
+        </div>
+
+        @if (Model.FunctionId is { } fnId)
+        {
+            <div class="rounded-2xl border border-line bg-surface p-5 shadow-panel">
+                <h2 class="mb-1 text-sm font-semibold text-ink">@(isFa ? "اجرای آزمایشی" : "Run it now")</h2>
+                <p class="mb-3 text-xs text-ink-muted">
+                    @(isFa
+                        ? "از همان دری که زمان‌بندی و رویداد استفاده می‌کنند — یعنی کدِ منتشرشده، نه آنچه در ویرایشگر است."
+                        : "Through the same door a schedule uses — so it runs the published code, not what is in the editor.")
+                </p>
+            </div>
+            @* Its own form: nesting it inside the save form above would make one button submit the other. *@
+            <form method="post" action="/functions/@Model.AppId/@fnId/run">
+                @Html.AntiForgeryToken()
+                <button class="btn-secondary w-full">@(isFa ? "اجرا کن" : "Run now")</button>
+            </form>
+        }
+    </aside>
+</form>
+
+@section Scripts {
+<script>
+    // Only the fields the chosen trigger uses. The server validates the same rule, so this is a
+    // courtesy — a route posted with a cron trigger is ignored there, not trusted here.
+    (function () {
+        var select = document.querySelector('[data-trigger]');
+        if (!select) return;
+        function paint() {
+            document.querySelectorAll('[data-when]').forEach(function (el) {
+                el.style.display = el.dataset.when === select.value ? '' : 'none';
+            });
+        }
+        select.addEventListener('change', paint);
+        paint();
+    })();
+</script>
+}

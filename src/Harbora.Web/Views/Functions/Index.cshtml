@@ -1,0 +1,76 @@
+@model FunctionAppListViewModel
+@using Harbora.Domain.Functions
+@using Harbora.Infrastructure.Functions
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+}
+
+<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <div>
+        <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "فانکشن‌ها" : "Functions")</h1>
+        <p class="text-sm text-ink-muted">
+            @(isFa
+                ? "کد را همین‌جا بنویسید. بدون ریپازیتوری، بدون Dockerfile — یک اپ میزبان، چند فانکشن."
+                : "Write the code here. No repository, no Dockerfile — one host app, many functions.")
+        </p>
+    </div>
+    <a href="/functions/new" class="btn-primary inline-flex items-center gap-2 px-5 py-2.5">
+        <i data-lucide="plus" class="h-4 w-4"></i>@(isFa ? "فانکشن‌اپ تازه" : "New function app")
+    </a>
+</div>
+
+@if (msg is not null) {<div class="mb-4 rounded-lg border border-ok bg-ok-soft px-4 py-2 text-sm text-ok">@msg</div>}
+@if (err is not null) {<div class="mb-4 rounded-lg border border-danger bg-danger-soft px-4 py-2 text-sm text-danger">@err</div>}
+
+@if (Model.Apps.Count == 0)
+{
+    <div class="rounded-2xl border border-dashed border-line bg-surface p-10 text-center">
+        <i data-lucide="code" class="mx-auto h-8 w-8 text-ink-faint"></i>
+        <h2 class="mt-3 font-semibold text-ink">@(isFa ? "هنوز چیزی نساخته‌اید" : "Nothing here yet")</h2>
+        <p class="mx-auto mt-1 max-w-md text-sm text-ink-muted">
+            @(isFa
+                ? "یک فانکشن‌اپ بسازید، زبانش را انتخاب کنید و اولین فانکشن آماده در ویرایشگر منتظرتان است."
+                : "Create a function app, pick its language, and the first working function is already in the editor.")
+        </p>
+        <a href="/functions/new" class="btn-primary mt-5 inline-flex px-5 py-2.5">@(isFa ? "شروع" : "Get started")</a>
+    </div>
+}
+else
+{
+    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        @foreach (var app in Model.Apps)
+        {
+            <a href="/functions/@app.Id" class="rounded-2xl border border-line bg-surface p-5 shadow-panel transition hover:border-accent/30">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="truncate font-semibold text-ink">@app.Name</div>
+                        <div class="truncate text-xs text-ink-faint" dir="ltr">@app.Slug</div>
+                    </div>
+                    <span class="shrink-0 rounded-lg bg-surface-2 px-2 py-1 text-[11px] font-medium text-ink-muted">
+                        @FunctionStarters.Label(app.Runtime)
+                    </span>
+                </div>
+                <div class="mt-4 flex flex-wrap items-center gap-2 text-xs">
+                    <span class="text-ink-muted">
+                        @(isFa ? $"{app.FunctionCount} فانکشن" : $"{app.FunctionCount} function(s)")
+                    </span>
+                    @if (!app.EverPublished)
+                    {
+                        <span class="rounded-md bg-surface-2 px-2 py-0.5 text-ink-faint">@(isFa ? "منتشر نشده" : "never published")</span>
+                    }
+                    else if (app.HasUnpublishedChanges)
+                    {
+                        @* The one thing on this page a person acts on: what is stored is not what is running. *@
+                        <span class="rounded-md bg-warn-soft px-2 py-0.5 text-warn">@(isFa ? "تغییر منتشرنشده" : "unpublished changes")</span>
+                    }
+                    else
+                    {
+                        <span class="rounded-md bg-ok-soft px-2 py-0.5 text-ok">@(isFa ? "به‌روز" : "live")</span>
+                    }
+                </div>
+            </a>
+        }
+    </div>
+}

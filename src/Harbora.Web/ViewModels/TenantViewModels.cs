@@ -63,7 +63,24 @@ public sealed class TenantDetailsViewModel
     public string PeriodLabel { get; set; } = string.Empty;
 
     public List<TenantMember> Members { get; set; } = new();
+
+    /// <summary>
+    /// What this tenant is entitled to, and who decided it.
+    ///
+    /// <para>
+    /// Here as well as on the features console because this is where an operator is standing when a
+    /// customer asks. The console answers "who has Functions"; this answers "what does this customer
+    /// have", and they are the same rows read from two ends.
+    /// </para>
+    /// </summary>
+    public List<TenantFeature> Features { get; set; } = new();
 }
+
+/// <summary>One feature as it resolves for one tenant.</summary>
+public sealed record TenantFeature(
+    string Key, string Name, string Pitch,
+    Harbora.Domain.Features.FeatureState State,
+    Harbora.Domain.Features.FeatureDecision DecidedBy);
 
 public sealed record TenantMember(Guid UserId, string Email, string DisplayName, string WorkspaceRole, bool Active)
 {

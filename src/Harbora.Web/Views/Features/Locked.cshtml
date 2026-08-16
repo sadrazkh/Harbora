@@ -1,0 +1,45 @@
+@model FeatureLockedViewModel
+@using Harbora.Domain.Features
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    ViewData["Title"] = Model.Feature.Name(isFa);
+}
+
+<div class="mx-auto max-w-2xl">
+    <div class="rounded-2xl border border-line bg-surface p-8 shadow-panel">
+        <div class="mb-5 flex items-center gap-3">
+            <span class="grid h-11 w-11 place-items-center rounded-xl bg-surface-2 text-ink-faint">
+                <i data-lucide="lock" class="h-5 w-5"></i>
+            </span>
+            <div>
+                <h1 class="text-xl font-bold tracking-tight text-ink">@Model.Feature.Name(isFa)</h1>
+                <p class="text-xs text-ink-faint">
+                    @(isFa ? "برای این ورک‌اسپیس فعال نیست" : "Not enabled for this workspace")
+                </p>
+            </div>
+        </div>
+
+        <p class="text-sm leading-relaxed text-ink-muted">@Model.Feature.Pitch(isFa)</p>
+
+        @* Says which level decided, because "ask your provider" and "ask about your plan" send the
+           person to two different conversations. *@
+        <div class="mt-6 rounded-xl border border-line bg-surface-2 p-4 text-sm text-ink-muted">
+            @Harbora.Web.Infrastructure.FeatureView.Explain(Model.Verdict, isFa)
+        </div>
+
+        @if (Model.Verdict.IsEnabled)
+        {
+            @* The page is reachable by anybody, including somebody it works for — a link in a support
+               message has to open for both of them, and it must not tell the wrong story to either. *@
+            <div class="mt-4 rounded-xl border border-ok bg-ok-soft p-4 text-sm text-ok">
+                @(isFa
+                    ? "این قابلیت برای شما فعال است — از منوی کناری بازش کنید."
+                    : "This feature is enabled for you — open it from the sidebar.")
+            </div>
+        }
+
+        <div class="mt-7 flex flex-wrap items-center gap-3">
+            <a href="/" class="btn-secondary">@(isFa ? "بازگشت به داشبورد" : "Back to dashboard")</a>
+        </div>
+    </div>
+</div>

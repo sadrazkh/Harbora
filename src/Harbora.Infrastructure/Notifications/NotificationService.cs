@@ -22,6 +22,7 @@ public sealed class NotificationService(
     ISecretProtector protector,
     IHttpClientFactory httpFactory,
     PlatformMailer platformMailer,
+    IFunctionEventBus functionEvents,
     Microsoft.Extensions.Options.IOptions<NotificationOptions> options,
     ILogger<NotificationService> logger) : INotificationService
 {
@@ -56,6 +57,20 @@ public sealed class NotificationService(
 
         foreach (var alert in matching)
             await DispatchSafe(alert, severity, title, body, ct);
+
+        // Functions subscribe to the same happenings people do, so they are told from here rather
+        // than from a second set of raise-sites kept in step by hand — the arrangement that ends with
+        // an operator being emailed about a crash no function was ever told about.
+        //
+        // Deliberately outside the rule matching above: a workspace with no alert rules still has
+        // functions, and making code depend on somebody having configured a notification channel
+        // would be an invisible coupling nobody could debug.
+        if (Domain.Functions.FunctionEvents.ForAlert(evt) is { } functionEventKey)
+            await functionEvents.PublishAsync(
+                Domain.Functions.FunctionEvent.Create(
+                    functionEventKey, workspaceId, title,
+                    ("title", title), ("body", body), ("severity", severity.ToString())),
+                ct);
 
         return matching.Count;
     }

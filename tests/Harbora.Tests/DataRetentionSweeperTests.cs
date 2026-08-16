@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
@@ -136,6 +136,18 @@ public class DataRetentionSweeperTests
             new CronRun { WorkspaceId = workspaceId, AppId = Guid.NewGuid(), StartedAt = Now.AddDays(-92), FinishedAt = Now.AddDays(-91) },
             new CronRun { WorkspaceId = workspaceId, AppId = Guid.NewGuid(), StartedAt = Now.AddDays(-90), FinishedAt = Now.AddDays(-89) });
 
+        db.FunctionInvocations.AddRange(
+            new Harbora.Domain.Functions.FunctionInvocation
+            {
+                WorkspaceId = workspaceId, FunctionId = Guid.NewGuid(), AppId = Guid.NewGuid(),
+                StartedAt = Now.AddDays(-32), CompletedAt = Now.AddDays(-32)
+            },
+            new Harbora.Domain.Functions.FunctionInvocation
+            {
+                WorkspaceId = workspaceId, FunctionId = Guid.NewGuid(), AppId = Guid.NewGuid(),
+                StartedAt = Now.AddDays(-29), CompletedAt = Now.AddDays(-29)
+            });
+
         db.NodeCommands.AddRange(
             new NodeCommandRecord
             {
@@ -190,19 +202,21 @@ public class DataRetentionSweeperTests
         db.PasswordResetTokens.Should().ContainSingle().Which.TokenHash.Should().Be("new");
         db.UserSessions.Should().ContainSingle().Which.ExpiresAt.Should().Be(Now.AddMinutes(1));
         db.EmailVerificationTokens.Should().ContainSingle().Which.TokenHash.Should().Be("verify-new");
+        db.FunctionInvocations.IgnoreQueryFilters().Should().ContainSingle()
+            .Which.CompletedAt.Should().Be(Now.AddDays(-29));
 
-        // Nine tables, one row each — and the sweep says so, rather than reporting a bare total
+        // Ten tables, one row each — and the sweep says so, rather than reporting a bare total
         // that could hide a table it never reached.
-        result.Deleted.Should().HaveCount(9);
+        result.Deleted.Should().HaveCount(10);
         result.Deleted.Values.Should().AllSatisfy(n => n.Should().Be(1));
-        result.TotalDeleted.Should().Be(9);
+        result.TotalDeleted.Should().Be(10);
     }
 
     [Fact]
     public async Task A_table_that_throws_does_not_stop_the_others()
     {
         // The failure this is really about: one locked or corrupt table silently ending the sweep,
-        // so eight tables grow forever and the logs mention only the ninth.
+        // so every other table grows forever and the logs mention only the one that broke.
         using var db = new OneBadTableDbContext(NewOptions(), typeof(NodeEventRecord));
         await SeedBothSidesAsync(db, Guid.NewGuid());
         db.Armed = true;
@@ -213,8 +227,8 @@ public class DataRetentionSweeperTests
         result.Failures.Should().ContainKey(RetentionTables.NodeEvents);
         result.Failures[RetentionTables.NodeEvents].Should().Contain("relation is locked");
 
-        // The other eight still ran.
-        result.Deleted.Should().HaveCount(8);
+        // The other nine still ran.
+        result.Deleted.Should().HaveCount(9);
         result.Deleted.Should().NotContainKey(RetentionTables.NodeEvents);
         db.DeploymentLogs.Should().ContainSingle();
         db.AuditLogs.Should().ContainSingle();
@@ -240,7 +254,7 @@ public class DataRetentionSweeperTests
         result.Failures.Should().BeEmpty();
         result.KeptForever.Should().Contain(RetentionTables.DeploymentLogs);
         db.DeploymentLogs.Should().HaveCount(2, "a span too long to be a date means keep, not delete");
-        result.Deleted.Should().HaveCount(8, "every other table was still swept");
+        result.Deleted.Should().HaveCount(9, "every other table was still swept");
     }
 
     [Fact]

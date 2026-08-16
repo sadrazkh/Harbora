@@ -2,7 +2,9 @@
 @inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @inject Microsoft.Extensions.Options.IOptions<Harbora.Modules.Backup.Infrastructure.BackupFeatureOptions> BackupFeatures
 @inject Microsoft.Extensions.Options.IOptions<Harbora.Modules.Sync.Infrastructure.SyncFeatureOptions> SyncFeatures
+@inject Harbora.Web.Infrastructure.FeatureView Features
 @using Harbora.Web.Infrastructure
+@using Harbora.Domain.Features
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     // Simple hides the specialist destinations; their routes stay live, so a bookmark or a link in
@@ -16,7 +18,15 @@
         navSource, SyncFeatures.Value.Sync);
     // Account visibility is independent from automatic hourly charging. Even with the meter off,
     // customers can inspect their balance and redeem vouchers, while operators can fund accounts.
-    var groups = NavigationMap.VisibleTo(navSource, NavigationCapabilities.For(User), panelMode);
+    // Entitlements do not filter the way capabilities do. A capability the caller lacks is removed;
+    // a feature they are not entitled to is drawn greyed with a lock, because a customer who cannot
+    // see what they are not buying has no way to ask for it. Only Hidden removes an entry.
+    var featureStates = new Dictionary<string, FeatureState>();
+    foreach (var key in navSource.SelectMany(g => g.Items).Select(i => i.Feature).Where(f => f is not null).Distinct())
+        featureStates[key!] = (await Features.GetAsync(key!)).State;
+
+    var groups = NavigationMap.Draw(navSource, NavigationCapabilities.For(User), panelMode,
+        key => featureStates.TryGetValue(key, out var state) ? state : FeatureState.Locked);
     var currentController = (string?)ViewContext.RouteData.Values["controller"];
 
     string GroupLabel(string key) => (key, isFa) switch
@@ -52,6 +62,7 @@
         ("ai",           true) => "هوش مصنوعی",    ("ai",           false) => "AI",
         ("ai-admin",     true) => "مدیریت AI",     ("ai-admin",     false) => "AI admin",
         ("audit",        true) => "گزارش رخدادها",  ("audit",        false) => "Audit log",
+        ("functions",    true) => "فانکشن‌ها",        ("functions",    false) => "Functions",
         ("templates",    true) => "قالب‌ها",         ("templates",    false) => "Templates",
         ("template-versions", true) => "نسخه‌های قالب", ("template-versions", false) => "Template versions",
         ("git",          _)    => "Git",
@@ -62,6 +73,7 @@
         ("servers",      true) => "سرورها",         ("servers",      false) => "Servers",
         ("nodes",        true) => "نودها",          ("nodes",        false) => "Nodes",
         ("plans",        true) => "پلن‌ها",          ("plans",        false) => "Plans",
+        ("feature-admin", true) => "قابلیت‌ها",      ("feature-admin", false) => "Features",
         ("tenants",      true) => "مستأجرها",       ("tenants",      false) => "Tenants",
         ("settings",     true) => "تنظیمات",        ("settings",     false) => "Settings",
         ("platform-settings", true) => "تنظیمات پلتفرم", ("platform-settings", false) => "Platform settings",
@@ -76,14 +88,30 @@
                 @GroupLabel(group.Key)
             </div>
             <div class="space-y-0.5">
-                @foreach (var item in group.Items)
+                @foreach (var entry in group.Entries)
                 {
+                    var item = entry.Item;
                     var active = string.Equals(currentController, item.Controller, StringComparison.OrdinalIgnoreCase);
-                    <a asp-controller="@item.Controller" asp-action="@item.Action"
-                       class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition @(active ? "bg-accent-soft text-accent-text font-medium" : "text-ink-muted hover:bg-surface-2 hover:text-ink")">
-                        <i data-lucide="@item.Icon" class="h-4 w-4 shrink-0"></i>
-                        <span class="sidebar-label truncate">@ItemLabel(item.Key)</span>
-                    </a>
+                    if (entry.Locked)
+                    {
+                        @* It still goes somewhere, and that is the whole design: the destination is the
+                           page that says what this is and who can switch it on, not the feature itself.
+                           A grey entry that does nothing at all teaches people the sidebar lies. *@
+                        <a href="/features/@item.Feature" title="@(isFa ? "برای شما فعال نیست" : "Not enabled for you")"
+                           class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink-faint/70 transition hover:bg-surface-2">
+                            <i data-lucide="@item.Icon" class="h-4 w-4 shrink-0 opacity-60"></i>
+                            <span class="sidebar-label truncate">@ItemLabel(item.Key)</span>
+                            <i data-lucide="lock" class="sidebar-footer-copy ms-auto h-3 w-3 shrink-0"></i>
+                        </a>
+                    }
+                    else
+                    {
+                        <a asp-controller="@item.Controller" asp-action="@item.Action"
+                           class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition @(active ? "bg-accent-soft text-accent-text font-medium" : "text-ink-muted hover:bg-surface-2 hover:text-ink")">
+                            <i data-lucide="@item.Icon" class="h-4 w-4 shrink-0"></i>
+                            <span class="sidebar-label truncate">@ItemLabel(item.Key)</span>
+                        </a>
+                    }
                 }
             </div>
         </div>
