@@ -439,6 +439,17 @@
      click, and the border goes dashed so a refused card cannot be mistaken for a selected one. */
   .size-server-card.is-refused,
   .size-tier-card.is-refused { @apply cursor-not-allowed border-dashed opacity-60 hover:border-line; }
+
+  /* `hidden` has to be spelled out here, and this is not belt-and-braces.
+     The cards above set `display: flex`, and an author rule beats the user agent's
+     `[hidden] { display: none }` — so the family filter set the property on four cards and every one
+     of them stayed on screen. The panels escaped it only because they set no display of their own,
+     which is luck rather than design, so they are named too.
+     Only a browser shows this: the markup is right, the script runs, the attribute lands, and the
+     .NET build and every markup test pass. */
+  .size-picker-tiers[hidden],
+  .size-server-card[hidden],
+  .size-tier-card[hidden] { @apply hidden; }
   .size-server-card:has(input:checked) .source-check,
   .size-tier-card:has(input:checked) .source-check { @apply block; }
   .form-field { @apply block min-w-0; }

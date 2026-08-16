@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Servers;
 using Harbora.Domain.Tenancy;
@@ -134,6 +135,59 @@ public class SizePickerHttpTests(HarboraHttpFixture fixture)
             "a withdrawn tier is still drawn — an operator has to be able to see they are not selling it");
         html.Should().Contain("data-picker-tier-state=\"NotOfferedHere\"",
             "and it says which of the five reasons applies rather than merely being greyed out");
+    }
+
+    [Fact]
+    public async Task A_create_form_arrives_with_a_tier_already_chosen()
+    {
+        // The size used to be a <select>, which always posts its first option — so an install that
+        // never set a platform default still created apps on a tier. Cards post nothing until one is
+        // chosen, so without this the form would submit an empty InstanceSizeKey, the binder would
+        // accept it, and the app would be created on no tier: no ceiling, and an hourly pass reporting
+        // something it cannot price.
+        //
+        // Found by opening the page in a browser. Every markup assertion above passed while the form
+        // was in this state.
+        SeedPricedTier("preselect", globalRate: 200, serverRate: null);
+
+        var html = await CreateFormAsync("picker-preselect@example.com", "203.0.113.245");
+
+        // The chooser's radios are the only inputs with this name, so a checked one is a chosen tier.
+        html.Should().MatchRegex("name=\"InstanceSizeKey\"[^>]*checked",
+            "a create form must open with a tier selected, or it submits no tier at all");
+    }
+
+    [Fact]
+    public async Task A_resize_form_does_not_choose_a_tier_for_somebody()
+    {
+        // The mirror of the rule above, and why it is conditional. On a resize, "no ceiling" is the
+        // state a resource made before tiers existed is already in — so preselecting a tier there
+        // would be a resize nobody asked for, applied by opening a page.
+        var (serverId, _) = SeedPricedTier("resize", globalRate: 200, serverRate: null);
+
+        var app = new Harbora.Domain.Apps.App
+        {
+            WorkspaceId = fixture.WorkspaceId,
+            // A host that exists. An app pointing at a server row that does not is a different case:
+            // the chooser is pinned to that host, finds nothing, and says so — which is the honest
+            // answer when a workload's machine has gone, and not what this test is about.
+            ServerId = serverId,
+            Name = "unsized-app",
+            Slug = "unsized-app",
+            Kind = ServiceKind.Web,
+            ContainerPort = 8080,
+            InstanceSizeKey = null,
+            Status = AppStatus.Running
+        };
+        Panel.Seed(db => db.Apps.Add(app));
+        Panel.GivenUser(fixture.WorkspaceId, "picker-resize@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.246", "picker-resize@example.com");
+
+        var html = await (await client.GetAsync($"/apps/details/{app.Id}")).Content.ReadAsStringAsync();
+
+        // "No limit" is the empty-valued radio, and it is the one that must be checked.
+        html.Should().MatchRegex("name=\"instanceSizeKey\" value=\"\"[^>]*checked",
+            "an app on no tier must open on \"no limit\", not on whichever tier happens to be first");
     }
 
     [Fact]

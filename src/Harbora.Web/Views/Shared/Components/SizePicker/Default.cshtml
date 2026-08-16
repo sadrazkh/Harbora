@@ -240,33 +240,94 @@ else
         });
     }
 
-    function showServer() {
+    // Serialised rather than interpolated bare: the field name comes from the caller, and Razor's
+    // encoder is not a JavaScript string escaper. The same idiom the create form's own script uses.
+    const sizeField = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.SizeFieldName));
+
+    /// Which tier is chosen right now, and which family tab is open — read before the panels move so
+    /// they can be carried onto the host being switched to.
+    function currentChoice() {
+        const shown = panels.find(panel => !panel.hidden);
+        return {
+            sizeKey: shown?.querySelector(`input[name="${sizeField}"]:checked`)?.value ?? null,
+            family: shown?.querySelector('[data-picker-family]:checked')?.value ?? null
+        };
+    }
+
+    function showServer(carry) {
         const chosen = root.querySelector('[data-picker-server]:checked')?.value;
         if (!chosen) return;
+
         panels.forEach(panel => {
             panel.hidden = panel.dataset.pickerPanel !== chosen;
 
-            // A hidden panel's radios must not stay checked: two panels each holding a checked
-            // size would post whichever the browser serialised last, which is the one the reader
-            // cannot see.
+            // A hidden panel's size must not stay checked: two panels each holding one would post
+            // whichever the browser serialised last, which is the one the reader cannot see. The
+            // family radios are per panel and never posted, so they are left alone.
             if (panel.hidden) {
                 panel.querySelectorAll('input[type=radio]:checked').forEach(radio => {
                     if (radio.dataset.pickerFamily === undefined) radio.checked = false;
                 });
             }
         });
+
+        const shown = panels.find(panel => !panel.hidden);
+        if (!shown || !carry) return;
+
+        // Keep the family tab the reader had opened, when this host has that family at all. Without
+        // it, choosing "memory-optimised" and then switching host drops you back on "general" — the
+        // tab groups are per panel, so each host reverts to its own default.
+        if (carry.family) {
+            const tab = shown.querySelector(`[data-picker-family][value="${carry.family}"]`);
+            if (tab) tab.checked = true;
+        }
+        showFamily(shown);
+
+        // And keep the tier, or pick one. Clearing the hidden panels above is what stops an ambiguous
+        // post; on its own it also means switching host silently leaves NO size chosen, and the form
+        // would submit an empty one — accepted by the binder, refused much later by the create gate.
+        // So: the same tier if this host offers it, otherwise the first one on the open tab, and if
+        // the host offers nothing at all, nothing — which is what its "no size available" card says.
+        const candidates = [...shown.querySelectorAll('input[type=radio]')]
+            .filter(radio => radio.dataset.pickerFamily === undefined && !radio.disabled);
+
+        const same = carry.sizeKey
+            ? candidates.find(radio => radio.value === carry.sizeKey)
+            : null;
+        const firstOnTab = candidates.find(radio =>
+            radio.closest('[data-picker-tier-family]')?.hidden === false);
+
+        (same ?? firstOnTab ?? candidates[0])?.click();
     }
 
     root.querySelectorAll('[data-picker-server]').forEach(radio =>
-        radio.addEventListener('change', showServer));
+        radio.addEventListener('change', () => {
+            // Read before the panels move — afterwards the choice being carried has already gone.
+            const carry = carried;
+            showServer(carry);
+            carried = currentChoice();
+        }));
 
     panels.forEach(panel => {
         panel.querySelectorAll('[data-picker-family]').forEach(radio =>
-            radio.addEventListener('change', () => showFamily(panel)));
+            radio.addEventListener('change', () => {
+                showFamily(panel);
+                carried = currentChoice();
+            }));
         showFamily(panel);
     });
 
-    if (root.querySelector('[data-picker-server]')) showServer();
+    // Remembered across a switch rather than read during it: the `change` handler runs after the
+    // browser has already moved the checked state onto the new host's radio, so by then the panel the
+    // reader was looking at is no longer the one `currentChoice` would find.
+    let carried = currentChoice();
+
+    root.querySelectorAll('input[type=radio]').forEach(radio => {
+        if (radio.dataset.pickerFamily === undefined && !radio.dataset.pickerServer)
+            radio.addEventListener('change', () => { carried = currentChoice(); });
+    });
+
+    if (root.querySelector('[data-picker-server]')) showServer(null);
 })();
 </script>
 }

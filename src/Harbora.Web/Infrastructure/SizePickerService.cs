@@ -97,13 +97,32 @@ public sealed class SizePickerService(
                 tiers));
         }
 
+        // The host the chooser opens on: the one asked for, else the first that can actually take work,
+        // so it does not open on a card the customer has to notice is refused.
+        var openServerId = selectedServerId ?? rows.FirstOrDefault(r => r.Selectable)?.ServerId;
+
+        // And the tier it opens on.
+        //
+        // <b>A create form must open on something.</b> The size used to be a <select>, which always
+        // posts its first option, so an install that never set a platform default still created apps on
+        // a tier. Cards post nothing until one is chosen — so with no default and nothing preselected,
+        // the form would submit an empty InstanceSizeKey, the binder would accept it, and the app would
+        // be created on no tier at all: no ceiling, and an hourly pass reporting it as something it
+        // cannot price. Resolved here rather than in the script, so it holds with JavaScript off.
+        //
+        // Not applied when "no ceiling" is offered: that is the resize controls, where a null key is
+        // the state the resource is already in and choosing a tier for somebody would be a resize they
+        // did not ask for.
+        var openSizeKey = selectedSizeKey;
+        if (!allowNoLimit && string.IsNullOrEmpty(openSizeKey))
+            openSizeKey = rows.FirstOrDefault(r => r.ServerId == openServerId)
+                ?.Tiers.FirstOrDefault(t => t.Selectable)?.Key;
+
         return new SizePickerModel(
             sizeFieldName,
             serverFieldName,
-            selectedSizeKey,
-            // Falls back to the first host that can actually take work, so the chooser opens on
-            // something usable rather than on a card the customer must first notice is refused.
-            selectedServerId ?? rows.FirstOrDefault(r => r.Selectable)?.ServerId,
+            openSizeKey,
+            openServerId,
             allowNoLimit,
             billing.Value.Enabled,
             rows);
