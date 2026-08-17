@@ -746,6 +746,11 @@ public class HarboraDbContext : DbContext
                 .HasFilter("\"Kind\" = 9 AND \"Status\" IN (0, 1)");
             // Finding the live job for a deployment/backup when cancelling or reconciling.
             e.HasIndex(x => new { x.TargetId, x.Status });
+            // /activity's own read (P5): one workspace's rows, newest first. WorkspaceId is not a
+            // query filter (see the property's own doc comment) but it is a WHERE clause every
+            // caller who wants one tenant's jobs writes by hand, so it earns an index the same way
+            // NotificationDelivery's WorkspaceId does.
+            e.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
             e.Property(x => x.ClaimedBy).HasMaxLength(128);
             e.Property(x => x.Error).HasMaxLength(2048);
             // Makes two workers claiming the same job a lost update rather than a double execution.

@@ -166,7 +166,7 @@ public sealed class WorkspacesController(
                         : $"Open this link within seven days to join {workspaceName}:\n{link}",
                     WorkspaceId);
                 await db.SaveChangesAsync(ct);
-                await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, ct);
+                await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, delivery.WorkspaceId, ct);
                 TempData["Message"] = IsFa
                     ? "دعوت‌نامه صف شد؛ لینک هم فقط همین بار نمایش داده می‌شود."
                     : "Invitation queued; the link is also shown this once.";

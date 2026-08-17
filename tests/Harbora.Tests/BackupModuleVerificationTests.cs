@@ -856,7 +856,8 @@ public sealed class BackupModuleVerificationTests : IDisposable
     /// </summary>
     private sealed class LeakyJobQueue(HarboraDbContext db, JobKind failOn) : IJobQueue
     {
-        public Task<Guid> EnqueueAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
+        public Task<Guid> EnqueueAsync(
+            JobKind kind, Guid targetId, Guid? workspaceId = null, CancellationToken ct = default)
         {
             if (kind != failOn) return Task.FromResult(Guid.CreateVersion7());
 
@@ -865,8 +866,9 @@ public sealed class BackupModuleVerificationTests : IDisposable
         }
 
         public Task<Guid> EnqueueExclusiveAsync(
-            JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default)
-            => EnqueueAsync(kind, targetId, ct);
+            JobKind kind, Guid targetId, Guid exclusiveWith, Guid? workspaceId = null,
+            CancellationToken ct = default)
+            => EnqueueAsync(kind, targetId, workspaceId, ct);
 
         public Task<bool> RequestCancellationAsync(
             JobKind kind, Guid targetId, CancellationToken ct = default) => Task.FromResult(false);

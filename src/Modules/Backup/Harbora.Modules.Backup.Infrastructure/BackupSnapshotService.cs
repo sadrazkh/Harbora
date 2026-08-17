@@ -113,7 +113,7 @@ public sealed class BackupSnapshotService(
             return new SnapshotOutcome(false, Error: AlreadyRunning);
         }
 
-        await jobs.EnqueueAsync(JobKind.BackupSnapshot, snapshot.Id, ct);
+        await jobs.EnqueueAsync(JobKind.BackupSnapshot, snapshot.Id, snapshot.WorkspaceId, ct);
         return new SnapshotOutcome(true, snapshot.Id);
     }
 
@@ -154,7 +154,7 @@ public sealed class BackupSnapshotService(
         // the Verified column to be brought up to date and it is going to be. Failing here would put
         // a red message on the screen for a request that is being honoured.
         if (!await BackupVerificationQueue.AlreadyQueuedAsync(db, snapshot.Id, ct))
-            await jobs.EnqueueAsync(JobKind.BackupVerify, snapshot.Id, ct);
+            await jobs.EnqueueAsync(JobKind.BackupVerify, snapshot.Id, snapshot.WorkspaceId, ct);
 
         return new SnapshotOutcome(true, snapshot.Id);
     }
@@ -334,7 +334,7 @@ public sealed class BackupSnapshotService(
             // Enqueued after the completion is saved, and never allowed to undo it — nor to leave a
             // refused insert tracked in this context for the next save to trip over. See
             // BackupVerificationQueue.
-            await BackupVerificationQueue.RequestAsync(jobs, db, snapshot.Id, logger, ct);
+            await BackupVerificationQueue.RequestAsync(jobs, db, snapshot.Id, snapshot.WorkspaceId, logger, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

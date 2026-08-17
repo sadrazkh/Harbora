@@ -115,19 +115,19 @@ public sealed class BackupPolicyScheduler(
         var pruneCutoff = now.AddHours(-6);
         var policiesToPrune = await db.BackupPolicies
             .Where(p => p.Enabled && p.LastSuccessAt != null && p.LastSuccessAt >= pruneCutoff)
-            .Select(p => p.Id)
+            .Select(p => new { p.Id, p.WorkspaceId })
             .ToListAsync(ct);
 
-        foreach (var policyId in policiesToPrune)
-            await jobs.EnqueueAsync(JobKind.BackupPrune, policyId, ct);
+        foreach (var policy in policiesToPrune)
+            await jobs.EnqueueAsync(JobKind.BackupPrune, policy.Id, policy.WorkspaceId, ct);
 
         var healthCutoff = now.AddHours(-1);
         var repositories = await db.BackupRepositories
             .Where(r => r.IsEnabled && (r.LastHealthCheckAt == null || r.LastHealthCheckAt <= healthCutoff))
-            .Select(r => r.Id)
+            .Select(r => new { r.Id, r.WorkspaceId })
             .ToListAsync(ct);
 
-        foreach (var repositoryId in repositories)
-            await jobs.EnqueueAsync(JobKind.RepositoryHealthCheck, repositoryId, ct);
+        foreach (var repository in repositories)
+            await jobs.EnqueueAsync(JobKind.RepositoryHealthCheck, repository.Id, repository.WorkspaceId, ct);
     }
 }

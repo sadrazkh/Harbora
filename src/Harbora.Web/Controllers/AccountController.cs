@@ -185,7 +185,7 @@ public sealed class AccountController(
                     ? $"برای گذاشتن رمز تازه این لینک را باز کنید (تا یک ساعت معتبر است):\n{link}\n\nاگر شما درخواست نکرده‌اید، این ایمیل را نادیده بگیرید."
                     : $"Open this link to set a new password (valid for one hour):\n{link}\n\nIf you did not ask for this, ignore this email.");
             await db.SaveChangesAsync(ct);
-            await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, ct);
+            await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, delivery.WorkspaceId, ct);
 
             await audit.LogAsync("user.password_reset_requested", "user", user.Id.ToString(), ClientIp,
                 actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
@@ -373,7 +373,7 @@ public sealed class AccountController(
                 ? $"برای تأیید ایمیل این لینک را باز کنید (تا ۲۴ ساعت معتبر است):\n{link}"
                 : $"Open this link to verify your email (valid for 24 hours):\n{link}");
         await db.SaveChangesAsync(ct);
-        await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, ct);
+        await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, delivery.WorkspaceId, ct);
         return true;
     }
 

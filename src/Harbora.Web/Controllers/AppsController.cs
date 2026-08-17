@@ -1284,7 +1284,7 @@ public sealed partial class AppsController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        await jobs.EnqueueAsync(JobKind.CronRun, app.Id, ct);
+        await jobs.EnqueueAsync(JobKind.CronRun, app.Id, app.WorkspaceId, ct);
         await audit.LogAsync("app.cron.run", "app", id.ToString(), ClientIp, ct: ct);
         TempData["Message"] = "Started. The run will appear below when it finishes.";
         return RedirectToAction(nameof(Details), new { id });

@@ -44,8 +44,15 @@ public sealed class ManagedServiceEngine(
             d.Type, d.DisplayName, d.DisplayNameFa, $"{d.ImageRepo}:{d.Versions[0]}",
             d.Versions, d.Port, d.HasDatabaseName)).ToList();
 
-    public Task QueueProvisionAsync(Guid serviceId, CancellationToken ct) =>
-        jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.ServiceProvision, serviceId, ct);
+    public async Task QueueProvisionAsync(Guid serviceId, CancellationToken ct)
+    {
+        // The four callers (the create form, the rebuild button, a template stack, an environment
+        // clone) all already know the service's workspace, but three of them hand this only the id —
+        // one extra read here is cheaper than widening the interface across every one of them.
+        var workspaceId = await db.ManagedServices.IgnoreQueryFilters()
+            .Where(s => s.Id == serviceId).Select(s => (Guid?)s.WorkspaceId).FirstOrDefaultAsync(ct);
+        await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.ServiceProvision, serviceId, workspaceId, ct);
+    }
 
     /// <summary>Runs on the background worker. Pulls the image and (re)creates the container.</summary>
     public async Task ProvisionAsync(Guid serviceId, CancellationToken ct)

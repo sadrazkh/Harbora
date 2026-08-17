@@ -12,7 +12,13 @@ public interface IJobQueue
     /// Persist a job and wake the worker. Returns the job id. The job excludes on its own target: no
     /// other job of this kind for this target runs beside it.
     /// </summary>
-    Task<Guid> EnqueueAsync(JobKind kind, Guid targetId, CancellationToken ct = default);
+    /// <param name="workspaceId">
+    /// Stamped onto <see cref="Domain.Jobs.Job.WorkspaceId"/> — the caller's own workspace, when the
+    /// work belongs to one. Null for platform-level work (a billing tick, an email queued before a
+    /// workspace is known). See the property's own doc comment for why this is not a query filter.
+    /// </param>
+    Task<Guid> EnqueueAsync(
+        JobKind kind, Guid targetId, Guid? workspaceId = null, CancellationToken ct = default);
 
     /// <summary>
     /// The same, for work whose target is not the thing that must not double up.
@@ -31,7 +37,7 @@ public interface IJobQueue
     /// What no two concurrently running jobs of this kind may share.
     /// </param>
     Task<Guid> EnqueueExclusiveAsync(
-        JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default);
+        JobKind kind, Guid targetId, Guid exclusiveWith, Guid? workspaceId = null, CancellationToken ct = default);
 
     /// <summary>
     /// Ask the live job for a target to stop: a Pending job is cancelled before it ever starts, and

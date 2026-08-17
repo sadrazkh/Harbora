@@ -24,15 +24,19 @@ public class DeploymentEngineConcurrencyTests
         public int Enqueued;
         public readonly List<Guid> CancelledTargets = [];
 
-        /// <summary>What each enqueue said the job's target is, and what it must not share.</summary>
-        public readonly List<(JobKind Kind, Guid TargetId, Guid? ExclusiveWith)> Jobs = [];
+        /// <summary>What each enqueue said the job's target is, what it must not share, and the
+        /// workspace it was stamped with — the last is what proves P5's scoping column is actually
+        /// populated by this call site rather than left null.</summary>
+        public readonly List<(JobKind Kind, Guid TargetId, Guid? ExclusiveWith, Guid? WorkspaceId)> Jobs = [];
 
-        public Task<Guid> EnqueueAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
-        { Enqueued++; Jobs.Add((kind, targetId, null)); return Task.FromResult(Guid.NewGuid()); }
+        public Task<Guid> EnqueueAsync(
+            JobKind kind, Guid targetId, Guid? workspaceId = null, CancellationToken ct = default)
+        { Enqueued++; Jobs.Add((kind, targetId, null, workspaceId)); return Task.FromResult(Guid.NewGuid()); }
 
         public Task<Guid> EnqueueExclusiveAsync(
-            JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default)
-        { Enqueued++; Jobs.Add((kind, targetId, exclusiveWith)); return Task.FromResult(Guid.NewGuid()); }
+            JobKind kind, Guid targetId, Guid exclusiveWith, Guid? workspaceId = null,
+            CancellationToken ct = default)
+        { Enqueued++; Jobs.Add((kind, targetId, exclusiveWith, workspaceId)); return Task.FromResult(Guid.NewGuid()); }
 
         public Task<bool> RequestCancellationAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
         { CancelledTargets.Add(targetId); return Task.FromResult(true); }
@@ -87,7 +91,31 @@ public class DeploymentEngineConcurrencyTests
             new DeploymentRequest(appId, DeploymentTrigger.Manual, Guid.NewGuid()), default);
 
         queue.Jobs.Should().ContainSingle().Which
-            .Should().Be((JobKind.Deployment, deploymentId, (Guid?)appId));
+            .Should().Be((JobKind.Deployment, deploymentId, (Guid?)appId, (Guid?)Guid.Empty));
+    }
+
+    /// <summary>
+    /// P5's scoping (§7 Q3(a)): <c>/activity</c> filters jobs by hand on a denormalised
+    /// <c>WorkspaceId</c>, so the app's own workspace has to reach the queued row — not the caller's
+    /// session, which a webhook does not have (the comment on <c>QueueDeploymentAsync</c> above says
+    /// exactly why the workspace is read off the app rather than assumed).
+    /// </summary>
+    [Fact]
+    public async Task The_queued_deployment_job_is_stamped_with_the_apps_own_workspace()
+    {
+        using var db = NewDb();
+        var workspaceId = Guid.NewGuid();
+        var appId = Guid.NewGuid();
+        db.Apps.Add(new App { Id = appId, WorkspaceId = workspaceId, Name = "a", Slug = "a" });
+        await db.SaveChangesAsync();
+
+        var queue = new NoopQueue();
+        var engine = new DeploymentEngine(db, queue, new Clock());
+
+        await engine.QueueDeploymentAsync(
+            new DeploymentRequest(appId, DeploymentTrigger.Manual, Guid.NewGuid()), default);
+
+        queue.Jobs.Should().ContainSingle().Which.WorkspaceId.Should().Be(workspaceId);
     }
 
     [Fact]

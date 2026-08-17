@@ -65,6 +65,31 @@ public class Job : BaseEntity
     public Guid TargetId { get; set; }
 
     /// <summary>
+    /// Denormalised from whatever the job's own target belongs to, the same way
+    /// <c>Deployment.WorkspaceId</c> and <c>NotificationDelivery.WorkspaceId</c> are: stamped at
+    /// enqueue time by the caller, who already knows it, rather than resolved later by joining
+    /// <see cref="TargetId"/> against nine different aggregate tables.
+    ///
+    /// <para>
+    /// <c>Job</c> stays a platform-wide, unfiltered table (<c>HarboraDbContext.ApplyWorkspaceFilters</c>)
+    /// — this column does not carry a global query filter, and does not turn it into one. A caller
+    /// like <c>/activity</c> that wants only its own workspace's rows filters explicitly, the same
+    /// way <c>NotificationsController</c> filters <c>UserNotification</c> by hand instead of relying
+    /// on EF to do it: a filter of <c>WorkspaceId == null || WorkspaceId == CurrentWorkspaceId</c>
+    /// would leak every platform-level job (a null <see cref="WorkspaceId"/>, same as
+    /// <c>NotificationDelivery</c>'s transactional rows) into every tenant at once, which is worse
+    /// than the absent filter this table has always had.
+    /// </para>
+    ///
+    /// <para>
+    /// Null for work that belongs to nobody in particular — a <c>BillingHour</c> tick processes every
+    /// workspace at once — and for the two password/verification emails queued before a workspace is
+    /// even known. Everything else is stamped by the caller that enqueued it.
+    /// </para>
+    /// </summary>
+    public Guid? WorkspaceId { get; set; }
+
+    /// <summary>
     /// What this job must not share with another job of the same kind running at the same time.
     /// Null — the ordinary case — means its own <see cref="TargetId"/>.
     ///

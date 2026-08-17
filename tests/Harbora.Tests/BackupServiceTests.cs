@@ -421,14 +421,16 @@ internal sealed class RecordingJobQueue : IJobQueue
 {
     public List<(JobKind Kind, Guid TargetId)> Enqueued { get; } = [];
 
-    public Task<Guid> EnqueueAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
+    public Task<Guid> EnqueueAsync(
+        JobKind kind, Guid targetId, Guid? workspaceId = null, CancellationToken ct = default)
     {
         Enqueued.Add((kind, targetId));
         return Task.FromResult(Guid.CreateVersion7());
     }
 
     public Task<Guid> EnqueueExclusiveAsync(
-        JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default)
+        JobKind kind, Guid targetId, Guid exclusiveWith, Guid? workspaceId = null,
+        CancellationToken ct = default)
     {
         Enqueued.Add((kind, targetId));
         return Task.FromResult(Guid.CreateVersion7());

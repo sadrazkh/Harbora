@@ -16,7 +16,7 @@ namespace Harbora.Infrastructure.Notifications;
 /// Deliberately a plain <c>Add</c> and nothing more: the caller's own <c>SaveChangesAsync</c> —
 /// already happening in every one of these actions, to persist the token/invitation row this email
 /// is about — covers the delivery row in the same request. The caller must still enqueue the job
-/// itself (<c>IJobQueue.EnqueueAsync(JobKind.NotificationDelivery, delivery.Id, ct)</c>) after that
+/// itself (<c>IJobQueue.EnqueueAsync(JobKind.NotificationDelivery, delivery.Id, delivery.WorkspaceId, ct)</c>) after that
 /// save, the same two-step every other N1 caller follows.
 /// </para>
 /// </summary>

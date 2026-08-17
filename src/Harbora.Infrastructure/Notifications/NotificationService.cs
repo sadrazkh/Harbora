@@ -457,7 +457,7 @@ public sealed class NotificationService(
 
         if (delivery.Status == NotificationDeliveryStatus.Pending)
             await scope.ServiceProvider.GetRequiredService<IJobQueue>()
-                .EnqueueAsync(JobKind.NotificationDelivery, delivery.Id, ct);
+                .EnqueueAsync(JobKind.NotificationDelivery, delivery.Id, delivery.WorkspaceId, ct);
     }
 
     /// <summary>

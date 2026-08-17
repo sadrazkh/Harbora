@@ -86,7 +86,7 @@ public sealed class BackupEngine(
         // and would fail it along with the run it was folded into.
         await jobs.EnqueueExclusiveAsync(
             Harbora.Domain.Jobs.JobKind.Backup, id,
-            exclusiveWith: BackupRunIdentity.ExclusionKeyFor(type, targetRef), ct);
+            exclusiveWith: BackupRunIdentity.ExclusionKeyFor(type, targetRef), workspaceId: workspaceId, ct);
 
         return id;
     }

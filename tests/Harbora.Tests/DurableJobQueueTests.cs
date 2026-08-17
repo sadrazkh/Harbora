@@ -17,6 +17,49 @@ public class DurableJobQueueTests
 {
     // ---- durability ----
 
+    /// <summary>
+    /// P5's whole scoping story rests on this column actually being populated by the caller who
+    /// enqueues, rather than left null — <c>/activity</c> filters on it by hand (Job carries no query
+    /// filter, see <c>Job.WorkspaceId</c>'s own doc comment), so a queue that silently dropped it
+    /// would make every job in the platform invisible to the page meant to show it.
+    /// </summary>
+    [Fact]
+    public async Task Enqueuing_with_a_workspace_id_stamps_it_on_the_row()
+    {
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        var workspaceId = Guid.NewGuid();
+
+        await h.Queue().EnqueueAsync(JobKind.Deployment, target, workspaceId);
+
+        h.JobFor(target)!.WorkspaceId.Should().Be(workspaceId);
+    }
+
+    /// <summary>The platform-level case — a billing tick, or an enqueue nobody attached a workspace
+    /// to — must not silently invent one; the row stays unowned rather than getting a wrong owner.</summary>
+    [Fact]
+    public async Task Enqueuing_with_no_workspace_id_leaves_the_row_unowned()
+    {
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+
+        await h.Queue().EnqueueAsync(JobKind.Deployment, target);
+
+        h.JobFor(target)!.WorkspaceId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Enqueuing_the_exclusive_way_stamps_the_workspace_id_too()
+    {
+        using var h = new JobHarness();
+        var target = Guid.NewGuid();
+        var workspaceId = Guid.NewGuid();
+
+        await h.Queue().EnqueueExclusiveAsync(JobKind.Deployment, target, Guid.NewGuid(), workspaceId);
+
+        h.JobFor(target)!.WorkspaceId.Should().Be(workspaceId);
+    }
+
     [Fact]
     public async Task Enqueuing_persists_the_work_before_it_runs()
     {

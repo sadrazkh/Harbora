@@ -98,7 +98,8 @@ public sealed class DeploymentEngine(
         // an insert with nothing between them, so a double-click, a CLI call racing a webhook or a
         // redelivered push can still produce two rows. Serialising them here is what stops that
         // becoming two docker builds, two containers under one name and two proxy applies.
-        await jobs.EnqueueExclusiveAsync(JobKind.Deployment, deploymentId, exclusiveWith: app.Id, ct);
+        await jobs.EnqueueExclusiveAsync(
+            JobKind.Deployment, deploymentId, exclusiveWith: app.Id, workspaceId: app.WorkspaceId, ct);
         await quotaReservation.CommitAsync(ct);
 
         return deploymentId;

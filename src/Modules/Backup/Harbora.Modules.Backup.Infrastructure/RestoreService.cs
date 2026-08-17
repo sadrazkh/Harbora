@@ -248,7 +248,7 @@ public sealed class RestoreService(
                 EntryCount = request.Entries?.Count ?? 0
             }), ct: ct);
 
-        await jobs.EnqueueAsync(JobKind.BackupRestore, job.Id, ct);
+        await jobs.EnqueueAsync(JobKind.BackupRestore, job.Id, job.WorkspaceId, ct);
         return new RestoreOutcome(true, job.Id);
     }
 
@@ -334,7 +334,7 @@ public sealed class RestoreService(
                 // make — but the reference to it is worth more than the check is, and the enqueue
                 // is the step that can fail. Recording where the way back is comes first, and the
                 // save above is what makes it durable. See BackupVerificationQueue.
-                await BackupVerificationQueue.RequestAsync(jobs, db, safety.SnapshotId, logger, ct);
+                await BackupVerificationQueue.RequestAsync(jobs, db, safety.SnapshotId, job.WorkspaceId, logger, ct);
             }
 
             var isDatabase = job.RestoreType is RestoreType.Database;

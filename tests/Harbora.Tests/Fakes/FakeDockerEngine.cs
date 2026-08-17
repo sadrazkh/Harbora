@@ -213,11 +213,15 @@ public sealed class FakeDockerEngine : IDockerEngine
     {
         ct.ThrowIfCancellationRequested();
         Record(nameof(BuildImageAsync), request.ImageTag);
+        BuildRequests.Add(request);
         if (BuildFailure is not null) throw BuildFailure;
         SeedImage(request.ImageTag);
         log.Report($"built {request.ImageTag}");
         return Task.FromResult(request.ImageTag);
     }
+
+    /// <summary>Every build request, so a test can assert on build args as well as the image tag.</summary>
+    public List<DockerBuildRequest> BuildRequests { get; } = [];
 
     public async Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct)
     {

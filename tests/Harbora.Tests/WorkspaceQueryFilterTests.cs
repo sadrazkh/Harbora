@@ -175,10 +175,12 @@ public class WorkspaceQueryFilterTests
 
     private sealed class RecordingQueue : IJobQueue
     {
-        public Task<Guid> EnqueueAsync(Harbora.Domain.Jobs.JobKind kind, Guid targetId, CancellationToken ct = default)
+        public Task<Guid> EnqueueAsync(
+            Harbora.Domain.Jobs.JobKind kind, Guid targetId, Guid? workspaceId = null, CancellationToken ct = default)
             => Task.FromResult(Guid.NewGuid());
         public Task<Guid> EnqueueExclusiveAsync(
-            Harbora.Domain.Jobs.JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default)
+            Harbora.Domain.Jobs.JobKind kind, Guid targetId, Guid exclusiveWith, Guid? workspaceId = null,
+            CancellationToken ct = default)
             => Task.FromResult(Guid.NewGuid());
         public Task<bool> RequestCancellationAsync(Harbora.Domain.Jobs.JobKind kind, Guid targetId, CancellationToken ct = default)
             => Task.FromResult(false);

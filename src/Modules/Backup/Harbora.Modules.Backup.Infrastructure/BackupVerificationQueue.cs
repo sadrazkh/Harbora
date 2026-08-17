@@ -66,7 +66,8 @@ internal static class BackupVerificationQueue
     /// </para>
     /// </summary>
     public static async Task RequestAsync(
-        IJobQueue jobs, HarboraDbContext db, Guid snapshotId, ILogger logger, CancellationToken ct)
+        IJobQueue jobs, HarboraDbContext db, Guid snapshotId, Guid workspaceId, ILogger logger,
+        CancellationToken ct)
     {
         try
         {
@@ -78,7 +79,7 @@ internal static class BackupVerificationQueue
                 return;
             }
 
-            await jobs.EnqueueAsync(JobKind.BackupVerify, snapshotId, ct);
+            await jobs.EnqueueAsync(JobKind.BackupVerify, snapshotId, workspaceId, ct);
         }
         catch (Exception ex)
         {

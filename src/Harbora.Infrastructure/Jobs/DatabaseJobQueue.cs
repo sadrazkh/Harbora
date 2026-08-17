@@ -16,20 +16,23 @@ public sealed class DatabaseJobQueue(
     IJobCancellationRegistry cancellations,
     JobSignal signal) : IJobQueue
 {
-    public Task<Guid> EnqueueAsync(JobKind kind, Guid targetId, CancellationToken ct = default)
-        => AddAsync(kind, targetId, exclusiveWith: null, ct);
+    public Task<Guid> EnqueueAsync(
+        JobKind kind, Guid targetId, Guid? workspaceId = null, CancellationToken ct = default)
+        => AddAsync(kind, targetId, exclusiveWith: null, workspaceId, ct);
 
     public Task<Guid> EnqueueExclusiveAsync(
-        JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default)
-        => AddAsync(kind, targetId, exclusiveWith, ct);
+        JobKind kind, Guid targetId, Guid exclusiveWith, Guid? workspaceId = null, CancellationToken ct = default)
+        => AddAsync(kind, targetId, exclusiveWith, workspaceId, ct);
 
-    private async Task<Guid> AddAsync(JobKind kind, Guid targetId, Guid? exclusiveWith, CancellationToken ct)
+    private async Task<Guid> AddAsync(
+        JobKind kind, Guid targetId, Guid? exclusiveWith, Guid? workspaceId, CancellationToken ct)
     {
         var job = new Job
         {
             Kind = kind,
             TargetId = targetId,
             ExclusiveWith = exclusiveWith,
+            WorkspaceId = workspaceId,
             Status = JobStatus.Pending,
             CreatedAt = clock.UtcNow
         };

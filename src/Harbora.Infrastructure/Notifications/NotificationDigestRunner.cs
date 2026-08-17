@@ -84,7 +84,7 @@ public sealed class NotificationDigestRunner(
             foreach (var entry in entries) entry.DeliveryId = delivery.Id;
 
             await db.SaveChangesAsync(ct);
-            await jobQueue.EnqueueAsync(JobKind.NotificationDelivery, delivery.Id, ct);
+            await jobQueue.EnqueueAsync(JobKind.NotificationDelivery, delivery.Id, delivery.WorkspaceId, ct);
         }
     }
 
@@ -139,7 +139,7 @@ public sealed class NotificationDigestRunner(
             user.LastWeeklyReportAt = now;
 
             await db.SaveChangesAsync(ct);
-            await jobQueue.EnqueueAsync(JobKind.NotificationDelivery, delivery.Id, ct);
+            await jobQueue.EnqueueAsync(JobKind.NotificationDelivery, delivery.Id, delivery.WorkspaceId, ct);
         }
     }
 }

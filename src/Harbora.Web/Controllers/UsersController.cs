@@ -197,7 +197,7 @@ public sealed class UsersController(
 
         await db.SaveChangesAsync(ct);
         await quotaReservation.CommitAsync(ct);
-        await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, ct);
+        await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, delivery.WorkspaceId, ct);
 
         await audit.LogAsync("user.invited", "user", email, ClientIp, ct: ct);
         return Back(IsFa ? $"دعوت‌نامه به {email} صف شد." : $"An invitation to {email} has been queued.");

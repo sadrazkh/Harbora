@@ -78,7 +78,7 @@ public sealed class FunctionInvoker(
 
         // Exclusive on the function rather than on the invocation: two calls of one function must not
         // overlap, or a handler that takes longer than its own schedule quietly runs twice at once.
-        await jobs.EnqueueExclusiveAsync(JobKind.FunctionInvoke, invocation.Id, fn.Id, ct);
+        await jobs.EnqueueExclusiveAsync(JobKind.FunctionInvoke, invocation.Id, fn.Id, app.WorkspaceId, ct);
         return invocation.Id;
     }
 

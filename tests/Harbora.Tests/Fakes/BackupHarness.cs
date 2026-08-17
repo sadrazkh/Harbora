@@ -315,14 +315,16 @@ public sealed class NoopJobQueue : IJobQueue
     /// <summary>Every enqueue, with <c>Job.ExcludesOn</c> already resolved the way the queue does it.</summary>
     public List<(Harbora.Domain.Jobs.JobKind Kind, Guid TargetId, Guid ExcludesOn)> Enqueued { get; } = [];
 
-    public Task<Guid> EnqueueAsync(Harbora.Domain.Jobs.JobKind kind, Guid targetId, CancellationToken ct = default)
+    public Task<Guid> EnqueueAsync(
+        Harbora.Domain.Jobs.JobKind kind, Guid targetId, Guid? workspaceId = null, CancellationToken ct = default)
     {
         Enqueued.Add((kind, targetId, targetId));
         return Task.FromResult(Guid.NewGuid());
     }
 
     public Task<Guid> EnqueueExclusiveAsync(
-        Harbora.Domain.Jobs.JobKind kind, Guid targetId, Guid exclusiveWith, CancellationToken ct = default)
+        Harbora.Domain.Jobs.JobKind kind, Guid targetId, Guid exclusiveWith, Guid? workspaceId = null,
+        CancellationToken ct = default)
     {
         Enqueued.Add((kind, targetId, exclusiveWith));
         return Task.FromResult(Guid.NewGuid());
