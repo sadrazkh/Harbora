@@ -333,6 +333,11 @@ harbora — Harbora server administration
     harbora backup-db                   Take one now, before doing something risky
     harbora restore-db <file>           Replace the database with a restore point (prompts)
 
+  Reports (read-only; writes nothing; safe to run any time, including on a healthy install)
+    harbora environment-report          Workloads with no environment, empty environments,
+                                        dual-network workloads, workspaces with no project.
+                                        Run this before any migration that touches EnvironmentId.
+
   Lifecycle
     harbora restart | stop
 
@@ -352,7 +357,7 @@ case "${1:-help}" in
   backups)        shift; cmd_backups "$@" ;;
   backup-db)      shift; cmd_backup_db "$@" ;;
   restore-db)     shift; cmd_restore_db "$@" ;;
-  info|users|reset-password|make-owner|unlock|node-ca)
+  info|users|reset-password|make-owner|unlock|node-ca|environment-report)
                   panel_admin "$@" ;;
   help|--help|-h) cmd_help ;;
   *)              err "Unknown command '$1'."; echo; cmd_help; exit 1 ;;

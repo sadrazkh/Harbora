@@ -2,6 +2,7 @@ using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
 using Harbora.Infrastructure.Nodes;
+using Harbora.Infrastructure.Projects;
 using Harbora.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -36,6 +37,7 @@ public static class AdminCommands
                 "make-owner" => await MakeOwnerAsync(args, config),
                 "unlock" => await UnlockAsync(args, config),
                 "node-ca" => await NodeCaAsync(config),
+                "environment-report" => await EnvironmentReportAsync(config),
                 "help" or "--help" or "-h" => Help(),
                 _ => Unknown(command)
             };
@@ -210,6 +212,20 @@ public static class AdminCommands
         return 0;
     }
 
+    /// <summary>
+    /// P1 of the app/environment management phase — "the report nobody has run". Read-only: answers
+    /// whether it is safe to write the migration that makes <c>EnvironmentId</c> required, without
+    /// writing anything itself. See <see cref="Projects.EnvironmentPlacementReport"/> for what each
+    /// of the four sections means and why a non-zero first section is a bug report, not a backfill.
+    /// </summary>
+    private static async Task<int> EnvironmentReportAsync(IConfiguration config)
+    {
+        await using var db = Open(config);
+        var report = await EnvironmentPlacementReport.BuildAsync(db);
+        Console.Write(EnvironmentPlacementReport.Render(report));
+        return 0;
+    }
+
     private static int Help()
     {
         Console.WriteLine("""
@@ -222,6 +238,9 @@ public static class AdminCommands
               harbora make-owner --email X            Promote an account to Owner
               harbora unlock --email X                Re-enable a deactivated account
               harbora node-ca                         Print the node CA (PEM) for Traefik's mTLS config
+              harbora environment-report              Read-only: workloads with no environment, empty
+                                                      environments, dual-network workloads, projectless
+                                                      workspaces. Writes nothing; safe to run any time.
 
             These work even when the panel refuses to start.
             """);
