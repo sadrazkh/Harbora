@@ -8,8 +8,10 @@ using Xunit;
 namespace Harbora.Tests;
 
 /// <summary>
-/// The incident timeline on <c>/monitoring</c> and the bell badge that counts what is open, end to
-/// end: the real route, a real cookie, real Razor (2026-08-16 monitoring-alerting spec §M4).
+/// The incident timeline on <c>/monitoring</c>, end to end: the real route, a real cookie, real Razor
+/// (2026-08-16 monitoring-alerting spec §M4). Its own open-incident badge is where that count lives
+/// now (N3, 2026-08-16 notification-system spec) — the topbar's bell counts this signed-in person's
+/// unread notifications instead; see <c>NotificationsHttpTests</c> for that badge.
 /// </summary>
 [Collection(HarboraHttpCollection.Name)]
 public class MonitoringTimelineHttpTests(HarboraHttpFixture fixture)
@@ -59,8 +61,13 @@ public class MonitoringTimelineHttpTests(HarboraHttpFixture fixture)
         html.Should().Contain("&#x62A;&#x623;&#x6CC;&#x6CC;&#x62F;", "the Persian acknowledge button on the open incident's row");
     }
 
+    /// <summary>
+    /// N3 moved this badge from the topbar's bell — every workspace member's shared count of open
+    /// incidents — to the timeline's own heading, unchanged in every other respect: still only open
+    /// incidents, still a workspace fact rather than a per-person one.
+    /// </summary>
     [Fact]
-    public async Task The_bell_badge_counts_only_open_incidents()
+    public async Task The_timelines_own_badge_counts_only_open_incidents()
     {
         // The fixture's workspace is shared across every test in this collection, so the badge count
         // is asserted as a DELTA rather than an absolute number — another test's still-open incident
@@ -95,7 +102,7 @@ public class MonitoringTimelineHttpTests(HarboraHttpFixture fixture)
 
     private static int OpenBadgeCount(string html)
     {
-        var match = System.Text.RegularExpressions.Regex.Match(html, "data-open-incidents-count=\"(\\d+)\"");
+        var match = System.Text.RegularExpressions.Regex.Match(html, "data-open-incident-count=\"(\\d+)\"");
         return match.Success ? int.Parse(match.Groups[1].Value) : 0;
     }
 

@@ -1,0 +1,88 @@
+@using Harbora.Web.ViewModels
+@using Harbora.Web.Infrastructure
+@model NotificationsPageViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    string Query(int page) => $"/notifications?page={page}&unreadOnly={(Model.UnreadOnly ? "true" : "false")}";
+}
+
+<div class="flex items-center justify-between mb-4">
+    <div>
+        <h1 class="text-xl font-semibold">@(isFa ? "اعلان‌ها" : "Notifications")</h1>
+        <p class="text-sm text-ink-muted">@(isFa ? "چیزهایی که این فضای کاری به شما گفته، جدیدترین ابتدا." : "What this workspace has told you, newest first.")</p>
+    </div>
+    <form asp-controller="Notifications" asp-action="MarkAllRead" method="post">
+        @Html.AntiForgeryToken()
+        <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm inline-flex items-center gap-2">
+            <i data-lucide="circle-check-big" class="h-4 w-4"></i>@(isFa ? "علامت‌گذاری همه به‌عنوان خوانده‌شده" : "Mark all as read")
+        </button>
+    </form>
+</div>
+
+<form method="get" action="/notifications" class="flex flex-wrap gap-2 mb-4">
+    <select name="unreadOnly" class="rounded-lg bg-surface border border-line px-3 py-2 text-sm" onchange="this.form.submit()">
+        <option value="false" selected="@(!Model.UnreadOnly)">@(isFa ? "همه" : "All")</option>
+        <option value="true" selected="@(Model.UnreadOnly)">@(isFa ? "فقط خوانده‌نشده" : "Unread only")</option>
+    </select>
+</form>
+
+<section class="rounded-xl border border-line bg-surface overflow-hidden" data-notifications-list>
+    @if (Model.Entries.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel("bell", isFa
+            ? "اعلانی برای نمایش نیست."
+            : "No notifications to show."))" />
+    }
+    else
+    {
+        <div class="divide-y divide-line">
+            @foreach (var n in Model.Entries)
+            {
+                var isUnread = n.ReadAt is null;
+                <div class="flex items-center justify-between gap-3 p-3"
+                     data-notification-row data-notification-id="@n.Id"
+                     data-notification-read="@(isUnread ? "false" : "true")"
+                     data-notification-severity="@n.Severity">
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2">
+                            @if (isUnread)
+                            {
+                                <span class="h-2 w-2 shrink-0 rounded-full bg-accent" aria-hidden="true"></span>
+                            }
+                            <strong class="text-sm truncate">@n.Title</strong>
+                        </div>
+                        <p class="mt-0.5 text-xs text-ink-faint truncate">@n.Body</p>
+                        <span class="text-[11px] text-ink-faint">@n.CreatedAt.ToString(Dates.Stamp)</span>
+                    </div>
+                    @if (isUnread)
+                    {
+                        <form asp-controller="Notifications" asp-action="MarkRead" asp-route-id="@n.Id" method="post" class="shrink-0">
+                            @Html.AntiForgeryToken()
+                            <button class="text-xs text-accent-text"
+                                    aria-label="@(isFa ? $"علامت‌گذاری {n.Title} به‌عنوان خوانده‌شده" : $"Mark {n.Title} as read")">
+                                @(isFa ? "خوانده‌شد" : "mark read")
+                            </button>
+                        </form>
+                    }
+                </div>
+            }
+        </div>
+    }
+</section>
+
+@if (Model.TotalPages > 1)
+{
+    <div class="flex items-center justify-between mt-4 text-sm">
+        <span class="text-ink-faint">@(isFa ? "صفحه" : "Page") @Model.Page / @Model.TotalPages · @Model.TotalCount @(isFa ? "مورد" : "entries")</span>
+        <div class="flex gap-2">
+            @if (Model.HasPrevious)
+            {
+                <a href="@Query(Model.Page - 1)" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1">@(isFa ? "قبلی" : "Previous")</a>
+            }
+            @if (Model.HasNext)
+            {
+                <a href="@Query(Model.Page + 1)" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1">@(isFa ? "بعدی" : "Next")</a>
+            }
+        </div>
+    </div>
+}

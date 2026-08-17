@@ -20,6 +20,7 @@
     string ItemLabel(string key) => (key, isFa) switch
     {
         ("dashboard", true) => "داشبورد", ("dashboard", false) => "Dashboard",
+        ("notifications", true) => "اعلان‌ها", ("notifications", false) => "Notifications",
         ("workspaces", true) => "ورک‌اسپیس‌ها و اعضا", ("workspaces", false) => "Workspaces & members",
         ("applications", true) => "برنامه‌ها", ("applications", false) => "Applications",
         ("services", true) => "دیتابیس‌ها", ("services", false) => "Databases",
@@ -80,12 +81,14 @@
         <i data-lucide="circle-help" class="h-4.5 w-4.5"></i>
     </a>
 
-    @* AlertsController only exposes POST routes — alert management itself lives at the bottom of
-       /monitoring, so the bell goes there rather than to a page that does not exist. The badge is
-       what open incidents this workspace has right now — see OpenIncidentsViewComponent. *@
-    <a href="/monitoring#timeline" class="relative hidden rounded-lg p-2 text-ink-muted hover:bg-surface-2 md:block" title="@(isFa ? "هشدارها" : "Alerts")">
+    @* N3 (2026-08-16 notification-system spec): the bell goes to this person's own inbox now, and the
+       badge is what they have not read — see UnreadNotificationsViewComponent. It used to count open
+       incidents for the whole workspace; that count did not go away, it moved to where incidents live,
+       the timeline on /monitoring, because "conditions open here" and "things I have not read" are
+       different facts with different lifecycles and one badge cannot honestly be both. *@
+    <a href="/notifications" class="relative hidden rounded-lg p-2 text-ink-muted hover:bg-surface-2 md:block" title="@(isFa ? "اعلان‌ها" : "Notifications")">
         <i data-lucide="bell" class="h-4.5 w-4.5"></i>
-        @await Component.InvokeAsync("OpenIncidents")
+        @await Component.InvokeAsync("UnreadNotifications")
     </a>
 
     <div class="hidden items-center rounded-lg bg-surface-2 p-0.5 xl:flex" role="group" aria-label="@T["Theme"]">

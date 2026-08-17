@@ -27,15 +27,16 @@ public class LinkTargetTests
     {
         // AlertsController declares only [HttpPost] routes ("", "{id}/test", "{id}/delete") — a GET
         // to /alerts, which is exactly what clicking a plain <a href> does, is a guaranteed 404 on
-        // every page in the panel. The bell's badge now counts open incidents (M4), so it points at
-        // the timeline section that lists them rather than at the rule-management section further
-        // down the same page — both are anchors on /monitoring, so neither 404s.
+        // every page in the panel. The bell's badge counts this person's unread notifications now
+        // (N3), so it points at NotificationsController's own [HttpGet("")] route rather than at the
+        // rule-management section on /monitoring, which is where it used to send M4's open-incident
+        // count before that count moved to the timeline's own badge there.
         var markup = View("Shared", "Design", "_Topbar.cshtml");
 
         markup.Should().NotContain("href=\"/alerts\"",
             "AlertsController has no GET route at /alerts — the bell would 404 on every page");
-        markup.Should().Contain("href=\"/monitoring#timeline\"",
-            "the bell's badge counts open incidents, so it should open the timeline that lists them");
+        markup.Should().Contain("href=\"/notifications\"",
+            "the bell counts this person's unread notifications, so it should open their inbox");
     }
 
     [Fact]

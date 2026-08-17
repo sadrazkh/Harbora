@@ -1,0 +1,6 @@
+@model Harbora.Web.Components.UnreadNotificationsViewComponent.Model
+@if (Model.UnreadCount > 0)
+{
+    <span class="absolute -end-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none text-white"
+          data-unread-notifications-count="@Model.UnreadCount">@(Model.UnreadCount > 99 ? "99+" : Model.UnreadCount.ToString())</span>
+}

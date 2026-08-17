@@ -206,6 +206,23 @@ public sealed class AuditPageViewModel
 }
 
 /// <summary>
+/// Backs <c>/notifications</c> (N3, 2026-08-16 notification-system spec): this signed-in person's own
+/// inbox for the current workspace, filtered and paged the same way the audit page already is.
+/// </summary>
+public sealed class NotificationsPageViewModel
+{
+    public List<Harbora.Domain.Notifications.UserNotification> Entries { get; set; } = new();
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 30;
+    public int TotalCount { get; set; }
+    public bool UnreadOnly { get; set; }
+
+    public int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalCount / (double)PageSize));
+    public bool HasPrevious => Page > 1;
+    public bool HasNext => Page < TotalPages;
+}
+
+/// <summary>
 /// The public landing page. Marketing copy is static (it describes the product), but plans come
 /// from the database so the page reflects what this installation actually offers.
 /// </summary>

@@ -50,6 +50,10 @@ public static class NavigationMap
     [
         new("overview", [
             new("dashboard", "Home", "Index", "layout-dashboard"),
+            // N3 (2026-08-16 notification-system spec): everyone's own inbox, reachable from the
+            // bell on every page and from here — no capability, since it shows only the caller's own
+            // rows regardless of role.
+            new("notifications", "Notifications", "Index", "bell"),
             new("workspaces", "Workspaces", "Index", "building-2"),
             // No capability, and that is the decision rather than an oversight: this is the page
             // somebody opens when their app has stopped and they want to know why. A bill only a
