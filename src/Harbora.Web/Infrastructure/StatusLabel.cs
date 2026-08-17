@@ -1,4 +1,5 @@
 using Harbora.Domain.Common;
+using Harbora.Domain.Jobs;
 
 namespace Harbora.Web.Infrastructure;
 
@@ -49,6 +50,18 @@ public static class StatusLabel
         DeploymentTrigger.Rollback => isFa ? "بازگردانی" : "Rollback",
         DeploymentTrigger.Schedule => isFa ? "زمان‌بندی" : "Schedule",
         _ => Fallback(trigger.ToString(), isFa)
+    };
+
+    /// <summary>P5 (/activity): the same five words <c>Job.IsTerminal</c> already groups by,
+    /// translated once so the status chip and any "why isn't this done" sentence agree.</summary>
+    public static string For(JobStatus status, bool isFa) => status switch
+    {
+        JobStatus.Pending => isFa ? "در صف" : "Pending",
+        JobStatus.Running => isFa ? "در حال اجرا" : "Running",
+        JobStatus.Succeeded => isFa ? "موفق" : "Succeeded",
+        JobStatus.Failed => isFa ? "ناموفق" : "Failed",
+        JobStatus.Cancelled => isFa ? "لغوشده" : "Cancelled",
+        _ => Fallback(status.ToString(), isFa)
     };
 
     /// <summary>

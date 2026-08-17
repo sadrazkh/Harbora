@@ -387,4 +387,33 @@ public class QueuePositionTests
             fa.Should().NotBe(QueuePosition.Describe(place, persian: false));
         }
     }
+
+    /// <summary>
+    /// P5 (/activity) labels every row's kind from this same table (<c>Noun</c> is now public for
+    /// exactly that reason) rather than restating a second bilingual mapping — so every one of the
+    /// twelve <see cref="JobKind"/> members needs a real name here, in both languages, not the
+    /// generic "job"/"کار" fallback that covered the three kinds nothing used to say a sentence about.
+    /// </summary>
+    [Theory]
+    [InlineData(JobKind.Deployment)]
+    [InlineData(JobKind.Backup)]
+    [InlineData(JobKind.ServiceProvision)]
+    [InlineData(JobKind.CronRun)]
+    [InlineData(JobKind.BackupSnapshot)]
+    [InlineData(JobKind.BackupRestore)]
+    [InlineData(JobKind.BackupVerify)]
+    [InlineData(JobKind.BackupPrune)]
+    [InlineData(JobKind.RepositoryHealthCheck)]
+    [InlineData(JobKind.BillingHour)]
+    [InlineData(JobKind.FunctionInvoke)]
+    [InlineData(JobKind.NotificationDelivery)]
+    public void Every_job_kind_has_a_real_noun_in_both_languages(JobKind kind)
+    {
+        var en = QueuePosition.Noun(kind, persian: false);
+        var fa = QueuePosition.Noun(kind, persian: true);
+
+        en.Should().NotBe("job", $"{kind} deserves its own English noun, not the generic fallback");
+        fa.Should().NotBe("کار", $"{kind} deserves its own Persian noun, not the generic fallback");
+        en.Should().NotBe(fa);
+    }
 }

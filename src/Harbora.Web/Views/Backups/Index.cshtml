@@ -6,6 +6,8 @@
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var msg = TempData["Message"] as string;
     var err = TempData["Error"] as string;
+    // P5: set only where a real Job now backs the message (BackupsController.Run).
+    var msgLinksToActivity = TempData["MessageLinksToActivity"] is true;
 
     // Unknown size is not zero bytes: a backup whose size was never recorded is not an empty one. And
     // a recorded size is never "0 MB" — the config backups are a few kilobytes, and forcing them
@@ -83,7 +85,16 @@
     <partial name="Design/_StatCard" model="lastCard" />
 </div>
 
-@if (msg is not null){<div class="alert-success mb-4">@msg</div>}
+@if (msg is not null)
+{
+    <div class="alert-success mb-4 flex flex-wrap items-center justify-between gap-2">
+        <span>@msg</span>
+        @if (msgLinksToActivity)
+        {
+            <a href="/activity" data-message-activity-link class="shrink-0 font-medium underline">@(isFa ? "دیدن در فعالیت" : "View in Activity")</a>
+        }
+    </div>
+}
 @if (err is not null){<div class="alert-danger mb-4">@err</div>}
 
 @if (unverified > 0)

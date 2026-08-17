@@ -5,6 +5,10 @@
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var msg = TempData["Message"] as string;
     var err = TempData["Error"] as string;
+    // Set only at the enqueue sites below (P5): the row this message is about now has a Job the
+    // person can actually watch, so the message that used to dead-end at "it runs in the
+    // background" becomes a link to where that is true.
+    var msgLinksToActivity = TempData["MessageLinksToActivity"] is true;
 
     string Size(long b) => b <= 0 ? "—" : b < 1048576 ? $"{b / 1024.0:0} KB" : $"{b / 1048576.0:0.0} MB";
 
@@ -106,7 +110,13 @@
 
 @if (msg is not null)
 {
-    <div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>
+    <div class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">
+        <span>@msg</span>
+        @if (msgLinksToActivity)
+        {
+            <a href="/activity" data-message-activity-link class="shrink-0 font-medium underline">@(isFa ? "دیدن در فعالیت" : "View in Activity")</a>
+        }
+    </div>
 }
 @if (err is not null)
 {

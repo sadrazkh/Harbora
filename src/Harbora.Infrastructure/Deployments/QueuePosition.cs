@@ -262,7 +262,21 @@ public static class QueuePosition
         ? $"{count} {Noun(kind, persian: true)}"
         : $"{count} {Noun(kind, persian: false)}s";
 
-    private static string Noun(JobKind kind, bool persian) => kind switch
+    /// <summary>
+    /// One job kind, named in both languages. Public (not just used by the sentences above) so
+    /// <c>/activity</c> (P5) can label every row's kind from this same table rather than restating
+    /// a second bilingual mapping that could drift from this one.
+    ///
+    /// <para>
+    /// Nine of the twelve <see cref="JobKind"/> members had a name here already; the other three —
+    /// <see cref="JobKind.BillingHour"/>, <see cref="JobKind.FunctionInvoke"/> and
+    /// <see cref="JobKind.NotificationDelivery"/> — never needed one because nothing ever queues
+    /// behind them in a sentence a person reads (a billing tick excludes on itself, a function
+    /// invocation and a notification delivery are both high-volume and low-drama). <c>/activity</c>
+    /// lists all twelve, so all twelve are named here now.
+    /// </para>
+    /// </summary>
+    public static string Noun(JobKind kind, bool persian) => kind switch
     {
         JobKind.Deployment => persian ? "استقرار" : "deployment",
         JobKind.Backup => persian ? "پشتیبان‌گیری" : "backup",
@@ -273,6 +287,9 @@ public static class QueuePosition
         JobKind.BackupVerify => persian ? "بررسی پشتیبان" : "backup verification",
         JobKind.BackupPrune => persian ? "هرس پشتیبان" : "backup prune",
         JobKind.RepositoryHealthCheck => persian ? "بررسی سلامت مخزن" : "repository health check",
+        JobKind.BillingHour => persian ? "محاسبه صورتحساب ساعتی" : "hourly billing run",
+        JobKind.FunctionInvoke => persian ? "فراخوانی تابع" : "function invocation",
+        JobKind.NotificationDelivery => persian ? "ارسال اعلان" : "notification delivery",
         _ => persian ? "کار" : "job"
     };
 

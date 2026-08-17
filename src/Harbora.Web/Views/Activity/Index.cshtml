@@ -1,0 +1,112 @@
+@using Harbora.Web.ViewModels
+@using Harbora.Domain.Jobs
+@model ActivityPageViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    string Query(int page) =>
+        $"/activity?page={page}&kind={Model.KindFilter?.ToString() ?? ""}&status={Model.StatusFilter?.ToString() ?? ""}";
+
+    string StatusColour(JobStatus status) => status switch
+    {
+        JobStatus.Succeeded => "bg-ok/15 text-ok",
+        JobStatus.Failed => "bg-danger/15 text-danger",
+        JobStatus.Cancelled => "bg-slate-500/15 text-ink",
+        _ => "bg-accent-hover/15 text-accent-text animate-pulse"
+    };
+}
+
+<div class="flex items-center justify-between mb-4">
+    <div>
+        <h1 class="text-xl font-semibold">@(isFa ? "فعالیت" : "Activity")</h1>
+        <p class="text-sm text-ink-muted">
+            @(isFa
+                ? "هر کار پس‌زمینه‌ای که این فضای کاری صف کرده، جدیدترین ابتدا."
+                : "Every background job this workspace has queued, newest first.")
+        </p>
+    </div>
+</div>
+
+<form method="get" action="/activity" class="flex flex-wrap gap-2 mb-4">
+    <select name="kind" class="rounded-lg bg-surface border border-line px-3 py-2 text-sm">
+        <option value="">@(isFa ? "همهٔ نوع‌ها" : "All kinds")</option>
+        @foreach (var k in Enum.GetValues<JobKind>())
+        {
+            <option value="@k" selected="@(k == Model.KindFilter)">@Harbora.Infrastructure.Deployments.QueuePosition.Noun(k, isFa)</option>
+        }
+    </select>
+    <select name="status" class="rounded-lg bg-surface border border-line px-3 py-2 text-sm">
+        <option value="">@(isFa ? "همهٔ وضعیت‌ها" : "All statuses")</option>
+        @foreach (var s in Enum.GetValues<JobStatus>())
+        {
+            <option value="@s" selected="@(s == Model.StatusFilter)">@Harbora.Web.Infrastructure.StatusLabel.For(s, isFa)</option>
+        }
+    </select>
+    <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">@(isFa ? "فیلتر" : "Filter")</button>
+</form>
+
+<section class="rounded-xl border border-line bg-surface overflow-hidden" data-activity-list>
+    @if (Model.Entries.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new Harbora.Web.ViewModels.EmptyStateModel("list-checks", isFa
+            ? "کاری برای نمایش نیست."
+            : "No jobs to show."))" />
+    }
+    else
+    {
+        <div class="divide-y divide-line">
+            @foreach (var job in Model.Entries)
+            {
+                var explanation = Model.QueueExplanations.GetValueOrDefault(job.Id);
+                var canCancel = job.Status is JobStatus.Pending or JobStatus.Running;
+                <div class="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"
+                     data-job-row data-job-id="@job.Id" data-job-kind="@job.Kind"
+                     data-job-status="@job.Status" data-job-target-id="@job.TargetId">
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2">
+                            <span class="rounded-full px-2.5 py-0.5 text-xs font-medium @StatusColour(job.Status)">
+                                @Harbora.Web.Infrastructure.StatusLabel.For(job.Status, isFa)
+                            </span>
+                            <strong class="truncate">@Harbora.Infrastructure.Deployments.QueuePosition.Noun(job.Kind, isFa)</strong>
+                        </div>
+                        <span class="text-[11px] text-ink-faint">@job.CreatedAt.ToString(Harbora.Web.Infrastructure.Dates.Stamp)</span>
+                        @if (explanation is not null)
+                        {
+                            <p class="mt-1 text-xs text-ink-muted" data-job-queue-explanation>@explanation</p>
+                        }
+                        @if (job.Status == JobStatus.Failed && job.Error is { Length: > 0 })
+                        {
+                            <p class="mt-1 text-xs text-danger" dir="ltr">@job.Error</p>
+                        }
+                    </div>
+                    @if (canCancel)
+                    {
+                        <form asp-controller="Activity" asp-action="Cancel" asp-route-id="@job.Id" method="post" class="shrink-0">
+                            @Html.AntiForgeryToken()
+                            <button class="text-xs text-danger"
+                                    aria-label="@(isFa ? "لغو این کار" : "Cancel this job")">
+                                @(isFa ? "لغو" : "cancel")
+                            </button>
+                        </form>
+                    }
+                </div>
+            }
+        </div>
+    }
+</section>
+
+@if (Model.TotalPages > 1)
+{
+    <div class="flex items-center justify-between mt-4 text-sm">
+        <span class="text-ink-faint">@(isFa ? "صفحه" : "Page") @Model.Page / @Model.TotalPages · @Model.TotalCount @(isFa ? "مورد" : "entries")</span>
+        <div class="flex gap-2">
+            @if (Model.HasPrevious)
+            {
+                <a href="@Query(Model.Page - 1)" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1">@(isFa ? "قبلی" : "Previous")</a>
+            }
+            @if (Model.HasNext)
+            {
+                <a href="@Query(Model.Page + 1)" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1">@(isFa ? "بعدی" : "Next")</a>
+            }
+        </div>
+    </div>
+}

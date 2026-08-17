@@ -80,7 +80,7 @@ import {
     CircleCheck, CircleCheckBig, CircleHelp, CloudUpload, Code, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard,
     Cuboid, Database, DatabaseZap, Download, ExternalLink, File, FileCode2, FileJson2, Folder,
     FolderLock, FolderOpen, Gauge, GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound,
-    Languages, Layers, Layers3, LayoutDashboard, Link, Lock, LockKeyhole, LogOut, Mail, Menu, Monitor, Moon, Network,
+    Languages, Layers, Layers3, LayoutDashboard, Link, ListChecks, Lock, LockKeyhole, LogOut, Mail, Menu, Monitor, Moon, Network,
     PanelLeftClose, PanelRight, Pause, Pencil, Play, Plug, PlugZap, Plus, RefreshCw, Rocket, RotateCw, Route,
     Ruler, ScrollText, Search, SearchX, Send, Server, Settings, Settings2, Shapes, ShieldAlert,
     ShieldCheck, SlidersHorizontal, Sparkles, SquareArrowOutUpRight, SquareTerminal, Star, Sun,

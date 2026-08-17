@@ -41,6 +41,17 @@ public sealed class BackupCenterController(
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private bool Enabled => features.Value.Backup;
+    private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    /// <summary>
+    /// The three messages below used to dead-end at "it runs in the background" — the exact defect
+    /// P5's audit names (0026: "the row exists, is cancellable in principle, and the message is a
+    /// dead end"). Each of these three now has a real <c>Job</c> row behind it
+    /// (<c>BackupSnapshotService</c>/<c>RestoreService</c> both stamp <c>WorkspaceId</c> on enqueue),
+    /// so the message can honestly point at somewhere that shows it — set alongside
+    /// <c>TempData["Message"]</c> and read by <c>Views/BackupCenter/Index.cshtml</c>.
+    /// </summary>
+    private void LinkMessageToActivity() => TempData["MessageLinksToActivity"] = true;
 
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken ct)
@@ -167,7 +178,11 @@ public sealed class BackupCenterController(
         var result = await snapshots.QueueAsync(
             WorkspaceId, repositoryId, targetType, targetRef, null, BackupTrigger.Manual, ct);
 
-        if (result.Succeeded) TempData["Message"] = "Backup queued. It runs in the background.";
+        if (result.Succeeded)
+        {
+            TempData["Message"] = IsFa ? "پشتیبان‌گیری صف شد." : "Backup queued.";
+            LinkMessageToActivity();
+        }
         else TempData["Error"] = result.Error;
 
         return RedirectToAction(nameof(Index));
@@ -263,7 +278,12 @@ public sealed class BackupCenterController(
         var result = await snapshots.QueueVerificationAsync(id, ct);
 
         if (result.Succeeded)
-            TempData["Message"] = "Verification queued. The Verified column updates when it finishes.";
+        {
+            TempData["Message"] = IsFa
+                ? "بررسی صف شد؛ ستون «تأییدشده» پس از پایان به‌روز می‌شود."
+                : "Verification queued. The Verified column updates when it finishes.";
+            LinkMessageToActivity();
+        }
         else TempData["Error"] = result.Error;
 
         return RedirectToAction(nameof(Index));
@@ -301,7 +321,11 @@ public sealed class BackupCenterController(
             selected,
             confirmationText), ct);
 
-        if (result.Succeeded) TempData["Message"] = "Restore queued. It runs in the background.";
+        if (result.Succeeded)
+        {
+            TempData["Message"] = IsFa ? "بازگردانی صف شد." : "Restore queued.";
+            LinkMessageToActivity();
+        }
         else TempData["Error"] = result.Error;
 
         return RedirectToAction(nameof(Index));

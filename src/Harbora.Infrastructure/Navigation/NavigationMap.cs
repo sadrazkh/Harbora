@@ -107,6 +107,11 @@ public static class NavigationMap
         ]),
         new("insight", [
             new("monitoring", "Monitoring", "Index", "activity"),
+            // P5 (2026-08-17 app-environment-management design): every durable job this workspace
+            // owns. No capability, like /notifications — it shows only the caller's own workspace's
+            // rows (Job carries no query filter; ActivityController filters by hand), so there is
+            // nothing a role could additionally restrict.
+            new("activity-jobs", "Activity", "Index", "list-checks"),
             new("audit", "Audit", "Index", "scroll-text", Advanced: true)
         ]),
         new("build", [

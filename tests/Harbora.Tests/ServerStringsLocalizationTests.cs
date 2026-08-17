@@ -106,6 +106,20 @@ public class ServerStringsLocalizationTests
         }
     }
 
+    /// <summary>P5's own status chip on <c>/activity</c> reads from this table.</summary>
+    [Fact]
+    public void Every_job_status_reads_in_both_languages()
+    {
+        foreach (var status in Enum.GetValues<Harbora.Domain.Jobs.JobStatus>())
+        {
+            var fa = StatusLabel.For(status, isFa: true);
+            var en = StatusLabel.For(status, isFa: false);
+
+            en.Should().NotBeNullOrWhiteSpace();
+            Persian.IsMatch(fa).Should().BeTrue($"{status} must have a Persian word, got '{fa}'");
+        }
+    }
+
     [Fact]
     public void Docker_container_states_read_in_both_languages()
     {

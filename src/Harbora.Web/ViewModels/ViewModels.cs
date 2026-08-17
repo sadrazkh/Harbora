@@ -222,6 +222,33 @@ public sealed class NotificationsPageViewModel
     public bool HasNext => Page < TotalPages;
 }
 
+/// <summary>
+/// Backs <c>/activity</c> (P5): every durable job this workspace owns, filtered and paged the same
+/// way <c>AuditController</c> and <c>/notifications</c> already are.
+/// </summary>
+public sealed class ActivityPageViewModel
+{
+    public List<Harbora.Domain.Jobs.Job> Entries { get; set; } = new();
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 50;
+    public int TotalCount { get; set; }
+    public Harbora.Domain.Jobs.JobKind? KindFilter { get; set; }
+    public Harbora.Domain.Jobs.JobStatus? StatusFilter { get; set; }
+
+    /// <summary>
+    /// One sentence per live row, already resolved through <c>QueuePosition.Describe</c> in the
+    /// current UI culture — the same thing <c>DeploymentsController.Details</c> puts in
+    /// <c>ViewBag.QueueExplanation</c> for a single deployment, keyed here by job id because this
+    /// page shows many at once. Absent for a settled row, and for a live one no queue rule has
+    /// anything to say about (claimed and running with nothing behind it).
+    /// </summary>
+    public Dictionary<Guid, string> QueueExplanations { get; set; } = new();
+
+    public int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalCount / (double)PageSize));
+    public bool HasPrevious => Page > 1;
+    public bool HasNext => Page < TotalPages;
+}
+
 /// <summary>N5 (2026-08-16 notification-system spec, "noise control") — one event's resolved state
 /// on both channels, already-defaulted so the view never has to ask "was this row even there".</summary>
 public sealed record NotificationPreferenceRow(

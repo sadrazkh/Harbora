@@ -76,7 +76,10 @@ public sealed partial class BackupsController(
             return RedirectToAction(nameof(Index));
         }
         await engine.QueueBackupAsync(WorkspaceId, type, reference, destinationId, scheduled: false, ct);
-        TempData["Message"] = "Backup queued.";
+        TempData["Message"] = IsFa ? "پشتیبان‌گیری صف شد." : "Backup queued.";
+        // P5: the row this message is about has a real Job behind it now (BackupEngine.QueueBackupAsync
+        // stamps WorkspaceId on enqueue), so the message can point at where it can actually be watched.
+        TempData["MessageLinksToActivity"] = true;
         return RedirectToAction(nameof(Index));
     }
 
