@@ -29,7 +29,7 @@ public class NotificationPreferencesHttpTests(HarboraHttpFixture fixture)
     public async Task A_user_who_has_never_touched_preferences_sees_every_event_resolved_to_its_default()
     {
         Panel.GivenUser(fixture.WorkspaceId, "prefs-fresh@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.60", "prefs-fresh@example.com");
+        var client = await Panel.SignedInAs("198.51.100.60", "prefs-fresh@example.com");
 
         var html = await (await client.GetAsync("/notifications/preferences")).Content.ReadAsStringAsync();
 
@@ -47,7 +47,7 @@ public class NotificationPreferencesHttpTests(HarboraHttpFixture fixture)
     public async Task Muting_in_app_for_an_optional_event_is_accepted_and_reflected_on_the_next_load()
     {
         Panel.GivenUser(fixture.WorkspaceId, "prefs-mute@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.61", "prefs-mute@example.com");
+        var client = await Panel.SignedInAs("198.51.100.61", "prefs-mute@example.com");
         var token = await client.AntiforgeryTokenFrom("/notifications/preferences");
 
         var response = await client.PostFormAsync("/notifications/preferences/event", token,
@@ -67,7 +67,7 @@ public class NotificationPreferencesHttpTests(HarboraHttpFixture fixture)
     public async Task Muting_the_last_immediate_channel_of_a_critical_event_is_refused_and_shown_on_the_page()
     {
         Panel.GivenUser(fixture.WorkspaceId, "prefs-critical@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.62", "prefs-critical@example.com");
+        var client = await Panel.SignedInAs("198.51.100.62", "prefs-critical@example.com");
         var token = await client.AntiforgeryTokenFrom("/notifications/preferences");
 
         // In-app is Immediate by default and email is Off by default, so turning in-app off too
@@ -91,7 +91,7 @@ public class NotificationPreferencesHttpTests(HarboraHttpFixture fixture)
     public async Task Quiet_hours_the_time_zone_and_the_weekly_opt_in_all_save_together()
     {
         var user = Panel.GivenUser(fixture.WorkspaceId, "prefs-quiet@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.63", "prefs-quiet@example.com");
+        var client = await Panel.SignedInAs("198.51.100.63", "prefs-quiet@example.com");
         var token = await client.AntiforgeryTokenFrom("/notifications/preferences");
 
         var response = await client.PostFormAsync("/notifications/preferences/quiet-hours", token,
@@ -111,7 +111,7 @@ public class NotificationPreferencesHttpTests(HarboraHttpFixture fixture)
     public async Task An_hour_outside_zero_to_twentythree_is_clamped_rather_than_rejected()
     {
         var user = Panel.GivenUser(fixture.WorkspaceId, "prefs-clamp@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.64", "prefs-clamp@example.com");
+        var client = await Panel.SignedInAs("198.51.100.64", "prefs-clamp@example.com");
         var token = await client.AntiforgeryTokenFrom("/notifications/preferences");
 
         var response = await client.PostFormAsync("/notifications/preferences/quiet-hours", token,
