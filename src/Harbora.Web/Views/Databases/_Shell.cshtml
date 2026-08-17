@@ -99,8 +99,12 @@
     }
 </nav>
 
-@if (msg is not null) { <div class="alert-success mb-4">@msg</div> }
-@if (err is not null) { <div class="alert-danger mb-4">@err</div> }
+@* data-spec-message/-error carry the raw, unlocalised value so a test can assert on the fact an
+   action reported rather than on which language it happened to render in — the panel renders
+   Persian by default in tests, and a message shown only in Fa/En prose is not otherwise assertable
+   without pinning a translation. *@
+@if (msg is not null) { <div class="alert-success mb-4" data-spec-message="@msg">@msg</div> }
+@if (err is not null) { <div class="alert-danger mb-4" data-spec-error="@err">@err</div> }
 
 @RenderBody()
 

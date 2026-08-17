@@ -272,7 +272,7 @@ public sealed partial class DatabasesController(
             memory is null ? null : (long?)memory.Value,
             connections.Count(c => c.Value.Contains(s.ContainerName)),
             latestBackup?.FinishedAt ?? latestBackup?.CreatedAt, latestBackup?.Status,
-            s.MemoryLimitBytes);
+            s.MemoryLimitBytes, s.ErrorMessage);
     }
 
     [HttpGet("create")]
@@ -509,6 +509,14 @@ public sealed partial class DatabasesController(
         return RedirectToAction(nameof(Details), new { id });
     }
 
+    /// <summary>
+    /// Recreates the container from the current definition. Two names for one action: when the
+    /// service is <see cref="ServiceStatus.Failed"/> this is the retry P4 (2026-08-17
+    /// app-environment-management design) asked for — the audit that found it called it "a working
+    /// retry mislabelled 'Rebuild container' and never gated on Failed" — and the fix is to
+    /// re-present it, not to write a second action beside it that would queue the exact same
+    /// <see cref="IManagedServiceEngine.QueueProvisionAsync"/>.
+    /// </summary>
     [HttpPost("{id:guid}/reprovision")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
@@ -518,13 +526,19 @@ public sealed partial class DatabasesController(
         var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
         if (svc is null) return NotFound();
 
+        var wasFailed = svc.Status == ServiceStatus.Failed;
+
         await engine.QueueProvisionAsync(id, ct);
 
         // Says what it costs. The container is replaced, so open connections drop — the data volume
         // is kept, which is the part people actually worry about.
-        TempData["Message"] = IsFa
-            ? $"{svc.Name} در حال بازسازی است. داده‌ها حفظ می‌شوند؛ اتصال‌های باز قطع می‌شوند."
-            : $"{svc.Name} is being rebuilt. The data is kept; open connections will drop.";
+        TempData["Message"] = wasFailed
+            ? (IsFa
+                ? $"در حال تلاش دوباره برای راه‌اندازی {svc.Name}."
+                : $"Retrying the provision of {svc.Name}.")
+            : (IsFa
+                ? $"{svc.Name} در حال بازسازی است. داده‌ها حفظ می‌شوند؛ اتصال‌های باز قطع می‌شوند."
+                : $"{svc.Name} is being rebuilt. The data is kept; open connections will drop.");
 
         return RedirectToAction(nameof(Details), new { id });
     }

@@ -257,15 +257,38 @@ else if (moving)
                     <button class="btn-secondary w-full justify-center py-2 text-sm"><i data-lucide="key-round" class="h-4 w-4"></i>@(isFa ? "تعویض رمز" : "Rotate password")</button>
                 </form>
 
+                @{
+                    // P4 (2026-08-17 app-environment-management design): the same button that has
+                    // always rebuilt the container IS the retry a Failed database needs — re-presented
+                    // rather than duplicated, since a second "Retry" action would do the exact same
+                    // thing this one already does.
+                    var isRetry = db.Status == ServiceStatus.Failed;
+                }
+                @if (isRetry && !string.IsNullOrWhiteSpace(db.ErrorMessage))
+                {
+                    <div class="rounded-lg border border-danger bg-danger-soft px-3 py-2 text-xs text-danger"
+                         data-spec-service-error="@db.ErrorMessage">
+                        @(isFa ? "علت شکست راه‌اندازی: " : "Why provisioning failed: ")@db.ErrorMessage
+                    </div>
+                }
                 <form asp-action="Reprovision" asp-route-id="@db.Id" method="post">
                     @Html.AntiForgeryToken()
-                    <button class="btn-secondary w-full justify-center py-2 text-sm"><i data-lucide="rotate-cw" class="h-4 w-4"></i>@(isFa ? "بازسازی کانتینر" : "Rebuild container")</button>
+                    <button class="@(isRetry ? "btn-primary" : "btn-secondary") w-full justify-center py-2 text-sm"
+                            data-spec-reprovision="@(isRetry ? "retry" : "rebuild")">
+                        <i data-lucide="rotate-cw" class="h-4 w-4"></i>@(isRetry
+                            ? (isFa ? "تلاش دوباره" : "Retry")
+                            : (isFa ? "بازسازی کانتینر" : "Rebuild container"))
+                    </button>
                 </form>
 
                 <p class="text-[11px] leading-4 text-ink-faint">
-                    @(isFa
-                        ? "بازسازی، کانتینر را از نو می‌سازد و سقف منابع و رمزنگاری را اعمال می‌کند. داده‌ها حفظ می‌شوند؛ اتصال‌های باز چند ثانیه قطع می‌شوند."
-                        : "Rebuilding recreates the container and applies the resource ceiling and encryption. The data is kept; open connections drop for a few seconds.")
+                    @(isRetry
+                        ? (isFa
+                            ? "راه‌اندازی را دوباره امتحان می‌کند — همان بازسازی کانتینر، برای همان دیتابیسی که بالا نیامد."
+                            : "Tries provisioning again — the same container rebuild, for the database that did not come up.")
+                        : (isFa
+                            ? "بازسازی، کانتینر را از نو می‌سازد و سقف منابع و رمزنگاری را اعمال می‌کند. داده‌ها حفظ می‌شوند؛ اتصال‌های باز چند ثانیه قطع می‌شوند."
+                            : "Rebuilding recreates the container and applies the resource ceiling and encryption. The data is kept; open connections drop for a few seconds."))
                 </p>
             </div>
             <partial name="Design/_PanelEnd" />

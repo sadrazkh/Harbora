@@ -69,7 +69,10 @@ public sealed record DatabaseRowViewModel(
     DateTimeOffset? LastBackupAt,
     BackupStatus? LastBackupStatus,
     /// <summary>The allotted memory, for the same reason as on an application row.</summary>
-    long MemoryLimitBytes = 0);
+    long MemoryLimitBytes = 0,
+    /// <summary>Why the last provision attempt failed, when <see cref="Status"/> is
+    /// <see cref="ServiceStatus.Failed"/> — P4, 2026-08-17 app-environment-management design.</summary>
+    string? ErrorMessage = null);
 
 // DatabaseOverviewViewModel moved to ViewModels/DatabaseTabViewModel.cs — it is now a
 // DatabaseTabViewModel (the database shell's tabs, mirroring AppTabViewModel), not a standalone model.
