@@ -356,6 +356,14 @@ public sealed class ManagedServiceEngine(
         if (!CredentialRotationPlan.IsSafeToApply(newPassword))
             throw new InvalidOperationException("The generated password could not be applied safely.");
 
+        // What this database's variables looked like before the password changed, and the name they
+        // may carry beside their bare one — the same two facts Detach already needs to tell "mine"
+        // from "a database that happens to want the same key name", from the same place AttachKeys
+        // keeps them. A second copy of either would drift from this one, and the drift is a
+        // customer's app quietly holding another database's credentials.
+        var oldAttachEnv = definition.AttachEnv(current);
+        var prefix = AttachKeys.PrefixFor(svc.Name);
+
         var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
         var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
         var network = _opt.WorkspaceNetwork(wsSlug);
@@ -384,7 +392,7 @@ public sealed class ManagedServiceEngine(
             await ProvisionAsync(svc.Id, ct);
 
         // Every app that was pointed at it is rewritten here, or the rotation simply breaks them.
-        var attachEnv = definition.AttachEnv(CredsFor(svc));
+        var newAttachEnv = definition.AttachEnv(CredsFor(svc));
         var apps = await db.Apps.Include(a => a.EnvironmentVariables)
             .Where(a => a.WorkspaceId == svc.WorkspaceId).ToListAsync(ct);
 
@@ -392,13 +400,30 @@ public sealed class ManagedServiceEngine(
         foreach (var app in apps)
         {
             var touched = false;
-            foreach (var (key, value) in attachEnv)
+            foreach (var (key, oldValue) in oldAttachEnv)
             {
-                var variable = app.EnvironmentVariables.FirstOrDefault(v => v.Key == key);
-                if (variable is null) continue;
-                variable.Value = protector.Protect(value);
-                variable.IsSecret = true;
-                touched = true;
+                var newValue = newAttachEnv[key];
+
+                // Both names this database may have written under. Missing the prefixed one would
+                // leave an app holding a dead password under the only name its code actually reads —
+                // Defect 1. Checking only the bare key, and only its name, is Detach's own bug before
+                // its guard existed: the same bare name can belong to a different database that
+                // happens to want it too, and matching by key alone would rewrite that one — Defect 2.
+                foreach (var candidate in new[] { key, prefix + key })
+                {
+                    var variable = app.EnvironmentVariables.FirstOrDefault(v => v.Key == candidate);
+                    if (variable is null) continue;
+
+                    // The value has to still be this database's old one, exactly as Detach checks
+                    // before it removes anything.
+                    string? decrypted;
+                    try { decrypted = protector.Unprotect(variable.Value); } catch { decrypted = null; }
+                    if (decrypted != oldValue) continue;
+
+                    variable.Value = protector.Protect(newValue);
+                    variable.IsSecret = true;
+                    touched = true;
+                }
             }
             if (touched) updated.Add(app.Name);
         }
