@@ -193,6 +193,86 @@ public sealed class DeploymentsController(
         : $"Deployment #{number} had already ended ({status}), so there was nothing to cancel.";
 
     /// <summary>
+    /// Retries a failed deployment (P6, 2026-08-17 app-environment-management design). Gated on
+    /// <see cref="DeploymentStatus.Failed"/> — the same "offering a control that always refuses
+    /// teaches people to ignore it" rule <see cref="Promote"/>'s target list already follows — and,
+    /// like every other action here, mints a fresh <see cref="Deployment"/> row rather than mutating
+    /// the failed one: <c>Deployment</c> is immutable history, and a retry that fails again must open
+    /// its own incident rather than reopen one someone already closed
+    /// (<c>DeploymentPipeline.cs:616-619</c>).
+    ///
+    /// <para>
+    /// <b>§7 Q4 — what this honestly re-uses.</b> The failed attempt's own recorded
+    /// <see cref="Deployment.GitRef"/>, and nothing else: that is the one field a redeploy could get
+    /// wrong that a retry should not — the app's current default branch may have moved since the
+    /// attempt that failed, especially for a webhook-triggered deploy of a branch that was never the
+    /// app's default in the first place. Every other candidate is deliberately left alone —
+    /// <see cref="Deployment.SourceArchivePath"/> is never carried forward (an uploaded archive is
+    /// deleted the moment <c>DeploymentPipeline.MaterialiseSourceAsync</c> reads it, so a second
+    /// reference to it points at nothing by the time a retry could run), and
+    /// <see cref="Deployment.ImageTag"/> is never carried forward either — skipping the build for an
+    /// exact image is <see cref="Promote"/>'s job, not a retry's. Environment variables, volumes and
+    /// instance size were never part of the request to begin with: <c>DeploymentRequest</c> carries
+    /// none of them, and the pipeline always reads the app as it stands right now — a full replay of
+    /// <see cref="Deployment.ConfigJson"/> is impossible by construction anyway, since its secrets are
+    /// stored as HMAC fingerprints rather than recoverable values.
+    /// </para>
+    /// </summary>
+    [HttpPost("/deployments/{id:guid}/retry")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
+    public async Task<IActionResult> Retry(Guid id, CancellationToken ct)
+    {
+        var failed = await db.Deployments.AsNoTracking()
+            .Where(d => d.Id == id && d.App!.WorkspaceId == WorkspaceId)
+            .Select(d => new { d.AppId, d.Status, d.Number, d.GitRef })
+            .FirstOrDefaultAsync(ct);
+
+        if (failed is null) return NotFound();
+        if (!await access.CanTouchAppAsync(failed.AppId, Capabilities.AppsDeploy, ct)) return Forbid();
+
+        var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+        if (failed.Status != DeploymentStatus.Failed)
+        {
+            TempData["Error"] = isFa
+                ? $"فقط یک استقرار ناموفق را می‌توان دوباره امتحان کرد — #{failed.Number} اکنون {failed.Status} است."
+                : $"Only a failed deployment can be retried — #{failed.Number} is now {failed.Status}.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        Guid newId;
+        try
+        {
+            newId = await deployEngine.QueueDeploymentAsync(new DeploymentRequest(
+                failed.AppId, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty,
+                GitRef: failed.GitRef), ct);
+        }
+        catch (QuotaRefusedException ex)
+        {
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+        catch (InvalidOperationException ex)
+        {
+            // e.g. another deployment of this app started between the page loading and this post.
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await audit.LogAsync("deployment.retried", "deployment", newId.ToString(), ClientIp,
+            metadataJson: $"{{\"retryOf\":\"{id}\"}}", ct: ct);
+
+        TempData["Message"] = isFa
+            ? $"در حال تلاش دوباره برای استقرار #{failed.Number} — همان شاخهٔ گیت دوباره ساخته می‌شود؛ " +
+              "متغیرها، حجم‌ها و اندازه از تنظیمات فعلی برنامه گرفته می‌شوند، نه از این نسخه."
+            : $"Retrying deployment #{failed.Number} — rebuilding the same git ref. Variables, volumes " +
+              "and instance size come from the app's current configuration, not from this snapshot.";
+
+        return RedirectToAction(nameof(Details), new { id = newId });
+    }
+
+    /// <summary>
     /// Releases this exact image into another service in the same project, without rebuilding.
     ///
     /// Building twice from one commit does not reliably produce the same image, so "we tested this

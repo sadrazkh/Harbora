@@ -100,9 +100,25 @@
                 ? "این استقرار به پایان رسید. لاگ کامل پایین همین صفحه است."
                 : "This deployment has ended. The full log is below.")
         </p>
-        <a href="@appUrl" class="btn-secondary px-4 py-2 text-sm">
-            @(deployIsFa ? "رفتن به برنامه" : "Open the application")
-        </a>
+        <div class="flex items-center gap-2">
+            @* P6 (2026-08-17 app-environment-management design): offered only on a Failed
+               deployment, the same "a control that always refuses teaches people to ignore it"
+               rule Promote's own target list follows. Re-uses the failed attempt's own git ref and
+               nothing else — the message after submitting says so, in both languages. *@
+            @if (Model.Status == Harbora.Domain.Common.DeploymentStatus.Failed)
+            {
+                <form asp-controller="Deployments" asp-action="Retry" asp-route-id="@Model.Id" method="post">
+                    @Html.AntiForgeryToken()
+                    <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold"
+                            data-retry-deployment>
+                        @(deployIsFa ? "تلاش دوباره" : "Retry")
+                    </button>
+                </form>
+            }
+            <a href="@appUrl" class="btn-secondary px-4 py-2 text-sm">
+                @(deployIsFa ? "رفتن به برنامه" : "Open the application")
+            </a>
+        </div>
     </div>
 </div>
 
