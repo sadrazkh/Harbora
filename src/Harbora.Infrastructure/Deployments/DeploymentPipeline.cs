@@ -921,8 +921,11 @@ public sealed class DeploymentPipeline(
                 }
 
                 await log(LogStream.System, $"Building {service.Name} → {image} …");
+                // P6: every service in the stack gets the app's own build-time variables, the same
+                // as the single-container path — this used to be an empty dictionary regardless of
+                // what the app declared.
                 image = await docker.BuildImageAsync(
-                    new DockerBuildRequest(service.Build, dockerfile, image, new Dictionary<string, string>()),
+                    new DockerBuildRequest(service.Build, dockerfile, image, BuildArgsFor(app)),
                     buildLog, ct);
             }
             else
@@ -1191,13 +1194,23 @@ public sealed class DeploymentPipeline(
         }
 
         await log(LogStream.System, $"Building image {imageTag} …");
-        var buildArgs = app.EnvironmentVariables
+        return await docker.BuildImageAsync(
+            new DockerBuildRequest(contextPath, dockerfile, imageTag, BuildArgsFor(app)), buildLog, ct);
+    }
+
+    /// <summary>
+    /// The subset of an app's variables marked <see cref="EnvironmentVariable.AvailableAtBuild"/>
+    /// (P6, 2026-08-17 app-environment-management design), decrypted the same way a runtime secret is
+    /// — the flag changes when a value is revealed, not whether it stays encrypted at rest. Shared by
+    /// every build this pipeline runs: the single-container path and each compose service's own build
+    /// used to compute this independently, and the compose path used to compute nothing at all
+    /// (<c>new Dictionary&lt;string, string&gt;()</c>), so a build arg reached a Dockerfile deploy and
+    /// silently never reached the identical Dockerfile inside a compose stack.
+    /// </summary>
+    private Dictionary<string, string> BuildArgsFor(App app) =>
+        app.EnvironmentVariables
             .Where(e => e.AvailableAtBuild)
             .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
-
-        return await docker.BuildImageAsync(
-            new DockerBuildRequest(contextPath, dockerfile, imageTag, buildArgs), buildLog, ct);
-    }
 
     private Dictionary<string, string> BuildEnv(App app)
     {
