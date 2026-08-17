@@ -175,6 +175,7 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
         var app = new App
         {
             WorkspaceId = fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = "rollback-refusal-app",
             Slug = "rollback-refusal-app",
@@ -249,6 +250,7 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
         var foreignApp = new App
         {
             WorkspaceId = Guid.CreateVersion7(),
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = "not-yours",
             Slug = "not-yours",
@@ -274,6 +276,7 @@ public class AppDetailTabsHttpTests(HarboraHttpFixture fixture)
         var app = new App
         {
             WorkspaceId = fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = "seeded-app",
             Slug = "seeded-app",
@@ -417,6 +420,7 @@ public class DatabaseDetailTabsHttpTests(HarboraHttpFixture fixture)
         var service = new ManagedService
         {
             WorkspaceId = workspaceId ?? fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = "seeded-db",
             Type = ManagedServiceType.PostgreSql,

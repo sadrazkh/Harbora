@@ -186,24 +186,13 @@ public sealed class CronJobRunner(
     }
 
     /// <summary>
-    /// The private network for this app's environment, or null while it has none — an app created
-    /// before projects existed and never reassigned. Mirrors
-    /// <c>DeploymentPipeline.ResolveEnvironmentNetworkAsync</c> so a cron run lands on the same
-    /// network a deployment of the same app would.
+    /// The private network for this app's environment. EnvironmentId is required (P2, 2026-08-17
+    /// app-environment-management design), so a cron job always has one — delegates to the shared
+    /// <see cref="Networking.EnvironmentNetworkResolver"/> rather than keeping its own copy of the
+    /// same lookup <c>DeploymentPipeline.ResolveEnvironmentNetworkAsync</c> made.
     /// </summary>
-    private async Task<string?> ResolveEnvironmentNetworkAsync(App job, CancellationToken ct)
-    {
-        if (job.EnvironmentId is not { } environmentId) return null;
-
-        var placement = await db.Environments
-            .Where(e => e.Id == environmentId)
-            .Select(e => new { e.Slug, ProjectSlug = e.Project!.Slug })
-            .FirstOrDefaultAsync(ct);
-
-        return placement is null
-            ? null
-            : Networking.EnvironmentNetwork.For(placement.ProjectSlug, placement.Slug, environmentId);
-    }
+    private Task<string> ResolveEnvironmentNetworkAsync(App job, CancellationToken ct) =>
+        Networking.EnvironmentNetworkResolver.ForAsync(db, job.EnvironmentId, ct);
 
     /// <summary>
     /// Settles runs that a restart interrupted. A row with no finish time is shown as still running,

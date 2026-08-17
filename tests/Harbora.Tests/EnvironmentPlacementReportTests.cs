@@ -12,15 +12,16 @@ using Project = Harbora.Domain.Projects.Project;
 namespace Harbora.Tests;
 
 /// <summary>
-/// P1 — the report nobody has run. Four questions against the live database, and the two rules that
-/// define it: it writes nothing, and a null-environment workload has to be named, not just counted.
+/// P1 — the report nobody has run. Four questions against the live database, and the rule that
+/// defines it: it writes nothing.
 ///
 /// <para>
-/// Every fixture here stands in for the one production shape the spec says is actually possible: a
-/// row detached from an environment <em>after</em> the 2026-07-30 backfill, by
-/// <c>DeleteBehavior.SetNull</c> firing on a delete path — not a row the backfill missed, because the
-/// backfill already ran. A NULL here is therefore a bug report against a delete path, and the test
-/// names say so where it matters.
+/// Q1 (null EnvironmentId) and Q3 (dual-attach) both settled to "always zero" once later
+/// sub-projects landed: P2 (2026-08-17 app-environment-management design) made EnvironmentId a
+/// required foreign key, so a null EnvironmentId can no longer exist in the schema at all, and P3
+/// retired the dual attach that made Q3 answerable as anything but zero. Both fields stay in the
+/// report rather than being deleted — a section that silently disappeared would read as "not
+/// checked" to an operator who remembers it being here.
 /// </para>
 /// </summary>
 public class EnvironmentPlacementReportTests
@@ -48,44 +49,16 @@ public class EnvironmentPlacementReportTests
         return (project, environment);
     }
 
-    // ---- question 1: null EnvironmentId, named rather than merely counted ----
+    // ---- question 1: null EnvironmentId ----
 
+    /// <summary>
+    /// Inverted by P2 (2026-08-17 app-environment-management design). EnvironmentId is a required
+    /// foreign key now, so a null EnvironmentId cannot exist in the schema at all — there is no
+    /// longer a C# value that expresses "unplaced". Q1 used to find and name these rows; the only
+    /// correct answer now is that there are none to find, always, whatever else is seeded.
+    /// </summary>
     [Fact]
-    public async Task A_workload_with_no_environment_is_named_in_the_report_not_just_counted()
-    {
-        await using var db = NewDb();
-        var workspace = Seed(db);
-        db.Apps.Add(new App
-        {
-            WorkspaceId = workspace.Id, ServerId = Guid.CreateVersion7(),
-            Name = "orphaned-worker", Slug = "orphaned-worker", EnvironmentId = null
-        });
-        await db.SaveChangesAsync();
-
-        var report = await EnvironmentPlacementReport.BuildAsync(db);
-
-        report.UnplacedApps.Should().ContainSingle(a => a.Name == "orphaned-worker");
-    }
-
-    [Fact]
-    public async Task A_managed_service_with_no_environment_is_named_in_the_report()
-    {
-        await using var db = NewDb();
-        var workspace = Seed(db);
-        db.ManagedServices.Add(new ManagedService
-        {
-            WorkspaceId = workspace.Id, ServerId = Guid.CreateVersion7(),
-            Name = "orphaned-db", ContainerName = "orphaned-db", EnvironmentId = null
-        });
-        await db.SaveChangesAsync();
-
-        var report = await EnvironmentPlacementReport.BuildAsync(db);
-
-        report.UnplacedManagedServices.Should().ContainSingle(s => s.Name == "orphaned-db");
-    }
-
-    [Fact]
-    public async Task An_app_placed_in_an_environment_is_not_reported_as_unplaced()
+    public async Task No_workload_can_be_unplaced_any_more_so_the_report_finds_none()
     {
         await using var db = NewDb();
         var workspace = Seed(db);
@@ -95,11 +68,18 @@ public class EnvironmentPlacementReportTests
             WorkspaceId = workspace.Id, ServerId = Guid.CreateVersion7(),
             Name = "web", Slug = "web", EnvironmentId = environment.Id
         });
+        db.ManagedServices.Add(new ManagedService
+        {
+            WorkspaceId = workspace.Id, ServerId = Guid.CreateVersion7(),
+            Name = "pg", ContainerName = "pg", EnvironmentId = environment.Id
+        });
         await db.SaveChangesAsync();
 
         var report = await EnvironmentPlacementReport.BuildAsync(db);
 
         report.UnplacedApps.Should().BeEmpty();
+        report.UnplacedManagedServices.Should().BeEmpty();
+        report.UnplacedWorkloadCount.Should().Be(0);
     }
 
     [Fact]
@@ -196,26 +176,6 @@ public class EnvironmentPlacementReportTests
         report.TotalWorkloadCount.Should().Be(1);
     }
 
-    [Fact]
-    public async Task A_workload_with_no_environment_does_not_count_toward_the_dual_attach_total()
-    {
-        // No environment network to resolve, so NetworkPlan.For returns [workspace] alone — and
-        // did even before P3, since the dual attach only ever applied to a placed workload.
-        await using var db = NewDb();
-        var workspace = Seed(db);
-        db.Apps.Add(new App
-        {
-            WorkspaceId = workspace.Id, ServerId = Guid.CreateVersion7(),
-            Name = "legacy", Slug = "legacy", EnvironmentId = null
-        });
-        await db.SaveChangesAsync();
-
-        var report = await EnvironmentPlacementReport.BuildAsync(db);
-
-        report.DualAttachWorkloadCount.Should().Be(0);
-        report.TotalWorkloadCount.Should().Be(1);
-    }
-
     // ---- question 4: a workspace with workloads but no project ----
 
     [Fact]
@@ -284,7 +244,7 @@ public class EnvironmentPlacementReportTests
             var app = new App
             {
                 WorkspaceId = workspace.Id, ServerId = Guid.CreateVersion7(),
-                Name = "web", Slug = "web", EnvironmentId = null
+                Name = "web", Slug = "web", EnvironmentId = environment.Id
             };
             var service = new ManagedService
             {
@@ -308,7 +268,7 @@ public class EnvironmentPlacementReportTests
         var appAfter = await verify.Apps.IgnoreQueryFilters().SingleAsync(a => a.Id == appId);
         var serviceAfter = await verify.ManagedServices.IgnoreQueryFilters().SingleAsync(s => s.Id == serviceId);
 
-        appAfter.EnvironmentId.Should().BeNull("the report must not have touched it");
+        appAfter.EnvironmentId.Should().Be(environmentId, "the report must not have touched it");
         serviceAfter.EnvironmentId.Should().Be(environmentId, "the report must not have touched it");
         (await verify.Apps.IgnoreQueryFilters().CountAsync()).Should().Be(1);
         (await verify.ManagedServices.IgnoreQueryFilters().CountAsync()).Should().Be(1);

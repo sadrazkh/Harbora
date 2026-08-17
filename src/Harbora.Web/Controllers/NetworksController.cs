@@ -127,9 +127,8 @@ public sealed class NetworksController(
             .FirstOrDefaultAsync(e => e.Id == targetEnvironmentId && e.WorkspaceId == WorkspaceId, ct);
         if (target is null) return null;
 
-        var current = service.EnvironmentId is { } currentId
-            ? await db.Environments.Include(e => e.Project).FirstOrDefaultAsync(e => e.Id == currentId, ct)
-            : null;
+        var current = await db.Environments.Include(e => e.Project)
+            .FirstOrDefaultAsync(e => e.Id == service.EnvironmentId, ct);
 
         // Databases it currently holds a connection to — worked out where the protector is.
         var siblings = await db.ManagedServices

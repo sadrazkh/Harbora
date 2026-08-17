@@ -38,9 +38,11 @@ public sealed class PreviewEnvironmentService(
     /// </summary>
     public async Task<Guid?> EnsureAsync(App parent, string branch, string? sha, CancellationToken ct)
     {
-        if (parent.EnvironmentId is not { } parentEnvironmentId) return null;
-
-        var projectId = await db.Environments.IgnoreQueryFilters().Where(e => e.Id == parentEnvironmentId)
+        // EnvironmentId is required now (P2, 2026-08-17 app-environment-management design), so every
+        // parent app has one — this used to silently disable previews for an app placed nowhere, which
+        // after enforcement is a condition that cannot arise. The project lookup below is still a real
+        // check: it fails closed if the environment's own project has somehow gone missing.
+        var projectId = await db.Environments.IgnoreQueryFilters().Where(e => e.Id == parent.EnvironmentId)
             .Select(e => e.ProjectId).FirstOrDefaultAsync(ct);
         if (projectId == Guid.Empty) return null;
 

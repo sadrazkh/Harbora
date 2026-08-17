@@ -99,6 +99,25 @@ public sealed class PipelineHarness : IDisposable
     }
 
     /// <summary>
+    /// A second environment in this workspace, distinct from <see cref="Environment"/> — for a test
+    /// that needs "somewhere else" to be a real place rather than the absence of one. EnvironmentId is
+    /// required now (P2, 2026-08-17 app-environment-management design), so a fixture that used to mean
+    /// "outside this environment" by leaving the column null needs an actual second environment to
+    /// mean the same thing.
+    /// </summary>
+    public Harbora.Domain.Projects.Environment AddEnvironment(string slug = "staging")
+    {
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            Id = Guid.NewGuid(), WorkspaceId = Workspace.Id, ProjectId = Project.Id,
+            Name = slug, Slug = slug
+        };
+        Db.Environments.Add(environment);
+        Db.SaveChanges();
+        return environment;
+    }
+
+    /// <summary>
     /// Attaches a domain so the proxy-wiring stage actually runs. An app may carry several, so
     /// <paramref name="primary"/> is how a test says which one the verification probe should ask for.
     /// </summary>

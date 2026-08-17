@@ -80,20 +80,4 @@ public class BackupDatabaseNetworkTests
             "the same one the real restore would use");
     }
 
-    /// <summary>
-    /// An app placed before projects and environments existed — still legal until P2 makes the
-    /// column required — must keep reaching the database on the workspace network it has always had.
-    /// </summary>
-    [Fact]
-    public async Task A_database_with_no_environment_yet_still_dumps_on_the_workspace_network()
-    {
-        using var h = new BackupHarness();
-        var database = await h.SeedDatabaseAsync(Guid.NewGuid());
-        var backup = await h.SeedPendingBackupAsync(BackupType.Database, database.Id.ToString());
-
-        await h.Engine().RunAsync(backup.Id, default);
-
-        var request = h.Docker.OneOffRequests.Should().ContainSingle().Subject;
-        request.NetworkMode.Should().Be("harbora-ws-acme");
-    }
 }

@@ -32,6 +32,26 @@ public sealed class ProjectsController(
     private static bool IsFa =>
         System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
+    /// <summary>
+    /// "2 apps: api, worker" — or past three, "5 apps: api, worker, cron and 2 more". Named, not
+    /// merely counted: a refusal that only says how many are in the way gives nobody anything to act
+    /// on, which is exactly what <c>ConfirmRemove</c> and the reserved-host refusals both refuse to
+    /// do, and what the delete guard here did before P2 (2026-08-17 app-environment-management
+    /// design) made the count worth naming.
+    /// </summary>
+    private string NamedList(IReadOnlyList<string> names, string kindEn, string kindFa)
+    {
+        const int shown = 3;
+        var listed = names.Count > shown
+            ? string.Join(IsFa ? "، " : ", ", names.Take(shown)) +
+              (IsFa ? $" و {names.Count - shown} مورد دیگر" : $" and {names.Count - shown} more")
+            : string.Join(IsFa ? "، " : ", ", names);
+
+        return IsFa
+            ? $"{names.Count} {kindFa}: {listed}"
+            : $"{names.Count} {kindEn}{(names.Count == 1 ? "" : "s")}: {listed}";
+    }
+
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -250,16 +270,27 @@ public sealed class ProjectsController(
         if (project is null) return NotFound();
 
         // Refused while anything still lives here. Deleting a project is not a way to delete apps and
-        // databases — those have their own confirmations, and their own consequences.
+        // databases — those have their own confirmations, and their own consequences. This is also
+        // the application-level half of what DeleteBehavior.Restrict backstops at the database (P2,
+        // 2026-08-17 app-environment-management design): EnvironmentId is a required foreign key now,
+        // so a project delete that reached SaveChanges with a workload still attached would fail as a
+        // raw constraint violation instead of the named refusal below.
         var ids = project.Environments.Select(e => e.Id).ToList();
-        var services = await db.Apps.CountAsync(a => a.EnvironmentId != null && ids.Contains(a.EnvironmentId.Value), ct);
-        var databases = await db.ManagedServices.CountAsync(s => s.EnvironmentId != null && ids.Contains(s.EnvironmentId.Value), ct);
+        var appNames = await db.Apps.Where(a => ids.Contains(a.EnvironmentId))
+            .OrderBy(a => a.Name).Select(a => a.Name).ToListAsync(ct);
+        var databaseNames = await db.ManagedServices.Where(s => ids.Contains(s.EnvironmentId))
+            .OrderBy(s => s.Name).Select(s => s.Name).ToListAsync(ct);
 
-        if (services + databases > 0)
+        if (appNames.Count + databaseNames.Count > 0)
         {
-            TempData["Error"] =
-                $"This project still holds {services} service(s) and {databases} database(s). " +
-                "Remove them first — deleting a project will not delete them for you.";
+            var fragments = new List<string>();
+            if (appNames.Count > 0) fragments.Add(NamedList(appNames, "app", "اپ"));
+            if (databaseNames.Count > 0) fragments.Add(NamedList(databaseNames, "database", "دیتابیس"));
+            var holds = string.Join(IsFa ? " و " : " and ", fragments);
+
+            TempData["Error"] = IsFa
+                ? $"این پروژه هنوز {holds} در خود دارد. ابتدا آن‌ها را حذف کنید — حذف پروژه آن‌ها را حذف نمی‌کند."
+                : $"This project still holds {holds}. Remove them first — deleting a project will not delete them for you.";
             return RedirectToAction(nameof(Details), new { id });
         }
 

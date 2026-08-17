@@ -180,10 +180,20 @@ public class QuotaRefusalBilingualismTests
             .UseInMemoryDatabase("bilingual-refusal-apps-" + Guid.NewGuid()).Options,
             new FixedWorkspaceScope(workspaceId));
 
+        var project = new Harbora.Domain.Projects.Project
+        { Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, Name = "Shop", Slug = "shop" };
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, ProjectId = project.Id,
+            Name = "Production", Slug = "production", IsDefault = true
+        };
+        db.Projects.Add(project);
+        db.Environments.Add(environment);
+
         var app = new App
         {
-            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, ServerId = Guid.CreateVersion7(),
-            Name = "Shop", Slug = "shop", Status = AppStatus.Stopped
+            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, EnvironmentId = environment.Id,
+            ServerId = Guid.CreateVersion7(), Name = "Shop", Slug = "shop", Status = AppStatus.Stopped
         };
         db.Apps.Add(app);
         db.Users.Add(new User
@@ -249,9 +259,20 @@ public class QuotaRefusalBilingualismTests
             .UseInMemoryDatabase("bilingual-refusal-db-" + Guid.NewGuid()).Options,
             new FixedWorkspaceScope(workspaceId));
 
+        var project = new Harbora.Domain.Projects.Project
+        { Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, Name = "Shop", Slug = "shop" };
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, ProjectId = project.Id,
+            Name = "Production", Slug = "production", IsDefault = true
+        };
+        db.Projects.Add(project);
+        db.Environments.Add(environment);
+
         var service = new ManagedService
         {
-            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, ServerId = Guid.CreateVersion7(),
+            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, EnvironmentId = environment.Id,
+            ServerId = Guid.CreateVersion7(),
             Name = "orders", ContainerName = "harbora-svc-orders", DatabaseName = "orders",
             Username = "postgres", Type = ManagedServiceType.PostgreSql, Status = ServiceStatus.Stopped
         };

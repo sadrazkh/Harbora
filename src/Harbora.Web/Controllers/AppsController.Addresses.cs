@@ -36,7 +36,7 @@ public sealed partial class AppsController
         // would be the least-gated write in the controller.
         var query = db.Apps.Where(a => a.WorkspaceId == WorkspaceId && !a.Domains.Any());
         if (await access.VisibleProjectIdsAsync(ct) is { } visible)
-            query = query.Where(a => a.EnvironmentId != null && visible.Contains(a.Environment!.ProjectId));
+            query = query.Where(a => visible.Contains(a.Environment!.ProjectId));
 
         var addressless = await query.OrderBy(a => a.Slug).ToListAsync(ct);
 
@@ -66,7 +66,7 @@ public sealed partial class AppsController
         var query = db.Apps.Include(a => a.Domains)
             .Where(a => a.WorkspaceId == WorkspaceId && !a.Domains.Any());
         if (await access.VisibleProjectIdsAsync(ct) is { } visible)
-            query = query.Where(a => a.EnvironmentId != null && visible.Contains(a.Environment!.ProjectId));
+            query = query.Where(a => visible.Contains(a.Environment!.ProjectId));
 
         var addressless = await query.ToListAsync(ct);
 

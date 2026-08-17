@@ -3,7 +3,6 @@ using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
 using Harbora.Domain.Services;
-using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Networking;
 using Harbora.Modules.Backup.Contracts;
 using Harbora.Modules.Backup.Infrastructure;
@@ -27,7 +26,7 @@ public class DatabaseTargetStagerNetworkTests
 
     private static DatabaseTargetStager Stager(HarboraDbContext db) => new(
         db, new PassthroughProtector(), new AlwaysResolves(),
-        Options.Create(new BackupModuleOptions()), Options.Create(new HarboraRuntimeOptions()),
+        Options.Create(new BackupModuleOptions()),
         NullLogger<DatabaseTargetStager>.Instance);
 
     [Fact]
@@ -62,30 +61,6 @@ public class DatabaseTargetStagerNetworkTests
         EnvironmentNetwork.IsEnvironmentNetwork(plan!.Execution.NetworkMode).Should().BeTrue(
             $"the stager planned to export on '{plan.Execution.NetworkMode}', not this database's " +
             "own environment network");
-    }
-
-    /// <summary>A service placed before projects and environments existed keeps its workspace
-    /// network — still legal until P2 makes the column required.</summary>
-    [Fact]
-    public async Task A_database_with_no_environment_yet_still_plans_on_the_workspace_network()
-    {
-        using var db = Db();
-        var workspace = new Workspace { Id = Guid.NewGuid(), Name = "Acme", Slug = "acme" };
-        var service = new ManagedService
-        {
-            Id = Guid.NewGuid(), WorkspaceId = workspace.Id,
-            Name = "orders", Type = ManagedServiceType.PostgreSql, Version = "16-alpine",
-            ContainerName = "harbora-orders", InternalPort = 5432, Username = "harbora",
-            EncryptedPassword = "s3cret", DatabaseName = "orders", VolumeName = "orders-data"
-        };
-        db.Workspaces.Add(workspace);
-        db.ManagedServices.Add(service);
-        await db.SaveChangesAsync();
-
-        var (plan, error) = await Stager(db).PlanAsync(service.Id, default);
-
-        error.Should().BeNull();
-        plan!.Execution.NetworkMode.Should().Be("harbora-ws-acme");
     }
 
     private sealed class AlwaysResolves : IDatabaseBackupProviderResolver

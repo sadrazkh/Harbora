@@ -25,6 +25,7 @@ public class AppDataHttpTests(HarboraHttpFixture fixture)
         var app = new App
         {
             WorkspaceId = fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = slug,
             Slug = slug,

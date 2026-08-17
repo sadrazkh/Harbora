@@ -35,20 +35,6 @@ public class NetworkWiringTests
     }
 
     [Fact]
-    public void A_service_with_no_environment_is_refused_for_the_right_reason()
-    {
-        // Asserted on the reason, not just the refusal. Without the guard this still comes back
-        // refused — because null never equals an id — but blames an environment mismatch, and the
-        // person goes looking for a difference between two environments when one of them is absent.
-        foreach (var verdict in new[] { NetworkWiring.CanAttach(null, Production), NetworkWiring.CanAttach(Production, null) })
-        {
-            verdict.Allowed.Should().BeFalse();
-            verdict.Reason.Should().Contain("must belong to an environment");
-            verdict.Reason.Should().NotContain("different environments");
-        }
-    }
-
-    [Fact]
     public void Moving_somewhere_it_already_is_is_refused()
     {
         NetworkWiring.CanMove(Production, Production, [], []).Allowed.Should().BeFalse();

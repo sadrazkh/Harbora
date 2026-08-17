@@ -10,8 +10,9 @@ public class ManagedService : BaseEntity
 {
     public Guid WorkspaceId { get; set; }
 
-    /// <summary>The environment this resource belongs to; nullable during the transition (see App).</summary>
-    public Guid? EnvironmentId { get; set; }
+    /// <summary>The environment this resource belongs to. Required (P2, 2026-08-17
+    /// app-environment-management design) — see App.</summary>
+    public Guid EnvironmentId { get; set; }
     public Harbora.Domain.Projects.Environment? Environment { get; set; }
     public Guid ServerId { get; set; }
 

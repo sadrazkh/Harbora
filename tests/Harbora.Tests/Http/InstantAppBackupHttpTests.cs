@@ -26,11 +26,13 @@ public class InstantAppBackupHttpTests(HarboraHttpFixture fixture)
 {
     private HarboraWebFactory Panel => fixture.Panel;
 
-    private App SeedApp(string slug, ServiceKind kind = ServiceKind.Web, Guid? workspaceId = null)
+    private App SeedApp(
+        string slug, ServiceKind kind = ServiceKind.Web, Guid? workspaceId = null, Guid? environmentId = null)
     {
         var app = new App
         {
             WorkspaceId = workspaceId ?? fixture.WorkspaceId,
+            EnvironmentId = environmentId ?? fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = slug,
             Slug = slug,
@@ -313,6 +315,8 @@ public class InstantAppBackupHttpTests(HarboraHttpFixture fixture)
     /// <summary>A workspace with nothing pre-seeded, for the "no repository at all" scenarios.</summary>
     private async Task<App> SeedFreshWorkspaceAppAsync(Guid workspaceId, string slug)
     {
+        var projectId = Guid.CreateVersion7();
+        var environmentId = Guid.CreateVersion7();
         Panel.Seed(db =>
         {
             var planId = db.Plans.Where(p => p.IsDefault).Select(p => p.Id).FirstOrDefault();
@@ -324,9 +328,18 @@ public class InstantAppBackupHttpTests(HarboraHttpFixture fixture)
                 IsDefault = false,
                 PlanId = planId == Guid.Empty ? null : planId
             });
+            // A project and environment of this fresh workspace's own — the app's EnvironmentId must
+            // belong to the same workspace it does, so it cannot borrow fixture.DefaultEnvironmentId.
+            db.Projects.Add(new Harbora.Domain.Projects.Project
+            { Id = projectId, WorkspaceId = workspaceId, Name = slug, Slug = "shop-" + slug });
+            db.Environments.Add(new Harbora.Domain.Projects.Environment
+            {
+                Id = environmentId, WorkspaceId = workspaceId, ProjectId = projectId,
+                Name = "Production", Slug = "production", IsDefault = true
+            });
         });
         await Task.CompletedTask;
-        return SeedApp(slug, workspaceId: workspaceId);
+        return SeedApp(slug, workspaceId: workspaceId, environmentId: environmentId);
     }
 
     private Guid SeedRepositoryReturningId(Guid? workspaceId = null)
@@ -400,9 +413,23 @@ public class InstantAppBackupHttpTests(HarboraHttpFixture fixture)
     private static (App App, IReadOnlyList<Deployment> Deployments) SeedAppWithSevenSucceededDeployments(
         HarboraWebFactory panel, Guid workspaceId, string slug)
     {
+        var projectId = Guid.CreateVersion7();
+        var environmentId = Guid.CreateVersion7();
+        panel.Seed(db =>
+        {
+            db.Projects.Add(new Harbora.Domain.Projects.Project
+            { Id = projectId, WorkspaceId = workspaceId, Name = "Shop", Slug = "shop-" + slug });
+            db.Environments.Add(new Harbora.Domain.Projects.Environment
+            {
+                Id = environmentId, WorkspaceId = workspaceId, ProjectId = projectId,
+                Name = "Production", Slug = "production", IsDefault = true
+            });
+        });
+
         var app = new App
         {
             WorkspaceId = workspaceId,
+            EnvironmentId = environmentId,
             ServerId = Guid.CreateVersion7(),
             Name = slug,
             Slug = slug,

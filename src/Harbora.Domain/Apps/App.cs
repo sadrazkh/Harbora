@@ -16,11 +16,12 @@ public class App : BaseEntity
     public Guid WorkspaceId { get; set; }
 
     /// <summary>
-    /// Which project environment this belongs to. Nullable during the transition: every existing app
-    /// is backfilled to its workspace's default project, and the column becomes required only once
-    /// every read path has moved.
+    /// Which project environment this belongs to. Required (P2, 2026-08-17
+    /// app-environment-management design): the 2026-07-30 backfill placed every app that existed
+    /// before this column did, and every creation path has set it since, so a workload with no
+    /// environment cannot be created any more.
     /// </summary>
-    public Guid? EnvironmentId { get; set; }
+    public Guid EnvironmentId { get; set; }
     public Harbora.Domain.Projects.Environment? Environment { get; set; }
 
     /// <summary>

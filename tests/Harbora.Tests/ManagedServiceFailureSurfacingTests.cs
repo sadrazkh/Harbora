@@ -119,6 +119,7 @@ internal sealed class ServiceFailureHarness : IDisposable
     private readonly bool _billingEnabled;
 
     public Guid WorkspaceId { get; } = Guid.NewGuid();
+    public Guid EnvironmentId { get; } = Guid.NewGuid();
     public HarboraDbContext Db { get; }
     public FakeDockerEngine Docker { get; } = new();
     public PassthroughProtector Protector { get; } = new();
@@ -130,6 +131,14 @@ internal sealed class ServiceFailureHarness : IDisposable
         _billingEnabled = billingEnabled;
         Db = Read();
         Db.Workspaces.Add(new Workspace { Id = WorkspaceId, Name = "Acme", Slug = "acme" });
+        var project = new Harbora.Domain.Projects.Project
+        { Id = Guid.NewGuid(), WorkspaceId = WorkspaceId, Name = "Shop", Slug = "shop" };
+        Db.Projects.Add(project);
+        Db.Environments.Add(new Harbora.Domain.Projects.Environment
+        {
+            Id = EnvironmentId, WorkspaceId = WorkspaceId, ProjectId = project.Id,
+            Name = "Production", Slug = "production", IsDefault = true
+        });
         Db.SaveChanges();
     }
 
@@ -155,6 +164,7 @@ internal sealed class ServiceFailureHarness : IDisposable
         var service = new ManagedService
         {
             WorkspaceId = WorkspaceId,
+            EnvironmentId = EnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = "orders",
             Type = ManagedServiceType.PostgreSql,

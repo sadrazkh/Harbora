@@ -169,9 +169,10 @@ public class PrivateAddressPipelineTests
     {
         using var harness = new PipelineHarness();
         SeedSiblingRunning(harness, "sibling", harness.Environment.Id, composeService: "sibling-svc");
-        // No EnvironmentId: on another network entirely, so it cannot collide. The collision query
-        // filters on environment for exactly this reason.
-        SeedSiblingRunning(harness, "stranger", environmentId: null, composeService: harness.App.Slug);
+        // A real second environment: on another network entirely, so it cannot collide. The collision
+        // query filters on environment for exactly this reason.
+        var elsewhere = harness.AddEnvironment();
+        SeedSiblingRunning(harness, "stranger", elsewhere.Id, composeService: harness.App.Slug);
 
         var deployment = harness.QueueDeployment();
         await harness.RunAsync(deployment);
@@ -209,10 +210,22 @@ public class PrivateAddressPipelineTests
         // legally allowed to be slugged "api" too. Its compose stack runs a service named after this
         // app's own slug, which is the actual collision string the old, slug-only match would have
         // reached through siblingHere to find.
+        var strangerWorkspaceId = Guid.NewGuid();
+        var strangerProject = new Harbora.Domain.Projects.Project
+        {
+            Id = Guid.NewGuid(), WorkspaceId = strangerWorkspaceId, Name = "Stranger", Slug = "stranger"
+        };
+        var strangerEnvironment = new Harbora.Domain.Projects.Environment
+        {
+            Id = Guid.NewGuid(), WorkspaceId = strangerWorkspaceId, ProjectId = strangerProject.Id,
+            Name = "Production", Slug = "production"
+        };
+        harness.Db.Projects.Add(strangerProject);
+        harness.Db.Environments.Add(strangerEnvironment);
         var strangerWorkspaceApp = new App
         {
-            WorkspaceId = Guid.NewGuid(), ServerId = harness.Server.Id,
-            EnvironmentId = null, Name = "api", Slug = "api",
+            WorkspaceId = strangerWorkspaceId, ServerId = harness.Server.Id,
+            EnvironmentId = strangerEnvironment.Id, Name = "api", Slug = "api",
             SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/api:1.0"
         };
         harness.Db.Apps.Add(strangerWorkspaceApp);
@@ -253,7 +266,7 @@ public class PrivateAddressPipelineTests
 
     /// <summary>Another app in the workspace, with a compose-stack container of its own.</summary>
     private static App SeedSiblingRunning(
-        PipelineHarness harness, string slug, Guid? environmentId, string composeService,
+        PipelineHarness harness, string slug, Guid environmentId, string composeService,
         string state = "running")
     {
         var sibling = new App

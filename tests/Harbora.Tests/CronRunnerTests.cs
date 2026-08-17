@@ -69,12 +69,33 @@ public class CronRunnerTests : IDisposable
     private CronJobRunner JobRunner(IServiceScope scope) =>
         scope.ServiceProvider.GetRequiredService<CronJobRunner>();
 
+    /// <summary>
+    /// EnvironmentId is required now (P2, 2026-08-17 app-environment-management design), so every app
+    /// this builds is placed in a project and environment of its own — "cron-default"/"production" —
+    /// rather than the workspace network it fell back to before every app had one. A test that needs
+    /// a DIFFERENT environment (a non-default one, or none at all is no longer legal) still seeds and
+    /// re-points the app itself, exactly as it did before.
+    /// </summary>
     private App Given(string cron, DateTimeOffset? nextRunAt = null, AppStatus status = AppStatus.Running,
                       string? command = "backup.sh", string image = "alpine:3.20")
     {
+        using var scope = _sp.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+
+        var project = new Harbora.Domain.Projects.Project
+        { Id = Guid.NewGuid(), WorkspaceId = _workspaceId, Name = "Cron Default", Slug = "cron-default" };
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            Id = Guid.NewGuid(), WorkspaceId = _workspaceId, ProjectId = project.Id,
+            Name = "Production", Slug = "production", IsDefault = true
+        };
+        db.Projects.Add(project);
+        db.Environments.Add(environment);
+
         var app = new App
         {
             WorkspaceId = _workspaceId,
+            EnvironmentId = environment.Id,
             Name = "nightly", Slug = "nightly",
             Kind = ServiceKind.Cron,
             CronExpression = cron,
@@ -84,8 +105,6 @@ public class CronRunnerTests : IDisposable
             PrebuiltImage = image,
             Command = command
         };
-        using var scope = _sp.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
         db.Apps.Add(app);
         db.SaveChanges();
         return app;
@@ -271,8 +290,12 @@ public class CronRunnerTests : IDisposable
     public async Task A_run_joins_the_projects_own_network()
     {
         // Otherwise a job is handed the environment variables naming its database and no route to
-        // reach it — a failure that looks exactly like wrong credentials and is not.
+        // reach it — a failure that looks exactly like wrong credentials and is not. EnvironmentId is
+        // required now (P2, 2026-08-17 app-environment-management design), so Given() already placed
+        // this app in its own project and environment — the network it must run on is theirs, not the
+        // workspace's.
         var app = Given("0 3 * * *", nextRunAt: _clock.UtcNow.AddMinutes(-1));
+        string expectedNetwork;
         using (var scope = _sp.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
@@ -281,12 +304,19 @@ public class CronRunnerTests : IDisposable
                 Id = _workspaceId, Name = "Acme", Slug = "acme"
             });
             db.SaveChanges();
+
+            var placement = db.Environments
+                .Where(e => e.Id == app.EnvironmentId)
+                .Select(e => new { e.Slug, ProjectSlug = e.Project!.Slug })
+                .Single();
+            expectedNetwork = Harbora.Infrastructure.Networking.EnvironmentNetwork.For(
+                placement.ProjectSlug, placement.Slug, app.EnvironmentId);
         }
 
         await Runner().TickAsync(default);
 
         _docker.OneOffRequests.Should().ContainSingle()
-            .Which.NetworkMode.Should().Be("harbora-ws-acme");
+            .Which.NetworkMode.Should().Be(expectedNetwork);
     }
 
     [Fact]
@@ -324,37 +354,12 @@ public class CronRunnerTests : IDisposable
             .Which.NetworkMode.Should().Be(expectedNetwork);
     }
 
-    [Fact]
-    public async Task A_cron_job_with_no_environment_still_runs_on_the_workspace_network()
-    {
-        // The environment column is still nullable during the workspace-to-environment transition.
-        // An app that was never assigned one must keep getting the workspace network — not null, and
-        // not some other environment's network just because one exists in the same workspace.
-        var project = new Harbora.Domain.Projects.Project
-        {
-            WorkspaceId = _workspaceId, Name = "Acme API", Slug = "acme-api"
-        };
-        var environment = new Harbora.Domain.Projects.Environment
-        {
-            WorkspaceId = _workspaceId, ProjectId = project.Id, Name = "Production", Slug = "production",
-            IsDefault = true
-        };
-        var app = Given("0 3 * * *", nextRunAt: _clock.UtcNow.AddMinutes(-1));
-        using (var scope = _sp.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
-            db.Workspaces.Add(new Harbora.Domain.Identity.Workspace { Id = _workspaceId, Name = "Acme", Slug = "acme" });
-            db.Projects.Add(project);
-            db.Environments.Add(environment);
-            // app.EnvironmentId is deliberately left null.
-            db.SaveChanges();
-        }
-
-        await Runner().TickAsync(default);
-
-        _docker.OneOffRequests.Should().ContainSingle()
-            .Which.NetworkMode.Should().Be("harbora-ws-acme");
-    }
+    // The test that used to live here, A_cron_job_with_no_environment_still_runs_on_the_workspace_network,
+    // asserted the opposite of what P2 (2026-08-17 app-environment-management design) makes true:
+    // EnvironmentId is a required Guid now, so "app.EnvironmentId is deliberately left null" — its own
+    // comment — is no longer something a test in this file can construct. Deleted rather than inverted:
+    // Given() places every app in a real environment, and A_run_joins_the_projects_own_network already
+    // proves a cron run reaches it.
 
     [Fact]
     public async Task Running_a_job_by_hand_does_not_move_its_schedule()

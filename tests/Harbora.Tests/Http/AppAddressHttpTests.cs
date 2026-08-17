@@ -24,13 +24,20 @@ public class AppAddressHttpTests(HarboraHttpFixture fixture)
 {
     private HarboraWebFactory Panel => fixture.Panel;
 
+    /// <summary>
+    /// EnvironmentId is required (P2, 2026-08-17 app-environment-management design). Left null, a
+    /// project and environment of their own are seeded for this one app — unique per call rather than
+    /// a fixed default, since this collection fixture is shared across every test in the class and a
+    /// repeated slug would collide on the (WorkspaceId, Slug) unique index.
+    /// </summary>
     private Guid SeedApp(string slug, ServiceKind kind, string? withDomain, bool ssl = true, Guid? environmentId = null)
     {
+        var placedIn = environmentId ?? SeedEnvironment();
         var app = new App
         {
             WorkspaceId = fixture.WorkspaceId,
             ServerId = Guid.CreateVersion7(),
-            EnvironmentId = environmentId,
+            EnvironmentId = placedIn,
             Name = slug,
             Slug = slug,
             Kind = kind,
@@ -50,6 +57,30 @@ public class AppAddressHttpTests(HarboraHttpFixture fixture)
         });
 
         return app.Id;
+    }
+
+    /// <summary>A project and environment of their own, uniquely slugged so repeated calls across the
+    /// tests in this collection fixture never collide.</summary>
+    private Guid SeedEnvironment()
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var projectId = Guid.CreateVersion7();
+        var environmentId = Guid.CreateVersion7();
+
+        Panel.Seed(db =>
+        {
+            db.Projects.Add(new Harbora.Domain.Projects.Project
+            {
+                Id = projectId, WorkspaceId = fixture.WorkspaceId, Name = "Shop", Slug = "addr-" + suffix
+            });
+            db.Environments.Add(new Harbora.Domain.Projects.Environment
+            {
+                Id = environmentId, WorkspaceId = fixture.WorkspaceId, ProjectId = projectId,
+                Name = "Production", Slug = "production", IsDefault = true
+            });
+        });
+
+        return environmentId;
     }
 
     // Upsert, not Add: Setting.Key carries a unique index that only Postgres enforces. Five tests in

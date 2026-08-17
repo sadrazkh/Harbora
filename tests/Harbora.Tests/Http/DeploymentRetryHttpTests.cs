@@ -46,6 +46,7 @@ public class DeploymentRetryHttpTests(HarboraHttpFixture fixture)
         var app = new App
         {
             WorkspaceId = fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = slug,
             Slug = slug,
@@ -164,7 +165,8 @@ public class DeploymentRetryHttpTests(HarboraHttpFixture fixture)
         }));
         var victimsApp = new App
         {
-            WorkspaceId = otherWorkspaceId, ServerId = Guid.CreateVersion7(),
+            WorkspaceId = otherWorkspaceId, EnvironmentId = fixture.DefaultEnvironmentId,
+            ServerId = Guid.CreateVersion7(),
             Name = "victim", Slug = "retry-victim", Kind = ServiceKind.Web, ContainerPort = 8080,
             SourceType = AppSourceType.GitRepository, GitRef = "main"
         };

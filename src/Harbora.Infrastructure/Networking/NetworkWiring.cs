@@ -25,13 +25,13 @@ public static class NetworkWiring
     /// Whether a database may be attached to a service.
     ///
     /// The environment is the network boundary, so it is also the wiring boundary. Refused rather
-    /// than warned: there is no configuration in which this works.
+    /// than warned: there is no configuration in which this works. Both ids are required now (P2,
+    /// 2026-08-17 app-environment-management design) — a service or database with no environment is
+    /// no longer a state that can exist, so the check that used to name that case has nothing left to
+    /// catch.
     /// </summary>
-    public static WiringVerdict CanAttach(Guid? serviceEnvironmentId, Guid? databaseEnvironmentId)
+    public static WiringVerdict CanAttach(Guid serviceEnvironmentId, Guid databaseEnvironmentId)
     {
-        if (serviceEnvironmentId is null || databaseEnvironmentId is null)
-            return WiringVerdict.No("Both the service and the database must belong to an environment.");
-
         if (serviceEnvironmentId != databaseEnvironmentId)
             return WiringVerdict.No(
                 "They are in different environments, which are different private networks. " +
@@ -50,7 +50,7 @@ public static class NetworkWiring
     /// <param name="attachedNames">Databases this service currently holds a connection to.</param>
     /// <param name="dependentNames">Services that reach this one by its internal name.</param>
     public static WiringVerdict CanMove(
-        Guid? currentEnvironmentId,
+        Guid currentEnvironmentId,
         Guid targetEnvironmentId,
         IReadOnlyList<string> attachedNames,
         IReadOnlyList<string> dependentNames)

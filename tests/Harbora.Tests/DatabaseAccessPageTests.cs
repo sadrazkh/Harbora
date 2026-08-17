@@ -99,10 +99,20 @@ public class DatabaseAccessPageTests
         var workspaceId = Guid.CreateVersion7();
         db.Add(new Harbora.Domain.Identity.Workspace { Id = workspaceId, Name = "Acme", Slug = "acme" });
 
+        var projectId = Guid.CreateVersion7();
+        var environmentId = Guid.CreateVersion7();
+        db.Add(new Harbora.Domain.Projects.Project
+        { Id = projectId, WorkspaceId = workspaceId, Name = "Shop", Slug = "shop" });
+        db.Add(new Harbora.Domain.Projects.Environment
+        {
+            Id = environmentId, WorkspaceId = workspaceId, ProjectId = projectId,
+            Name = "Production", Slug = "production", IsDefault = true
+        });
+
         var protector = new PassthroughProtector();
         var database = new ManagedService
         {
-            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId,
+            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, EnvironmentId = environmentId,
 
             // Guid.Empty is the panel's own machine, which is what the gateway insists on before it
             // will publish a port.
@@ -180,9 +190,19 @@ public class DatabaseAccessPageTests
             .UseInMemoryDatabase("dbaccess-page-" + Guid.NewGuid()).Options);
 
         var workspaceId = Guid.CreateVersion7();
+        var projectId = Guid.CreateVersion7();
+        var environmentId = Guid.CreateVersion7();
+        db.Add(new Harbora.Domain.Projects.Project
+        { Id = projectId, WorkspaceId = workspaceId, Name = "Shop", Slug = "shop" });
+        db.Add(new Harbora.Domain.Projects.Environment
+        {
+            Id = environmentId, WorkspaceId = workspaceId, ProjectId = projectId,
+            Name = "Production", Slug = "production", IsDefault = true
+        });
         var database = new ManagedService
         {
-            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, ServerId = Guid.CreateVersion7(),
+            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, EnvironmentId = environmentId,
+            ServerId = Guid.CreateVersion7(),
             Name = "Shop DB", ContainerName = "harbora-svc-shop", DatabaseName = "shop",
             InternalPort = 5432, Type = ManagedServiceType.PostgreSql, Status = status
         };
@@ -605,7 +625,8 @@ public class DatabaseAccessPageTests
         var f = Build();
         var theirs = new ManagedService
         {
-            Id = Guid.CreateVersion7(), WorkspaceId = Guid.CreateVersion7(), ServerId = Guid.CreateVersion7(),
+            Id = Guid.CreateVersion7(), WorkspaceId = Guid.CreateVersion7(),
+            EnvironmentId = Guid.CreateVersion7(), ServerId = Guid.CreateVersion7(),
             Name = "Theirs", ContainerName = "harbora-svc-theirs", InternalPort = 5432,
             Type = ManagedServiceType.PostgreSql, Status = ServiceStatus.Running
         };

@@ -57,21 +57,20 @@ public static class EnvironmentPlacementReport
             workspaceSlugs.TryGetValue(workspaceId, out var slug) ? slug : "(unknown workspace)";
 
         // ---- Q1: which App/ManagedService rows have a null EnvironmentId ----
+        //
+        // Answered empty, always, since P2 (2026-08-17 app-environment-management design): the column
+        // is a required foreign key now, so a null EnvironmentId cannot exist in the schema at all —
+        // this is no longer a question the data can answer any other way. Left as a field rather than
+        // removed, for the same reason Q3 stayed after P3: a section that silently disappeared from
+        // this report would read as "not checked" to an operator who remembers it being here.
 
-        var unplacedApps = apps.Where(a => a.EnvironmentId is null)
-            .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(a => new UnplacedWorkload(a.Id, "App", a.Name, a.WorkspaceId, SlugOf(a.WorkspaceId)))
-            .ToList();
-
-        var unplacedServices = services.Where(s => s.EnvironmentId is null)
-            .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(s => new UnplacedWorkload(s.Id, "ManagedService", s.Name, s.WorkspaceId, SlugOf(s.WorkspaceId)))
-            .ToList();
+        var unplacedApps = new List<UnplacedWorkload>();
+        var unplacedServices = new List<UnplacedWorkload>();
 
         // ---- Q2: environments with no workload ----
 
-        var occupiedEnvironmentIds = apps.Where(a => a.EnvironmentId is not null).Select(a => a.EnvironmentId!.Value)
-            .Concat(services.Where(s => s.EnvironmentId is not null).Select(s => s.EnvironmentId!.Value))
+        var occupiedEnvironmentIds = apps.Select(a => a.EnvironmentId)
+            .Concat(services.Select(s => s.EnvironmentId))
             .ToHashSet();
 
         var emptyEnvironments = environments.Where(e => !occupiedEnvironmentIds.Contains(e.Id))

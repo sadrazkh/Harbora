@@ -69,7 +69,8 @@ public class DatabaseAccessLifecycleTests
         FakeDockerEngine Docker,
         FakeNodeAgentClient Node,
         Clock Clock,
-        ManagedService Database);
+        ManagedService Database,
+        string ExpectedNetwork);
 
     /// <summary>
     /// The install this feature actually ships on: the panel talks to the same Docker daemon the
@@ -84,11 +85,22 @@ public class DatabaseAccessLifecycleTests
         var workspace = new Workspace { Id = Guid.CreateVersion7(), Name = "Acme", Slug = "acme" };
         db.Add(workspace);
 
+        var project = new Harbora.Domain.Projects.Project
+        { Id = Guid.CreateVersion7(), WorkspaceId = workspace.Id, Name = "Shop", Slug = "shop" };
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            Id = Guid.CreateVersion7(), WorkspaceId = workspace.Id, ProjectId = project.Id,
+            Name = "Production", Slug = "production", IsDefault = true
+        };
+        db.Add(project);
+        db.Add(environment);
+
         var protector = new PassthroughProtector();
         var database = new ManagedService
         {
             Id = Guid.CreateVersion7(),
             WorkspaceId = workspace.Id,
+            EnvironmentId = environment.Id,
 
             // Guid.Empty resolves to the panel's own engine through the fake factory, which is what
             // the gateway insists on before it will publish a port.
@@ -124,7 +136,9 @@ public class DatabaseAccessLifecycleTests
                 NullLogger<ManagedServiceEngine>.Instance),
             protector);
 
-        return new LocalStack(db, service, docker, node, clock, database);
+        var expectedNetwork = Harbora.Infrastructure.Networking.EnvironmentNetwork.For(
+            project.Slug, environment.Slug, environment.Id);
+        return new LocalStack(db, service, docker, node, clock, database, expectedNetwork);
     }
 
     [Fact]
@@ -288,6 +302,16 @@ public class DatabaseAccessLifecycleTests
     /// <summary>
     /// The rotation runs against the database over its own private network, with the admin password
     /// in the environment rather than in argv — the same contract creating the login has.
+    ///
+    /// <para>
+    /// The network asserted on here changed meaning deliberately (P3, 2026-08-17
+    /// app-environment-management design): this used to pin the literal string "harbora-ws-acme"
+    /// because <c>BuildLocal</c>'s database had no environment of its own and every one-off fell back
+    /// to the shared workspace network. EnvironmentId is required now (P2), so the fixture places the
+    /// database in a real environment and this asserts on that environment's own network — the same
+    /// shape <c>DatabaseAccessLifecycleTests.cs</c>'s own doc comment on the class already names as
+    /// the trap other tests in this design have to avoid.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task The_rotation_reaches_the_database_on_its_own_network_and_keeps_the_admin_password_out_of_argv()
@@ -304,7 +328,7 @@ public class DatabaseAccessLifecycleTests
             .Should().ContainSingle(r => string.Join(' ', r.Command).Contains("ALTER USER", StringComparison.Ordinal))
             .Subject;
 
-        request.NetworkMode.Should().Be("harbora-ws-acme");
+        request.NetworkMode.Should().Be(stack.ExpectedNetwork);
         request.Env.Should().ContainKey("PGPASSWORD");
         string.Join(' ', request.Command).Should().NotContain("admin_secret");
     }

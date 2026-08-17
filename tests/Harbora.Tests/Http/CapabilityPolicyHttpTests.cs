@@ -22,6 +22,11 @@ public class CapabilityPolicyHttpTests(HarboraHttpFixture fixture)
 {
     private HarboraWebFactory Panel => fixture.Panel;
 
+    /// <summary>
+    /// EnvironmentId is required (P2, 2026-08-17 app-environment-management design). Left null, a
+    /// project and environment of their own are seeded for this one app — uniquely slugged, since
+    /// this collection fixture is shared across every test in the class.
+    /// </summary>
     private Guid GivenApp(string slug, Guid? environmentId = null)
     {
         var app = new App
@@ -30,10 +35,32 @@ public class CapabilityPolicyHttpTests(HarboraHttpFixture fixture)
             Name = slug,
             Slug = slug,
             SourceType = AppSourceType.Upload,
-            EnvironmentId = environmentId
+            EnvironmentId = environmentId ?? SeedEnvironment()
         };
         Panel.Seed(db => db.Apps.Add(app));
         return app.Id;
+    }
+
+    private Guid SeedEnvironment()
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var projectId = Guid.CreateVersion7();
+        var environmentId = Guid.CreateVersion7();
+
+        Panel.Seed(db =>
+        {
+            db.Projects.Add(new Harbora.Domain.Projects.Project
+            {
+                Id = projectId, WorkspaceId = fixture.WorkspaceId, Name = "Shop", Slug = "cap-" + suffix
+            });
+            db.Environments.Add(new Harbora.Domain.Projects.Environment
+            {
+                Id = environmentId, WorkspaceId = fixture.WorkspaceId, ProjectId = projectId,
+                Name = "Production", Slug = "production", IsDefault = true
+            });
+        });
+
+        return environmentId;
     }
 
     /// <summary>A deploy submitted the way the panel's own button submits it.</summary>

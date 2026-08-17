@@ -33,6 +33,7 @@ public class VolumeDownloadLinkHttpTests(HarboraHttpFixture fixture)
         var app = new App
         {
             WorkspaceId = workspaceId ?? fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = slug,
             Slug = slug,

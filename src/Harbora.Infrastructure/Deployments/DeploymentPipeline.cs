@@ -666,23 +666,13 @@ public sealed class DeploymentPipeline(
     }
 
     /// <summary>
-    /// The private network for this service's environment, or null while it has none — an app
-    /// created before projects existed and never reassigned. Null keeps it on the workspace network
-    /// rather than inventing a boundary it was never placed inside.
+    /// The private network for this app's environment. EnvironmentId is required (P2, 2026-08-17
+    /// app-environment-management design), so this is no longer optional — see
+    /// <see cref="Networking.EnvironmentNetworkResolver"/>, the shared implementation every resolver
+    /// like this one used to duplicate.
     /// </summary>
-    private async Task<string?> ResolveEnvironmentNetworkAsync(App app, CancellationToken ct)
-    {
-        if (app.EnvironmentId is not { } environmentId) return null;
-
-        var placement = await db.Environments
-            .Where(e => e.Id == environmentId)
-            .Select(e => new { e.Slug, ProjectSlug = e.Project!.Slug })
-            .FirstOrDefaultAsync(ct);
-
-        return placement is null
-            ? null
-            : Networking.EnvironmentNetwork.For(placement.ProjectSlug, placement.Slug, environmentId);
-    }
+    private Task<string> ResolveEnvironmentNetworkAsync(App app, CancellationToken ct) =>
+        Networking.EnvironmentNetworkResolver.ForAsync(db, app.EnvironmentId, ct);
 
     /// <summary>
     /// Every short name already answered to on this app's network by somebody else.
@@ -710,12 +700,10 @@ public sealed class DeploymentPipeline(
     /// </summary>
     private async Task<IReadOnlyCollection<string>> TakenAliasesAsync(IDockerEngine docker, App app, CancellationToken ct)
     {
-        if (app.EnvironmentId is not { } environmentId) return [];
-
         try
         {
             var siblingIds = await db.Apps
-                .Where(a => a.EnvironmentId == environmentId && a.Id != app.Id)
+                .Where(a => a.EnvironmentId == app.EnvironmentId && a.Id != app.Id)
                 .Select(a => a.Id.ToString())
                 .ToListAsync(ct);
 

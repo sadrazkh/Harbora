@@ -254,6 +254,7 @@ public class UsageRangeHttpTests(HarboraHttpFixture fixture)
         var app = new App
         {
             WorkspaceId = fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = slug,
             Slug = slug,
@@ -277,6 +278,7 @@ public class UsageRangeHttpTests(HarboraHttpFixture fixture)
         var app = new App
         {
             WorkspaceId = workspaceId ?? fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = serverId,
             Name = slug,
             Slug = slug,
@@ -308,6 +310,7 @@ public class UsageRangeHttpTests(HarboraHttpFixture fixture)
         var service = new ManagedService
         {
             WorkspaceId = fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = name,
             Type = ManagedServiceType.PostgreSql,

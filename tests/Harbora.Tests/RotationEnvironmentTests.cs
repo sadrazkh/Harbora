@@ -115,10 +115,11 @@ internal sealed class RotationHarness : IDisposable
 
     public async Task<ManagedService> SeedDatabaseAsync(string name, Guid? environmentId = null)
     {
+        var placedIn = environmentId ?? await SeedEnvironmentAsync();
         var service = new ManagedService
         {
             WorkspaceId = _workspaceId,
-            EnvironmentId = environmentId,
+            EnvironmentId = placedIn,
             ServerId = Guid.CreateVersion7(),
             Name = name,
             Type = ManagedServiceType.PostgreSql,
@@ -136,9 +137,14 @@ internal sealed class RotationHarness : IDisposable
         return service;
     }
 
-    /// <summary>A project and one environment inside it, in this harness's workspace.</summary>
-    public async Task<Guid> SeedEnvironmentAsync(string projectSlug = "shop", string environmentSlug = "prod")
+    /// <summary>
+    /// A project and one environment inside it, in this harness's workspace. The default slug carries
+    /// a unique suffix so two databases seeded without an explicit environment in the same test do not
+    /// collide on the (WorkspaceId, Slug) unique index.
+    /// </summary>
+    public async Task<Guid> SeedEnvironmentAsync(string? projectSlug = null, string environmentSlug = "prod")
     {
+        projectSlug ??= "shop-" + Guid.NewGuid().ToString("N")[..8];
         var project = new Harbora.Domain.Projects.Project
         {
             Id = Guid.NewGuid(), WorkspaceId = _workspaceId, Name = projectSlug, Slug = projectSlug
@@ -170,6 +176,7 @@ internal sealed class RotationHarness : IDisposable
         var app = new App
         {
             WorkspaceId = _workspaceId,
+            EnvironmentId = await SeedEnvironmentAsync(),
             ServerId = Guid.CreateVersion7(),
             Name = "web",
             Slug = "web-" + Guid.NewGuid().ToString("n")[..8],

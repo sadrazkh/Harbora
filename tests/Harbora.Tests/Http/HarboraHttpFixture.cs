@@ -21,6 +21,15 @@ public sealed class HarboraHttpFixture : IDisposable
     /// <summary>The workspace nearly every test hangs its fixture off.</summary>
     public Guid WorkspaceId { get; } = Guid.CreateVersion7();
 
+    /// <summary>
+    /// The environment nearly every test that seeds an <c>App</c> or <c>ManagedService</c> places it
+    /// in when it does not care which one. EnvironmentId is required now (P2, 2026-08-17
+    /// app-environment-management design), and this fixture is shared by every test class in the
+    /// collection, so it is seeded exactly once here rather than once per file — the alternative most
+    /// files would otherwise reinvent, with its own risk of colliding on a fixed default slug.
+    /// </summary>
+    public Guid DefaultEnvironmentId { get; } = Guid.CreateVersion7();
+
     public HarboraHttpFixture()
     {
         // Past first run, like a panel anyone would be making requests to. Without this the setup
@@ -40,6 +49,17 @@ public sealed class HarboraHttpFixture : IDisposable
             });
 
             db.Settings.Add(new Setting { Key = SettingKeys.SetupCompleted, Value = "true" });
+
+            var projectId = Guid.CreateVersion7();
+            db.Projects.Add(new Harbora.Domain.Projects.Project
+            {
+                Id = projectId, WorkspaceId = WorkspaceId, Name = "Shop", Slug = "shop"
+            });
+            db.Environments.Add(new Harbora.Domain.Projects.Environment
+            {
+                Id = DefaultEnvironmentId, WorkspaceId = WorkspaceId, ProjectId = projectId,
+                Name = "Production", Slug = "production", IsDefault = true
+            });
         });
     }
 

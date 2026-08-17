@@ -24,6 +24,7 @@ public class ServiceRetryHttpTests(HarboraHttpFixture fixture)
         var service = new ManagedService
         {
             WorkspaceId = fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = name,
             Type = ManagedServiceType.PostgreSql,

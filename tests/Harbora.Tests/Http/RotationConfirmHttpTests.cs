@@ -29,6 +29,7 @@ public class RotationConfirmHttpTests(HarboraHttpFixture fixture)
         var service = new ManagedService
         {
             WorkspaceId = fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = "orders-" + suffix,
             Type = ManagedServiceType.PostgreSql,
@@ -45,6 +46,7 @@ public class RotationConfirmHttpTests(HarboraHttpFixture fixture)
         var app = new App
         {
             WorkspaceId = fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = "web-" + suffix,
             Slug = "web-" + suffix,
@@ -135,6 +137,7 @@ public class RotationConfirmHttpTests(HarboraHttpFixture fixture)
         var service = new ManagedService
         {
             WorkspaceId = fixture.WorkspaceId,
+            EnvironmentId = fixture.DefaultEnvironmentId,
             ServerId = Guid.CreateVersion7(),
             Name = "orders-untouched",
             Type = ManagedServiceType.PostgreSql,

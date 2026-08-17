@@ -15,9 +15,9 @@ namespace Harbora.Tests;
 /// The project/environment layer added on top of the existing model.
 ///
 /// The constraint that shaped it: the deploy engine is the one part of Harbora proven to work end to
-/// end, so <c>Apps</c> keeps its name, its columns and its behaviour. Everything here is additive —
-/// an app with no environment is still a perfectly valid app, because that is what every existing row
-/// looks like until the backfill runs.
+/// end, so <c>Apps</c> keeps its name, its columns and its behaviour. Everything here is additive.
+/// EnvironmentId itself became required in P2 (2026-08-17 app-environment-management design), once
+/// the 2026-07-30 backfill had placed every row that predated it.
 /// </summary>
 public class ProjectModelTests
 {
@@ -66,21 +66,14 @@ public class ProjectModelTests
         db.Apps.Single().EnvironmentId.Should().Be(environment.Id);
     }
 
-    [Fact]
-    public void An_app_without_an_environment_is_still_valid()
-    {
-        // Every row that exists today looks like this until the migration's backfill runs, and the
-        // deploy engine must keep working for all of them in the meantime.
-        using var db = NewDb("proj-" + Guid.NewGuid());
-
-        db.Apps.Add(new App
-        {
-            WorkspaceId = Workspace, ServerId = Guid.CreateVersion7(), Name = "legacy", Slug = "legacy"
-        });
-
-        db.Invoking(x => x.SaveChanges()).Should().NotThrow();
-        db.Apps.Single().EnvironmentId.Should().BeNull();
-    }
+    // The test that used to live here, An_app_without_an_environment_is_still_valid, asserted the
+    // opposite of what P2 (2026-08-17 app-environment-management design) makes true: EnvironmentId is
+    // a required Guid now, and there is no longer a C# value that expresses "no environment" for a
+    // test in this file to construct. Deleted rather than inverted in place, because the invariant it
+    // would need to prove — a dangling EnvironmentId is refused — is a real foreign-key constraint
+    // that only a real database enforces; EF's InMemory provider does not validate that a scalar FK
+    // resolves to an existing row, so an inverted version here would assert something InMemory cannot
+    // actually demonstrate. EnvironmentColumnPostgresTests in the Postgres lane proves it for real.
 
     [Fact]
     public void An_existing_app_defaults_to_a_web_service()

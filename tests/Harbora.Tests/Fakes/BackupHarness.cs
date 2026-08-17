@@ -106,20 +106,21 @@ public sealed class BackupHarness : IDisposable
     /// <summary>A PostgreSQL database scheduled on the given server, with its workspace.</summary>
     /// <param name="environmentId">
     /// Placed in this environment when given — <see cref="SeedEnvironmentAsync"/> makes one. Left
-    /// null reproduces a service that predates projects/environments (still legal until P2 makes the
-    /// column required), which is what every call site here did before P3 needed to tell the two
-    /// apart.
+    /// null, a default environment is created and used: EnvironmentId is required (P2, 2026-08-17
+    /// app-environment-management design), so every call site that does not care which environment
+    /// still needs a real one rather than none at all.
     /// </param>
     public async Task<Harbora.Domain.Services.ManagedService> SeedDatabaseAsync(
         Guid serverId, string name = "orders", Guid? environmentId = null)
     {
         await EnsureWorkspaceAsync();
+        var placedIn = environmentId ?? await SeedEnvironmentAsync();
 
         var service = new Harbora.Domain.Services.ManagedService
         {
             Id = Guid.NewGuid(),
             WorkspaceId = WorkspaceId,
-            EnvironmentId = environmentId,
+            EnvironmentId = placedIn,
             ServerId = serverId,
             Name = name,
             Type = ManagedServiceType.PostgreSql,
@@ -140,10 +141,15 @@ public sealed class BackupHarness : IDisposable
     /// <summary>
     /// A project and one environment inside it, in this harness's workspace — what a database has to
     /// be placed in before it gets a network of its own rather than the shared workspace one.
+    ///
+    /// The default slug carries a short unique suffix rather than a fixed name, so two calls with no
+    /// argument in the same test — one seeding a database with no explicit placement, say, then
+    /// another — do not collide on the (WorkspaceId, Slug) unique index.
     /// </summary>
-    public async Task<Guid> SeedEnvironmentAsync(string projectSlug = "shop", string environmentSlug = "prod")
+    public async Task<Guid> SeedEnvironmentAsync(string? projectSlug = null, string environmentSlug = "prod")
     {
         await EnsureWorkspaceAsync();
+        projectSlug ??= "shop-" + Guid.NewGuid().ToString("N")[..8];
 
         var project = new Harbora.Domain.Projects.Project
         {
@@ -165,10 +171,11 @@ public sealed class BackupHarness : IDisposable
         Guid serverId, string volumeName, string slug = "blog")
     {
         await EnsureWorkspaceAsync();
+        var environmentId = await SeedEnvironmentAsync();
 
         var app = new Harbora.Domain.Apps.App
         {
-            Id = Guid.NewGuid(), WorkspaceId = WorkspaceId, ServerId = serverId,
+            Id = Guid.NewGuid(), WorkspaceId = WorkspaceId, EnvironmentId = environmentId, ServerId = serverId,
             Name = slug, Slug = slug
         };
         app.Volumes.Add(new Harbora.Domain.Apps.Volume { Name = volumeName, MountPath = "/data" });

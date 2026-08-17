@@ -258,7 +258,7 @@ public sealed class ManagedServiceEngine(
         return Networking.NetworkPlan.Primary(environmentNetwork, _opt.WorkspaceNetwork(wsSlug));
     }
 
-    private Task<string?> ResolveEnvironmentNetworkAsync(Domain.Services.ManagedService svc, CancellationToken ct) =>
+    private Task<string> ResolveEnvironmentNetworkAsync(Domain.Services.ManagedService svc, CancellationToken ct) =>
         Networking.EnvironmentNetworkResolver.ForAsync(db, svc.EnvironmentId, ct);
 
     /// <summary>

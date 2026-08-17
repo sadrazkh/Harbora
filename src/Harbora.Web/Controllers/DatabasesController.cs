@@ -87,7 +87,7 @@ public sealed partial class DatabasesController(
         var query = db.ManagedServices.Where(s => s.WorkspaceId == WorkspaceId);
         var visibleProjectIds = await access.VisibleProjectIdsAsync(ct);
         if (visibleProjectIds is { } visible)
-            query = query.Where(s => s.EnvironmentId != null && visible.Contains(s.Environment!.ProjectId));
+            query = query.Where(s => visible.Contains(s.Environment!.ProjectId));
 
         var services = await query.AsNoTracking()
             .Include(s => s.Environment).ThenInclude(e => e!.Project)
@@ -115,7 +115,7 @@ public sealed partial class DatabasesController(
             .Include(a => a.EnvironmentVariables)
             .Where(a => a.WorkspaceId == WorkspaceId);
         if (visibleProjectIds is { } appProjects)
-            appsQuery = appsQuery.Where(a => a.EnvironmentId != null && appProjects.Contains(a.Environment!.ProjectId));
+            appsQuery = appsQuery.Where(a => appProjects.Contains(a.Environment!.ProjectId));
 
         var apps = await appsQuery
             .OrderBy(a => a.Name).ToListAsync(ct);
@@ -130,11 +130,9 @@ public sealed partial class DatabasesController(
             var service = services.First(s => s.Id == selectedRow.Id);
             var canManage = await access.CanTouchServiceAsync(service.Id, Capabilities.DatabasesManage, ct);
             var conn = await engine.GetConnectionInfoAsync(service.Id, ct);
-            var network = service.EnvironmentId is { } environmentId
-                ? await db.Environments.AsNoTracking().Where(e => e.Id == environmentId)
-                    .Select(e => Harbora.Infrastructure.Networking.EnvironmentNetwork.For(e.Project!.Slug, e.Slug, e.Id))
-                    .FirstOrDefaultAsync(ct)
-                : null;
+            var network = await db.Environments.AsNoTracking().Where(e => e.Id == service.EnvironmentId)
+                .Select(e => Harbora.Infrastructure.Networking.EnvironmentNetwork.For(e.Project!.Slug, e.Slug, e.Id))
+                .FirstOrDefaultAsync(ct);
             var usingApps = connections.Where(c => c.Value.Contains(service.ContainerName))
                 .Select(c => apps.First(a => a.Id == c.Key).Name).Order().ToList();
             var selectedBackups = backups.Where(b => b.TargetRef == service.Id.ToString()).Take(6)
@@ -206,11 +204,9 @@ public sealed partial class DatabasesController(
         var usingApps = connections.Where(c => c.Value.Contains(service.ContainerName))
             .Select(c => apps.First(a => a.Id == c.Key).Name).Order().ToList();
 
-        var network = service.EnvironmentId is { } environmentId
-            ? await db.Environments.AsNoTracking().Where(e => e.Id == environmentId)
-                .Select(e => Harbora.Infrastructure.Networking.EnvironmentNetwork.For(e.Project!.Slug, e.Slug, e.Id))
-                .FirstOrDefaultAsync(ct)
-            : null;
+        var network = await db.Environments.AsNoTracking().Where(e => e.Id == service.EnvironmentId)
+            .Select(e => Harbora.Infrastructure.Networking.EnvironmentNetwork.For(e.Project!.Slug, e.Slug, e.Id))
+            .FirstOrDefaultAsync(ct);
 
         var backups = await db.Backups.AsNoTracking()
             .Where(b => b.TargetRef == service.Id.ToString())
@@ -761,8 +757,10 @@ public sealed partial class DatabasesController(
         // attach succeeded and wrote a hostname resolvable only on the other network — the service
         // then started, looked healthy, and could not reach its database.
         var service = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id, ct);
+        if (service is null) return NotFound();
+
         var verdict = Harbora.Infrastructure.Networking.NetworkWiring.CanAttach(
-            app.EnvironmentId, service?.EnvironmentId);
+            app.EnvironmentId, service.EnvironmentId);
         if (!verdict.Allowed)
         {
             TempData["Error"] = verdict.Reason;
@@ -780,7 +778,7 @@ public sealed partial class DatabasesController(
             StringComparer.Ordinal);
 
         var prefixedOnly = Harbora.Infrastructure.Services.AttachKeys.IsPrefixedOnly(env, current);
-        var final = Harbora.Infrastructure.Services.AttachKeys.For(env, current, service!.Name);
+        var final = Harbora.Infrastructure.Services.AttachKeys.For(env, current, service.Name);
 
         foreach (var (key, value) in final)
         {

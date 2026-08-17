@@ -40,22 +40,4 @@ public class RotationNetworkTests
             "goes, and this is the failure that would surface as instead");
     }
 
-    /// <summary>
-    /// An app placed before projects and environments existed — still legal until P2 makes the
-    /// column required — must keep rotating on the workspace network it has always had. Losing this
-    /// would strand a database nobody has redeployed since the migration that backfilled the column.
-    /// </summary>
-    [Fact]
-    public async Task A_database_with_no_environment_yet_still_rotates_on_the_workspace_network()
-    {
-        using var h = new RotationHarness();
-        var database = await h.SeedDatabaseAsync("orders");
-
-        await h.Engine().RotatePasswordAsync(database.Id, default);
-
-        var request = h.Docker.OneOffRequests.Should().ContainSingle(
-            r => string.Join(' ', r.Command).Contains("ALTER", StringComparison.Ordinal)).Subject;
-
-        request.NetworkMode.Should().Be("harbora-ws-acme");
-    }
 }

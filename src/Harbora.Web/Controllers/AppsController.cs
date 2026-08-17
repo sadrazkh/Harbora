@@ -91,7 +91,7 @@ public sealed partial class AppsController(
         // A list that shows what the buttons refuse is worse than a shorter list. Null means "every
         // project", which is the common case and must not be confused with an empty list.
         if (await access.VisibleProjectIdsAsync(ct) is { } visible)
-            query = query.Where(a => a.EnvironmentId != null && visible.Contains(a.Environment!.ProjectId));
+            query = query.Where(a => visible.Contains(a.Environment!.ProjectId));
 
         var apps = await query
             .AsNoTracking()
@@ -518,11 +518,9 @@ public sealed partial class AppsController(
         // to know to open each database in turn and attach the app from there, and nothing here
         // listed what it was already using. So "one app, several databases" was supported by
         // everything except the screen somebody would try it on.
-        var siblings = app.EnvironmentId is { } envId
-            ? await db.ManagedServices.AsNoTracking()
-                .Where(s => s.WorkspaceId == WorkspaceId && s.EnvironmentId == envId)
-                .OrderBy(s => s.Name).ToListAsync(ct)
-            : [];
+        var siblings = await db.ManagedServices.AsNoTracking()
+            .Where(s => s.WorkspaceId == WorkspaceId && s.EnvironmentId == app.EnvironmentId)
+            .OrderBy(s => s.Name).ToListAsync(ct);
 
         var wiredTo = serviceUsage
             .ConnectionsFor([app], siblings.Select(s => s.ContainerName))
@@ -534,17 +532,15 @@ public sealed partial class AppsController(
         // the hostname would not resolve. That was explained and left there: the person could see
         // the refusal and had nowhere to go with it. The move already existed, on a page in
         // Advanced mode that most people never open.
-        ViewBag.Elsewhere = app.EnvironmentId is null
-            ? new List<AppDatabaseElsewhereViewModel>()
-            : await db.ManagedServices.AsNoTracking()
-                .Include(s => s.Environment).ThenInclude(e => e!.Project)
-                .Where(s => s.WorkspaceId == WorkspaceId && s.EnvironmentId != app.EnvironmentId)
-                .OrderBy(s => s.Name)
-                .Select(s => new AppDatabaseElsewhereViewModel(
-                    s.Id, s.Name, s.Type,
-                    s.Environment!.Project!.Name + " · " + s.Environment.Name,
-                    s.EnvironmentId!.Value))
-                .ToListAsync(ct);
+        ViewBag.Elsewhere = await db.ManagedServices.AsNoTracking()
+            .Include(s => s.Environment).ThenInclude(e => e!.Project)
+            .Where(s => s.WorkspaceId == WorkspaceId && s.EnvironmentId != app.EnvironmentId)
+            .OrderBy(s => s.Name)
+            .Select(s => new AppDatabaseElsewhereViewModel(
+                s.Id, s.Name, s.Type,
+                s.Environment!.Project!.Name + " · " + s.Environment.Name,
+                s.EnvironmentId))
+            .ToListAsync(ct);
 
         ViewBag.Databases = siblings
             .Select(s => new AppDatabaseLinkViewModel(

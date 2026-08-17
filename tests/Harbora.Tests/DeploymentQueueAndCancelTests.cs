@@ -117,10 +117,22 @@ public class DeploymentQueueAndCancelTests
                 .UseInMemoryDatabase("deploy-cancel-" + Guid.NewGuid()).Options,
             new FixedWorkspaceScope(workspaceId));
 
+        var project = new Harbora.Domain.Projects.Project
+        {
+            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, Name = "Shop", Slug = "shop"
+        };
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, ProjectId = project.Id,
+            Name = "Production", Slug = "production", IsDefault = true
+        };
+        db.Projects.Add(project);
+        db.Environments.Add(environment);
+
         var app = new App
         {
-            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, ServerId = Guid.CreateVersion7(),
-            Name = "Shop", Slug = "shop"
+            Id = Guid.CreateVersion7(), WorkspaceId = workspaceId, EnvironmentId = environment.Id,
+            ServerId = Guid.CreateVersion7(), Name = "Shop", Slug = "shop"
         };
         db.Apps.Add(app);
 

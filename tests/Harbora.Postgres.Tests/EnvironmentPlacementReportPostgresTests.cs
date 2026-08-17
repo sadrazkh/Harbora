@@ -16,12 +16,13 @@ namespace Harbora.Postgres.Tests;
 /// <para>
 /// <see cref="EnvironmentPlacementReportPostgresTests.A_freshly_migrated_empty_database_reports_zero_across_every_question"/>
 /// runs the report against a database that carries every migration up to head, including the one that
-/// backfills <c>EnvironmentId</c> (<c>20260730220251_ProjectsAndEnvironments.cs</c>). An empty
-/// database proves nothing about the backfill's SQL directly — there is nothing for it to have
-/// missed — but it does prove the report's own queries translate and run against the schema that SQL
-/// produced, which InMemory cannot check: <c>IgnoreQueryFilters()</c> composing correctly, the
-/// required <c>Environment → Project</c> join, and the dictionary/hash-set post-processing over rows
-/// that came back from real Npgsql projections rather than LINQ-to-Objects throughout.
+/// backfills <c>EnvironmentId</c> (<c>20260730220251_ProjectsAndEnvironments.cs</c>) and the one that
+/// makes it required (P2, 2026-08-17 app-environment-management design). An empty database proves
+/// nothing about the backfill's SQL directly — there is nothing for it to have missed — but it does
+/// prove the report's own queries translate and run against the schema that SQL produced, which
+/// InMemory cannot check: <c>IgnoreQueryFilters()</c> composing correctly, the required
+/// <c>Environment → Project</c> join, and the dictionary/hash-set post-processing over rows that came
+/// back from real Npgsql projections rather than LINQ-to-Objects throughout.
 /// </para>
 /// </summary>
 [Collection(PostgresLane.Collection)]
@@ -43,23 +44,34 @@ public sealed class EnvironmentPlacementReportPostgresTests(PostgresLane lane)
     }
 
     [PostgresFact]
-    public async Task A_workload_detached_after_the_backfill_is_named_by_the_report_over_real_postgres()
+    public async Task A_placed_workload_is_not_reported_as_unplaced_over_real_postgres()
     {
-        // Stands in for the shape the spec says is the only way a NULL exists in production today: a
-        // row placed by the 2026-07-30 backfill and then detached by DeleteBehavior.SetNull on an
-        // environment delete. Written directly rather than by deleting an environment, because the
-        // point of this fact is the report's read, not the delete path that produces the row.
-        var connectionString = await lane.FreshlyMigratedAsync("environment-report-unplaced");
+        // The test that used to live here wrote a row with EnvironmentId = null to stand in for the
+        // shape the spec said was the only way a NULL could exist in production: a row placed by the
+        // 2026-07-30 backfill and then detached by DeleteBehavior.SetNull on an environment delete.
+        // P2 (2026-08-17 app-environment-management design) made EnvironmentId a required, RESTRICT
+        // foreign key, so that row can no longer exist — EnvironmentColumnPostgresTests proves the
+        // constraint that makes it impossible. What is left to prove here is that Q1 reports zero
+        // for a database that actually has a workload in it, not only for an empty one.
+        var connectionString = await lane.FreshlyMigratedAsync("environment-report-placed");
 
         Guid workspaceId;
         await using (var seed = PostgresLane.Open(connectionString))
         {
             var workspace = new Workspace { Name = "acme", Slug = "acme" };
+            var project = new Project { WorkspaceId = workspace.Id, Name = "blog", Slug = "blog" };
+            var environment = new Environment
+            {
+                WorkspaceId = workspace.Id, ProjectId = project.Id,
+                Name = "production", Slug = "production", IsDefault = true
+            };
             seed.Workspaces.Add(workspace);
+            seed.Projects.Add(project);
+            seed.Environments.Add(environment);
             seed.Apps.Add(new App
             {
-                WorkspaceId = workspace.Id, ServerId = Guid.CreateVersion7(),
-                Name = "orphaned-worker", Slug = "orphaned-worker", EnvironmentId = null
+                WorkspaceId = workspace.Id, ServerId = Guid.CreateVersion7(), EnvironmentId = environment.Id,
+                Name = "web", Slug = "web"
             });
             await seed.SaveChangesAsync();
             workspaceId = workspace.Id;
@@ -68,8 +80,9 @@ public sealed class EnvironmentPlacementReportPostgresTests(PostgresLane lane)
         await using var db = PostgresLane.Open(connectionString);
         var report = await EnvironmentPlacementReport.BuildAsync(db);
 
-        report.UnplacedApps.Should()
-            .ContainSingle(a => a.Name == "orphaned-worker" && a.WorkspaceId == workspaceId);
+        report.UnplacedApps.Should().BeEmpty();
+        report.UnplacedWorkloadCount.Should().Be(0);
+        report.WorkspacesWithWorkloadsButNoProject.Where(w => w.WorkspaceId == workspaceId).Should().BeEmpty();
     }
 
     [PostgresFact]

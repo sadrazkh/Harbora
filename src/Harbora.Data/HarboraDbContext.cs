@@ -351,12 +351,19 @@ public class HarboraDbContext : DbContext
             e.Property(x => x.Slug).HasMaxLength(63).IsRequired();
         });
 
-        // Deliberately SetNull, not Cascade: deleting an environment must never silently take a
-        // customer's running apps and databases with it. Detaching them surfaces the mistake instead.
+        // Restrict, not SetNull and not Cascade (P2, 2026-08-17 app-environment-management design).
+        // EnvironmentId is required now, so SetNull is no longer legal — a cascade would silently
+        // destroy a customer's running apps and databases along with the environment, which is the
+        // outcome the original SetNull comment existed to prevent. Restrict keeps that guarantee the
+        // right way: the database refuses to delete an environment that still holds a workload, and
+        // every path that removes an Environment row (ProjectsController.Delete,
+        // AppOperationsService.RemoveEmptyPreviewEnvironmentAsync) already checks for exactly that
+        // before it tries, so this is the backstop for what those checks are supposed to guarantee,
+        // not the only thing standing between a delete and a customer's data.
         b.Entity<App>(e => e.HasOne(x => x.Environment).WithMany()
-            .HasForeignKey(x => x.EnvironmentId).OnDelete(DeleteBehavior.SetNull));
+            .HasForeignKey(x => x.EnvironmentId).IsRequired().OnDelete(DeleteBehavior.Restrict));
         b.Entity<ManagedService>(e => e.HasOne(x => x.Environment).WithMany()
-            .HasForeignKey(x => x.EnvironmentId).OnDelete(DeleteBehavior.SetNull));
+            .HasForeignKey(x => x.EnvironmentId).IsRequired().OnDelete(DeleteBehavior.Restrict));
 
         b.Entity<Deployment>(e =>
         {

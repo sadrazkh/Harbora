@@ -90,7 +90,7 @@ public class ProjectAccessServiceTests : IDisposable
         _db.SaveChanges();
     }
 
-    private Guid GivenApp(Guid? environmentId)
+    private Guid GivenApp(Guid environmentId)
     {
         var app = new App
         {
@@ -102,7 +102,7 @@ public class ProjectAccessServiceTests : IDisposable
         return app.Id;
     }
 
-    private Guid GivenDatabase(Guid? environmentId)
+    private Guid GivenDatabase(Guid environmentId)
     {
         var service = new ManagedService
         {
@@ -233,15 +233,6 @@ public class ProjectAccessServiceTests : IDisposable
         (await Service().CanSeeAppAsync(app, default)).Should().BeTrue();
         (await Service().CanTouchAppAsync(app, Capabilities.AppsDeploy, default)).Should().BeFalse(
             "being a platform administrator must not silently make this membership a workspace administrator");
-    }
-
-    [Fact]
-    public async Task An_app_belonging_to_no_project_is_out_of_reach_when_scoped()
-    {
-        GivenUser(SystemRole.Member, scoped: true, (_shopProject, null, SystemRole.Member));
-        var orphan = GivenApp(environmentId: null);
-
-        (await Service().CanTouchAppAsync(orphan, Capabilities.AppsDeploy, default)).Should().BeFalse();
     }
 
     [Fact]
