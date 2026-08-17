@@ -33,14 +33,23 @@ namespace Harbora.Infrastructure.Notifications;
 /// N4 ("in the reader's own language"): <see cref="NotifyAsync"/>/<see cref="NotifyRuleAsync"/> no
 /// longer take a pre-built title/body — a raise site hands over a
 /// <see cref="NotificationEventData"/>, and this class is where rendering happens, via
-/// <see cref="catalog"/>. The in-app copy (<see cref="FanOutInAppAsync"/>) is rendered once per
+/// <see cref="catalog"/>. The in-app copy (<see cref="FanOutToMembersAsync"/>) is rendered once per
 /// member, in that member's own <c>User.PreferredCulture</c> — the same event genuinely reads
 /// differently for two people in the same workspace. A channel delivery (Telegram, Discord, a
 /// webhook, or an alert's own email target) has no person attached to it, so it renders once, in the
 /// platform's default culture (<see cref="NotificationTemplateCatalog.DefaultCulture"/>) — the same
 /// default <c>User.PreferredCulture</c> already documents. The admin-fallback path
 /// (<see cref="EnqueueFallbackToAdminsAsync"/>) sits between the two: it names a real person by email,
-/// so it renders per admin, the same as the in-app fan-out.
+/// so it renders per admin, the same as the member fan-out.
+/// </para>
+///
+/// <para>
+/// N5 ("noise control"): <see cref="FanOutToMembersAsync"/> is also where a member's own
+/// <c>NotificationPreference</c> and quiet hours are resolved — every earlier stage of this class
+/// still writes the same rows it always did, and N5 changes only whether/where a given member's copy
+/// actually lands. A critical event is never affected by quiet hours and can only be re-routed, never
+/// silenced entirely — see that method's own doc for the invariant it enforces as a second, defensive
+/// check on top of <c>NotificationPreferenceService.SetAsync</c>'s own.
 /// </para>
 /// </summary>
 public sealed class NotificationService(
@@ -85,9 +94,11 @@ public sealed class NotificationService(
 
         // N3 ("told a person, not a channel"): the in-app copy is not the zero-rule fallback's
         // understudy below — it is written for every member whether or not any rule matched, and
-        // whether or not a channel exists at all. See FanOutInAppAsync for why. N4: rendered once per
-        // member's own culture, not the single string every earlier version of this method built.
-        await FanOutInAppAsync(workspaceId, evt, severity, ct);
+        // whether or not a channel exists at all. See FanOutToMembersAsync for why. N4: rendered once
+        // per member's own culture, not the single string every earlier version of this method built.
+        // N5 ("noise control"): the same call now also resolves each member's own preference and
+        // quiet hours — see that method's own doc.
+        await FanOutToMembersAsync(workspaceId, evt, severity, ct);
 
         if (matching.Count > 0)
         {
@@ -158,9 +169,9 @@ public sealed class NotificationService(
         if (alert is null) return NotificationResult.Failed("That alert rule no longer exists.");
         if (!alert.IsEnabled) return NotificationResult.Failed("That alert rule is disabled.");
 
-        // N3: a per-app threshold breach is a workspace event too, so it gets the same in-app fan-out
-        // NotifyAsync gives every other event — see FanOutInAppAsync.
-        await FanOutInAppAsync(alert.WorkspaceId, evt, severity, ct);
+        // N3: a per-app threshold breach is a workspace event too, so it gets the same fan-out
+        // NotifyAsync gives every other event — see FanOutToMembersAsync.
+        await FanOutToMembersAsync(alert.WorkspaceId, evt, severity, ct);
 
         var (encryptedBody, subject) = RenderForChannel(evt);
         await EnqueueDeliveryAsync(new NotificationDelivery
@@ -462,8 +473,23 @@ public sealed class NotificationService(
     /// Every active member, not merely admins — N3 §7 Q2 answers differently for this row than N1
     /// answered it for the admin-only email fallback below: paging somebody's phone for every event
     /// nobody asked them about is noise a Viewer never signed up for, but a row waiting in an inbox
-    /// they do not have to open costs them nothing until N5 makes it tunable. "Not in N3: preferences"
-    /// — everyone gets the in-app copy of everything the workspace is told.
+    /// they do not have to open costs them nothing until N5 makes it tunable.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>N5 ("noise control"): "Not in N3: preferences" is no longer true.</b> Each member's own
+    /// <c>NotificationPreference</c> — absent meaning <see cref="NotificationPreferenceDefaults"/>,
+    /// which is <c>InApp = Immediate</c> for every event, byte-identical to N3's own unconditional
+    /// behaviour — decides whether their in-app row is written at all, and whether their personal
+    /// email is sent now, folded into their next digest, or skipped. A critical event
+    /// (<see cref="NotificationEventClass.IsCritical"/>) is never affected by quiet hours on any
+    /// channel and always gets at least one channel resolved <c>Immediate</c> — enforced twice: once
+    /// when the preference was written (<c>NotificationPreferenceService.SetAsync</c>), and again here,
+    /// belt-and-suspenders, in case a row was ever written by anything else. If neither channel comes
+    /// out <c>Immediate</c> for a critical event — which a correctly-behaving preference service never
+    /// allows — this forces the in-app row anyway rather than trust the data: a customer may choose
+    /// where the last warning before suspension goes, not whether it exists, and that has to hold even
+    /// against a bad row, not merely against a well-behaved caller.
     /// </para>
     ///
     /// <para>
@@ -479,30 +505,92 @@ public sealed class NotificationService(
     /// yet.
     /// </para>
     /// </summary>
-    private async Task FanOutInAppAsync(
+    private async Task FanOutToMembersAsync(
         Guid workspaceId, NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
     {
         var members = await db.WorkspaceMembers
             .Where(m => m.WorkspaceId == workspaceId && m.User!.IsActive)
-            .Select(m => new { m.UserId, m.User!.PreferredCulture })
+            .Select(m => new
+            {
+                m.UserId, m.User!.PreferredCulture, m.User!.Email,
+                m.User!.TimeZoneId, m.User!.QuietHoursStartHour, m.User!.QuietHoursEndHour
+            })
             .Distinct()
             .ToListAsync(ct);
 
         if (members.Count == 0) return; // Nobody in the workspace at all — nothing to write.
+
+        var isCritical = NotificationEventClass.IsCritical(evt.Type);
+        var memberIds = members.Select(m => m.UserId).ToList();
+        var preferences = await db.NotificationPreferences
+            .Where(p => memberIds.Contains(p.UserId) && p.EventType == evt.Type)
+            .ToListAsync(ct);
+        var now = clock.UtcNow;
+
+        NotificationPreferenceMode Resolve(Guid userId, NotificationChannel channel) =>
+            preferences.FirstOrDefault(p => p.UserId == userId && p.Channel == channel)?.Mode
+            ?? NotificationPreferenceDefaults.DefaultFor(evt.Type, channel);
 
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
         foreach (var member in members)
         {
             var rendered = catalog.Render(evt, member.PreferredCulture);
-            scopedDb.UserNotifications.Add(new Domain.Notifications.UserNotification
+            var immediateLanded = false;
+
+            var inAppMode = Resolve(member.UserId, NotificationChannel.InApp);
+            if (inAppMode == NotificationPreferenceMode.Immediate)
             {
-                WorkspaceId = workspaceId,
-                UserId = member.UserId,
-                Severity = severity,
-                Title = rendered.Subject,
-                Body = rendered.TextBody
-            });
+                scopedDb.UserNotifications.Add(new Domain.Notifications.UserNotification
+                {
+                    WorkspaceId = workspaceId, UserId = member.UserId, Severity = severity,
+                    Title = rendered.Subject, Body = rendered.TextBody
+                });
+                immediateLanded = true;
+            }
+
+            var emailMode = Resolve(member.UserId, NotificationChannel.Email);
+            // Quiet hours only ever touch the optional half of an event, and only ever the email
+            // channel — see QuietHours' own doc for why in-app has nothing to gain from it.
+            if (!isCritical && emailMode == NotificationPreferenceMode.Immediate
+                && QuietHours.IsQuiet(member.QuietHoursStartHour, member.QuietHoursEndHour, member.TimeZoneId, now))
+                emailMode = NotificationPreferenceMode.Digest;
+
+            switch (emailMode)
+            {
+                case NotificationPreferenceMode.Immediate:
+                    await EnqueueDeliveryAsync(new NotificationDelivery
+                    {
+                        WorkspaceId = workspaceId, Purpose = NotificationDeliveryPurpose.PersonalPreference,
+                        Channel = AlertChannel.Email, RecipientAddress = member.Email, Severity = severity,
+                        Subject = rendered.Subject,
+                        EncryptedBody = protector.Protect(ChannelBody.Encode(rendered.TextBody, rendered.HtmlBody))
+                    }, ct);
+                    immediateLanded = true;
+                    break;
+
+                case NotificationPreferenceMode.Digest:
+                    scopedDb.NotificationDigestEntries.Add(new Domain.Notifications.NotificationDigestEntry
+                    {
+                        UserId = member.UserId, WorkspaceId = workspaceId, EventType = evt.Type,
+                        Severity = severity, Title = rendered.Subject, Body = rendered.TextBody
+                    });
+                    break;
+            }
+
+            // The belt-and-suspenders check described in this method's own doc comment.
+            if (isCritical && !immediateLanded)
+            {
+                logger.LogWarning(
+                    "{Event} is critical but resolved to no Immediate channel for user {UserId}; " +
+                    "forcing the in-app row rather than trust a preference row that should never allow this.",
+                    evt.Type, member.UserId);
+                scopedDb.UserNotifications.Add(new Domain.Notifications.UserNotification
+                {
+                    WorkspaceId = workspaceId, UserId = member.UserId, Severity = severity,
+                    Title = rendered.Subject, Body = rendered.TextBody
+                });
+            }
         }
 
         await scopedDb.SaveChangesAsync(ct);
