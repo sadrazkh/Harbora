@@ -167,6 +167,15 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => x.Email).IsUnique();
             e.Property(x => x.Email).HasMaxLength(256).IsRequired();
             e.Property(x => x.DisplayName).HasMaxLength(128);
+
+            // N5 (2026-08-16 notification-system spec): a real column default, not merely the C#
+            // property initializer — every other new column this codebase has added backfills
+            // existing rows with the CLR zero value (an empty string), which would leave every
+            // account that predates this migration with no time zone at all rather than the sensible
+            // default the spec asks for. HasDefaultValue is what makes the migration itself carry
+            // "Asia/Tehran" into the ALTER TABLE, so an existing account gets the same answer a freshly
+            // created one does.
+            e.Property(x => x.TimeZoneId).HasDefaultValue("Asia/Tehran");
         });
 
         b.Entity<ApiToken>(e =>
