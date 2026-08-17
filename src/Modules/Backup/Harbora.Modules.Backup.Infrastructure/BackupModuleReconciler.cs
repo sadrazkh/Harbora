@@ -185,10 +185,12 @@ public sealed record SweepAttempt(string Path, SweepResult Result);
 /// so two processes sharing a database and a staging directory would let the second settle rows the
 /// first is actively running and delete the copy underneath it. Single-instance is the supported
 /// topology — <c>docs/product-audit/13-target-architecture.md</c> §4 records the per-instance
-/// constraints the platform already relies on (<c>JobCancellationRegistry</c>, <c>AlertThrottle</c>,
-/// the AI rate-limit windows, <c>NodeIngressRegistry</c>), and HA is P3 — so no defence against it
-/// is built here. When HA does arrive this pass needs a lease or an instance-scoped staging root,
-/// and this paragraph is where to start reading.
+/// constraints the platform already relies on (<c>JobCancellationRegistry</c>, the AI rate-limit
+/// windows, <c>NodeIngressRegistry</c>) — <c>AlertThrottle</c> used to be one of them and no longer
+/// is: N2 (2026-08-16 notification-system spec) replaced it with <c>AlertDedup</c>, a database row
+/// rather than a process-lifetime dictionary, so it is no longer single-instance-only — and HA is P3,
+/// so no defence against the rest of this list is built here. When HA does arrive this pass needs a
+/// lease or an instance-scoped staging root, and this paragraph is where to start reading.
 /// </para>
 /// </summary>
 public sealed class BackupModuleReconciler(

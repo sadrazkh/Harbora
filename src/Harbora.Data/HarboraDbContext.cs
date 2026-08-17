@@ -105,6 +105,7 @@ public class HarboraDbContext : DbContext
     public DbSet<ContainerLifecycleCursor> ContainerLifecycleCursors => Set<ContainerLifecycleCursor>();
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AlertIncident> AlertIncidents => Set<AlertIncident>();
+    public DbSet<AlertDedupMark> AlertDedupMarks => Set<AlertDedupMark>();
     public DbSet<Harbora.Domain.Notifications.NotificationDelivery> NotificationDeliveries =>
         Set<Harbora.Domain.Notifications.NotificationDelivery>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
@@ -409,6 +410,17 @@ public class HarboraDbContext : DbContext
         {
             e.HasIndex(x => new { x.WorkspaceId, x.Condition, x.SubjectRef, x.ClosedAt });
             e.HasIndex(x => new { x.WorkspaceId, x.ClosedAt, x.OpenedAt });
+        });
+
+        // N2 (2026-08-16 notification-system spec): the persisted replacement for AlertThrottle.
+        // Unique on Key, not workspace-scoped — AlertDedup.ShouldFireAsync's whole mechanism is "try
+        // to insert this exact key, see if it was already there", and that is only race-safe with a
+        // real constraint behind it, the same reasoning IX_ContainerLifecycleCursors_ServerId_ResourceRef
+        // above already applies.
+        b.Entity<AlertDedupMark>(e =>
+        {
+            e.Property(x => x.Key).HasMaxLength(200);
+            e.HasIndex(x => x.Key).IsUnique();
         });
 
         // N1 (2026-08-16 notification-system spec): a delivery row. Deliberately NOT

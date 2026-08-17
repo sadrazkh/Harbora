@@ -37,7 +37,7 @@ public class ContainerLifecycleCollectionTests
         var engine = new FakeDockerEngine();
         var factory = new FakeServerEngineFactory(engine);
         var notifications = new RecordingNotificationService();
-        var throttle = new AlertThrottle();
+        var dedup = new AlertDedup(db);
         var clock = new FixedClock(Now);
         var rollups = new MetricsRollupService(db, clock, NullLogger<MetricsRollupService>.Instance);
 
@@ -46,7 +46,7 @@ public class ContainerLifecycleCollectionTests
         db.SaveChanges();
 
         var collector = new MetricsCollector(
-            db, factory, notifications, new IncidentService(db), throttle, clock, rollups,
+            db, factory, notifications, new IncidentService(db), dedup, clock, rollups,
             Options.Create(new MonitoringOptions()), NullLogger<MetricsCollector>.Instance);
 
         return new Harness(collector, db, engine, clock, server);

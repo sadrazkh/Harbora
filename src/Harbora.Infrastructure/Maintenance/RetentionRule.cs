@@ -287,4 +287,19 @@ public static class RetentionRule
         NotificationDeliveriesToDelete(DateTimeOffset cutoff) =>
         delivery => delivery.CreatedAt < cutoff
                     && delivery.Status != Domain.Common.NotificationDeliveryStatus.Pending;
+
+    /// <summary>
+    /// Dedup marks past the cutoff (2026-08-16 notification-system spec, N2).
+    ///
+    /// <para>
+    /// <b>Safety.</b> Every row here is inert the moment it is written: <c>AlertDedup.ShouldFireAsync</c>
+    /// never reads <c>FiredAt</c>, only whether <c>Key</c> exists, and the window is baked into the key
+    /// itself — so a mark whose window has passed cannot be asked about again under the same key. There
+    /// is no "still needed" case to protect, unlike every other rule in this file; age is measured from
+    /// <c>FiredAt</c> because it is the only timestamp the row carries.
+    /// </para>
+    /// </summary>
+    public static Expression<Func<Domain.Monitoring.AlertDedupMark, bool>> AlertDedupMarksToDelete(
+        DateTimeOffset cutoff) =>
+        mark => mark.FiredAt < cutoff;
 }

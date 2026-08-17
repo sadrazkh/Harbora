@@ -311,8 +311,11 @@ public static class DependencyInjection
         // stop firing" half of monitoring, kept separate from NotificationService because a resolve is
         // not a notification (see the type doc).
         services.AddScoped<Monitoring.IncidentService>();
-        // Survives the collector's per-pass scope, so a recurring condition alerts once per interval.
-        services.AddSingleton<Monitoring.AlertThrottle>();
+        // N2 (2026-08-16 notification-system spec): persisted dedup key with a window, replacing the
+        // in-memory AlertThrottle that used to be registered here — scoped like the db context it
+        // writes through, not a singleton, because durability is now the database's job rather than a
+        // process-lifetime dictionary's.
+        services.AddScoped<Monitoring.AlertDedup>();
         // Summarises finished hours and days so history outlives the raw samples.
         services.AddScoped<Monitoring.MetricsRollupService>();
         services.AddScoped<IMetricsCollector, Monitoring.MetricsCollector>();

@@ -103,6 +103,17 @@ public sealed class RetentionOptions
     public int NotificationDeliveryDays { get; set; } = 90;
 
     /// <summary>
+    /// <c>AlertDedupMark</c> rows (N2) — the persisted "have we already said this" marks that replaced
+    /// <c>AlertThrottle</c>'s in-memory dictionary. Short compared with every other knob on this page,
+    /// on purpose: a mark's usefulness ends with its own window (a day for SSL, an hour by default for
+    /// disk) — the moment the window rolls over, the key that answered "already fired" stops matching
+    /// anything a caller will ever ask for again. Kept a week past that, the same reasoning
+    /// <see cref="PasswordResetTokenDays"/> gives for its own short default, so a support conversation
+    /// about "did we warn about this yesterday" still has an answer.
+    /// </summary>
+    public int AlertDedupMarkDays { get; set; } = 7;
+
+    /// <summary>
     /// The hour (UTC, 0–23) the nightly sweep runs at. Defaults to 03:00 UTC.
     ///
     /// <para>

@@ -17,7 +17,7 @@ public sealed class MetricsCollector(
     IServerEngineFactory engineFactory,
     INotificationService notifications,
     IncidentService incidents,
-    AlertThrottle throttle,
+    AlertDedup dedup,
     ISystemClock clock,
     MetricsRollupService rollups,
     IOptions<MonitoringOptions> options,
@@ -449,8 +449,19 @@ public sealed class MetricsCollector(
         Domain.Servers.Server server, IReadOnlyList<Guid> workspaceIds, int pct, DateTimeOffset now, CancellationToken ct)
     {
         // Once per interval per node (an hour by default), so a full disk doesn't spam every tick —
-        // and so one node filling up doesn't silence the warning for every other node.
-        if (!throttle.ShouldFire($"disk:{server.Id}", now, _options.DiskAlertInterval)) return;
+        // and so one node filling up doesn't silence the warning for every other node. N2 (2026-08-16
+        // notification-system spec): the window is baked into the dedup key itself via
+        // AlertDedupWindow.Bucket, so a restart between two ticks no longer re-fires — the defect
+        // AlertThrottle's own doc comment admitted. Zero (or less) means "never throttle", the same
+        // "0 disables the limit" reading every other knob in this platform gives a zero, and a bucket
+        // of zero width has no meaning, so that case skips the dedup check entirely rather than asking
+        // AlertDedupWindow for one.
+        var interval = _options.DiskAlertInterval;
+        if (interval > TimeSpan.Zero)
+        {
+            var key = $"disk:{server.Id}:{AlertDedupWindow.Bucket(now, interval)}";
+            if (!await dedup.ShouldFireAsync(key, now, ct)) return;
+        }
 
         foreach (var wsId in workspaceIds)
         {

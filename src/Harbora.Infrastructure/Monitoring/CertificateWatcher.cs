@@ -55,6 +55,7 @@ public sealed class CertificateWatcher(
         var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
         var incidents = scope.ServiceProvider.GetRequiredService<IncidentService>();
         var clock = scope.ServiceProvider.GetRequiredService<ISystemClock>();
+        var dedup = scope.ServiceProvider.GetRequiredService<AlertDedup>();
 
         // Only domains we actually issue certificates for; one with SSL off has nothing to expire.
         var domains = await db.Domains
@@ -85,10 +86,20 @@ public sealed class CertificateWatcher(
 
             logger.LogWarning("Certificate for {Host} expires {Expiry:yyyy-MM-dd}.",
                 domain.Host, status.Probe.CertificateExpiresAt);
+            var now = clock.UtcNow;
             await incidents.OpenAsync(domain.WorkspaceId, AlertEvent.SslExpiring, domain.Host,
-                alert.Severity, alert.Headline, alert.Detail, clock.UtcNow, ct);
-            await notifications.NotifyAsync(domain.WorkspaceId, AlertEvent.SslExpiring,
-                alert.Severity, alert.Headline, alert.Detail, ct);
+                alert.Severity, alert.Headline, alert.Detail, now, ct);
+
+            // N2 (2026-08-16 notification-system spec): doc 09 §6 asks for at most one SSL warning
+            // per host per day — the acceptance criterion that named deduplication and had none.
+            // Daily, and fixed rather than configurable like disk's: SSL is already checked on a
+            // 24-hour timer, so "one per calendar day" is what that cadence already means, and the
+            // incident above still refreshes every pass regardless — this only gates whether the
+            // channel is told again today.
+            var dedupKey = $"ssl:{domain.Host}:{now:yyyy-MM-dd}";
+            if (await dedup.ShouldFireAsync(dedupKey, now, ct))
+                await notifications.NotifyAsync(domain.WorkspaceId, AlertEvent.SslExpiring,
+                    alert.Severity, alert.Headline, alert.Detail, ct);
         }
 
         await db.SaveChangesAsync(ct);

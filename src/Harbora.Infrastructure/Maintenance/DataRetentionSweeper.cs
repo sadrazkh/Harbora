@@ -26,6 +26,7 @@ public static class RetentionTables
     public const string EmailVerificationTokens = "EmailVerificationTokens";
     public const string AlertIncidents = "AlertIncidents";
     public const string NotificationDeliveries = "NotificationDeliveries";
+    public const string AlertDedupMarks = "AlertDedupMarks";
 }
 
 /// <summary>
@@ -243,6 +244,13 @@ public sealed class DataRetentionSweeper(
             RetentionTables.NotificationDeliveries, nameof(RetentionOptions.NotificationDeliveryDays),
             config.NotificationDeliveryDays,
             cutoff => Task.FromResult(RetentionRule.NotificationDeliveriesToDelete(cutoff)));
+
+        // N2 (2026-08-16 notification-system spec): AlertDedup's own marks, the table this
+        // sub-project's spec asked for a retention knob on the day it was added.
+        await SweepAgedTableAsync<Domain.Monitoring.AlertDedupMark>(
+            RetentionTables.AlertDedupMarks, nameof(RetentionOptions.AlertDedupMarkDays),
+            config.AlertDedupMarkDays,
+            cutoff => Task.FromResult(RetentionRule.AlertDedupMarksToDelete(cutoff)));
 
         var result = new RetentionSweepResult(deleted, keptForever, failures);
 

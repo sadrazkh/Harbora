@@ -40,7 +40,7 @@ public class MetricsCollectorOptionsTests
         var engine = new FakeDockerEngine();
         var factory = new FakeServerEngineFactory(engine);
         var notifications = new RecordingNotificationService();
-        var throttle = new Harbora.Infrastructure.Monitoring.AlertThrottle();
+        var dedup = new Harbora.Infrastructure.Monitoring.AlertDedup(db);
         var clock = new FixedClock(Now);
         var rollups = new MetricsRollupService(db, clock, NullLogger<MetricsRollupService>.Instance);
 
@@ -49,7 +49,7 @@ public class MetricsCollectorOptionsTests
         db.SaveChanges();
 
         var collector = new MetricsCollector(
-            db, factory, notifications, new IncidentService(db), throttle, clock, rollups,
+            db, factory, notifications, new IncidentService(db), dedup, clock, rollups,
             Options.Create(options ?? new MonitoringOptions()), NullLogger<MetricsCollector>.Instance);
 
         return new Harness(collector, db, engine, notifications, clock, server);

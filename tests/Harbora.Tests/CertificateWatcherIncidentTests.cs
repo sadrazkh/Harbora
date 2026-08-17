@@ -28,20 +28,18 @@ public class CertificateWatcherIncidentTests : IDisposable
     private readonly FakeDomainInspector _inspector = new();
     private readonly RecordingNotificationService _notifications = new();
     private readonly HarboraDbContext _db;
+    private readonly string _dbName;
 
     public CertificateWatcherIncidentTests()
     {
         // The database name must be computed ONCE, outside the configure lambda: AddDbContext calls
         // that lambda again every time a new scope builds its own DbContext, and Guid.NewGuid() inside
         // it would hand each scope a different, empty in-memory database — exactly the trap that made
-        // this fixture look like it was writing to one store and reading from another.
-        var dbName = "cert-watcher-" + Guid.NewGuid();
-        var services = new ServiceCollection();
-        services.AddDbContext<HarboraDbContext>(o => o.UseInMemoryDatabase(dbName));
-        services.AddScoped<IncidentService>();
-        services.AddSingleton<IDomainInspector>(_inspector);
-        services.AddSingleton<INotificationService>(_notifications);
-        services.AddSingleton<ISystemClock>(new FixedClock(Now));
+        // this fixture look like it was writing to one store and reading from another. Kept as a field
+        // too, so a test can build a second, wholly independent provider against the same store — the
+        // way a restarted panel opens a fresh process against the same database.
+        _dbName = "cert-watcher-" + Guid.NewGuid();
+        var services = BuildServices(_dbName, _inspector, _notifications);
 
         _provider = services.BuildServiceProvider();
         _db = _provider.GetRequiredService<HarboraDbContext>();
@@ -59,6 +57,27 @@ public class CertificateWatcherIncidentTests : IDisposable
 
         _watcher = new CertificateWatcher(
             _provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CertificateWatcher>.Instance);
+    }
+
+    /// <summary>
+    /// One DI container wired the way <c>CertificateWatcher</c> needs — a scope factory it can build
+    /// child scopes from, each with its own <see cref="HarboraDbContext"/> over the same named
+    /// in-memory store. Factored out so a "simulated restart" test can build a second, wholly
+    /// independent container against that same store, the way a second panel process would.
+    /// </summary>
+    private static ServiceCollection BuildServices(
+        string dbName, IDomainInspector inspector, INotificationService notifications, ISystemClock? clock = null)
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<HarboraDbContext>(o => o.UseInMemoryDatabase(dbName));
+        services.AddScoped<IncidentService>();
+        // N2 (2026-08-16 notification-system spec): CheckAllAsync resolves this from its own scope,
+        // same as IncidentService — scoped, not a singleton, since durability is the database's job.
+        services.AddScoped<AlertDedup>();
+        services.AddSingleton(inspector);
+        services.AddSingleton(notifications);
+        services.AddSingleton(clock ?? new FixedClock(Now));
+        return services;
     }
 
     private sealed class FakeDomainInspector : IDomainInspector
