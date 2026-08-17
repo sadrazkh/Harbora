@@ -4,18 +4,31 @@ using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Jobs;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Harbora.Infrastructure.Deployments;
 
 /// <summary>
 /// Creates the immutable <see cref="Deployment"/> record and hands the heavy lifting to a
 /// queued <see cref="DeploymentPipeline"/> so the HTTP request returns immediately.
+///
+/// <para>
+/// P7 (2026-08-17 app-environment-management design): two pre-flight checks live here rather than
+/// at each of the eleven places that call <see cref="QueueDeploymentAsync"/>, the same reasoning
+/// the PAYG start gate's own comment gives for its own single home. <paramref name="scheduler"/>
+/// and <paramref name="monitoringOptions"/> are optional constructor parameters — both are always
+/// resolved by DI in production, and staying optional is what lets the many direct-construction
+/// unit tests of this class keep passing three arguments without also having to fabricate a node
+/// and a disk figure they were never testing.
+/// </para>
 /// </summary>
 public sealed class DeploymentEngine(
     HarboraDbContext db,
     IJobQueue jobs,
     ISystemClock clock,
-    IQuotaService? quota = null) : IDeploymentEngine
+    IQuotaService? quota = null,
+    ISchedulerService? scheduler = null,
+    IOptions<Monitoring.MonitoringOptions>? monitoringOptions = null) : IDeploymentEngine
 {
     public async Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct)
     {
@@ -62,6 +75,46 @@ public sealed class DeploymentEngine(
             var mayQueue = await quota.CanQueueDeploymentAsync(app.WorkspaceId, ct);
             if (!mayQueue.Allowed)
                 throw new QuotaRefusedException(mayQueue);
+        }
+
+        // P7: "SchedulerService.CheckAsync already exists and is called once. Calling it at queue
+        // time is the whole of the item." The node this app was placed on when it was created can
+        // have filled up since — another app's growth, a host that shrank its own headroom — and
+        // building a release nobody can run is a worse failure than refusing before the build ever
+        // starts.
+        //
+        // The headroom asked for is the app's own footprint again, not zero: a deploy briefly runs
+        // two containers side by side — the new one health-checking, the old one still serving until
+        // cutover — and the app's steady-state allocation is already counted as committed on its
+        // node. This is asking whether there is room for that transient second copy, which is a real
+        // question even though the app "already fits" in its usual, one-copy sense.
+        if (scheduler is not null)
+        {
+            var placement = await scheduler.CheckAsync(app.ServerId, app.MemoryLimitBytes, app.CpuLimit, ct);
+            if (!placement.Ok)
+                throw new CapacityRefusedException(placement);
+        }
+
+        // P7, the owner's answer to §7 Q5: refuses rather than warns — MetricsCollector's own
+        // DiskWarnRatio path already warns at this same kind of figure, so warning here would
+        // deliver nothing new. Reads Node.FreeDiskBytes, which the platform already collects on
+        // every heartbeat; no null and no zero (never reported) is read as "definitely full" — both
+        // mean nothing has measured this node yet, the same "unknown means allow" NodeCapacity.CanFit
+        // already reads a zero allocatable figure as.
+        if (monitoringOptions is not null)
+        {
+            var threshold = monitoringOptions.Value.DeployMinFreeDiskBytes;
+            var freeBytes = await db.Nodes.AsNoTracking()
+                .Where(n => n.ServerId == app.ServerId).Select(n => (long?)n.FreeDiskBytes).FirstOrDefaultAsync(ct);
+
+            if (freeBytes is > 0 && freeBytes < threshold)
+            {
+                var freeText = Services.StorageMeasurement.Describe(freeBytes);
+                var thresholdText = Services.StorageMeasurement.Describe(threshold);
+                throw new LowDiskRefusedException(freeBytes.Value, threshold,
+                    reason: $"Only {freeText} free on this node; deploys are refused below {thresholdText}.",
+                    reasonFa: $"تنها {freeText} فضای آزاد روی این سرور مانده؛ استقرار زیر {thresholdText} رد می‌شود.");
+            }
         }
 
         // Filtered, this returns nothing for a webhook and every push is "deployment #1", colliding

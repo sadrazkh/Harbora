@@ -93,4 +93,28 @@ public sealed class MonitoringOptions
     public double IncidentAutoExpireDays { get; set; } = 14;
 
     internal TimeSpan IncidentAutoExpireAfter => TimeSpan.FromDays(Math.Max(1, IncidentAutoExpireDays));
+
+    /// <summary>
+    /// The free-disk floor a deploy is refused below — P7 (2026-08-17 app-environment-management
+    /// design). A byte figure rather than a ratio, unlike <see cref="DiskWarnRatio"/>: a build's
+    /// image layers and a container's own writes have a size that does not scale with how big the
+    /// disk happens to be, so "how many bytes are actually left to work with" is the question that
+    /// protects a build, not "what fraction of the disk is full" — a mostly-empty 4 TB disk and a
+    /// mostly-empty 40 GB disk can both be answering that ratio "5% used" while only one of them has
+    /// room for anything.
+    ///
+    /// <para>
+    /// <b>The owner's decision on §7 Q5: this refuses, it does not merely warn.</b> Warning at this
+    /// same figure is a restatement of what <c>MetricsCollector</c>'s <see cref="DiskWarnRatio"/>
+    /// path already does after the fact; refusing is the item P7 was asked to deliver. The refusal
+    /// names the free-byte figure and this threshold, so whoever reads it can act rather than guess.
+    /// </para>
+    ///
+    /// <para>
+    /// Default 1 GiB: small enough that an install with normal headroom never notices it, large
+    /// enough that a build which needs a few hundred megabytes of scratch space does not itself tip
+    /// the node from "refuses cleanly" to "fails while writing".
+    /// </para>
+    /// </summary>
+    public long DeployMinFreeDiskBytes { get; set; } = 1L * 1024 * 1024 * 1024;
 }

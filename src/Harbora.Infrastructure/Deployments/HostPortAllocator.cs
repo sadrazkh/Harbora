@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using Harbora.Data;
 using Harbora.Infrastructure.Nodes;
 using Harbora.Domain.Servers;
@@ -73,12 +75,21 @@ public sealed class HostPortAllocator(
 
     private async Task<int> ReserveAsync(Guid serverId, Guid appId, int deploymentNumber, CancellationToken ct)
     {
+        // P7 (2026-08-17 app-environment-management design), the port-burn item: only meaningful for
+        // a LOCAL server, where this process and the one about to publish the port are the same
+        // machine — a bind test run here says something true about a port dockerd is about to
+        // publish there. For a remote node the panel has no socket on that machine at all, so the
+        // probe is skipped and the number is trusted the way it always was; that is the node-side
+        // publish the spec says this item is not asking for.
+        var isLocal = await db.Servers.AsNoTracking()
+            .Where(s => s.Id == serverId).Select(s => (bool?)s.IsLocal).FirstOrDefaultAsync(ct) ?? false;
+
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
             var taken = await db.HostPortAllocations.Where(a => a.ServerId == serverId)
                 .Select(a => a.Port).ToListAsync(ct);
 
-            if (HostPortRange.NextFree(taken) is not { } port)
+            if (NextViablePort(taken, isLocal) is not { } port)
                 throw new InvalidOperationException(
                     $"Every host port between {HostPortRange.First} and {HostPortRange.Last} is in use on " +
                     "this node. Remove unused apps, or add another node.");
@@ -104,6 +115,55 @@ public sealed class HostPortAllocator(
 
         throw new InvalidOperationException(
             "Could not reserve a host port after repeated contention. Retry the deployment.");
+    }
+
+    /// <summary>
+    /// The lowest port in range that is free per <see cref="HostPortAllocations"/> and, when
+    /// <paramref name="probeLocally"/>, actually bindable — the same "try it, catch
+    /// <see cref="SocketException"/>, advance" shape <see cref="NodeIngressRegistry.TryBind"/>
+    /// already uses for the panel's own tunnelled listeners, applied here instead of trusting the
+    /// database alone.
+    ///
+    /// <para>
+    /// This is a live probe, not a persisted burn list, and deliberately so: it re-checks fresh on
+    /// every allocation rather than remembering a port was bad last time, which is what makes it
+    /// self-healing without a table of its own. The cost is a wasted bind attempt on a still-burned
+    /// port every time this runs — a socket syscall, not a failed deploy, which is the trade this
+    /// item exists to make. Before this, <c>NextFree</c> alone would hand back the same blocked port
+    /// every single time, because nothing here had ever asked the OS.
+    /// </para>
+    /// </summary>
+    private static int? NextViablePort(IReadOnlyCollection<int> taken, bool probeLocally)
+    {
+        var used = new HashSet<int>(taken);
+        for (var port = HostPortRange.First; port <= HostPortRange.Last; port++)
+        {
+            if (used.Contains(port)) continue;
+            if (probeLocally && IsBurned(port)) continue;
+            return port;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Whether something this database does not know about already holds <paramref name="port"/>.
+    /// Bind-then-release rather than a long-lived listener — Docker is the one that actually has to
+    /// hold the port once a container starts, and this only has to prove the port was free a moment
+    /// before that, the same TOCTOU trade every "check, then use" port probe makes.
+    /// </summary>
+    private static bool IsBurned(int port)
+    {
+        try
+        {
+            using var probe = new TcpListener(IPAddress.Any, port);
+            probe.Start();
+            probe.Stop();
+            return false;
+        }
+        catch (SocketException)
+        {
+            return true;
+        }
     }
 
     /// <summary>

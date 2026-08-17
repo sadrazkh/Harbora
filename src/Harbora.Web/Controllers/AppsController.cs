@@ -418,6 +418,18 @@ public sealed partial class AppsController(
                 TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
                 return RedirectToAction(nameof(Details), new { id = app.Id });
             }
+            catch (CapacityRefusedException ex)
+            {
+                // P7: the node re-check at queue time. The app row still exists — only its first
+                // deploy did not start — so this reads the same as the quota refusal just above.
+                TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+                return RedirectToAction(nameof(Details), new { id = app.Id });
+            }
+            catch (LowDiskRefusedException ex)
+            {
+                TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+                return RedirectToAction(nameof(Details), new { id = app.Id });
+            }
         }
 
         if (templateAdvice is not null) TempData["Message"] = templateAdvice;
@@ -1038,6 +1050,16 @@ public sealed partial class AppsController(
             TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
             return RedirectToAction(nameof(Details), new { id });
         }
+        catch (CapacityRefusedException ex)
+        {
+            TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+        catch (LowDiskRefusedException ex)
+        {
+            TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
 
         return RedirectToAction("Details", "Deployments", new { id = deploymentId });
     }
@@ -1112,6 +1134,16 @@ public sealed partial class AppsController(
                 new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, app.GitRef), ct);
         }
         catch (QuotaRefusedException ex)
+        {
+            TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+        catch (CapacityRefusedException ex)
+        {
+            TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+        catch (LowDiskRefusedException ex)
         {
             TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
             return RedirectToAction(nameof(Details), new { id });

@@ -321,6 +321,18 @@ public sealed class DeploymentsController(
             TempData["Error"] = ex.Message;
             return RedirectToAction(nameof(Details), new { id });
         }
+        // Matching this method's own existing QuotaRefusedException catch just above: English-only
+        // here, same as that one already was — not a new gap this introduces.
+        catch (CapacityRefusedException ex)
+        {
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+        catch (LowDiskRefusedException ex)
+        {
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
 
         await audit.LogAsync("app.promote", "app", target.Id.ToString(), ClientIp, ct: ct);
         TempData["Message"] = $"Promoting {source.Value.Plan.ImageTag} to {target.Name}.";

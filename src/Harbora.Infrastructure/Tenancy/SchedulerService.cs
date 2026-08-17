@@ -33,9 +33,14 @@ public sealed class SchedulerService(INodeCapacityService capacity) : IScheduler
     public async Task<PlacementResult> CheckAsync(Guid serverId, long memoryBytes, double cpu, CancellationToken ct)
     {
         var node = await capacity.GetAsync(serverId, ct);
-        if (node is null) return PlacementResult.Fail("Server not found.");
-        if (!node.IsOnline) return PlacementResult.Fail($"'{node.Name}' is offline.");
-        if (!node.CanFit(memoryBytes, cpu)) return PlacementResult.Fail($"'{node.Name}' does not have enough free capacity.");
+        if (node is null)
+            return PlacementResult.Fail("Server not found.", "سرور یافت نشد.");
+        if (!node.IsOnline)
+            return PlacementResult.Fail($"'{node.Name}' is offline.", $"«{node.Name}» آفلاین است.");
+        if (!node.CanFit(memoryBytes, cpu))
+            return PlacementResult.Fail(
+                $"'{node.Name}' does not have enough free capacity.",
+                $"«{node.Name}» ظرفیت آزاد کافی ندارد.");
         return PlacementResult.Placed(serverId);
     }
 }

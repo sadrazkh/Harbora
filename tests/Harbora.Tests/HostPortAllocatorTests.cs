@@ -185,4 +185,99 @@ public class HostPortAllocatorTests
         (await allocate.Should().ThrowAsync<InvalidOperationException>())
             .Which.Message.Should().Contain("another node", "the message has to name a way out");
     }
+
+    // ---- the port-burn item (P7, 2026-08-17 app-environment-management design) ----------------
+    //
+    // HostPortAllocations alone used to be the only thing this class consulted: a port a foreign
+    // process already held looked exactly as free as one nobody had ever touched, so the deploy
+    // proceeded, Docker's own publish failed, and the very next deploy on that node picked the same
+    // doomed number again — HostPortRange.NextFree is deterministic. NodeIngressRegistry.TryBind
+    // already has the fix's shape (try, catch SocketException, advance); these tests hold the same
+    // shape applied here, scoped to a local server the way §"panel-side listener, not the node-side
+    // publish" asks for.
+
+    [Fact]
+    public async Task A_burned_port_on_a_local_server_is_skipped_in_favour_of_the_next_free_one()
+    {
+        await using var db = NewContext("ports-burned-local-" + Guid.NewGuid());
+        var serverId = Guid.CreateVersion7();
+        db.Servers.Add(new Server { Id = serverId, Name = "local-01", Hostname = "127.0.0.1", IsLocal = true });
+        await db.SaveChangesAsync();
+
+        // Something this platform does not know about already holds the lowest port in range.
+        using var squatter = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, HostPortRange.First);
+        squatter.Start();
+        try
+        {
+            var port = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, default);
+
+            port.Should().Be(HostPortRange.First + 1,
+                "the lowest port is genuinely occupied by something outside this database's own bookkeeping");
+            db.HostPortAllocations.Should().ContainSingle().Which.Port.Should().Be(HostPortRange.First + 1,
+                "the burned port must never be written to the reservation table either");
+        }
+        finally { squatter.Stop(); }
+    }
+
+    [Fact]
+    public async Task A_second_deploy_after_a_bind_failure_keeps_choosing_a_different_port()
+    {
+        // The failure this item actually fixes: before it, NextFree alone handed back the same
+        // blocked number on every attempt because nothing had ever asked the OS. This is a live
+        // probe rather than a persisted burn list, so it re-proves the port is still bad on a
+        // second, independent allocation the same way it did on the first.
+        await using var db = NewContext("ports-burned-repeat-" + Guid.NewGuid());
+        var serverId = Guid.CreateVersion7();
+        db.Servers.Add(new Server { Id = serverId, Name = "local-01", Hostname = "127.0.0.1", IsLocal = true });
+        await db.SaveChangesAsync();
+
+        using var squatter = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, HostPortRange.First);
+        squatter.Start();
+        try
+        {
+            var first = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, default);
+            var second = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, default);
+
+            first.Should().Be(HostPortRange.First + 1);
+            second.Should().Be(HostPortRange.First + 2,
+                "the same deployment/app pair asked twice under different app ids must not collide");
+        }
+        finally { squatter.Stop(); }
+    }
+
+    [Fact]
+    public async Task A_burned_port_on_a_remote_server_is_still_handed_out_because_nothing_here_can_probe_it()
+    {
+        // The deliberate scope cut: a remote node is a different machine, so a bind test on this
+        // process proves nothing about a port over there. IsLocal defaults true, so this is the one
+        // test that has to say so explicitly rather than rely on the default.
+        await using var db = NewContext("ports-burned-remote-" + Guid.NewGuid());
+        var serverId = Guid.CreateVersion7();
+        db.Servers.Add(new Server { Id = serverId, Name = "remote-01", Hostname = "203.0.113.9", IsLocal = false });
+        await db.SaveChangesAsync();
+
+        using var squatter = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, HostPortRange.First);
+        squatter.Start();
+        try
+        {
+            var port = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, default);
+
+            port.Should().Be(HostPortRange.First,
+                "this machine's own sockets say nothing about a port on a remote node, so the number is trusted the way it always was");
+        }
+        finally { squatter.Stop(); }
+    }
+
+    [Fact]
+    public async Task A_server_row_that_does_not_exist_is_treated_as_not_local_rather_than_probed()
+    {
+        // Every pre-existing test in this file allocates against a bare Guid with no Server row at
+        // all — the shape this allocator has always supported. The port-burn probe must not turn
+        // that absence into a crash or into a surprise live socket bind.
+        await using var db = NewContext("ports-no-server-row-" + Guid.NewGuid());
+
+        var port = await AllocatorOn(db).AllocateAsync(NodeA, Guid.CreateVersion7(), 1, default);
+
+        port.Should().Be(HostPortRange.First);
+    }
 }
