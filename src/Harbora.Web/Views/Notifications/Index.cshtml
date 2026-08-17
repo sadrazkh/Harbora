@@ -11,12 +11,17 @@
         <h1 class="text-xl font-semibold">@(isFa ? "اعلان‌ها" : "Notifications")</h1>
         <p class="text-sm text-ink-muted">@(isFa ? "چیزهایی که این فضای کاری به شما گفته، جدیدترین ابتدا." : "What this workspace has told you, newest first.")</p>
     </div>
-    <form asp-controller="Notifications" asp-action="MarkAllRead" method="post">
-        @Html.AntiForgeryToken()
-        <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm inline-flex items-center gap-2">
-            <i data-lucide="circle-check-big" class="h-4 w-4"></i>@(isFa ? "علامت‌گذاری همه به‌عنوان خوانده‌شده" : "Mark all as read")
-        </button>
-    </form>
+    <div class="flex items-center gap-2">
+        <a href="/notifications/preferences" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm inline-flex items-center gap-2">
+            <i data-lucide="settings" class="h-4 w-4"></i>@(isFa ? "تنظیمات" : "Preferences")
+        </a>
+        <form asp-controller="Notifications" asp-action="MarkAllRead" method="post">
+            @Html.AntiForgeryToken()
+            <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm inline-flex items-center gap-2">
+                <i data-lucide="circle-check-big" class="h-4 w-4"></i>@(isFa ? "علامت‌گذاری همه به‌عنوان خوانده‌شده" : "Mark all as read")
+            </button>
+        </form>
+    </div>
 </div>
 
 <form method="get" action="/notifications" class="flex flex-wrap gap-2 mb-4">

@@ -1,0 +1,175 @@
+@using Harbora.Infrastructure.Notifications
+@model NotificationPreferencesPageViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    string EventLabel(AlertEvent evt) => (evt, isFa) switch
+    {
+        (AlertEvent.DeployFailed, true) => "استقرار ناموفق",
+        (AlertEvent.DeployFailed, false) => "Deploy failed",
+        (AlertEvent.AppCrashed, true) => "کرش برنامه",
+        (AlertEvent.AppCrashed, false) => "App crashed",
+        (AlertEvent.SslExpiring, true) => "انقضای گواهی SSL",
+        (AlertEvent.SslExpiring, false) => "SSL expiring",
+        (AlertEvent.DiskWarning, true) => "هشدار فضای دیسک",
+        (AlertEvent.DiskWarning, false) => "Disk warning",
+        (AlertEvent.BackupFailed, true) => "شکست پشتیبان‌گیری",
+        (AlertEvent.BackupFailed, false) => "Backup failed",
+        (AlertEvent.ThresholdBreached, true) => "عبور از آستانه منابع",
+        (AlertEvent.ThresholdBreached, false) => "Resource threshold breached",
+        (AlertEvent.LowBalance, true) => "اعتبار رو به پایان",
+        (AlertEvent.LowBalance, false) => "Low balance",
+        (_, true) => evt.ToString(),
+        (_, false) => evt.ToString()
+    };
+
+    string ModeLabel(NotificationPreferenceMode mode) => (mode, isFa) switch
+    {
+        (NotificationPreferenceMode.Immediate, true) => "فوری",
+        (NotificationPreferenceMode.Immediate, false) => "Immediate",
+        (NotificationPreferenceMode.Digest, true) => "خلاصه دوره‌ای",
+        (NotificationPreferenceMode.Digest, false) => "Digest",
+        (NotificationPreferenceMode.Off, true) => "خاموش",
+        (NotificationPreferenceMode.Off, false) => "Off",
+        (_, true) => mode.ToString(),
+        (_, false) => mode.ToString()
+    };
+
+    string RejectionMessage(NotificationPreferenceRejection rejection) => (rejection, isFa) switch
+    {
+        (NotificationPreferenceRejection.CriticalCoverageLost, true) =>
+            "این رویداد بحرانی است. می‌توانید مسیر تحویل آن را تغییر دهید، اما نمی‌توانید آن را در همه کانال‌ها خاموش کنید — دست‌کم یک کانال باید «فوری» بماند.",
+        (NotificationPreferenceRejection.CriticalCoverageLost, false) =>
+            "This event is critical. You can choose where it goes, but not switch it off everywhere — at least one channel must stay Immediate.",
+        (NotificationPreferenceRejection.IllegalMode, true) =>
+            "درون‌برنامه‌ای را نمی‌توان به‌صورت خلاصه دوره‌ای تنظیم کرد.",
+        (NotificationPreferenceRejection.IllegalMode, false) =>
+            "In-app cannot be set to Digest.",
+        (_, true) => "این تغییر اعمال نشد.",
+        (_, false) => "That change could not be applied."
+    };
+}
+
+<div class="flex items-center justify-between mb-4">
+    <div>
+        <h1 class="text-xl font-semibold">@(isFa ? "تنظیمات اعلان‌ها" : "Notification preferences")</h1>
+        <p class="text-sm text-ink-muted">
+            @(isFa
+                ? "برای هر رویداد مشخص کنید کجا می‌خواهید مطلع شوید. رویدادهای بحرانی را می‌توانید مسیردهی کنید، نه خاموش."
+                : "Choose where each event reaches you. Critical events can be re-routed, not switched off.")
+        </p>
+    </div>
+    <a href="/notifications" class="rounded-lg bg-surface-2 px-4 py-2 text-sm inline-flex items-center gap-2">
+        <i data-lucide="bell" class="h-4 w-4"></i>@(isFa ? "بازگشت به اعلان‌ها" : "Back to notifications")
+    </a>
+</div>
+
+@if (Model.Rejection is { } rejection)
+{
+    <div class="rounded-xl border border-line bg-surface-2 p-3 mb-4 text-sm flex items-start gap-2" data-preference-rejection="@rejection">
+        <i data-lucide="triangle-alert" class="h-4 w-4 shrink-0 mt-0.5"></i>
+        <span>@RejectionMessage(rejection)</span>
+    </div>
+}
+
+<section class="rounded-xl border border-line bg-surface p-4 mb-6" data-quiet-hours-form>
+    <h2 class="text-sm font-semibold mb-3 flex items-center gap-2">
+        <i data-lucide="moon" class="h-4 w-4"></i>@(isFa ? "ساعات سکوت" : "Quiet hours")
+    </h2>
+    <form asp-controller="Notifications" asp-action="SetQuietHours" method="post" class="grid gap-3 sm:grid-cols-4">
+        @Html.AntiForgeryToken()
+        <label class="text-xs text-ink-faint sm:col-span-2">
+            @(isFa ? "منطقه زمانی" : "Time zone")
+            <input type="text" name="timeZoneId" value="@Model.TimeZoneId" data-quiet-hours-timezone
+                   class="mt-1 w-full rounded-lg bg-surface-2 border border-line px-3 py-2 text-sm" />
+        </label>
+        <label class="text-xs text-ink-faint">
+            @(isFa ? "شروع" : "Start")
+            <select name="quietHoursStartHour" data-quiet-hours-start class="mt-1 w-full rounded-lg bg-surface-2 border border-line px-3 py-2 text-sm">
+                <option value="">@(isFa ? "خاموش" : "Off")</option>
+                @for (var h = 0; h < 24; h++)
+                {
+                    <option value="@h" selected="@(Model.QuietHoursStartHour == h)">@h:00</option>
+                }
+            </select>
+        </label>
+        <label class="text-xs text-ink-faint">
+            @(isFa ? "پایان" : "End")
+            <select name="quietHoursEndHour" data-quiet-hours-end class="mt-1 w-full rounded-lg bg-surface-2 border border-line px-3 py-2 text-sm">
+                <option value="">@(isFa ? "خاموش" : "Off")</option>
+                @for (var h = 0; h < 24; h++)
+                {
+                    <option value="@h" selected="@(Model.QuietHoursEndHour == h)">@h:00</option>
+                }
+            </select>
+        </label>
+        <label class="text-xs text-ink-faint sm:col-span-4 flex items-center gap-2">
+            <input type="checkbox" name="weeklyReportOptIn" value="true" checked="@Model.WeeklyReportOptIn" data-weekly-report-opt-in />
+            @(isFa ? "خلاصه هفتگی را برایم ایمیل کن" : "Email me a weekly summary")
+        </label>
+        <div class="sm:col-span-4">
+            <button type="submit" class="rounded-lg bg-accent text-accent-fg px-4 py-2 text-sm">@(isFa ? "ذخیره" : "Save")</button>
+        </div>
+    </form>
+</section>
+
+<section class="rounded-xl border border-line bg-surface overflow-hidden" data-preference-matrix>
+    <table class="w-full text-sm">
+        <thead class="bg-surface-2 text-ink-faint">
+            <tr>
+                <th class="text-start p-3">@(isFa ? "رویداد" : "Event")</th>
+                <th class="text-start p-3">
+                    <i data-lucide="bell" class="h-4 w-4 inline"></i>
+                    @(isFa ? "درون‌برنامه‌ای" : "In-app")
+                </th>
+                <th class="text-start p-3">
+                    <i data-lucide="mail" class="h-4 w-4 inline"></i>
+                    @(isFa ? "ایمیل" : "Email")
+                </th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-line">
+            @foreach (var row in Model.Rows)
+            {
+                <tr data-preference-row data-preference-event="@row.EventType" data-preference-critical="@(row.IsCritical ? "true" : "false")">
+                    <td class="p-3">
+                        <div class="flex items-center gap-2">
+                            @EventLabel(row.EventType)
+                            @if (row.IsCritical)
+                            {
+                                <span class="text-[11px] rounded-full bg-surface-2 px-2 py-0.5 text-ink-faint" title="@(isFa ? "قابل مسیردهی، نه خاموش‌کردن" : "Re-routable, not switchable off")">
+                                    @(isFa ? "بحرانی" : "Critical")
+                                </span>
+                            }
+                        </div>
+                    </td>
+                    <td class="p-3">
+                        <form asp-controller="Notifications" asp-action="SetEventPreference" method="post">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="eventType" value="@row.EventType" />
+                            <input type="hidden" name="channel" value="@NotificationChannel.InApp" />
+                            <select name="mode" onchange="this.form.submit()" data-preference-mode="InApp"
+                                    class="rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs">
+                                <option value="@NotificationPreferenceMode.Immediate" selected="@(row.InApp == NotificationPreferenceMode.Immediate)">@ModeLabel(NotificationPreferenceMode.Immediate)</option>
+                                <option value="@NotificationPreferenceMode.Off" selected="@(row.InApp == NotificationPreferenceMode.Off)">@ModeLabel(NotificationPreferenceMode.Off)</option>
+                            </select>
+                        </form>
+                    </td>
+                    <td class="p-3">
+                        <form asp-controller="Notifications" asp-action="SetEventPreference" method="post">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="eventType" value="@row.EventType" />
+                            <input type="hidden" name="channel" value="@NotificationChannel.Email" />
+                            <select name="mode" onchange="this.form.submit()" data-preference-mode="Email"
+                                    class="rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs">
+                                <option value="@NotificationPreferenceMode.Immediate" selected="@(row.Email == NotificationPreferenceMode.Immediate)">@ModeLabel(NotificationPreferenceMode.Immediate)</option>
+                                <option value="@NotificationPreferenceMode.Digest" selected="@(row.Email == NotificationPreferenceMode.Digest)">@ModeLabel(NotificationPreferenceMode.Digest)</option>
+                                <option value="@NotificationPreferenceMode.Off" selected="@(row.Email == NotificationPreferenceMode.Off)">@ModeLabel(NotificationPreferenceMode.Off)</option>
+                            </select>
+                        </form>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</section>

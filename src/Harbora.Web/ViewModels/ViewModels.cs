@@ -222,6 +222,29 @@ public sealed class NotificationsPageViewModel
     public bool HasNext => Page < TotalPages;
 }
 
+/// <summary>N5 (2026-08-16 notification-system spec, "noise control") — one event's resolved state
+/// on both channels, already-defaulted so the view never has to ask "was this row even there".</summary>
+public sealed record NotificationPreferenceRow(
+    Harbora.Domain.Common.AlertEvent EventType,
+    bool IsCritical,
+    Harbora.Domain.Common.NotificationPreferenceMode InApp,
+    Harbora.Domain.Common.NotificationPreferenceMode Email);
+
+/// <summary>N5: the preferences page — the matrix, quiet hours, the time zone they hang off, and the
+/// weekly report opt-in, all on one screen since none of it is workspace-scoped.</summary>
+public sealed class NotificationPreferencesPageViewModel
+{
+    public List<NotificationPreferenceRow> Rows { get; set; } = new();
+    public string TimeZoneId { get; set; } = "Asia/Tehran";
+    public int? QuietHoursStartHour { get; set; }
+    public int? QuietHoursEndHour { get; set; }
+    public bool WeeklyReportOptIn { get; set; }
+
+    /// <summary>Set when a preference write was just refused — <c>null</c> means the page loaded
+    /// clean, not that nothing was ever tried.</summary>
+    public Harbora.Infrastructure.Notifications.NotificationPreferenceRejection? Rejection { get; set; }
+}
+
 /// <summary>
 /// The public landing page. Marketing copy is static (it describes the product), but plans come
 /// from the database so the page reflects what this installation actually offers.
