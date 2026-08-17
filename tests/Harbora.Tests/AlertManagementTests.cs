@@ -35,10 +35,10 @@ public class AlertManagementTests
 
     private sealed class StubNotifications : INotificationService
     {
-        public Task<int> NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
+        public Task<int> NotifyAsync(Guid workspaceId, Harbora.Domain.Notifications.NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
             => Task.FromResult(0);
 
-        public Task<NotificationResult> NotifyRuleAsync(Guid alertId, AlertSeverity severity, string title, string body, CancellationToken ct)
+        public Task<NotificationResult> NotifyRuleAsync(Guid alertId, Harbora.Domain.Notifications.NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
             => Task.FromResult(NotificationResult.Ok);
 
         public Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct)

@@ -140,8 +140,16 @@ public sealed class RecordingNotificationService : INotificationService
     /// different facts, and a caller that looks up the wrong workspace raises exactly the right
     /// number of notifications to the wrong people.
     /// </para>
+    ///
+    /// <para>
+    /// <paramref name="Data"/> is the raise site's own structured event (N4, 2026-08-16
+    /// notification-system spec) rather than a rendered title/body — this fake is the seam a raiser's
+    /// own test asserts against, so it records exactly what a raise site now hands over: facts, not
+    /// words. A test that wants the actual English/Persian sentence renders <see cref="Data"/> itself
+    /// through <c>NotificationTemplateCatalog</c>, the same as production does.
+    /// </para>
     /// </summary>
-    public sealed record Sent(Guid Workspace, AlertEvent Event, AlertSeverity Severity, string Title, string Body);
+    public sealed record Sent(Guid Workspace, AlertEvent Event, AlertSeverity Severity, Harbora.Domain.Notifications.NotificationEventData Data);
 
     public List<Sent> Notifications { get; } = [];
 
@@ -160,10 +168,10 @@ public sealed class RecordingNotificationService : INotificationService
     /// workspace that genuinely has no rule.
     /// </para>
     /// </summary>
-    public Task<int> NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
+    public Task<int> NotifyAsync(Guid workspaceId, Harbora.Domain.Notifications.NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        Notifications.Add(new Sent(workspaceId, evt, severity, title, body));
+        Notifications.Add(new Sent(workspaceId, evt.Type, severity, evt));
         return Task.FromResult(1);
     }
 
@@ -178,10 +186,10 @@ public sealed class RecordingNotificationService : INotificationService
     /// records a notification nobody received.
     /// </para>
     /// </summary>
-    public Task<NotificationResult> NotifyRuleAsync(Guid alertId, AlertSeverity severity, string title, string body, CancellationToken ct)
+    public Task<NotificationResult> NotifyRuleAsync(Guid alertId, Harbora.Domain.Notifications.NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        Notifications.Add(new Sent(Guid.Empty, AlertEvent.ThresholdBreached, severity, title, body));
+        Notifications.Add(new Sent(Guid.Empty, AlertEvent.ThresholdBreached, severity, evt));
         return Task.FromResult(NotificationResult.Ok);
     }
 

@@ -5,6 +5,7 @@ using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
 using Harbora.Domain.Monitoring;
+using Harbora.Domain.Notifications;
 using Harbora.Infrastructure.Notifications;
 using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
@@ -59,14 +60,19 @@ public class NotificationInAppFanOutTests
             scope.Factory,
             new FixedClock(),
             Microsoft.Extensions.Options.Options.Create(new NotificationOptions()),
+            new NotificationTemplateCatalog(),
             NullLogger<NotificationService>.Instance);
         return (service, db, scope);
     }
 
-    /// <summary>A signed-up, active member of <see cref="Workspace"/> in <paramref name="db"/>.</summary>
-    private static Guid AddMember(HarboraDbContext db, WorkspaceRole role = WorkspaceRole.Member, bool active = true)
+    /// <summary>A signed-up, active member of <see cref="Workspace"/> in <paramref name="db"/>.
+    /// <paramref name="preferredCulture"/> is null to leave <c>User.PreferredCulture</c> at its own
+    /// default ("fa" — <c>User.cs:25</c>) rather than this fixture choosing one by hand.</summary>
+    private static Guid AddMember(
+        HarboraDbContext db, WorkspaceRole role = WorkspaceRole.Member, bool active = true, string? preferredCulture = null)
     {
         var user = new User { Email = $"{Guid.NewGuid()}@example.com", DisplayName = "member", IsActive = active };
+        if (preferredCulture is not null) user.PreferredCulture = preferredCulture;
         db.Users.Add(user);
         db.WorkspaceMembers.Add(new WorkspaceMember { WorkspaceId = Workspace, UserId = user.Id, Role = role });
         db.SaveChanges();
@@ -80,17 +86,20 @@ public class NotificationInAppFanOutTests
         var alice = AddMember(db);
         var bob = AddMember(db);
 
-        await service.NotifyAsync(Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical,
-            "Deploy failed: api #4", "build error", default);
+        var evt = NotificationEventData.Create(AlertEvent.DeployFailed,
+            ("AppName", "api"), ("DeploymentNumber", "4"), ("Reason", "build error"));
+        await service.NotifyAsync(Workspace, evt, AlertSeverity.Critical, default);
 
+        // Neither member set a culture, so both render at User.PreferredCulture's own default ("fa").
+        var expected = new NotificationTemplateCatalog().Render(evt, "fa");
         var rows = scope.NewDb().UserNotifications.Where(n => n.WorkspaceId == Workspace).ToList();
         rows.Select(r => r.UserId).Should().BeEquivalentTo([alice, bob],
             "a workspace nobody configured a channel for is still a workspace somebody was told about");
         rows.Should().AllSatisfy(r =>
         {
             r.ReadAt.Should().BeNull();
-            r.Title.Should().Be("Deploy failed: api #4");
-            r.Body.Should().Be("build error");
+            r.Title.Should().Be(expected.Subject);
+            r.Body.Should().Be(expected.TextBody);
             r.Severity.Should().Be(AlertSeverity.Critical);
         });
     }
@@ -112,8 +121,10 @@ public class NotificationInAppFanOutTests
         var bob = AddMember(db);
         db.SaveChanges();
 
-        var matched = await service.NotifyAsync(Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical,
-            "Deploy failed: api #5", "build error", default);
+        var matched = await service.NotifyAsync(Workspace,
+            NotificationEventData.Create(AlertEvent.DeployFailed,
+                ("AppName", "api"), ("DeploymentNumber", "5"), ("Reason", "build error")),
+            AlertSeverity.Critical, default);
 
         matched.Should().Be(1, "one alert rule matched, which is what NotifyAsync's count has always meant");
         scope.NewDb().UserNotifications.Where(n => n.WorkspaceId == Workspace)
@@ -127,8 +138,9 @@ public class NotificationInAppFanOutTests
         var alice = AddMember(db);
         AddMember(db, active: false);
 
-        await service.NotifyAsync(Workspace, AlertEvent.AppCrashed, AlertSeverity.Critical,
-            "App crashed: worker", "exited unexpectedly", default);
+        await service.NotifyAsync(Workspace,
+            NotificationEventData.Create(AlertEvent.AppCrashed, ("AppName", "worker"), ("Reason", "Exited")),
+            AlertSeverity.Critical, default);
 
         scope.NewDb().UserNotifications.Where(n => n.WorkspaceId == Workspace)
             .Select(n => n.UserId).Should().BeEquivalentTo([alice]);
@@ -139,8 +151,9 @@ public class NotificationInAppFanOutTests
     {
         var (service, db, scope) = Build();
 
-        var act = async () => await service.NotifyAsync(Workspace, AlertEvent.DiskWarning,
-            AlertSeverity.Warning, "Low disk space", "94% used", default);
+        var act = async () => await service.NotifyAsync(Workspace,
+            NotificationEventData.Create(AlertEvent.DiskWarning, ("ServerName", "node-1"), ("Percent", "94")),
+            AlertSeverity.Warning, default);
 
         await act.Should().NotThrowAsync();
         scope.NewDb().UserNotifications.Where(n => n.WorkspaceId == Workspace).Should().BeEmpty();
@@ -162,8 +175,10 @@ public class NotificationInAppFanOutTests
         var alice = AddMember(db);
         db.SaveChanges();
 
-        var result = await service.NotifyRuleAsync(rule.Id, AlertSeverity.Warning,
-            "api: memory above 90%", "held for 5m", default);
+        var result = await service.NotifyRuleAsync(rule.Id,
+            NotificationEventData.Create(AlertEvent.ThresholdBreached,
+                ("AppName", "api"), ("Metric", "MemoryPercent"), ("Threshold", "90"), ("SustainedMinutes", "5")),
+            AlertSeverity.Warning, default);
 
         result.Delivered.Should().BeTrue();
         scope.NewDb().UserNotifications.Where(n => n.WorkspaceId == Workspace)
@@ -181,8 +196,9 @@ public class NotificationInAppFanOutTests
         var alice = AddMember(db);
         var bob = AddMember(db);
 
-        await service.NotifyAsync(Workspace, AlertEvent.BackupFailed, AlertSeverity.Warning,
-            "Backup failed", "disk full", default);
+        await service.NotifyAsync(Workspace,
+            NotificationEventData.Create(AlertEvent.BackupFailed, ("TargetRef", "primary-db"), ("Detail", "disk full")),
+            AlertSeverity.Warning, default);
 
         var writer = scope.NewDb();
         var aliceRow = writer.UserNotifications.Single(n => n.UserId == alice);
@@ -193,5 +209,62 @@ public class NotificationInAppFanOutTests
         reader.UserNotifications.Single(n => n.UserId == alice).ReadAt.Should().NotBeNull();
         reader.UserNotifications.Single(n => n.UserId == bob).ReadAt.Should().BeNull(
             "each member's row is their own; one person's read state must never leak onto another's");
+    }
+
+    // ---- N4 (2026-08-16 notification-system spec, "in the reader's own language") ------------
+
+    /// <summary>
+    /// The whole feature, named directly: one raised event, two members of the same workspace, two
+    /// different <c>PreferredCulture</c>s — and two different languages land in their inboxes. A test
+    /// with a single recipient could not prove this at all; it would still pass if
+    /// <c>NotificationService</c> quietly rendered every row in whichever culture happened to be
+    /// requested first.
+    /// </summary>
+    [Fact]
+    public async Task The_same_event_renders_in_each_members_own_preferred_culture()
+    {
+        var (service, db, scope) = Build();
+        var farsiReader = AddMember(db, preferredCulture: "fa");
+        var englishReader = AddMember(db, preferredCulture: "en");
+
+        var evt = NotificationEventData.Create(AlertEvent.AppCrashed, ("AppName", "worker"), ("Reason", "Exited"));
+        await service.NotifyAsync(Workspace, evt, AlertSeverity.Critical, default);
+
+        var catalog = new NotificationTemplateCatalog();
+        var fa = catalog.Render(evt, "fa");
+        var en = catalog.Render(evt, "en");
+        fa.Subject.Should().NotBe(en.Subject, "the fixture is only worth anything if the two languages actually differ");
+
+        var rows = scope.NewDb().UserNotifications.Where(n => n.WorkspaceId == Workspace).ToList();
+        var farsiRow = rows.Single(r => r.UserId == farsiReader);
+        var englishRow = rows.Single(r => r.UserId == englishReader);
+
+        farsiRow.Title.Should().Be(fa.Subject);
+        farsiRow.Body.Should().Be(fa.TextBody);
+        englishRow.Title.Should().Be(en.Subject);
+        englishRow.Body.Should().Be(en.TextBody);
+        farsiRow.Title.Should().NotBe(englishRow.Title,
+            "the same event, told to two people, must not read the same to both of them");
+    }
+
+    /// <summary>
+    /// A member who never touched the culture picker still has a row — <c>User.PreferredCulture</c>'s
+    /// own default (<c>User.cs:25</c>) is "fa", not a null the rendering step has to special-case.
+    /// </summary>
+    [Fact]
+    public async Task A_member_with_no_preferred_culture_set_is_told_in_the_platforms_default_fa()
+    {
+        var (service, db, scope) = Build();
+        var member = AddMember(db); // preferredCulture left null — the User entity's own default applies.
+        db.Users.Single(u => u.Id == member).PreferredCulture.Should().Be("fa",
+            "the fixture must actually exercise the unset default, not a value this test chose");
+
+        var evt = NotificationEventData.Create(AlertEvent.DiskWarning, ("ServerName", "node-1"), ("Percent", "94"));
+        await service.NotifyAsync(Workspace, evt, AlertSeverity.Warning, default);
+
+        var expected = new NotificationTemplateCatalog().Render(evt, "fa");
+        var row = scope.NewDb().UserNotifications.Single(n => n.WorkspaceId == Workspace);
+        row.Title.Should().Be(expected.Subject);
+        row.Body.Should().Be(expected.TextBody);
     }
 }

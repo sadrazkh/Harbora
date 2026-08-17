@@ -6,6 +6,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Billing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Monitoring;
+using Harbora.Domain.Notifications;
 using Harbora.Infrastructure.Notifications;
 using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
@@ -426,23 +427,16 @@ public class LowBalanceAlertTests
 
         await Harness.Tick(db, notifications: told).ChargeHourAsync(Hour, default);
 
+        // N4 (2026-08-16 notification-system spec): NotifyAsync's own input is the workspace name and
+        // the hours left as data, not a rendered sentence in either language — see
+        // NotificationTemplateCatalogTests for what a template actually does with them, and the test
+        // below this one for why "both languages in the same string" is no longer how this raise site
+        // answers "which language".
         var sent = told.Notifications.Should().ContainSingle().Subject;
-        sent.Title.Should().Contain("tenant");
+        sent.Data.Get("WorkspaceName").Should().Be("tenant");
 
-        // Asserted on each half separately rather than on the whole body, because "the body contains
-        // 22" is true of a body that says it in one language and not the other — which is how a
-        // Persian reader ends up with the half of the message that has no number in it. The two
-        // halves are the two paragraphs.
-        var halves = sent.Body.Split("\n\n", StringSplitOptions.RemoveEmptyEntries);
-        halves.Should().HaveCount(2);
-
-        foreach (var half in halves)
-        {
-            half.Should().Contain("tenant");
-
-            // 11,000 left at 500 an hour is 22 whole hours.
-            half.Should().Contain("22");
-        }
+        // 11,000 left at 500 an hour is 22 whole hours.
+        sent.Data.Get("Hours").Should().Be("22");
     }
 
     [Fact]
@@ -457,26 +451,34 @@ public class LowBalanceAlertTests
         await Harness.Tick(db, notifications: told).ChargeHourAsync(Hour, default);
 
         // 11,499 / 500 = 22.998.
-        told.Notifications.Should().ContainSingle().Subject.Body.Should().Contain("22");
+        told.Notifications.Should().ContainSingle().Subject.Data.Get("Hours").Should().Be("22");
     }
 
     [Fact]
-    public async Task The_warning_carries_both_languages_because_nothing_here_knows_which_one_to_use()
+    public async Task The_warning_hands_over_facts_not_prose_so_the_recipient_decides_the_language()
     {
-        // Item 21 of the do-not-change list, arriving at a surface with no request behind it. There
-        // is no culture to read: this runs on a timer, and a channel is a Telegram group or a shared
-        // mailbox rather than a person with a PreferredCulture. Picking one language would be
-        // picking it wrong for half the installs this platform is built for, so both go out.
+        // Item 21 of the do-not-change list, arriving at a surface with no request behind it — but
+        // N4 (2026-08-16 notification-system spec) changes what "no request behind it" means for this
+        // raise site specifically: BillingTick.LowBalanceMessage still says both languages at once for
+        // the incident, because an incident has no reader to pick one for. NotifyAsync's own input no
+        // longer says either language: it is the workspace name and the hours left, and
+        // NotificationService picks the language per actual recipient (a member's own
+        // PreferredCulture, or the platform default for a channel with no person attached) — proved
+        // here by rendering the same facts both ways and getting two different sentences.
         await using var db = Harness.SystemContext();
         SeedTenant(db, "tenant", balanceMinor: Threshold - 500);
         var told = new RecordingNotificationService();
 
         await Harness.Tick(db, notifications: told).ChargeHourAsync(Hour, default);
 
-        var sent = told.Notifications.Should().ContainSingle().Subject;
-        sent.Body.Should().Contain("balance");
-        sent.Body.Should().Contain("اعتبار");
-        sent.Title.Should().Contain("اعتبار");
+        var data = told.Notifications.Should().ContainSingle().Subject.Data;
+        var catalog = new NotificationTemplateCatalog();
+        var fa = catalog.Render(data, "fa");
+        var en = catalog.Render(data, "en");
+
+        fa.Subject.Should().Contain("اعتبار");
+        en.TextBody.Should().Contain("balance");
+        fa.Subject.Should().NotBe(en.Subject, "the same facts must read differently depending who is asking");
     }
 
     // --- when the warning itself goes wrong -------------------------------------------------
@@ -485,12 +487,12 @@ public class LowBalanceAlertTests
     /// case where the failure escapes anyway — a disposed context, a broken rule query.</summary>
     private sealed class BrokenNotifications : INotificationService
     {
-        public Task<int> NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity,
-            string title, string body, CancellationToken ct) =>
+        public Task<int> NotifyAsync(Guid workspaceId, Harbora.Domain.Notifications.NotificationEventData evt,
+            AlertSeverity severity, CancellationToken ct) =>
             throw new InvalidOperationException("the alert rules could not be read");
 
-        public Task<NotificationResult> NotifyRuleAsync(Guid alertId, AlertSeverity severity,
-            string title, string body, CancellationToken ct) => throw new NotSupportedException();
+        public Task<NotificationResult> NotifyRuleAsync(Guid alertId, Harbora.Domain.Notifications.NotificationEventData evt,
+            AlertSeverity severity, CancellationToken ct) => throw new NotSupportedException();
 
         public Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct) =>
             throw new NotSupportedException();
@@ -593,6 +595,7 @@ public class LowBalanceAlertTests
             scope.Factory,
             Harness.Clock,
             Options.Create(new NotificationOptions { DeliveryTimeoutSeconds = 10 }),
+            new NotificationTemplateCatalog(),
             NullLogger<NotificationService>.Instance);
         return (service, scope);
     }
@@ -698,10 +701,12 @@ public class LowBalanceAlertTests
             scope.Factory,
             new FixedClock(),
             Options.Create(new NotificationOptions { DeliveryTimeoutSeconds = 10 }),
+            new NotificationTemplateCatalog(),
             NullLogger<NotificationService>.Instance);
 
-        await service.NotifyAsync(workspaceId, AlertEvent.LowBalance, AlertSeverity.Warning,
-            "Balance running low", "body", default);
+        await service.NotifyAsync(workspaceId,
+            NotificationEventData.Create(AlertEvent.LowBalance, ("WorkspaceName", "tenant"), ("Hours", "22")),
+            AlertSeverity.Warning, default);
         await RunQueuedDeliveriesAsync(service, db);
 
         handler.Calls.Should().Be(1);
@@ -750,10 +755,12 @@ public class LowBalanceAlertTests
             scope.Factory,
             new FixedClock(),
             Options.Create(new NotificationOptions { DeliveryTimeoutSeconds = 10 }),
+            new NotificationTemplateCatalog(),
             NullLogger<NotificationService>.Instance);
 
-        await service.NotifyAsync(workspaceId, AlertEvent.LowBalance, AlertSeverity.Warning,
-            "Balance running low", "body", default);
+        await service.NotifyAsync(workspaceId,
+            NotificationEventData.Create(AlertEvent.LowBalance, ("WorkspaceName", "tenant"), ("Hours", "22")),
+            AlertSeverity.Warning, default);
 
         handler.Calls.Should().Be(0);
     }

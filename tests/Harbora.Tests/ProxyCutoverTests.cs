@@ -85,7 +85,7 @@ public class ProxyCutoverTests
 
         var alert = h.Notifications.Notifications.Should().ContainSingle().Subject;
         alert.Event.Should().Be(AlertEvent.DeployFailed);
-        alert.Body.Should().Contain(EngineError);
+        alert.Data.Get("Reason").Should().Contain(EngineError);
     }
 
     // ---- and retires nothing ----

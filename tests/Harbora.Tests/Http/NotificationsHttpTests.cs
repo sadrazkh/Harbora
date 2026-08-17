@@ -87,8 +87,10 @@ public class NotificationsHttpTests(HarboraHttpFixture fixture)
         using (var scope = Panel.Services.CreateScope())
         {
             var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
-            await notifications.NotifyAsync(workspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical,
-                "Deploy failed: api #9", "build error", default);
+            await notifications.NotifyAsync(workspaceId,
+                NotificationEventData.Create(AlertEvent.DeployFailed,
+                    ("AppName", "api"), ("DeploymentNumber", "9"), ("Reason", "build error")),
+                AlertSeverity.Critical, default);
         }
 
         var rows = Panel.Read(db => db.UserNotifications.Where(n => n.WorkspaceId == workspaceId).ToList());

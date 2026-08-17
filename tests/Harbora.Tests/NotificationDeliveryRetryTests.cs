@@ -57,6 +57,7 @@ public class NotificationDeliveryRetryTests
             Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
             scope.Factory, new FixedClock(),
             Microsoft.Extensions.Options.Options.Create(new NotificationOptions { DeliveryTimeoutSeconds = 10 }),
+            new NotificationTemplateCatalog(),
             NullLogger<NotificationService>.Instance);
         return (service, db, scope);
     }
@@ -220,7 +221,9 @@ public class NotificationDeliveryRetryTests
         await db.SaveChangesAsync();
 
         var reached = await service.NotifyAsync(
-            workspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical, "Deploy failed", "reason", default);
+            workspaceId, NotificationEventData.Create(AlertEvent.DeployFailed,
+                ("AppName", "Deploy failed"), ("Reason", "reason")),
+            AlertSeverity.Critical, default);
 
         reached.Should().Be(0, "no Alert rule matched — the count is still honest about that");
         var delivery = await db.NotificationDeliveries.SingleAsync();
@@ -236,7 +239,9 @@ public class NotificationDeliveryRetryTests
         var workspaceId = Guid.CreateVersion7();
 
         var reached = await service.NotifyAsync(
-            workspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical, "Deploy failed", "reason", default);
+            workspaceId, NotificationEventData.Create(AlertEvent.DeployFailed,
+                ("AppName", "Deploy failed"), ("Reason", "reason")),
+            AlertSeverity.Critical, default);
 
         reached.Should().Be(0);
         var delivery = await db.NotificationDeliveries.SingleAsync();

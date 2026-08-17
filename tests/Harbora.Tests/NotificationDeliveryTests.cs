@@ -4,6 +4,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Monitoring;
+using Harbora.Domain.Notifications;
 using Harbora.Infrastructure.Notifications;
 using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
@@ -72,6 +73,7 @@ public class NotificationDeliveryTests
             new FixedClock(),
             Microsoft.Extensions.Options.Options.Create(
                 new NotificationOptions { DeliveryTimeoutSeconds = timeoutSeconds }),
+            new Harbora.Infrastructure.Notifications.NotificationTemplateCatalog(),
             NullLogger<NotificationService>.Instance);
         return (service, db, rule, scope);
     }
@@ -207,7 +209,8 @@ public class NotificationDeliveryTests
         var handler = new Responder(HttpStatusCode.Forbidden);
         var (service, db, rule, _) = Build(handler);
 
-        await service.NotifyAsync(Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical, "t", "b", default);
+        await service.NotifyAsync(Workspace, NotificationEventData.Create(AlertEvent.DeployFailed, ("AppName", "t"), ("Reason", "b")),
+            AlertSeverity.Critical, default);
 
         handler.Calls.Should().Be(0, "the attempt has not happened yet — only been queued");
         var delivery = await db.NotificationDeliveries.SingleAsync();
@@ -224,7 +227,8 @@ public class NotificationDeliveryTests
         // Alert.LastError, is the record N1 promises.
         var (service, db, rule, _) = Build(new Responder(HttpStatusCode.Forbidden));
 
-        await service.NotifyAsync(Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical, "t", "b", default);
+        await service.NotifyAsync(Workspace, NotificationEventData.Create(AlertEvent.DeployFailed, ("AppName", "t"), ("Reason", "b")),
+            AlertSeverity.Critical, default);
         await RunQueuedDeliveriesAsync(service, db);
 
         var delivery = await db.NotificationDeliveries.SingleAsync();
@@ -270,7 +274,8 @@ public class NotificationDeliveryTests
         var (service, db, _, _) = Build(handler);
 
         var reached = await service.NotifyAsync(
-            Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical, "t", "b", default);
+            Workspace, NotificationEventData.Create(AlertEvent.DeployFailed, ("AppName", "t"), ("Reason", "b")),
+            AlertSeverity.Critical, default);
 
         reached.Should().Be(1);
         await RunQueuedDeliveriesAsync(service, db);
@@ -291,7 +296,8 @@ public class NotificationDeliveryTests
         await db.SaveChangesAsync();
 
         var reached = await service.NotifyAsync(
-            Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical, "t", "b", default);
+            Workspace, NotificationEventData.Create(AlertEvent.DeployFailed, ("AppName", "t"), ("Reason", "b")),
+            AlertSeverity.Critical, default);
 
         reached.Should().Be(0);
         handler.Calls.Should().Be(0, "the count has to agree with what actually went out");
@@ -307,7 +313,8 @@ public class NotificationDeliveryTests
         var (service, db, _, _) = Build(new ThrowingHandler());
 
         var notify = async () => await service.NotifyAsync(
-            Workspace, AlertEvent.DeployFailed, AlertSeverity.Critical, "t", "b", default);
+            Workspace, NotificationEventData.Create(AlertEvent.DeployFailed, ("AppName", "t"), ("Reason", "b")),
+            AlertSeverity.Critical, default);
 
         await notify.Should().NotThrowAsync();
 
