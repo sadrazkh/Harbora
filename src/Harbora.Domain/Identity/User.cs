@@ -45,6 +45,40 @@ public class User : BaseEntity
     public DateTimeOffset? LastLoginAt { get; set; }
 
     /// <summary>
+    /// The IANA time zone this person's quiet hours (N5, 2026-08-16 notification-system spec) are
+    /// measured in — §7 Q5(a): a per-user zone, not a platform-wide one, "because a platform-wide zone
+    /// would silence a customer in Tehran during a European operator's night". Defaults to
+    /// <c>"Asia/Tehran"</c> — the same reasoning <see cref="PreferredCulture"/>'s own "fa" default
+    /// already gives: absent any other signal, this platform assumes an Iranian user first. Never
+    /// used for anything but quiet hours; every other clock in this codebase stays UTC.
+    /// </summary>
+    public string TimeZoneId { get; set; } = "Asia/Tehran";
+
+    /// <summary>
+    /// Quiet hours start, in this person's own local hour (0-23). Null — the default — means quiet
+    /// hours are off; a half-set window (only one of the pair) is read the same way, never as "the
+    /// whole day" or "never". See <c>Harbora.Infrastructure.Notifications.QuietHours</c> for the
+    /// window itself, including how one that crosses midnight (22 → 06) is read, and for why a
+    /// critical event is never held back by it regardless of what these two hold.
+    /// </summary>
+    public int? QuietHoursStartHour { get; set; }
+
+    /// <summary>Quiet hours end, in this person's own local hour (0-23). See <see cref="QuietHoursStartHour"/>.</summary>
+    public int? QuietHoursEndHour { get; set; }
+
+    /// <summary>
+    /// Opt-in for the weekly summary email (N5) — off by default, the same "Phase-2 nicety" doc 09
+    /// itself calls it. Turning this on costs nothing extra: the summary is built from rows this
+    /// person's own notifications already wrote.
+    /// </summary>
+    public bool WeeklyReportOptIn { get; set; }
+
+    /// <summary>When this person's last weekly report was sent, or null if never. Lives on the user
+    /// row rather than a table of its own, since it is one fact about one person rather than a growing
+    /// history — <c>NotificationDigestRunner</c> reads it to decide whether seven days have passed.</summary>
+    public DateTimeOffset? LastWeeklyReportAt { get; set; }
+
+    /// <summary>
     /// When ownership of the address was proven. Existing accounts are backfilled during upgrade;
     /// new public registrations remain null until the one-time link is used.
     /// </summary>

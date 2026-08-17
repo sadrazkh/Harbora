@@ -308,7 +308,27 @@ public enum NotificationDeliveryPurpose
     PasswordReset = 2,
     EmailVerification = 3,
     WorkspaceInvite = 4,
-    PlatformInvite = 5
+    PlatformInvite = 5,
+
+    /// <summary>
+    /// N5 (2026-08-16 notification-system spec, "noise control"): one member's own
+    /// <c>NotificationPreference</c> resolved <see cref="NotificationChannel.Email"/> to
+    /// <c>Immediate</c> for one event — distinct from <see cref="NoRecipientFallback"/>, which fires
+    /// only when a workspace has no alert rule at all and pages every admin; this fires because one
+    /// person asked to be told this way, whether or not a rule exists.
+    /// </summary>
+    PersonalPreference = 6,
+
+    /// <summary>
+    /// N5: several <c>NotificationDigestEntry</c> rows folded into one email by
+    /// <c>NotificationDigestRunner</c>. The rendered content already carries everything that was
+    /// digested; the entries themselves only point back at this row (see
+    /// <c>NotificationDigestEntry.DeliveryId</c>).
+    /// </summary>
+    PersonalDigest = 7,
+
+    /// <summary>N5: the opt-in weekly summary.</summary>
+    WeeklyReport = 8
 }
 
 /// <summary>
@@ -339,6 +359,49 @@ public enum ServerStatus
     Online = 1,
     Offline = 2,
     Degraded = 3
+}
+
+/// <summary>
+/// The two channels a person's own <c>NotificationPreference</c> can address (N5, 2026-08-16
+/// notification-system spec, "noise control"). Deliberately not <see cref="AlertChannel"/>:
+/// Telegram/Discord/Webhook stay workspace-level integrations nobody sets a personal preference for
+/// (doc 09 §3 — "Telegram/Discord/Webhook remain workspace-level integrations"), so a preference row
+/// only ever names one of these two.
+/// </summary>
+public enum NotificationChannel
+{
+    /// <summary>The <c>UserNotification</c> row N3 already writes for every member.</summary>
+    InApp = 0,
+
+    /// <summary>A personal email — on top of, not instead of, any workspace Alert-rule email.</summary>
+    Email = 1
+}
+
+/// <summary>
+/// What a person asked to happen to one (event type, channel) pair. Persisted by value — never
+/// renumber.
+/// </summary>
+public enum NotificationPreferenceMode
+{
+    /// <summary>Delivered the moment the event happens.</summary>
+    Immediate = 0,
+
+    /// <summary>
+    /// Held and folded into this person's next digest email rather than sent on its own. Only a legal
+    /// choice for <see cref="NotificationChannel.Email"/> — see
+    /// <c>NotificationPreferenceService.SetAsync</c> for why <see cref="NotificationChannel.InApp"/>
+    /// never digests: there is no "later, bundled" reading experience distinct from the
+    /// <c>/notifications</c> list a row already sits in the moment it is written.
+    /// </summary>
+    Digest = 1,
+
+    /// <summary>
+    /// Not delivered on this channel at all. Never a legal resolution for <b>every</b> channel of a
+    /// critical event at once — see <c>NotificationEventClass.IsCritical</c> and
+    /// <c>NotificationPreferenceRules.HasCriticalCoverage</c>: a customer may choose where their last
+    /// warning before suspension goes, not whether it exists.
+    /// </summary>
+    Off = 2
 }
 
 public enum TokenType
