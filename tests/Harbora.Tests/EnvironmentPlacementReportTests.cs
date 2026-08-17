@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Identity;
@@ -308,5 +308,35 @@ public class EnvironmentPlacementReportTests
         // ran, not a report that silently produced nothing.
         text.Should().Contain("0");
         text.Should().NotContain("orphaned");
+    }
+
+    /// <summary>
+    /// Section 1 must not print a zero, because since P2 nothing asks the database that question —
+    /// the column is a required foreign key, so the query was removed rather than answered.
+    ///
+    /// <para>
+    /// A "0" there would be a claim nobody made. And the operator this report exists for runs it
+    /// <em>before</em> a risky migration, quite possibly on a server where that migration has not
+    /// applied — so a reassuring zero from a check that never ran is the precise failure the report
+    /// was built to prevent, reappearing inside the report itself.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section_one_says_the_schema_enforces_it_rather_than_printing_a_reassuring_zero()
+    {
+        var clean = new EnvironmentPlacementReportResult(
+            UnplacedApps: [], UnplacedManagedServices: [], EmptyEnvironments: [],
+            TotalWorkloadCount: 3, DualAttachWorkloadCount: 3, WorkspacesWithWorkloadsButNoProject: []);
+
+        var text = EnvironmentPlacementReport.Render(clean);
+
+        var sectionOne = text[text.IndexOf("1)", StringComparison.Ordinal)..];
+        sectionOne = sectionOne[..sectionOne.IndexOf("2)", StringComparison.Ordinal)];
+
+        sectionOne.Should().Contain("enforced by the schema");
+        sectionOne.Should().NotContain(": 0",
+            "a count implies somebody counted, and since P2 nobody does");
+        sectionOne.Should().Contain("not an answer",
+            "the operator must be told this line is silent, not clean, if the migration has not applied");
     }
 }

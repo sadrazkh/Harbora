@@ -127,10 +127,16 @@ public static class EnvironmentPlacementReport
         w.AppendLine("────────────────────────────────────────");
         w.AppendLine();
 
-        w.AppendLine($"1) Workloads with no environment (EnvironmentId IS NULL): {report.UnplacedWorkloadCount}");
+        // Deliberately not a count. Since P2 made EnvironmentId a required foreign key, nothing above
+        // asks the database this question any more — so printing "0" would be a claim nobody made.
+        // The operator this report exists for runs it BEFORE a risky migration, quite possibly on a
+        // server where that migration has not applied, and a reassuring zero from a check that never
+        // ran is the exact failure this whole report was built to prevent.
+        w.AppendLine("1) Workloads with no environment (EnvironmentId IS NULL): enforced by the schema");
         if (report.UnplacedWorkloadCount == 0)
         {
-            w.AppendLine("   None found.");
+            w.AppendLine("   Not queried — the column is a required foreign key, so this state cannot be stored.");
+            w.AppendLine("   If the EnvironmentId migration has not applied here, this line is not an answer.");
         }
         else
         {
