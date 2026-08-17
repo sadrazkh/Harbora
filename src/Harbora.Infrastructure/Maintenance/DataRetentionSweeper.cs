@@ -27,6 +27,7 @@ public static class RetentionTables
     public const string AlertIncidents = "AlertIncidents";
     public const string NotificationDeliveries = "NotificationDeliveries";
     public const string AlertDedupMarks = "AlertDedupMarks";
+    public const string UserNotifications = "UserNotifications";
 }
 
 /// <summary>
@@ -251,6 +252,12 @@ public sealed class DataRetentionSweeper(
             RetentionTables.AlertDedupMarks, nameof(RetentionOptions.AlertDedupMarkDays),
             config.AlertDedupMarkDays,
             cutoff => Task.FromResult(RetentionRule.AlertDedupMarksToDelete(cutoff)));
+
+        // N3 (2026-08-16 notification-system spec): the per-user in-app copy of a workspace event.
+        await SweepAgedTableAsync<Domain.Notifications.UserNotification>(
+            RetentionTables.UserNotifications, nameof(RetentionOptions.UserNotificationDays),
+            config.UserNotificationDays,
+            cutoff => Task.FromResult(RetentionRule.UserNotificationsToDelete(cutoff)));
 
         var result = new RetentionSweepResult(deleted, keptForever, failures);
 

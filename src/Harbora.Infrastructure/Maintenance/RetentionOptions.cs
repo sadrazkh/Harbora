@@ -114,6 +114,15 @@ public sealed class RetentionOptions
     public int AlertDedupMarkDays { get; set; } = 7;
 
     /// <summary>
+    /// <c>UserNotification</c> rows (N3) — the per-user in-app copy of a workspace event. Longer than
+    /// a delivery's 90 days: this is what a person actually reads on <c>/notifications</c>, not a
+    /// technical attempt log, and 180 days follows doc 14's own figure for in-app rows. Whether a row
+    /// has been read plays no part in when it goes — see <c>RetentionRule.UserNotificationsToDelete</c>
+    /// for why an unread row is not "still needed" the way a Pending delivery or an open incident is.
+    /// </summary>
+    public int UserNotificationDays { get; set; } = 180;
+
+    /// <summary>
     /// The hour (UTC, 0–23) the nightly sweep runs at. Defaults to 03:00 UTC.
     ///
     /// <para>

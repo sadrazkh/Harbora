@@ -108,6 +108,8 @@ public class HarboraDbContext : DbContext
     public DbSet<AlertDedupMark> AlertDedupMarks => Set<AlertDedupMark>();
     public DbSet<Harbora.Domain.Notifications.NotificationDelivery> NotificationDeliveries =>
         Set<Harbora.Domain.Notifications.NotificationDelivery>();
+    public DbSet<Harbora.Domain.Notifications.UserNotification> UserNotifications =>
+        Set<Harbora.Domain.Notifications.UserNotification>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
     public DbSet<AppTemplateVersion> AppTemplateVersions => Set<AppTemplateVersion>();
     public DbSet<Harbora.Domain.Ai.AiProvider> AiProviders => Set<Harbora.Domain.Ai.AiProvider>();
@@ -439,6 +441,22 @@ public class HarboraDbContext : DbContext
             // The delivery log's own read: one workspace's rows, newest first. NotificationDeliveryJobHandler
             // reads by Id (the primary key) and needs no index of its own.
             e.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
+        });
+
+        // N3 (2026-08-16 notification-system spec): a per-user copy of a workspace event. Deliberately
+        // NOT workspace-filtered — unfiltered-but-user-keyed, the same pattern ApiToken already uses
+        // (doc 14 §3): a workspace-only filter would still merge every member's rows into one set, so
+        // every reader (the bell, /notifications, the retention sweep) filters by UserId explicitly.
+        b.Entity<Harbora.Domain.Notifications.UserNotification>(e =>
+        {
+            e.Property(x => x.Title).HasMaxLength(200);
+            e.Property(x => x.Body).HasMaxLength(4000);
+
+            // The bell's unread count and the /notifications page's paginated list are the only two
+            // reads, and both start from UserId + WorkspaceId, narrow by whether ReadAt is null, and
+            // sort newest first — so all four columns are in the index, ReadAt ahead of the ranged
+            // CreatedAt for the same reason MetricRollup's own index puts its ranged column last.
+            e.HasIndex(x => new { x.UserId, x.WorkspaceId, x.ReadAt, x.CreatedAt });
         });
 
         b.Entity<AppTemplate>(e => e.HasIndex(x => x.Key).IsUnique());

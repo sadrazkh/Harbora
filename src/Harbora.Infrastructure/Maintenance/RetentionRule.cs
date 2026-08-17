@@ -302,4 +302,19 @@ public static class RetentionRule
     public static Expression<Func<Domain.Monitoring.AlertDedupMark, bool>> AlertDedupMarksToDelete(
         DateTimeOffset cutoff) =>
         mark => mark.FiredAt < cutoff;
+
+    /// <summary>
+    /// Per-user in-app rows past the cutoff (2026-08-16 notification-system spec, N3).
+    ///
+    /// <para>
+    /// <b>Safety.</b> Unlike a delivery or an incident, nothing about <em>unread</em> makes a row not
+    /// yet history — <c>ReadAt</c> is what a person answers "have I seen this" with, not a lock a
+    /// running operation still needs, so an old unread row is swept exactly like an old read one. Age
+    /// is measured from <c>CreatedAt</c>, the only timestamp every row is guaranteed to carry (most
+    /// never get a <c>ReadAt</c> at all). 180 days follows doc 14's own figure for in-app rows.
+    /// </para>
+    /// </summary>
+    public static Expression<Func<Domain.Notifications.UserNotification, bool>> UserNotificationsToDelete(
+        DateTimeOffset cutoff) =>
+        n => n.CreatedAt < cutoff;
 }

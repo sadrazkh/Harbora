@@ -215,6 +215,19 @@ public class DataRetentionSweeperTests
             new Harbora.Domain.Monitoring.AlertDedupMark { Key = "dedup-old", FiredAt = Now.AddDays(-8) },
             new Harbora.Domain.Monitoring.AlertDedupMark { Key = "dedup-new", FiredAt = Now.AddDays(-6) });
 
+        // N3 (2026-08-16 notification-system spec). UserNotificationDays defaults to 180.
+        db.UserNotifications.AddRange(
+            new Harbora.Domain.Notifications.UserNotification
+            {
+                WorkspaceId = workspaceId, UserId = Guid.NewGuid(), Title = "old", Body = "old",
+                CreatedAt = Now.AddDays(-181)
+            },
+            new Harbora.Domain.Notifications.UserNotification
+            {
+                WorkspaceId = workspaceId, UserId = Guid.NewGuid(), Title = "new", Body = "new",
+                CreatedAt = Now.AddDays(-179)
+            });
+
         await db.SaveChangesAsync();
     }
 
@@ -243,12 +256,13 @@ public class DataRetentionSweeperTests
         db.AlertIncidents.IgnoreQueryFilters().Should().ContainSingle().Which.Title.Should().Be("new");
         db.NotificationDeliveries.Should().ContainSingle().Which.Subject.Should().Be("new");
         db.AlertDedupMarks.Should().ContainSingle().Which.Key.Should().Be("dedup-new");
+        db.UserNotifications.Should().ContainSingle().Which.Title.Should().Be("new");
 
-        // Thirteen tables, one row each — and the sweep says so, rather than reporting a bare total
+        // Fourteen tables, one row each — and the sweep says so, rather than reporting a bare total
         // that could hide a table it never reached.
-        result.Deleted.Should().HaveCount(13);
+        result.Deleted.Should().HaveCount(14);
         result.Deleted.Values.Should().AllSatisfy(n => n.Should().Be(1));
-        result.TotalDeleted.Should().Be(13);
+        result.TotalDeleted.Should().Be(14);
     }
 
     [Fact]
@@ -266,8 +280,8 @@ public class DataRetentionSweeperTests
         result.Failures.Should().ContainKey(RetentionTables.NodeEvents);
         result.Failures[RetentionTables.NodeEvents].Should().Contain("relation is locked");
 
-        // The other twelve still ran.
-        result.Deleted.Should().HaveCount(12);
+        // The other thirteen still ran.
+        result.Deleted.Should().HaveCount(13);
         result.Deleted.Should().NotContainKey(RetentionTables.NodeEvents);
         db.DeploymentLogs.Should().ContainSingle();
         db.AuditLogs.Should().ContainSingle();
@@ -293,7 +307,7 @@ public class DataRetentionSweeperTests
         result.Failures.Should().BeEmpty();
         result.KeptForever.Should().Contain(RetentionTables.DeploymentLogs);
         db.DeploymentLogs.Should().HaveCount(2, "a span too long to be a date means keep, not delete");
-        result.Deleted.Should().HaveCount(12, "every other table was still swept");
+        result.Deleted.Should().HaveCount(13, "every other table was still swept");
     }
 
     [Fact]
