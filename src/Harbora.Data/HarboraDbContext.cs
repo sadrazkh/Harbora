@@ -110,6 +110,10 @@ public class HarboraDbContext : DbContext
         Set<Harbora.Domain.Notifications.NotificationDelivery>();
     public DbSet<Harbora.Domain.Notifications.UserNotification> UserNotifications =>
         Set<Harbora.Domain.Notifications.UserNotification>();
+    public DbSet<Harbora.Domain.Notifications.NotificationPreference> NotificationPreferences =>
+        Set<Harbora.Domain.Notifications.NotificationPreference>();
+    public DbSet<Harbora.Domain.Notifications.NotificationDigestEntry> NotificationDigestEntries =>
+        Set<Harbora.Domain.Notifications.NotificationDigestEntry>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
     public DbSet<AppTemplateVersion> AppTemplateVersions => Set<AppTemplateVersion>();
     public DbSet<Harbora.Domain.Ai.AiProvider> AiProviders => Set<Harbora.Domain.Ai.AiProvider>();
@@ -457,6 +461,27 @@ public class HarboraDbContext : DbContext
             // sort newest first — so all four columns are in the index, ReadAt ahead of the ranged
             // CreatedAt for the same reason MetricRollup's own index puts its ranged column last.
             e.HasIndex(x => new { x.UserId, x.WorkspaceId, x.ReadAt, x.CreatedAt });
+        });
+
+        // N5 (2026-08-16 notification-system spec, "noise control"): the preference matrix. Not
+        // workspace-filtered, for the same reason UserNotification is not — a preference is one
+        // person's. Unique on (UserId, EventType, Channel): "an absent row means the default" only
+        // holds if there is never more than one explicit choice for the same triple to disagree about.
+        b.Entity<Harbora.Domain.Notifications.NotificationPreference>(e =>
+        {
+            e.HasIndex(x => new { x.UserId, x.EventType, x.Channel }).IsUnique();
+        });
+
+        // N5: digest/weekly-report lines waiting to be folded into a NotificationDelivery. Not
+        // workspace-filtered, same reasoning as UserNotification. The digest runner's own read is
+        // "this user's still-pending rows" (DeliveryId == null); UserId leads the index for that,
+        // DeliveryId narrows it, the same shape NotificationDelivery's own retention rule already
+        // reads by status before age.
+        b.Entity<Harbora.Domain.Notifications.NotificationDigestEntry>(e =>
+        {
+            e.Property(x => x.Title).HasMaxLength(200);
+            e.Property(x => x.Body).HasMaxLength(4000);
+            e.HasIndex(x => new { x.UserId, x.DeliveryId });
         });
 
         b.Entity<AppTemplate>(e => e.HasIndex(x => x.Key).IsUnique());

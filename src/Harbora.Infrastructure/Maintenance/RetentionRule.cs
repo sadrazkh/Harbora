@@ -317,4 +317,20 @@ public static class RetentionRule
     public static Expression<Func<Domain.Notifications.UserNotification, bool>> UserNotificationsToDelete(
         DateTimeOffset cutoff) =>
         n => n.CreatedAt < cutoff;
+
+    /// <summary>
+    /// Digest/weekly-report lines past the cutoff (2026-08-16 notification-system spec, N5).
+    ///
+    /// <para>
+    /// <b>Safety.</b> A row with <c>DeliveryId == null</c> is not history — it is exactly what
+    /// <c>NotificationDigestRunner</c> is waiting to fold into a delivery, the same "not yet attempted"
+    /// guard <c>NotificationDeliveriesToDelete</c> gives <c>Pending</c>. Sweeping it would be the
+    /// digest silently losing something it had not said yet, which is the one outcome this whole
+    /// sub-project exists to rule out. Age is measured from <c>CreatedAt</c>, the only timestamp a
+    /// still-pending row is guaranteed to carry.
+    /// </para>
+    /// </summary>
+    public static Expression<Func<Domain.Notifications.NotificationDigestEntry, bool>>
+        NotificationDigestEntriesToDelete(DateTimeOffset cutoff) =>
+        entry => entry.DeliveryId != null && entry.CreatedAt < cutoff;
 }

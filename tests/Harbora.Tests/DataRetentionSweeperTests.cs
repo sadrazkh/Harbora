@@ -228,6 +228,20 @@ public class DataRetentionSweeperTests
                 CreatedAt = Now.AddDays(-179)
             });
 
+        // N5 (2026-08-16 notification-system spec). NotificationDigestEntryDays defaults to 90; only
+        // an already-flushed row (DeliveryId set) is ever a candidate.
+        db.NotificationDigestEntries.AddRange(
+            new Harbora.Domain.Notifications.NotificationDigestEntry
+            {
+                UserId = Guid.NewGuid(), WorkspaceId = workspaceId, Title = "old", Body = "old",
+                DeliveryId = Guid.NewGuid(), CreatedAt = Now.AddDays(-91)
+            },
+            new Harbora.Domain.Notifications.NotificationDigestEntry
+            {
+                UserId = Guid.NewGuid(), WorkspaceId = workspaceId, Title = "new", Body = "new",
+                DeliveryId = Guid.NewGuid(), CreatedAt = Now.AddDays(-89)
+            });
+
         await db.SaveChangesAsync();
     }
 
@@ -257,12 +271,13 @@ public class DataRetentionSweeperTests
         db.NotificationDeliveries.Should().ContainSingle().Which.Subject.Should().Be("new");
         db.AlertDedupMarks.Should().ContainSingle().Which.Key.Should().Be("dedup-new");
         db.UserNotifications.Should().ContainSingle().Which.Title.Should().Be("new");
+        db.NotificationDigestEntries.Should().ContainSingle().Which.Title.Should().Be("new");
 
-        // Fourteen tables, one row each — and the sweep says so, rather than reporting a bare total
+        // Fifteen tables, one row each — and the sweep says so, rather than reporting a bare total
         // that could hide a table it never reached.
-        result.Deleted.Should().HaveCount(14);
+        result.Deleted.Should().HaveCount(15);
         result.Deleted.Values.Should().AllSatisfy(n => n.Should().Be(1));
-        result.TotalDeleted.Should().Be(14);
+        result.TotalDeleted.Should().Be(15);
     }
 
     [Fact]
@@ -280,8 +295,8 @@ public class DataRetentionSweeperTests
         result.Failures.Should().ContainKey(RetentionTables.NodeEvents);
         result.Failures[RetentionTables.NodeEvents].Should().Contain("relation is locked");
 
-        // The other thirteen still ran.
-        result.Deleted.Should().HaveCount(13);
+        // The other fourteen still ran.
+        result.Deleted.Should().HaveCount(14);
         result.Deleted.Should().NotContainKey(RetentionTables.NodeEvents);
         db.DeploymentLogs.Should().ContainSingle();
         db.AuditLogs.Should().ContainSingle();
@@ -307,7 +322,7 @@ public class DataRetentionSweeperTests
         result.Failures.Should().BeEmpty();
         result.KeptForever.Should().Contain(RetentionTables.DeploymentLogs);
         db.DeploymentLogs.Should().HaveCount(2, "a span too long to be a date means keep, not delete");
-        result.Deleted.Should().HaveCount(13, "every other table was still swept");
+        result.Deleted.Should().HaveCount(14, "every other table was still swept");
     }
 
     [Fact]
@@ -519,5 +534,24 @@ public class DataRetentionSweeperTests
         await NewSweeper(db).SweepAsync(CancellationToken.None);
 
         db.NotificationDeliveries.Should().ContainSingle().Which.Subject.Should().Be("still pending");
+    }
+
+    [Fact]
+    public async Task A_digest_entry_waiting_for_its_next_run_survives_however_old_it_is()
+    {
+        // RetentionRule.NotificationDigestEntriesToDelete only ever considers DeliveryId != null. A
+        // window passing without the digest job running must not turn into the entry being swept —
+        // that would be the exact loss N5's own brief rules out, dressed up as housekeeping.
+        using var db = new HarboraDbContext(NewOptions());
+        db.NotificationDigestEntries.Add(new Harbora.Domain.Notifications.NotificationDigestEntry
+        {
+            UserId = Guid.NewGuid(), WorkspaceId = Guid.NewGuid(), Title = "still waiting", Body = "still waiting",
+            DeliveryId = null, CreatedAt = Now.AddDays(-400)
+        });
+        await db.SaveChangesAsync();
+
+        await NewSweeper(db).SweepAsync(CancellationToken.None);
+
+        db.NotificationDigestEntries.Should().ContainSingle().Which.Title.Should().Be("still waiting");
     }
 }

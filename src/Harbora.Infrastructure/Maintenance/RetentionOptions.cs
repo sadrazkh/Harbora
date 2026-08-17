@@ -123,6 +123,17 @@ public sealed class RetentionOptions
     public int UserNotificationDays { get; set; } = 180;
 
     /// <summary>
+    /// <c>NotificationDigestEntry</c> rows (N5) — lines already folded into a sent digest or weekly
+    /// report. Never a candidate while still pending (<c>DeliveryId == null</c>): see
+    /// <c>RetentionRule.NotificationDigestEntriesToDelete</c> for why that guard exists on top of age.
+    /// Ninety days, matching <see cref="NotificationDeliveryDays"/> rather than the longer
+    /// <see cref="UserNotificationDays"/> — once flushed, the content lives on in the
+    /// <c>NotificationDelivery</c> row it was folded into, so this copy is a technical trail like a
+    /// delivery, not a person's reading list like <c>UserNotification</c>.
+    /// </summary>
+    public int NotificationDigestEntryDays { get; set; } = 90;
+
+    /// <summary>
     /// The hour (UTC, 0–23) the nightly sweep runs at. Defaults to 03:00 UTC.
     ///
     /// <para>

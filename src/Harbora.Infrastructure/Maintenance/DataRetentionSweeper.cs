@@ -28,6 +28,7 @@ public static class RetentionTables
     public const string NotificationDeliveries = "NotificationDeliveries";
     public const string AlertDedupMarks = "AlertDedupMarks";
     public const string UserNotifications = "UserNotifications";
+    public const string NotificationDigestEntries = "NotificationDigestEntries";
 }
 
 /// <summary>
@@ -258,6 +259,14 @@ public sealed class DataRetentionSweeper(
             RetentionTables.UserNotifications, nameof(RetentionOptions.UserNotificationDays),
             config.UserNotificationDays,
             cutoff => Task.FromResult(RetentionRule.UserNotificationsToDelete(cutoff)));
+
+        // N5 (2026-08-16 notification-system spec, "noise control"): digest/weekly-report lines
+        // already folded into a delivery. NotificationPreference gets no line here — see its own doc
+        // comment for why a bounded config table is not swept the way a growing history table is.
+        await SweepAgedTableAsync<Domain.Notifications.NotificationDigestEntry>(
+            RetentionTables.NotificationDigestEntries, nameof(RetentionOptions.NotificationDigestEntryDays),
+            config.NotificationDigestEntryDays,
+            cutoff => Task.FromResult(RetentionRule.NotificationDigestEntriesToDelete(cutoff)));
 
         var result = new RetentionSweepResult(deleted, keptForever, failures);
 
