@@ -68,6 +68,11 @@ public sealed class NotificationService(
 
         var matching = alerts.Where(a => Matches(a, evt)).ToList();
 
+        // N3 ("told a person, not a channel"): the in-app copy is not the zero-rule fallback's
+        // understudy below — it is written for every member whether or not any rule matched, and
+        // whether or not a channel exists at all. See FanOutInAppAsync for why.
+        await FanOutInAppAsync(workspaceId, severity, title, body, ct);
+
         foreach (var alert in matching)
             await EnqueueDeliveryAsync(new NotificationDelivery
             {
@@ -124,6 +129,10 @@ public sealed class NotificationService(
         var alert = await db.Alerts.IgnoreQueryFilters().FirstOrDefaultAsync(a => a.Id == alertId, ct);
         if (alert is null) return NotificationResult.Failed("That alert rule no longer exists.");
         if (!alert.IsEnabled) return NotificationResult.Failed("That alert rule is disabled.");
+
+        // N3: a per-app threshold breach is a workspace event too, so it gets the same in-app fan-out
+        // NotifyAsync gives every other event — see FanOutInAppAsync.
+        await FanOutInAppAsync(alert.WorkspaceId, severity, title, body, ct);
 
         await EnqueueDeliveryAsync(new NotificationDelivery
         {
@@ -394,6 +403,56 @@ public sealed class NotificationService(
         if (delivery.Status == NotificationDeliveryStatus.Pending)
             await scope.ServiceProvider.GetRequiredService<IJobQueue>()
                 .EnqueueAsync(JobKind.NotificationDelivery, delivery.Id, ct);
+    }
+
+    /// <summary>
+    /// In-app is the sink that cannot fail (N3, 2026-08-16 notification-system spec, "told a person,
+    /// not a channel") — the general case of the fix just below (<see cref="EnqueueFallbackToAdminsAsync"/>)
+    /// made for its own one scenario. A row in this table cannot answer 404, cannot time out and needs
+    /// no SMTP configured: it is the one copy of an event that always lands, so a workspace that has
+    /// never configured a channel — or whose only channel is currently refusing everything — stops
+    /// being a workspace nobody can reach, for every event this class raises, not only the one where
+    /// no alert rule exists at all.
+    ///
+    /// <para>
+    /// Every active member, not merely admins — N3 §7 Q2 answers differently for this row than N1
+    /// answered it for the admin-only email fallback below: paging somebody's phone for every event
+    /// nobody asked them about is noise a Viewer never signed up for, but a row waiting in an inbox
+    /// they do not have to open costs them nothing until N5 makes it tunable. "Not in N3: preferences"
+    /// — everyone gets the in-app copy of everything the workspace is told.
+    /// </para>
+    ///
+    /// <para>
+    /// Runs on its own isolated scope, the same reasoning <see cref="EnqueueDeliveryAsync"/> documents:
+    /// this must persist regardless of what the caller does afterward, and must not flush whatever the
+    /// caller's own unit of work (a batched collector tick, a pipeline's failure path) has not saved
+    /// yet.
+    /// </para>
+    /// </summary>
+    private async Task FanOutInAppAsync(
+        Guid workspaceId, AlertSeverity severity, string title, string body, CancellationToken ct)
+    {
+        var memberUserIds = await db.WorkspaceMembers
+            .Where(m => m.WorkspaceId == workspaceId && m.User!.IsActive)
+            .Select(m => m.UserId)
+            .Distinct()
+            .ToListAsync(ct);
+
+        if (memberUserIds.Count == 0) return; // Nobody in the workspace at all — nothing to write.
+
+        using var scope = scopeFactory.CreateScope();
+        var scopedDb = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+        foreach (var userId in memberUserIds)
+            scopedDb.UserNotifications.Add(new Domain.Notifications.UserNotification
+            {
+                WorkspaceId = workspaceId,
+                UserId = userId,
+                Severity = severity,
+                Title = title,
+                Body = body
+            });
+
+        await scopedDb.SaveChangesAsync(ct);
     }
 
     /// <summary>
