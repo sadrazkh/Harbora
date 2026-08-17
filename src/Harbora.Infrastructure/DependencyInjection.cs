@@ -327,6 +327,15 @@ public static class DependencyInjection
         // Raises the SSL-expiry alert the rule engine has always offered but nothing ever fired.
         services.AddHostedService<Monitoring.CertificateWatcher>();
 
+        // N5 (2026-08-16 notification-system spec, "noise control"): per-user preferences, the digest
+        // job and the weekly report. The service reads/writes NotificationPreference directly; the
+        // runner is what NotificationDigestScheduler's timer and its own tests both call.
+        services.AddScoped<Notifications.NotificationPreferenceService>();
+        services.Configure<Notifications.NotificationDigestOptions>(
+            config.GetSection(Notifications.NotificationDigestOptions.SectionName));
+        services.AddScoped<Notifications.NotificationDigestRunner>();
+        services.AddHostedService<Notifications.NotificationDigestScheduler>();
+
         // The Learning Centre: the nine tutorial chapters in docs/tutorial, rendered on request (see
         // Learning.LearningLibrary). Left unregistered by the task that built the library, because
         // only its first consumer — the controller — knows the production root to give it, and that

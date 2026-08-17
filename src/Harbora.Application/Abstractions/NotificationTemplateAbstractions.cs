@@ -36,4 +36,28 @@ public interface INotificationTemplateCatalog
     /// must still receive a notification, not a failed background job.
     /// </summary>
     RenderedNotification Render(Domain.Notifications.NotificationEventData data, string? culture);
+
+    /// <summary>
+    /// N5 (2026-08-16 notification-system spec, "noise control"): several already-rendered
+    /// <see cref="DigestLine"/>s, folded into one email — the hourly/daily digest job's own render.
+    /// Each line was rendered once already, at the moment it was queued, in the same reader's own
+    /// culture this call is given again; nothing here re-derives words from an <c>AlertEvent</c>, it
+    /// only composes what already exists into one subject and one body. Never called with an empty
+    /// list — <c>NotificationDigestRunner</c> only ever folds a non-empty batch.
+    /// </summary>
+    RenderedNotification RenderDigest(IReadOnlyList<DigestLine> lines, string? culture);
+
+    /// <summary>N5: the opt-in weekly summary — a count of what a person's own <c>UserNotification</c>
+    /// rows held over the period, by severity.</summary>
+    RenderedNotification RenderWeeklyReport(WeeklyReportSummary summary, string? culture);
 }
+
+/// <summary>One already-rendered line waiting for a digest — the in-memory shape of a
+/// <c>Harbora.Domain.Notifications.NotificationDigestEntry</c> row, without a dependency from this
+/// project onto <c>Harbora.Domain</c>'s notification tables themselves.</summary>
+public sealed record DigestLine(string Title, string Body, Domain.Common.AlertSeverity Severity);
+
+/// <summary>What a person's opt-in weekly report says: how many of their own <c>UserNotification</c>
+/// rows fell in <c>[PeriodStart, PeriodEnd]</c>, by severity.</summary>
+public sealed record WeeklyReportSummary(
+    int CriticalCount, int WarningCount, int InfoCount, DateTimeOffset PeriodStart, DateTimeOffset PeriodEnd);

@@ -59,6 +59,36 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
     }
 
     /// <summary>
+    /// N5 ("noise control"): composes, never re-derives — every <see cref="DigestLine"/> was already
+    /// rendered once, in this same reader's own culture, at the moment <c>NotificationService</c>
+    /// queued it. This only joins them into one subject and one body, through the same
+    /// <see cref="Wrap"/> every other template shares, so the digest email looks like the rest of the
+    /// platform's mail rather than a separate format invented for it.
+    /// </summary>
+    public RenderedNotification RenderDigest(IReadOnlyList<DigestLine> lines, string? culture)
+    {
+        var isFa = !string.Equals(culture, "en", StringComparison.OrdinalIgnoreCase);
+        var subject = isFa
+            ? $"{lines.Count} بروزرسانی در انتظار شماست"
+            : $"{lines.Count} update{(lines.Count == 1 ? "" : "s")} waiting for you";
+        var text = string.Join("\n\n", lines.Select(l => $"{l.Title}\n{l.Body}"));
+        return new RenderedNotification(subject, text, Wrap(text, isFa));
+    }
+
+    /// <summary>N5: the opt-in weekly summary, one sentence of counts by severity.</summary>
+    public RenderedNotification RenderWeeklyReport(WeeklyReportSummary summary, string? culture)
+    {
+        var isFa = !string.Equals(culture, "en", StringComparison.OrdinalIgnoreCase);
+        var subject = isFa ? "خلاصه هفتگی شما" : "Your weekly summary";
+        var text = isFa
+            ? $"در بازه {summary.PeriodStart:yyyy-MM-dd} تا {summary.PeriodEnd:yyyy-MM-dd}: " +
+              $"{summary.CriticalCount} بحرانی، {summary.WarningCount} هشدار و {summary.InfoCount} اطلاعاتی."
+            : $"From {summary.PeriodStart:yyyy-MM-dd} to {summary.PeriodEnd:yyyy-MM-dd}: " +
+              $"{summary.CriticalCount} critical, {summary.WarningCount} warning and {summary.InfoCount} informational.";
+        return new RenderedNotification(subject, text, Wrap(text, isFa));
+    }
+
+    /// <summary>
     /// The one mechanically-derived part of a template: escape the text alternative into a minimal,
     /// direction-aware HTML document. Every event's <em>words</em> come from the switch below;
     /// this is only the markup they are poured into, so seven templates do not each repeat the same
