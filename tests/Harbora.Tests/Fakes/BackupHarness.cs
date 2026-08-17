@@ -104,8 +104,14 @@ public sealed class BackupHarness : IDisposable
     }
 
     /// <summary>A PostgreSQL database scheduled on the given server, with its workspace.</summary>
+    /// <param name="environmentId">
+    /// Placed in this environment when given — <see cref="SeedEnvironmentAsync"/> makes one. Left
+    /// null reproduces a service that predates projects/environments (still legal until P2 makes the
+    /// column required), which is what every call site here did before P3 needed to tell the two
+    /// apart.
+    /// </param>
     public async Task<Harbora.Domain.Services.ManagedService> SeedDatabaseAsync(
-        Guid serverId, string name = "orders")
+        Guid serverId, string name = "orders", Guid? environmentId = null)
     {
         await EnsureWorkspaceAsync();
 
@@ -113,6 +119,7 @@ public sealed class BackupHarness : IDisposable
         {
             Id = Guid.NewGuid(),
             WorkspaceId = WorkspaceId,
+            EnvironmentId = environmentId,
             ServerId = serverId,
             Name = name,
             Type = ManagedServiceType.PostgreSql,
@@ -128,6 +135,29 @@ public sealed class BackupHarness : IDisposable
         Db.ManagedServices.Add(service);
         await Db.SaveChangesAsync();
         return service;
+    }
+
+    /// <summary>
+    /// A project and one environment inside it, in this harness's workspace — what a database has to
+    /// be placed in before it gets a network of its own rather than the shared workspace one.
+    /// </summary>
+    public async Task<Guid> SeedEnvironmentAsync(string projectSlug = "shop", string environmentSlug = "prod")
+    {
+        await EnsureWorkspaceAsync();
+
+        var project = new Harbora.Domain.Projects.Project
+        {
+            Id = Guid.NewGuid(), WorkspaceId = WorkspaceId, Name = projectSlug, Slug = projectSlug
+        };
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            Id = Guid.NewGuid(), WorkspaceId = WorkspaceId, ProjectId = project.Id,
+            Name = environmentSlug, Slug = environmentSlug, IsDefault = true
+        };
+        Db.Projects.Add(project);
+        Db.Environments.Add(environment);
+        await Db.SaveChangesAsync();
+        return environment.Id;
     }
 
     /// <summary>An application on the given server, declaring one docker volume by name.</summary>

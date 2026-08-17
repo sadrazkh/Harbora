@@ -287,10 +287,12 @@ public sealed class DeploymentPipeline(
             var workspaceNetwork = _opt.WorkspaceNetwork(wsSlug);
 
             // Each environment gets its own private network, so staging cannot reach production's
-            // database by name. During the move both are attached — see NetworkPlan: a service that
-            // has redeployed must stay reachable by the ones that have not.
+            // database by name. The workspace network is only the fallback for an app placed before
+            // projects and environments existed and never reassigned (see NetworkPlan) — P3
+            // (2026-08-17 app-environment-management design) retired the dual attach every placed
+            // workload used to carry while backup, restore and rotation still depended on it.
             var environmentNetwork = await ResolveEnvironmentNetworkAsync(app, ct);
-            var networks = Networking.NetworkPlan.For(environmentNetwork, workspaceNetwork, keepWorkspaceNetwork: true);
+            var networks = Networking.NetworkPlan.For(environmentNetwork, workspaceNetwork);
             var network = Networking.NetworkPlan.Primary(environmentNetwork, workspaceNetwork);
 
             foreach (var name in networks) await docker.EnsureNetworkAsync(name, ct);
@@ -463,8 +465,11 @@ public sealed class DeploymentPipeline(
             // itself throwing, e.g.) flush a state describing a container that was never started.
             app.PrivateAddressState = privateAddress.Outcome;
 
-            // A container is created on one network; the rest are attached now. Both are needed
-            // only while the platform moves to per-environment networks (see NetworkPlan).
+            // A container is created on one network; anything past the first would be attached here.
+            // NetworkPlan.For returns a single name for a placed workload now (P3, 2026-08-17
+            // app-environment-management design), so this loop is empty in practice — left iterating
+            // the list rather than hard-coded to one name, because a workload with no environment
+            // still gets exactly one name too, just a different one, through the same shape.
             foreach (var extra in networks.Skip(1))
                 await docker.ConnectNetworkAsync(containerName, extra, ct);
 

@@ -233,6 +233,14 @@ public sealed class BackupEngine(
         var image = $"{definition.ImageRepo}:{svc.Version}";
         var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
 
+        // On the database's own environment network once it has one, not the workspace network the
+        // whole tenant shares — see NetworkForAsync's own comment on ManagedServiceEngine. The
+        // workspace network is only reachable here today because of the dual attach every workload
+        // still carries; P3 (2026-08-17 app-environment-management design) moves this one-off off it
+        // ahead of that attach going away, so a dump does not go quiet the day it does.
+        var environmentNetwork = await Networking.EnvironmentNetworkResolver.ForAsync(db, svc.EnvironmentId, ct);
+        var network = Networking.NetworkPlan.Primary(environmentNetwork, _runtime.WorkspaceNetwork(wsSlug));
+
         var docker = RequireCapableHost(await HostForServiceAsync(svc, ct), "be exported");
 
         var output = new System.Text.StringBuilder();
@@ -241,7 +249,7 @@ public sealed class BackupEngine(
             plan.Command,
             [(_opt.StagingVolume, "/backup", false)],
             Env: plan.Env,
-            NetworkMode: _runtime.WorkspaceNetwork(wsSlug)),
+            NetworkMode: network),
             new Deployments.InlineProgress<string>(line => { lock (output) output.AppendLine(line); }), ct);
 
         if (exit != 0)
@@ -441,7 +449,11 @@ public sealed class BackupEngine(
             svc.ContainerName, definition.Port, svc.Username, RevealPassword(svc.EncryptedPassword), svc.DatabaseName);
         var image = $"{definition.ImageRepo}:{svc.Version}";
         var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
-        var network = _runtime.WorkspaceNetwork(wsSlug);
+
+        // Same network the dump above reaches this database on — the environment's own once it has
+        // one. Both the safety dump below and the restore itself share this value.
+        var environmentNetwork = await Networking.EnvironmentNetworkResolver.ForAsync(db, svc.EnvironmentId, ct);
+        var network = Networking.NetworkPlan.Primary(environmentNetwork, _runtime.WorkspaceNetwork(wsSlug));
 
         // Before the safety dump, so a host that cannot take one also cannot start the restore that
         // dump exists to protect.
@@ -952,7 +964,8 @@ public sealed class BackupEngine(
         var plan = RestoreRehearsal.For(svc.Type, creds, $"/backup/{fileName}", backup.Id)!;
         var image = $"{definition.ImageRepo}:{svc.Version}";
         var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
-        var network = _runtime.WorkspaceNetwork(wsSlug);
+        var environmentNetwork = await Networking.EnvironmentNetworkResolver.ForAsync(db, svc.EnvironmentId, ct);
+        var network = Networking.NetworkPlan.Primary(environmentNetwork, _runtime.WorkspaceNetwork(wsSlug));
 
         async Task<(int Exit, string Output)> RunAsync(IReadOnlyList<string> command, bool mountBackups)
         {

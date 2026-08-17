@@ -81,16 +81,19 @@ public static class EnvironmentPlacementReport
 
         // ---- Q3: workloads that would attach to more than one network today ----
         //
-        // NetworkPlan.For(environmentNetwork, workspaceNetwork, keepWorkspaceNetwork) returns two
-        // names — [environment, workspace] — whenever environmentNetwork is non-null, and both
-        // production call sites (DeploymentPipeline.cs, ManagedServiceEngine.cs) hardcode
-        // keepWorkspaceNetwork: true. environmentNetwork is non-null exactly when EnvironmentId is
-        // set and the FK it names still resolves — which, since the column is a real foreign key with
-        // DeleteBehavior.SetNull, is every non-null EnvironmentId. So the dual-attach count is exactly
-        // the count of placed workloads; a cron job's own ephemeral run container is a distinct,
-        // single-network case (CronJobRunner uses NetworkPlan.Primary) and is not counted here.
-        var dualAttachCount = apps.Count(a => a.EnvironmentId is not null)
-                               + services.Count(s => s.EnvironmentId is not null);
+        // Answered zero, always, since P3 (2026-08-17 app-environment-management design): the dual
+        // attach this question was about is gone. NetworkPlan.For used to return two names —
+        // [environment, workspace] — whenever an environment network existed, because both production
+        // call sites (DeploymentPipeline.cs, ManagedServiceEngine.cs) hardcoded keepWorkspaceNetwork:
+        // true. P3 moved every one-off that reached a database on the workspace network onto the
+        // workload's own environment network first — BackupEngine's dump, restore and restore
+        // rehearsal, the backup module's stager, and ManagedServiceEngine's rotation — proved each one
+        // still worked, and only then deleted the parameter. NetworkPlan.For now returns a single name
+        // unconditionally, so no workload can attach to more than one network through it any more.
+        // Left as a field, not removed, because P1's report shape is what an operator reads before a
+        // migration, and a section that silently disappeared would read as "not checked" rather than
+        // "checked, and the answer is now always zero".
+        var dualAttachCount = 0;
 
         // ---- Q4: a workspace with a workload but no project ----
 
@@ -155,7 +158,7 @@ public static class EnvironmentPlacementReport
 
         w.AppendLine($"3) Workloads that would attach to more than one network today: " +
                       $"{report.DualAttachWorkloadCount} of {report.TotalWorkloadCount}");
-        w.AppendLine("   (every workload with an environment dual-attaches today; see NetworkPlan.For)");
+        w.AppendLine("   (always zero since P3 retired the dual attach; see NetworkPlan.For)");
         w.AppendLine();
 
         w.AppendLine($"4) Workspaces with a workload but no project: {report.WorkspacesWithWorkloadsButNoProject.Count}");

@@ -113,11 +113,12 @@ internal sealed class RotationHarness : IDisposable
         Clock,
         NullLogger<ManagedServiceEngine>.Instance);
 
-    public async Task<ManagedService> SeedDatabaseAsync(string name)
+    public async Task<ManagedService> SeedDatabaseAsync(string name, Guid? environmentId = null)
     {
         var service = new ManagedService
         {
             WorkspaceId = _workspaceId,
+            EnvironmentId = environmentId,
             ServerId = Guid.CreateVersion7(),
             Name = name,
             Type = ManagedServiceType.PostgreSql,
@@ -133,6 +134,24 @@ internal sealed class RotationHarness : IDisposable
         _db.ManagedServices.Add(service);
         await _db.SaveChangesAsync();
         return service;
+    }
+
+    /// <summary>A project and one environment inside it, in this harness's workspace.</summary>
+    public async Task<Guid> SeedEnvironmentAsync(string projectSlug = "shop", string environmentSlug = "prod")
+    {
+        var project = new Harbora.Domain.Projects.Project
+        {
+            Id = Guid.NewGuid(), WorkspaceId = _workspaceId, Name = projectSlug, Slug = projectSlug
+        };
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            Id = Guid.NewGuid(), WorkspaceId = _workspaceId, ProjectId = project.Id,
+            Name = environmentSlug, Slug = environmentSlug, IsDefault = true
+        };
+        _db.Projects.Add(project);
+        _db.Environments.Add(environment);
+        await _db.SaveChangesAsync();
+        return environment.Id;
     }
 
     /// <summary>What <c>AttachEnv</c> produces for a database as it stands right now, decrypting its

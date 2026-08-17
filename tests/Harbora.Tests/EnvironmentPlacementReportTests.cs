@@ -169,12 +169,17 @@ public class EnvironmentPlacementReportTests
 
     // ---- question 3: workloads that would attach to more than one network today ----
 
+    /// <summary>
+    /// Inverted by P3 (2026-08-17 app-environment-management design): a placed workload used to
+    /// dual-attach unconditionally, because both production call sites hardcoded
+    /// <c>keepWorkspaceNetwork: true</c>. P3 moved every one-off that reached a database on the
+    /// workspace network onto the workload's own environment network and then deleted that
+    /// parameter, so <c>NetworkPlan.For</c> now returns exactly one name — a placed workload no
+    /// longer dual-attaches, and this count is zero regardless of placement.
+    /// </summary>
     [Fact]
-    public async Task A_workload_placed_in_an_environment_counts_toward_the_dual_attach_total()
+    public async Task A_workload_placed_in_an_environment_no_longer_counts_toward_the_dual_attach_total()
     {
-        // NetworkPlan.For returns [environment, workspace] whenever an environment network exists,
-        // and both production call sites hardcode keepWorkspaceNetwork: true — so a placed workload
-        // dual-attaches today, unconditionally.
         await using var db = NewDb();
         var workspace = Seed(db);
         var (_, environment) = SeedPlacement(db, workspace);
@@ -187,13 +192,15 @@ public class EnvironmentPlacementReportTests
 
         var report = await EnvironmentPlacementReport.BuildAsync(db);
 
-        report.DualAttachWorkloadCount.Should().Be(1);
+        report.DualAttachWorkloadCount.Should().Be(0);
+        report.TotalWorkloadCount.Should().Be(1);
     }
 
     [Fact]
     public async Task A_workload_with_no_environment_does_not_count_toward_the_dual_attach_total()
     {
-        // No environment network to resolve, so NetworkPlan.For returns [workspace] alone.
+        // No environment network to resolve, so NetworkPlan.For returns [workspace] alone — and
+        // did even before P3, since the dual attach only ever applied to a placed workload.
         await using var db = NewDb();
         var workspace = Seed(db);
         db.Apps.Add(new App

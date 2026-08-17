@@ -93,12 +93,12 @@ public sealed class ManagedServiceEngine(
             var image = $"{def.ImageRepo}:{svc.Version}";
 
             // On its environment's own network, so a staging service cannot reach a production
-            // database by name. The workspace network stays attached while the platform moves over
-            // — see NetworkPlan — or apps that have not redeployed lose their database.
+            // database by name — the workspace network is only the fallback for a service placed
+            // before projects and environments existed (see NetworkPlan).
             var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
             var workspaceNetwork = _opt.WorkspaceNetwork(wsSlug);
             var environmentNetwork = await ResolveEnvironmentNetworkAsync(svc, ct);
-            var networks = Networking.NetworkPlan.For(environmentNetwork, workspaceNetwork, keepWorkspaceNetwork: true);
+            var networks = Networking.NetworkPlan.For(environmentNetwork, workspaceNetwork);
             var network = Networking.NetworkPlan.Primary(environmentNetwork, workspaceNetwork);
 
             foreach (var name in networks) await docker.EnsureNetworkAsync(name, ct);
@@ -258,19 +258,8 @@ public sealed class ManagedServiceEngine(
         return Networking.NetworkPlan.Primary(environmentNetwork, _opt.WorkspaceNetwork(wsSlug));
     }
 
-    private async Task<string?> ResolveEnvironmentNetworkAsync(Domain.Services.ManagedService svc, CancellationToken ct)
-    {
-        if (svc.EnvironmentId is not { } environmentId) return null;
-
-        var placement = await db.Environments
-            .Where(e => e.Id == environmentId)
-            .Select(e => new { e.Slug, ProjectSlug = e.Project!.Slug })
-            .FirstOrDefaultAsync(ct);
-
-        return placement is null
-            ? null
-            : Networking.EnvironmentNetwork.For(placement.ProjectSlug, placement.Slug, environmentId);
-    }
+    private Task<string?> ResolveEnvironmentNetworkAsync(Domain.Services.ManagedService svc, CancellationToken ct) =>
+        Networking.EnvironmentNetworkResolver.ForAsync(db, svc.EnvironmentId, ct);
 
     /// <summary>
     /// Starts a stopped database, after asking whether the workspace may start anything.
@@ -435,7 +424,15 @@ public sealed class ManagedServiceEngine(
 
         var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
         var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
-        var network = _opt.WorkspaceNetwork(wsSlug);
+
+        // On the network the database actually answers on — its environment's, once it has one —
+        // rather than the workspace network directly. TestConnectionAsync got this right already;
+        // rotation used to be the one caller still reaching straight for the workspace network, which
+        // is exactly the path P3 (2026-08-17 app-environment-management design) moves off it: the
+        // workspace network is being retired underneath every one-off container that touches a
+        // customer's database.
+        var environmentNetwork = await ResolveEnvironmentNetworkAsync(svc, ct);
+        var network = Networking.NetworkPlan.Primary(environmentNetwork, _opt.WorkspaceNetwork(wsSlug));
 
         if (CredentialRotationPlan.For(svc.Type, current, newPassword) is { } plan)
         {

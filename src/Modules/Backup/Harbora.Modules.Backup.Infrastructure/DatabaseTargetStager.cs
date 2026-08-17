@@ -89,13 +89,21 @@ public sealed class DatabaseTargetStager(
         var workspaceSlug = await db.Workspaces.IgnoreQueryFilters()
             .Where(w => w.Id == service.WorkspaceId).Select(w => w.Slug).FirstOrDefaultAsync(ct);
 
+        // The database's own environment network once it has one, rather than the workspace network
+        // every tenant shares — the same move BackupEngine's dump and restore make, and for the same
+        // reason: the workspace network is only reachable here today because of the dual attach, and
+        // P3 (2026-08-17 app-environment-management design) moves this one-off off it first.
+        var environmentNetwork = await Harbora.Infrastructure.Networking.EnvironmentNetworkResolver
+            .ForAsync(db, service.EnvironmentId, ct);
+        var workspaceNetwork = workspaceSlug is null ? null : runtime.Value.WorkspaceNetwork(workspaceSlug);
+
         var connection = new DatabaseConnection(
             service.ContainerName, definition.Port, service.Username, password, service.DatabaseName);
 
         var execution = new DatabaseExecutionContext(
             // The database's OWN image at ITS version, so the client always matches the server.
             $"{definition.ImageRepo}:{service.Version}",
-            workspaceSlug is null ? null : runtime.Value.WorkspaceNetwork(workspaceSlug),
+            environmentNetwork ?? workspaceNetwork,
             _options.StagingVolume,
             DatabaseDumpCommands.ContainerMountPath);
 
