@@ -209,6 +209,12 @@ public class DataRetentionSweeperTests
                 CreatedAt = Now.AddDays(-89)
             });
 
+        // N2 (2026-08-16 notification-system spec). AlertDedupMarkDays defaults to 7, so the cutoff
+        // sits a week back from Now rather than the 90-day shape most of this fixture uses.
+        db.AlertDedupMarks.AddRange(
+            new Harbora.Domain.Monitoring.AlertDedupMark { Key = "dedup-old", FiredAt = Now.AddDays(-8) },
+            new Harbora.Domain.Monitoring.AlertDedupMark { Key = "dedup-new", FiredAt = Now.AddDays(-6) });
+
         await db.SaveChangesAsync();
     }
 
@@ -236,12 +242,13 @@ public class DataRetentionSweeperTests
             .Which.CompletedAt.Should().Be(Now.AddDays(-29));
         db.AlertIncidents.IgnoreQueryFilters().Should().ContainSingle().Which.Title.Should().Be("new");
         db.NotificationDeliveries.Should().ContainSingle().Which.Subject.Should().Be("new");
+        db.AlertDedupMarks.Should().ContainSingle().Which.Key.Should().Be("dedup-new");
 
-        // Twelve tables, one row each — and the sweep says so, rather than reporting a bare total
+        // Thirteen tables, one row each — and the sweep says so, rather than reporting a bare total
         // that could hide a table it never reached.
-        result.Deleted.Should().HaveCount(12);
+        result.Deleted.Should().HaveCount(13);
         result.Deleted.Values.Should().AllSatisfy(n => n.Should().Be(1));
-        result.TotalDeleted.Should().Be(12);
+        result.TotalDeleted.Should().Be(13);
     }
 
     [Fact]
@@ -259,8 +266,8 @@ public class DataRetentionSweeperTests
         result.Failures.Should().ContainKey(RetentionTables.NodeEvents);
         result.Failures[RetentionTables.NodeEvents].Should().Contain("relation is locked");
 
-        // The other eleven still ran.
-        result.Deleted.Should().HaveCount(11);
+        // The other twelve still ran.
+        result.Deleted.Should().HaveCount(12);
         result.Deleted.Should().NotContainKey(RetentionTables.NodeEvents);
         db.DeploymentLogs.Should().ContainSingle();
         db.AuditLogs.Should().ContainSingle();
@@ -286,7 +293,7 @@ public class DataRetentionSweeperTests
         result.Failures.Should().BeEmpty();
         result.KeptForever.Should().Contain(RetentionTables.DeploymentLogs);
         db.DeploymentLogs.Should().HaveCount(2, "a span too long to be a date means keep, not delete");
-        result.Deleted.Should().HaveCount(11, "every other table was still swept");
+        result.Deleted.Should().HaveCount(12, "every other table was still swept");
     }
 
     [Fact]
