@@ -4,6 +4,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Networking;
+using Harbora.Domain.Notifications;
 using Harbora.Infrastructure.Networking;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -642,8 +643,10 @@ public sealed class DeploymentPipeline(
                 () => stream.PublishLogAsync(deploymentId, LogStream.System, failureLine, CancellationToken.None),
                 "deploy log");
             await TellSomebody(
-                () => notifications.NotifyAsync(app.WorkspaceId, AlertEvent.DeployFailed, AlertSeverity.Critical,
-                    $"Deploy failed: {app.Name} #{deployment.Number}", reason, CancellationToken.None),
+                () => notifications.NotifyAsync(app.WorkspaceId,
+                    NotificationEventData.Create(AlertEvent.DeployFailed,
+                        ("AppName", app.Name), ("DeploymentNumber", deployment.Number.ToString()), ("Reason", reason)),
+                    AlertSeverity.Critical, CancellationToken.None),
                 "alert rules");
             // A fourth surface, and the same rule as the three above it: on its own token-free call,
             // guarded, so a customer's event handler cannot cost this deployment its failure record.

@@ -144,8 +144,15 @@ public interface INotificationService
     /// notification sent to nobody; the failure of a channel that <i>exists</i> is a different fact
     /// and is written back onto the rule, where a broken channel is meant to be read.
     /// </para>
+    ///
+    /// <para>
+    /// N4 (2026-08-16 notification-system spec, "in the reader's own language"): <paramref name="evt"/>
+    /// carries what happened and what it happened to, not a pre-built sentence — a raise site's job
+    /// stops at the facts, and this renders them per recipient, in that recipient's own
+    /// <c>User.PreferredCulture</c>, via <c>INotificationTemplateCatalog</c>.
+    /// </para>
     /// </summary>
-    Task<int> NotifyAsync(Guid workspaceId, Domain.Common.AlertEvent evt, Domain.Common.AlertSeverity severity, string title, string body, CancellationToken ct);
+    Task<int> NotifyAsync(Guid workspaceId, Domain.Notifications.NotificationEventData evt, Domain.Common.AlertSeverity severity, CancellationToken ct);
 
     /// <summary>
     /// Deliver through one specific rule, whatever its event opt-ins say.
@@ -156,7 +163,7 @@ public interface INotificationService
     /// evaluator, which already holds the row.
     /// </summary>
     Task<NotificationResult> NotifyRuleAsync(
-        Guid alertId, Domain.Common.AlertSeverity severity, string title, string body, CancellationToken ct);
+        Guid alertId, Domain.Notifications.NotificationEventData evt, Domain.Common.AlertSeverity severity, CancellationToken ct);
 
     /// <summary>Send a one-off test message to a single alert (for the "test" button).</summary>
     /// <summary>

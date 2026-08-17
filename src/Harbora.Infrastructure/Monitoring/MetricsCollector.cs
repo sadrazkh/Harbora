@@ -2,6 +2,7 @@
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Monitoring;
+using Harbora.Domain.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -139,6 +140,7 @@ public sealed class MetricsCollector(
 
             bool breached;
             string subject, body;
+            NotificationEventData evt;
 
             if (rule.Metric == AlertMetric.RestartRate)
             {
@@ -156,6 +158,14 @@ public sealed class MetricsCollector(
                 subject = $"{app.Name}: {restarts:0} restart(s) in {rule.SustainedMinutes} minute(s)";
                 body = $"{app.Name} has restarted {restarts:0} time(s) in the last {rule.SustainedMinutes} " +
                        $"minute(s) — at or above the configured {rule.ThresholdPercent:0}.";
+                // N4 (2026-08-16 notification-system spec): what happened (restarted N times) and what
+                // it happened to (this app), not the sentence above — that sentence still exists only
+                // for the incident timeline, which N4 leaves in English (see the class-wide note where
+                // NotifyRuleAsync is called).
+                evt = NotificationEventData.Create(AlertEvent.ThresholdBreached,
+                    ("AppName", app.Name), ("Metric", rule.Metric.ToString()),
+                    ("Observed", restarts.ToString("0")), ("SustainedMinutes", rule.SustainedMinutes.ToString()),
+                    ("Threshold", rule.ThresholdPercent!.Value.ToString("0")));
             }
             else
             {
@@ -183,6 +193,10 @@ public sealed class MetricsCollector(
                 subject = $"{app.Name}: {unit} above {rule.ThresholdPercent:0}%";
                 body = $"{app.Name} has held above {rule.ThresholdPercent:0}% of its {unit} allocation " +
                        $"for {rule.SustainedMinutes} minute(s).";
+                evt = NotificationEventData.Create(AlertEvent.ThresholdBreached,
+                    ("AppName", app.Name), ("Metric", rule.Metric.ToString()),
+                    ("Threshold", rule.ThresholdPercent!.Value.ToString("0")),
+                    ("SustainedMinutes", rule.SustainedMinutes.ToString()));
             }
 
             if (!breached)
@@ -210,7 +224,7 @@ public sealed class MetricsCollector(
 
             // Through this rule specifically. Broadcasting a threshold to every channel in the
             // workspace would tell people who never asked about this app.
-            await notifications.NotifyRuleAsync(rule.Id, ThresholdRule.Severity, subject, body, ct);
+            await notifications.NotifyRuleAsync(rule.Id, evt, ThresholdRule.Severity, ct);
         }
 
         await db.SaveChangesAsync(ct);
@@ -395,13 +409,19 @@ public sealed class MetricsCollector(
 
             if (next == AppStatus.Crashed)
             {
+                // The incident's own text stays this exact English sentence — the M4 timeline is not
+                // in N4's scope (see NotificationTemplateCatalog's class doc). "Reason" below is a
+                // machine key ("CrashLooping"/"Exited"), not this phrase: the notification's own
+                // template chooses the words per reader, in their own language.
                 var how = observed == ObservedAppState.CrashLooping
                     ? "keeps crashing and being restarted"
                     : "exited unexpectedly";
                 await incidents.OpenAsync(app.WorkspaceId, AlertEvent.AppCrashed, app.Id.ToString(),
                     AlertSeverity.Critical, $"App crashed: {app.Name}", $"The container for '{app.Name}' {how}.", now, ct);
-                await notifications.NotifyAsync(app.WorkspaceId, AlertEvent.AppCrashed, AlertSeverity.Critical,
-                    $"App crashed: {app.Name}", $"The container for '{app.Name}' {how}.", ct);
+                var reasonKey = observed == ObservedAppState.CrashLooping ? "CrashLooping" : "Exited";
+                await notifications.NotifyAsync(app.WorkspaceId,
+                    NotificationEventData.Create(AlertEvent.AppCrashed, ("AppName", app.Name), ("Reason", reasonKey)),
+                    AlertSeverity.Critical, ct);
             }
             else if (wasCrashed)
             {
@@ -463,11 +483,10 @@ public sealed class MetricsCollector(
             if (!await dedup.ShouldFireAsync(key, now, ct)) return;
         }
 
+        var evt = NotificationEventData.Create(AlertEvent.DiskWarning,
+            ("ServerName", server.Name), ("Percent", pct.ToString()));
         foreach (var wsId in workspaceIds)
-        {
-            await notifications.NotifyAsync(wsId, AlertEvent.DiskWarning, AlertSeverity.Warning,
-                "Low disk space", $"Disk usage on {server.Name} is at {pct}%.", ct);
-        }
+            await notifications.NotifyAsync(wsId, evt, AlertSeverity.Warning, ct);
     }
 
     private static MonitoringMetric Metric(Guid serverId, string name, string? resource, double value, DateTimeOffset ts) =>

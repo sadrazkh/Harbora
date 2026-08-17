@@ -5,6 +5,7 @@ using Harbora.Domain.Billing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
 using Harbora.Domain.Mail;
+using Harbora.Domain.Notifications;
 using Harbora.Domain.Servers;
 using Harbora.Domain.Services;
 using Harbora.Domain.Tenancy;
@@ -920,8 +921,15 @@ public sealed class BillingTick(
                 AlertSeverity.Warning, title, body, clock.UtcNow, ct);
             await db.SaveChangesAsync(ct);
 
-            var rulesReached = await notifications.NotifyAsync(
-                workspace.Id, AlertEvent.LowBalance, AlertSeverity.Warning, title, body, ct);
+            // N4 (2026-08-16 notification-system spec): the incident above keeps saying it twice —
+            // it is a workspace-level fact with no reader, and LowBalanceMessage's own reasoning for
+            // that has not changed. NotifyAsync's own recipients are a different story: the in-app row
+            // and the admin-fallback path both name a real person now, with a real
+            // User.PreferredCulture, so this hands over the facts rather than either language's
+            // sentence and lets NotificationService pick per reader.
+            var evt = NotificationEventData.Create(AlertEvent.LowBalance,
+                ("WorkspaceName", workspace.Name), ("Hours", FlooredHours(wallet.BalanceMinor, hourCostMinor)));
+            var rulesReached = await notifications.NotifyAsync(workspace.Id, evt, AlertSeverity.Warning, ct);
 
             if (rulesReached > 0) return;
 
@@ -1052,19 +1060,28 @@ public sealed class BillingTick(
     /// the sentence somebody can act on — a balance in minor units is not.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Floored, never rounded: a warning that promises an hour the customer does not have is worse
+    /// than one that understates. Shared by <see cref="LowBalanceMessage"/> (the incident's own,
+    /// still-dual-language text) and the structured <c>NotificationEventData</c>
+    /// <c>ReviewLowBalanceAsync</c> hands <c>NotifyAsync</c> (N4, 2026-08-16 notification-system spec)
+    /// so the two never say a different number of hours.
+    ///
+    /// <para>
+    /// Invariant, so a pool thread that happens to be under fa-IR cannot format a figure in digits
+    /// the reader has never seen. Said plainly rather than left implicit: no test fails if that
+    /// argument is deleted, because .NET does not substitute native digits on this path today — it is
+    /// a guard against a format that grows one later, and against the habit of leaving the thread's
+    /// culture to decide what a machine-read message looks like.
+    /// </para>
+    /// </summary>
+    private static string FlooredHours(long balanceMinor, long hourCostMinor) =>
+        (balanceMinor <= 0 ? 0 : balanceMinor / hourCostMinor).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
     private static (string Title, string Body) LowBalanceMessage(
         string workspaceName, long balanceMinor, long hourCostMinor)
     {
-        // Floored, never rounded: a warning that promises an hour the customer does not have is
-        // worse than one that understates.
-        //
-        // Invariant, so a pool thread that happens to be under fa-IR cannot send a figure in digits
-        // the reader has never seen. Said plainly rather than left implicit: no test fails if that
-        // argument is deleted, because .NET does not substitute native digits on this path today —
-        // it is a guard against a format that grows one later, and against the habit of leaving the
-        // thread's culture to decide what a machine-read message looks like.
-        var hours = balanceMinor <= 0 ? 0 : balanceMinor / hourCostMinor;
-        var left = hours.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var left = FlooredHours(balanceMinor, hourCostMinor);
 
         var title = $"Balance running low: {workspaceName} — اعتبار رو به پایان است";
 

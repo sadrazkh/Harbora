@@ -171,7 +171,7 @@ public sealed class AdminSettingsController(
             await mailer.SendAsync(to,
                 IsFa ? "ایمیل آزمایشی Harbora" : "Harbora test email",
                 IsFa ? "اگر این را می‌خوانید، SMTP پلتفرم کار می‌کند." : "If you can read this, platform SMTP works.",
-                ct);
+                null, ct);
             TempData["Message"] = IsFa ? $"ایمیل آزمایشی به {to} رفت." : $"A test email went to {to}.";
         }
         catch (Exception e) when (e is not OperationCanceledException)

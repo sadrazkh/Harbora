@@ -6,6 +6,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Backups;
 using Harbora.Domain.Common;
+using Harbora.Domain.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -161,8 +162,9 @@ public sealed class BackupEngine(
             await incidents.OpenAsync(backup.WorkspaceId, AlertEvent.BackupFailed, backup.Id.ToString(),
                 AlertSeverity.Warning, $"Backup failed: {backup.Type}", ex.Message, clock.UtcNow, CancellationToken.None);
             await db.SaveChangesAsync(CancellationToken.None);
-            await notifications.NotifyAsync(backup.WorkspaceId, AlertEvent.BackupFailed, AlertSeverity.Warning,
-                $"Backup failed: {backup.Type}", ex.Message, ct);
+            var evt = NotificationEventData.Create(AlertEvent.BackupFailed,
+                ("TargetRef", $"{backup.Type} · {backup.TargetRef}"), ("Detail", ex.Message));
+            await notifications.NotifyAsync(backup.WorkspaceId, evt, AlertSeverity.Warning, ct);
         }
     }
 

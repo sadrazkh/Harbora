@@ -28,6 +28,20 @@ namespace Harbora.Infrastructure.Notifications;
 /// happens. <see cref="SendTestAsync"/> is unchanged: the panel's Test button wants the server's own
 /// words immediately, not a queued verdict.
 /// </para>
+///
+/// <para>
+/// N4 ("in the reader's own language"): <see cref="NotifyAsync"/>/<see cref="NotifyRuleAsync"/> no
+/// longer take a pre-built title/body — a raise site hands over a
+/// <see cref="NotificationEventData"/>, and this class is where rendering happens, via
+/// <see cref="catalog"/>. The in-app copy (<see cref="FanOutInAppAsync"/>) is rendered once per
+/// member, in that member's own <c>User.PreferredCulture</c> — the same event genuinely reads
+/// differently for two people in the same workspace. A channel delivery (Telegram, Discord, a
+/// webhook, or an alert's own email target) has no person attached to it, so it renders once, in the
+/// platform's default culture (<see cref="NotificationTemplateCatalog.DefaultCulture"/>) — the same
+/// default <c>User.PreferredCulture</c> already documents. The admin-fallback path
+/// (<see cref="EnqueueFallbackToAdminsAsync"/>) sits between the two: it names a real person by email,
+/// so it renders per admin, the same as the in-app fan-out.
+/// </para>
 /// </summary>
 public sealed class NotificationService(
     HarboraDbContext db,
@@ -38,6 +52,7 @@ public sealed class NotificationService(
     IServiceScopeFactory scopeFactory,
     ISystemClock clock,
     Microsoft.Extensions.Options.IOptions<NotificationOptions> options,
+    INotificationTemplateCatalog catalog,
     ILogger<NotificationService> logger) : INotificationService
 {
     private readonly NotificationOptions _options = options.Value;
@@ -60,39 +75,47 @@ public sealed class NotificationService(
     /// that has no other home — nothing throws and no row changes.
     /// </para>
     /// </summary>
-    public async Task<int> NotifyAsync(Guid workspaceId, AlertEvent evt, AlertSeverity severity, string title, string body, CancellationToken ct)
+    public async Task<int> NotifyAsync(Guid workspaceId, NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
     {
         var alerts = await db.Alerts
             .Where(a => a.WorkspaceId == workspaceId && a.IsEnabled && a.MinSeverity <= severity)
             .ToListAsync(ct);
 
-        var matching = alerts.Where(a => Matches(a, evt)).ToList();
+        var matching = alerts.Where(a => Matches(a, evt.Type)).ToList();
 
         // N3 ("told a person, not a channel"): the in-app copy is not the zero-rule fallback's
         // understudy below — it is written for every member whether or not any rule matched, and
-        // whether or not a channel exists at all. See FanOutInAppAsync for why.
-        await FanOutInAppAsync(workspaceId, severity, title, body, ct);
+        // whether or not a channel exists at all. See FanOutInAppAsync for why. N4: rendered once per
+        // member's own culture, not the single string every earlier version of this method built.
+        await FanOutInAppAsync(workspaceId, evt, severity, ct);
 
-        foreach (var alert in matching)
-            await EnqueueDeliveryAsync(new NotificationDelivery
-            {
-                WorkspaceId = workspaceId,
-                Purpose = NotificationDeliveryPurpose.AlertDispatch,
-                Channel = alert.Channel,
-                AlertId = alert.Id,
-                Severity = severity,
-                Subject = title,
-                EncryptedBody = protector.Protect(body)
-            }, ct);
+        if (matching.Count > 0)
+        {
+            // Rendered once, in the platform's default culture — a Telegram group or a webhook has no
+            // person to read PreferredCulture off, so every matching rule shares the one rendering
+            // rather than repeating the same render per rule.
+            var (encryptedBody, subject) = RenderForChannel(evt);
+            foreach (var alert in matching)
+                await EnqueueDeliveryAsync(new NotificationDelivery
+                {
+                    WorkspaceId = workspaceId,
+                    Purpose = NotificationDeliveryPurpose.AlertDispatch,
+                    Channel = alert.Channel,
+                    AlertId = alert.Id,
+                    Severity = severity,
+                    Subject = subject,
+                    EncryptedBody = encryptedBody
+                }, ct);
+        }
 
         // §3 way two: nothing seeds an Alert row, so a workspace that never visited the alerts page
         // matches zero rules here — not because it opted out, but because there was never anything to
         // opt out of. Every rule with sufficient severity that DID opt out of this event is left
         // alone: that is a choice the fallback below must not override, which is why this asks "does
         // any rule exist at all" rather than reusing `matching`.
-        if (matching.Count == 0 && evt != AlertEvent.Test
+        if (matching.Count == 0 && evt.Type != AlertEvent.Test
             && !await db.Alerts.AnyAsync(a => a.WorkspaceId == workspaceId, ct))
-            await EnqueueFallbackToAdminsAsync(workspaceId, severity, title, body, ct);
+            await EnqueueFallbackToAdminsAsync(workspaceId, evt, severity, ct);
 
         // Functions subscribe to the same happenings people do, so they are told from here rather
         // than from a second set of raise-sites kept in step by hand — the arrangement that ends with
@@ -100,13 +123,18 @@ public sealed class NotificationService(
         //
         // Deliberately outside the rule matching above: a workspace with no alert rules still has
         // functions, and making code depend on somebody having configured a notification channel
-        // would be an invisible coupling nobody could debug.
-        if (Domain.Functions.FunctionEvents.ForAlert(evt) is { } functionEventKey)
+        // would be an invisible coupling nobody could debug. Rendered at "en" specifically — a
+        // function reads event.data.title/body as a stable machine contract, not a message shown to a
+        // particular reader, and English is what that contract has always carried.
+        if (Domain.Functions.FunctionEvents.ForAlert(evt.Type) is { } functionEventKey)
+        {
+            var rendered = catalog.Render(evt, "en");
             await functionEvents.PublishAsync(
                 Domain.Functions.FunctionEvent.Create(
-                    functionEventKey, workspaceId, title,
-                    ("title", title), ("body", body), ("severity", severity.ToString())),
+                    functionEventKey, workspaceId, rendered.Subject,
+                    ("title", rendered.Subject), ("body", rendered.TextBody), ("severity", severity.ToString())),
                 ct);
+        }
 
         return matching.Count;
     }
@@ -124,7 +152,7 @@ public sealed class NotificationService(
     /// </para>
     /// </summary>
     public async Task<NotificationResult> NotifyRuleAsync(
-        Guid alertId, AlertSeverity severity, string title, string body, CancellationToken ct)
+        Guid alertId, NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
     {
         var alert = await db.Alerts.IgnoreQueryFilters().FirstOrDefaultAsync(a => a.Id == alertId, ct);
         if (alert is null) return NotificationResult.Failed("That alert rule no longer exists.");
@@ -132,8 +160,9 @@ public sealed class NotificationService(
 
         // N3: a per-app threshold breach is a workspace event too, so it gets the same in-app fan-out
         // NotifyAsync gives every other event — see FanOutInAppAsync.
-        await FanOutInAppAsync(alert.WorkspaceId, severity, title, body, ct);
+        await FanOutInAppAsync(alert.WorkspaceId, evt, severity, ct);
 
+        var (encryptedBody, subject) = RenderForChannel(evt);
         await EnqueueDeliveryAsync(new NotificationDelivery
         {
             WorkspaceId = alert.WorkspaceId,
@@ -141,11 +170,20 @@ public sealed class NotificationService(
             Channel = alert.Channel,
             AlertId = alert.Id,
             Severity = severity,
-            Subject = title,
-            EncryptedBody = protector.Protect(body)
+            Subject = subject,
+            EncryptedBody = encryptedBody
         }, ct);
 
         return NotificationResult.Ok;
+    }
+
+    /// <summary>Renders once, in the platform's default culture, for a destination with no person
+    /// attached — see the class doc for why a channel delivery does not ask a member's
+    /// <c>PreferredCulture</c> the way the in-app row and the admin fallback do.</summary>
+    private (string EncryptedBody, string Subject) RenderForChannel(NotificationEventData evt)
+    {
+        var rendered = catalog.Render(evt, NotificationTemplateCatalog.DefaultCulture);
+        return (protector.Protect(ChannelBody.Encode(rendered.TextBody, rendered.HtmlBody)), rendered.Subject);
     }
 
     public async Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct)
@@ -191,13 +229,15 @@ public sealed class NotificationService(
     };
 
     /// <summary>Used only by <see cref="SendTestAsync"/>: one attempt, swallowed into a
-    /// <see cref="NotificationResult"/> the panel's Test button can show immediately.</summary>
+    /// <see cref="NotificationResult"/> the panel's Test button can show immediately. Not templated —
+    /// see the class doc — so both languages get the identical text/HTML alternative.</summary>
     private async Task<NotificationResult> DispatchSafe(Alert alert, AlertSeverity severity, string title, string body, CancellationToken ct)
     {
         NotificationResult result;
         try
         {
-            await DispatchOnceAsync(alert.Channel, alert.EncryptedTarget, severity, title, body, ct);
+            await DispatchOnceAsync(alert.Channel, alert.EncryptedTarget, severity, title,
+                new ChannelBody(body, null), ct);
             result = NotificationResult.Ok;
         }
         catch (Exception ex)
@@ -219,7 +259,7 @@ public sealed class NotificationService(
     /// everything else propagates as whatever the sender itself threw.
     /// </summary>
     private async Task DispatchOnceAsync(
-        AlertChannel channel, string encryptedTarget, AlertSeverity severity, string title, string body, CancellationToken ct)
+        AlertChannel channel, string encryptedTarget, AlertSeverity severity, string title, ChannelBody body, CancellationToken ct)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(_options.DeliveryTimeout);
@@ -229,9 +269,9 @@ public sealed class NotificationService(
             var target = string.IsNullOrEmpty(encryptedTarget) ? "{}" : protector.Unprotect(encryptedTarget);
             await (channel switch
             {
-                AlertChannel.Telegram => SendTelegram(target, title, body, timeout.Token),
-                AlertChannel.Discord => SendDiscord(target, severity, title, body, timeout.Token),
-                AlertChannel.Webhook => SendWebhook(target, severity, title, body, timeout.Token),
+                AlertChannel.Telegram => SendTelegram(target, title, body.Text, timeout.Token),
+                AlertChannel.Discord => SendDiscord(target, severity, title, body.Text, timeout.Token),
+                AlertChannel.Webhook => SendWebhook(target, severity, title, body.Text, timeout.Token),
                 AlertChannel.Email => SendEmail(target, title, body, timeout.Token),
                 _ => Task.CompletedTask
             });
@@ -322,11 +362,15 @@ public sealed class NotificationService(
 
         try
         {
-            var body = protector.Unprotect(delivery.EncryptedBody);
+            // ChannelBody.Decode recognises N4's own {text, html} envelope and falls back to treating
+            // the whole decrypted string as plain text (Html: null) for anything else — every delivery
+            // OutboxMail.Queue ever wrote, and every row a restart-surviving job re-claims from before
+            // this class knew how to template anything.
+            var body = ChannelBody.Decode(protector.Unprotect(delivery.EncryptedBody));
             if (alert is not null)
                 await DispatchOnceAsync(alert.Channel, alert.EncryptedTarget, delivery.Severity, delivery.Subject, body, ct);
             else
-                await platformMailer.SendAsync(delivery.RecipientAddress!, delivery.Subject, body, ct);
+                await platformMailer.SendAsync(delivery.RecipientAddress!, delivery.Subject, body.Text, body.Html, ct);
 
             delivery.Status = NotificationDeliveryStatus.Sent;
             delivery.LastError = null;
@@ -423,6 +467,12 @@ public sealed class NotificationService(
     /// </para>
     ///
     /// <para>
+    /// N4: rendered once per member, in that member's own <c>User.PreferredCulture</c> — this is the
+    /// one place in the class where "the same event, two readers, two languages" is actually true,
+    /// because it is the one place that knows every reader by name.
+    /// </para>
+    ///
+    /// <para>
     /// Runs on its own isolated scope, the same reasoning <see cref="EnqueueDeliveryAsync"/> documents:
     /// this must persist regardless of what the caller does afterward, and must not flush whatever the
     /// caller's own unit of work (a batched collector tick, a pipeline's failure path) has not saved
@@ -430,27 +480,30 @@ public sealed class NotificationService(
     /// </para>
     /// </summary>
     private async Task FanOutInAppAsync(
-        Guid workspaceId, AlertSeverity severity, string title, string body, CancellationToken ct)
+        Guid workspaceId, NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
     {
-        var memberUserIds = await db.WorkspaceMembers
+        var members = await db.WorkspaceMembers
             .Where(m => m.WorkspaceId == workspaceId && m.User!.IsActive)
-            .Select(m => m.UserId)
+            .Select(m => new { m.UserId, m.User!.PreferredCulture })
             .Distinct()
             .ToListAsync(ct);
 
-        if (memberUserIds.Count == 0) return; // Nobody in the workspace at all — nothing to write.
+        if (members.Count == 0) return; // Nobody in the workspace at all — nothing to write.
 
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
-        foreach (var userId in memberUserIds)
+        foreach (var member in members)
+        {
+            var rendered = catalog.Render(evt, member.PreferredCulture);
             scopedDb.UserNotifications.Add(new Domain.Notifications.UserNotification
             {
                 WorkspaceId = workspaceId,
-                UserId = userId,
+                UserId = member.UserId,
                 Severity = severity,
-                Title = title,
-                Body = body
+                Title = rendered.Subject,
+                Body = rendered.TextBody
             });
+        }
 
         await scopedDb.SaveChangesAsync(ct);
     }
@@ -460,14 +513,19 @@ public sealed class NotificationService(
     /// workspace Admin, by email, rather than the fact vanishing the moment the dispatch loop ran zero
     /// times. Not every member: a Viewer or a Developer did not sign up to be paged for an
     /// unconfigured channel, and Admins are the smallest audience the owner's answer to §7 Q2 asks for.
+    ///
+    /// <para>
+    /// N4: an admin is a real person with a real <c>User.PreferredCulture</c> — unlike a channel
+    /// delivery, this renders per admin rather than once in the platform default.
+    /// </para>
     /// </summary>
     private async Task EnqueueFallbackToAdminsAsync(
-        Guid workspaceId, AlertSeverity severity, string title, string body, CancellationToken ct)
+        Guid workspaceId, NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
     {
         var admins = await db.WorkspaceMembers
             .Where(m => m.WorkspaceId == workspaceId && m.Role == Domain.Common.WorkspaceRole.Admin
                         && m.User!.IsActive)
-            .Select(m => m.User!.Email)
+            .Select(m => new { m.User!.Email, m.User!.PreferredCulture })
             .Distinct()
             .ToListAsync(ct);
 
@@ -476,14 +534,15 @@ public sealed class NotificationService(
             // Recorded as such rather than silently doing nothing: even a workspace with nobody at
             // all to tell leaves a row a person can find later, instead of this looking identical to
             // a successful, quiet delivery.
+            var (encryptedBody, subject) = RenderForChannel(evt);
             await EnqueueDeliveryAsync(new NotificationDelivery
             {
                 WorkspaceId = workspaceId,
                 Purpose = NotificationDeliveryPurpose.NoRecipientFallback,
                 Channel = AlertChannel.Email,
                 Severity = severity,
-                Subject = title,
-                EncryptedBody = protector.Protect(body),
+                Subject = subject,
+                EncryptedBody = encryptedBody,
                 Status = NotificationDeliveryStatus.Suppressed,
                 LastError = "This workspace has no alert rule and no admin to notify instead.",
                 LastAttemptAt = clock.UtcNow
@@ -491,17 +550,20 @@ public sealed class NotificationService(
             return;
         }
 
-        foreach (var email in admins)
+        foreach (var admin in admins)
+        {
+            var rendered = catalog.Render(evt, admin.PreferredCulture);
             await EnqueueDeliveryAsync(new NotificationDelivery
             {
                 WorkspaceId = workspaceId,
                 Purpose = NotificationDeliveryPurpose.NoRecipientFallback,
                 Channel = AlertChannel.Email,
-                RecipientAddress = email,
+                RecipientAddress = admin.Email,
                 Severity = severity,
-                Subject = title,
-                EncryptedBody = protector.Protect(body)
+                Subject = rendered.Subject,
+                EncryptedBody = protector.Protect(ChannelBody.Encode(rendered.TextBody, rendered.HtmlBody))
             }, ct);
+        }
     }
 
     /// <summary>
@@ -577,7 +639,13 @@ public sealed class NotificationService(
             throw new InvalidOperationException($"Refusing to call webhook URL: {reason}.");
     }
 
-    private async Task SendEmail(string target, string title, string body, CancellationToken ct)
+    /// <summary>
+    /// The one channel that gets a real HTML alternative (N4) — everything else already speaks its own
+    /// format. <see cref="ChannelBody.Html"/> is null for anything that reached this class before N4
+    /// templated it (a password reset, an invite), and <see cref="PlatformMailer.SendAsync"/> sends
+    /// plain-text-only mail in that case, exactly as it always has.
+    /// </summary>
+    private async Task SendEmail(string target, string title, ChannelBody body, CancellationToken ct)
     {
         var t = JsonSerializer.Deserialize<EmailTarget>(target, TargetJson)!;
 
@@ -586,7 +654,7 @@ public sealed class NotificationService(
         // for the installation that routes alerts through somewhere else.
         if (string.IsNullOrWhiteSpace(t.Host) && !string.IsNullOrWhiteSpace(t.To))
         {
-            await platformMailer.SendAsync(t.To, title, body, ct);
+            await platformMailer.SendAsync(t.To, title, body.Text, body.Html, ct);
             return;
         }
 
@@ -595,7 +663,9 @@ public sealed class NotificationService(
             EnableSsl = t.UseSsl,
             Credentials = new NetworkCredential(t.User, t.Password)
         };
-        using var message = new MailMessage(t.From, t.To, title, body);
+        using var message = new MailMessage(t.From, t.To, title, body.Text);
+        if (body.Html is { } html)
+            message.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(html, null, "text/html"));
         await client.SendMailAsync(message, ct);
     }
 

@@ -2,6 +2,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Networking;
+using Harbora.Domain.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -98,8 +99,19 @@ public sealed class CertificateWatcher(
             // channel is told again today.
             var dedupKey = $"ssl:{domain.Host}:{now:yyyy-MM-dd}";
             if (await dedup.ShouldFireAsync(dedupKey, now, ct))
-                await notifications.NotifyAsync(domain.WorkspaceId, AlertEvent.SslExpiring,
-                    alert.Severity, alert.Headline, alert.Detail, ct);
+            {
+                // Same facts CertificateAlert.Evaluate already worked out to word the incident above —
+                // recomputed rather than threaded through CertificateAlertMessage so that pure,
+                // independently-tested function stays exactly what it was.
+                var expiresAt = status.Probe.CertificateExpiresAt!.Value;
+                var expired = expiresAt <= now;
+                var evt = NotificationEventData.Create(AlertEvent.SslExpiring,
+                    ("Host", domain.Host), ("AppName", domain.Name),
+                    ("Expired", expired ? "true" : "false"),
+                    ("Days", expired ? "" : ((int)(expiresAt - now).TotalDays).ToString()),
+                    ("ExpiryDate", expiresAt.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)));
+                await notifications.NotifyAsync(domain.WorkspaceId, evt, alert.Severity, ct);
+            }
         }
 
         await db.SaveChangesAsync(ct);

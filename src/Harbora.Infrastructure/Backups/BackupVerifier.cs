@@ -1,6 +1,7 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
+using Harbora.Domain.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -69,9 +70,10 @@ public sealed class BackupVerifier(IServiceScopeFactory scopeFactory, ILogger<Ba
             $"The most recent {due.Type} backup of '{due.TargetRef}' failed its restore check. " +
             $"{result.Reason} Take a fresh backup and check it before relying on this one.", clock.UtcNow, ct);
         await db.SaveChangesAsync(ct);
-        await notifications.NotifyAsync(due.WorkspaceId, AlertEvent.BackupFailed, AlertSeverity.Critical,
-            "A backup would not restore",
-            $"The most recent {due.Type} backup of '{due.TargetRef}' failed its restore check. " +
-            $"{result.Reason} Take a fresh backup and check it before relying on this one.", ct);
+        var evt = NotificationEventData.Create(AlertEvent.BackupFailed,
+            ("TargetRef", due.TargetRef),
+            ("Detail", $"The most recent {due.Type} backup of '{due.TargetRef}' failed its restore check. " +
+                       $"{result.Reason} Take a fresh backup and check it before relying on this one."));
+        await notifications.NotifyAsync(due.WorkspaceId, evt, AlertSeverity.Critical, ct);
     }
 }

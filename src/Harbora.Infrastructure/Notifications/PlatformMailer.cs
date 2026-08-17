@@ -74,8 +74,16 @@ public sealed class PlatformMailer(
     /// <summary>
     /// Send one message. Throws with the server's own words on failure — the caller decides whether
     /// that is a form error (the test button) or a logged warning (a background notification).
+    ///
+    /// <para>
+    /// <paramref name="htmlBody"/> is null for every caller that has not gone through N4's templates
+    /// (2026-08-16 notification-system spec) — a password reset, an invite, the panel's own SMTP test
+    /// — and mail goes out exactly as it always has: plain text, no <c>IsBodyHtml</c>. Supplied, it is
+    /// added as an HTML alternate view alongside the plain-text body rather than replacing it, so a
+    /// mail client that cannot or will not render HTML still shows the same words.
+    /// </para>
     /// </summary>
-    public async Task SendAsync(string to, string subject, string body, CancellationToken ct)
+    public async Task SendAsync(string to, string subject, string body, string? htmlBody, CancellationToken ct)
     {
         var settings = await GetSettingsAsync(ct);
         if (!settings.IsConfigured)
@@ -86,6 +94,8 @@ public sealed class PlatformMailer(
             client.Credentials = new NetworkCredential(settings.User, settings.Password);
 
         using var message = new MailMessage(settings.From, to, subject, body);
+        if (htmlBody is not null)
+            message.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(htmlBody, null, "text/html"));
         await client.SendMailAsync(message, ct);
     }
 }

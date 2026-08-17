@@ -2,6 +2,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Jobs;
+using Harbora.Domain.Notifications;
 using Harbora.Modules.Backup.Contracts;
 using Harbora.Modules.Backup.Domain;
 using Microsoft.EntityFrameworkCore;
@@ -169,9 +170,17 @@ public sealed class BackupNotificationService(
             // Every backup-module event maps to BackupFailed today: it is the only backup-related
             // AlertEvent that exists, and adding members to that enum would change a shipped
             // platform contract for the sake of a module that is still behind a flag.
-            await notifications.NotifyAsync(
-                notification.WorkspaceId, AlertEvent.BackupFailed, severity,
-                notification.Title, notification.Detail, cancellationToken);
+            //
+            // N4 (2026-08-16 notification-system spec): the module's own ~ten event kinds
+            // (BackupNotificationKind) each still compose their own English Title/Detail deep inside
+            // this module — that is this bridge's own boundary, not a raise site the spec names, and
+            // reaching further in would mean templating a whole second module's vocabulary. What
+            // crosses the bridge is treated as free text, the same way a deploy's own failure reason
+            // is: the wrapper sentence around it is translated; Title/Detail themselves pass through
+            // untranslated, in whatever language the module composed them.
+            var evt = NotificationEventData.Create(AlertEvent.BackupFailed,
+                ("Detail", $"{notification.Title}: {notification.Detail}"));
+            await notifications.NotifyAsync(notification.WorkspaceId, evt, severity, cancellationToken);
 
             // Opened the same way the legacy backup engine opens one for its own failures: nothing in
             // this module re-checks a finished snapshot or a finished sync, so this closes only by a

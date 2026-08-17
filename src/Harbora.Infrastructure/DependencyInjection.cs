@@ -302,6 +302,10 @@ public static class DependencyInjection
         // deliberately not the same number as VerificationSchedule.StaleAfter or
         // StorageMeasurer.StaleAfter.
         services.Configure<Monitoring.MonitoringOptions>(config.GetSection(Monitoring.MonitoringOptions.SectionName));
+        // N4 (2026-08-16 notification-system spec, "in the reader's own language"): stateless, so a
+        // singleton — see NotificationTemplateCatalog's own doc for why this lives here rather than
+        // behind Harbora.Web's SharedResource/.resx.
+        services.AddSingleton<Application.Abstractions.INotificationTemplateCatalog, Notifications.NotificationTemplateCatalog>();
         services.AddScoped<INotificationService, Notifications.NotificationService>();
         // N1 (2026-08-16 notification-system spec): the job body for one queued NotificationDelivery.
         // Registered as an IJobHandler so JobDispatcher finds it without the core referencing this
