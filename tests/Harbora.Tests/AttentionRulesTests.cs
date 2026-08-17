@@ -121,6 +121,37 @@ public class AttentionRulesTests
     }
 
     [Fact]
+    public void A_failed_service_provision_links_to_the_database()
+    {
+        var serviceId = Guid.CreateVersion7();
+        var items = AttentionRules.Build(new AttentionFacts
+        {
+            HasAnyApp = true, HasAnyBackupSchedule = true,
+            FailedServices = [("orders-db", serviceId, "The database refused the new password.")]
+        });
+
+        var item = items.Should().ContainSingle().Subject;
+        item.Level.Should().Be(AttentionLevel.Critical);
+        item.TitleKey.Should().Be(AttentionRules.ServiceFailedTitle);
+        item.TitleArgs.Should().Equal("orders-db");
+        item.DetailText.Should().Contain("password", "the error itself is data and travels verbatim");
+        item.DetailKey.Should().BeNull("a real error message beats the generic fallback");
+        item.ActionUrl.Should().Be($"/databases/{serviceId}");
+    }
+
+    [Fact]
+    public void A_failed_service_provision_with_no_error_still_says_something()
+    {
+        var items = AttentionRules.Build(new AttentionFacts
+        {
+            HasAnyApp = true, HasAnyBackupSchedule = true,
+            FailedServices = [("orders-db", Guid.CreateVersion7(), null)]
+        });
+
+        items.Single().DetailKey.Should().Be(AttentionRules.ServiceFailedDetail);
+    }
+
+    [Fact]
     public void A_channel_that_stopped_delivering_is_surfaced()
     {
         // This is the finding that makes all the others reach anyone. A silent alert channel is why
@@ -221,6 +252,7 @@ public class AttentionRulesTests
             FailedDeployments = [("a", Deployment, null), ("b", Deployment, "x. y")],
             CrashedApps = [("c", AppId)],
             FailedBackups = [("d", null), ("e", "x. y")],
+            FailedServices = [("svc1", AppId, null), ("svc2", AppId, "x. y")],
             BrokenChannels = [("f", ChannelKind.Alert, "x"), ("g", ChannelKind.BackupDelivery, "x")],
             CertificateProblems =
             [

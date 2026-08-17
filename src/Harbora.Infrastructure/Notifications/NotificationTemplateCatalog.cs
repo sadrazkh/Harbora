@@ -132,6 +132,10 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
             "ساعت دیگر کافی است. با رسیدن اعتبار به صفر، برنامه‌ها و پایگاه‌های داده‌ی آن تا زمان شارژ حساب " +
             "متوقف می‌شوند."),
 
+        AlertEvent.ServiceProvisionFailed => (
+            $"راه‌اندازی ناموفق: {d.Get("ServiceName")}",
+            $"راه‌اندازی سرویس «{d.Get("ServiceName")}» با شکست مواجه شد.\n\n{d.Get("Reason")}"),
+
         // Test (a synchronous, unlocalised ping — see NotificationService.DispatchSafe) and any future
         // member appended without a same-day template both land here rather than throwing: a reader
         // still gets a notification, and NotificationTemplateCensusTests is what notices the gap.
@@ -165,6 +169,10 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
             $"Workspace \"{d.Get("WorkspaceName")}\" has about {d.Get("Hours")} more hour(s) of balance " +
             "at what the last hour cost it. When the balance reaches zero its apps and databases are " +
             "stopped until it is topped up."),
+
+        AlertEvent.ServiceProvisionFailed => (
+            $"Provisioning failed: {d.Get("ServiceName")}",
+            $"Provisioning of service \"{d.Get("ServiceName")}\" failed.\n\n{d.Get("Reason")}"),
 
         _ => ($"Event: {d.Type}", "")
     };

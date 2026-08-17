@@ -32,7 +32,10 @@ public sealed class ManagedServiceEngine(
     IBillingGate billing,
     IOptions<HarboraRuntimeOptions> options,
     ISystemClock clock,
-    ILogger<ManagedServiceEngine> logger) : IManagedServiceEngine
+    ILogger<ManagedServiceEngine> logger,
+    ISecretRedactor? redactor = null,
+    INotificationService? notifications = null,
+    Monitoring.IncidentService? incidents = null) : IManagedServiceEngine
 {
     private readonly HarboraRuntimeOptions _opt = options.Value;
 
@@ -68,12 +71,12 @@ public sealed class ManagedServiceEngine(
             svc.WorkspaceId, Domain.Billing.BilledResourceType.Service, svc.Id, ct);
         if (!mayStart.Allowed)
         {
-            // Nothing bilingual to decide here: ManagedService has no stored reason field, only the
-            // Status enum the screen already reads Failed off. mayStart.Reason reaches nothing but
-            // the host's own operator log, which — like every other logger call in this codebase — is
-            // English by convention and not a customer-facing surface at all.
-            svc.Status = ServiceStatus.Failed;
-            await db.SaveChangesAsync(CancellationToken.None);
+            // P4 (2026-08-17 app-environment-management design): this used to be the gap its own
+            // comment named — Status flipped to Failed and mayStart.Reason went nowhere but the
+            // operator log. ManagedService.ErrorMessage is that reason's home now, same as every
+            // other failure this method can produce, so a refused database says why on its own page
+            // instead of looking identical to one that tried and broke.
+            await FailAsync(svc, mayStart.Reason ?? "The workspace may not start new work right now.", ct);
             logger.LogWarning("{Svc} was not provisioned: {Reason}", svc.Name, mayStart.Reason);
             return;
         }
@@ -164,19 +167,78 @@ public sealed class ManagedServiceEngine(
             // moving tag is pulled again, and a database that changed major version this way will
             // not start on the data it already has.
             svc.RunningImage = image;
+            // P4: whatever the last attempt said is history the moment this one lands — the same
+            // reasoning `IncidentService.ResolveAsync`'s doc gives, and true here in a way it is not
+            // for a deploy: a ManagedService row is mutated in place rather than minting a new one per
+            // attempt, so THIS success is the earlier failure's own condition clearing, not a
+            // different fact about a different attempt.
+            svc.ErrorMessage = null;
             await db.SaveChangesAsync(ct);
+            if (incidents is not null)
+            {
+                await incidents.ResolveAsync(
+                    svc.WorkspaceId, Domain.Common.AlertEvent.ServiceProvisionFailed, svc.Id.ToString(), clock.UtcNow, ct);
+                await db.SaveChangesAsync(ct);
+            }
             logger.LogInformation("Provisioned managed service {Name} ({Type}).", svc.Name, svc.Type);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to provision service {Name}.", svc.Name);
-            svc.Status = ServiceStatus.Failed;
-            // Not `ct`: a provision that hits the job's deadline arrives here with that token
-            // already cancelled, and saving under it throws before the row is written — leaving the
-            // service reading Provisioning with nothing provisioning it. The write that records the
-            // failure is owed after the work stops, so it is made unconditionally, as
+
+            // Redacted before it is stored, not only on its way to a log — DeploymentPipeline's own
+            // failure path does the same for the same reason: the command that failed can be one that
+            // carries this database's own password on its command line (see CredentialRotationPlan),
+            // and this reason is shown on the service's own page.
+            var creds = CredsFor(svc);
+            var redacted = redactor is null ? ex.Message : redactor.Redact(ex.Message, [creds.Password]);
+            var reason = Deployments.LogText.Clean(redacted);
+
+            // Not `ct` from here on: a provision that hits the job's deadline arrives here with that
+            // token already cancelled, and saving under it throws before the row is written — leaving
+            // the service reading Provisioning with nothing provisioning it. The write that records
+            // the failure is owed after the work stops, so it is made unconditionally, as
             // JobWorker.SettleAsync does for the job row itself.
-            await db.SaveChangesAsync(CancellationToken.None);
+            await FailAsync(svc, reason, CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// The one place a provisioning attempt is recorded as failed: the row, the incident, and whoever
+    /// has a channel for it. Shared by the billing refusal above and the catch block below — before
+    /// P4 only the row's <see cref="ManagedService.Status"/> changed and both of the other two never
+    /// happened at all.
+    /// </summary>
+    private async Task FailAsync(ManagedService svc, string reason, CancellationToken ct)
+    {
+        svc.Status = ServiceStatus.Failed;
+        svc.ErrorMessage = reason;
+        await db.SaveChangesAsync(ct);
+
+        if (incidents is not null)
+        {
+            await incidents.OpenAsync(
+                svc.WorkspaceId, Domain.Common.AlertEvent.ServiceProvisionFailed, svc.Id.ToString(),
+                Domain.Common.AlertSeverity.Critical, $"{svc.Name} failed to provision", reason, clock.UtcNow, ct);
+            await db.SaveChangesAsync(ct);
+        }
+
+        if (notifications is not null)
+        {
+            try
+            {
+                await notifications.NotifyAsync(svc.WorkspaceId,
+                    Domain.Notifications.NotificationEventData.Create(Domain.Common.AlertEvent.ServiceProvisionFailed,
+                        ("ServiceName", svc.Name), ("Reason", reason)),
+                    Domain.Common.AlertSeverity.Critical, ct);
+            }
+            catch (Exception notifyError)
+            {
+                // Best-effort, the same rule DeploymentPipeline's own TellSomebody applies to its own
+                // alert dispatch: the row already carries the failure, so a channel refusing to accept
+                // it must not cost the record of the failure itself.
+                logger.LogWarning(notifyError, "Could not notify about the provisioning failure of {Svc}.", svc.Name);
+            }
         }
     }
 

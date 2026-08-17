@@ -28,6 +28,23 @@ public class ManagedService : BaseEntity
     public string ContainerName { get; set; } = string.Empty;
     public int InternalPort { get; set; }
 
+    /// <summary>
+    /// Why the last provision attempt failed, or null when the last attempt did not fail (including
+    /// "has never failed" and "failed, then a later attempt succeeded" — a success clears this).
+    ///
+    /// <para>
+    /// The pattern this follows exists five times over already — <c>Deployment.ErrorMessage</c>,
+    /// <c>CronRun.Error</c>, <c>Job.Error</c>, <c>Alert.LastError</c>,
+    /// <c>NotificationDelivery.LastError</c> — and none of them landed on <c>ManagedService</c>, which
+    /// is why a failed database used to say only <see cref="Status"/>'s bare <c>Failed</c> and nothing
+    /// about why. Modelled closest on <c>Deployment.ErrorMessage</c>: both are set from the same catch
+    /// block that also flips a status enum to its failed member, both are cleared the moment the same
+    /// operation succeeds again, and both are shown on the resource's own page rather than only in a
+    /// log a customer cannot read.
+    /// </para>
+    /// </summary>
+    public string? ErrorMessage { get; set; }
+
     public string Username { get; set; } = string.Empty;
     /// <summary>Encrypted at rest.</summary>
     public string EncryptedPassword { get; set; } = string.Empty;

@@ -224,6 +224,9 @@
   <data name="Backup failed: {0}"><value>پشتیبان ناموفق: {0}</value></data>
   <data name="The backup did not complete."><value>پشتیبان کامل نشد.</value></data>
   <data name="Open backups"><value>باز کردن پشتیبان‌ها</value></data>
+  <data name="{0}: database failed to provision"><value>{0}: راه‌اندازی پایگاه داده ناموفق بود</value></data>
+  <data name="It did not come up."><value>بالا نیامد.</value></data>
+  <data name="Open the database"><value>باز کردن پایگاه داده</value></data>
   <data name="{0} is not delivering"><value>{0} پیام نمی‌رساند</value></data>
   <data name="Alert channel: {0}"><value>کانال هشدار: {0}</value></data>
   <data name="Backup delivery: {0}"><value>تحویل بکاپ: {0}</value></data>

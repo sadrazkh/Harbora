@@ -54,6 +54,16 @@ public sealed class AttentionService(
             .Take(3)
             .ToListAsync(ct);
 
+        // P4 (2026-08-17 app-environment-management design): a failed provision used to say only
+        // Status = Failed on its own page and nothing here — the same gap a failed deployment or a
+        // failed backup never had.
+        var failedServices = await db.ManagedServices
+            .Where(s => s.WorkspaceId == workspaceId && s.Status == ServiceStatus.Failed)
+            .OrderByDescending(s => s.UpdatedAt)
+            .Select(s => new { s.Name, s.Id, s.ErrorMessage })
+            .Take(3)
+            .ToListAsync(ct);
+
         var brokenAlerts = await db.Alerts
             .Where(a => a.WorkspaceId == workspaceId && a.IsEnabled && a.LastError != null)
             .Select(a => new { a.Name, a.LastError })
@@ -98,6 +108,7 @@ public sealed class AttentionService(
                 CrashedApps = crashed.Select(a => (a.Name, a.Id)).ToList(),
                 FailedBackups = failedBackups.Select(b =>
                     (string.IsNullOrWhiteSpace(b.TargetRef) ? b.Type.ToString() : b.TargetRef, b.ErrorMessage)).ToList(),
+                FailedServices = failedServices.Select(s => (s.Name, s.Id, s.ErrorMessage)).ToList(),
                 BrokenChannels =
                     brokenAlerts.Select(a => (a.Name, ChannelKind.Alert, a.LastError!))
                         .Concat(brokenDeliveries.Select(d => (d.Name, ChannelKind.BackupDelivery, d.LastError!)))

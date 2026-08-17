@@ -226,6 +226,15 @@ public sealed class NotificationService(
     /// Warning. Adding a sixth checkbox would also mean a column, a migration and a bilingual label,
     /// which is a lot of surface to build for the answer "no thank you, do not tell me".
     /// </para>
+    ///
+    /// <para>
+    /// <see cref="AlertEvent.ServiceProvisionFailed"/> (P4, 2026-08-17 app-environment-management
+    /// design) answers true for the same reason of shape, not the same reason of urgency: it is not
+    /// workspace-wide like <see cref="AlertEvent.LowBalance"/>, but P4's own schema budget is one
+    /// column — <c>ManagedService.ErrorMessage</c> — and that column is what this sub-project spends
+    /// it on. A workspace's <see cref="AlertSeverity"/> floor on each rule (already checked before this
+    /// method runs) is the filter a database failure gets; a seventh checkbox is not.
+    /// </para>
     /// </summary>
     private static bool Matches(Alert a, AlertEvent evt) => evt switch
     {
@@ -235,6 +244,7 @@ public sealed class NotificationService(
         AlertEvent.DiskWarning => a.OnDiskWarning,
         AlertEvent.BackupFailed => a.OnBackupFailed,
         AlertEvent.LowBalance => true,
+        AlertEvent.ServiceProvisionFailed => true,
         AlertEvent.Test => true,
         _ => false
     };

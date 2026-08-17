@@ -243,7 +243,22 @@ public enum AlertEvent
     /// decision rather than an omission — see <c>NotificationService.Matches</c>, which says why.
     /// </para>
     /// </summary>
-    LowBalance = 7
+    LowBalance = 7,
+
+    /// <summary>
+    /// A managed database (or other backing service) failed to provision — <c>ManagedServiceEngine.
+    /// ProvisionAsync</c>'s own catch block, the same place that now also writes
+    /// <c>ManagedService.ErrorMessage</c>. Appended, for the same reason as the value above it.
+    ///
+    /// <para>
+    /// Also carries no per-rule opt-in flag, and for a reason adjacent to <see cref="LowBalance"/>'s
+    /// own: there is no existing checkbox this cleanly fits (it is not a deploy, not a backup, not a
+    /// crash), and P4 — the sub-project that added this member — spends exactly one schema change on
+    /// a reason column for <c>ManagedService</c> itself, not a second one on a sixth <c>Alert</c>
+    /// checkbox nobody asked for yet. See <c>NotificationService.Matches</c> for where that is decided.
+    /// </para>
+    /// </summary>
+    ServiceProvisionFailed = 8
 }
 
 /// <summary>

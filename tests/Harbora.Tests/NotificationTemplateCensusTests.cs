@@ -108,6 +108,8 @@ public class NotificationTemplateCensusTests
         AlertEvent.ThresholdBreached => NotificationEventData.Create(evt,
             ("AppName", "api"), ("Metric", "CpuPercent"), ("Threshold", "90"), ("SustainedMinutes", "5")),
         AlertEvent.LowBalance => NotificationEventData.Create(evt, ("WorkspaceName", "tenant"), ("Hours", "22")),
+        AlertEvent.ServiceProvisionFailed => NotificationEventData.Create(evt,
+            ("ServiceName", "orders-db"), ("Reason", "image pull timed out")),
         _ => throw new InvalidOperationException(
             $"{evt} has no sample data yet — add a case here alongside its NotificationTemplateCatalog template.")
     };

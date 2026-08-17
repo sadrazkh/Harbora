@@ -66,6 +66,14 @@ public sealed record AttentionFacts
     public IReadOnlyList<(string App, Guid AppId)> CrashedApps { get; init; } = [];
     public IReadOnlyList<(string Target, string? Error)> FailedBackups { get; init; } = [];
 
+    /// <summary>
+    /// Managed services (databases/caches) whose last provision attempt failed — P4, 2026-08-17
+    /// app-environment-management design. Before this arm existed a failed database said nothing on
+    /// the dashboard at all; it only ever showed up as a red pill on its own page, for whoever thought
+    /// to look.
+    /// </summary>
+    public IReadOnlyList<(string Name, Guid ServiceId, string? Error)> FailedServices { get; init; } = [];
+
     /// <summary>Alert rules and backup channels that recorded a failure on their last attempt.</summary>
     public IReadOnlyList<(string Name, ChannelKind Kind, string Error)> BrokenChannels { get; init; } = [];
 
@@ -138,6 +146,9 @@ public static class AttentionRules
     public const string BackupFailedTitle = "Backup failed: {0}";
     public const string BackupFailedDetail = "The backup did not complete.";
     public const string BackupsAction = "Open backups";
+    public const string ServiceFailedTitle = "{0}: database failed to provision";
+    public const string ServiceFailedDetail = "It did not come up.";
+    public const string ServiceFailedAction = "Open the database";
     public const string ChannelTitle = "{0} is not delivering";
     public const string ChannelAlertDetail = "Alert channel: {0}";
     public const string ChannelBackupDetail = "Backup delivery: {0}";
@@ -163,6 +174,7 @@ public static class AttentionRules
         CertificateExpiredTitle, CertificateAttentionTitle,
         CertificateExpiredDetail, CertificateExpiringDetail, CertificateFailedDetail, CertificateAction,
         BackupFailedTitle, BackupFailedDetail, BackupsAction,
+        ServiceFailedTitle, ServiceFailedDetail, ServiceFailedAction,
         ChannelTitle, ChannelAlertDetail, ChannelBackupDetail, AlertsAction,
         DiskTitle, DiskDetail, MonitoringAction,
         NeverDeployedTitle, NeverDeployedDetail, NeverDeployedAction,
@@ -234,6 +246,16 @@ public static class AttentionRules
                 DetailText = Summarise(error),
                 DetailKey = Summarise(error) is null ? BackupFailedDetail : null,
                 ActionKey = BackupsAction, ActionUrl = "/backups"
+            });
+
+        foreach (var (name, serviceId, error) in facts.FailedServices)
+            items.Add(new()
+            {
+                Level = AttentionLevel.Critical,
+                TitleKey = ServiceFailedTitle, TitleArgs = [name],
+                DetailText = Summarise(error),
+                DetailKey = Summarise(error) is null ? ServiceFailedDetail : null,
+                ActionKey = ServiceFailedAction, ActionUrl = $"/databases/{serviceId}"
             });
 
         foreach (var (name, kind, error) in facts.BrokenChannels)
