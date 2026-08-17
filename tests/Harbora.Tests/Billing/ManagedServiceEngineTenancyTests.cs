@@ -266,7 +266,8 @@ public class ManagedServiceEngineTenancyTests
             node: node,
             currentUser: currentUser,
             creationBilling: new Harbora.Infrastructure.Billing.ResourceCreationBilling(
-                db, clock, Options.Create(new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })))
+                db, clock, Options.Create(new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
+            deploymentEngine: new NeverAskedDeploymentEngine())
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
@@ -295,6 +296,15 @@ public class ManagedServiceEngineTenancyTests
             throw new NotSupportedException();
         public Task<PlacementResult> CheckAsync(Guid serverId, long memoryBytes, double cpu, CancellationToken ct) =>
             throw new NotSupportedException();
+    }
+
+    /// <summary>Every test in this file exercises Start/Stop, never Rotate — the controller still
+    /// has to be constructed with something, and this throws if it is ever reached.</summary>
+    private sealed class NeverAskedDeploymentEngine : IDeploymentEngine
+    {
+        public Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task CancelAsync(Guid deploymentId, CancellationToken ct) => throw new NotSupportedException();
     }
 
     private sealed class SilentAudit : IAuditLogger

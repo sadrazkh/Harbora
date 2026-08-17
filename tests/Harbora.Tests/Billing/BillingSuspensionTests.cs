@@ -165,7 +165,7 @@ internal sealed class FakeDatabaseOperations(BillingContext own) : IManagedServi
     public Task QueueProvisionAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
     public Task RemoveAsync(Guid serviceId, bool deleteData, CancellationToken ct) => throw new NotSupportedException();
     public Task<long?> MeasureStorageAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
-    public Task<IReadOnlyList<string>> RotatePasswordAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
+    public Task<IReadOnlyList<RotatedApp>> RotatePasswordAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
     public Task<string?> TestConnectionAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
     public Task<ServiceConnectionInfo> GetConnectionInfoAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
     public Task<IReadOnlyDictionary<string, string>> BuildAttachEnvAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();

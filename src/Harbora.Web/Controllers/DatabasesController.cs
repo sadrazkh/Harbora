@@ -41,7 +41,8 @@ public sealed partial class DatabasesController(
     IAuditLogger audit,
     INodeAgentClient node,
     ICurrentUser currentUser,
-    Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling) : Controller
+    Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling,
+    IDeploymentEngine deploymentEngine) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 
@@ -626,7 +627,15 @@ public sealed partial class DatabasesController(
 
     /// <summary>
     /// Replaces the password and rewrites it into every service that was attached to this database.
-    /// Those services keep the old value until they are redeployed, which is what the message says.
+    ///
+    /// <para>
+    /// P4 (2026-08-17 app-environment-management design): used to end here, on a one-line flash
+    /// message telling the person to go and redeploy the affected apps by hand. It now ends on
+    /// <see cref="RotateConfirm"/> instead, which lists exactly what was rewritten and can queue
+    /// every one of those redeploys in a single press — <c>DeploymentEngine.QueueDeploymentAsync</c>
+    /// already coalesces onto an app's own in-flight deployment (<c>DeploymentEngine.cs:101</c>), so
+    /// looping over the list there is safe even if one of them is already mid-deploy.
+    /// </para>
     /// </summary>
     [HttpPost("{id:guid}/rotate")]
     [ValidateAntiForgeryToken]
@@ -637,15 +646,103 @@ public sealed partial class DatabasesController(
         try
         {
             var updated = await engine.RotatePasswordAsync(id, ct);
-            TempData["Message"] = updated.Count == 0
-                ? "The password was changed. No service had it stored."
-                : $"The password was changed and written into: {string.Join(", ", updated)}. " +
-                  "Redeploy them to pick it up — until then they are still using the old one.";
+            if (updated.Count == 0)
+            {
+                TempData["Message"] = "The password was changed. No service had it stored.";
+                return RedirectToAction(nameof(Details), new { id });
+            }
+
+            TempData["RotatedAppIds"] = string.Join(",", updated.Select(a => a.AppId));
+            return RedirectToAction(nameof(RotateConfirm), new { id });
         }
         catch (InvalidOperationException ex)
         {
             TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
         }
+    }
+
+    /// <summary>
+    /// What a rotation just rewrote, and the one press that finishes it. <c>ConfirmRemove</c> is the
+    /// page pattern — a browser <c>confirm()</c> was judged not good enough for destructive work —
+    /// applied here to the mirror-image case: this confirms something that already happened rather
+    /// than asking permission before it does, because rotating the password is not itself reversible
+    /// to ask permission for; queuing redeploys is the part worth a deliberate press.
+    /// </summary>
+    [HttpGet("{id:guid}/rotate/confirm")]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> RotateConfirm(Guid id, CancellationToken ct)
+    {
+        if (!await access.CanTouchServiceAsync(id, Capabilities.DatabasesManage, ct)) return NotFound();
+        var svc = await db.ManagedServices.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
+        if (svc is null) return NotFound();
+
+        // TempData is consumed on read — a direct hit on this URL (a bookmark, a refresh) finds
+        // nothing to confirm and goes back to the database's own page rather than rendering an
+        // empty list that looks like a rotation touched nothing.
+        //
+        // Read with ToString() rather than an `is string` pattern: ASP.NET Core's default
+        // CookieTempDataProvider round-trips a stored string through a type-sniffing serializer
+        // that hands a bare Guid back as System.Guid, not System.String, whenever the joined list
+        // happens to be exactly one id (nothing to join, so no comma survives to prove it was ever
+        // a list). A rotation touching exactly one app is the ordinary case, not an edge one, so
+        // this cannot be pattern-matched away.
+        var idsRaw = TempData["RotatedAppIds"]?.ToString();
+        if (string.IsNullOrWhiteSpace(idsRaw))
+            return RedirectToAction(nameof(Details), new { id });
+
+        var ids = idsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(Guid.Parse).ToList();
+        var apps = await db.Apps.AsNoTracking()
+            .Where(a => ids.Contains(a.Id) && a.WorkspaceId == WorkspaceId)
+            .Select(a => new RotatedAppRowViewModel(a.Id, a.Name))
+            .ToListAsync(ct);
+
+        ViewBag.Service = svc;
+        ViewBag.Apps = apps;
+        ViewData["Title"] = $"Rotated {svc.Name}";
+        return View();
+    }
+
+    /// <summary>Queues a redeploy for every app <see cref="RotateConfirm"/> listed.</summary>
+    [HttpPost("{id:guid}/rotate/confirm")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> RotateQueueRedeploys(Guid id, string? appIds, CancellationToken ct)
+    {
+        await Guard(id, ct);
+
+        var ids = (appIds ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries).Select(Guid.Parse).Distinct().ToList();
+
+        var queued = 0;
+        foreach (var appId in ids)
+        {
+            // Rotation touches every app in the workspace it finds a matching variable on; queuing
+            // the redeploy is still gated per app, the same as Attach/Detach already are, because
+            // managing a database does not imply the right to deploy every app in the workspace.
+            if (!await access.CanTouchAppAsync(appId, Capabilities.AppsDeploy, ct)) continue;
+            var exists = await db.Apps.AsNoTracking().AnyAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
+            if (!exists) continue;
+
+            try
+            {
+                await deploymentEngine.QueueDeploymentAsync(
+                    new DeploymentRequest(appId, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty), ct);
+                queued++;
+            }
+            catch (InvalidOperationException)
+            {
+                // Already mid-deploy, or refused for this one app alone — the loop's job is to queue
+                // what it safely can, not to let one app's refusal stop the rest from picking up the
+                // password they are also waiting on.
+            }
+        }
+
+        TempData["Message"] = queued == 0
+            ? (IsFa ? "هیچ دیپلویی صف نشد." : "Nothing was queued.")
+            : (IsFa ? $"{queued} دیپلوی صف شد." : $"Queued {queued} redeploy(s).");
+
         return RedirectToAction(nameof(Details), new { id });
     }
 

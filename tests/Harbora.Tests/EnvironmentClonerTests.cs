@@ -115,7 +115,7 @@ public class EnvironmentClonerTests
         public Task StopAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
         public Task RemoveAsync(Guid id, bool deleteData, CancellationToken ct) => throw new NotSupportedException();
         public Task<long?> MeasureStorageAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
-        public Task<IReadOnlyList<string>> RotatePasswordAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IReadOnlyList<RotatedApp>> RotatePasswordAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
         public Task<string?> TestConnectionAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
         public Task<ServiceConnectionInfo> GetConnectionInfoAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
     }

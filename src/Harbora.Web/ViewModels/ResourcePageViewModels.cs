@@ -79,6 +79,10 @@ public sealed record DatabaseRowViewModel(
 
 public sealed record ResourceOptionViewModel(Guid Id, string Name, string Environment, bool Compatible);
 
+/// <summary>One app <c>DatabasesController.RotateConfirm</c> lists, for the redeploy checkbox
+/// beside it — P4, 2026-08-17 app-environment-management design.</summary>
+public sealed record RotatedAppRowViewModel(Guid Id, string Name);
+
 public sealed record BackupEventViewModel(
     Guid Id,
     BackupStatus Status,

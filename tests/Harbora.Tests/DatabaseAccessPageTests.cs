@@ -165,7 +165,8 @@ public class DatabaseAccessPageTests
             currentUser,
             new Harbora.Infrastructure.Billing.ResourceCreationBilling(
                 db, clock, Microsoft.Extensions.Options.Options.Create(
-                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })))
+                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
+            deploymentEngine: new NeverAskedDeploymentEngine())
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
@@ -227,7 +228,8 @@ public class DatabaseAccessPageTests
             currentUser,
             new Harbora.Infrastructure.Billing.ResourceCreationBilling(
                 db, new Clock(), Microsoft.Extensions.Options.Options.Create(
-                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })))
+                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
+            deploymentEngine: new NeverAskedDeploymentEngine())
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
@@ -248,6 +250,15 @@ public class DatabaseAccessPageTests
 
         public Task<PlacementResult> CheckAsync(Guid serverId, long memoryBytes, double cpu, CancellationToken ct) =>
             Task.FromResult(PlacementResult.Placed(serverId));
+    }
+
+    /// <summary>None of these tests rotate a password — they are about the access page — so nothing
+    /// here reaches the deployment engine at all.</summary>
+    private sealed class NeverAskedDeploymentEngine : IDeploymentEngine
+    {
+        public Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task CancelAsync(Guid deploymentId, CancellationToken ct) => throw new NotSupportedException();
     }
 
     private sealed class AlwaysAllowedQuota : IQuotaService

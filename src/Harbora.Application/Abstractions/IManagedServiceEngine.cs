@@ -27,9 +27,12 @@ public interface IManagedServiceEngine
 
     /// <summary>
     /// Replaces the database password and rewrites it into every app that was attached to it.
-    /// Returns the apps that must be redeployed before they will use the new one.
+    /// Returns the apps that must be redeployed before they will use the new one — by id, not only
+    /// by display name (P4, 2026-08-17 app-environment-management design), so a caller can act on
+    /// the answer rather than merely print it: the confirmation page this feeds queues a redeploy
+    /// per <see cref="RotatedApp.AppId"/>.
     /// </summary>
-    Task<IReadOnlyList<string>> RotatePasswordAsync(Guid serviceId, CancellationToken ct);
+    Task<IReadOnlyList<RotatedApp>> RotatePasswordAsync(Guid serviceId, CancellationToken ct);
 
     /// <summary>
     /// Connects to the database from its own private network, the way a service would. Returns null
@@ -55,6 +58,9 @@ public sealed record ServiceCatalogEntry(
     IReadOnlyList<string> Versions,
     int InternalPort,
     bool HasDatabaseName);
+
+/// <summary>One app whose environment was rewritten by a password rotation.</summary>
+public sealed record RotatedApp(Guid AppId, string Name);
 
 public sealed record ServiceConnectionInfo(
     string Host,

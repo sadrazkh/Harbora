@@ -411,7 +411,7 @@ public sealed class ManagedServiceEngine(
         return bytes;
     }
 
-    public async Task<IReadOnlyList<string>> RotatePasswordAsync(Guid serviceId, CancellationToken ct)
+    public async Task<IReadOnlyList<RotatedApp>> RotatePasswordAsync(Guid serviceId, CancellationToken ct)
     {
         var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == serviceId, ct);
         if (svc is null) return [];
@@ -465,7 +465,7 @@ public sealed class ManagedServiceEngine(
         var apps = await db.Apps.Include(a => a.EnvironmentVariables)
             .Where(a => a.WorkspaceId == svc.WorkspaceId).ToListAsync(ct);
 
-        var updated = new List<string>();
+        var updated = new List<RotatedApp>();
         foreach (var app in apps)
         {
             var touched = false;
@@ -494,7 +494,9 @@ public sealed class ManagedServiceEngine(
                     touched = true;
                 }
             }
-            if (touched) updated.Add(app.Name);
+            // By id, not only by name (P4): the confirmation page this feeds queues a redeploy per
+            // app, and App.Name is not guaranteed unique the way Id is.
+            if (touched) updated.Add(new RotatedApp(app.Id, app.Name));
         }
         await db.SaveChangesAsync(ct);
 

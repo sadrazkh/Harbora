@@ -1,0 +1,44 @@
+@using Harbora.Web.ViewModels
+@{
+    var svc = (Harbora.Domain.Services.ManagedService)ViewBag.Service;
+    var apps = (IReadOnlyList<RotatedAppRowViewModel>)ViewBag.Apps;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+}
+<div class="max-w-2xl">
+    <a href="/databases/@svc.Id" class="text-accent-text text-sm">← @svc.Name</a>
+    <h1 class="text-2xl font-bold tracking-tight text-ink mt-1 mb-4" data-spec-rotate-confirm="@svc.Id">
+        @(isFa ? "رمز عوض شد" : "Password rotated")
+    </h1>
+
+    @if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
+
+    <div class="rounded-xl border border-line bg-surface p-4 mb-4">
+        <p class="text-sm text-ink">
+            @(isFa
+                ? $"رمز «{svc.Name}» عوض شد. این {apps.Count} اپ هنوز رمز قبلی را دارند تا دوباره دیپلوی شوند:"
+                : $"The password for \"{svc.Name}\" was changed. These {apps.Count} app(s) still hold the old one until they are redeployed:")
+        </p>
+    </div>
+
+    <ul class="text-sm text-ink list-disc ms-5 mb-4" data-spec-rotate-app-count="@apps.Count">
+        @foreach (var app in apps)
+        {
+            <li data-spec-rotate-app="@app.Id">@app.Name</li>
+        }
+    </ul>
+
+    <form asp-controller="Databases" asp-action="RotateQueueRedeploys" asp-route-id="@svc.Id" method="post" class="space-y-4">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="appIds" value="@string.Join(",", apps.Select(a => a.Id))" />
+        <div class="flex gap-2">
+            <button class="rounded-lg bg-accent hover:bg-accent text-white px-4 py-2 text-sm font-semibold"
+                    data-spec-rotate-queue="@apps.Count">
+                @(isFa ? $"دیپلوی هر {apps.Count} اپ" : $"Redeploy all {apps.Count}")
+            </button>
+            <a href="/databases/@svc.Id" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">
+                @(isFa ? "بعداً" : "Not now")
+            </a>
+        </div>
+    </form>
+</div>

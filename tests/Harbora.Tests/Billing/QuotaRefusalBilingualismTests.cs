@@ -110,7 +110,7 @@ public class QuotaRefusalBilingualismTests
         public Task StopAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
         public Task RemoveAsync(Guid serviceId, bool deleteData, CancellationToken ct) => throw new NotSupportedException();
         public Task<long?> MeasureStorageAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
-        public Task<IReadOnlyList<string>> RotatePasswordAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IReadOnlyList<RotatedApp>> RotatePasswordAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
         public Task<string?> TestConnectionAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
         public Task<ServiceConnectionInfo> GetConnectionInfoAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
         public Task<IReadOnlyDictionary<string, string>> BuildAttachEnvAsync(Guid serviceId, CancellationToken ct) => throw new NotSupportedException();
@@ -271,6 +271,7 @@ public class QuotaRefusalBilingualismTests
         var protector = new PassthroughProtector();
         var clock = new FixedClock();
         var node = new FakeNodeAgentClient(NullLogger<FakeNodeAgentClient>.Instance);
+        var unused = new Unused();
 
         var controller = new DatabasesController(
             db,
@@ -289,7 +290,8 @@ public class QuotaRefusalBilingualismTests
             currentUser: currentUser,
             creationBilling: new Harbora.Infrastructure.Billing.ResourceCreationBilling(
                 db, clock, Microsoft.Extensions.Options.Options.Create(
-                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })))
+                    new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
+            deploymentEngine: unused)
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
