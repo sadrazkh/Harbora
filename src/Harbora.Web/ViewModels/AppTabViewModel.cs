@@ -66,6 +66,17 @@ public sealed class AppOverviewViewModel : AppTabViewModel
     /// <summary>How many container instances this app is configured to run.</summary>
     public int Replicas { get; init; }
 
+    /// <summary>
+    /// How many of those <see cref="Replicas"/> containers are actually reporting "running" right
+    /// now — the panel's own health/status card, asked live rather than assumed from the deploy that
+    /// started them. Null when the engine could not be asked, the same tolerance
+    /// <see cref="LiveContainer"/> already gives a remote node with no reachable agent or a request
+    /// that timed out: "unknown" must never render as "0 of 3 up", which tells an operator their app
+    /// is down when the truth is only that the panel could not check. Left null for a one-replica app
+    /// too — <see cref="LiveContainer"/> already answers that case, and asking twice buys nothing.
+    /// </summary>
+    public int? RunningReplicas { get; init; }
+
     /// <summary>The port the app listens on inside its own container.</summary>
     public int ContainerPort { get; init; }
 

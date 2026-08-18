@@ -288,7 +288,21 @@
                 </div>
                 <div>
                     <dt class="text-ink-faint">@(isFa ? "تکرار" : "Replicas")</dt>
-                    <dd class="text-ink">@Model.Replicas</dd>
+                    @if (Model.RunningReplicas is { } running)
+                    {
+                        // "If 2 of 3 are up, the panel must say that rather than showing green" — the
+                        // running count is asked from the engine live (AppsController.
+                        // TryRunningReplicaCountAsync), never assumed from the deploy that started them.
+                        <dd class="text-ink @(running < Model.Replicas ? "text-amber-500" : "")"
+                            data-replicas-desired="@Model.Replicas" data-replicas-running="@running">
+                            @running@(isFa ? " از " : " of ")@Model.Replicas
+                            @(running < Model.Replicas ? (isFa ? "در حال اجرا" : "running") : "")
+                        </dd>
+                    }
+                    else
+                    {
+                        <dd class="text-ink" data-replicas-desired="@Model.Replicas">@Model.Replicas</dd>
+                    }
                 </div>
                 <div>
                     <dt class="text-ink-faint">@(isFa ? "پورت" : "Port")</dt>

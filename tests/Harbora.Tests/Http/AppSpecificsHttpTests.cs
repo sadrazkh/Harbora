@@ -80,6 +80,51 @@ public class AppSpecificsHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task An_apps_page_with_two_of_three_replicas_up_says_so_rather_than_showing_all_green()
+    {
+        // "If 2 of 3 are up, the panel must say that rather than showing green" — the headline
+        // status requirement for replicas, asked here against the real controller and a real
+        // rendered page rather than against the view model directly.
+        var app = new App
+        {
+            WorkspaceId = fixture.WorkspaceId,
+            ServerId = Guid.CreateVersion7(),
+            Name = "spec-replicated",
+            Slug = "spec-replicated",
+            Kind = ServiceKind.Web,
+            DesiredReplicas = 3,
+            SourceType = AppSourceType.PrebuiltImage,
+            PrebuiltImage = "ghcr.io/example/seeded:1.0",
+            Status = AppStatus.Running
+        };
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(app);
+            db.Deployments.Add(new Deployment
+            {
+                AppId = app.Id, WorkspaceId = fixture.WorkspaceId, Number = 4,
+                Status = DeploymentStatus.Succeeded, ImageTag = "harbora/seeded:build-4"
+            });
+        });
+
+        var replica1 = DeploymentPlanning.ReplicaContainerName(app.WorkspaceId, app.Slug, 4, 1);
+        var replica2 = DeploymentPlanning.ReplicaContainerName(app.WorkspaceId, app.Slug, 4, 2);
+        var replica3 = DeploymentPlanning.ReplicaContainerName(app.WorkspaceId, app.Slug, 4, 3);
+        Panel.Docker.SeedContainer(replica1, app.Slug, state: "running");
+        Panel.Docker.SeedContainer(replica2, app.Slug, state: "running");
+        Panel.Docker.SeedContainer(replica3, app.Slug, state: "exited");
+
+        Panel.GivenUser(fixture.WorkspaceId, "spec-replicated@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.230", "spec-replicated@example.com");
+
+        var html = await (await client.GetAsync($"/apps/details/{app.Id}")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-replicas-desired=\"3\"");
+        html.Should().Contain("data-replicas-running=\"2\"",
+            "two of the three replica containers are reporting running; the third has exited");
+    }
+
+    [Fact]
     public async Task An_apps_page_with_a_dangling_instance_size_key_shows_unknown_rather_than_zeroes()
     {
         var app = new App

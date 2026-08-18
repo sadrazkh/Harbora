@@ -631,6 +631,16 @@ public sealed partial class AppsController(
         // this into a 500 for a page that otherwise has everything it needs.
         var liveContainer = await TryInspectAsync(app.ServerId, containerName, ct);
 
+        // "If 2 of 3 are up, the panel must say that rather than showing green" — a single
+        // TryInspectAsync of replica 1 cannot answer that, so this asks for all of them at once.
+        // Only for an app actually running more than one: a one-replica app's status is exactly what
+        // liveContainer already reports, so a second Docker round trip would buy nothing.
+        var desiredReplicas = app.DesiredReplicas ?? 1;
+        var runningReplicas = desiredReplicas > 1 && latestDeployment is not null
+            ? await TryRunningReplicaCountAsync(
+                app.ServerId, app.WorkspaceId, app.Slug, latestDeployment.Number, desiredReplicas, ct)
+            : null;
+
         // ---- uptime percent + restart history (M3) ----
         //
         // Read from the app.up/app.restarts series LifecycleHistory maintains — a real window, not a
@@ -673,7 +683,8 @@ public sealed partial class AppsController(
             HasVolumes = backupVolumes.Count > 0,
             App = app,
             InstanceSize = instanceSize,
-            Replicas = app.DesiredReplicas ?? 1,
+            Replicas = desiredReplicas,
+            RunningReplicas = runningReplicas,
             ContainerPort = app.ContainerPort,
             Server = server,
             ContainerName = containerName,
@@ -717,6 +728,44 @@ public sealed partial class AppsController(
         catch (Exception e) when (e is not OperationCanceledException)
         {
             logger.LogWarning(e, "Could not inspect container {Container} for app specifics.", containerName);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// How many of a replicated app's containers are reporting "running" right now — the multi-container
+    /// counterpart of <see cref="TryInspectAsync"/>, and just as tolerant of an engine that cannot
+    /// answer: a throw, a timeout, or a remote node with no inspect verb all collapse to null, never
+    /// to zero, which the view already knows to render as unknown rather than as every replica down.
+    /// </summary>
+    private async Task<int?> TryRunningReplicaCountAsync(
+        Guid serverId, Guid workspaceId, string slug, int deploymentNumber, int desiredReplicas,
+        CancellationToken ct)
+    {
+        try
+        {
+            using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            bounded.CancelAfter(TimeSpan.FromSeconds(5));
+            var docker = await engines.ResolveAsync(serverId, bounded.Token);
+
+            var names = Harbora.Infrastructure.Deployments.DeploymentPlanning
+                .ReplicaContainerNames(workspaceId, slug, deploymentNumber, desiredReplicas)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var containers = await docker.ListContainersAsync(
+                Harbora.Infrastructure.Deployments.DeploymentPlanning.AppLabel, bounded.Token);
+
+            return containers.Count(c =>
+                names.Contains(c.Name) && c.State.Equals("running", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning("Listing replica containers for app {Slug} timed out.", slug);
+            return null;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            logger.LogWarning(e, "Could not list replica containers for app {Slug}.", slug);
             return null;
         }
     }
