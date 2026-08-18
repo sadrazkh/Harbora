@@ -62,6 +62,9 @@ public class ProjectDeletionServiceTests
         public Task StopAsync(Guid appId, CancellationToken ct) => throw new NotSupportedException();
         public Task StartAsync(Guid appId, CancellationToken ct) => throw new NotSupportedException();
         public Task<string> GetLogsAsync(Guid appId, int tail, CancellationToken ct) => throw new NotSupportedException();
+        public Task<LogSearchResult> SearchLogsAsync(
+            IReadOnlyList<Guid> appIds, string? text, bool problemsOnly, TimeSpan? window, int maxLinesPerApp,
+            CancellationToken ct) => throw new NotSupportedException();
     }
 
     private sealed class FakeServiceEngine(HarboraDbContext db, HashSet<Guid> refuses) : IManagedServiceEngine

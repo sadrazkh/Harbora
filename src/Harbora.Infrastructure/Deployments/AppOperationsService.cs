@@ -172,6 +172,82 @@ public sealed class AppOperationsService(
         catch (Exception ex) { logger.LogWarning(ex, "Fetching logs failed."); return $"(logs unavailable: {ex.Message})"; }
     }
 
+    /// <summary>
+    /// One app's fetched tail, searched — the unit every caller of <see cref="SearchLogsAsync"/>
+    /// fans out over. A failure resolving the app or reaching its engine is reported through
+    /// <see cref="AppLogCoverage"/> rather than thrown, so one unreachable app in a cross-app search
+    /// never hides what the reachable ones found.
+    /// </summary>
+    public async Task<LogSearchResult> SearchLogsAsync(
+        IReadOnlyList<Guid> appIds, string? text, bool problemsOnly, TimeSpan? window, int maxLinesPerApp,
+        CancellationToken ct)
+    {
+        var cap = maxLinesPerApp <= 0 ? 200 : maxLinesPerApp;
+        var windowRequested = window is not null;
+        var hits = new List<LogSearchHit>();
+        var coverage = new List<AppLogCoverage>();
+
+        foreach (var appId in appIds)
+        {
+            App app;
+            IDockerEngine docker;
+            string? containerId;
+            try
+            {
+                (app, docker, containerId) = await ResolveAsync(appId, ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Resolving app {AppId} for a log search failed.", appId);
+                coverage.Add(new AppLogCoverage(appId, appId.ToString(), false, ex.Message, 0, windowRequested, false));
+                continue;
+            }
+
+            if (containerId is null)
+            {
+                coverage.Add(new AppLogCoverage(
+                    app.Id, app.Name, false, "No container is running for this app.", 0, windowRequested, false));
+                continue;
+            }
+
+            try
+            {
+                if (window is { } w)
+                {
+                    try
+                    {
+                        var timed = await docker.GetLogsSinceAsync(containerId, DateTimeOffset.UtcNow - w, cap, ct);
+                        var matched = LogFilter.ApplyTimed(timed, text, problemsOnly);
+                        hits.AddRange(matched.Select(m => new LogSearchHit(app.Id, app.Name, m.Text, m.Timestamp)));
+                        coverage.Add(new AppLogCoverage(app.Id, app.Name, true, null, timed.Count, true, true));
+                        continue;
+                    }
+                    catch (NotSupportedException)
+                    {
+                        // This app's host cannot attach real timestamps — fall through to the plain
+                        // tail below rather than reporting a false empty result for a window that was
+                        // never actually applied.
+                    }
+                }
+
+                var raw = await docker.GetLogsAsync(containerId, cap, ct);
+                var matchedLines = LogFilter.Apply(raw, text, problemsOnly);
+                hits.AddRange(matchedLines.Select(m => new LogSearchHit(app.Id, app.Name, m, null)));
+                coverage.Add(new AppLogCoverage(app.Id, app.Name, true, null, CountLines(raw), windowRequested, false));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Fetching logs for app {AppId} failed.", appId);
+                coverage.Add(new AppLogCoverage(app.Id, app.Name, false, ex.Message, 0, windowRequested, false));
+            }
+        }
+
+        return new LogSearchResult(hits, coverage);
+    }
+
+    private static int CountLines(string? raw) =>
+        string.IsNullOrEmpty(raw) ? 0 : raw.Replace("\r\n", "\n").Split('\n').Length;
+
     // --- helpers ---
 
     /// <summary>
