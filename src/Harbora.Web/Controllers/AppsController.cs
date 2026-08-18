@@ -1093,6 +1093,67 @@ public sealed partial class AppsController(
     }
 
     /// <summary>
+    /// Changes how many containers this app's next deployment starts.
+    ///
+    /// <para>
+    /// Written to the row and nothing more — the same shape <see cref="Resize"/> just above already
+    /// uses for a resource change that only takes effect once something is actually released again.
+    /// A live add/remove of running containers outside <c>DeploymentPipeline</c> would mean a second,
+    /// less-tested path doing the pipeline's own job — starting containers, health-checking them,
+    /// rewiring the proxy, reverting on failure — and drifting from it is exactly how this platform
+    /// has stranded ports and containers before. Scaling down still frees everything it should: the
+    /// next deploy's cutover keeps only the new, lower replica count and retires the rest, and its
+    /// remote-node port release already matches by deployment number regardless of how many replicas
+    /// held one.
+    /// </para>
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/replicas")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
+    public async Task<IActionResult> SetReplicas(Guid id, int replicas, CancellationToken ct)
+    {
+        if (!await access.CanTouchAppAsync(id, Capabilities.AppsEnv, ct)) return Forbid();
+
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        if (replicas < 1)
+        {
+            TempData["Error"] = IsFa ? "تعداد تکرار باید حداقل ۱ باشد." : "Replicas must be at least 1.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        var current = app.DesiredReplicas ?? 1;
+        if (replicas > current)
+        {
+            // Only the EXTRA replicas need to fit: the ones already running are already counted in
+            // the workspace's committed usage (QuotaService.SnapshotAsync reads DesiredReplicas off
+            // this same row), so checking the whole new total here would double-count what this app
+            // already holds and refuse a scale-up that does fit.
+            var extra = replicas - current;
+            var delta = new Harbora.Application.Abstractions.WorkloadQuotaDelta(
+                MemoryBytes: app.MemoryLimitBytes * extra, CpuCores: app.CpuLimit * extra);
+            var check = await quota.CanAddWorkloadsAsync(WorkspaceId, delta, ct);
+            if (!check.Allowed)
+            {
+                TempData["Error"] = (IsFa ? check.ReasonFa : null) ?? check.Reason;
+                return RedirectToAction(nameof(Details), new { id });
+            }
+        }
+
+        app.DesiredReplicas = replicas;
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("app.replicas-set", "app", $"{app.Name}={replicas}", ClientIp, ct: ct);
+
+        TempData["Message"] = IsFa
+            ? $"تعداد تکرار روی {replicas} تنظیم شد. با استقرار بعدی اعمال می‌شود."
+            : $"Replicas set to {replicas}. It applies on the next deployment.";
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
     /// Moves an app to another version of the template it came from.
     ///
     /// The version's pinned digest becomes the image and a deployment is queued, so the update goes

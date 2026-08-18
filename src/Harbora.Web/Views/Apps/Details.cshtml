@@ -465,6 +465,30 @@
             </form>
         </section>
 
+        @* ---- replicas ----
+           How many containers the NEXT deployment starts — the same "write the row, apply on the
+           next release" shape as the size control just above. Nothing here touches a running
+           container directly; DeploymentPipeline is the only thing that does. Withheld for a
+           scheduled job: Cron never starts a long-running container at all (ServicePlan.IsLongRunning),
+           so a replica count on one has nothing to describe. *@
+        @if (app.Kind != ServiceKind.Cron)
+        {
+            <section class="rounded-xl border border-line bg-surface p-4">
+                <div class="mb-3 font-semibold">@(isFa ? "تکرار" : "Replicas")</div>
+                <form asp-controller="Apps" asp-action="SetReplicas" asp-route-id="@app.Id" method="post" class="flex items-center gap-2">
+                    @Html.AntiForgeryToken()
+                    <input type="number" name="replicas" min="1" value="@Model.Replicas"
+                           class="input w-20" data-replicas-input aria-label="@(isFa ? "تعداد تکرار" : "Replica count")" />
+                    <button class="btn-secondary py-2 px-3 text-sm">@(isFa ? "اعمال" : "Apply")</button>
+                </form>
+                <p class="mt-2 text-[11px] leading-4 text-ink-faint">
+                    @(isFa
+                        ? "تعداد کانتینرهای در حال اجرا؛ با استقرار بعدی اعمال می‌شود."
+                        : "How many containers stay running; applies on the next deployment.")
+                </p>
+            </section>
+        }
+
         @* ---- Domains ----
            The status shown here is probed, not configured: DNS is resolved and a real TLS handshake
            is made. The old "SSL" badge only meant a checkbox was ticked, so a domain that had never
