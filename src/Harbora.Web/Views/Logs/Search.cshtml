@@ -1,0 +1,150 @@
+@model ProjectLogSearchViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<div class="mb-4">
+    <a href="/projects/@Model.Project.Id@(Model.SelectedEnvironmentId is null ? "" : $"?environmentId={Model.SelectedEnvironmentId}")"
+       class="text-accent-text text-sm">← @Model.Project.Name</a>
+    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "جست‌وجوی لاگ‌ها" : "Search logs")</h1>
+    <p class="text-ink-muted text-sm">
+        @(isFa
+            ? $"در {Model.Apps.Count} اپ این پروژه — هر بار روی جدیدترین خروجی هر کانتینر، نه یک آرشیو ذخیره‌شده."
+            : $"Across {Model.Apps.Count} app(s) in this project — each search re-fetches every container's own recent output; nothing is stored.")
+    </p>
+</div>
+
+@if (Model.Apps.Count == 0)
+{
+    <div class="rounded-lg bg-surface-2 border border-line px-4 py-3 text-sm text-ink-muted">
+        @(isFa ? "این محدوده هیچ اپی ندارد." : "There is nothing deployed in this scope to search.")
+    </div>
+    return;
+}
+
+<div class="mb-4 flex flex-wrap items-end gap-3">
+    <div>
+        <label class="block text-xs text-ink-muted mb-1">@(isFa ? "جست‌وجو" : "Search")</label>
+        <input id="search" type="search" dir="ltr" placeholder="@(isFa ? "متن در لاگ‌ها" : "Text to find in the logs")"
+               class="rounded-lg bg-canvas border border-line px-3 py-1.5 text-sm w-64" />
+    </div>
+    <label class="flex items-center gap-2 text-sm text-ink-muted pb-2">
+        <input type="checkbox" id="problems"> @(isFa ? "فقط خطاها و هشدارها" : "Problems only")
+    </label>
+    <div>
+        <label class="block text-xs text-ink-muted mb-1">@(isFa ? "بازه‌ی زمانی" : "Time window")</label>
+        <select id="window" class="rounded-lg bg-canvas border border-line px-3 py-1.5 text-sm">
+            <option value="0">@(isFa ? "کل خروجی دریافتی" : "All of the fetched tail")</option>
+            <option value="15">@(isFa ? "۱۵ دقیقه‌ی اخیر" : "Last 15 minutes")</option>
+            <option value="60">@(isFa ? "۱ ساعت اخیر" : "Last hour")</option>
+            <option value="360">@(isFa ? "۶ ساعت اخیر" : "Last 6 hours")</option>
+            <option value="1440">@(isFa ? "۲۴ ساعت اخیر" : "Last 24 hours")</option>
+        </select>
+    </div>
+    @if (Model.Environments.Count > 1)
+    {
+        <div>
+            <label class="block text-xs text-ink-muted mb-1">@(isFa ? "محیط" : "Environment")</label>
+            <select id="environment" class="rounded-lg bg-canvas border border-line px-3 py-1.5 text-sm">
+                <option value="">@(isFa ? "همه‌ی محیط‌ها" : "All environments")</option>
+                @foreach (var e in Model.Environments)
+                {
+                    <option value="@e.Id" selected="@(e.Id == Model.SelectedEnvironmentId)">@e.Name</option>
+                }
+            </select>
+        </div>
+    }
+    <button id="run" class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+        @(isFa ? "جست‌وجو" : "Search")
+    </button>
+</div>
+
+@* What the search actually covered — never left implicit, because a search that silently covered a
+   fraction of what it was asked to and came back empty is indistinguishable from one that covered
+   everything, unless something says so. *@
+<div id="coverage" class="mb-3 text-xs text-ink-muted" dir="@(isFa ? "rtl" : "ltr")"></div>
+
+<div class="rounded-xl border border-line bg-terminal text-terminal-ink font-mono text-xs">
+    <div id="results" class="p-4 max-h-[65vh] overflow-auto whitespace-pre-wrap" dir="ltr">
+        @(isFa ? "برای جست‌وجو کلید بالا را بزنید." : "Run a search to see results here.")
+    </div>
+</div>
+
+@section Scripts {
+<script>
+(function () {
+    const projectId = '@Model.Project.Id';
+    const search = document.getElementById('search');
+    const problems = document.getElementById('problems');
+    const windowSel = document.getElementById('window');
+    const envSel = document.getElementById('environment');
+    const run = document.getElementById('run');
+    const results = document.getElementById('results');
+    const coverage = document.getElementById('coverage');
+    const isFa = @Json.Serialize(isFa);
+
+    function query() {
+        const parts = [];
+        if (search.value.trim()) parts.push('search=' + encodeURIComponent(search.value.trim()));
+        if (problems.checked) parts.push('problems=true');
+        if (windowSel.value !== '0') parts.push('minutes=' + windowSel.value);
+        if (envSel && envSel.value) parts.push('environmentId=' + envSel.value);
+        return parts.join('&');
+    }
+
+    function escapeHtml(s) {
+        return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+    }
+
+    function renderCoverage(data) {
+        const unreached = data.coverage.filter(c => !c.reached);
+        const windowUnhonored = data.coverage.filter(c => c.timeWindowRequested && !c.timeWindowHonored);
+        const scanned = data.coverage.reduce((n, c) => n + (c.linesScanned || 0), 0);
+
+        const bits = [];
+        bits.push(isFa
+            ? `${data.appsSearched} اپ بررسی شد (${data.appsReached} در دسترس)، مجموعاً ${scanned} خط.`
+            : `Searched ${data.appsSearched} app(s) (${data.appsReached} reachable), ${scanned} line(s) total.`);
+
+        if (unreached.length > 0) {
+            const names = unreached.map(c => c.appName).join(', ');
+            bits.push(isFa ? `در دسترس نبود: ${names}.` : `Not reachable: ${names}.`);
+        }
+        if (windowUnhonored.length > 0) {
+            const names = windowUnhonored.map(c => c.appName).join(', ');
+            bits.push(isFa
+                ? `بازه‌ی زمانی برای این‌ها اعمال نشد (کل خروجی دریافتی نمایش داده شد): ${names}.`
+                : `Time window not available for: ${names} (their full fetched tail was searched instead).`);
+        }
+        coverage.textContent = bits.join(' ');
+    }
+
+    function renderResults(data) {
+        if (data.hits.length === 0) {
+            results.textContent = isFa ? 'هیچ خطی مطابقت نداشت.' : 'No lines matched.';
+            return;
+        }
+        results.innerHTML = data.hits.map(h => {
+            const when = h.timestamp ? new Date(h.timestamp).toISOString().replace('T', ' ').replace('Z', '') : '';
+            const stamp = when ? `<span class="text-ink-faint">${when}</span> ` : '';
+            return `<div><span class="text-accent-text">[${escapeHtml(h.appName)}]</span> ${stamp}${escapeHtml(h.line)}</div>`;
+        }).join('');
+    }
+
+    async function load() {
+        results.textContent = isFa ? 'در حال جست‌وجو…' : 'Searching…';
+        coverage.textContent = '';
+        try {
+            const r = await fetch('/projects/' + projectId + '/logs/search?' + query());
+            const data = await r.json();
+            renderCoverage(data);
+            renderResults(data);
+        } catch (e) {
+            results.textContent = isFa ? 'جست‌وجو ناموفق بود.' : 'The search failed.';
+        }
+    }
+
+    run.addEventListener('click', load);
+    search.addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+})();
+</script>
+}

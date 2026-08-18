@@ -61,6 +61,24 @@ public class NetworksViewModel
     public Harbora.Infrastructure.Networking.ArchitecturePicture? Picture { get; set; }
 }
 
+/// <summary>
+/// The page behind a project-wide (or one-environment) log search — see <c>LogsController</c>. Holds
+/// only what fills in the search form; the results themselves are fetched by the page's own script,
+/// the same way <c>Apps/Logs.cshtml</c> already fetches a single app's.
+/// </summary>
+public sealed class ProjectLogSearchViewModel
+{
+    public Project Project { get; set; } = null!;
+    public List<Environment> Environments { get; set; } = [];
+
+    /// <summary>Null means "every environment in the project" — the default, and the wider scope.</summary>
+    public Guid? SelectedEnvironmentId { get; set; }
+
+    /// <summary>The apps the search will fan out over, named up front so an empty result reads as
+    /// "searched N apps, found nothing" rather than as a blank page.</summary>
+    public List<App> Apps { get; set; } = [];
+}
+
 /// <summary>What moving a service to another environment would cost.</summary>
 public class MoveServiceViewModel
 {
