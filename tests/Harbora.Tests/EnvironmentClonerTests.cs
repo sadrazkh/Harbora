@@ -155,7 +155,7 @@ public class EnvironmentClonerTests
             Name = "API", Slug = "api", SourceType = AppSourceType.PrebuiltImage,
             PrebuiltImage = "nginx:1", ContainerPort = 8080, Status = AppStatus.Running,
             PreviewsEnabled = true, ActiveDeploymentId = Guid.CreateVersion7(),
-            PublishedHostPort = 31000
+            PublishedHostPort = 31000, DesiredReplicas = 3
         };
         app.EnvironmentVariables.Add(new EnvironmentVariable
         { Key = "APP_SECRET", Value = "keep-me", IsSecret = true });
@@ -346,6 +346,20 @@ public class EnvironmentClonerTests
         copy.PreviewsEnabled.Should().BeFalse("a copy that spawns environments of its own is a bill");
         copy.PublishedHostPort.Should().BeNull("that port is taken on the original's node");
         copy.Status.Should().Be(AppStatus.Created);
+    }
+
+    [Fact]
+    public async Task The_replica_count_travels_with_the_copy()
+    {
+        // A clone that dropped this back to the default would silently reduce a staging copy's
+        // capacity from what production actually runs — the same kind of silent shrink this whole
+        // file exists to catch for the environment variables.
+        var h = Build();
+
+        var outcome = await h.Cloner.CloneAsync(Workspace, h.Source.Id, "Staging", default);
+        var copy = await h.Db.Apps.FirstAsync(a => a.EnvironmentId == outcome.EnvironmentId);
+
+        copy.DesiredReplicas.Should().Be(3, "the original ran three replicas and the copy should reproduce that");
     }
 
     // ---- the variables, which is where the silent failure lives ----
