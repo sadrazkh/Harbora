@@ -124,6 +124,11 @@ public static class DependencyInjection
         services.AddHostedService<Deployments.CronRunner>();
         // Crash recovery: reconcile in-flight deployments on startup (ADR-005).
         services.AddHostedService<Deployments.DeploymentReconciler>();
+        // The panel's own network membership does not survive an update that recreates its container
+        // (docker-compose.yml declares it on the shared network only; every tenant network is joined
+        // imperatively, at deploy time). Rebinding here, before the gate below opens, means a cron or
+        // event invocation queued the moment the worker starts claiming still finds its function app.
+        services.AddHostedService<Deployments.PanelNetworkRebinder>();
         // Lets the job worker start claiming. Hosted services start in registration order, so every
         // startup reconciler — including any added later — must be registered ABOVE this line; that
         // is the whole guarantee, and it is on the reconciler's registration, not on this one.
