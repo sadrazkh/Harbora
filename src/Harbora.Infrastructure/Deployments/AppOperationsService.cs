@@ -97,6 +97,15 @@ public sealed class AppOperationsService(
         var app = await db.Apps.IgnoreQueryFilters().Include(a => a.Volumes)
             .FirstOrDefaultAsync(a => a.Id == appId, ct);
         if (app is null) return;
+
+        // HARBORA-0033. Checked first, before the container is even resolved: a refusal here has to
+        // leave the app exactly as it was — running, routed, its volumes untouched — not a container
+        // gone and a Protected volume orphaned behind it. This is the one guard every caller of
+        // DeleteAsync inherits for free: the panel's own app delete, PreviewEnvironmentService's
+        // teardown, and ProjectDeletionService's cascade all end up here rather than talking to Docker
+        // themselves (see this class's own remarks, and ProjectDeletionService's).
+        if (removeVolumes) Storage.VolumeProtection.GuardAgainstDestroying(app.Volumes);
+
         var docker = await engineFactory.ResolveAsync(app.ServerId, ct);
 
         var id = await FindContainerIdAsync(docker, app.WorkspaceId, app.Slug, ct);
