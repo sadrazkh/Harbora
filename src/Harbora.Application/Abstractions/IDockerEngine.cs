@@ -38,6 +38,26 @@ public interface IDockerEngine
     /// <summary>Non-following snapshot of the last <paramref name="tailLines"/> log lines.</summary>
     Task<string> GetLogsAsync(string containerId, int tailLines, CancellationToken ct);
 
+    /// <summary>
+    /// A snapshot of log lines no older than <paramref name="since"/>, each carrying the moment the
+    /// container produced it. <see cref="GetLogsAsync"/>'s tail carries no such thing — nothing before
+    /// a time-window search ever asked Docker for one.
+    ///
+    /// <para>
+    /// Not every transport this platform speaks can supply a real per-line timestamp for a stream it
+    /// does not capture itself. The default throws <see cref="NotSupportedException"/> rather than
+    /// quietly handing back an untimed tail dressed up as a time-scoped one — the same rule
+    /// <see cref="ExecAsync"/> already states for a shell an engine cannot honestly offer: an engine
+    /// that cannot do this must be able to say so, so a caller asking for a window knows which hosts
+    /// could honor it and which could not, instead of being told nothing matched a window that was
+    /// never actually applied.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<TimedLogLine>> GetLogsSinceAsync(
+        string containerId, DateTimeOffset since, int maxLines, CancellationToken ct) =>
+        throw new NotSupportedException(
+            $"{GetType().Name} cannot attach real timestamps to its log lines, so it cannot honor a time window.");
+
     Task<IReadOnlyList<ContainerInfo>> ListContainersAsync(string? labelFilter, CancellationToken ct);
     Task<ContainerStats?> GetStatsAsync(string containerId, CancellationToken ct);
 
@@ -177,6 +197,9 @@ public record ContainerDetail(
 /// record is: a zero here is a specific claim, not a stand-in for "nobody answered".
 /// </summary>
 public record ContainerLifecycle(int? RestartCount, DateTimeOffset? StartedAt);
+
+/// <summary>One line of container output, paired with the moment the container wrote it.</summary>
+public record TimedLogLine(DateTimeOffset Timestamp, string Text);
 
 public record ImageInfo(string Id, string Tag, DateTimeOffset CreatedAt, long SizeBytes);
 public record ContainerStats(double CpuPercent, long MemoryUsedBytes, long MemoryLimitBytes, long NetRxBytes, long NetTxBytes);

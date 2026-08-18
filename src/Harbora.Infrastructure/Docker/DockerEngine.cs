@@ -207,6 +207,30 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         return string.Concat(stdout, stderr);
     }
 
+    /// <summary>
+    /// The one engine that can honor a time window honestly: Docker's own log API takes
+    /// <c>Since</c>/<c>Timestamps</c> as first-class parameters, so this asks the daemon directly
+    /// rather than guessing from an untimed tail. <paramref name="maxLines"/> stays as a hard cap
+    /// alongside <c>Since</c> — a container that has written for days must not turn "last 15 minutes"
+    /// into an unbounded read.
+    /// </summary>
+    public async Task<IReadOnlyList<TimedLogLine>> GetLogsSinceAsync(
+        string containerId, DateTimeOffset since, int maxLines, CancellationToken ct)
+    {
+        var parameters = new ContainerLogsParameters
+        {
+            ShowStdout = true,
+            ShowStderr = true,
+            Follow = false,
+            Tail = maxLines.ToString(),
+            Timestamps = true,
+            Since = since.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture)
+        };
+        using var stream = await client.Containers.GetContainerLogsAsync(containerId, tty: false, parameters, ct);
+        var (stdout, stderr) = await stream.ReadOutputToEndAsync(ct);
+        return DockerTimestampedLog.Parse(string.Concat(stdout, stderr));
+    }
+
     public async Task<IReadOnlyList<ContainerInfo>> ListContainersAsync(string? labelFilter, CancellationToken ct)
     {
         var parameters = new ContainersListParameters { All = true };
