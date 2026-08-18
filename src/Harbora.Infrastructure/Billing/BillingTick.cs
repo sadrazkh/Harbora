@@ -910,7 +910,16 @@ public sealed class BillingTick(
 
             if (verdict != LowBalanceVerdict.Warn) return;
 
-            var (title, body) = LowBalanceMessage(workspace.Name, wallet.BalanceMinor, hourCostMinor);
+            // Computed once and handed to both the incident and the notification below, so a
+            // customer who reads one and then the other never finds them naming two different dates
+            // for the one thing they both mean. Formatted invariant, same reasoning as FlooredHours:
+            // nothing on this path has a request's culture to read digits from, and the SSL-expiry
+            // warning already sets the precedent (CertificateWatcher's own ExpiryDate).
+            var runsOutOn = BurnRate.RunwayDate(clock.UtcNow, wallet.BalanceMinor, hourCostMinor) is { } runsOut
+                ? runsOut.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
+                : "";
+
+            var (title, body) = LowBalanceMessage(workspace.Name, wallet.BalanceMinor, hourCostMinor, runsOutOn);
 
             // Opened rather than resolved anywhere: the balance climbing back out of the window only
             // clears the wallet's own warned marker above (Rearm) — a separate mechanism from the
@@ -928,7 +937,8 @@ public sealed class BillingTick(
             // User.PreferredCulture, so this hands over the facts rather than either language's
             // sentence and lets NotificationService pick per reader.
             var evt = NotificationEventData.Create(AlertEvent.LowBalance,
-                ("WorkspaceName", workspace.Name), ("Hours", FlooredHours(wallet.BalanceMinor, hourCostMinor)));
+                ("WorkspaceName", workspace.Name), ("Hours", FlooredHours(wallet.BalanceMinor, hourCostMinor)),
+                ("RunsOutOn", runsOutOn));
             var rulesReached = await notifications.NotifyAsync(workspace.Id, evt, AlertSeverity.Warning, ct);
 
             if (rulesReached > 0) return;
@@ -1076,22 +1086,31 @@ public sealed class BillingTick(
     /// </para>
     /// </summary>
     private static string FlooredHours(long balanceMinor, long hourCostMinor) =>
-        (balanceMinor <= 0 ? 0 : balanceMinor / hourCostMinor).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        (BurnRate.RunwayHours(balanceMinor, hourCostMinor) ?? 0)
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
 
+    /// <param name="runsOutOn">
+    /// The same runway, said as an invariant "yyyy-MM-dd" date rather than a count of hours — a
+    /// customer's own "when" question, not only "how much longer". Empty when
+    /// <see cref="BurnRate.RunwayDate"/> has none to give, in which case the sentence naming it is
+    /// left out rather than printed with a blank in it.
+    /// </param>
     private static (string Title, string Body) LowBalanceMessage(
-        string workspaceName, long balanceMinor, long hourCostMinor)
+        string workspaceName, long balanceMinor, long hourCostMinor, string runsOutOn)
     {
         var left = FlooredHours(balanceMinor, hourCostMinor);
+        var whenEn = runsOutOn.Length > 0 ? $" At this rate, the balance runs out around {runsOutOn}." : "";
+        var whenFa = runsOutOn.Length > 0 ? $" با همین روند، اعتبار حدود {runsOutOn} به پایان می‌رسد." : "";
 
         var title = $"Balance running low: {workspaceName} — اعتبار رو به پایان است";
 
         var body =
             $"Workspace \"{workspaceName}\" has about {left} more hour(s) of balance at what the last " +
             "hour cost it. When the balance reaches zero its apps and databases are stopped until it " +
-            "is topped up.\n\n" +
+            $"is topped up.{whenEn}\n\n" +
             $"اعتبار فضای کاری «{workspaceName}» با نرخ ساعت گذشته تقریباً برای {left} ساعت دیگر کافی " +
             "است. با رسیدن اعتبار به صفر، برنامه‌ها و پایگاه‌های داده‌ی آن تا زمان شارژ حساب متوقف " +
-            "می‌شوند.";
+            $"می‌شوند.{whenFa}";
 
         return (title, body);
     }

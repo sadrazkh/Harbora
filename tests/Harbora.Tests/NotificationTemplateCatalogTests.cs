@@ -128,6 +128,32 @@ public class NotificationTemplateCatalogTests
         rendered.TextBody.Should().Contain("acme").And.Contain("22");
     }
 
+    [Fact]
+    public void Low_balance_also_says_when_that_runway_runs_out_in_both_languages()
+    {
+        // The hours figure and the date are the same runway, said two ways — BillingTick hands both
+        // over already computed, and this template only has to place the date it was given.
+        var data = NotificationEventData.Create(AlertEvent.LowBalance,
+            ("WorkspaceName", "acme"), ("Hours", "22"), ("RunsOutOn", "2026-08-20"));
+
+        Catalog.Render(data, "en").TextBody.Should().Contain("2026-08-20");
+        Catalog.Render(data, "fa").TextBody.Should().Contain("2026-08-20");
+    }
+
+    [Fact]
+    public void Low_balance_omits_the_runway_date_sentence_rather_than_printing_a_blank_one()
+    {
+        // BurnRate.RunwayDate has none to give when nothing is currently costing money, and
+        // ReviewLowBalanceAsync hands over "" for it — RunningLow already guarantees the hour that
+        // triggers a warning cost something, so this is a defensive case rather than one the product
+        // reaches today, and it must degrade to silence rather than "runs out around ."
+        var data = NotificationEventData.Create(AlertEvent.LowBalance,
+            ("WorkspaceName", "acme"), ("Hours", "22"), ("RunsOutOn", ""));
+
+        Catalog.Render(data, "en").TextBody.Should().NotContain("around .").And.NotContain("runs out around");
+        Catalog.Render(data, "fa").TextBody.Should().NotContain("به پایان می‌رسد");
+    }
+
     // ---- the HTML alternative -----------------------------------------------------------------
 
     [Fact]

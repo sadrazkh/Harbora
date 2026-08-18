@@ -440,6 +440,26 @@ public class LowBalanceAlertTests
     }
 
     [Fact]
+    public async Task The_warning_also_carries_the_same_runway_said_as_a_date()
+    {
+        // Hours and date are one runway, computed once (BurnRate.RunwayDate) and handed to both the
+        // incident and the notification data — a customer must never see them disagree.
+        await using var db = Harness.SystemContext();
+        SeedTenant(db, "tenant", balanceMinor: Threshold - 500);
+        var told = new RecordingNotificationService();
+
+        await Harness.Tick(db, notifications: told).ChargeHourAsync(Hour, default);
+
+        // 11,000 left at 500 an hour is 22 whole hours from the clock the tick reads "now" off —
+        // Harness.Now, not the billing hour being charged.
+        var expected = Harness.Now.AddHours(22).ToString("yyyy-MM-dd");
+        told.Notifications.Should().ContainSingle().Subject.Data.Get("RunsOutOn").Should().Be(expected);
+
+        var incident = db.AlertIncidents.AsNoTracking().Should().ContainSingle().Subject;
+        incident.Body.Should().Contain(expected);
+    }
+
+    [Fact]
     public async Task The_hours_left_are_floored_rather_than_rounded_up()
     {
         // 11,999 at 500 an hour is 23.998 hours. Rounding that to 24 tells a customer they have a

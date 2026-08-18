@@ -365,6 +365,127 @@ public sealed class WalletService(
     }
 
     /// <summary>
+    /// The least number of distinct hours this workspace has to have been billed for before
+    /// <see cref="ForecastAsync"/> will project anything.
+    ///
+    /// <para>
+    /// One full day. A single hour is not a pattern — it can be a resource created ten minutes ago,
+    /// a deploy still finishing, or the one hour of a day's backfill that happened to be priced
+    /// differently — and extrapolating it across a month is exactly the shape of confident wrong
+    /// number this feature exists to refuse. A day is the smallest window that could plausibly show a
+    /// workspace's own rhythm rather than a single moment of it, and it is the unit the low-balance
+    /// warning already thinks in — <see cref="Wallet.LowBalanceHours"/> defaults to the same 24.
+    /// </para>
+    /// </summary>
+    public const int MinimumHistoryHours = 24;
+
+    /// <summary>
+    /// What the current billing period is heading towards, and when the balance runs out at that
+    /// rate — both derived from hours the real hourly pass already priced and wrote, never
+    /// recomputed from rates here. See <see cref="CostForecast"/> for what each figure means and why
+    /// it is a claim about the future rather than a record of the past.
+    ///
+    /// <para>
+    /// <b>The burn rate is the most recently completed billing hour, not a month-to-date average.</b>
+    /// An average blends whatever a workspace was doing across the whole period, so a workspace that
+    /// ran heavily for three weeks and was stopped yesterday would still show a high average today —
+    /// which is precisely the "forecast a stopped workload as though it were still burning" failure
+    /// this feature is required not to make. The one hour is what <see cref="BillingTick"/> priced
+    /// against whatever was actually running through it, so a suspension or a stopped app is reflected
+    /// the next time the tick runs, without this method needing to know suspension exists at all.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>That hour is chosen by the clock, not by which hour last has a row.</b> An hour nothing was
+    /// chargeable in writes no ledger line at all — <see cref="BillingTick"/> still evaluates the
+    /// workspace, it simply has nothing to bill — so reaching backward for the last hour that DID
+    /// leave a row would read a workspace that stopped everything three days ago as though it were
+    /// still burning at Tuesday's rate. Once a workspace has cleared
+    /// <see cref="MinimumHistoryHours"/> of real charges, an hour with no row for it is trusted as a
+    /// genuine zero rather than treated as missing data.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Every read here ignores the tenant filter</b>, for the reason every other read in this class
+    /// does: a provider administrator viewing a customer's forecast, and a background job with no
+    /// session at all, both need to see past their own scope. <paramref name="workspaceId"/> is the
+    /// only thing keeping two customers' figures apart.
+    /// </para>
+    /// </summary>
+    public async Task<CostForecast> ForecastAsync(
+        Guid workspaceId, DateTimeOffset periodFrom, DateTimeOffset periodTo, CancellationToken ct)
+    {
+        var now = clock.UtcNow;
+
+        // Already a fact, not a forecast, so it is read and returned even when there is not enough
+        // history to project the rest of the period.
+        var spentSoFarMinor = -(await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
+            .Where(l => l.WorkspaceId == workspaceId
+                        && l.BillingHour >= periodFrom && l.BillingHour < periodTo
+                        && (l.Kind == LedgerKind.Charge || l.Kind == LedgerKind.PlanMinimumTopUp))
+            .SumAsync(l => (long?)l.AmountMinor, ct) ?? 0);
+
+        // Every hour this workspace has ever actually been charged for, not only this period's — a
+        // wallet that has run for months has earned the platform's confidence on the first day of a
+        // new one, and gating on the period alone would make every workspace on the install look
+        // brand new at midnight on the 1st.
+        var chargedHours = await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
+            .Where(l => l.WorkspaceId == workspaceId
+                        && (l.Kind == LedgerKind.Charge || l.Kind == LedgerKind.PlanMinimumTopUp))
+            .Select(l => l.BillingHour)
+            .Distinct()
+            .ToListAsync(ct);
+
+        if (chargedHours.Count < MinimumHistoryHours)
+            return new CostForecast(
+                HasEnoughHistory: false, chargedHours.Count, MinimumHistoryHours,
+                spentSoFarMinor, BurnRateHourlyMinor: 0,
+                ProjectedPeriodTotalMinor: null, RunwayHours: null, RunwayDate: null);
+
+        // The hour immediately before the one in progress — the newest hour BillingTick could
+        // possibly have priced by now, whether or not anything of it ended up on the ledger. Mirrors
+        // BillingTick.TopOfHour/HasEnded exactly, because an hour named differently by the two would
+        // let this method ask about an hour the tick has not reached yet and call the silence "free".
+        var lastEndedHour = TopOfHour(now).AddHours(-1);
+
+        // What that hour actually cost, read the same way BillingTick itself reads "what did this
+        // hour come to" when it decides whether to warn — see ReviewLowBalanceAsync's hourCostMinor.
+        // No rows for the hour sums to null, and null becomes zero here rather than "unknown": once
+        // MinimumHistoryHours has been cleared, a silent hour is trusted as a real one that cost
+        // nothing, not as data this method failed to find.
+        var burnRateMinor = Math.Max(0L, -(await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
+            .Where(l => l.WorkspaceId == workspaceId && l.BillingHour == lastEndedHour
+                        && (l.Kind == LedgerKind.Charge || l.Kind == LedgerKind.PlanMinimumTopUp))
+            .SumAsync(l => (long?)l.AmountMinor, ct) ?? 0));
+
+        // Whole hours between now and the end of the period. The current, still-running hour is
+        // deliberately not part of "spent so far" — BillingTick only charges an hour once it has
+        // ended — so it belongs on the projected side, not double-counted on both.
+        var hoursRemaining = Math.Max(0L, (long)Math.Floor((periodTo - now).TotalHours));
+
+        // Guarded the way MonthlyEstimate guards its own multiplication: this project compiles
+        // unchecked, so an overflow here would not throw — it would wrap to a large negative and
+        // present a runaway workspace's bill as a refund, which is worse than refusing a figure.
+        long? projectedTotalMinor = spentSoFarMinor;
+        if (burnRateMinor > 0 && hoursRemaining > 0)
+        {
+            projectedTotalMinor = hoursRemaining > (long.MaxValue - spentSoFarMinor) / burnRateMinor
+                ? null
+                : spentSoFarMinor + burnRateMinor * hoursRemaining;
+        }
+
+        var balanceMinor = await db.Wallets.IgnoreQueryFilters().AsNoTracking()
+            .Where(w => w.WorkspaceId == workspaceId)
+            .Select(w => (long?)w.BalanceMinor).FirstOrDefaultAsync(ct) ?? 0;
+
+        return new CostForecast(
+            HasEnoughHistory: true, chargedHours.Count, MinimumHistoryHours,
+            spentSoFarMinor, burnRateMinor, projectedTotalMinor,
+            BurnRate.RunwayHours(balanceMinor, burnRateMinor),
+            BurnRate.RunwayDate(now, balanceMinor, burnRateMinor));
+    }
+
+    /// <summary>
     /// Writes a compensating line without changing the old one. Positive returns money; negative
     /// removes an erroneous credit. The resulting balance drives the same suspend/resume authority
     /// as an hourly charge or a normal credit.

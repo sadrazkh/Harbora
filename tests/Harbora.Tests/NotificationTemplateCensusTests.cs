@@ -107,7 +107,8 @@ public class NotificationTemplateCensusTests
             ("TargetRef", "primary-db"), ("Detail", "connection refused")),
         AlertEvent.ThresholdBreached => NotificationEventData.Create(evt,
             ("AppName", "api"), ("Metric", "CpuPercent"), ("Threshold", "90"), ("SustainedMinutes", "5")),
-        AlertEvent.LowBalance => NotificationEventData.Create(evt, ("WorkspaceName", "tenant"), ("Hours", "22")),
+        AlertEvent.LowBalance => NotificationEventData.Create(evt,
+            ("WorkspaceName", "tenant"), ("Hours", "22"), ("RunsOutOn", "2026-08-20")),
         AlertEvent.ServiceProvisionFailed => NotificationEventData.Create(evt,
             ("ServiceName", "orders-db"), ("Reason", "image pull timed out")),
         _ => throw new InvalidOperationException(

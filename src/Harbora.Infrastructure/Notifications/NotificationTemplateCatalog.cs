@@ -130,7 +130,7 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
             $"اعتبار رو به پایان است: {d.Get("WorkspaceName")}",
             $"اعتبار فضای کاری «{d.Get("WorkspaceName")}» با نرخ ساعت گذشته تقریباً برای {d.Get("Hours")} " +
             "ساعت دیگر کافی است. با رسیدن اعتبار به صفر، برنامه‌ها و پایگاه‌های داده‌ی آن تا زمان شارژ حساب " +
-            "متوقف می‌شوند."),
+            $"متوقف می‌شوند.{RunsOutOnFa(d)}"),
 
         AlertEvent.ServiceProvisionFailed => (
             $"راه‌اندازی ناموفق: {d.Get("ServiceName")}",
@@ -168,7 +168,7 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
             $"Balance running low: {d.Get("WorkspaceName")}",
             $"Workspace \"{d.Get("WorkspaceName")}\" has about {d.Get("Hours")} more hour(s) of balance " +
             "at what the last hour cost it. When the balance reaches zero its apps and databases are " +
-            "stopped until it is topped up."),
+            $"stopped until it is topped up.{RunsOutOnEn(d)}"),
 
         AlertEvent.ServiceProvisionFailed => (
             $"Provisioning failed: {d.Get("ServiceName")}",
@@ -189,6 +189,21 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
         "CrashLooping" => isFa ? "مدام دچار کرش شده و مجدداً راه‌اندازی می‌شود" : "keeps crashing and being restarted",
         _ => isFa ? "به‌طور غیرمنتظره متوقف شد" : "exited unexpectedly"
     };
+
+    /// <summary>
+    /// The runway restated as a date, appended to the low-balance sentence that already gives it in
+    /// hours — <c>BillingTick.ReviewLowBalanceAsync</c> computes both from the one hourly cost and
+    /// hands this one over as <c>RunsOutOn</c>, an invariant "yyyy-MM-dd" string, so this template
+    /// never re-derives the arithmetic behind it. Empty when there is none to give (see
+    /// <c>BurnRate.RunwayDate</c>), in which case nothing is appended rather than a sentence with a
+    /// blank date in it.
+    /// </summary>
+    private static string RunsOutOnEn(NotificationEventData d) =>
+        d.Get("RunsOutOn") is { Length: > 0 } date ? $" At this rate, the balance runs out around {date}." : "";
+
+    /// <inheritdoc cref="RunsOutOnEn"/>
+    private static string RunsOutOnFa(NotificationEventData d) =>
+        d.Get("RunsOutOn") is { Length: > 0 } date ? $" با همین روند، اعتبار حدود {date} به پایان می‌رسد." : "";
 
     /// <summary><c>CertificateWatcher</c> passes <c>Expired</c> ("true"/"false") rather than choosing
     /// the sentence itself, so both languages describe the same two cases here, once.</summary>
