@@ -373,8 +373,16 @@ public sealed class QuotaService(HarboraDbContext db, IOptions<BillingOptions> b
         if (excludeAppId is { } ex) appsQuery = appsQuery.Where(a => a.Id != ex);
 
         var apps = await appsQuery.CountAsync(ct);
-        var mem = await appsQuery.SumAsync(a => (long?)a.MemoryLimitBytes, ct) ?? 0;
-        var cpu = await appsQuery.SumAsync(a => (double?)a.CpuLimit, ct) ?? 0;
+
+        // A replicated app commits its memory/CPU limit once per replica, not once total — three
+        // containers hold three times the resources one does. Without this, an app scaled to three
+        // replicas measured as one on this workspace's usage screen and against its plan's caps, so a
+        // customer could scale straight past a memory or CPU ceiling this exact query exists to
+        // enforce. DesiredReplicas is nullable and null means "never set" rather than "zero", so this
+        // reads it the same way the deployment pipeline does: `?? 1`, matching App.DesiredReplicas'
+        // own default — nothing on any write path today sets it below 1.
+        var mem = await appsQuery.SumAsync(a => (long?)(a.MemoryLimitBytes * (a.DesiredReplicas ?? 1)), ct) ?? 0;
+        var cpu = await appsQuery.SumAsync(a => (double?)(a.CpuLimit * (a.DesiredReplicas ?? 1)), ct) ?? 0;
 
         // Databases count too. They did not, so a plan's memory limit measured half the workspace
         // and a tenant could sit inside their quota while the host ran out of memory.
