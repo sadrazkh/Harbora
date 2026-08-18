@@ -518,7 +518,7 @@ public sealed class BillingTick(
 
         void Workload(
             BilledResourceType type, Guid id, string name, string? sizeKey, Guid serverId,
-            BilledRunState state)
+            BilledRunState state, int replicas = 1)
         {
             if (sizeKey is null || !sizes.TryGetValue(sizeKey, out var size))
             {
@@ -561,7 +561,13 @@ public sealed class BillingTick(
                 return;
             }
 
-            billable.Add(new BillableResource(type, id, name, state, rate));
+            // A PAYG app running N replicas is N containers on the node for every hour they run, not
+            // one — this is the whole reason DesiredReplicas exists, and billing that stayed silent
+            // about it would be the one place the platform gave away capacity nobody paid for. Only
+            // ever more than 1 for BilledResourceType.App (the only caller that passes it); a
+            // service's replicas — should it ever grow the concept — is a question for that day, not
+            // this one.
+            billable.Add(new BillableResource(type, id, name, state, checked(rate * Math.Max(1, replicas))));
         }
 
         // What a gibibyte-hour costs on this workspace's plan, or null having said why. Shared by
@@ -597,7 +603,11 @@ public sealed class BillingTick(
             // Created and Deploying reserve nothing yet: no container, no image on disk, no port.
             if (state is not { } billedState) continue;
 
-            Workload(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId, billedState);
+            // Stopped still reserves exactly one slot — the image and the port, not N containers that
+            // are not running. Only Running multiplies: that is the state in which DesiredReplicas
+            // containers are actually up and costing the node something.
+            var replicas = billedState == BilledRunState.Running ? Math.Max(1, app.DesiredReplicas ?? 1) : 1;
+            Workload(BilledResourceType.App, app.Id, app.Name, app.InstanceSizeKey, app.ServerId, billedState, replicas);
         }
 
         var services = await db.ManagedServices.IgnoreQueryFilters().AsNoTracking()

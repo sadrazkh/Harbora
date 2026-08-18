@@ -459,6 +459,43 @@ public class BillingTickTests
     }
 
     [Fact]
+    public async Task A_running_app_with_three_replicas_is_charged_three_times_its_rate()
+    {
+        // The money side of the same fact DeploymentPipelineReplicaTests proves on the container
+        // side: three replicas is three containers on the node for every hour they run, and PAYG
+        // meters hourly per running workload. A tick that charged one rate regardless of DesiredReplicas
+        // would be giving away two of every three replicas for free.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(db, "tenant", ratePerHour: 500);
+        await db.SaveChangesAsync();
+        (await db.Apps.SingleAsync()).DesiredReplicas = 3;
+        await db.SaveChangesAsync();
+
+        await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-1500);
+        (await db.BillingLedger.Where(l => l.WorkspaceId == ws && l.ResourceType == BilledResourceType.App)
+            .SingleAsync()).AmountMinor.Should().Be(-1500);
+    }
+
+    [Fact]
+    public async Task A_stopped_app_with_replicas_configured_is_still_charged_at_the_single_stopped_rate()
+    {
+        // Stopped means no container is running, whatever DesiredReplicas says — multiplying a
+        // reservation nothing is consuming would charge for containers that do not exist.
+        await using var db = Harness.SystemContext();
+        var ws = Harness.SeedWorkspaceWithOneRunningApp(
+            db, "tenant", ratePerHour: 500, stoppedRatePerHour: 100, status: AppStatus.Stopped);
+        await db.SaveChangesAsync();
+        (await db.Apps.SingleAsync()).DesiredReplicas = 3;
+        await db.SaveChangesAsync();
+
+        await Harness.Tick(db).ChargeHourAsync(Hour, default);
+
+        (await db.Wallets.SingleAsync(w => w.WorkspaceId == ws)).BalanceMinor.Should().Be(-100);
+    }
+
+    [Fact]
     public async Task A_retried_tick_charges_once()
     {
         // The durable queue retries. Without the unique index behind this, a retry is a second bill.
