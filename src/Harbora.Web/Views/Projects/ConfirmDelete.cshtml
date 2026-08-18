@@ -41,7 +41,27 @@
                 <ul class="text-sm text-danger list-disc ms-5 mb-3">
                     @foreach (var a in plan.Apps)
                     {
-                        <li>@a.Name <span class="text-ink-faint">— @a.EnvironmentName</span></li>
+                        <li data-app-volume-count="@a.VolumeCount" data-app-volume-protected="@a.HasProtectedVolume.ToString().ToLowerInvariant()">
+                            @a.Name <span class="text-ink-faint">— @a.EnvironmentName</span>
+                            @if (a.VolumeCount > 0)
+                            {
+                                @* HARBORA-0033: an app's stored files used to disappear in this cascade with
+                                   nothing on this screen saying so — the same gap ServiceRemovalPlan already
+                                   closed for a database's data below. *@
+                                <text> — </text>
+                                @(isFa
+                                    ? (a.VolumeCount == 1 ? "همراه با ۱ والیوم داده" : $"همراه با {a.VolumeCount} والیوم داده")
+                                    : (a.VolumeCount == 1 ? "with 1 volume of data" : $"with {a.VolumeCount} volumes of data"))
+                            }
+                            @if (a.HasProtectedVolume)
+                            {
+                                <span class="text-warn">
+                                    @(isFa
+                                        ? " — یکی از والیوم‌هایش محافظت‌شده است؛ حذف این پروژه رد خواهد شد تا وقتی محافظت خاموش شود"
+                                        : " — one of its volumes is protected; this delete will be refused until protection is turned off")
+                                </span>
+                            }
+                        </li>
                     }
                 </ul>
             }

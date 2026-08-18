@@ -1,7 +1,23 @@
 namespace Harbora.Infrastructure.Projects;
 
-/// <summary>One app or database a project delete would destroy, named and placed.</summary>
-public readonly record struct ProjectRemovalItem(Guid Id, string Name, string EnvironmentName);
+/// <summary>
+/// One app or database a project delete would destroy, named and placed.
+///
+/// <param name="VolumeCount">
+/// How many <see cref="Domain.Apps.Volume"/> rows this app carries — zero for a database, which
+/// reports its own data through <c>ServiceRemovalPlan</c>'s "with its data" wording instead. Named
+/// here so the confirm screen can say a project delete destroys an app's stored files too, not only
+/// the app itself — HARBORA-0033's "the user must be able to tell before confirming" (see
+/// <c>ProjectsController</c>'s <c>ConfirmDelete</c> view).
+/// </param>
+/// <param name="HasProtectedVolume">
+/// Whether any of those volumes is <see cref="Domain.Apps.Volume.Protected"/> — and so will make
+/// <see cref="ProjectDeletionService.DeleteAsync"/> refuse this app rather than delete it, the same
+/// way <see cref="VolumeCount"/> exists to say what would be destroyed, this exists to say what
+/// cannot be.
+/// </param>
+public readonly record struct ProjectRemovalItem(
+    Guid Id, string Name, string EnvironmentName, int VolumeCount = 0, bool HasProtectedVolume = false);
 
 /// <summary>
 /// Everything a project delete would destroy — read once by <see cref="ProjectDeletionService.PlanAsync"/>

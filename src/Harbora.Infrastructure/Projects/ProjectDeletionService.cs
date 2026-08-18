@@ -51,8 +51,24 @@ public sealed class ProjectDeletionService(
             .OrderBy(a => a.Name)
             .Select(a => new { a.Id, a.Name, a.EnvironmentId })
             .ToListAsync(ct);
+
+        // HARBORA-0033: what an app's own volumes would do to this delete, named for the confirm
+        // screen the same way ServiceRemovalPlan already names a database's data. Grouped in memory
+        // for the same reason the row above is — a handful of apps, never worth a second round trip
+        // per app.
+        var appIdsForVolumes = appRows.Select(a => a.Id).ToList();
+        var volumesByApp = appIdsForVolumes.Count == 0
+            ? []
+            : await db.Volumes.Where(v => appIdsForVolumes.Contains(v.AppId))
+                .Select(v => new { v.AppId, v.Protected })
+                .ToListAsync(ct);
+        var volumeCounts = volumesByApp.GroupBy(v => v.AppId).ToDictionary(g => g.Key, g => g.Count());
+        var appsWithProtectedVolume = volumesByApp.Where(v => v.Protected).Select(v => v.AppId).ToHashSet();
+
         var apps = appRows
-            .Select(a => new ProjectRemovalItem(a.Id, a.Name, environmentNames.GetValueOrDefault(a.EnvironmentId, "")))
+            .Select(a => new ProjectRemovalItem(
+                a.Id, a.Name, environmentNames.GetValueOrDefault(a.EnvironmentId, ""),
+                volumeCounts.GetValueOrDefault(a.Id, 0), appsWithProtectedVolume.Contains(a.Id)))
             .ToList();
 
         var serviceRows = await db.ManagedServices.Where(s => environmentIds.Contains(s.EnvironmentId))

@@ -286,4 +286,88 @@ public class ProjectDeleteHttpTests(HarboraHttpFixture fixture)
         Panel.Read(db => db.Apps.IgnoreQueryFilters().Any(a => a.Slug == fineSlug)).Should().BeFalse(
             "the sibling app with no container problem must still be gone — one stuck item must not block the rest");
     }
+
+    /// <summary>
+    /// HARBORA-0033's brake, reached through the exact same cascade the tests above already prove:
+    /// <c>ProjectDeletionService</c> never talks to Docker itself, it calls
+    /// <c>IAppOperationsService.DeleteAsync</c> for every app it lists — the same method the guard
+    /// lives in — so a Protected volume refuses the project cascade the same way it refuses a single
+    /// app delete, and the project's own "still holds X" honesty (already proven above for a stuck
+    /// container) covers it for free.
+    /// </summary>
+    [Fact]
+    public async Task A_protected_volume_leaves_its_app_behind_and_the_project_survives_with_it()
+    {
+        var (project, environment) = SeedProject("protected-volume-blocks-cascade");
+        var protectedSlug = "guarded-api-" + project.Id.ToString("N")[..8];
+        var app = new Harbora.Domain.Apps.App
+        {
+            WorkspaceId = fixture.WorkspaceId, EnvironmentId = environment.Id, ServerId = Guid.CreateVersion7(),
+            Name = "guarded-api", Slug = protectedSlug,
+            SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/guarded:1.0"
+        };
+        var volume = new Harbora.Domain.Apps.Volume
+        {
+            AppId = app.Id, Name = "guarded-api-data", MountPath = "/data", Protected = true
+        };
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(app);
+            db.Volumes.Add(volume);
+        });
+        Panel.GivenUser(fixture.WorkspaceId, "protected-volume-blocks-cascade@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.247", "protected-volume-blocks-cascade@example.com");
+
+        var response = await ConfirmedDeleteAsync(client, project.Id, project.Name);
+
+        response.RedirectPath().Should().Be($"/projects/{project.Id}",
+            "a project delete that could not remove everything must land back on the project, not on the list");
+
+        var html = await (await client.GetAsync(response.RedirectPath())).Content.ReadAsStringAsync();
+        ErrorBannerText(html).Should().Contain("guarded-api",
+            "the refusal has to name the app a protected volume is blocking, the same as any other stuck item");
+
+        Panel.Read(db => db.Projects.Any(p => p.Id == project.Id)).Should().BeTrue();
+        Panel.Read(db => db.Apps.IgnoreQueryFilters().Any(a => a.Id == app.Id)).Should().BeTrue(
+            "the app must still be there — its volume being protected must not orphan it or its container");
+        Panel.Read(db => db.Volumes.Any(v => v.Id == volume.Id)).Should().BeTrue(
+            "the protected volume's row must survive along with the app that owns it");
+        Panel.Docker.OperationsOn(volume.Name).Should().NotContain("RemoveVolumeAsync",
+            "a protected volume's data must never reach Docker even by way of the project cascade");
+    }
+
+    /// <summary>
+    /// HARBORA-0033's UI half: an app's stored files disappearing in a project cascade used to be
+    /// invisible on this screen entirely — <c>ServiceRemovalPlan</c> already said "with its data" for
+    /// a database, and nothing said the equivalent for an app.
+    /// </summary>
+    [Fact]
+    public async Task The_confirm_page_names_an_apps_volume_count_and_warns_when_one_is_protected()
+    {
+        var (project, environment) = SeedProject("confirm-page-volumes");
+        var app = new Harbora.Domain.Apps.App
+        {
+            WorkspaceId = fixture.WorkspaceId, EnvironmentId = environment.Id, ServerId = Guid.CreateVersion7(),
+            Name = "storage-api", Slug = "storage-api-" + project.Id.ToString("N")[..8],
+            SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/storage:1.0"
+        };
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(app);
+            db.Volumes.Add(new Harbora.Domain.Apps.Volume
+            { AppId = app.Id, Name = "storage-api-data", MountPath = "/data", Protected = true });
+        });
+        Panel.GivenUser(fixture.WorkspaceId, "confirm-page-volumes@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.248", "confirm-page-volumes@example.com");
+
+        var response = await client.GetAsync($"/projects/{project.Id}/delete");
+        var html = await response.Content.ReadAsStringAsync();
+
+        // Not a translated sentence — the panel renders Persian by default in this suite — but the
+        // data attribute ConfirmDelete.cshtml carries regardless of language.
+        html.Should().Contain("storage-api").And.Contain("data-app-volume-count=\"1\"",
+            "the confirm screen must say an app carries data, not just name the app");
+        html.Should().Contain("data-app-volume-protected=\"true\"",
+            "and it must warn that this specific delete will be refused, before anyone types the project's name");
+    }
 }
