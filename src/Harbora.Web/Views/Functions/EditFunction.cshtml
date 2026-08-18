@@ -32,11 +32,16 @@
                 <span class="text-xs text-ink-faint">@FunctionStarters.Label(Model.Runtime)</span>
             </div>
             @* A plain textarea, monospace and LTR whatever the panel's direction is — code is not
-               prose, and an RTL editor mangles it. It is deliberately not a heavyweight editor
-               component: this panel ships its JavaScript itself, and a syntax highlighter is a
-               megabyte of download for a page most customers open twice. *@
-            <textarea name="Code" rows="22" spellcheck="false" dir="ltr" required
-                      class="w-full resize-y rounded-xl border border-line bg-canvas p-4 font-mono text-[13px] leading-relaxed text-ink focus:border-accent focus:outline-none">@Model.Form.Code</textarea>
+               prose, and an RTL editor mangles it. The island below (main.ts, CodeEditor.vue)
+               mounts a trimmed, lazily-loaded CodeMirror over it and keeps this element's value in
+               sync as the source of truth for the form post; this textarea is the fallback if that
+               script never loads, not a placeholder for it — it is complete and correct on its
+               own. *@
+            <div id="function-code-editor" data-island="function-code-editor"
+                 data-runtime="@Model.Runtime" data-lang="@(isFa ? "fa" : "en")">
+                <textarea id="function-code" name="Code" rows="22" spellcheck="false" dir="ltr" required
+                          class="w-full resize-y rounded-xl border border-line bg-canvas p-4 font-mono text-[13px] leading-relaxed text-ink focus:border-accent focus:outline-none">@Model.Form.Code</textarea>
+            </div>
         </div>
 
         @if (Model.Runs is { Count: > 0 })

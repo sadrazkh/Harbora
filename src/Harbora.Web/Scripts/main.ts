@@ -34,6 +34,28 @@ const islands: Record<string, IslandMounter> = {
       lang: el.dataset.lang || 'en',
     }).mount(el);
   },
+  // The one island loaded on demand rather than up front: CodeMirror, trimmed, is 96-130 kB
+  // gzipped depending on the runtime's grammar, and the Functions editor is a page most customers
+  // open twice. `import()` here — not a static import at the top of this file — is what makes
+  // Vite emit it as its own chunk instead of folding it into every page's entry bundle.
+  //
+  // The mount point wraps the real <textarea> Razor rendered, not an empty div: if the chunk
+  // never resolves (offline, blocked, a bad deploy), `.catch()` below runs and that textarea is
+  // never touched — the form already posts correctly without any of this.
+  'function-code-editor': (el) => {
+    const textarea = el.querySelector<HTMLTextAreaElement>('textarea[name="Code"]');
+    if (!textarea) return;
+    import('./islands/CodeEditor.vue').then(({ default: CodeEditor }) => {
+      createApp(CodeEditor, {
+        runtime: el.dataset.runtime || 'CSharp',
+        lang: el.dataset.lang || 'en',
+        initialCode: textarea.value,
+        fieldName: textarea.name,
+      }).mount(el);
+    }).catch(() => {
+      // Leave the plain textarea exactly as it is — see the comment above.
+    });
+  },
   'metrics-chart': (el) => {
     createApp(MetricsChart, {
       name: el.dataset.name!,
