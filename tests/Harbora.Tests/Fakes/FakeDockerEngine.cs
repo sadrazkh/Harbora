@@ -403,10 +403,17 @@ public sealed class FakeDockerEngine : IDockerEngine
         return Task.CompletedTask;
     }
 
+    /// <summary>Volume names whose removal fails — a daemon that refuses, or a volume still in use.
+    /// Mirrors <see cref="UnremovableContainers"/> and <see cref="UndeletableImages"/> for the third
+    /// kind of thing this engine can be told to resist removing.</summary>
+    public HashSet<string> UnremovableVolumes { get; } = new(StringComparer.Ordinal);
+
     public Task RemoveVolumeAsync(string name, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         Record(nameof(RemoveVolumeAsync), name);
+        if (UnremovableVolumes.Contains(name))
+            throw new InvalidOperationException($"volume {name} could not be removed");
         return Task.CompletedTask;
     }
 

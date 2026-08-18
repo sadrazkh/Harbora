@@ -35,11 +35,28 @@
                     // rule B3 settled for health and uptime, and E settled for backup contents).
                     var lastBackupAt = Model.LastBackupAt.TryGetValue(volume.Name, out var at) ? at : null;
 
+                    // HARBORA-0033: the two confirm texts a person can actually get, chosen by the
+                    // checkbox below rather than fixed at render time — "the data stays" stopped being
+                    // true the moment that checkbox existed at all.
+                    var unmountOnlyConfirm = isFa
+                        ? "این مسیر دیگر وصل نشود؟ داده‌ها روی سرور می‌مانند."
+                        : "Stop mounting this path? The data stays on the server.";
+                    var deleteDataConfirm = isFa
+                        ? "این مسیر و داده‌هایش برای همیشه حذف شوند؟ این کار برگشت‌ناپذیر است."
+                        : "Delete this path and its data, permanently? This cannot be undone.";
+
                     <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 p-2.5"
-                         data-volume-backup-state="@(lastBackupAt is null ? "never" : "backed-up")">
+                         data-volume-backup-state="@(lastBackupAt is null ? "never" : "backed-up")"
+                         data-volume-protected="@volume.Protected.ToString().ToLowerInvariant()">
                         <span class="min-w-0">
                             <code dir="ltr" class="block truncate text-sm text-ink">@volume.MountPath</code>
-                            <small class="text-[11px] text-ink-faint">
+                            @if (volume.Protected)
+                            {
+                                <span class="inline-block rounded bg-warn-soft px-1.5 py-0.5 text-[10px] font-semibold text-warn align-middle ms-1">
+                                    @(isFa ? "محافظت‌شده" : "Protected")
+                                </span>
+                            }
+                            <small class="text-[11px] text-ink-faint block">
                                 @(volume.StorageBytes is { } bytes
                                     ? Harbora.Infrastructure.Tenancy.ByteSize.Measured(bytes)
                                     : (isFa ? "اندازه‌گیری نشده" : "not measured"))
@@ -69,9 +86,32 @@
                                     @(isFa ? "بدون مخزن پشتیبان" : "No backup repository")
                                 </span>
                             }
-                            <form asp-controller="Apps" asp-action="RemoveVolume" asp-route-id="@Model.Id" asp-route-volumeId="@volume.Id" method="post"
-                                  onsubmit="return confirm('@(isFa ? "این مسیر دیگر وصل نشود؟ داده‌ها روی سرور می‌مانند." : "Stop mounting this path? The data stays on the server.")');">
+                            <form asp-controller="Apps" asp-action="SetVolumeProtection" asp-route-id="@Model.Id" asp-route-volumeId="@volume.Id" method="post">
                                 @Html.AntiForgeryToken()
+                                <input type="hidden" name="protect" value="@((!volume.Protected).ToString().ToLowerInvariant())" />
+                                <button class="text-[11px] text-ink-faint hover:text-ink">
+                                    @(volume.Protected ? (isFa ? "برداشتن محافظت" : "Remove protection") : (isFa ? "محافظت کن" : "Protect"))
+                                </button>
+                            </form>
+                            <form asp-controller="Apps" asp-action="RemoveVolume" asp-route-id="@Model.Id" asp-route-volumeId="@volume.Id" method="post"
+                                  data-confirm-keep="@unmountOnlyConfirm" data-confirm-delete="@deleteDataConfirm"
+                                  data-confirm="@unmountOnlyConfirm"
+                                  onsubmit="return confirm(this.dataset.confirm);">
+                                @Html.AntiForgeryToken()
+                                @if (!volume.Protected)
+                                {
+                                    <label class="flex items-center gap-1 text-[11px] text-ink-faint">
+                                        <input type="checkbox" name="deleteData" value="true"
+                                               onchange="this.closest('form').dataset.confirm = this.checked ? this.closest('form').dataset.confirmDelete : this.closest('form').dataset.confirmKeep" />
+                                        @(isFa ? "حذف داده هم" : "Delete data too")
+                                    </label>
+                                }
+                                else
+                                {
+                                    <span class="text-[11px] text-ink-faint" title="@(isFa ? "برای حذف داده، ابتدا محافظت را خاموش کنید." : "Turn off protection before deleting its data.")">
+                                        @(isFa ? "داده محافظت‌شده" : "Data is protected")
+                                    </span>
+                                }
                                 <button class="text-[11px] text-ink-faint hover:text-danger">@(isFa ? "برداشتن" : "Unmount")</button>
                             </form>
                         </span>

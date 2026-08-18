@@ -11,6 +11,7 @@ using Harbora.Domain.Networking;
 using Harbora.Domain.Servers;
 using Harbora.Domain.Tenancy;
 using Harbora.Infrastructure.Networking;
+using Harbora.Infrastructure.Storage;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -881,29 +882,92 @@ public sealed partial class AppsController(
         var volume = app.Volumes.FirstOrDefault(v => v.Id == volumeId);
         if (volume is null) return NotFound();
 
+        // HARBORA-0033. Checked before the row is touched at all — a refusal here must leave the
+        // volume mounted, tracked and exactly as it was, not removed-from-the-app-but-not-deleted.
+        if (deleteData)
+        {
+            try { VolumeProtection.GuardAgainstDestroying([volume]); }
+            catch (VolumeProtectedException ex)
+            {
+                TempData["Error"] = IsFa ? ex.ReasonFa : ex.Message;
+                return RedirectToAction(nameof(Volumes), new { id });
+            }
+        }
+
         var name = volume.Name;
         var path = volume.MountPath;
         app.Volumes.Remove(volume);
         await db.SaveChangesAsync(ct);
 
         // Two different acts, and the second is not undoable. Forgetting the mount leaves the data
-        // on the host where it can be mounted again; deleting it is gone.
+        // on the host where it can be mounted again; deleting it is gone. Whether it actually IS gone
+        // is not assumed from "deleteData was true" — the docker call is what decides that, and the
+        // audit log and the message shown below both follow what actually happened rather than what
+        // was asked for. Before this, a Docker removal that threw was logged and then reported to the
+        // person as "Deleted" anyway — the exact defect class this whole feature exists to close.
+        var dataActuallyDeleted = false;
         if (deleteData)
         {
             var docker = await engines.ResolveAsync(app.ServerId, ct);
-            try { await docker.RemoveVolumeAsync(name, ct); }
+            try { await docker.RemoveVolumeAsync(name, ct); dataActuallyDeleted = true; }
             catch (Exception e) { logger.LogWarning(e, "Volume {Volume} was unmounted but not deleted.", name); }
         }
 
         await audit.LogAsync(
-            deleteData ? "app.volume_deleted" : "app.volume_detached", "app",
+            dataActuallyDeleted ? "app.volume_deleted" : "app.volume_detached", "app",
             $"{app.Name}:{path}", ClientIp, ct: ct);
 
-        TempData["Message"] = deleteData
-            ? (IsFa ? $"«{path}» و داده‌هایش حذف شد." : $"{path} and its data were deleted.")
-            : (IsFa
+        if (dataActuallyDeleted)
+        {
+            TempData["Message"] = IsFa ? $"«{path}» و داده‌هایش حذف شد." : $"{path} and its data were deleted.";
+        }
+        else if (deleteData)
+        {
+            // Asked for, and not done — named as what it is rather than folded into the "kept" message.
+            TempData["Error"] = IsFa
+                ? $"«{path}» از اپ برداشته شد، اما حذف دادهٔ آن ناموفق بود. داده‌اش هنوز روی سرور در والیوم «{name}» است."
+                : $"{path} was unmounted, but deleting its data failed. The data is still on the server in volume \"{name}\".";
+        }
+        else
+        {
+            TempData["Message"] = IsFa
                 ? $"«{path}» دیگر وصل نمی‌شود. داده‌ها روی سرور ماندند."
-                : $"{path} is no longer mounted. The data is still on the server.");
+                : $"{path} is no longer mounted. The data is still on the server.";
+        }
+
+        return RedirectToAction(nameof(Volumes), new { id });
+    }
+
+    /// <summary>
+    /// Toggles <see cref="Volume.Protected"/> — HARBORA-0033's only way to set the flag every
+    /// destructive delete path now checks. Deliberately not gated on anything the volume is doing
+    /// (mounted, backed up, whatever): turning protection on or off changes no data by itself, only
+    /// what the next delete is allowed to do.
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/volumes/{volumeId:guid}/protect")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
+    public async Task<IActionResult> SetVolumeProtection(Guid id, Guid volumeId, bool protect, CancellationToken ct)
+    {
+        if (!await access.CanTouchAppAsync(id, Capabilities.AppsEnv, ct)) return Forbid();
+
+        var app = await db.Apps.Include(a => a.Volumes)
+            .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        var volume = app.Volumes.FirstOrDefault(v => v.Id == volumeId);
+        if (volume is null) return NotFound();
+
+        volume.Protected = protect;
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync(
+            protect ? "app.volume_protected" : "app.volume_unprotected", "app",
+            $"{app.Name}:{volume.MountPath}", ClientIp, ct: ct);
+
+        TempData["Message"] = protect
+            ? (IsFa ? $"«{volume.MountPath}» محافظت شد. تا خاموش نشود، داده‌اش حذف نمی‌شود." : $"{volume.MountPath} is now protected. Its data cannot be deleted until this is turned off.")
+            : (IsFa ? $"محافظت «{volume.MountPath}» خاموش شد." : $"Protection for {volume.MountPath} was turned off.");
 
         return RedirectToAction(nameof(Volumes), new { id });
     }
@@ -1373,10 +1437,25 @@ public sealed partial class AppsController(
     public async Task<IActionResult> Delete(Guid id, bool removeVolumes, CancellationToken ct)
     {
         if (!await MayAsync(id, Capabilities.AppsDelete, ct)) return NotFound();
-        await ops.DeleteAsync(id, removeVolumes, ct);
+
+        try
+        {
+            await ops.DeleteAsync(id, removeVolumes, ct);
+        }
+        catch (VolumeProtectedException ex)
+        {
+            // HARBORA-0033. Refused before anything happened — the app, its container and every one
+            // of its volumes are exactly as they were a moment ago, so this redirects back to the app
+            // rather than to the (still populated) list.
+            TempData["Error"] = IsFa ? ex.ReasonFa : ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
         await audit.LogAsync("app.delete", "app", id.ToString(), ClientIp,
             metadataJson: $"{{\"removeVolumes\":{removeVolumes.ToString().ToLowerInvariant()}}}", ct: ct);
-        TempData["Message"] = "App deleted.";
+        TempData["Message"] = removeVolumes
+            ? (IsFa ? "اپ و داده‌های والیوم‌هایش حذف شدند." : "The app and its volume data were deleted.")
+            : (IsFa ? "اپ حذف شد. داده‌های والیوم‌هایش روی سرور ماندند." : "App deleted. Its volume data is still on the server.");
         return RedirectToAction(nameof(Index));
     }
 
