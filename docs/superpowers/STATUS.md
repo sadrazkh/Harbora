@@ -53,18 +53,46 @@ holding containers, volumes and ports. That is a resource leak, not a missing fe
 whether GA includes posting the URL back to the PR; and what teardown does when a branch is deleted
 while a deployment is in flight.
 
-### 2. Deleting a project still requires emptying it by hand
+### 2. Deleting a project still requires emptying it by hand — **in progress**
 
 `ProjectsController.Delete` now **refuses with a named list** of the apps and databases in the way and
 says plainly that deleting a project will not delete them for you — which is a large improvement on
 the raw constraint violation it used to be. But the owner's complaint stands: there is still no way to
 delete a project and its contents in one deliberate act. What is missing is a confirmation screen that
-lists what would go and does it, not a change to the refusal.
+lists what would go and does it, not a change to the refusal. Being built on `proj-delete`.
 
-### 3. Functions
+### 3. Functions — **explored, three defects fixed, editor in progress**
 
-The owner's assessment: incomplete, and its code editing is closer to a text box than an editor. Not
-yet explored in the way the other areas were.
+Explored properly on 2026-08-18; the spec is
+[`2026-08-18-functions-design.md`](specs/2026-08-18-functions-design.md).
+
+**The old note that "no host image has ever been built" was wrong.** The generator was copied into a
+scratch harness and all three hosts were built and run on this machine: health answered with the right
+function count, routes resolved, an unsigned invoke got 401 and a signed one 204. **The runtime was
+never the problem — the panel was**, in three places, all now fixed and on master:
+
+- **"Run now" opened a `<form>` nested inside the save form.** HTML forbids nesting, so the parser
+  dropped it and both buttons posted to Save — pressing Run now answered *"Saved. Press Publish to
+  make it live."* since the feature's first commit. A comment two lines above named the exact failure
+  and then committed it. No test had ever rendered the view; there is now one that parses the DOM with
+  AngleSharp, because no assertion over the Razor source could catch it — the inner tag genuinely is
+  in the file.
+- **The panel lost its route to every function app on each update.** It joined each app's network
+  imperatively at deploy time while compose declared only `harbora`, and the documented upgrade
+  recreates the container. Cron and event calls then recorded *"Could not reach the function app."*
+  for ever. It now re-attaches on boot. **Derived from four cited facts, not measured — there is no
+  Docker here — and still unconfirmed against a live daemon.**
+- **A rollback never cleared the unpublished flag**, so the editor showed a green "live" chip over
+  code that was not running.
+
+**One decision was made wrong and then corrected.** "Run now runs the buffer" was chosen before it was
+known that running the buffer requires a full image rebuild — which made Run now a second name for
+Publish and cost the only way to test a cron function without waiting for 03:00. It now runs the
+published version on `apps.operate`, and the editor says beside the button which code it will reach.
+
+**Still open:** the editor itself. A bare `<textarea>` with no id, no JS and no draft protection.
+Being replaced on `fn-editor` with a lazily-imported CodeMirror island — the panel already ships Vite 6
+and a Vue island registry, so it is a fifth island, not a rewrite.
 
 ### 4. The rest of the audit roadmap — phases 4, 5, 7, 8, 10–16
 
@@ -89,8 +117,9 @@ not stable.
 
 ## The finding worth carrying into whatever comes next
 
-**Eleven times, a capability assumed missing already existed.** Three of those, the person who assumed
-was the author of the spec.
+**Twelve times, a capability assumed missing already existed.** Three of those, the person who assumed
+was the author of the spec. The twelfth was the Functions runtime: a note in memory said no host image
+had ever been built, and all three build and run fine.
 
 The one that taught the method: a spec claimed volume browsing and upload did not exist. They had
 shipped for months. The search had been for `BrowseVolume` and `FileBrowser` — **the names the feature
