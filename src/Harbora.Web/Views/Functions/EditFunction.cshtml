@@ -133,7 +133,7 @@
 
             <div class="flex items-center gap-3 border-t border-line pt-4">
                 <button data-action="save" class="btn-primary px-5 py-2.5">@(isFa ? "ذخیره" : "Save")</button>
-                <a href="/functions/@Model.AppId" class="btn-secondary">@(isFa ? "انصراف" : "Cancel")</a>
+                <a href="/functions/@Model.AppId" data-action="cancel" class="btn-secondary">@(isFa ? "انصراف" : "Cancel")</a>
             </div>
         </div>
 
@@ -197,6 +197,50 @@
         }
         select.addEventListener('change', paint);
         paint();
+    })();
+
+    // Draft protection. Today's only total failure: no dirty tracking, no beforeunload guard, a
+    // Cancel that discards silently, and — sharper than it looks — Run now navigates away too
+    // (formaction on a button inside this same form) without ever saving the buffer it runs
+    // instead of. A failed save already keeps the typed code, because SaveFunction re-renders this
+    // view from the posted model on refusal rather than reloading from the database — this guards
+    // the other way to lose it: leaving before saving at all.
+    (function () {
+        var form = document.querySelector('form[action$="/save"]');
+        if (!form) return;
+
+        var dirty = false;
+        form.addEventListener('input', function () { dirty = true; });
+        form.addEventListener('change', function () { dirty = true; });
+
+        var discardMessage = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa
+            ? "تغییرات ذخیره‌نشده‌ای دارید. کنار گذاشته شوند؟"
+            : "You have unsaved changes. Discard them?"));
+
+        form.addEventListener('submit', function (e) {
+            var submitter = e.submitter;
+            // Save persists whatever is on screen, so leaving right after it loses nothing. Run now
+            // does not — it calls the published version, not the buffer — so it is, for this
+            // purpose, exactly like Cancel: a way to leave the page that would otherwise lose
+            // unsaved edits in silence.
+            if (submitter && submitter.dataset.action === 'run' && dirty && !window.confirm(discardMessage)) {
+                e.preventDefault();
+                return;
+            }
+            dirty = false;
+        });
+
+        window.addEventListener('beforeunload', function (e) {
+            if (!dirty) return;
+            e.preventDefault();
+            e.returnValue = '';
+        });
+
+        document.querySelectorAll('[data-action="cancel"]').forEach(function (a) {
+            a.addEventListener('click', function (e) {
+                if (dirty && !window.confirm(discardMessage)) e.preventDefault();
+            });
+        });
     })();
 </script>
 }
