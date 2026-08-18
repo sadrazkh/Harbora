@@ -104,8 +104,14 @@ public sealed class AppOperationsService(
         if (removeVolumes)
             foreach (var v in app.Volumes) await docker.RemoveVolumeAsync(v.Name, ct);
 
-        // Drop this app's routes, then re-apply what the platform is left routing.
-        await db.Routes.IgnoreQueryFilters().Where(r => r.AppId == appId).ExecuteDeleteAsync(ct);
+        // Drop this app's routes, then re-apply what the platform is left routing. Loaded and removed
+        // rather than ExecuteDeleteAsync, for the reason HostPortAllocator.RemoveAsync (called two
+        // lines down, for its own rows) already states: a handful per app, and it keeps this path
+        // exercisable by the test suite's provider, which has no ExecuteDelete. Before this, no HTTP
+        // test could drive a delete through this method at all — ProjectDeleteHttpTests's
+        // confirmed-cascade coverage is what found it.
+        var routes = await db.Routes.IgnoreQueryFilters().Where(r => r.AppId == appId).ToListAsync(ct);
+        db.Routes.RemoveRange(routes);
         // Host-port reservations hang off the server, not the app, so nothing cascades them away.
         // Left behind they would retire a port from the node permanently, once per deleted app.
         await hostPorts.ReleaseAppAsync(appId, ct);
