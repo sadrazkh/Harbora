@@ -1,5 +1,7 @@
 ﻿using FluentAssertions;
+using Harbora.Application.Abstractions;
 using Harbora.Infrastructure.Deployments;
+using Harbora.Infrastructure.Docker;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -132,6 +134,49 @@ public class LogFilterTests
         var name = LogFilter.FileName("shop", new DateTimeOffset(2026, 7, 31, 14, 5, 9, TimeSpan.Zero));
 
         name.Should().Be("shop-logs-20260731-140509.txt");
+    }
+
+    // ---- ApplyTimed: the same rule, for lines that already carry their own moment ----
+
+    private const string StampedSample = """
+        2026-07-31T10:00:01.000000000Z Starting up
+        2026-07-31T10:00:02.000000000Z Listening on 8080
+        2026-07-31T10:00:09.000000000Z ERROR could not connect to database
+        2026-07-31T10:00:09.100000000Z     at Shop.Data.Connect()
+        2026-07-31T10:00:09.200000000Z     at Shop.Program.Main()
+        2026-07-31T10:00:10.000000000Z Retrying
+        2026-07-31T10:00:12.000000000Z WARN slow query 2400ms
+        """;
+
+    [Fact]
+    public void A_timed_search_keeps_only_the_lines_that_contain_it_with_their_moments_intact()
+    {
+        var stamped = DockerTimestampedLog.Parse(StampedSample);
+
+        var kept = LogFilter.ApplyTimed(stamped, "retrying", onlyProblems: false);
+
+        kept.Should().ContainSingle();
+        kept[0].Text.Should().Be("Retrying");
+        kept[0].Timestamp.Should().Be(DateTimeOffset.Parse("2026-07-31T10:00:10.000000000Z"));
+    }
+
+    [Fact]
+    public void A_timed_stack_trace_stays_with_the_line_that_introduced_it()
+    {
+        var stamped = DockerTimestampedLog.Parse(StampedSample);
+
+        var kept = LogFilter.ApplyTimed(stamped, "could not connect", onlyProblems: false);
+
+        kept.Should().HaveCount(3);
+        kept[0].Text.Should().Contain("ERROR");
+        kept[1].Text.Should().Contain("Shop.Data.Connect");
+        kept[2].Text.Should().Contain("Shop.Program.Main");
+    }
+
+    [Fact]
+    public void An_empty_timed_list_gives_nothing_out()
+    {
+        LogFilter.ApplyTimed([], "x", false).Should().BeEmpty();
     }
 
     [Fact]

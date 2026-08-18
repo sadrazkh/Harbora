@@ -1,4 +1,6 @@
-﻿namespace Harbora.Infrastructure.Deployments;
+﻿using Harbora.Application.Abstractions;
+
+namespace Harbora.Infrastructure.Deployments;
 
 /// <summary>
 /// Finding the line that matters in a wall of container output.
@@ -30,23 +32,49 @@ public static class LogFilter
         if (string.IsNullOrEmpty(text)) return [];
 
         var lines = text.Replace("\r\n", "\n").Split('\n');
-        var wanted = new List<string>();
+        return KeptIndexes(lines.Length, i => lines[i], search, onlyProblems).Select(i => lines[i]).ToList();
+    }
+
+    /// <summary>
+    /// The same rule <see cref="Apply"/> states, kept for lines that already carry their own moment —
+    /// a time-window search's lines, timestamped by Docker itself, rather than a plain tail with none.
+    /// A continuation line joins the group of the line that introduced it, so a stack trace's frames
+    /// carry the timestamp of the error they belong to, not one of their own.
+    /// </summary>
+    public static IReadOnlyList<TimedLogLine> ApplyTimed(
+        IReadOnlyList<TimedLogLine> lines, string? search, bool onlyProblems)
+    {
+        if (lines.Count == 0) return [];
+
+        return KeptIndexes(lines.Count, i => lines[i].Text, search, onlyProblems)
+            .Select(i => lines[i]).ToList();
+    }
+
+    /// <summary>
+    /// The grouping rule both overloads share, worked out once over anything indexable: a blank line
+    /// ends a group, a line matching the filter starts one and keeps its continuation lines (those
+    /// that begin with whitespace), and nothing widens what the filter alone would have kept.
+    /// </summary>
+    private static List<int> KeptIndexes(int count, Func<int, string> textAt, string? search, bool onlyProblems)
+    {
+        var wanted = new List<int>();
         var keepingContinuation = false;
 
-        foreach (var line in lines)
+        for (var i = 0; i < count; i++)
         {
+            var line = textAt(i);
             if (line.Length == 0) { keepingContinuation = false; continue; }
 
             var isContinuation = char.IsWhiteSpace(line[0]);
             if (isContinuation && keepingContinuation)
             {
-                wanted.Add(line);
+                wanted.Add(i);
                 continue;
             }
 
             var matches = Matches(line, search, onlyProblems);
             keepingContinuation = matches && !isContinuation;
-            if (matches) wanted.Add(line);
+            if (matches) wanted.Add(i);
         }
 
         return wanted;

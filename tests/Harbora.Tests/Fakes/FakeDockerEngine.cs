@@ -45,6 +45,24 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// <summary>What the container "printed". The health gate reads this to explain a failure.</summary>
     public string ContainerLogs { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Per-container output, keyed by container id — what <see cref="GetLogsAsync"/> and
+    /// <see cref="GetLogsSinceAsync"/> answer for a specific container, distinct from the single
+    /// global <see cref="ContainerLogs"/> the health gate uses. A search across several apps needs
+    /// each container to say something different, or a test proving one app's lines never leak into
+    /// another's results would have nothing to tell them apart with.
+    /// </summary>
+    public ConcurrentDictionary<string, string> ContainerLogsById { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Container ids that refuse a time-windowed request — simulating a host whose transport
+    /// (<c>RemoteDockerEngine</c>, <c>NodeWorkloadEngine</c> in production) cannot attach a real
+    /// timestamp to a stream it did not capture. Mirrors those engines' reliance on the interface's
+    /// default <see cref="IDockerEngine.GetLogsSinceAsync"/>, without this fake having to implement
+    /// two more transports just to prove the fallback.
+    /// </summary>
+    public HashSet<string> TimeWindowUnsupportedFor { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Ports the built/pulled image declares. Empty means the image says nothing.</summary>
     public List<int> ImagePorts { get; } = [];
 
@@ -333,7 +351,22 @@ public sealed class FakeDockerEngine : IDockerEngine
     public Task<string> GetLogsAsync(string containerId, int tailLines, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(ContainerLogs);
+        return Task.FromResult(ContainerLogsById.TryGetValue(containerId, out var logs) ? logs : ContainerLogs);
+    }
+
+    public Task<IReadOnlyList<TimedLogLine>> GetLogsSinceAsync(
+        string containerId, DateTimeOffset since, int maxLines, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        if (TimeWindowUnsupportedFor.Contains(containerId))
+            throw new NotSupportedException(
+                "This fake container's host cannot attach real timestamps (simulated).");
+
+        var raw = ContainerLogsById.TryGetValue(containerId, out var logs) ? logs : ContainerLogs;
+        var parsed = Harbora.Infrastructure.Docker.DockerTimestampedLog.Parse(raw);
+        return Task.FromResult<IReadOnlyList<TimedLogLine>>(
+            parsed.Where(l => l.Timestamp >= since).Take(maxLines).ToList());
     }
 
     public Task<IReadOnlyList<ContainerInfo>> ListContainersAsync(string? labelFilter, CancellationToken ct)
