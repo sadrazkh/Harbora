@@ -48,6 +48,56 @@ public class TraefikProxyEngineTests
         preview.Content.Should().Contain("http://harbora-app:80");
     }
 
+    // ---- replicas: one loadBalancer, several servers (confirms the multi-server assumption) ----
+
+    [Fact]
+    public void A_route_with_extra_upstreams_renders_a_server_line_for_each_one()
+    {
+        var route = HostRoute(svc: "harbora-app-1", port: 8080);
+        route.ExtraUpstreamsJson = RouteUpstreams.Serialize(
+        [
+            new RouteUpstreams.Upstream("harbora-app-2", 8080),
+            new RouteUpstreams.Upstream("harbora-app-3", 8080)
+        ]);
+
+        var content = Engine().Preview([route]).Content;
+
+        content.Should().Contain("http://harbora-app-1:8080");
+        content.Should().Contain("http://harbora-app-2:8080");
+        content.Should().Contain("http://harbora-app-3:8080");
+        // One loadBalancer, three servers under it — not three separate services, which is what
+        // would actually spread traffic across replicas instead of only ever hitting the first.
+        content.Should().Contain("loadBalancer:");
+    }
+
+    [Fact]
+    public void A_route_with_no_extra_upstreams_renders_exactly_as_it_always_has()
+    {
+        // The single-replica case, and the safety argument for the whole feature: a route the
+        // designer created by hand, or a deploy of an app running one replica, must produce
+        // byte-for-byte the same loadBalancer as before ExtraUpstreamsJson existed.
+        var route = HostRoute();
+
+        var content = Engine().Preview([route]).Content;
+
+        content.Should().Contain("http://harbora-app:80");
+        content.Should().NotContain("healthCheck:",
+            "a single-server loadBalancer gets no active health check unless the app asked for more than one");
+    }
+
+    [Fact]
+    public void A_replicated_routes_active_health_check_polls_the_apps_own_path()
+    {
+        var route = HostRoute();
+        route.ExtraUpstreamsJson = RouteUpstreams.Serialize([new RouteUpstreams.Upstream("harbora-app-2", 80)]);
+        route.LoadBalancerHealthCheckPath = "/healthz";
+
+        var content = Engine().Preview([route]).Content;
+
+        content.Should().Contain("healthCheck:");
+        content.Should().Contain("path: \"/healthz\"");
+    }
+
     [Fact]
     public void Preview_includes_cert_resolver_when_ssl_enabled()
     {
