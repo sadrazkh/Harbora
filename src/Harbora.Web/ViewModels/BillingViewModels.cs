@@ -63,6 +63,25 @@ public sealed class BillingPageViewModel
     public long CreditTotalMinor => Credits.Sum(c => c.AmountMinor);
 
     public long AdjustmentTotalMinor => Adjustments.Sum(a => a.AmountMinor);
+
+    /// <summary>
+    /// What the period in progress is heading towards, and when the balance runs out at that rate.
+    /// Null when there is nothing to project: the period being shown has already closed (see
+    /// <see cref="NextPeriod"/> — a past month has already happened, and projecting it is not a
+    /// forecast, it is arithmetic somebody already knows the answer to) or the workspace is
+    /// currently suspended, in which case <see cref="Suspended"/>'s own message is what the customer
+    /// reads instead of a number that assumes it is still burning.
+    /// </summary>
+    public CostForecast? Forecast { get; init; }
+
+    /// <summary>
+    /// Whether the wallet already has an outstanding low-balance warning — the exact flag
+    /// <c>BillingTick</c> writes to <c>Wallet.LowBalanceWarnedAtBalanceMinor</c> and clears once the
+    /// balance climbs clear of the window again. Used only to style the runway below with the same
+    /// urgency the warning itself already decided on, never to decide a second time whether the
+    /// workspace is "running low".
+    /// </summary>
+    public bool LowBalanceWarningActive { get; init; }
 }
 
 /// <param name="AmountMinor">Positive: a credit is money in.</param>

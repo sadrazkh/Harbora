@@ -235,6 +235,133 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
             "the adjustment must not be disguised as a resource cost row");
     }
 
+    // --- the cost forecast ---------------------------------------------------------------------
+
+    /// <summary>The hour immediately before the one in progress right now — the newest hour the
+    /// forecast could possibly price, mirroring BillingTick's own TopOfHour/HasEnded.</summary>
+    private static DateTimeOffset LastEndedHour()
+    {
+        var utc = DateTimeOffset.UtcNow;
+        var topOfHour = new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero);
+        return topOfHour.AddHours(-1);
+    }
+
+    private static BillingLedgerEntry ChargeLine(Guid workspaceId, DateTimeOffset hour, long amountMinor) => new()
+    {
+        WorkspaceId = workspaceId,
+        BillingHour = hour,
+        Kind = LedgerKind.Charge,
+        AmountMinor = amountMinor,
+        ResourceType = BilledResourceType.App,
+        ResourceId = Guid.CreateVersion7(),
+        ResourceName = "forecast-app",
+        RunState = BilledRunState.Running,
+        Hours = 1
+    };
+
+    [Fact]
+    public async Task A_workspace_with_a_days_steady_history_sees_a_projected_cost_and_a_runway()
+    {
+        // 24 hours at 500 each, ending on the newest hour the tick could have priced by now — a
+        // workspace with an established, steady rate.
+        var tenant = GivenTenant("forecast-projected", balanceMinor: 12_000);
+        var lastEndedHour = LastEndedHour();
+        Panel.Seed(db =>
+        {
+            for (var h = 0; h < 24; h++)
+                db.BillingLedger.Add(ChargeLine(tenant, lastEndedHour.AddHours(-h), -500));
+        });
+        Panel.GivenUser(tenant, "forecast-member@example.com", SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.180", "forecast-member@example.com");
+
+        var before = DateTimeOffset.UtcNow;
+        var page = await (await client.GetAsync("/billing")).Content.ReadAsStringAsync();
+        var after = DateTimeOffset.UtcNow;
+
+        page.Should().Contain(@"data-forecast-state=""projected""")
+            .And.Contain(@"data-forecast-history-hours=""24""");
+        // 12,000 at 500 an hour is exactly 24 whole hours of runway — independent of the moment the
+        // request happens to land in, unlike the runway date below.
+        page.Should().Contain(@"data-forecast-runway-hours=""24""");
+
+        // The date is "now" (whichever instant the controller actually read) plus those 24 hours, so
+        // it is checked as a range around the request rather than pinned to one instant this test
+        // does not control.
+        var match = System.Text.RegularExpressions.Regex.Match(
+            page, @"data-forecast-runway-date-unix=""(?<unix>\d+)""");
+        match.Success.Should().BeTrue("the projected forecast always carries a runway date");
+        var runwayUnix = long.Parse(match.Groups["unix"].Value);
+        runwayUnix.Should().BeInRange(
+            before.AddHours(24).ToUnixTimeSeconds(), after.AddHours(24).ToUnixTimeSeconds());
+    }
+
+    [Fact]
+    public async Task A_workspace_billed_for_only_a_few_hours_gets_a_declined_forecast_not_a_number()
+    {
+        // Below WalletService.MinimumHistoryHours: one hour of history stretched across a month is
+        // exactly the confident-wrong-number this feature refuses to show.
+        var tenant = GivenTenant("forecast-thin", balanceMinor: 5_000);
+        var lastEndedHour = LastEndedHour();
+        Panel.Seed(db =>
+        {
+            for (var h = 0; h < 3; h++)
+                db.BillingLedger.Add(ChargeLine(tenant, lastEndedHour.AddHours(-h), -500));
+        });
+        Panel.GivenUser(tenant, "forecast-thin-member@example.com", SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.184", "forecast-thin-member@example.com");
+
+        var page = await (await client.GetAsync("/billing")).Content.ReadAsStringAsync();
+
+        page.Should().Contain(@"data-forecast-state=""insufficient-history""")
+            .And.Contain(@"data-forecast-history-hours=""3""")
+            .And.Contain(@"data-forecast-minimum-history-hours=""24""");
+        page.Should().NotContain("data-forecast-projected-minor",
+            "a workspace this new gets no numeric projection, only what has already been charged");
+    }
+
+    [Fact]
+    public async Task A_suspended_workspace_is_not_forecast_as_though_it_were_still_burning()
+    {
+        var tenant = GivenTenant("forecast-suspended", balanceMinor: 0);
+        var lastEndedHour = LastEndedHour();
+        Panel.Seed(db =>
+        {
+            for (var h = 0; h < 24; h++)
+                db.BillingLedger.Add(ChargeLine(tenant, lastEndedHour.AddHours(-h), -500));
+            var workspace = db.Workspaces.IgnoreQueryFilters().Single(w => w.Id == tenant);
+            workspace.IsSuspended = true;
+            workspace.SuspendedReason = SuspensionReason.NoBalance;
+        });
+        Panel.GivenUser(tenant, "forecast-suspended-member@example.com", SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.185", "forecast-suspended-member@example.com");
+
+        var page = await (await client.GetAsync("/billing")).Content.ReadAsStringAsync();
+
+        page.Should().Contain(@"data-forecast-state=""suspended""");
+        page.Should().NotContain("data-forecast-projected-minor")
+            .And.NotContain("data-forecast-runway-hours");
+    }
+
+    [Fact]
+    public async Task A_closed_past_month_shows_no_forecast_at_all()
+    {
+        // Enough history, plenty of balance — but the month asked for has already happened, so
+        // projecting it further answers a question nobody asked.
+        var tenant = GivenTenant("forecast-past-month", balanceMinor: 50_000);
+        var hour = new DateTimeOffset(2026, 7, 5, 0, 0, 0, TimeSpan.Zero);
+        Panel.Seed(db =>
+        {
+            for (var h = 0; h < 24; h++)
+                db.BillingLedger.Add(ChargeLine(tenant, hour.AddHours(h), -500));
+        });
+        Panel.GivenUser(tenant, "forecast-past-member@example.com", SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.186", "forecast-past-member@example.com");
+
+        var page = await (await client.GetAsync("/billing?month=2026-07")).Content.ReadAsStringAsync();
+
+        page.Should().NotContain("data-forecast-state");
+    }
+
     // --- balance vouchers --------------------------------------------------------------------
 
     [Fact]

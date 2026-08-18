@@ -106,6 +106,95 @@
     }
 </div>
 
+@* ---- the forecast ----------------------------------------------------------------------------
+   Two questions a bill on its own cannot answer: roughly what the month lands at, and when the
+   balance runs out. Both are claims about the future, so both are labelled as an estimate and say
+   the assumption behind them — "if today's running workloads keep running" — rather than sitting in
+   the same voice as a charge that already happened.
+
+   Nothing here is shown for a suspended workspace (nothing is running for it to keep running) or for
+   a closed month (it has already happened; projecting it further answers a question nobody asked).
+   BillingController decides that once, in Forecast being null, so the view only has one thing to
+   check rather than repeating the rule. *@
+@if (Model.Suspended)
+{
+    <div class="rounded-xl border border-line bg-surface p-4 mb-6" data-forecast-state="suspended">
+        <h2 class="font-semibold text-ink mb-1">@(isFa ? "پیش‌بینی هزینه" : "Cost forecast")</h2>
+        <p class="text-sm text-ink-muted">
+            @(isFa
+                ? "فضای کاری معلق است، پس چیزی نیست که ادامه‌دار فرض شود؛ پیش‌بینی هزینه نمایش داده نمی‌شود."
+                : "The workspace is suspended, so there is nothing to assume keeps running — no forecast is shown.")
+        </p>
+    </div>
+}
+else if (Model.Forecast is { } forecast)
+{
+    <div class="rounded-xl border border-line bg-surface p-4 mb-6"
+         data-forecast-state="@(forecast.HasEnoughHistory ? "projected" : "insufficient-history")"
+         data-forecast-history-hours="@forecast.HistoryHours"
+         data-forecast-minimum-history-hours="@forecast.MinimumHistoryHours"
+         data-forecast-spent-so-far-minor="@forecast.SpentSoFarMinor">
+        <h2 class="font-semibold text-ink mb-1">@(isFa ? "پیش‌بینی هزینه" : "Cost forecast")</h2>
+
+        @if (!forecast.HasEnoughHistory)
+        {
+            @* Below the minimum, on purpose: one hour of history stretched across a month is a
+               confident wrong number, not a forecast. Only the fact already on the ledger — what has
+               actually been spent so far — is shown. *@
+            <p class="text-sm text-ink-muted">
+                @(isFa
+                    ? $"برای پیش‌بینی هزینه دست‌کم به {forecast.MinimumHistoryHours} ساعت سابقهٔ صورتحساب نیاز است؛ تاکنون {forecast.HistoryHours} ساعت ثبت شده است. تا آن زمان فقط آنچه واقعاً هزینه شده نشان داده می‌شود."
+                    : $"Forecasting needs at least {forecast.MinimumHistoryHours} hours of billing history; {forecast.HistoryHours} recorded so far. Until then, only what has actually been spent is shown.")
+            </p>
+            <div class="mt-2 text-lg font-bold text-ink" dir="ltr">
+                @MinorUnits.Format(forecast.SpentSoFarMinor, Model.Currency)
+            </div>
+        }
+        else
+        {
+            <p class="text-xs text-ink-faint mb-3">
+                @(isFa
+                    ? "این یک تخمین است، با این فرض که بار کاری فعلی همان‌طور که اکنون در حال اجراست ادامه یابد."
+                    : "This is an estimate, assuming the workloads running right now keep running as they are.")
+            </p>
+            <div class="grid sm:grid-cols-2 gap-4">
+                <div data-forecast-projected-minor="@(forecast.ProjectedPeriodTotalMinor?.ToString() ?? "")">
+                    <div class="text-ink-muted text-sm">@(isFa ? "هزینهٔ تخمینی این دوره" : "Estimated cost this period")</div>
+                    @if (forecast.ProjectedPeriodTotalMinor is { } projected)
+                    {
+                        <div class="mt-1 text-xl font-bold text-ink" dir="ltr">≈ @MinorUnits.Format(projected, Model.Currency)</div>
+                    }
+                    else
+                    {
+                        <div class="mt-1 text-xl font-bold text-ink-faint" dir="ltr">—</div>
+                    }
+                </div>
+                <div data-forecast-runway-hours="@(forecast.RunwayHours?.ToString() ?? "")"
+                     data-forecast-runway-date-unix="@(forecast.RunwayDate?.ToUnixTimeSeconds().ToString() ?? "")">
+                    <div class="text-ink-muted text-sm">@(isFa ? "پایان اعتبار با این نرخ" : "Runs out at this rate")</div>
+                    @if (forecast.RunwayDate is { } runwayDate)
+                    {
+                        @* Coloured by the same flag the low-balance warning itself already set — not
+                           a second opinion about whether this is urgent, only the one that already
+                           decided rendered louder. *@
+                        <div class="mt-1 text-xl font-bold @(Model.LowBalanceWarningActive ? "text-danger" : "text-ink")" dir="ltr">
+                            @runwayDate.LocalDateTime.ToString(Dates.Day)
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="mt-1 text-sm text-ink-faint">
+                            @(isFa
+                                ? "چیزی در حال حاضر هزینه‌ای ندارد؛ اعتبار کاهش نمی‌یابد."
+                                : "Nothing is currently costing money; the balance is not being drawn down.")
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
 <div class="rounded-xl border border-line bg-surface p-4 mb-6">
     <div class="flex flex-wrap items-start justify-between gap-3">
         <div>

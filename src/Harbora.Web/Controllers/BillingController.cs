@@ -85,6 +85,17 @@ public sealed class BillingController(
         var thisMonth = Label(MonthOf(null).From);
         var period = Label(from);
         var budgetState = await budgets.GetAsync(WorkspaceId, clock.UtcNow, ct);
+        var suspended = workspace?.IsSuspended ?? false;
+
+        // A forecast only for the month in progress — a closed month has already happened, and
+        // projecting it further is not a forecast, it is arithmetic the ledger has already settled.
+        // And never for a suspended workspace: its most recently charged hour will catch up with
+        // that suspension the next time the tick runs, but showing a number in the meantime that
+        // assumes today's rate keeps going is exactly the "forecast it as though it were still
+        // burning" failure this feature is required to refuse.
+        var forecast = period == thisMonth && !suspended
+            ? await wallets.ForecastAsync(WorkspaceId, from, to, ct)
+            : null;
 
         return View(new BillingPageViewModel
         {
@@ -96,7 +107,7 @@ public sealed class BillingController(
             // printing the shipped default at a provider who sells in something else would label
             // every figure on the page with the wrong money.
             Currency = wallet?.Currency ?? billing.Value.CurrencyOrDefault,
-            Suspended = workspace?.IsSuspended ?? false,
+            Suspended = suspended,
             SuspendedForNoBalance = workspace?.SuspendedReason == SuspensionReason.NoBalance,
             SuspendedForSpendLimit = workspace?.SuspendedReason == SuspensionReason.SpendLimit,
             CurrentMonthSpendMinor = budgetState.SpendMinor,
@@ -113,7 +124,12 @@ public sealed class BillingController(
             NextPeriod = string.CompareOrdinal(period, thisMonth) < 0 ? Label(from.AddMonths(1)) : null,
             Costs = await wallets.BreakdownAsync(WorkspaceId, from, to, ct),
             Credits = credits,
-            Adjustments = adjustments
+            Adjustments = adjustments,
+            Forecast = forecast,
+            // The same flag BillingTick already writes when a low-balance warning is outstanding —
+            // reused as-is rather than a second "is this running low" threshold invented for this
+            // page. See BillingPageViewModel.LowBalanceWarningActive.
+            LowBalanceWarningActive = wallet?.LowBalanceWarnedAtBalanceMinor is not null
         });
     }
 
