@@ -20,6 +20,14 @@
       only reference that needs a server.
     -->
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.4" />
+    <!--
+      A real HTML5 parser for the one class of bug a string match cannot see: which <form> a button
+      actually belongs to. The nested-form defect that shipped in EditFunction.cshtml was invisible to
+      any assertion over the Razor output — the inner <form> tag *is* in the file — because a
+      spec-compliant parser silently drops it. Asking AngleSharp what it built is the only way to have
+      caught that, and the only way a regression in the fix would be caught again.
+    -->
+    <PackageReference Include="AngleSharp" Version="1.7.1" />
   </ItemGroup>
 
   <ItemGroup>

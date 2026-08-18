@@ -93,9 +93,10 @@ threshold breached, certificate expiring, low balance, git push, git tag, worksp
 suspended / resumed, member invited / joined. An event never crosses a workspace boundary.
 
 Schedules and events reach the container over the private network with the app's own invoke secret;
-they never go out through the proxy. **Run now** on the editor page uses that same door, so testing
-by hand tests what will happen at 03:00 — including the fact that it runs the *published* code, not
-what is currently in the editor.
+they never go out through the proxy. **Run now** on the editor page saves what is currently in the
+editor and publishes it — the same deployment a press of Publish starts — so what runs next is what
+you just typed, not whatever was live before. It takes the usual build time; the button opens the
+deployment's own progress page so you can watch it happen.
 
 Every call the platform makes itself is recorded on the function's page: trigger, status, duration,
 and the error if there was one. Rows are kept for `Retention:FunctionInvocationDays` days (30 by

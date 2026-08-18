@@ -127,7 +127,7 @@
             <input type="hidden" name="IsEnabled" value="false" />
 
             <div class="flex items-center gap-3 border-t border-line pt-4">
-                <button class="btn-primary px-5 py-2.5">@(isFa ? "ذخیره" : "Save")</button>
+                <button data-action="save" class="btn-primary px-5 py-2.5">@(isFa ? "ذخیره" : "Save")</button>
                 <a href="/functions/@Model.AppId" class="btn-secondary">@(isFa ? "انصراف" : "Cancel")</a>
             </div>
         </div>
@@ -138,15 +138,20 @@
                 <h2 class="mb-1 text-sm font-semibold text-ink">@(isFa ? "اجرای آزمایشی" : "Run it now")</h2>
                 <p class="mb-3 text-xs text-ink-muted">
                     @(isFa
-                        ? "از همان دری که زمان‌بندی و رویداد استفاده می‌کنند — یعنی کدِ منتشرشده، نه آنچه در ویرایشگر است."
-                        : "Through the same door a schedule uses — so it runs the published code, not what is in the editor.")
+                        ? "کد همین صفحه را ذخیره و منتشر می‌کند — همان کاری که «انتشار» انجام می‌دهد — تا آنچه اجرا می‌شود دقیقاً همین باشد، نه نسخه‌ی قبلی."
+                        : "Saves the code on this page and publishes it — the same thing Publish does — so what runs is exactly this, not the last-published version.")
                 </p>
+                @* A submit button of the form above, not a form of its own: a <form> nested inside
+                   another is silently dropped by the HTML parser (a spec-compliant one discards the
+                   inner start tag), so both buttons would submit to Save and this one would never run
+                   anything. `formaction` gives one button a different destination without a second
+                   <form> — and because it stays part of the same form, Run now posts exactly what Save
+                   posts: the buffer on screen, not whatever was last saved. *@
+                <button type="submit" formaction="/functions/@Model.AppId/@fnId/run" formmethod="post"
+                        data-action="run" class="btn-secondary w-full">
+                    @(isFa ? "اجرا کن" : "Run now")
+                </button>
             </div>
-            @* Its own form: nesting it inside the save form above would make one button submit the other. *@
-            <form method="post" action="/functions/@Model.AppId/@fnId/run">
-                @Html.AntiForgeryToken()
-                <button class="btn-secondary w-full">@(isFa ? "اجرا کن" : "Run now")</button>
-            </form>
         }
     </aside>
 </form>
