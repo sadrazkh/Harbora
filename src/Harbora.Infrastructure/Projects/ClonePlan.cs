@@ -20,6 +20,12 @@ public sealed record CloneSourceApp(
     /// under-predicts what the copy consumes, and a plan at its domain limit would be allowed past it.
     /// </summary>
     ServiceKind Kind,
+    /// <summary>
+    /// How many containers this application runs. Carried for the same reason <see cref="Kind"/> is:
+    /// the copy runs as many as the original, so an estimate that counted one container's memory
+    /// would under-predict a three-replica app by two thirds and wave a plan past its own ceiling.
+    /// </summary>
+    int Replicas,
     IReadOnlyList<CloneSourceVolume> Volumes);
 
 /// <summary>A managed service in the environment being copied.</summary>
@@ -52,6 +58,8 @@ public sealed record CloneAppSpec(
     double CpuLimit,
     /// <summary>Carried from the source so the quota estimate knows which copies get an address.</summary>
     ServiceKind Kind,
+    /// <summary>Carried from the source so the copy runs as many containers as the original.</summary>
+    int Replicas,
     IReadOnlyList<CloneVolumeSpec> Volumes);
 
 public sealed record CloneServiceSpec(
@@ -95,12 +103,16 @@ public sealed record ClonePlan(
     IReadOnlyList<CloneServiceSpec> Services,
     int DomainsLeftBehind)
 {
-    /// <summary>Memory the whole package asks for, so quota is answered once rather than per item.</summary>
+    /// <summary>
+    /// Memory the whole package asks for, so quota is answered once rather than per item.
+    /// An application's limit is per container, so a three-replica app asks for three times it —
+    /// summing it once would let a plan sitting at its ceiling clone straight past it.
+    /// </summary>
     public long MemoryBytes =>
-        Apps.Sum(a => a.MemoryLimitBytes) + Services.Sum(s => s.MemoryLimitBytes);
+        Apps.Sum(a => a.MemoryLimitBytes * Math.Max(1, a.Replicas)) + Services.Sum(s => s.MemoryLimitBytes);
 
     public double CpuCores =>
-        Apps.Sum(a => a.CpuLimit) + Services.Sum(s => s.CpuLimit);
+        Apps.Sum(a => a.CpuLimit * Math.Max(1, a.Replicas)) + Services.Sum(s => s.CpuLimit);
 
     public int ResourceCount => Apps.Count + Services.Count;
 
@@ -136,6 +148,7 @@ public sealed record ClonePlan(
 
             apps.Add(new CloneAppSpec(
                 app.Id, app.Name, slug, app.InstanceSizeKey, app.MemoryLimitBytes, app.CpuLimit, app.Kind,
+                Math.Max(1, app.Replicas),
                 app.Volumes.Select(v => new CloneVolumeSpec(
                     // The same shape the create form produces, so a cloned volume is not a
                     // different kind of thing from one made by hand.

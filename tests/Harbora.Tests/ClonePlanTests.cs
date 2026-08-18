@@ -17,8 +17,8 @@ public class ClonePlanTests
 {
     private static CloneSourceApp App(
         string slug, string name = "App", long memory = 0, double cpu = 0, int domains = 0,
-        ServiceKind kind = ServiceKind.Web, params string[] mounts) =>
-        new(Guid.NewGuid(), name, slug, "small", memory, cpu, domains, kind,
+        ServiceKind kind = ServiceKind.Web, int replicas = 1, params string[] mounts) =>
+        new(Guid.NewGuid(), name, slug, "small", memory, cpu, domains, kind, replicas,
             mounts.Select(m => new CloneSourceVolume(m, false, null)).ToList());
 
     private static CloneSourceService Service(
@@ -131,7 +131,7 @@ public class ClonePlanTests
     public void A_volume_keeps_its_mount_path_and_its_limits()
     {
         var plan = ClonePlan.Of(new CloneRequest("Staging", Project, [], [], [],
-            [new CloneSourceApp(Guid.NewGuid(), "App", "api", "small", 0, 0, 0, ServiceKind.Web,
+            [new CloneSourceApp(Guid.NewGuid(), "App", "api", "small", 0, 0, 0, ServiceKind.Web, 1,
                 [new CloneSourceVolume("/data", ReadOnly: true, SizeLimitBytes: 5_000)])],
             []));
 
@@ -139,6 +139,33 @@ public class ClonePlanTests
         volume.MountPath.Should().Be("/data");
         volume.ReadOnly.Should().BeTrue();
         volume.SizeLimitBytes.Should().Be(5_000);
+    }
+
+    [Fact]
+    public void The_quota_estimate_counts_every_replica_the_copy_will_run()
+    {
+        // A limit is per container, so copying a three-replica app asks the plan for three times it.
+        // Counting it once let a workspace sitting just under its ceiling clone straight past it —
+        // the estimate said one container's worth and the deploy then started three.
+        var plan = ClonePlan.Of(new CloneRequest("Staging", Project, [], [], [],
+            [App("api", memory: 512_000_000, cpu: 0.5, replicas: 3)], []));
+
+        plan.MemoryBytes.Should().Be(1_536_000_000);
+        plan.CpuCores.Should().Be(1.5);
+        plan.Apps[0].Replicas.Should().Be(3, "the copy has to run as many containers as the original");
+    }
+
+    [Fact]
+    public void An_app_that_never_set_a_replica_count_still_counts_as_one()
+    {
+        // DesiredReplicas is nullable and was dead for months, so rows predating the feature carry
+        // null or zero. Either must estimate as one container, not as none — a plan that summed zero
+        // would let an unlimited number of legacy apps through any ceiling.
+        var plan = ClonePlan.Of(new CloneRequest("Staging", Project, [], [], [],
+            [App("api", memory: 512_000_000, cpu: 0.5, replicas: 0)], []));
+
+        plan.MemoryBytes.Should().Be(512_000_000);
+        plan.CpuCores.Should().Be(0.5);
     }
 
     // ---- databases ----

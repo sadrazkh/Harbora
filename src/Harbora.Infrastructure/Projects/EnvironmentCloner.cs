@@ -61,6 +61,7 @@ public sealed class EnvironmentCloner(
             .Select(a => new
             {
                 a.Id, a.Name, a.Slug, a.InstanceSizeKey, a.MemoryLimitBytes, a.CpuLimit, a.Kind,
+                a.DesiredReplicas,
                 Domains = a.Domains.Count,
                 Volumes = a.Volumes.Select(v => new { v.MountPath, v.ReadOnly, v.SizeLimitBytes }).ToList()
             })
@@ -95,6 +96,7 @@ public sealed class EnvironmentCloner(
             takenContainers,
             apps.Select(a => new CloneSourceApp(
                 a.Id, a.Name, a.Slug, a.InstanceSizeKey, a.MemoryLimitBytes, a.CpuLimit, a.Domains, a.Kind,
+                a.DesiredReplicas ?? 1,
                 a.Volumes.Select(v => new CloneSourceVolume(v.MountPath, v.ReadOnly, v.SizeLimitBytes))
                     .ToList())).ToList(),
             services.Select(s => new CloneSourceService(
