@@ -268,6 +268,7 @@ public sealed class FunctionsController(
 
         ViewData["Title"] = fn.Name;
         var recent = await functions.RecentInvocationsAsync(fn.Id, 20, ct);
+        var revisions = await functions.RecentRevisionsAsync(fn.Id, ct);
 
         return View(new FunctionEditViewModel(
             app.Id, app.Name, app.FunctionRuntime ?? FunctionRuntime.CSharp, fn.Id,
@@ -285,7 +286,8 @@ public sealed class FunctionsController(
             recent.Select(i => new FunctionRunRow(
                 i.StartedAt, i.Trigger, i.StatusCode, i.Succeeded, i.DurationMs, i.Error, i.CompletedAt is null)).ToList(),
             IsPublished: app.ActiveDeploymentId is not null,
-            HasUnpublishedChanges: fn.HasUnpublishedChanges));
+            HasUnpublishedChanges: fn.HasUnpublishedChanges,
+            Revisions: revisions.Select((r, index) => new FunctionRevisionRow(r.Id, r.CreatedAt, IsCurrent: index == 0)).ToList()));
     }
 
     [HttpPost("{id:guid}/save")]
@@ -312,6 +314,9 @@ public sealed class FunctionsController(
         // Whole-app, because the image is whole-app: publishing rebuilds every function, so saying
         // only this one is unpublished would describe something the platform cannot do.
         await functions.MarkDirtyAsync(app.Id, ct);
+        // One immutable row per save, pruned back to the newest MaxRevisions — every save, not just
+        // an edit to existing code, so a brand-new function's very first version is restorable too.
+        await functions.RecordRevisionAsync(candidate, ct);
         await db.SaveChangesAsync(ct);
         await audit.LogAsync("functions.save", "App", app.Id.ToString(), ct: ct);
 
@@ -382,6 +387,43 @@ public sealed class FunctionsController(
             ? "حذف شد. تا زمانی که منتشر نکنید، هنوز روی سرور اجرا می‌شود."
             : "Deleted. It keeps running on the server until you publish.";
         return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// Brings an earlier revision's code back onto the editor and saves it — the same door
+    /// <see cref="SaveFunction"/> uses, not a special one, so a restore is subject to the same
+    /// whole-app unpublished flag and writes its own new <see cref="FunctionCodeRevision"/> rather
+    /// than deleting or rewinding history. Restoring twice in a row is therefore visible in the
+    /// list as two entries, which is the honest account of what happened.
+    /// </summary>
+    [HttpPost("{id:guid}/{functionId:guid}/revisions/{revisionId:guid}/restore")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
+    public async Task<IActionResult> RestoreRevision(Guid id, Guid functionId, Guid revisionId, CancellationToken ct)
+    {
+        var app = await FunctionApps.FirstOrDefaultAsync(a => a.Id == id, ct);
+        if (app is null) return NotFound();
+
+        var fn = await db.FunctionDefinitions.FirstOrDefaultAsync(f => f.Id == functionId && f.AppId == id, ct);
+        if (fn is null) return NotFound();
+
+        var revision = await db.FunctionCodeRevisions
+            .FirstOrDefaultAsync(r => r.Id == revisionId && r.FunctionId == functionId, ct);
+        if (revision is null) return NotFound();
+
+        fn.Code = revision.Code;
+        fn.NextRunAt = null;
+        fn.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await functions.MarkDirtyAsync(id, ct);
+        await functions.RecordRevisionAsync(fn, ct);
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("functions.restore_revision", "App", id.ToString(), ct: ct);
+
+        TempData["Message"] = IsFa
+            ? "نسخه‌ی قبلی بازگردانده شد. برای اجرا شدن، «انتشار» را بزنید."
+            : "Restored an earlier version. Press Publish to make it live.";
+        return RedirectToAction(nameof(EditFunction), new { id, functionId });
     }
 
     /// <summary>

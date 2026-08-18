@@ -153,4 +153,53 @@ public sealed class FunctionAppService(HarboraDbContext db, ISecretProtector pro
             .OrderByDescending(i => i.StartedAt)
             .Take(take)
             .ToListAsync(ct);
+
+    /// <summary>
+    /// How many past versions of one function's code stay restorable.
+    ///
+    /// <para>
+    /// Twenty is "the length of one genuinely bad afternoon of edits" — comfortably more than the
+    /// two or three saves a person makes shaping one function (the case this whole editor is sized
+    /// for, per the design doc's own ranking), while staying a number nobody has to size a sweeper
+    /// around: pruned inline on every save, so the table never grows past
+    /// <c>MaxRevisions</c> rows times the number of functions that have ever been saved, regardless
+    /// of the platform's age. Going back further than that is what Publish's own deployment history
+    /// is for — a different table, kept for a different reason.
+    /// </para>
+    /// </summary>
+    public const int MaxRevisions = 20;
+
+    /// <summary>
+    /// Snapshots the code about to be saved as a new, immutable revision, then prunes anything past
+    /// the newest <see cref="MaxRevisions"/> for this function. Called once per successful save,
+    /// including a restore — which is itself a save, so restoring to an old version shows up as its
+    /// own new revision rather than rewriting or deleting the one it copied from.
+    /// </summary>
+    public async Task RecordRevisionAsync(FunctionDefinition function, CancellationToken ct)
+    {
+        db.FunctionCodeRevisions.Add(new FunctionCodeRevision
+        {
+            FunctionId = function.Id,
+            WorkspaceId = function.WorkspaceId,
+            Code = function.Code,
+        });
+
+        var existing = await db.FunctionCodeRevisions
+            .Where(r => r.FunctionId == function.Id)
+            .OrderByDescending(r => r.CreatedAt)
+            .ToListAsync(ct);
+
+        // The row added above is tracked but not yet persisted, so it is not in `existing` — what
+        // needs pruning is whatever sits beyond the newest MaxRevisions - 1 already-saved rows,
+        // leaving exactly MaxRevisions once the new one lands too.
+        if (existing.Count > MaxRevisions - 1)
+            db.FunctionCodeRevisions.RemoveRange(existing.Skip(MaxRevisions - 1));
+    }
+
+    /// <summary>Every kept revision of one function, newest first — at most <see cref="MaxRevisions"/>.</summary>
+    public Task<List<FunctionCodeRevision>> RecentRevisionsAsync(Guid functionId, CancellationToken ct) =>
+        db.FunctionCodeRevisions
+            .Where(r => r.FunctionId == functionId)
+            .OrderByDescending(r => r.CreatedAt)
+            .ToListAsync(ct);
 }

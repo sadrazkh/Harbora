@@ -157,6 +157,7 @@ public class HarboraDbContext : DbContext
 
     public DbSet<Harbora.Domain.Functions.FunctionDefinition> FunctionDefinitions => Set<Harbora.Domain.Functions.FunctionDefinition>();
     public DbSet<Harbora.Domain.Functions.FunctionInvocation> FunctionInvocations => Set<Harbora.Domain.Functions.FunctionInvocation>();
+    public DbSet<Harbora.Domain.Functions.FunctionCodeRevision> FunctionCodeRevisions => Set<Harbora.Domain.Functions.FunctionCodeRevision>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -670,6 +671,16 @@ public class HarboraDbContext : DbContext
             // oldest across all of them; both are this index.
             e.HasIndex(x => new { x.FunctionId, x.StartedAt });
             e.Property(x => x.Error).HasMaxLength(1000);
+            e.HasOne<Harbora.Domain.Functions.FunctionDefinition>().WithMany()
+                .HasForeignKey(x => x.FunctionId).OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        });
+
+        b.Entity<Harbora.Domain.Functions.FunctionCodeRevision>(e =>
+        {
+            // The editor reads one function's revisions newest-first, and FunctionAppService prunes
+            // the same way — both are this index, same shape as FunctionInvocation's above.
+            e.HasIndex(x => new { x.FunctionId, x.CreatedAt });
             e.HasOne<Harbora.Domain.Functions.FunctionDefinition>().WithMany()
                 .HasForeignKey(x => x.FunctionId).OnDelete(DeleteBehavior.Cascade);
             e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);

@@ -129,3 +129,25 @@ public class FunctionInvocation : BaseEntity
     /// <summary>Short reason for a failure, already redacted. Never the whole response body.</summary>
     public string? Error { get; set; }
 }
+
+/// <summary>
+/// One past save of a function's code. Immutable, in the same shape <c>Deployment</c> already uses
+/// for its own history — a restore is a new save that happens to carry an old body, never a rewrite
+/// of a row that already exists — so the table only ever grows by insert, and reading "what was this
+/// five saves ago" never has to distrust a row somebody might have touched since.
+///
+/// <para>
+/// <see cref="BaseEntity.CreatedAt"/> is when this version was written; there is no
+/// <c>UpdatedAt</c> use here, because a revision is never updated after the fact.
+/// </para>
+/// </summary>
+public class FunctionCodeRevision : BaseEntity
+{
+    public Guid FunctionId { get; set; }
+
+    /// <summary>Copied from the function, the same way every other per-function child table does it.</summary>
+    public Guid WorkspaceId { get; set; }
+
+    /// <summary>The function's code exactly as it stood the moment this revision was written.</summary>
+    public string Code { get; set; } = string.Empty;
+}

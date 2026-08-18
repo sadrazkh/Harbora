@@ -183,6 +183,45 @@
     </aside>
 </form>
 
+@* Deliberately outside the form above. Nesting a per-row restore <form> inside the Save form is
+   exactly §3(a)'s original bug — an HTML5 parser drops the inner start tag — so each row here is
+   its own top-level form, the same shape Details.cshtml already uses for its own per-row delete. *@
+@if (Model.FunctionId is { } editingId && Model.Revisions is { Count: > 0 })
+{
+    <div class="mt-5 rounded-2xl border border-line bg-surface p-5 shadow-panel">
+        <h2 class="mb-1 text-sm font-semibold text-ink">@(isFa ? "تاریخچه‌ی نسخه‌ها" : "Revision history")</h2>
+        <p class="mb-3 text-xs text-ink-muted">
+            @(isFa
+                ? $"آخرین {FunctionAppService.MaxRevisions} نسخه‌ی ذخیره‌شده نگه داشته می‌شود. بازگردانی یک نسخه خودش نسخه‌ی تازه‌ای می‌سازد."
+                : $"The last {FunctionAppService.MaxRevisions} saved versions are kept. Restoring one writes a new version of its own.")
+        </p>
+        <ul class="divide-y divide-line text-xs">
+            @foreach (var revision in Model.Revisions)
+            {
+                <li class="flex items-center justify-between gap-3 py-2" data-revision-id="@revision.Id">
+                    <span class="text-ink-muted" dir="ltr">@revision.CreatedAt.LocalDateTime.ToString(Dates.Precise)</span>
+                    @if (revision.IsCurrent)
+                    {
+                        <span data-revision-current class="text-ink-faint">@(isFa ? "نسخه‌ی فعلی" : "Current")</span>
+                    }
+                    else
+                    {
+                        <form method="post" action="/functions/@Model.AppId/@editingId/revisions/@revision.Id/restore"
+                              onsubmit="return confirm('@(isFa
+                                  ? "کد به این نسخه بازگردانده شود؟ نسخه‌ی فعلی هم در تاریخچه می‌ماند."
+                                  : "Restore the code to this version? The current version stays in the history too.")');">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" data-action="restore-revision" class="text-accent-text hover:underline">
+                                @(isFa ? "بازگردانی" : "Restore")
+                            </button>
+                        </form>
+                    }
+                </li>
+            }
+        </ul>
+    </div>
+}
+
 @section Scripts {
 <script>
     // Only the fields the chosen trigger uses. The server validates the same rule, so this is a

@@ -50,6 +50,9 @@ public sealed record FunctionRunRow(
     DateTimeOffset StartedAt, FunctionTrigger Trigger, int? StatusCode, bool Succeeded,
     int DurationMs, string? Error, bool StillRunning);
 
+/// <summary>One kept revision of a function's code, as the editor's history panel shows it.</summary>
+public sealed record FunctionRevisionRow(Guid Id, DateTimeOffset CreatedAt, bool IsCurrent);
+
 /// <param name="IsPublished">
 /// Whether this app has ever been published — <c>App.ActiveDeploymentId is not null</c>, which is the
 /// same condition <c>FunctionInvoker.QueueAsync</c> checks before it will run anything. The editor
@@ -66,4 +69,5 @@ public sealed record FunctionEditViewModel(
     FunctionFormModel Form, IReadOnlyList<FunctionEventKind> Events,
     IReadOnlyList<FunctionRunRow>? Runs = null,
     bool IsPublished = false,
-    bool HasUnpublishedChanges = false);
+    bool HasUnpublishedChanges = false,
+    IReadOnlyList<FunctionRevisionRow>? Revisions = null);
