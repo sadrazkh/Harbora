@@ -513,8 +513,15 @@ public sealed class DeploymentPipeline(
             await Log(LogStream.System, $"✅ Deployment #{deployment.Number} succeeded.");
 
             // The code in the image is now the code in the database, so the editor stops saying
-            // "edited, not published" — the one sentence on that page a person acts on.
-            await MarkFunctionsPublishedAsync(app, ct);
+            // "edited, not published" — the one sentence on that page a person acts on. A rollback
+            // is the opposite fact: it never rebuilds (ADR-006), so the image now running was NOT
+            // built from these rows, whatever they say. Marking them dirty is what keeps the "live"
+            // chip honest — the alternative is the flags sitting exactly as they were, which reads
+            // as "live" over code that provably is not what answered this deployment.
+            if (deployment.RolledBackFromId is not null)
+                await MarkFunctionsRolledBackAsync(app, ct);
+            else
+                await MarkFunctionsPublishedAsync(app, ct);
             await functionEvents.PublishAsync(
                 Domain.Functions.FunctionEvent.Create(
                     Domain.Functions.FunctionEvents.DeploymentSucceeded, app.WorkspaceId, app.Slug,
@@ -1083,6 +1090,33 @@ public sealed class DeploymentPipeline(
 
         foreach (var fn in functions.Where(f => f.UpdatedAt <= readAt))
             fn.HasUnpublishedChanges = false;
+    }
+
+    /// <summary>
+    /// Marks every function in a rolled-back app as edited-since-published, whether or not a single
+    /// row was touched.
+    ///
+    /// <para>
+    /// A rollback re-releases a prior image and deliberately never rebuilds (ADR-006), so
+    /// <see cref="_codeReadAt"/> is never set for this deployment and <see cref="MarkFunctionsPublishedAsync"/>
+    /// would be a no-op — which is exactly the defect: the flags are left exactly as they were, and
+    /// if they already read clean the "live" chip keeps saying so over a container running a
+    /// different image than the one those rows would build. There is no cheap way to tell whether the
+    /// rows genuinely still match the artifact just re-released — that would mean diffing generated
+    /// output against the image — so the honest, conservative answer is the same one an edit gets:
+    /// unpublished, until a real publish proves it again.
+    /// </para>
+    /// </summary>
+    private async Task MarkFunctionsRolledBackAsync(App app, CancellationToken ct)
+    {
+        if (app.SourceType != AppSourceType.InlineCode) return;
+
+        var functions = await db.FunctionDefinitions.IgnoreQueryFilters()
+            .Where(f => f.AppId == app.Id && !f.HasUnpublishedChanges)
+            .ToListAsync(ct);
+
+        foreach (var fn in functions)
+            fn.HasUnpublishedChanges = true;
     }
 
     /// <summary>

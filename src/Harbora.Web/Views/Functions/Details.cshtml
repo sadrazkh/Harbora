@@ -93,17 +93,22 @@
                     }
                 </td>
                 <td class="px-5 py-3">
+                    @* data-fn-state is the language-independent hook: the panel renders Persian by
+                       default, so a test — or a screenshot diff — has nothing untranslated to key off
+                       here otherwise. Also what closes §3(c): a rollback never rebuilds (ADR-006), so
+                       DeploymentPipeline now marks every function of a rolled-back app unpublished
+                       again even though nobody edited a line — this chip is what that fix is for. *@
                     @if (!fn.IsEnabled)
                     {
-                        <span class="rounded-md bg-surface-2 px-2 py-0.5 text-xs text-ink-faint">@(isFa ? "خاموش" : "off")</span>
+                        <span data-fn-state="off" class="rounded-md bg-surface-2 px-2 py-0.5 text-xs text-ink-faint">@(isFa ? "خاموش" : "off")</span>
                     }
                     else if (fn.HasUnpublishedChanges)
                     {
-                        <span class="rounded-md bg-warn-soft px-2 py-0.5 text-xs text-warn">@(isFa ? "منتشرنشده" : "unpublished")</span>
+                        <span data-fn-state="unpublished" class="rounded-md bg-warn-soft px-2 py-0.5 text-xs text-warn">@(isFa ? "منتشرنشده" : "unpublished")</span>
                     }
                     else
                     {
-                        <span class="rounded-md bg-ok-soft px-2 py-0.5 text-xs text-ok">@(isFa ? "زنده" : "live")</span>
+                        <span data-fn-state="live" class="rounded-md bg-ok-soft px-2 py-0.5 text-xs text-ok">@(isFa ? "زنده" : "live")</span>
                     }
                 </td>
                 <td class="px-5 py-3 text-end">

@@ -58,16 +58,16 @@ else
                     </span>
                     @if (!app.EverPublished)
                     {
-                        <span class="rounded-md bg-surface-2 px-2 py-0.5 text-ink-faint">@(isFa ? "منتشر نشده" : "never published")</span>
+                        <span data-fn-state="never-published" class="rounded-md bg-surface-2 px-2 py-0.5 text-ink-faint">@(isFa ? "منتشر نشده" : "never published")</span>
                     }
                     else if (app.HasUnpublishedChanges)
                     {
                         @* The one thing on this page a person acts on: what is stored is not what is running. *@
-                        <span class="rounded-md bg-warn-soft px-2 py-0.5 text-warn">@(isFa ? "تغییر منتشرنشده" : "unpublished changes")</span>
+                        <span data-fn-state="unpublished" class="rounded-md bg-warn-soft px-2 py-0.5 text-warn">@(isFa ? "تغییر منتشرنشده" : "unpublished changes")</span>
                     }
                     else
                     {
-                        <span class="rounded-md bg-ok-soft px-2 py-0.5 text-ok">@(isFa ? "به‌روز" : "live")</span>
+                        <span data-fn-state="live" class="rounded-md bg-ok-soft px-2 py-0.5 text-ok">@(isFa ? "به‌روز" : "live")</span>
                     }
                 </div>
             </a>
