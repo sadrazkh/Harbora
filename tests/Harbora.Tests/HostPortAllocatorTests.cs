@@ -61,8 +61,8 @@ public class HostPortAllocatorTests
         await using var db = NewContext("ports-two-apps-" + Guid.NewGuid());
         var allocator = AllocatorOn(db);
 
-        var first = await allocator.AllocateAsync(NodeA, Guid.CreateVersion7(), 1, default);
-        var second = await allocator.AllocateAsync(NodeA, Guid.CreateVersion7(), 1, default);
+        var first = await allocator.AllocateAsync(NodeA, Guid.CreateVersion7(), 1, 0, default);
+        var second = await allocator.AllocateAsync(NodeA, Guid.CreateVersion7(), 1, 0, default);
 
         second.Should().NotBe(first);
     }
@@ -76,8 +76,8 @@ public class HostPortAllocatorTests
         var allocator = AllocatorOn(db);
         var app = Guid.CreateVersion7();
 
-        var old = await allocator.AllocateAsync(NodeA, app, 1, default);
-        var fresh = await allocator.AllocateAsync(NodeA, app, 2, default);
+        var old = await allocator.AllocateAsync(NodeA, app, 1, 0, default);
+        var fresh = await allocator.AllocateAsync(NodeA, app, 2, 0, default);
 
         fresh.Should().NotBe(old);
     }
@@ -90,8 +90,8 @@ public class HostPortAllocatorTests
         var allocator = AllocatorOn(db);
         var app = Guid.CreateVersion7();
 
-        var first = await allocator.AllocateAsync(NodeA, app, 7, default);
-        var again = await allocator.AllocateAsync(NodeA, app, 7, default);
+        var first = await allocator.AllocateAsync(NodeA, app, 7, 0, default);
+        var again = await allocator.AllocateAsync(NodeA, app, 7, 0, default);
 
         again.Should().Be(first);
         db.HostPortAllocations.Should().ContainSingle();
@@ -104,8 +104,8 @@ public class HostPortAllocatorTests
         await using var db = NewContext("ports-nodes-" + Guid.NewGuid());
         var allocator = AllocatorOn(db);
 
-        var onA = await allocator.AllocateAsync(NodeA, Guid.CreateVersion7(), 1, default);
-        var onB = await allocator.AllocateAsync(NodeB, Guid.CreateVersion7(), 1, default);
+        var onA = await allocator.AllocateAsync(NodeA, Guid.CreateVersion7(), 1, 0, default);
+        var onB = await allocator.AllocateAsync(NodeB, Guid.CreateVersion7(), 1, 0, default);
 
         onB.Should().Be(onA);
     }
@@ -119,9 +119,9 @@ public class HostPortAllocatorTests
         var allocator = AllocatorOn(db);
         var gone = Guid.CreateVersion7();
 
-        var released = await allocator.AllocateAsync(NodeA, gone, 1, default);
+        var released = await allocator.AllocateAsync(NodeA, gone, 1, 0, default);
         await allocator.ReleaseAppAsync(gone, default);
-        var reused = await allocator.AllocateAsync(NodeA, Guid.CreateVersion7(), 1, default);
+        var reused = await allocator.AllocateAsync(NodeA, Guid.CreateVersion7(), 1, 0, default);
 
         reused.Should().Be(released, "a range that only shrinks would run out");
     }
@@ -132,8 +132,8 @@ public class HostPortAllocatorTests
         await using var db = NewContext("ports-release-" + Guid.NewGuid());
         var allocator = AllocatorOn(db);
         var app = Guid.CreateVersion7();
-        await allocator.AllocateAsync(NodeA, app, 1, default);
-        var live = await allocator.AllocateAsync(NodeA, app, 2, default);
+        await allocator.AllocateAsync(NodeA, app, 1, 0, default);
+        var live = await allocator.AllocateAsync(NodeA, app, 2, 0, default);
 
         await allocator.ReleaseAllButAsync(NodeA, app, keepDeploymentNumber: 2, default);
 
@@ -149,11 +149,11 @@ public class HostPortAllocatorTests
         var allocator = AllocatorOn(db);
         var app = Guid.CreateVersion7();
 
-        var port = await allocator.AllocateAsync(NodeA, app, 3, default);
+        var port = await allocator.AllocateAsync(NodeA, app, 3, 0, default);
         await allocator.ReleaseAsync(NodeA, app, 3, default);
 
         db.HostPortAllocations.Should().BeEmpty();
-        (await allocator.AllocateAsync(NodeA, Guid.CreateVersion7(), 1, default)).Should().Be(port);
+        (await allocator.AllocateAsync(NodeA, Guid.CreateVersion7(), 1, 0, default)).Should().Be(port);
     }
 
     [Fact]
@@ -163,8 +163,8 @@ public class HostPortAllocatorTests
         var allocator = AllocatorOn(db);
         var mine = Guid.CreateVersion7();
         var theirs = Guid.CreateVersion7();
-        await allocator.AllocateAsync(NodeA, mine, 1, default);
-        var keep = await allocator.AllocateAsync(NodeA, theirs, 1, default);
+        await allocator.AllocateAsync(NodeA, mine, 1, 0, default);
+        var keep = await allocator.AllocateAsync(NodeA, theirs, 1, 0, default);
 
         await allocator.ReleaseAppAsync(mine, default);
 
@@ -180,7 +180,7 @@ public class HostPortAllocatorTests
             { ServerId = NodeA, AppId = Guid.CreateVersion7(), DeploymentNumber = 1, Port = port });
         await db.SaveChangesAsync();
 
-        var allocate = async () => await AllocatorOn(db).AllocateAsync(NodeA, Guid.CreateVersion7(), 1, default);
+        var allocate = async () => await AllocatorOn(db).AllocateAsync(NodeA, Guid.CreateVersion7(), 1, 0, default);
 
         (await allocate.Should().ThrowAsync<InvalidOperationException>())
             .Which.Message.Should().Contain("another node", "the message has to name a way out");
@@ -209,7 +209,7 @@ public class HostPortAllocatorTests
         squatter.Start();
         try
         {
-            var port = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, default);
+            var port = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, 0, default);
 
             port.Should().Be(HostPortRange.First + 1,
                 "the lowest port is genuinely occupied by something outside this database's own bookkeeping");
@@ -235,8 +235,8 @@ public class HostPortAllocatorTests
         squatter.Start();
         try
         {
-            var first = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, default);
-            var second = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, default);
+            var first = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, 0, default);
+            var second = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, 0, default);
 
             first.Should().Be(HostPortRange.First + 1);
             second.Should().Be(HostPortRange.First + 2,
@@ -260,7 +260,7 @@ public class HostPortAllocatorTests
         squatter.Start();
         try
         {
-            var port = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, default);
+            var port = await AllocatorOn(db).AllocateAsync(serverId, Guid.CreateVersion7(), 1, 0, default);
 
             port.Should().Be(HostPortRange.First,
                 "this machine's own sockets say nothing about a port on a remote node, so the number is trusted the way it always was");
@@ -276,7 +276,7 @@ public class HostPortAllocatorTests
         // that absence into a crash or into a surprise live socket bind.
         await using var db = NewContext("ports-no-server-row-" + Guid.NewGuid());
 
-        var port = await AllocatorOn(db).AllocateAsync(NodeA, Guid.CreateVersion7(), 1, default);
+        var port = await AllocatorOn(db).AllocateAsync(NodeA, Guid.CreateVersion7(), 1, 0, default);
 
         port.Should().Be(HostPortRange.First);
     }

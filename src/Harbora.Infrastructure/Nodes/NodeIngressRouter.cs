@@ -38,8 +38,13 @@ public sealed class NodeIngressRouter(
     private readonly NodeAgentControlPlaneOptions _node = nodeOptions.Value;
     private readonly HarboraRuntimeOptions _runtime = runtimeOptions.Value;
 
+    public Task<UpstreamTarget> ResolveAsync(
+        Server server, Guid appId, int deploymentNumber, int nodePort, CancellationToken ct) =>
+        ResolveAsync(server, appId, deploymentNumber, replicaIndex: 0, nodePort, ct);
+
+    /// <summary>Replica form — see <see cref="HostPortAllocation.ReplicaIndex"/> for what 0 means.</summary>
     public async Task<UpstreamTarget> ResolveAsync(
-        Server server, Guid appId, int deploymentNumber, int nodePort, CancellationToken ct)
+        Server server, Guid appId, int deploymentNumber, int replicaIndex, int nodePort, CancellationToken ct)
     {
         var direct = new UpstreamTarget(server.Hostname, nodePort, Tunnelled: false);
 
@@ -52,9 +57,9 @@ public sealed class NodeIngressRouter(
 
         var panelPort = registry.Bind(
             node.NodeId, nodePort,
-            (await hostPorts.AllocatePairAsync(server.Id, appId, deploymentNumber, ct)).IngressPort);
+            (await hostPorts.AllocatePairAsync(server.Id, appId, deploymentNumber, replicaIndex, ct)).IngressPort);
 
-        await hostPorts.RecordIngressPortAsync(server.Id, appId, deploymentNumber, panelPort, ct);
+        await hostPorts.RecordIngressPortAsync(server.Id, appId, deploymentNumber, replicaIndex, panelPort, ct);
 
         if (!registry.IsConnected(node.NodeId))
             // Not fatal here: the health check that follows goes through this same path and will

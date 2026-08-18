@@ -317,7 +317,25 @@ public sealed class TraefikProxyEngine(
         sb.AppendLine($"    {RouterName(r)}-svc:");
         sb.AppendLine("      loadBalancer:");
         sb.AppendLine("        servers:");
-        sb.AppendLine($"          - url: \"http://{r.TargetService}:{r.TargetPort}\"");
+        // Ordinarily just the one — RouteUpstreams.All returns TargetService/TargetPort alone when
+        // ExtraUpstreamsJson is empty, which is every route the designer creates by hand. A deployment
+        // that started more than one replica container populated the extras, and every one of them
+        // gets a server line here: this loadBalancer, not a second router per replica, is what spreads
+        // traffic across them.
+        foreach (var upstream in Domain.Networking.RouteUpstreams.All(r))
+            sb.AppendLine($"          - url: \"http://{upstream.Host}:{upstream.Port}\"");
+
+        // Traefik polls this path on every server above and stops sending it traffic the moment a
+        // poll fails — no panel-side loop, no re-render on a container dying between deploys. Only
+        // rendered when the deploying app actually recorded a path: an app with none configured a
+        // health check with no fixed answer, and every server here would then read as failing forever.
+        if (!string.IsNullOrWhiteSpace(r.LoadBalancerHealthCheckPath))
+        {
+            sb.AppendLine("        healthCheck:");
+            sb.AppendLine($"          path: \"{r.LoadBalancerHealthCheckPath}\"");
+            sb.AppendLine("          interval: \"10s\"");
+            sb.AppendLine("          timeout: \"5s\"");
+        }
     }
 
     private void RenderMiddlewares(StringBuilder sb, Route r)

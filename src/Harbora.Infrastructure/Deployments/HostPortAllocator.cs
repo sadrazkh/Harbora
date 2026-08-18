@@ -22,15 +22,18 @@ public sealed class HostPortAllocator(
     private const int MaxAttempts = 10;
 
     /// <summary>
-    /// Reserves a port for this deployment, or returns the one it already holds — a retried deploy
-    /// must not consume a second port.
+    /// Reserves a port for this deployment's given replica, or returns the one it already holds — a
+    /// retried deploy must not consume a second port. <paramref name="replicaIndex"/> is 0 for a
+    /// deployment running exactly one replica — the ordinary case — and 1-based for replica 2 and
+    /// beyond of a deployment running more than one; see <see cref="HostPortAllocation.ReplicaIndex"/>.
     /// </summary>
-    public async Task<int> AllocateAsync(Guid serverId, Guid appId, int deploymentNumber, CancellationToken ct) =>
-        (await AllocatePairAsync(serverId, appId, deploymentNumber, ct)).NodePort;
+    public async Task<int> AllocateAsync(
+        Guid serverId, Guid appId, int deploymentNumber, int replicaIndex, CancellationToken ct) =>
+        (await AllocatePairAsync(serverId, appId, deploymentNumber, replicaIndex, ct)).NodePort;
 
     /// <summary>
-    /// The reservation for this deployment, including the panel-side ingress port when one was
-    /// recorded.
+    /// The reservation for this deployment's given replica, including the panel-side ingress port
+    /// when one was recorded.
     ///
     /// <para>
     /// Separate from <see cref="AllocateAsync"/> only because most callers want the node's port and
@@ -40,26 +43,29 @@ public sealed class HostPortAllocator(
     /// </para>
     /// </summary>
     public async Task<PortReservation> AllocatePairAsync(
-        Guid serverId, Guid appId, int deploymentNumber, CancellationToken ct)
+        Guid serverId, Guid appId, int deploymentNumber, int replicaIndex, CancellationToken ct)
     {
         var held = await db.HostPortAllocations
             .FirstOrDefaultAsync(a => a.ServerId == serverId && a.AppId == appId
-                                      && a.DeploymentNumber == deploymentNumber, ct);
+                                      && a.DeploymentNumber == deploymentNumber
+                                      && a.ReplicaIndex == replicaIndex, ct);
         if (held is not null) return new PortReservation(held.Port, held.IngressPort);
 
-        var port = await ReserveAsync(serverId, appId, deploymentNumber, ct);
+        var port = await ReserveAsync(serverId, appId, deploymentNumber, replicaIndex, ct);
         return new PortReservation(port, null);
     }
 
     /// <summary>
-    /// Record the panel port bound for this deployment, so a restart can bind the same one again.
+    /// Record the panel port bound for this deployment's given replica, so a restart can bind the
+    /// same one again.
     /// </summary>
     public async Task RecordIngressPortAsync(
-        Guid serverId, Guid appId, int deploymentNumber, int ingressPort, CancellationToken ct)
+        Guid serverId, Guid appId, int deploymentNumber, int replicaIndex, int ingressPort, CancellationToken ct)
     {
         var row = await db.HostPortAllocations
             .FirstOrDefaultAsync(a => a.ServerId == serverId && a.AppId == appId
-                                      && a.DeploymentNumber == deploymentNumber, ct);
+                                      && a.DeploymentNumber == deploymentNumber
+                                      && a.ReplicaIndex == replicaIndex, ct);
 
         if (row is null || row.IngressPort == ingressPort) return;
 
@@ -73,7 +79,8 @@ public sealed class HostPortAllocator(
             .Where(a => a.IngressPort != null)
             .ToListAsync(ct);
 
-    private async Task<int> ReserveAsync(Guid serverId, Guid appId, int deploymentNumber, CancellationToken ct)
+    private async Task<int> ReserveAsync(
+        Guid serverId, Guid appId, int deploymentNumber, int replicaIndex, CancellationToken ct)
     {
         // P7 (2026-08-17 app-environment-management design), the port-burn item: only meaningful for
         // a LOCAL server, where this process and the one about to publish the port are the same
@@ -96,7 +103,8 @@ public sealed class HostPortAllocator(
 
             db.HostPortAllocations.Add(new HostPortAllocation
             {
-                ServerId = serverId, AppId = appId, DeploymentNumber = deploymentNumber, Port = port
+                ServerId = serverId, AppId = appId, DeploymentNumber = deploymentNumber,
+                ReplicaIndex = replicaIndex, Port = port
             });
 
             try
@@ -184,10 +192,25 @@ public sealed class HostPortAllocator(
         logger.LogDebug("Released {Count} host port(s) for app {App}.", before, appId);
     }
 
-    /// <summary>Frees one reservation — used when a deployment fails, so a failed deploy leaks nothing.</summary>
+    /// <summary>
+    /// Frees every replica's reservation for one deployment — used when a deployment fails, so a
+    /// failed deploy leaks nothing, whether it ever started one container or several.
+    /// </summary>
     public async Task ReleaseAsync(Guid serverId, Guid appId, int deploymentNumber, CancellationToken ct) =>
         await RemoveAsync(a => a.ServerId == serverId && a.AppId == appId
                                && a.DeploymentNumber == deploymentNumber, ct);
+
+    /// <summary>
+    /// Frees the ports of every replica above <paramref name="keepReplicaCount"/> for one deployment —
+    /// used when a running app's replica count is scaled down without a new deployment, so the
+    /// containers <see cref="AppOperationsService"/> stops on the way down do not strand the ports they
+    /// held.
+    /// </summary>
+    public async Task ReleaseReplicasAboveAsync(
+        Guid serverId, Guid appId, int deploymentNumber, int keepReplicaCount, CancellationToken ct) =>
+        await RemoveAsync(a => a.ServerId == serverId && a.AppId == appId
+                               && a.DeploymentNumber == deploymentNumber
+                               && a.ReplicaIndex > keepReplicaCount, ct);
 
     /// <summary>Frees everything an app holds — it is being deleted.</summary>
     public async Task ReleaseAppAsync(Guid appId, CancellationToken ct) =>

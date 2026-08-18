@@ -333,14 +333,26 @@ public sealed class DeploymentPipeline(
                 return;
             }
 
-            // Zero-downtime cutover (ADR-007): the new container gets a versioned name and starts
-            // ALONGSIDE the currently-serving one. We only retire the old container(s) AFTER the new
-            // one is healthy and traffic has been switched — so a failed deploy never drops traffic.
+            // Zero-downtime cutover (ADR-007): every replica gets a versioned name and starts
+            // ALONGSIDE whatever is currently serving. We only retire the old container(s) AFTER
+            // every new replica is healthy and traffic has been switched — so a failed deploy never
+            // drops traffic, whether it starts one container or several.
             var containerName = DeploymentPlanning.ContainerName(app.WorkspaceId, app.Slug, deployment.Number);
+
+            // Replicas are a property of a long-running single container, not of a Compose stack —
+            // StartComposeStackAsync below has its own per-service shape — and this line never runs
+            // for Cron/ReleaseTask at all (the `!ServicePlan.IsLongRunning` branch above already
+            // returned). Read fresh from `app`, never from the deployment: a rollback or a redeploy
+            // always releases at whatever count the app is configured for NOW, not whatever ran the
+            // version being re-released.
+            var replicaCount = composeStack is null ? Math.Max(1, app.DesiredReplicas ?? 1) : 1;
+            var replicaNames = DeploymentPlanning.ReplicaContainerNames(
+                app.WorkspaceId, app.Slug, deployment.Number, replicaCount);
 
             // Decide how the proxy reaches this app. On the local node Traefik joins the tenant
             // network and routes by container name. On a remote node there is no shared overlay, so
-            // we publish the container port to a per-deployment host port (lets old + new coexist).
+            // each replica publishes its container port to its own per-deployment host port (lets old
+            // and new coexist, and lets every replica be routed to independently).
             var server = await db.Servers.FirstAsync(s => s.Id == app.ServerId, ct);
 
             // What the image says about itself beats what the app was configured with. A stock
@@ -349,26 +361,7 @@ public sealed class DeploymentPipeline(
             // a port nothing was listening on.
             var containerPort = await ResolveContainerPortAsync(docker, app, imageTag, Log, ct);
 
-            int? publishPort = null;
-            string upstreamHost = containerName;
-            var upstreamPort = containerPort;
-            if (!server.IsLocal)
-            {
-                // Reserved, not derived: a hashed port consulted nothing about what was already
-                // in use, and a port reused across apps aims one app's route at another's container.
-                publishPort = await hostPorts.AllocateAsync(server.Id, app.Id, deployment.Number, ct);
-
-                // A node behind NAT publishes on a port only its own machine can reach, so the
-                // proxy is sent to a port here instead and the bytes go back down the node's tunnel.
-                var upstream = await ingressRouter.ResolveAsync(server, app.Id, deployment.Number, publishPort.Value, ct);
-                upstreamHost = upstream.Host;
-                upstreamPort = upstream.Port;
-
-                if (upstream.Tunnelled)
-                    await Log(LogStream.System,
-                        $"This node is reached through its ingress tunnel; the proxy will target {upstream.Host}:{upstream.Port}.");
-            }
-            else
+            if (server.IsLocal)
             {
                 // Give the local Traefik ingress into this tenant's network, and the panel reach
                 // for HTTP health checks by container name (both idempotent, best-effort).
@@ -404,22 +397,27 @@ public sealed class DeploymentPipeline(
                 var web = await StartComposeStackAsync(
                     docker, app, deployment, composeStack, network, labels, server, stackBuildLog, Log, ct);
                 containerName = web.ContainerName;
-                // A remote server's upstream was already decided above, and on a tunnelled node it
-                // is the panel's own port — naming server.Hostname here would quietly route around
-                // the tunnel and leave a compose stack unreachable where a single container works.
-                upstreamHost = server.IsLocal ? web.ContainerName : upstreamHost;
-                upstreamPort = server.IsLocal ? web.Port : publishPort is not null ? upstreamPort : web.Port;
+                // On a remote node the web service's own publish (inside StartComposeStackAsync,
+                // above) already made the reservation this reuses — naming server.Hostname here would
+                // quietly route around a tunnelled node's ingress and leave a compose stack
+                // unreachable where a single container works.
+                (string Host, int Port) composeUpstream = (web.ContainerName, web.Port);
+                if (!server.IsLocal)
+                {
+                    var remote = await ResolveRemoteUpstreamAsync(server, app, deployment, portReplicaIndex: 0, Log, ct);
+                    composeUpstream = (remote.Host, remote.Port);
+                }
                 keepContainers = web.AllContainerNames;
 
                 await SetStatus(DeploymentStatus.HealthChecking);
-                var stackHealth = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort,
+                var stackHealth = await WaitForHealthyAsync(docker, composeUpstream.Host, composeUpstream.Port,
                     web.ContainerName, app.HealthCheckPath, msg => Log(LogStream.System, msg), ct);
                 if (!stackHealth.IsHealthy)
                     throw new InvalidOperationException(
                         $"The '{web.ServiceName}' service did not become healthy. " +
                         HealthDiagnosis.Explain(stackHealth, web.ContainerName));
 
-                await WireProxyAsync(app, upstreamHost, upstreamPort, Log, Record, ct);
+                await WireProxyAsync(app, [composeUpstream], app.HealthCheckPath, Log, Record, ct);
                 await RetireOldContainersAsync(docker, app.WorkspaceId, app.Slug, keepContainers, Log, ct);
 
                 if (deployment.RolledBackFromId is not null)
@@ -446,57 +444,124 @@ public sealed class DeploymentPipeline(
             // container's own start-up, where a failed migration takes the site down with it.
             await RunReleaseTaskAsync(docker, app, imageTag, network, env, Log, LogFromEngine, ct);
 
-            // The compose path twenty lines below has always done this; the ordinary path never did,
-            // so an app was reachable only as harbora-{slug}-{number} — a name that changes every
-            // time it ships. An ambiguous alias is withheld rather than registered: docker balances
-            // between every container answering to a name, so a duplicate silently sends a share of
-            // the calls to a stranger.
+            // The compose path above has always done this; the ordinary path never did, so an app was
+            // reachable only as harbora-{slug}-{number} — a name that changes every time it ships. An
+            // ambiguous alias is withheld rather than registered: docker balances between every
+            // container answering to a name, so a duplicate silently sends a share of the calls to a
+            // stranger. Given only to replica 1 below, for the same reason: a second container sharing
+            // that name would be exactly the ambiguous registration this already refuses for a
+            // stranger's app, self-inflicted.
             var privateAddress = PrivateAddress.Decide(app.Kind, app.Slug, await TakenAliasesAsync(docker, app, ct));
 
-            await Log(LogStream.System, $"Starting container {containerName} …");
-            var containerId = await docker.RunContainerAsync(new DockerRunRequest(
-                imageTag, containerName, network, env, labels,
-                app.Volumes.Select(v => (v.Name, v.MountPath, v.ReadOnly)).ToList(),
-                containerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath,
-                Command: null, PublishToHostPort: publishPort,
-                NetworkAliases: privateAddress.HasAlias ? [privateAddress.Alias!] : null), ct);
-            // Recorded only once the container that would answer to it actually exists — assigning it
-            // alongside the decision above would let a failure between here and there (the run call
-            // itself throwing, e.g.) flush a state describing a container that was never started.
-            app.PrivateAddressState = privateAddress.Outcome;
+            // Every replica starts alongside whatever is currently serving, each with its own name
+            // and — on a remote node — its own published port, before any of them is health-checked
+            // or takes traffic.
+            var upstreams = new List<(string Host, int Port)>();
+            string? firstContainerId = null;
+            int? firstPublishPort = null;
+            for (var replicaIndex = 1; replicaIndex <= replicaCount; replicaIndex++)
+            {
+                var replicaName = replicaNames[replicaIndex - 1];
 
-            // A container is created on one network; anything past the first would be attached here.
-            // NetworkPlan.For returns a single name for a placed workload now (P3, 2026-08-17
-            // app-environment-management design), so this loop is empty in practice — left iterating
-            // the list rather than hard-coded to one name, because a workload with no environment
-            // still gets exactly one name too, just a different one, through the same shape.
-            foreach (var extra in networks.Skip(1))
-                await docker.ConnectNetworkAsync(containerName, extra, ct);
+                (string Host, int Port) upstream;
+                int? publishPort = null;
+                if (server.IsLocal)
+                {
+                    upstream = (replicaName, containerPort);
+                }
+                else
+                {
+                    // 0-based here, and offset by one from the container-naming index above: replica
+                    // 1 (the unsuffixed name) keeps port-replica-index 0, which is the exact key a
+                    // single-replica app has always reserved under — so nothing changes for the
+                    // ordinary case, and replica 2 onward reserve fresh indices 1, 2, ….
+                    var remote = await ResolveRemoteUpstreamAsync(server, app, deployment, replicaIndex - 1, Log, ct);
+                    publishPort = remote.PublishPort;
+                    upstream = (remote.Host, remote.Port);
+                    if (replicaIndex == 1) firstPublishPort = publishPort;
+                }
 
-            await Log(LogStream.System, $"Container {containerId[..12]} is up. Verifying health …");
+                var replicaLabels = replicaCount > 1
+                    ? new Dictionary<string, string>(labels) { ["harbora.replica"] = replicaIndex.ToString() }
+                    : labels;
+
+                await Log(LogStream.System, replicaCount > 1
+                    ? $"Starting replica {replicaIndex}/{replicaCount}: {replicaName} …"
+                    : $"Starting container {replicaName} …");
+
+                var containerId = await docker.RunContainerAsync(new DockerRunRequest(
+                    imageTag, replicaName, network, env, replicaLabels,
+                    app.Volumes.Select(v => (v.Name, v.MountPath, v.ReadOnly)).ToList(),
+                    containerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath,
+                    Command: null, PublishToHostPort: publishPort,
+                    NetworkAliases: replicaIndex == 1 && privateAddress.HasAlias ? [privateAddress.Alias!] : null), ct);
+
+                if (replicaIndex == 1)
+                {
+                    firstContainerId = containerId;
+                    // Recorded only once the container that would answer to it actually exists —
+                    // assigning it alongside the decision above would let a failure between here and
+                    // there (the run call itself throwing, e.g.) flush a state describing a container
+                    // that was never started.
+                    app.PrivateAddressState = privateAddress.Outcome;
+                }
+
+                // A container is created on one network; anything past the first would be attached
+                // here. NetworkPlan.For returns a single name for a placed workload now (P3,
+                // 2026-08-17 app-environment-management design), so this loop is empty in practice —
+                // left iterating the list rather than hard-coded to one name, because a workload with
+                // no environment still gets exactly one name too, just a different one, through the
+                // same shape.
+                foreach (var extra in networks.Skip(1))
+                    await docker.ConnectNetworkAsync(replicaName, extra, ct);
+
+                upstreams.Add(upstream);
+            }
+
+            await Log(LogStream.System, replicaCount > 1
+                ? $"{replicaCount} container(s) are up. Verifying health …"
+                : $"Container {firstContainerId![..12]} is up. Verifying health …");
             await SetStatus(DeploymentStatus.HealthChecking);
 
             // A worker answers no HTTP, forever, and that is correct behaviour — so it is checked for
             // being alive, not for replying. Only services that serve HTTP get the probe.
             var probePath = ServicePlan.HasHttpHealthCheck(app.Kind) ? app.HealthCheckPath : null;
-            var health = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort, containerName, probePath,
-                msg => Log(LogStream.System, msg), ct);
-            if (!health.IsHealthy)
-                throw new InvalidOperationException(HealthDiagnosis.Explain(health, containerName));
 
-            // New container is healthy → switch traffic to it, THEN retire the old container(s).
+            // All-or-nothing, the same guarantee a single container already made: a deploy that gets
+            // two of three replicas healthy has released nothing, and the previous release — if any —
+            // is still serving every OLD replica untouched the moment any new one fails its check.
+            for (var replicaIndex = 1; replicaIndex <= replicaCount; replicaIndex++)
+            {
+                var replicaName = replicaNames[replicaIndex - 1];
+                var (upstreamHost, upstreamPort) = upstreams[replicaIndex - 1];
+                var health = await WaitForHealthyAsync(docker, upstreamHost, upstreamPort, replicaName, probePath,
+                    msg => Log(LogStream.System, msg), ct);
+                if (!health.IsHealthy)
+                    throw new InvalidOperationException(replicaCount > 1
+                        ? $"Replica {replicaIndex}/{replicaCount} ({replicaName}) did not become healthy. " +
+                          HealthDiagnosis.Explain(health, replicaName)
+                        : HealthDiagnosis.Explain(health, replicaName));
+            }
+
+            // Every new replica is healthy → switch traffic to all of them, THEN retire the old
+            // container(s).
             if (ServicePlan.HasPublicTraffic(app.Kind))
-                await WireProxyAsync(app, upstreamHost, upstreamPort, Log, Record, ct);
+                await WireProxyAsync(app, upstreams, probePath, Log, Record, ct);
             else
                 await Log(LogStream.System,
                     $"{app.Kind} service — no public route. " +
                     (ServicePlan.JoinsInternalNetwork(app.Kind)
                         ? $"Reachable inside this project at {containerName}."
                         : "Not reachable from other services."));
-            await RetireOldContainersAsync(docker, app.WorkspaceId, app.Slug, keepContainerName: containerName, Log, ct);
+            await RetireOldContainersAsync(docker, app.WorkspaceId, app.Slug, keepContainerNames: replicaNames, Log, ct);
             if (!server.IsLocal)
             {
-                app.PublishedHostPort = publishPort;
+                // Replica 1's port, for the panel's single-port display and for FunctionInvoker,
+                // which dials an app by exactly this column. A partial answer once there is more than
+                // one replica — documented, not silent: nothing today reads a list of ports off an
+                // App row, and replica 1 is always the one FunctionInvoker's own kind (Private/Worker
+                // invocation) would reach.
+                app.PublishedHostPort = firstPublishPort;
                 // Only now: releasing before the cutover would offer another app a port that is
                 // still carrying this one's live traffic.
                 await hostPorts.ReleaseAllButAsync(server.Id, app.Id, deployment.Number, ct);
@@ -596,12 +661,19 @@ public sealed class DeploymentPipeline(
             // dead — and still does, at every await in the `try`. Below it there is no deployment
             // left to stop, only what it left behind and what it owes the person who asked for it.
 
-            // Zero-downtime guarantee: remove only the just-started (failed) container; the previous
+            // Zero-downtime guarantee: remove only the just-started (failed) replica(s); the previous
             // version — if any — keeps serving untouched. TryRemoveContainerByNameAsync swallows
-            // everything ("never mask the original failure"), so on the cancelled token this looked
-            // exactly like a successful cleanup and left the container running.
-            await TryRemoveContainerByNameAsync(
-                docker, DeploymentPlanning.ContainerName(app.WorkspaceId, app.Slug, deployment.Number), CancellationToken.None);
+            // everything ("never mask the original failure") and no-ops on a name nothing ever
+            // started, so trying every name this deployment COULD have used costs nothing extra on
+            // the ordinary one-replica deploy and correctly reaches every replica on one that failed
+            // partway through starting several. A Compose stack has no replica concept of its own —
+            // its own containers are named per-service and are not covered here, matching what this
+            // line has always done for a stack.
+            var cleanupReplicaCount = app.SourceType == AppSourceType.DockerCompose
+                ? 1 : Math.Max(1, app.DesiredReplicas ?? 1);
+            foreach (var name in DeploymentPlanning.ReplicaContainerNames(
+                         app.WorkspaceId, app.Slug, deployment.Number, cleanupReplicaCount))
+                await TryRemoveContainerByNameAsync(docker, name, CancellationToken.None);
             // The container is gone, so the port it reserved must go too — otherwise a node loses a
             // port to every failed deploy until the range runs out. The range is per-node and shared
             // by every app on it, so one app's repeatedly-timing-out builds drain it for everybody
@@ -960,8 +1032,11 @@ public sealed class DeploymentPipeline(
             // Only the web service needs a published host port, and only on a remote node.
             // Same reservation as the single-container path: one port per deployment, held for the
             // web service. AllocateAsync returns the existing one if this deployment already has it.
+            // Replica index 0: a Compose stack has no replica concept of its own, and 0 is the exact
+            // key a single-replica app has always reserved under, so this stays the same reservation
+            // ResolveRemoteUpstreamAsync (called for the web service once this stack is up) reuses.
             int? publish = service.IsWeb && !server.IsLocal
-                ? await hostPorts.AllocateAsync(server.Id, app.Id, deployment.Number, ct)
+                ? await hostPorts.AllocateAsync(server.Id, app.Id, deployment.Number, 0, ct)
                 : null;
 
             await log(LogStream.System, $"Starting {containerName} …");
@@ -1550,6 +1625,33 @@ public sealed class DeploymentPipeline(
     }
 
     /// <summary>
+    /// Reserves a remote node's host port for one replica (or for a Compose stack's single web
+    /// service, at <paramref name="portReplicaIndex"/> 0) and resolves the address the proxy should
+    /// actually dial — the node directly, or the panel's own tunnel listener on a node behind NAT.
+    /// Idempotent: a retried deploy, or a second caller asking about a reservation
+    /// <see cref="StartComposeStackAsync"/> already made, gets back the same port.
+    /// </summary>
+    private async Task<(int PublishPort, string Host, int Port)> ResolveRemoteUpstreamAsync(
+        Domain.Servers.Server server, App app, Deployment deployment, int portReplicaIndex,
+        Func<LogStream, string, Task> log, CancellationToken ct)
+    {
+        // Reserved, not derived: a hashed port consulted nothing about what was already in use, and a
+        // port reused across apps aims one app's route at another's container.
+        var publishPort = await hostPorts.AllocateAsync(server.Id, app.Id, deployment.Number, portReplicaIndex, ct);
+
+        // A node behind NAT publishes on a port only its own machine can reach, so the proxy is sent
+        // to a port here instead and the bytes go back down the node's tunnel.
+        var upstream = await ingressRouter.ResolveAsync(
+            server, app.Id, deployment.Number, portReplicaIndex, publishPort, ct);
+
+        if (upstream.Tunnelled)
+            await log(LogStream.System,
+                $"This node is reached through its ingress tunnel; the proxy will target {upstream.Host}:{upstream.Port}.");
+
+        return (publishPort, upstream.Host, upstream.Port);
+    }
+
+    /// <summary>
     /// Materialise a Route per domain then re-apply the whole platform's proxy config.
     ///
     /// <para>
@@ -1560,7 +1662,7 @@ public sealed class DeploymentPipeline(
     /// </para>
     /// </summary>
     private async Task WireProxyAsync(
-        App app, string upstreamHost, int upstreamPort,
+        App app, IReadOnlyList<(string Host, int Port)> upstreams, string? healthCheckPath,
         Func<LogStream, string, Task> log, Func<LogStream, string, Task> record, CancellationToken ct)
     {
         if (app.Domains.Count == 0)
@@ -1568,6 +1670,21 @@ public sealed class DeploymentPipeline(
             await log(LogStream.System, "No domains attached; skipping proxy wiring.");
             return;
         }
+
+        // The first upstream stays in TargetService/TargetPort exactly as a single-replica deploy has
+        // always left it — every other reader of a Route (RoutesController, AdminerService, the
+        // designer) still sees one target. Anything past it is carried in ExtraUpstreamsJson, which
+        // only TraefikProxyEngine's renderer reads, so a route with one upstream (every route the
+        // designer creates by hand, and every deploy of an app running one replica) is stored and
+        // rendered exactly as it always was.
+        var primary = upstreams[0];
+        var extraJson = Domain.Networking.RouteUpstreams.Serialize(
+            upstreams.Skip(1).Select(u => new Domain.Networking.RouteUpstreams.Upstream(u.Host, u.Port)).ToList());
+        // Traefik's own active health check is what makes "a replica that dies stops receiving
+        // traffic" true with nothing here polling anything — worth rendering only once there is more
+        // than one server to choose between, and only when the app has a path configured to poll.
+        var lbHealthPath = upstreams.Count > 1 && !string.IsNullOrWhiteSpace(healthCheckPath)
+            ? healthCheckPath : null;
 
         // Saved BEFORE the apply, and it has to be: the config below is rendered from the stored
         // routes of the whole platform, so a route added for a domain's first deployment would not
@@ -1599,9 +1716,12 @@ public sealed class DeploymentPipeline(
             // another table.
             if (undo.All(u => !ReferenceEquals(u.Route, route)))
                 undo.Add(new RouteRevert(route, isNew, route.TargetService, route.TargetPort,
+                    route.ExtraUpstreamsJson, route.LoadBalancerHealthCheckPath,
                     route.SslEnabled, route.RedirectHttpToHttps, route.IsEnabled));
-            route.TargetService = upstreamHost;
-            route.TargetPort = upstreamPort;
+            route.TargetService = primary.Host;
+            route.TargetPort = primary.Port;
+            route.ExtraUpstreamsJson = extraJson;
+            route.LoadBalancerHealthCheckPath = lbHealthPath;
             route.SslEnabled = domain.SslEnabled;
             route.RedirectHttpToHttps = domain.ForceHttps;
             route.IsEnabled = true;
@@ -1694,6 +1814,7 @@ public sealed class DeploymentPipeline(
     /// <summary>What one Route row said before this deployment rewrote it.</summary>
     private sealed record RouteRevert(
         Route Route, bool WasAdded, string TargetService, int TargetPort,
+        string? ExtraUpstreamsJson, string? LoadBalancerHealthCheckPath,
         bool SslEnabled, bool RedirectHttpToHttps, bool IsEnabled);
 
     /// <summary>
@@ -1717,6 +1838,8 @@ public sealed class DeploymentPipeline(
                 }
                 previous.Route.TargetService = previous.TargetService;
                 previous.Route.TargetPort = previous.TargetPort;
+                previous.Route.ExtraUpstreamsJson = previous.ExtraUpstreamsJson;
+                previous.Route.LoadBalancerHealthCheckPath = previous.LoadBalancerHealthCheckPath;
                 previous.Route.SslEnabled = previous.SslEnabled;
                 previous.Route.RedirectHttpToHttps = previous.RedirectHttpToHttps;
                 previous.Route.IsEnabled = previous.IsEnabled;

@@ -31,6 +31,15 @@ public class HostPortAllocation : BaseEntity
     public int DeploymentNumber { get; set; }
 
     /// <summary>
+    /// Which replica of the deployment this port belongs to (1-based). Zero for everything reserved
+    /// before replicas existed and for a deployment running exactly one replica — the ordinary case —
+    /// so every pre-existing row and every single-replica app keeps reading as it always has. Combined
+    /// with <see cref="DeploymentNumber"/>, this is what lets three replicas of one deployment each
+    /// hold their own port at once instead of racing to overwrite one reservation.
+    /// </summary>
+    public int ReplicaIndex { get; set; }
+
+    /// <summary>
     /// The port the panel binds locally when this node's own ports can only be reached through its
     /// ingress tunnel. Null on a node the proxy can dial directly, which is the ordinary case.
     ///

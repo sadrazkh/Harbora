@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260818192241_AppReplicas")]
+    partial class AppReplicas
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -722,9 +725,6 @@ namespace Harbora.Data.Migrations
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<bool>("Protected")
-                        .HasColumnType("boolean");
 
                     b.Property<bool>("ReadOnly")
                         .HasColumnType("boolean");

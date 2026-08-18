@@ -240,7 +240,7 @@ public sealed class NodeIngressTests : IDisposable
         var appId = Guid.CreateVersion7();
 
         var allocator = Allocator();
-        var nodePort = await allocator.AllocateAsync(server.Id, appId, 1, CancellationToken.None);
+        var nodePort = await allocator.AllocateAsync(server.Id, appId, 1, 0, CancellationToken.None);
 
         var upstream = await Router().ResolveAsync(server, appId, 1, nodePort, CancellationToken.None);
 
@@ -272,7 +272,7 @@ public sealed class NodeIngressTests : IDisposable
         var appId = Guid.CreateVersion7();
 
         var allocator = Allocator();
-        var nodePort = await allocator.AllocateAsync(server.Id, appId, 1, CancellationToken.None);
+        var nodePort = await allocator.AllocateAsync(server.Id, appId, 1, 0, CancellationToken.None);
         await Router().ResolveAsync(server, appId, 1, nodePort, CancellationToken.None);
 
         _registry.BoundPorts.Should().Be(1);
@@ -293,10 +293,10 @@ public sealed class NodeIngressTests : IDisposable
         var allocator = Allocator();
         var router = Router();
 
-        var oldPort = await allocator.AllocateAsync(server.Id, appId, 1, CancellationToken.None);
+        var oldPort = await allocator.AllocateAsync(server.Id, appId, 1, 0, CancellationToken.None);
         var old = await router.ResolveAsync(server, appId, 1, oldPort, CancellationToken.None);
 
-        var newPort = await allocator.AllocateAsync(server.Id, appId, 2, CancellationToken.None);
+        var newPort = await allocator.AllocateAsync(server.Id, appId, 2, 0, CancellationToken.None);
         var live = await router.ResolveAsync(server, appId, 2, newPort, CancellationToken.None);
 
         await allocator.ReleaseAllButAsync(server.Id, appId, keepDeploymentNumber: 2, CancellationToken.None);
@@ -316,7 +316,7 @@ public sealed class NodeIngressTests : IDisposable
 
         foreach (var deployment in (int[])[1, 2])
         {
-            var nodePort = await allocator.AllocateAsync(server.Id, appId, deployment, CancellationToken.None);
+            var nodePort = await allocator.AllocateAsync(server.Id, appId, deployment, 0, CancellationToken.None);
             await router.ResolveAsync(server, appId, deployment, nodePort, CancellationToken.None);
         }
 

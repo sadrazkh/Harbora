@@ -38,6 +38,26 @@ public static class DeploymentPlanning
     public static string LegacyContainerName(string slug) => $"harbora-{slug}";
 
     /// <summary>
+    /// Name for replica <paramref name="replicaIndex"/> (1-based) of a deployment. Replica 1 keeps
+    /// the exact name a single-container app has always had — <see cref="ContainerName"/> — so an app
+    /// nobody ever set replicas on, and everything that already matches on that name (MetricsCollector,
+    /// the Overview tab's container-name display, a private-network alias), needs no second scheme to
+    /// learn. Replica 2 and beyond get one more "-{index}" segment, the same shape
+    /// <see cref="ComposeContainerName"/> already adds a service segment in.
+    /// </summary>
+    public static string ReplicaContainerName(Guid workspaceId, string slug, int number, int replicaIndex) =>
+        replicaIndex <= 1
+            ? ContainerName(workspaceId, slug, number)
+            : $"{ContainerName(workspaceId, slug, number)}-{replicaIndex}";
+
+    /// <summary>Every replica name a deployment with this many replicas gets, 1-based, in order.</summary>
+    public static IReadOnlyList<string> ReplicaContainerNames(
+        Guid workspaceId, string slug, int number, int replicaCount) =>
+        Enumerable.Range(1, Math.Max(1, replicaCount))
+            .Select(i => ReplicaContainerName(workspaceId, slug, number, i))
+            .ToList();
+
+    /// <summary>
     /// This app's containers that are NOT the just-deployed one — removed only AFTER the new
     /// container is healthy and traffic has been switched. Matches by the harbora.app label so a
     /// legacy (unversioned) container is retired too.
