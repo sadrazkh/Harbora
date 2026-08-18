@@ -4,6 +4,7 @@ using Harbora.Domain.Identity;
 using Harbora.Infrastructure.Nodes;
 using Harbora.Infrastructure.Projects;
 using Harbora.Infrastructure.Security;
+using Harbora.Infrastructure.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -38,6 +39,7 @@ public static class AdminCommands
                 "unlock" => await UnlockAsync(args, config),
                 "node-ca" => await NodeCaAsync(config),
                 "environment-report" => await EnvironmentReportAsync(config),
+                "volume-orphan-report" => await VolumeOrphanReportAsync(config),
                 "help" or "--help" or "-h" => Help(),
                 _ => Unknown(command)
             };
@@ -226,6 +228,18 @@ public static class AdminCommands
         return 0;
     }
 
+    /// <summary>
+    /// HARBORA-0033's read-only half — see <see cref="VolumeOrphanReport"/> for what each section
+    /// means and why the third is "not checked" rather than a reassuring zero.
+    /// </summary>
+    private static async Task<int> VolumeOrphanReportAsync(IConfiguration config)
+    {
+        await using var db = Open(config);
+        var report = await VolumeOrphanReport.BuildAsync(db);
+        Console.Write(VolumeOrphanReport.Render(report));
+        return 0;
+    }
+
     private static int Help()
     {
         Console.WriteLine("""
@@ -241,6 +255,9 @@ public static class AdminCommands
               harbora environment-report              Read-only: workloads with no environment, empty
                                                       environments, dual-network workloads, projectless
                                                       workspaces. Writes nothing; safe to run any time.
+              harbora volume-orphan-report            Read-only: volumes whose owning App or
+                                                      Environment row is gone. Writes nothing; safe to
+                                                      run any time.
 
             These work even when the panel refuses to start.
             """);
