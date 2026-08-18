@@ -1,9 +1,9 @@
 # Where this work stands — 2026-08-18
 
 Written so the owner can put this down and pick it up later without re-deriving anything.
-Everything below is merged and **deployed** to `platform.irnetfree.info` at `75b016d`.
+Everything below is merged and **deployed** to `platform.irnetfree.info` at `678ba7a`.
 
-Tests: **4,897 passing, 0 failing.** Build: 0 errors, 2 pre-existing NU1903 warnings on SSH.NET
+Tests: **4,933 passing, 0 failing.** Build: 0 errors, 2 pre-existing NU1903 warnings on SSH.NET
 (SSH.NET arrives transitively via the SFTP backup transport; security is out of scope by standing
 instruction, so they are left alone deliberately).
 
@@ -53,17 +53,18 @@ holding containers, volumes and ports. That is a resource leak, not a missing fe
 whether GA includes posting the URL back to the PR; and what teardown does when a branch is deleted
 while a deployment is in flight.
 
-### 2. Deleting a project still requires emptying it by hand — **in progress**
+### 2. The rest of the audit roadmap — phases 4, 5, 7, 8, 10–16
 
-`ProjectsController.Delete` now **refuses with a named list** of the apps and databases in the way and
-says plainly that deleting a project will not delete them for you — which is a large improvement on
-the raw constraint violation it used to be. But the owner's complaint stands: there is still no way to
-delete a project and its contents in one deliberate act. What is missing is a confirmation screen that
-lists what would go and does it, not a change to the refusal. Being built on `proj-delete`.
+Listed by the audit because audits list things. **None of them is in the "a customer problem stays
+silent" class** — that class was Phases 6 and 9, and both are done. Pick these up by need, not by
+number.
 
-### 3. Functions — **explored, three defects fixed, editor in progress**
+---
 
-Explored properly on 2026-08-18; the spec is
+## Functions and project deletion — done and deployed 2026-08-18
+
+Both were the owner's complaints on 2026-08-18: *Functions is buggy, unclear and Notepad-like, and you
+cannot even delete a project.* The spec is
 [`2026-08-18-functions-design.md`](specs/2026-08-18-functions-design.md).
 
 **The old note that "no host image has ever been built" was wrong.** The generator was copied into a
@@ -77,11 +78,12 @@ never the problem — the panel was**, in three places, all now fixed and on mas
   and then committed it. No test had ever rendered the view; there is now one that parses the DOM with
   AngleSharp, because no assertion over the Razor source could catch it — the inner tag genuinely is
   in the file.
-- **The panel lost its route to every function app on each update.** It joined each app's network
-  imperatively at deploy time while compose declared only `harbora`, and the documented upgrade
-  recreates the container. Cron and event calls then recorded *"Could not reach the function app."*
-  for ever. It now re-attaches on boot. **Derived from four cited facts, not measured — there is no
-  Docker here — and still unconfirmed against a live daemon.**
+- **The panel lost its route to every function app on each update**, and this one was **confirmed on
+  the live server, not derived**. It joined each app's network imperatively at deploy time while
+  compose declared only `harbora`, and the documented upgrade recreates the container. Before the
+  2026-08-18 deploy the panel was attached to one tenant network; the `n8n-production` network had
+  existed since 2026-08-10 and the panel **was not on it** — that route had been dead for eight days
+  and nothing said so. It now re-attaches on boot: `Rebound the panel to 2 of 2 tenant network(s)`.
 - **A rollback never cleared the unpublished flag**, so the editor showed a green "live" chip over
   code that was not running.
 
@@ -90,15 +92,35 @@ known that running the buffer requires a full image rebuild — which made Run n
 Publish and cost the only way to test a cron function without waiting for 03:00. It now runs the
 published version on `apps.operate`, and the editor says beside the button which code it will reach.
 
-**Still open:** the editor itself. A bare `<textarea>` with no id, no JS and no draft protection.
-Being replaced on `fn-editor` with a lazily-imported CodeMirror island — the panel already ships Vite 6
-and a Vue island registry, so it is a fifth island, not a rewrite.
+### The editor
 
-### 4. The rest of the audit roadmap — phases 4, 5, 7, 8, 10–16
+A lazily-imported CodeMirror island over the textarea, which **still works alone** — the Vue mount
+only happens after the dynamic import resolves, so with JavaScript off or broken the real
+`<textarea name="Code">` is untouched and the form still posts. Highlighting, line numbers, bracket
+matching, auto-indent, a real undo history, find-and-replace, and tab indenting instead of escaping
+the field. Plus draft protection on leaving unsaved, and code history kept 20 deep and restorable.
 
-Listed by the audit because audits list things. **None of them is in the "a customer problem stays
-silent" class** — that class was Phases 6 and 9, and both are done. Pick these up by need, not by
-number.
+**Measured on this machine, not estimated:** the entry bundle went 129.00 → 129.78 kB gzip — **+0.78 kB
+for every page**, which is only the registration glue. The editor's own chunk is 112.46 kB gzip and the
+grammar splits per runtime (C# 120.23 · Python 140.46 · JavaScript 154.79 kB total), all of it on that
+one page.
+
+### Deleting a project
+
+A confirmation screen that **names every app, database, domain and scheduled function** that would go,
+gated on typing the project name — the convention `ServiceRemovalPlan` already set here. The screen and
+the deletion read **one** `ProjectRemovalPlan`, and a test holds them together, because two independent
+queries drift and then the screen becomes a lie. The old refusal is untouched: an unconfirmed POST
+still gets the same named list.
+
+**What does not get deleted, stated rather than hidden:** legacy `Backup`/`BackupSchedule` rows and the
+backup module's policies reference apps by a loose string, not a foreign key, so they are orphaned
+rather than removed. That was already true of deleting a single app.
+
+**A real bug surfaced on the way:** `AppOperationsService.DeleteAsync` dropped an app's routes with
+`ExecuteDeleteAsync`, which the test provider cannot run. `HostPortAllocator.RemoveAsync` three lines
+below already carried the fix and said why — the routes line had simply never been reached, because no
+test had ever driven app deletion through HTTP.
 
 ---
 
@@ -132,9 +154,14 @@ this codebase, check it is not already there.
 
 ## Known gaps in verification, stated so nobody assumes otherwise
 
-- **No Docker or Postgres on the development machine.** Twelve migrations shipped this week were
-  verified by snapshot diff and a fresh build, never against a real PostgreSQL. The CI Postgres lane
-  is where that first happens.
+- **No Docker or Postgres on the development machine.** Migrations shipped this week were verified by
+  snapshot diff and a fresh build, not against a real PostgreSQL. **One exception:**
+  `FunctionCodeRevisions` was confirmed applied on the live server's PostgreSQL on 2026-08-18, table
+  and all. Deploying to server 57 is a genuine verification lane and was not being used as one.
+- **"No Docker here" is weaker than it was taken to be.** The Functions runtime was written off as
+  unproven for that reason; copying the generator's output into a scratch directory built and ran all
+  three hosts. Before declaring something unverifiable, check whether the artefact under test is
+  really the container or merely reached through one.
 - **Apps on a remote node** show unknown health and uptime: the node command allowlist has no inspect
   verb. Documented at the call site.
 - **Server `91.99.205.231` is abandoned** at `9f5a9fb` (2026-08-08) by the owner's decision. Only
