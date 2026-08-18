@@ -5,6 +5,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
 using Harbora.Domain.Services;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -44,6 +45,14 @@ public class ProjectDeleteHttpTests(HarboraHttpFixture fixture)
     {
         var token = await client.AntiforgeryTokenFrom($"/projects/{projectId}");
         return await client.PostFormAsync($"/projects/{projectId}/delete", token);
+    }
+
+    /// <summary>The confirmed shape of the same POST — a typed name alongside the antiforgery token,
+    /// exactly what the confirm page's own form submits.</summary>
+    private async Task<HttpResponseMessage> ConfirmedDeleteAsync(HttpClient client, Guid projectId, string confirmName)
+    {
+        var token = await client.AntiforgeryTokenFrom($"/projects/{projectId}");
+        return await client.PostFormAsync($"/projects/{projectId}/delete", token, ("confirmName", confirmName));
     }
 
     private static readonly Regex ErrorBanner = new(
@@ -131,5 +140,150 @@ public class ProjectDeleteHttpTests(HarboraHttpFixture fixture)
 
         Panel.Read(db => db.Projects.Any(p => p.Id == project.Id)).Should().BeFalse(
             "nothing was placed in this project's environment, so Restrict had nothing to refuse");
+    }
+
+    /// <summary>
+    /// The other half of P2's own guard: refusing forever with no way to discover a way through it is
+    /// as much of a dead end as refusing silently. These four tests are the confirm-and-cascade path
+    /// the three refusal tests above were always missing — the actual fix for "you cannot even delete
+    /// a project".
+    /// </summary>
+    [Fact]
+    public async Task The_confirm_page_names_every_app_and_database_the_delete_would_destroy()
+    {
+        var (project, environment) = SeedProject("confirm-page-lists");
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(new App
+            {
+                WorkspaceId = fixture.WorkspaceId, EnvironmentId = environment.Id, ServerId = Guid.CreateVersion7(),
+                Name = "checkout-api", Slug = "checkout-api-" + project.Id.ToString("N")[..8],
+                SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/checkout:1.0"
+            });
+            db.ManagedServices.Add(new ManagedService
+            {
+                WorkspaceId = fixture.WorkspaceId, EnvironmentId = environment.Id, ServerId = Guid.CreateVersion7(),
+                Name = "orders-db", ContainerName = "harbora-svc-orders-db-" + project.Id.ToString("N")[..8],
+                Type = ManagedServiceType.PostgreSql, DatabaseName = "orders", VolumeName = "orders-db-data"
+            });
+        });
+        Panel.GivenUser(fixture.WorkspaceId, "confirm-page-lists@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.243", "confirm-page-lists@example.com");
+
+        var response = await client.GetAsync($"/projects/{project.Id}/delete");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var html = await response.Content.ReadAsStringAsync();
+
+        html.Should().Contain("checkout-api").And.Contain("orders-db",
+            "the confirm screen has to name exactly what the delete would destroy, not merely count it");
+        html.Should().Contain(project.Name,
+            "the typed-confirmation label has to show the project's own name for someone to type back");
+    }
+
+    [Fact]
+    public async Task Typing_the_wrong_name_on_the_confirm_page_still_refuses_the_delete()
+    {
+        var (project, environment) = SeedProject("wrong-confirm-name");
+        Panel.Seed(db => db.Apps.Add(new App
+        {
+            WorkspaceId = fixture.WorkspaceId, EnvironmentId = environment.Id, ServerId = Guid.CreateVersion7(),
+            Name = "checkout-api", Slug = "checkout-api-" + project.Id.ToString("N")[..8],
+            SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/checkout:1.0"
+        }));
+        Panel.GivenUser(fixture.WorkspaceId, "wrong-confirm-name@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.244", "wrong-confirm-name@example.com");
+
+        var response = await ConfirmedDeleteAsync(client, project.Id, "not-the-project-name");
+
+        response.RedirectPath().Should().Be($"/projects/{project.Id}");
+        Panel.Read(db => db.Projects.Any(p => p.Id == project.Id)).Should().BeTrue(
+            "a typo in the confirmation must not be treated as consent to destroy the project");
+        Panel.Read(db => db.Apps.IgnoreQueryFilters().Any(a => a.EnvironmentId == environment.Id)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Typing_the_projects_own_name_deletes_it_and_everything_inside_it()
+    {
+        var (project, environment) = SeedProject("full-cascade");
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(new App
+            {
+                WorkspaceId = fixture.WorkspaceId, EnvironmentId = environment.Id, ServerId = Guid.CreateVersion7(),
+                Name = "checkout-api", Slug = "checkout-api-" + project.Id.ToString("N")[..8],
+                SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/checkout:1.0"
+            });
+            db.ManagedServices.Add(new ManagedService
+            {
+                WorkspaceId = fixture.WorkspaceId, EnvironmentId = environment.Id, ServerId = Guid.CreateVersion7(),
+                Name = "orders-db", ContainerName = "harbora-svc-orders-db-" + project.Id.ToString("N")[..8],
+                Type = ManagedServiceType.PostgreSql, DatabaseName = "orders", VolumeName = "orders-db-data"
+            });
+        });
+        Panel.GivenUser(fixture.WorkspaceId, "full-cascade@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.245", "full-cascade@example.com");
+
+        var response = await ConfirmedDeleteAsync(client, project.Id, project.Name);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        response.RedirectPath().Should().Be("/projects",
+            "a fully completed delete lands on the project list, the same place an empty project's delete does");
+
+        Panel.Read(db => db.Projects.Any(p => p.Id == project.Id)).Should().BeFalse();
+        Panel.Read(db => db.Environments.IgnoreQueryFilters().Any(e => e.ProjectId == project.Id)).Should().BeFalse();
+        Panel.Read(db => db.Apps.IgnoreQueryFilters().Any(a => a.EnvironmentId == environment.Id)).Should().BeFalse();
+        Panel.Read(db => db.ManagedServices.IgnoreQueryFilters().Any(s => s.EnvironmentId == environment.Id)).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The must-not-lie guarantee: a container that resists removal must be named as still there, not
+    /// papered over with "Deleted". Uses <c>FakeDockerEngine.UnremovableContainers</c> — the same fake
+    /// every other delete-path test in this suite would reach for — to make one specific app's
+    /// container removal throw, the way a real daemon does when a container is wedged.
+    /// </summary>
+    [Fact]
+    public async Task A_container_that_will_not_stop_leaves_only_that_app_behind_and_says_so()
+    {
+        var (project, environment) = SeedProject("container-wont-stop");
+        var stuckSlug = "stuck-api-" + project.Id.ToString("N")[..8];
+        var fineSlug = "fine-worker-" + project.Id.ToString("N")[..8];
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(new App
+            {
+                WorkspaceId = fixture.WorkspaceId, EnvironmentId = environment.Id, ServerId = Guid.CreateVersion7(),
+                Name = "stuck-api", Slug = stuckSlug,
+                SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/stuck:1.0"
+            });
+            db.Apps.Add(new App
+            {
+                WorkspaceId = fixture.WorkspaceId, EnvironmentId = environment.Id, ServerId = Guid.CreateVersion7(),
+                Name = "fine-worker", Slug = fineSlug,
+                SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/fine:1.0"
+            });
+        });
+
+        const string containerName = "harbora-stuck-1";
+        Panel.Docker.SeedContainer(containerName, stuckSlug, workspaceId: fixture.WorkspaceId);
+        Panel.Docker.UnremovableContainers.Add(containerName);
+
+        Panel.GivenUser(fixture.WorkspaceId, "container-wont-stop@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.246", "container-wont-stop@example.com");
+
+        var response = await ConfirmedDeleteAsync(client, project.Id, project.Name);
+
+        response.RedirectPath().Should().Be($"/projects/{project.Id}",
+            "a delete that did not finish must land back on the project, not on the (falsely) empty list");
+
+        var html = await (await client.GetAsync(response.RedirectPath())).Content.ReadAsStringAsync();
+        ErrorBannerText(html).Should().Contain("stuck-api",
+            "the result must name exactly which app could not be removed, not just say the delete failed");
+
+        Panel.Read(db => db.Projects.Any(p => p.Id == project.Id)).Should().BeTrue(
+            "the project must not be reported deleted while one of its apps is still there");
+        Panel.Read(db => db.Apps.IgnoreQueryFilters().Any(a => a.Slug == stuckSlug)).Should().BeTrue(
+            "the app whose container would not stop must keep its row — removing it anyway would orphan the container");
+        Panel.Read(db => db.Apps.IgnoreQueryFilters().Any(a => a.Slug == fineSlug)).Should().BeFalse(
+            "the sibling app with no container problem must still be gone — one stuck item must not block the rest");
     }
 }
