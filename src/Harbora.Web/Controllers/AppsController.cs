@@ -1474,34 +1474,74 @@ public sealed partial class AppsController(
     /// <summary>
     /// The tail, filtered before it is sent. Done here rather than in the browser because the line
     /// that explains an outage is usually not the one on screen.
+    ///
+    /// <para>
+    /// Reports what it actually covered on the way out — <c>X-Log-Lines-Scanned</c> and, when a time
+    /// window was asked for, <c>X-Log-Time-Window-Honored</c> — as headers rather than folded into the
+    /// body, so the plain-text body stays exactly what it always was (what <c>LogsDownload</c> below
+    /// sends when someone downloads "whatever is on screen") while the page can still say what a
+    /// search covered without guessing from an empty pane, which looks the same whether nothing
+    /// matched or nothing was actually searched.
+    /// </para>
     /// </summary>
     [HttpGet("/apps/{id:guid}/logs/data")]
     public async Task<IActionResult> LogsData(
-        Guid id, int tail = 200, string? search = null, bool problems = false, CancellationToken ct = default)
+        Guid id, int tail = 200, string? search = null, bool problems = false, int minutes = 0,
+        CancellationToken ct = default)
     {
         if (!await access.CanSeeAppAsync(id, ct)) return NotFound();
 
-        var text = await ops.GetLogsAsync(id, tail, ct);
-        if (string.IsNullOrWhiteSpace(search) && !problems) return Content(text, "text/plain");
+        var window = minutes > 0 ? TimeSpan.FromMinutes(minutes) : (TimeSpan?)null;
 
-        var lines = Harbora.Infrastructure.Deployments.LogFilter.Apply(text, search, problems);
+        // Unfiltered live tail: untouched by this feature, byte for byte — the common case, polled
+        // every few seconds by auto-refresh, stays exactly as cheap and as simple as it always was.
+        if (window is null && string.IsNullOrWhiteSpace(search) && !problems)
+        {
+            var raw = await ops.GetLogsAsync(id, tail, ct);
+            Response.Headers["X-Log-Lines-Scanned"] = CountLines(raw).ToString();
+            return Content(raw, "text/plain");
+        }
 
+        var result = await ops.SearchLogsAsync([id], search, problems, window, tail <= 0 ? 200 : tail, ct);
+        var coverage = result.Coverage[0];
+
+        Response.Headers["X-Log-Lines-Scanned"] = coverage.LinesScanned.ToString();
+        if (coverage.TimeWindowRequested)
+            Response.Headers["X-Log-Time-Window-Honored"] = coverage.TimeWindowHonored ? "true" : "false";
+
+        if (!coverage.Reached) return Content(string.Empty, "text/plain");
+
+        var lines = result.Hits.Select(h => h.Line).ToList();
         // Said plainly, because an empty pane looks the same as a broken one.
         return Content(lines.Count == 0
             ? "No lines match that filter."
             : string.Join('\n', lines), "text/plain");
     }
 
+    private static int CountLines(string? raw) =>
+        string.IsNullOrEmpty(raw) ? 0 : raw.Replace("\r\n", "\n").Split('\n').Length;
+
     /// <summary>Downloads the tail as a file — the second thing anyone does is send it to someone.</summary>
     [HttpGet("/apps/{id:guid}/logs/download")]
     public async Task<IActionResult> LogsDownload(
-        Guid id, int tail = 2000, string? search = null, bool problems = false, CancellationToken ct = default)
+        Guid id, int tail = 2000, string? search = null, bool problems = false, int minutes = 0,
+        CancellationToken ct = default)
     {
         var app = await db.Apps.AsNoTracking().FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
-        var text = await ops.GetLogsAsync(id, tail, ct);
-        var lines = Harbora.Infrastructure.Deployments.LogFilter.Apply(text, search, problems);
+        var window = minutes > 0 ? TimeSpan.FromMinutes(minutes) : (TimeSpan?)null;
+        List<string> lines;
+        if (window is null)
+        {
+            var text = await ops.GetLogsAsync(id, tail, ct);
+            lines = Harbora.Infrastructure.Deployments.LogFilter.Apply(text, search, problems).ToList();
+        }
+        else
+        {
+            var result = await ops.SearchLogsAsync([id], search, problems, window, tail, ct);
+            lines = result.Hits.Select(h => h.Line).ToList();
+        }
 
         return File(System.Text.Encoding.UTF8.GetBytes(string.Join('\n', lines)), "text/plain",
             Harbora.Infrastructure.Deployments.LogFilter.FileName(app.Slug, DateTimeOffset.UtcNow));

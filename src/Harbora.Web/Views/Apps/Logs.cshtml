@@ -11,11 +11,18 @@
     <div class="flex flex-wrap items-center gap-3">
         @* Filtered on the server, over the whole tail: the line that explains an outage is usually
            not the one already on screen, which is all the browser's own find can reach. *@
-        <input id="search" type="search" placeholder="@(isFa ? "جست‌وجو در لاگ‌ها" : "Search the logs")"
+        <input id="search" type="search" dir="ltr" placeholder="@(isFa ? "جست‌وجو در لاگ‌ها" : "Search the logs")"
                class="rounded-lg bg-canvas border border-line px-3 py-1.5 text-sm w-56" />
         <label class="flex items-center gap-2 text-sm text-ink-muted">
             <input type="checkbox" id="problems"> @(isFa ? "فقط خطاها و هشدارها" : "Problems only")
         </label>
+        <select id="window" class="rounded-lg bg-canvas border border-line px-2 py-1.5 text-sm">
+            <option value="0">@(isFa ? "کل خروجی دریافتی" : "All of the fetched tail")</option>
+            <option value="15">@(isFa ? "۱۵ دقیقه‌ی اخیر" : "Last 15 minutes")</option>
+            <option value="60">@(isFa ? "۱ ساعت اخیر" : "Last hour")</option>
+            <option value="360">@(isFa ? "۶ ساعت اخیر" : "Last 6 hours")</option>
+            <option value="1440">@(isFa ? "۲۴ ساعت اخیر" : "Last 24 hours")</option>
+        </select>
         <label class="flex items-center gap-2 text-sm text-ink-muted">
             <input type="checkbox" id="autorefresh" checked> @(isFa ? "به‌روزرسانی خودکار" : "Auto-refresh")
         </label>
@@ -24,12 +31,17 @@
     </div>
 </div>
 
+@* What this pane actually covers — never left implicit. A pane that came back empty because
+   nothing matched must not look the same as one that came back empty because the search never
+   really reached what it was asked to. *@
+<div id="coverage" class="mb-2 text-xs text-ink-muted" dir="@(isFa ? "rtl" : "ltr")"></div>
+
 <div class="rounded-xl border border-line bg-terminal text-terminal-ink font-mono text-xs">
     <div class="flex items-center justify-between px-4 py-2 border-b border-line text-ink-muted">
         <span>harbora-@Model.Slug</span>
         <button id="clear" class="hover:text-white">clear</button>
     </div>
-    <pre id="log" class="p-4 max-h-[70vh] overflow-auto whitespace-pre-wrap">@(isFa ? "در حال بارگذاری…" : "Loading…")</pre>
+    <pre id="log" dir="ltr" class="p-4 max-h-[70vh] overflow-auto whitespace-pre-wrap">@(isFa ? "در حال بارگذاری…" : "Loading…")</pre>
 </div>
 
 @section Scripts {
@@ -43,12 +55,16 @@
     });
     const search = document.getElementById('search');
     const problems = document.getElementById('problems');
+    const windowSel = document.getElementById('window');
     const download = document.getElementById('download');
+    const coverage = document.getElementById('coverage');
+    const isFa = @Json.Serialize(isFa);
 
     function query() {
         const parts = ['tail=400'];
         if (search.value.trim()) parts.push('search=' + encodeURIComponent(search.value.trim()));
         if (problems.checked) parts.push('problems=true');
+        if (windowSel.value !== '0') parts.push('minutes=' + windowSel.value);
         return parts.join('&');
     }
 
@@ -58,12 +74,30 @@
     }
     search.addEventListener('input', function () { syncDownload(); load(); });
     problems.addEventListener('change', function () { syncDownload(); load(); });
+    windowSel.addEventListener('change', function () { syncDownload(); load(); });
     syncDownload();
+
+    // What this fetch actually covered, read off the response headers rather than guessed from the
+    // body — an empty pane looks the same whether nothing matched or nothing was really searched.
+    function renderCoverage(response) {
+        const scanned = response.headers.get('X-Log-Lines-Scanned');
+        const honored = response.headers.get('X-Log-Time-Window-Honored');
+        if (scanned === null) { coverage.textContent = ''; return; }
+
+        let text = isFa ? `${scanned} خط بررسی شد.` : `Searched ${scanned} line(s).`;
+        if (honored === 'false') {
+            text += isFa
+                ? ' بازه‌ی زمانی برای این اپ اعمال نشد؛ کل خروجی دریافتی نمایش داده شد.'
+                : ' The time window could not be applied for this app’s host; the full fetched tail is shown instead.';
+        }
+        coverage.textContent = text;
+    }
 
     async function load() {
         try {
             const r = await fetch('/apps/@Model.Id/logs/data?' + query());
             const t = await r.text();
+            renderCoverage(r);
             el.textContent = t || '@(isFa ? "لاگی موجود نیست (کانتینر در حال اجرا نیست)." : "No logs (container not running).")';
             if (atBottom) el.scrollTop = el.scrollHeight;
         } catch (e) { /* keep last */ }
