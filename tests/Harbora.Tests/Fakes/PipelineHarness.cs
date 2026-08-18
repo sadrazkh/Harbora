@@ -243,6 +243,18 @@ public sealed class PipelineHarness : IDisposable
         return this;
     }
 
+    /// <summary>Sets how many replica containers a deployment of this app should start.</summary>
+    public PipelineHarness WithReplicas(int count)
+    {
+        App.DesiredReplicas = count;
+        Db.SaveChanges();
+        return this;
+    }
+
+    /// <summary>The container name a given deployment number's replica gets (1-based; 1 is unsuffixed).</summary>
+    public string ReplicaContainerFor(int number, int replicaIndex) =>
+        DeploymentPlanning.ReplicaContainerName(App.WorkspaceId, App.Slug, number, replicaIndex);
+
     /// <summary>
     /// Runs the pipeline over a different proxy engine — in practice the real
     /// <c>TraefikProxyEngine</c> over a temporary config file, when what a test is watching is the
