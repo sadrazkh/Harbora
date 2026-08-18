@@ -119,19 +119,18 @@
     </section>
 </div>
 
-@if (Model.Services.Count == 0 && Model.Databases.Count == 0)
-{
-    <section class="mt-6 rounded-xl border border-danger bg-red-950/10 p-4">
-        <div class="font-semibold text-danger mb-1">@(isFa ? "منطقه‌ی خطر" : "Danger zone")</div>
-        <p class="text-xs text-ink-muted mb-3">
-            @(isFa ? "این پروژه خالی است و می‌تواند حذف شود." : "This project is empty and can be deleted.")
-        </p>
-        <form asp-controller="Projects" asp-action="Delete" asp-route-id="@Model.Project.Id" method="post"
-              onsubmit="return confirm('@(isFa ? "این پروژه حذف شود؟" : "Delete this project?")')">
-            @Html.AntiForgeryToken()
-            <button class="rounded-lg bg-danger-soft hover:bg-danger-soft text-danger px-4 py-2 text-sm font-semibold">
-                🗑 @(isFa ? "حذف پروژه" : "Delete project")
-            </button>
-        </form>
-    </section>
-}
+@* Always shown — not only when the selected environment is empty. A project can hold apps and
+   databases in an environment that is not the one currently selected, and the confirm page this
+   links to lists the whole project, not just this tab. *@
+<section class="mt-6 rounded-xl border border-danger bg-red-950/10 p-4">
+    <div class="font-semibold text-danger mb-1">@(isFa ? "منطقه‌ی خطر" : "Danger zone")</div>
+    <p class="text-xs text-ink-muted mb-3">
+        @(isFa
+            ? "حذف پروژه، همه‌ی محیط‌ها، اپ‌ها و دیتابیس‌های آن را نیز حذف می‌کند."
+            : "Deleting a project also deletes every environment, app and database inside it.")
+    </p>
+    <a href="/projects/@Model.Project.Id/delete"
+       class="inline-block rounded-lg bg-danger-soft hover:bg-danger-soft text-danger px-4 py-2 text-sm font-semibold">
+        🗑 @(isFa ? "حذف پروژه" : "Delete project")
+    </a>
+</section>

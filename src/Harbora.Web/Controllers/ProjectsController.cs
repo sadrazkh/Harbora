@@ -22,6 +22,7 @@ namespace Harbora.Web.Controllers;
 public sealed class ProjectsController(
     HarboraDbContext db,
     ProjectService projects,
+    ProjectDeletionService deletion,
     Harbora.Infrastructure.Services.ServiceUsageService usage,
     Harbora.Infrastructure.Security.ProjectAccessService access,
     EnvironmentCloner cloner,
@@ -260,43 +261,90 @@ public sealed class ProjectsController(
         return RedirectToAction(nameof(Details), new { id, environmentId = outcome.EnvironmentId });
     }
 
+    /// <summary>
+    /// What deleting this project would destroy — every app and database in every one of its
+    /// environments, named, plus what cascades with them. The same <see cref="ProjectRemovalPlan"/>
+    /// <see cref="Delete"/> below reads before it does anything, so this page and that action can
+    /// never end up looking at two different sets.
+    /// </summary>
+    [HttpGet("{id:guid}/delete")]
+    [Authorize(Policy = Capabilities.AppsDelete)]
+    public async Task<IActionResult> ConfirmDelete(Guid id, CancellationToken ct)
+    {
+        if (await access.VisibleProjectIdsAsync(ct) is { } visible && !visible.Contains(id))
+            return NotFound();
+
+        var plan = await deletion.PlanAsync(WorkspaceId, id, ct);
+        if (plan is null) return NotFound();
+
+        ViewData["Title"] = IsFa ? $"حذف {plan.Value.ProjectName}" : $"Delete {plan.Value.ProjectName}";
+        ViewBag.Plan = plan.Value;
+        return View();
+    }
+
     [HttpPost("{id:guid}/delete")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.AppsDelete)]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Delete(Guid id, string? confirmName, CancellationToken ct)
     {
-        var project = await db.Projects.Include(p => p.Environments)
-            .FirstOrDefaultAsync(p => p.Id == id && p.WorkspaceId == WorkspaceId, ct);
-        if (project is null) return NotFound();
+        var plan = await deletion.PlanAsync(WorkspaceId, id, ct);
+        if (plan is null) return NotFound();
 
-        // Refused while anything still lives here. Deleting a project is not a way to delete apps and
-        // databases — those have their own confirmations, and their own consequences. This is also
-        // the application-level half of what DeleteBehavior.Restrict backstops at the database (P2,
-        // 2026-08-17 app-environment-management design): EnvironmentId is a required foreign key now,
-        // so a project delete that reached SaveChanges with a workload still attached would fail as a
-        // raw constraint violation instead of the named refusal below.
-        var ids = project.Environments.Select(e => e.Id).ToList();
-        var appNames = await db.Apps.Where(a => ids.Contains(a.EnvironmentId))
-            .OrderBy(a => a.Name).Select(a => a.Name).ToListAsync(ct);
-        var databaseNames = await db.ManagedServices.Where(s => ids.Contains(s.EnvironmentId))
-            .OrderBy(s => s.Name).Select(s => s.Name).ToListAsync(ct);
-
-        if (appNames.Count + databaseNames.Count > 0)
+        // Refused while anything still lives here and nobody has typed the project's name back. This
+        // is also the application-level half of what DeleteBehavior.Restrict backstops at the database
+        // (P2, 2026-08-17 app-environment-management design): EnvironmentId is a required foreign key
+        // now, so an unconfirmed delete that reached SaveChanges with a workload still attached would
+        // fail as a raw constraint violation instead of the named refusal below. A typed, matching
+        // confirmation is the only thing that turns this into the cascade ProjectDeletionService runs
+        // — deleting a project is never a silent way to delete the apps and databases inside it.
+        if (!plan.Value.IsConfirmed(confirmName))
         {
             var fragments = new List<string>();
-            if (appNames.Count > 0) fragments.Add(NamedList(appNames, "app", "اپ"));
-            if (databaseNames.Count > 0) fragments.Add(NamedList(databaseNames, "database", "دیتابیس"));
+            if (plan.Value.Apps.Count > 0)
+                fragments.Add(NamedList(plan.Value.Apps.Select(a => a.Name).ToList(), "app", "اپ"));
+            if (plan.Value.Databases.Count > 0)
+                fragments.Add(NamedList(plan.Value.Databases.Select(d => d.Name).ToList(), "database", "دیتابیس"));
             var holds = string.Join(IsFa ? " و " : " and ", fragments);
 
             TempData["Error"] = IsFa
-                ? $"این پروژه هنوز {holds} در خود دارد. ابتدا آن‌ها را حذف کنید — حذف پروژه آن‌ها را حذف نمی‌کند."
-                : $"This project still holds {holds}. Remove them first — deleting a project will not delete them for you.";
+                ? $"این پروژه هنوز {holds} در خود دارد. آن‌ها را یکی‌یکی حذف کنید، یا برای حذف همه‌چیز با هم نام پروژه را در صفحه‌ی تأیید بنویسید."
+                : $"This project still holds {holds}. Remove them one at a time, or delete everything " +
+                  "at once by typing the project's name on the confirm page.";
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        db.Projects.Remove(project);
-        await db.SaveChangesAsync(ct);
-        TempData["Message"] = $"Project '{project.Name}' deleted.";
+        var outcome = await deletion.DeleteAsync(WorkspaceId, id, ct);
+
+        if (!outcome.FullyDeleted)
+        {
+            // Not "Deleted" — this platform's defining defect class is a result that claims work it
+            // did not do. Whatever DeleteAsync could not remove is named here, exactly the way the
+            // refusal above names what blocked it in the first place.
+            var fragments = new List<string>();
+            if (outcome.RemainingApps.Count > 0) fragments.Add(NamedList(outcome.RemainingApps, "app", "اپ"));
+            if (outcome.RemainingDatabases.Count > 0)
+                fragments.Add(NamedList(outcome.RemainingDatabases, "database", "دیتابیس"));
+            var holds = string.Join(IsFa ? " و " : " and ", fragments);
+
+            TempData["Error"] = IsFa
+                ? $"پروژه به‌طور کامل حذف نشد: {holds} هنوز باقی مانده‌اند. بقیه حذف شدند؛ دوباره تلاش کنید."
+                : $"The project could not be fully deleted: {holds} are still there. Everything else was removed — try again.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await audit.LogAsync("project.deleted", "project", id.ToString(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+            {
+                apps = plan.Value.Apps.Count,
+                databases = plan.Value.Databases.Count
+            }),
+            ct: ct);
+
+        TempData["Message"] = IsFa
+            ? $"«{outcome.ProjectName}» به همراه {plan.Value.Apps.Count} اپ و {plan.Value.Databases.Count} دیتابیس حذف شد."
+            : $"'{outcome.ProjectName}' was deleted, along with {plan.Value.Apps.Count} app(s) and " +
+              $"{plan.Value.Databases.Count} database(s).";
         return RedirectToAction(nameof(Index));
     }
 }

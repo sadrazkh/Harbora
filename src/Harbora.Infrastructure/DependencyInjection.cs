@@ -179,6 +179,10 @@ public static class DependencyInjection
 
         // Projects + environments: the grouping every screen and the private network hang off.
         services.AddScoped<Projects.ProjectService>();
+        // The confirmed cascade behind "delete project": every app and database it names goes
+        // through the same single-item delete paths AppsController and DatabasesController already
+        // use, not a second way of tearing a workload down.
+        services.AddScoped<Projects.ProjectDeletionService>();
         services.AddScoped<Security.WorkspaceAccountService>();
         services.AddScoped<Security.AccountSessionService>();
         services.AddScoped<Templates.TemplateDeploymentService>();

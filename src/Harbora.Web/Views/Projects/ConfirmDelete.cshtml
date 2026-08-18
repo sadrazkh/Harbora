@@ -1,0 +1,109 @@
+@{
+    var plan = (Harbora.Infrastructure.Projects.ProjectRemovalPlan)ViewBag.Plan;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+}
+<div class="max-w-2xl">
+    <a href="/projects/@plan.ProjectId" class="text-accent-text text-sm">← @plan.ProjectName</a>
+    <h1 class="text-2xl font-bold tracking-tight text-ink mt-1 mb-4">
+        @(isFa ? "حذف پروژه" : "Delete project")
+    </h1>
+
+    @if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
+
+    @if (plan.IsEmpty)
+    {
+        <div class="rounded-xl border border-line bg-surface p-4 mb-4">
+            <p class="text-sm text-ink">
+                @(isFa
+                    ? "این پروژه در هیچ‌یک از محیط‌هایش چیزی ندارد. حذف آن هیچ اپ یا دیتابیسی را از بین نمی‌برد."
+                    : "This project holds nothing in any of its environments. Deleting it destroys no apps or databases.")
+            </p>
+        </div>
+    }
+    else
+    {
+        @* Named, not merely counted — the same rule the refusal on Details already follows. Everything
+           listed here is exactly what ProjectDeletionService.DeleteAsync will attempt, because both
+           read the same ProjectRemovalPlan. *@
+        <div class="rounded-xl border border-danger bg-danger-soft p-4 mb-4">
+            <p class="text-sm text-danger font-semibold mb-3">
+                @(isFa
+                    ? "این کار برگشت‌ناپذیر است. این‌ها برای همیشه حذف خواهند شد:"
+                    : "This cannot be undone. These will be permanently deleted:")
+            </p>
+
+            @if (plan.Apps.Count > 0)
+            {
+                <div class="text-sm font-medium text-danger mb-1">
+                    @(isFa ? $"{plan.Apps.Count} اپ:" : $"{plan.Apps.Count} app(s):")
+                </div>
+                <ul class="text-sm text-danger list-disc ms-5 mb-3">
+                    @foreach (var a in plan.Apps)
+                    {
+                        <li>@a.Name <span class="text-ink-faint">— @a.EnvironmentName</span></li>
+                    }
+                </ul>
+            }
+
+            @if (plan.Databases.Count > 0)
+            {
+                <div class="text-sm font-medium text-danger mb-1">
+                    @(isFa ? $"{plan.Databases.Count} دیتابیس:" : $"{plan.Databases.Count} database(s):")
+                </div>
+                <ul class="text-sm text-danger list-disc ms-5 mb-3">
+                    @foreach (var d in plan.Databases)
+                    {
+                        <li>
+                            @d.Name <span class="text-ink-faint">— @d.EnvironmentName</span>
+                            — @(isFa ? "همراه با داده‌هایش" : "with its data")
+                        </li>
+                    }
+                </ul>
+            }
+
+            @if (plan.DomainHosts.Count > 0)
+            {
+                <p class="text-xs text-danger mb-1">
+                    @(isFa
+                        ? $"{plan.DomainHosts.Count} دامنه دیگر پاسخ نخواهد داد: {string.Join("، ", plan.DomainHosts)}"
+                        : $"{plan.DomainHosts.Count} domain(s) will stop resolving: {string.Join(", ", plan.DomainHosts)}")
+                </p>
+            }
+
+            @if (plan.ScheduledFunctionCount > 0)
+            {
+                <p class="text-xs text-danger">
+                    @(isFa
+                        ? $"{plan.ScheduledFunctionCount} کار زمان‌بندی‌شده دیگر اجرا نخواهد شد."
+                        : $"{plan.ScheduledFunctionCount} scheduled function(s) will stop running.")
+                </p>
+            }
+        </div>
+    }
+
+    <form asp-controller="Projects" asp-action="Delete" asp-route-id="@plan.ProjectId" method="post" class="space-y-4">
+        @Html.AntiForgeryToken()
+
+        @if (!plan.IsEmpty)
+        {
+            <div>
+                <label class="block text-sm text-ink-muted mb-1">
+                    @(isFa ? "برای تأیید، نام پروژه را دقیقاً بنویسید:" : "To confirm, type the project's name exactly:")
+                    <code class="text-ink">@plan.ProjectName</code>
+                </label>
+                <input name="confirmName" autocomplete="off" data-testid="confirm-project-name"
+                       class="w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm" />
+            </div>
+        }
+
+        <div class="flex gap-2">
+            <button class="rounded-lg bg-danger-soft hover:bg-danger-soft text-danger px-4 py-2 text-sm font-semibold">
+                @(isFa ? "حذف پروژه" : "Delete project")
+            </button>
+            <a href="/projects/@plan.ProjectId" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">
+                @(isFa ? "انصراف" : "Cancel")
+            </a>
+        </div>
+    </form>
+</div>
