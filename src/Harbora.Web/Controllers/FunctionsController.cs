@@ -31,6 +31,7 @@ namespace Harbora.Web.Controllers;
 public sealed class FunctionsController(
     HarboraDbContext db,
     FunctionAppService functions,
+    IFunctionInvoker invoker,
     IQuotaService quota,
     ISchedulerService scheduler,
     ICurrentUser currentUser,
@@ -282,7 +283,9 @@ public sealed class FunctionsController(
             },
             FunctionEvents.All,
             recent.Select(i => new FunctionRunRow(
-                i.StartedAt, i.Trigger, i.StatusCode, i.Succeeded, i.DurationMs, i.Error, i.CompletedAt is null)).ToList()));
+                i.StartedAt, i.Trigger, i.StatusCode, i.Succeeded, i.DurationMs, i.Error, i.CompletedAt is null)).ToList(),
+            IsPublished: app.ActiveDeploymentId is not null,
+            HasUnpublishedChanges: fn.HasUnpublishedChanges));
     }
 
     [HttpPost("{id:guid}/save")]
@@ -382,65 +385,53 @@ public sealed class FunctionsController(
     }
 
     /// <summary>
-    /// Saves the buffer and starts a deployment that will run it.
+    /// Runs one function now, through exactly the door a schedule uses.
     ///
     /// <para>
-    /// The owner's decision: Run now runs what is on screen, not whatever is already live — an editor
-    /// that answered a line you just changed with the OLD code would be the confusion, not the
-    /// feature. Nothing in this platform can execute code that was never built into an image, so
-    /// "run the buffer" can only mean "make the buffer the thing that is running": save it, publish
-    /// it, and say so — the same two steps a person would take by hand, in one press, rather than a
-    /// button that quietly reports success for a call it never made.
+    /// Deliberately the same path rather than a direct HTTP call from here: a person testing a
+    /// function by hand must be testing what will happen at 03:00, including the secret, the
+    /// envelope and the invocation row.
     /// </para>
     ///
     /// <para>
-    /// Requires both <see cref="Capabilities.AppsEnv"/> and <see cref="Capabilities.AppsDeploy"/>,
-    /// not the lighter <see cref="Capabilities.AppsOperate"/> this action used when it only invoked
-    /// published code: it now does what Save and Publish each do, on their own policies, so an
-    /// Operator — who may run a function but may not edit or deploy one — must not gain either power
-    /// through this door.
+    /// It runs the <em>published</em> code, and the editor says so beside the button whenever the
+    /// saved row differs from what is deployed. Making it run the buffer instead was tried and
+    /// reverted: nothing here can execute code that was never built into an image, so "run the
+    /// buffer" could only mean save-and-publish — which turned Run now into a second name for
+    /// Publish, cost the one way to test a cron function without waiting for 03:00, and made the
+    /// panel <em>less</em> clear rather than more. Two buttons, two genuinely different acts, each
+    /// labelled with what it does.
+    /// </para>
+    ///
+    /// <para>
+    /// Stays on the lighter <see cref="Capabilities.AppsOperate"/> for that reason: an Operator may
+    /// run a function without being able to edit or deploy one, and running published code is the
+    /// operating act, not the editing one.
     /// </para>
     /// </summary>
     [HttpPost("{id:guid}/{functionId:guid}/run")]
     [ValidateAntiForgeryToken]
-    [Authorize(Policy = Capabilities.AppsEnv)]
-    [Authorize(Policy = Capabilities.AppsDeploy)]
-    public async Task<IActionResult> RunNow(Guid id, Guid functionId, FunctionFormModel model, CancellationToken ct)
+    [Authorize(Policy = Capabilities.AppsOperate)]
+    public async Task<IActionResult> RunNow(Guid id, Guid functionId, CancellationToken ct)
     {
-        var app = await FunctionApps.FirstOrDefaultAsync(a => a.Id == id, ct);
-        if (app is null) return NotFound();
+        var fn = await db.FunctionDefinitions.AsNoTracking()
+            .FirstOrDefaultAsync(f => f.Id == functionId && f.AppId == id, ct);
+        if (fn is null) return NotFound();
 
-        var runtime = app.FunctionRuntime ?? FunctionRuntime.CSharp;
-        var existing = await functions.ListAsync(app.Id, ct);
+        var queued = await invoker.QueueAsync(fn.Id, fn.Trigger == FunctionTrigger.Http
+            ? FunctionTrigger.Http : fn.Trigger, evt: null, ct);
 
-        var (candidate, failure) = TryBuildCandidate(app, functionId, model, existing, runtime);
-        if (failure is not null) return failure;
+        await audit.LogAsync("functions.run", "App", id.ToString(), ct: ct);
 
-        candidate!.NextRunAt = null;
-        candidate.UpdatedAt = DateTimeOffset.UtcNow;
+        TempData[queued is null ? "Error" : "Message"] = queued is null
+            ? (IsFa
+                ? "اجرا نشد: یا فانکشن خاموش است یا این اپ هنوز منتشر نشده."
+                : "Nothing ran: the function is off, or this app has never been published.")
+            : (IsFa
+                ? "نسخه‌ی منتشرشده اجرا شد — نتیجه در تاریخچه‌ی همین فانکشن است."
+                : "Ran the published version — the result is in this function's history.");
 
-        await functions.MarkDirtyAsync(app.Id, ct);
-        // An app created before the secret existed, or one whose secret never saved, would deploy a
-        // host that refuses every scheduled call with a 401 — the same reason Publish issues it here.
-        functions.EnsureSecret(app);
-        await db.SaveChangesAsync(ct);
-        await audit.LogAsync("functions.run", "App", app.Id.ToString(), ct: ct);
-
-        try
-        {
-            var deploymentId = await functions.PublishAsync(app.Id, currentUser.UserId ?? Guid.Empty, ct);
-            TempData["Message"] = IsFa
-                ? "ذخیره شد و انتشار آغاز شد — به‌محض آماده‌شدن، دقیقاً همین کد اجرا خواهد شد."
-                : "Saved, and a deployment has started — this is exactly what will run once it is live.";
-            return RedirectToAction("Details", "Deployments", new { id = deploymentId });
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or QuotaRefusedException)
-        {
-            TempData["Error"] = (ex as QuotaRefusedException) is { } refused && IsFa
-                ? refused.ReasonFa
-                : ex.Message;
-            return RedirectToAction(nameof(EditFunction), new { id, functionId });
-        }
+        return RedirectToAction(nameof(EditFunction), new { id, functionId });
     }
 
     private async Task<FunctionAppFormViewModel> NewFormAsync(FunctionAppFormModel model, CancellationToken ct)

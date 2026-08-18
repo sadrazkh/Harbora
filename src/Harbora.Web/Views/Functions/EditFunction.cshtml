@@ -135,20 +135,42 @@
         @if (Model.FunctionId is { } fnId)
         {
             <div class="rounded-2xl border border-line bg-surface p-5 shadow-panel">
-                <h2 class="mb-1 text-sm font-semibold text-ink">@(isFa ? "اجرای آزمایشی" : "Run it now")</h2>
+                <h2 class="mb-1 text-sm font-semibold text-ink">
+                    @(isFa ? "اجرای نسخه‌ی منتشرشده" : "Run the published version")
+                </h2>
                 <p class="mb-3 text-xs text-ink-muted">
                     @(isFa
-                        ? "کد همین صفحه را ذخیره و منتشر می‌کند — همان کاری که «انتشار» انجام می‌دهد — تا آنچه اجرا می‌شود دقیقاً همین باشد، نه نسخه‌ی قبلی."
-                        : "Saves the code on this page and publishes it — the same thing Publish does — so what runs is exactly this, not the last-published version.")
+                        ? "از همان مسیری که زمان‌بندی استفاده می‌کند — پس دقیقاً همان چیزی را می‌آزمایید که ساعت ۳ بامداد اتفاق می‌افتد."
+                        : "Through the same door a schedule uses — so you are testing exactly what happens at 03:00.")
                 </p>
+                @if (!Model.IsPublished)
+                {
+                    @* Disabled rather than allowed-and-then-refused. FunctionInvoker.QueueAsync returns
+                       null when ActiveDeploymentId is null, so the press would land back here with an
+                       error; saying it on the button is the same fact, one step earlier. *@
+                    <p data-run-state="never-published" class="mb-3 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn">
+                        @(isFa
+                            ? "این اپ هنوز منتشر نشده، پس چیزی برای اجرا وجود ندارد. اول «انتشار» را بزنید."
+                            : "This app has never been published, so there is nothing to run yet. Press Publish first.")
+                    </p>
+                }
+                else if (Model.HasUnpublishedChanges)
+                {
+                    @* The honest half of the Run-now decision. Running the buffer would mean rebuilding
+                       the image on every press — which is Publish under another name — so instead this
+                       says plainly which code the button will reach. *@
+                    <p data-run-state="stale" class="mb-3 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn">
+                        @(isFa
+                            ? "ویرایش‌های منتشرنشده دارید. این دکمه نسخه‌ی منتشرشده را اجرا می‌کند، نه کد روی این صفحه — برای اجرای این کد، «انتشار» را بزنید."
+                            : "You have unpublished edits. This runs the published version, not the code on this page — press Publish to make this code the one that runs.")
+                    </p>
+                }
                 @* A submit button of the form above, not a form of its own: a <form> nested inside
                    another is silently dropped by the HTML parser (a spec-compliant one discards the
                    inner start tag), so both buttons would submit to Save and this one would never run
-                   anything. `formaction` gives one button a different destination without a second
-                   <form> — and because it stays part of the same form, Run now posts exactly what Save
-                   posts: the buffer on screen, not whatever was last saved. *@
+                   anything. `formaction` gives one button its own destination without a second <form>. *@
                 <button type="submit" formaction="/functions/@Model.AppId/@fnId/run" formmethod="post"
-                        data-action="run" class="btn-secondary w-full">
+                        data-action="run" class="btn-secondary w-full" disabled="@(!Model.IsPublished)">
                     @(isFa ? "اجرا کن" : "Run now")
                 </button>
             </div>

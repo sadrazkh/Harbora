@@ -50,7 +50,20 @@ public sealed record FunctionRunRow(
     DateTimeOffset StartedAt, FunctionTrigger Trigger, int? StatusCode, bool Succeeded,
     int DurationMs, string? Error, bool StillRunning);
 
+/// <param name="IsPublished">
+/// Whether this app has ever been published — <c>App.ActiveDeploymentId is not null</c>, which is the
+/// same condition <c>FunctionInvoker.QueueAsync</c> checks before it will run anything. The editor
+/// disables Run now when this is false rather than letting the press fail: an unpublished app cannot
+/// run, and saying so on the button is clearer than saying it after.
+/// </param>
+/// <param name="HasUnpublishedChanges">
+/// Whether the saved row differs from what is deployed. Run now invokes the <em>published</em> code,
+/// so when this is true the editor says so beside the button — running is instant and honest, and the
+/// alternative (rebuilding on every press) would make Run now a second name for Publish.
+/// </param>
 public sealed record FunctionEditViewModel(
     Guid AppId, string AppName, FunctionRuntime Runtime, Guid? FunctionId,
     FunctionFormModel Form, IReadOnlyList<FunctionEventKind> Events,
-    IReadOnlyList<FunctionRunRow>? Runs = null);
+    IReadOnlyList<FunctionRunRow>? Runs = null,
+    bool IsPublished = false,
+    bool HasUnpublishedChanges = false);

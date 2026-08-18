@@ -108,7 +108,7 @@ public class FunctionEditorHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
-    public async Task Pressing_run_now_saves_the_buffer_and_starts_a_deployment_that_will_run_it()
+    public async Task Run_now_invokes_the_published_code_and_never_starts_a_deployment()
     {
         var world = GivenFunctionApp("fn-run-owner");
         Panel.GivenUser(fixture.WorkspaceId, "fn-run-owner@example.com", SystemRole.Owner);
@@ -117,84 +117,97 @@ public class FunctionEditorHttpTests(HarboraHttpFixture fixture)
         var token = await client.AntiforgeryTokenFrom($"/functions/{world.AppId}/{world.FunctionId}");
 
         var response = await client.PostFormAsync(
-            $"/functions/{world.AppId}/{world.FunctionId}/run", token,
-            ("functionId", world.FunctionId.ToString()),
-            ("Name", "Hello"), ("Trigger", ((int)FunctionTrigger.Http).ToString()),
-            ("Route", ""), ("Code", "export default async () => ({ hello: 'buffer' });"),
-            ("IsEnabled", "true"));
+            $"/functions/{world.AppId}/{world.FunctionId}/run", token);
 
-        response.StatusCode.Should().Be(HttpStatusCode.Found,
-            "a successful run redirects to the deployment it just started");
-        response.RedirectPath().Should().StartWith("/Deployments/Details/",
-            "Run now opens the deployment's own progress page rather than claiming an instant result");
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        response.RedirectPath().Should().Contain(world.FunctionId.ToString(),
+            "Run now comes back to the editor it was pressed from, where the history it wrote is shown");
 
-        var stored = Panel.Read(db => db.FunctionDefinitions.AsNoTracking().First(f => f.Id == world.FunctionId));
-        stored.Code.Should().Be("export default async () => ({ hello: 'buffer' });",
-            "the code that gets published has to be what was on screen when Run now was pressed");
-
-        Panel.Deployments.Queued.Should().Contain(r => r.AppId == world.AppId,
-            "making the buffer live is the only way this platform can run code that was never built");
-
-        // Not an instant call: nothing here has actually executed the new code yet, so the recorded
-        // history must not gain a row claiming it did.
-        var invocations = Panel.Read(db => db.FunctionInvocations.Count(i => i.FunctionId == world.FunctionId));
-        invocations.Should().Be(0);
+        // The whole point of keeping this button separate from Publish: it must not rebuild anything.
+        // Making it save-and-deploy was tried and reverted precisely because that made it a second
+        // name for Publish and cost the one way to test a cron function without waiting for 03:00.
+        Panel.Deployments.Queued.Should().NotContain(r => r.AppId == world.AppId,
+            "running the published version is an operating act, not a deploy");
     }
 
     [Fact]
-    public async Task Run_now_with_invalid_code_redisplays_the_editor_and_starts_no_deployment()
+    public async Task Run_now_never_writes_the_editor_buffer_over_the_saved_code()
     {
-        var world = GivenFunctionApp("fn-run-invalid");
-        Panel.GivenUser(fixture.WorkspaceId, "fn-run-invalid@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.152", "fn-run-invalid@example.com");
+        var world = GivenFunctionApp("fn-run-nosave");
+        Panel.GivenUser(fixture.WorkspaceId, "fn-run-nosave@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.152", "fn-run-nosave@example.com");
 
         var token = await client.AntiforgeryTokenFrom($"/functions/{world.AppId}/{world.FunctionId}");
 
-        var response = await client.PostFormAsync(
+        // Run now shares the Save form, so the POST genuinely carries every field on screen. The
+        // action must ignore them: a button labelled "run" that quietly saved would be the same class
+        // of lie as the nested form this class was written to catch, only in the other direction.
+        await client.PostFormAsync(
             $"/functions/{world.AppId}/{world.FunctionId}/run", token,
             ("functionId", world.FunctionId.ToString()),
-            ("Name", "Hello"), ("Trigger", ((int)FunctionTrigger.Http).ToString()),
-            ("Route", ""), ("Code", ""), // empty code is refused by FunctionAppService.Validate
+            ("Name", "Renamed by a run"), ("Trigger", ((int)FunctionTrigger.Http).ToString()),
+            ("Route", ""), ("Code", "export default async () => ({ hello: 'buffer' });"),
             ("IsEnabled", "true"));
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK,
-            "a refused edit re-renders the editor rather than redirecting anywhere");
-
         var stored = Panel.Read(db => db.FunctionDefinitions.AsNoTracking().First(f => f.Id == world.FunctionId));
-        stored.Code.Should().NotBeEmpty("a rejected edit must not overwrite the function's saved code");
-
-        Panel.Deployments.Queued.Should().NotContain(r => r.AppId == world.AppId,
-            "an edit the validator refused must never reach the deploy engine");
+        stored.Code.Should().Be("export default async () => ({ hello: 'world' });");
+        stored.Name.Should().Be("Hello");
     }
 
     [Fact]
-    public async Task An_operator_cannot_run_now_because_it_now_saves_and_deploys()
+    public async Task An_operator_may_run_the_published_function()
     {
         var world = GivenFunctionApp("fn-run-operator");
-        Panel.Seed(db => db.FeatureGrants.Add(new FeatureGrant
-        {
-            Scope = FeatureScope.Workspace, TargetId = fixture.WorkspaceId,
-            FeatureKey = PlatformFeatures.Functions, State = FeatureState.Enabled
-        }));
         Panel.GivenUser(fixture.WorkspaceId, "fn-run-op@example.com", SystemRole.Operator);
         var client = await Panel.SignedInAs("203.0.113.153", "fn-run-op@example.com");
 
-        // An operator can still reach the editor (read access), so the antiforgery token comes from
-        // the same page a real attempt would use.
         var token = await client.AntiforgeryTokenFrom($"/functions/{world.AppId}/{world.FunctionId}");
 
         var response = await client.PostFormAsync(
-            $"/functions/{world.AppId}/{world.FunctionId}/run", token,
-            ("functionId", world.FunctionId.ToString()),
-            ("Name", "Hello"), ("Trigger", ((int)FunctionTrigger.Http).ToString()),
-            ("Route", ""), ("Code", "export default async () => ({ hello: 'buffer' });"),
-            ("IsEnabled", "true"));
+            $"/functions/{world.AppId}/{world.FunctionId}/run", token);
 
-        // Run now now saves (apps.env) and deploys (apps.deploy) — neither is an operator's capability
-        // (RolePermissions: Operator gets only apps.operate + backups.run) — so the cookie scheme's
-        // AccessDeniedPath is what answers, the same as any other capability refusal.
+        // apps.operate is exactly an Operator's capability (RolePermissions gives them apps.operate +
+        // backups.run). Running published code is the operating act, so this door stays open to them —
+        // the reverted save-and-deploy version had closed it.
         response.StatusCode.Should().Be(HttpStatusCode.Found);
-        response.RedirectPath().Should().Be("/account/denied");
-        Panel.Deployments.Queued.Should().NotContain(r => r.AppId == world.AppId);
+        response.RedirectPath().Should().NotBe("/account/denied");
+    }
+
+    [Fact]
+    public async Task The_editor_says_which_code_run_now_will_reach_when_edits_are_unpublished()
+    {
+        var world = GivenFunctionApp("fn-run-stale");
+        Panel.Seed(db =>
+        {
+            var app = db.Apps.First(a => a.Id == world.AppId);
+            app.ActiveDeploymentId = Guid.CreateVersion7();          // published at least once
+            db.FunctionDefinitions.First(f => f.Id == world.FunctionId).HasUnpublishedChanges = true;
+        });
+        Panel.GivenUser(fixture.WorkspaceId, "fn-run-stale@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.154", "fn-run-stale@example.com");
+
+        var document = await ParseAsync(
+            await (await client.GetAsync($"/functions/{world.AppId}/{world.FunctionId}")).Content.ReadAsStringAsync());
+
+        document.QuerySelector("[data-run-state='stale']").Should().NotBeNull(
+            "the panel must say plainly that Run now reaches the published code, not the edits on screen");
+        document.QuerySelector("[data-action='run']")!.HasAttribute("disabled").Should().BeFalse(
+            "unpublished edits do not stop the published version from being runnable");
+    }
+
+    [Fact]
+    public async Task Run_now_is_disabled_before_the_app_has_ever_been_published()
+    {
+        var world = GivenFunctionApp("fn-run-unpublished");
+        Panel.GivenUser(fixture.WorkspaceId, "fn-run-unpub@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.155", "fn-run-unpub@example.com");
+
+        var document = await ParseAsync(
+            await (await client.GetAsync($"/functions/{world.AppId}/{world.FunctionId}")).Content.ReadAsStringAsync());
+
+        // FunctionInvoker.QueueAsync returns null when ActiveDeploymentId is null, so pressing this
+        // could only ever fail. Saying so on the button is the same fact, one step earlier.
+        document.QuerySelector("[data-run-state='never-published']").Should().NotBeNull();
+        document.QuerySelector("[data-action='run']")!.HasAttribute("disabled").Should().BeTrue();
     }
 }
