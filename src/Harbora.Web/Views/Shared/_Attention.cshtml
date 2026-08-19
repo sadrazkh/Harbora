@@ -88,7 +88,7 @@
                         @if (item.DetailText is not null)
                         {
                             @* Verbatim data from the failing thing itself — a summarised error, never
-                               localised — so the whole line is technical and reads left-to-right. *@
+                               localised — so the whole line is technical and always reads LTR. *@
                             <div class="attention-detail font-mono" dir="ltr">@item.DetailText</div>
                         }
                         else if (item.DetailKey is not null)
