@@ -715,3 +715,27 @@ html.dark .auth-card { box-shadow: 0 20px 60px rgb(0 0 0 / 0.4); }
   margin-bottom: 14px;
   font-size: 13px;
 }
+
+/* ---- Applications list (2026-08-19 apps-redesign, phase 2 / 3b) -----------
+   Text-labelled row actions ("Logs", "Redeploy", the never-deployed row's dark "Deploy") — distinct
+   from `.row-actions a/button`, which is sized for a single icon glyph and has no room for a word. */
+@layer components {
+  .apps-row-btn {
+    @apply inline-flex min-h-8 shrink-0 items-center justify-center whitespace-nowrap rounded-lg
+           border border-line-strong bg-surface px-2.5 text-[11px] font-medium text-ink-muted
+           transition duration-150 hover:border-accent/30 hover:text-accent-text;
+  }
+  .apps-row-btn.is-dark { @apply border-transparent bg-ink text-white hover:text-white hover:opacity-90; }
+}
+
+/* Touch targets stay comfortable on a phone even though the same buttons are compact on desktop —
+   قواعد مشترک پیاده‌سازی (apps-redesign handoff): 44px minimum on mobile. */
+@media (max-width: 639px) {
+  .apps-row-btn { min-height: 44px; flex: 1; }
+}
+
+/* The row's own hover tint is the only new motion this page adds; everything else it uses (button
+   and link transitions) is already covered by the app-wide rule above. */
+@media (prefers-reduced-motion: reduce) {
+  .apps-row { transition: none; }
+}

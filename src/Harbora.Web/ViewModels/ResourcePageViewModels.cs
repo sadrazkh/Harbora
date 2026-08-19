@@ -37,7 +37,19 @@ public sealed record ApplicationRowViewModel(
     /// the sample alone — and "512 MB" answers nothing on its own, since full or empty depends
     /// entirely on whether the app was given 512 MB or 8 GB. Zero means no ceiling was set.
     /// </summary>
-    long MemoryLimitBytes = 0);
+    long MemoryLimitBytes = 0,
+    /// <summary>
+    /// How long the last deployment took, when it finished. Null both for a deployment still running
+    /// (no <c>FinishedAt</c> yet) and for an app that has never deployed at all — the Applications
+    /// list (2026-08-19 apps-redesign) reads this rather than an em dash either way.
+    /// </summary>
+    TimeSpan? LastDeploymentDuration = null,
+    /// <summary>
+    /// Up to ten CPU samples across the last hour, bucketed by <c>MetricBucketing</c>, for the
+    /// Applications list's HEALTH · 1H micro-chart. Empty when nothing was measured in the window —
+    /// not the same as an app that measured a flat zero.
+    /// </summary>
+    IReadOnlyList<double>? CpuSeries = null);
 
 public sealed class DatabasesPageViewModel
 {

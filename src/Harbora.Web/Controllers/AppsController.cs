@@ -126,6 +126,22 @@ public sealed partial class AppsController(
                             && (m.Name == "cpu.percent" || m.Name == "mem.used"))
                 .OrderByDescending(m => m.Timestamp).Take(2_000).ToListAsync(ct);
 
+        // A second, time-windowed query for the HEALTH · 1H sparkline — the query above only keeps
+        // each app's single latest reading, which answers "what is it now" but has nothing to draw a
+        // trend from.
+        var since = DateTimeOffset.UtcNow.AddHours(-1);
+        var cpuHistory = resourceRefs.Count == 0
+            ? new List<MonitoringMetric>()
+            : await db.MonitoringMetrics.AsNoTracking()
+                .Where(m => m.ResourceRef != null && resourceRefs.Contains(m.ResourceRef)
+                            && m.Name == "cpu.percent" && m.Timestamp >= since)
+                .OrderBy(m => m.Timestamp)
+                .Take(20_000)
+                .ToListAsync(ct);
+        var cpuHistoryByRef = cpuHistory
+            .GroupBy(m => m.ResourceRef!)
+            .ToDictionary(g => g.Key, g => g.Select(m => (m.Timestamp, m.Value)));
+
         return View(new ApplicationsPageViewModel
         {
             Apps = apps.Select(a =>
@@ -136,6 +152,9 @@ public sealed partial class AppsController(
                     .FirstOrDefault(m => m.ResourceRef == metricRef && m.Name == "cpu.percent")?.Value;
                 var memory = metricRef is null ? null : metrics
                     .FirstOrDefault(m => m.ResourceRef == metricRef && m.Name == "mem.used")?.Value;
+                var cpuSeries = metricRef is not null && cpuHistoryByRef.TryGetValue(metricRef, out var points)
+                    ? Harbora.Infrastructure.Monitoring.MetricBucketing.Bucket(points, since, DateTimeOffset.UtcNow, 10)
+                    : [];
                 return new ApplicationRowViewModel(
                     a.Id, a.Name, a.Slug, a.SourceType, a.Kind, a.Status,
                     a.Environment?.Project?.Name ?? "—", a.Environment?.Name ?? "—",
@@ -144,7 +163,10 @@ public sealed partial class AppsController(
                     deployment?.FinishedAt ?? deployment?.CreatedAt,
                     deployment?.CommitSha is { Length: > 0 } sha ? sha[..Math.Min(7, sha.Length)] : null,
                     operable.Contains(a.Id), cpu, memory is null ? null : (long?)memory.Value,
-                    a.MemoryLimitBytes);
+                    a.MemoryLimitBytes,
+                    deployment?.StartedAt is { } started && deployment?.FinishedAt is { } finished
+                        ? finished - started : null,
+                    cpuSeries);
             }).ToList(),
             QuickStarts = await FeaturedCardsAsync(6, ct)
         });

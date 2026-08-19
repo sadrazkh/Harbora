@@ -4,20 +4,27 @@
 @{
     ViewData["Title"] = "Applications";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var inv = System.Globalization.CultureInfo.InvariantCulture;
     var here = Context.Request.Path + Context.Request.QueryString;
     // The rail is only drawn when a panel is actually open (Task 7) — this is also the toolbar
     // control's cue that a way back needs to be on the page instead.
     var anyRailOpen = await Rails.AnyOpenAsync();
     var environments = Model.Apps.Select(a => a.Environment).Where(e => e != "—").Distinct().Order().ToList();
-    string Bytes(long? bytes) => bytes switch
+
+    // ---- formatting helpers -------------------------------------------------------------------
+    // Every one of these returns an already-formatted string rather than a raw number, so the
+    // markup can print it with a plain @-expression: CurrentCulture (Persian by default in this
+    // panel) would otherwise reshape the digits themselves, and a technical reading is exactly the
+    // token the redesign spec says must stay legible — invariant — even under fa.
+    string Mb(double bytes) => Math.Round(bytes / 1024 / 1024, 0).ToString("0", inv);
+    string Pct(double value) => value.ToString("0.#", inv);
+
+    string? DeployDuration(TimeSpan? span) => span switch
     {
-        null => "—",
-        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
-        < 1024L * 1024 * 1024 => $"{bytes / 1024.0 / 1024:0.#} MB",
-        _ => $"{bytes / 1024.0 / 1024 / 1024:0.##} GB"
+        null => null,
+        { TotalSeconds: < 60 } s => $"{((int)s.TotalSeconds).ToString(inv)}s",
+        { } s => $"{((int)s.TotalMinutes).ToString(inv)}m {((int)s.TotalSeconds % 60).ToString(inv)}s"
     };
-    string CssPercent(double? value) => Math.Clamp(value ?? 0, 0, 100)
-        .ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
     string SourceLabel(AppSourceType source) => source switch
     {
@@ -40,13 +47,15 @@
         AppSourceType.Upload => "terminal",
         _ => "box"
     };
-    string Tone(AppStatus status) => status switch
+    // The HEALTH dot's colour when there is a reading to show tone for — the old STATUS column's
+    // job, folded into this one, rather than dropped (نگاشت رنگ / قواعد مشترک: nothing is deleted).
+    string HealthDotClass(AppStatus status) => status switch
     {
-        AppStatus.Running => "is-ok",
-        AppStatus.Deploying => "is-info",
-        AppStatus.Failed or AppStatus.Crashed => "is-danger",
-        AppStatus.Stopped => "is-idle",
-        _ => "is-warn"
+        AppStatus.Running => "bg-ok",
+        AppStatus.Deploying => "bg-info",
+        AppStatus.Failed or AppStatus.Crashed => "bg-danger",
+        AppStatus.Stopped => "bg-idle",
+        _ => "bg-warn"
     };
 }
 
@@ -65,17 +74,13 @@
 <section class="resource-shell">
     <div class="resource-toolbar">
         <div id="statusFilter" class="segmented-control" role="group" aria-label="@(isFa ? "فیلتر وضعیت" : "Status filter")">
-            <button type="button" data-status="all" class="is-active">@(isFa ? "همه" : "All") <span>@Model.Apps.Count</span></button>
-            <button type="button" data-status="Running">@T["Running"] <span>@Model.Running</span></button>
-            <button type="button" data-status="Deploying">@(isFa ? "در حال ساخت" : "Building") <span>@Model.Building</span></button>
-            <button type="button" data-status="Stopped">@T["Stopped"] <span>@Model.Stopped</span></button>
-            <button type="button" data-status="Failed">@T["Failed"] <span>@Model.Failed</span></button>
+            <button type="button" data-status="all" class="is-active">@(isFa ? "همه" : "All") <span dir="ltr" class="font-mono">@Model.Apps.Count.ToString(inv)</span></button>
+            <button type="button" data-status="Running" disabled="@(Model.Running == 0)">@T["Running"] <span dir="ltr" class="font-mono">@Model.Running.ToString(inv)</span></button>
+            <button type="button" data-status="Deploying" disabled="@(Model.Building == 0)">@(isFa ? "در حال ساخت" : "Building") <span dir="ltr" class="font-mono">@Model.Building.ToString(inv)</span></button>
+            <button type="button" data-status="Stopped" disabled="@(Model.Stopped == 0)">@T["Stopped"] <span dir="ltr" class="font-mono">@Model.Stopped.ToString(inv)</span></button>
+            <button type="button" data-status="Failed" disabled="@(Model.Failed == 0)">@T["Failed"] <span dir="ltr" class="font-mono">@Model.Failed.ToString(inv)</span></button>
         </div>
         <div class="flex min-w-0 flex-1 flex-wrap justify-end gap-2">
-            <label class="resource-search">
-                <i data-lucide="search" class="h-4 w-4"></i>
-                <input id="appSearch" type="search" placeholder="@(isFa ? "جست‌وجوی برنامه…" : "Search applications…")" />
-            </label>
             @if (environments.Count > 1)
             {
                 <select id="environmentFilter" class="compact-select" aria-label="@(isFa ? "محیط" : "Environment")">
@@ -83,6 +88,10 @@
                     @foreach (var environment in environments) { <option value="@environment">@environment</option> }
                 </select>
             }
+            <label class="resource-search">
+                <i data-lucide="search" class="h-4 w-4"></i>
+                <input id="appSearch" type="search" placeholder="@(isFa ? "فیلتر بر اساس نام، دامنه، منبع…" : "Filter by name, domain, source…")" />
+            </label>
             @if (!anyRailOpen)
             {
                 @* Do-not-change item 23: closing every panel folds the rail away entirely (Task 7),
@@ -109,109 +118,143 @@
 
     @if (Model.Apps.Count == 0)
     {
-        <div class="empty-state min-h-[28rem]">
-            <span class="empty-state-icon"><i data-lucide="rocket" class="h-6 w-6"></i></span>
-            <h2>@T["No applications yet"]</h2>
-            <p>@(isFa ? "از یک قالب آماده شروع کنید یا مخزن خودتان را متصل کنید." : "Start from a production-ready template or connect your own repository.")</p>
-            <a href="/apps/create" class="btn-primary">@T["Create Application"]</a>
-        </div>
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel("rocket",
+            isFa ? "هنوز برنامه‌ای نساخته‌اید. از یک قالب آماده شروع کنید یا مخزن خودتان را متصل کنید." : "You haven't created an application yet. Start from a ready-made template or connect your own repository.",
+            isFa ? "+ برنامه جدید" : "+ New app", "/apps/create"))" />
     }
     else
     {
-        <div class="overflow-x-auto">
-            <table class="resource-table min-w-[1120px]">
-                <thead><tr>
-                    <th>@(isFa ? "برنامه" : "Application")</th>
-                    <th>@(isFa ? "سورس" : "Source")</th>
-                    <th>@(isFa ? "پروژه / محیط" : "Project / environment")</th>
-                    <th>@T["Domain"]</th>
-                    <th>@T["Status"]</th>
-                    <th>CPU</th>
-                    <th>@T["Memory"]</th>
-                    <th>@(isFa ? "آخرین استقرار" : "Last deployment")</th>
-                    <th class="text-end">@(isFa ? "عملیات" : "Actions")</th>
-                </tr></thead>
-                <tbody id="appRows">
-                @foreach (var app in Model.Apps)
+        <div class="apps-table">
+            <div class="hidden gap-3 border-b border-line bg-surface-2 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-ink-faint sm:grid sm:grid-cols-[1.9fr_1.5fr_1.2fr_1.4fr_130px]" role="row">
+                <span role="columnheader">@(isFa ? "برنامه" : "Application")</span>
+                <span role="columnheader">@(isFa ? "سلامت · ۱ ساعت" : "Health · 1h")</span>
+                <span role="columnheader">@T["Domain"]</span>
+                <span role="columnheader">@(isFa ? "آخرین استقرار" : "Last deployment")</span>
+                <span role="columnheader"></span>
+            </div>
+            <div id="appRows">
+            @foreach (var app in Model.Apps)
+            {
+                var filterStatus = app.Status is AppStatus.Failed or AppStatus.Crashed ? "Failed" : app.Status.ToString();
+                var everDeployed = app.LastDeploymentNumber is not null;
+                var hasReading = app.CpuPercent is not null;
+                var isIdle = hasReading && Math.Round(app.CpuPercent!.Value, 1) <= 0.0;
+                var healthDotClass = !hasReading ? "bg-warn" : HealthDotClass(app.Status);
+                string healthText;
+                if (!hasReading)
                 {
-                    var filterStatus = app.Status is AppStatus.Failed or AppStatus.Crashed ? "Failed" : app.Status.ToString();
-                    <tr class="app-row" data-name="@($"{app.Name} {app.Slug} {app.Domain} {app.Project} {app.Environment}".ToLowerInvariant())" data-status="@filterStatus" data-environment="@app.Environment">
-                        <td>
-                            <a href="/apps/details/@app.Id" class="resource-identity">
-                                <span class="resource-avatar bg-accent-soft text-accent-text"><i data-lucide="@SourceIcon(app.SourceType)" class="h-4 w-4"></i></span>
-                                <span><strong>@app.Name</strong><small>@app.Slug · @app.Kind</small></span>
-                            </a>
-                        </td>
-                        <td><span class="runtime-chip">@SourceLabel(app.SourceType)</span></td>
-                        <td><div class="table-primary">@app.Project</div><div class="table-secondary">@app.Environment</div></td>
-                        <td>
-                            @if (app.Domain is { Length: > 0 } host)
-                            { <a href="https://@host" target="_blank" rel="noopener" class="domain-link"><i data-lucide="lock-keyhole" class="h-3.5 w-3.5"></i>@host<i data-lucide="external-link" class="h-3 w-3"></i></a> }
-                            else
-                            { <span class="table-secondary">@(isFa ? "بدون دامنه" : "No domain")</span> }
-                        </td>
-                        <td><span class="resource-status @Tone(app.Status)"><i></i>@app.Status</span></td>
-                        <td>
-                            <div class="metric-reading">@(app.CpuPercent is null ? "—" : $"{app.CpuPercent:0.#}%")</div>
-                            @* No track when nothing was measured: an empty bar and an idle app look
-                               identical and mean opposite things. *@
-                            @if (app.CpuPercent is not null)
-                            {
-                                <span class="metric-track"><i style="width:@CssPercent(app.CpuPercent)%"></i></span>
-                            }
-                        </td>
-                        <td>
-                            @* The sample used to stand alone, and on its own it answers nothing —
-                               whether 512 MB is full or empty depends entirely on what the app was
-                               given. Now it is read against its allocation. *@
-                            @{ var memory = Harbora.Infrastructure.Monitoring.AllocationReading.Of(app.MemoryBytes, app.MemoryLimitBytes); }
-                            <div class="metric-reading" dir="ltr">
-                                @Bytes(app.MemoryBytes)@(app.MemoryLimitBytes > 0 ? $" / {Bytes(app.MemoryLimitBytes)}" : "")
-                            </div>
-                            @if (memory.HasShare)
-                            {
-                                <span class="metric-track"><i style="width:@memory.Percent%"></i></span>
-                                <span class="table-secondary">
-                                    @(memory.IsOver
-                                        ? (isFa ? "بالاتر از سقف — تا استقرار بعدی" : "over its limit until redeployed")
-                                        : (isFa ? $"٪{memory.Percent} از تخصیص" : $"{memory.Percent}% of allocation"))
-                                </span>
-                            }
-                            else
-                            {
-                                <span class="table-secondary">
-                                    @(app.MemoryBytes is null
-                                        ? (isFa ? "هنوز اندازه‌گیری نشده" : "Not measured yet")
-                                        : (isFa ? "بدون سقف حافظه" : "No memory ceiling"))
-                                </span>
-                            }
-                        </td>
-                        <td>
-                            @if (app.LastDeploymentNumber is { } number)
-                            {
-                                <div class="table-primary">#@number · @(app.LastDeploymentStatus?.ToString() ?? "—")</div>
-                                <div class="table-secondary">@(app.LastCommit ?? "—") · @app.LastDeploymentAt?.LocalDateTime.ToString(Dates.Stamp)</div>
-                            }
-                            else { <span class="table-secondary">@(isFa ? "هنوز استقرار ندارد" : "Never deployed")</span> }
-                        </td>
-                        <td>
-                            <div class="row-actions">
-                                <a href="/apps/details/@app.Id" title="@(isFa ? "بازکردن" : "Open")"><i data-lucide="square-arrow-out-up-right" class="h-4 w-4"></i></a>
-                                @if (app.CanOperate && app.Status == AppStatus.Running)
-                                {
-                                    <form asp-controller="Apps" asp-action="Restart" asp-route-id="@app.Id" method="post">@Html.AntiForgeryToken()<button title="@(T["Restart"].Value)"><i data-lucide="rotate-cw" class="h-4 w-4"></i></button></form>
-                                }
-                                else if (app.CanOperate)
-                                {
-                                    <form asp-controller="Apps" asp-action="Start" asp-route-id="@app.Id" method="post">@Html.AntiForgeryToken()<button title="@(T["Start"].Value)"><i data-lucide="play" class="h-4 w-4"></i></button></form>
-                                }
-                                <a href="/apps/@app.Id/logs" title="@(T["Logs"].Value)"><i data-lucide="scroll-text" class="h-4 w-4"></i></a>
-                            </div>
-                        </td>
-                    </tr>
+                    healthText = isFa ? "بدون متریک — هرگز مستقر نشده" : "no metrics — never deployed";
                 }
-                </tbody>
-            </table>
+                else if (isIdle)
+                {
+                    healthText = app.MemoryLimitBytes > 0 ? $"idle · {Mb(app.MemoryLimitBytes)}MB limit" : "idle";
+                }
+                else
+                {
+                    var used = Mb(app.MemoryBytes ?? 0);
+                    healthText = app.MemoryLimitBytes > 0
+                        ? $"CPU {Pct(app.CpuPercent!.Value)}% · {used}/{Mb(app.MemoryLimitBytes)}MB"
+                        : $"CPU {Pct(app.CpuPercent!.Value)}% · {used}MB";
+                }
+                var domainKnown = app.Domain is { Length: > 0 };
+                var deployNumberText = app.LastDeploymentNumber is { } n
+                    ? $"#{n.ToString(inv)} · {(app.LastDeploymentStatus?.ToString().ToLowerInvariant() ?? "—")}"
+                    : null;
+                var deployDurationText = DeployDuration(app.LastDeploymentDuration);
+                var deployStamp = app.LastDeploymentAt?.LocalDateTime.ToString(Dates.Stamp);
+                <div class="apps-row grid grid-cols-[1fr_auto] items-start gap-x-3 gap-y-2 border-b border-line px-4 py-3.5 transition duration-150 last:border-b-0 hover:bg-surface-2/70 sm:grid-cols-[1.9fr_1.5fr_1.2fr_1.4fr_130px] sm:items-center sm:gap-3"
+                     role="row" data-name="@($"{app.Name} {app.Slug} {app.Domain} {SourceLabel(app.SourceType)} {app.Kind}".ToLowerInvariant())" data-status="@filterStatus" data-environment="@app.Environment">
+                    <div role="cell" class="flex min-w-0 items-center gap-2.5">
+                        <a href="/apps/details/@app.Id" class="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg bg-accent-soft text-accent-text">
+                            <i data-lucide="@SourceIcon(app.SourceType)" class="h-3.5 w-3.5"></i>
+                        </a>
+                        <div class="min-w-0">
+                            <a href="/apps/details/@app.Id" dir="ltr" class="block truncate font-mono text-[13px] font-medium text-ink hover:text-accent-text">@app.Name</a>
+                            <div class="mt-1.5 truncate text-[10.5px] text-ink-faint">@app.Kind · @SourceLabel(app.SourceType)</div>
+                        </div>
+                    </div>
+                    <div role="cell" class="apps-cell-health hidden min-w-0 sm:block">
+                        <div class="flex items-center gap-2">
+                            <span class="apps-health-dot inline-block h-1.5 w-1.5 shrink-0 rounded-full @healthDotClass"></span>
+                            @if (hasReading)
+                            {
+                                <span dir="ltr" class="truncate font-mono text-[11.5px] text-ink-muted">@healthText</span>
+                            }
+                            else
+                            {
+                                <span class="truncate text-[11.5px] text-ink-faint">@healthText</span>
+                            }
+                        </div>
+                        @if (hasReading)
+                        {
+                            <div class="mt-2 h-4 w-full text-accent">
+                                <partial name="Design/_Sparkline" model="@(new MetricModel(Harbora.Infrastructure.Monitoring.MetricDisplay.ForSeries(app.CpuSeries), "CPU"))" />
+                            </div>
+                        }
+                    </div>
+                    <div role="cell" class="apps-cell-domain hidden min-w-0 sm:block">
+                        @if (domainKnown && everDeployed)
+                        {
+                            <a href="https://@app.Domain" target="_blank" rel="noopener" dir="ltr" class="block truncate font-mono text-xs text-accent-text hover:underline">@app.Domain</a>
+                        }
+                        else if (domainKnown)
+                        {
+                            <span dir="ltr" class="block truncate font-mono text-xs text-ink-faint">@app.Domain</span>
+                        }
+                        else
+                        {
+                            <span class="table-secondary">@(isFa ? "بدون دامنه" : "No domain")</span>
+                        }
+                    </div>
+                    <div role="cell" class="apps-cell-deploy hidden min-w-0 sm:block">
+                        @if (deployNumberText is not null)
+                        {
+                            <div dir="ltr" class="truncate font-mono text-xs text-ink">@deployNumberText</div>
+                            <div dir="ltr" class="mt-1.5 truncate font-mono text-[10.5px] text-ink-faint">@deployStamp@(deployDurationText is not null ? $" · {deployDurationText}" : "")</div>
+                        }
+                        else
+                        {
+                            <span class="table-secondary">@(isFa ? "هنوز استقرار ندارد" : "Never deployed")</span>
+                        }
+                    </div>
+                    <div role="cell" class="apps-cell-meta col-span-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-ink-muted sm:hidden">
+                        <span class="apps-health-dot inline-block h-1.5 w-1.5 shrink-0 rounded-full @healthDotClass"></span>
+                        <span dir="ltr" class="@(hasReading ? "font-mono" : "")">@healthText</span>
+                        <span aria-hidden="true">·</span>
+                        @if (domainKnown)
+                        {
+                            <span dir="ltr" class="font-mono @(everDeployed ? "text-accent-text" : "text-ink-faint")">@app.Domain</span>
+                        }
+                        else
+                        {
+                            <span>@(isFa ? "بدون دامنه" : "no domain")</span>
+                        }
+                        @if (deployNumberText is not null)
+                        {
+                            <span aria-hidden="true">·</span>
+                            <span dir="ltr" class="font-mono">@deployNumberText</span>
+                        }
+                    </div>
+                    <div role="cell" class="flex items-center gap-1.5 sm:justify-end">
+                        @if (!everDeployed)
+                        {
+                            <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@app.Id" method="post" class="inline">
+                                @Html.AntiForgeryToken()
+                                <button type="submit" class="apps-row-btn is-dark">@T["Deploy"]</button>
+                            </form>
+                        }
+                        else
+                        {
+                            <a href="/apps/@app.Id/logs" class="apps-row-btn">@(isFa ? "لاگ‌ها" : "Logs")</a>
+                            <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@app.Id" method="post" class="inline">
+                                @Html.AntiForgeryToken()
+                                <button type="submit" class="apps-row-btn">@(isFa ? "استقرار مجدد" : "Redeploy")</button>
+                            </form>
+                        }
+                    </div>
+                </div>
+            }
+            </div>
         </div>
         <div class="resource-footer"><span id="appResultCount">@Model.Apps.Count</span> @(isFa ? "برنامه" : "applications")</div>
         <div id="noAppMatch" class="hidden p-10 text-center text-sm text-ink-faint">@(isFa ? "برنامه‌ای با این فیلتر پیدا نشد." : "No applications match these filters.")</div>
@@ -321,7 +364,7 @@
 @section Scripts {
 <script>
 (() => {
-    const rows = Array.from(document.querySelectorAll('.app-row'));
+    const rows = Array.from(document.querySelectorAll('.apps-row'));
     const search = document.getElementById('appSearch');
     const environment = document.getElementById('environmentFilter');
     const count = document.getElementById('appResultCount');
@@ -344,6 +387,7 @@
     search?.addEventListener('input', apply);
     environment?.addEventListener('change', apply);
     document.querySelectorAll('#statusFilter [data-status]').forEach(button => button.addEventListener('click', () => {
+        if (button.disabled) return;
         status = button.dataset.status;
         document.querySelectorAll('#statusFilter [data-status]').forEach(x => x.classList.remove('is-active'));
         button.classList.add('is-active');
