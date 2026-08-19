@@ -43,8 +43,15 @@ public static class Tone
     public const string Idle = "idle";
 }
 
-/// <summary>Tone is semantic, not a colour: the palette decides what "warn" looks like.</summary>
-public sealed record StatusPillModel(string Text, string Tone);
+/// <summary>
+/// Tone is semantic, not a colour: the palette decides what "warn" looks like.
+/// </summary>
+/// <param name="Title">
+/// An optional native tooltip — the one piece of context a pill's few characters cannot hold, such as
+/// the moment a restore check ran or the reason it refused. Omitted by every caller that has nothing
+/// to add.
+/// </param>
+public sealed record StatusPillModel(string Text, string Tone, string? Title = null);
 
 /// <summary>Shown instead of an empty table, with the one action that fills it.</summary>
 public sealed record EmptyStateModel(string Icon, string Message, string? ActionText = null, string? ActionUrl = null);

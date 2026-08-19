@@ -196,4 +196,57 @@ public class BackupDestinationHttpTests(HarboraHttpFixture fixture)
         stored.EncryptedSftpPassword.Should().NotBeNullOrEmpty()
             .And.NotBe("s3cret", "the password must be stored encrypted, not verbatim");
     }
+
+    /// <summary>
+    /// The redesign folds the SFTP fields behind a Simple-mode disclosure (do-not-change list item
+    /// 23, PanelMode fold-never-remove): open in Advanced, folded in Simple, and — the rule that
+    /// actually matters here — always forced open when the server just rejected the submission, since
+    /// a block folded over the field it is complaining about is an error nobody can see.
+    /// </summary>
+    [Fact]
+    public async Task Rejecting_an_sftp_destination_reopens_the_fold_and_keeps_what_was_typed()
+    {
+        Panel.GivenUser(fixture.WorkspaceId, "dest-rejected@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.163", "dest-rejected@example.com");
+
+        var token = await client.AntiforgeryTokenFrom("/backups");
+
+        // No sftpHostKey: SftpTransfer.WhyUnusable refuses this, so CreateDestination redirects
+        // without saving anything.
+        var response = await client.PostFormAsync("/backups/destinations", token,
+            ("name", "half-typed-sftp"), ("type", "Sftp"),
+            ("sftpHost", "backup.example.com"), ("sftpPort", "2222"),
+            ("sftpUsername", "harbora"), ("sftpPassword", "s3cret"),
+            ("sftpDirectory", "/srv/harbora-backups"), ("sftpHostKey", ""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        response.RedirectPath().Should().Be("/backups");
+
+        Panel.Read(db => db.BackupDestinations.AsNoTracking()
+                .Any(d => d.WorkspaceId == fixture.WorkspaceId && d.Name == "half-typed-sftp"))
+            .Should().BeFalse("a destination missing its host key must not be saved");
+
+        var document = await ParseAsync(
+            await (await client.GetAsync("/backups")).Content.ReadAsStringAsync());
+
+        var form = document.QuerySelector("[data-dest-form]");
+        form.Should().NotBeNull();
+
+        form!.QuerySelector("select[name='type'] option[value='Sftp']")!.HasAttribute("selected").Should().BeTrue(
+            "the type selector must still say SFTP, or the toggle script hides the very fields the " +
+            "disclosure below just opened");
+
+        var disclosure = form.QuerySelector("[data-when-sftp] details");
+        disclosure.Should().NotBeNull("the SFTP fields must be folded, not removed");
+        disclosure!.HasAttribute("open").Should().BeTrue(
+            "a rejected submission must force the fold open — the error inside it is otherwise invisible");
+
+        form.QuerySelector("input[name='name']")!.GetAttribute("value").Should().Be("half-typed-sftp");
+        form.QuerySelector("input[name='sftpHost']")!.GetAttribute("value").Should().Be("backup.example.com");
+        form.QuerySelector("input[name='sftpUsername']")!.GetAttribute("value").Should().Be("harbora");
+        form.QuerySelector("input[name='sftpDirectory']")!.GetAttribute("value").Should().Be("/srv/harbora-backups");
+        (form.QuerySelector("input[name='sftpPassword']")!.GetAttribute("value") ?? "").Should().BeEmpty(
+            "nothing was ever stored for a rejected destination, so there is nothing a blank " +
+            "password box could quietly discard by not round-tripping it");
+    }
 }

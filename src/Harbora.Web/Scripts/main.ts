@@ -108,7 +108,7 @@ mountDeployProgress();
 // load. Adding an icon to a view means adding it here too, which is the point.
 import {
     createIcons, Activity, AlertTriangle, Archive, ArrowRight, ArrowUpLeft, ArrowUpRight, Bell,
-    BookOpen, Box, Boxes, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp,
+    BookOpen, Box, Boxes, Building2, CalendarClock, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp,
     CircleCheck, CircleCheckBig, CircleHelp, CloudUpload, Code, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard,
     Cuboid, Database, DatabaseZap, Download, ExternalLink, File, FileCode2, FileJson2, Folder,
     FolderLock, FolderOpen, Gauge, GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound,
@@ -122,7 +122,7 @@ import {
 
 const usedIcons = {
     Activity, AlertTriangle, Archive, ArrowRight, ArrowUpLeft, ArrowUpRight, Bell, BookOpen, Box,
-    Boxes, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleCheck,
+    Boxes, Building2, CalendarClock, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleCheck,
     CircleCheckBig, CircleHelp, CloudUpload, Code, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard, Cuboid,
     Database, DatabaseZap, Download, ExternalLink, File, FileCode2, FileJson2, Folder, FolderLock,
     FolderOpen, Gauge, GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound, Languages,

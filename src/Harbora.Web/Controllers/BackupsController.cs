@@ -151,6 +151,19 @@ public sealed partial class BackupsController(
             && Harbora.Infrastructure.Backups.SftpTransfer.WhyUnusable(sftpHost, sftpUsername, sftpHostKey) is { } refusal)
         {
             TempData["Error"] = refusal;
+
+            // The SFTP fields live behind the fold-never-remove Advanced disclosure (do-not-change
+            // list item 23): a block folded over the field the server just complained about is an
+            // error nobody can see, so the redirect carries what it needs to force the disclosure
+            // open and put the person back where they were — everything but the password, which
+            // nothing was stored for yet, so there is nothing a blank box would quietly discard.
+            TempData["DestinationSftpRejected"] = true;
+            TempData["RejectedDestinationName"] = name;
+            TempData["RejectedSftpHost"] = sftpHost;
+            TempData["RejectedSftpPort"] = (sftpPort <= 0 ? 22 : sftpPort).ToString();
+            TempData["RejectedSftpUsername"] = sftpUsername;
+            TempData["RejectedSftpDirectory"] = sftpDirectory;
+            TempData["RejectedSftpHostKey"] = sftpHostKey;
             return RedirectToAction(nameof(Index));
         }
 
@@ -217,11 +230,24 @@ public sealed partial class BackupsController(
         return RedirectToAction(nameof(Index));
     }
 
+    /// <summary>
+    /// Confirmed by typing DELETE, the same word every other destructive action on this page asks
+    /// for — extending, not downgrading, the pattern (do-not-change list item 19). A native
+    /// <c>confirm()</c> was the last one left on this page; this was it.
+    /// </summary>
     [HttpPost("schedules/{id:guid}/delete")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.BackupsManage)]
-    public async Task<IActionResult> DeleteSchedule(Guid id, CancellationToken ct)
+    public async Task<IActionResult> DeleteSchedule(Guid id, string confirm, CancellationToken ct)
     {
+        if (confirm != "DELETE")
+        {
+            TempData["Error"] = IsFa
+                ? "حذف تأیید نشد؛ هیچ زمان‌بندی‌ای پاک نشد."
+                : "The deletion was not confirmed. Nothing was removed.";
+            return RedirectToAction(nameof(Index));
+        }
+
         await db.BackupSchedules.Where(s => s.Id == id && s.WorkspaceId == WorkspaceId).ExecuteDeleteAsync(ct);
         return RedirectToAction(nameof(Index));
     }

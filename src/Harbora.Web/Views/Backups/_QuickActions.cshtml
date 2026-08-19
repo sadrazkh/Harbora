@@ -1,0 +1,77 @@
+@model BackupsViewContext
+@{
+    var isFa = Model.IsFa;
+}
+@* ---- doing something now ----
+   Two cards side by side because they are one decision made in opposite directions: take a copy of
+   something here, or bring a copy in from elsewhere. *@
+<div class="mb-6 grid gap-4 lg:grid-cols-2">
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="mb-1 text-[15px] font-semibold text-ink">@T["Run backup"]</h2>
+        <p class="mb-3 text-xs text-ink-faint">
+            @(isFa
+                ? "همین حالا یک نسخه گرفته می‌شود و به مقصدی که انتخاب می‌کنید فرستاده می‌شود."
+                : "A copy is taken now and stored at the destination you choose.")
+        </p>
+        <form asp-controller="Backups" asp-action="Run" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <label class="form-field">
+                <span>@T["Target"]</span>
+                <select name="target" class="form-control">
+                    @foreach (var (val, label) in Model.Page.Targets){<option value="@val">@label</option>}
+                </select>
+            </label>
+            <label class="form-field">
+                <span>@T["Destination"]</span>
+                <select name="destinationId" class="form-control">
+                    @foreach (var d in Model.Page.Destinations){<option value="@d.Id">@d.Name (@d.Type)</option>}
+                </select>
+            </label>
+            <button class="btn-primary w-full justify-center">
+                <i data-lucide="cloud-upload" class="h-4 w-4"></i>@T["Run backup"]
+            </button>
+        </form>
+    </section>
+
+    @* ---- bringing one in ----
+       A backup that had been downloaded and kept somewhere safe was, until now, unusable: the restore
+       path only read artifacts this install's own runs had produced, so a rebuilt panel could not
+       restore its own backups and one Harbora could not take over from another. *@
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="mb-1 text-[15px] font-semibold text-ink">
+            @(isFa ? "بارگذاری یک نسخهٔ پشتیبان" : "Upload a backup")
+        </h2>
+        <p class="mb-3 text-xs text-ink-faint">
+            @(isFa
+                ? "فایلی که قبلاً از همین‌جا — یا از یک Harbora دیگر — دانلود شده. Harbora داخل فایل را نمی‌بیند، پس پیش از اتکا به آن «بررسی بازیابی» را اجرا کنید."
+                : "A file downloaded from here, or from another Harbora. Harbora cannot see inside it, so run the restore check before relying on it.")
+        </p>
+        <form asp-controller="Backups" asp-action="Upload" method="post" enctype="multipart/form-data" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <label class="form-field">
+                <span>@(isFa ? "این نسخه، پشتیبانِ چه چیزی است؟" : "What is this a backup of?")</span>
+                <select name="target" class="form-control">
+                    @foreach (var (val, label) in Model.Page.Targets){<option value="@val">@label</option>}
+                </select>
+                <small>
+                    @(isFa
+                        ? "بازگردانی روی همین هدف انجام می‌شود، پس اشتباه انتخاب کردنش یعنی بازنویسی چیز دیگری."
+                        : "A restore writes to whatever is chosen here, so the wrong choice overwrites something else.")
+                </small>
+            </label>
+            <label class="form-field">
+                <span>@(isFa ? "کجا ذخیره شود" : "Where to store it")</span>
+                <select name="destinationId" class="form-control">
+                    @foreach (var d in Model.Page.Destinations){<option value="@d.Id">@d.Name (@d.Type)</option>}
+                </select>
+            </label>
+            <label class="form-field">
+                <span>@(isFa ? "فایل" : "File")</span>
+                <input name="file" type="file" required class="form-control text-sm" />
+            </label>
+            <button class="btn-secondary w-full justify-center">
+                <i data-lucide="upload-cloud" class="h-4 w-4"></i>@(isFa ? "بارگذاری" : "Upload")
+            </button>
+        </form>
+    </section>
+</div>

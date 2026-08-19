@@ -1,0 +1,109 @@
+@model BackupsViewContext
+@{
+    var isFa = Model.IsFa;
+}
+@* ---- delivery: a copy of every backup, sent where you can reach it ---- *@
+<h2 class="mb-1 text-lg font-semibold text-ink">@(isFa ? "ارسال بکاپ" : "Send backups to")</h2>
+<p class="mb-3 text-xs text-ink-muted">
+    @(isFa
+        ? "از هر بکاپ (زمان‌بندی‌شده یا دستی) یک کپی به این مقصدها فرستاده می‌شود. نسخه‌ی اصلی همان‌جا که هست می‌ماند، چون بازگردانی از روی چت یا ایمیل ممکن نیست."
+        : "A copy of every backup — scheduled or run by hand — is sent here. The stored artifact stays where it is: a chat or a mailbox is not something a restore can read from.")
+</p>
+@if (Model.Page.Deliveries.Count == 0)
+{
+    <div class="mb-6 rounded-xl border border-line bg-surface">
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel(
+            "send",
+            isFa ? "هنوز هیچ مقصد ارسالی اضافه نشده — بکاپ‌ها فقط همین‌جا ذخیره می‌شوند."
+                 : "No delivery channel has been added yet — backups are only ever stored here."))" />
+    </div>
+}
+<div class="mb-6 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+    @foreach (var d in Model.Page.Deliveries)
+    {
+        var health = d.LastError is not null
+            ? new StatusPillModel(isFa ? "ناموفق" : "failing", Tone.Error)
+            : d.LastAttemptAt is not null
+                ? new StatusPillModel(isFa ? "سالم" : "delivering", Tone.Ok)
+                // Never attempted is not the same as working, and must not read as it.
+                : new StatusPillModel(isFa ? "هنوز چیزی فرستاده نشده" : "nothing sent yet", Tone.Idle);
+
+        <section class="rounded-xl border border-line bg-surface p-4">
+            <div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                <h3 class="min-w-0 truncate font-semibold text-ink">@d.Name</h3>
+                <span class="status-pill bg-surface-2 text-ink-muted">@d.Channel</span>
+            </div>
+            <p class="mb-3 text-[11px]"><partial name="Design/_StatusPill" model="health" /></p>
+            @if (d.LastError is not null)
+            {
+                <p class="mb-3 break-all text-xs text-danger/90">@d.LastError</p>
+            }
+            <div class="flex items-center gap-2 border-t border-line pt-3">
+                <form asp-controller="Backups" asp-action="TestDelivery" asp-route-id="@d.Id" method="post">
+                    @Html.AntiForgeryToken()
+                    <button class="btn-secondary px-3 py-1.5 text-xs">
+                        <i data-lucide="plug-zap" class="h-3.5 w-3.5"></i>@(isFa ? "تست" : "Test")
+                    </button>
+                </form>
+                @* Typed confirmation — this button used to ask nothing at all before dropping a channel
+                   that may hold a live bot token or SMTP password (do-not-change list item 19). *@
+                <form asp-controller="Backups" asp-action="DeleteDelivery" asp-route-id="@d.Id" method="post"
+                      class="inline" data-confirm-word="DELETE"
+                      data-confirm-prompt="@(isFa ? "این مقصد ارسال برای همیشه پاک می‌شود. برای تأیید DELETE را تایپ کنید:" : "This delivery channel will be permanently removed. Type DELETE to confirm:")">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="confirm" />
+                    <button class="px-2 py-1.5 text-xs text-danger">@T["Delete"]</button>
+                </form>
+            </div>
+        </section>
+    }
+
+    <section class="rounded-xl border border-dashed border-line bg-surface-2 p-4">
+        <h3 class="mb-3 font-semibold text-ink">+ @(isFa ? "افزودن مقصد ارسال" : "Add a delivery channel")</h3>
+        <form asp-controller="Backups" asp-action="CreateDelivery" method="post" class="space-y-2" data-delivery-form>
+            @Html.AntiForgeryToken()
+            <input name="name" placeholder="@(isFa ? "نام" : "Name")" class="form-control text-sm" />
+            <select name="channel" data-delivery-channel class="form-control text-sm">
+                <option value="Telegram">Telegram</option>
+                <option value="Email">Email</option>
+            </select>
+
+            <div data-channel="Telegram" class="space-y-2">
+                <p class="text-xs text-ink-muted">
+                    @(isFa
+                        ? "۱) در تلگرام از @@BotFather یک ربات بساز و توکنش را اینجا بگذار. ۲) ربات را باز کن و Start را بزن. ۳) دکمه‌ی زیر آی‌دی چت را پیدا می‌کند."
+                        : "1) Create a bot with @@BotFather and paste its token. 2) Open the bot and press Start. 3) The button below finds your chat id.")
+                </p>
+                <input name="botToken" data-bot-token placeholder="123456:ABC-DEF..." dir="ltr"
+                       class="form-control font-mono text-sm" />
+                <div class="flex gap-2">
+                    <input name="chatId" data-chat-id placeholder="@(isFa ? "آی‌دی چت" : "Chat id")" dir="ltr"
+                           class="form-control flex-1 font-mono text-sm" />
+                    <button type="button" data-find-chats class="btn-secondary whitespace-nowrap px-3 py-2 text-sm">
+                        @(isFa ? "پیدا کن" : "Find")
+                    </button>
+                </div>
+                <p data-chat-hint class="hidden text-xs text-ink-muted"></p>
+            </div>
+
+            <div data-channel="Email" class="hidden space-y-2">
+                <div class="flex gap-2">
+                    <input name="smtpHost" placeholder="smtp.example.com" dir="ltr" class="form-control flex-1 text-sm" />
+                    <input name="smtpPort" type="number" value="587" dir="ltr" class="form-control w-24 text-sm" />
+                </div>
+                <input name="smtpUser" placeholder="@(isFa ? "نام کاربری" : "SMTP user")" dir="ltr" class="form-control text-sm" />
+                <input name="smtpPassword" type="password" placeholder="@(isFa ? "رمز" : "SMTP password")" dir="ltr" class="form-control text-sm" />
+                <input name="emailFrom" placeholder="backups@@example.com" dir="ltr" class="form-control text-sm" />
+                <input name="emailTo" placeholder="you@@example.com" dir="ltr" class="form-control text-sm" />
+            </div>
+
+            <label class="form-field">
+                <span>@(isFa ? "بیشترین حجم (مگابایت)" : "Max size (MB)")</span>
+                <input name="maxSizeMb" type="number" min="0" placeholder="0" dir="ltr" class="form-control text-sm" />
+                <small>@(isFa ? "خالی = پیش‌فرض همان کانال" : "blank = the channel's own limit")</small>
+            </label>
+
+            <button class="btn-primary w-full justify-center py-2 text-sm">@(isFa ? "افزودن" : "Add")</button>
+        </form>
+    </section>
+</div>

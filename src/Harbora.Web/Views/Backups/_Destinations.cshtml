@@ -1,0 +1,187 @@
+@model BackupsViewContext
+@{
+    var isFa = Model.IsFa;
+}
+@* ---- destinations ----
+   Each is a card with its own form open, rather than a name in a list beside one shared "+ add"
+   accordion. They could only be created before: a rotated key or a moved bucket meant adding a second
+   destination and leaving the first one on the page failing every night.
+
+   No empty state: EnsureDefaultDestinationAsync (BackupsController.Index) provisions a Local
+   destination the first time this page is opened, so this grid is never genuinely empty — an
+   _EmptyState card here would be dead markup nothing can ever reach. *@
+<h2 class="mb-3 text-lg font-semibold text-ink">@T["Destinations"]</h2>
+<div class="mb-6 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+    @foreach (var d in Model.Page.Destinations)
+    {
+        var backupsHere = Model.Page.Backups.Count(b => b.DestinationId == d.Id);
+        var schedulesHere = Model.Page.Schedules.Count(s => s.DestinationId == d.Id);
+
+        <section class="rounded-xl border border-line bg-surface p-4">
+            <div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                <h3 class="font-semibold text-ink">@d.Name</h3>
+                <span class="flex items-center gap-1.5">
+                    <span class="status-pill bg-surface-2 text-ink-muted">@d.Type</span>
+                    @if (d.IsDefault)
+                    {
+                        <span class="status-pill bg-accent-soft text-accent-text">@(isFa ? "پیش‌فرض" : "default")</span>
+                    }
+                </span>
+            </div>
+
+            <p class="mb-3 text-[11px] text-ink-faint">
+                @(isFa
+                    ? $"{backupsHere} نسخه و {schedulesHere} زمان‌بندی به اینجا اشاره می‌کنند."
+                    : $"{backupsHere} backup(s) and {schedulesHere} schedule(s) point here.")
+            </p>
+
+            <form asp-controller="Backups" asp-action="UpdateDestination" asp-route-id="@d.Id"
+                  method="post" class="space-y-2">
+                @Html.AntiForgeryToken()
+                <label class="form-field"><span>@(isFa ? "نام" : "Name")</span>
+                    <input name="name" value="@d.Name" class="form-control text-sm" /></label>
+
+                @* The type is deliberately not editable: every other column means something different
+                   per type, so turning a directory into a bucket would leave a path nothing reads and
+                   a destination pointing at nowhere while looking configured. *@
+                @if (d.Type == BackupDestinationType.Local)
+                {
+                    <label class="form-field"><span>@(isFa ? "مسیر" : "Path")</span>
+                        <input name="localPath" value="@d.LocalPath" dir="ltr"
+                               placeholder="/var/lib/harbora/backups" class="form-control text-sm" /></label>
+                }
+                else if (d.Type == BackupDestinationType.S3)
+                {
+                    <label class="form-field"><span>Endpoint</span>
+                        <input name="endpoint" value="@d.Endpoint" dir="ltr" class="form-control text-sm" /></label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <label class="form-field"><span>Bucket</span>
+                            <input name="bucket" value="@d.Bucket" dir="ltr" class="form-control text-sm" /></label>
+                        <label class="form-field"><span>Region</span>
+                            <input name="region" value="@d.Region" dir="ltr" class="form-control text-sm" /></label>
+                    </div>
+                    <label class="form-field"><span>@(isFa ? "کلید دسترسی" : "Access key")</span>
+                        <input name="accessKey" value="@d.AccessKey" dir="ltr" class="form-control text-sm" /></label>
+                    @* Blank leaves the stored one alone. The form cannot show what is there — it is
+                       encrypted — so an empty box is somebody who did not want to change it, not
+                       somebody asking for the destination to lose its credentials. *@
+                    <label class="form-field"><span>@(isFa ? "کلید مخفی" : "Secret key")</span>
+                        <input name="secretKey" type="password" autocomplete="new-password" dir="ltr"
+                               placeholder="@(d.EncryptedSecretKey is null
+                                   ? (isFa ? "تنظیم نشده" : "not set")
+                                   : (isFa ? "ذخیره شده — برای تغییر بنویسید" : "stored — type to change"))"
+                               class="form-control text-sm" /></label>
+                }
+                else
+                {
+                    <div class="grid grid-cols-[1fr_auto] gap-2">
+                        <label class="form-field"><span>@(isFa ? "میزبان" : "Host")</span>
+                            <input name="sftpHost" value="@d.SftpHost" dir="ltr" class="form-control text-sm" /></label>
+                        <label class="form-field"><span>@(isFa ? "پورت" : "Port")</span>
+                            <input name="sftpPort" type="number" value="@d.SftpPort" dir="ltr"
+                                   class="form-control w-20 text-sm" /></label>
+                    </div>
+                    <label class="form-field"><span>@(isFa ? "نام کاربری" : "Username")</span>
+                        <input name="sftpUsername" value="@d.SftpUsername" dir="ltr" class="form-control text-sm" /></label>
+                    <label class="form-field"><span>@(isFa ? "رمز" : "Password")</span>
+                        <input name="sftpPassword" type="password" autocomplete="new-password" dir="ltr"
+                               placeholder="@(d.EncryptedSftpPassword is null
+                                   ? (isFa ? "تنظیم نشده" : "not set")
+                                   : (isFa ? "ذخیره شده — برای تغییر بنویسید" : "stored — type to change"))"
+                               class="form-control text-sm" /></label>
+                    <label class="form-field"><span>@(isFa ? "پوشه" : "Directory")</span>
+                        <input name="sftpDirectory" value="@d.SftpDirectory" dir="ltr" class="form-control text-sm" /></label>
+                    @* Required, not optional: without it Harbora cannot tell the real server from
+                       anything else answering on that address, and would hand it the backup and the
+                       password to reach it. Blank keeps whatever is stored. *@
+                    <label class="form-field"><span>@(isFa ? "کلید میزبان" : "Host key")</span>
+                        <textarea name="sftpHostKey" rows="2" dir="ltr"
+                                  class="form-control font-mono text-xs">@d.SftpHostKey</textarea>
+                        <small>@(isFa ? "با ssh-keyscan بگیرید." : "Get it with `ssh-keyscan`.")</small></label>
+                }
+
+                <button class="btn-secondary w-full justify-center py-2 text-sm">@T["Save"]</button>
+            </form>
+
+            <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+                @* A real round trip, not a settings check: every way a destination fails looks the
+                   same as a correct form until something is actually sent. *@
+                <form asp-controller="Backups" asp-action="TestDestination" asp-route-id="@d.Id" method="post">
+                    @Html.AntiForgeryToken()
+                    <button class="btn-secondary px-3 py-1.5 text-xs">
+                        <i data-lucide="plug-zap" class="h-3.5 w-3.5"></i>@(isFa ? "تست اتصال" : "Test")
+                    </button>
+                </form>
+
+                @* Typed confirmation, the same DELETE the History table's own delete button asks for
+                   (do-not-change list item 19: extend the destructive-confirmation pattern, never
+                   downgrade to a native confirm() — the dialog this replaced). *@
+                <form asp-controller="Backups" asp-action="DeleteDestination" asp-route-id="@d.Id" method="post"
+                      class="inline" data-confirm-word="DELETE"
+                      data-confirm-prompt="@(isFa ? "این مقصد برای همیشه برداشته می‌شود. برای تأیید DELETE را تایپ کنید:" : "This destination will be permanently removed. Type DELETE to confirm:")">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="confirm" />
+                    <button class="px-2 py-1.5 text-xs text-danger">@T["Delete"]</button>
+                </form>
+            </div>
+        </section>
+    }
+
+    <section class="rounded-xl border border-dashed border-line bg-surface-2 p-4">
+        <h3 class="mb-3 font-semibold text-ink">+ @T["Add destination"]</h3>
+        <form asp-controller="Backups" asp-action="CreateDestination" method="post" class="space-y-2" data-dest-form>
+            @Html.AntiForgeryToken()
+            <label class="form-field"><span>@(isFa ? "نام" : "Name")</span>
+                <input name="name" required value="@Model.RejectedSftp?.Name" class="form-control text-sm" /></label>
+            <label class="form-field"><span>@(isFa ? "نوع" : "Type")</span>
+                <select name="type" data-dest-type class="form-control text-sm">
+                    <option value="Local">Local</option>
+                    <option value="S3">S3-compatible</option>
+                    <option value="Sftp" selected="@(Model.RejectedSftp is not null)">SFTP</option>
+                </select></label>
+
+            <div data-when-local>
+                <label class="form-field"><span>@(isFa ? "مسیر" : "Path")</span>
+                    <input name="localPath" placeholder="/var/lib/harbora/backups" dir="ltr" class="form-control text-sm" /></label>
+            </div>
+            <div data-when-s3 class="space-y-2" style="display:none">
+                <input name="endpoint" placeholder="https://s3.example.com" dir="ltr" class="form-control text-sm" />
+                <input name="bucket" placeholder="bucket" dir="ltr" class="form-control text-sm" />
+                <input name="region" placeholder="us-east-1" dir="ltr" class="form-control text-sm" />
+                <input name="accessKey" placeholder="access key" dir="ltr" class="form-control text-sm" />
+                <input name="secretKey" type="password" placeholder="secret key" dir="ltr" class="form-control text-sm" />
+            </div>
+            @* Folded, not hidden — the PanelMode fold-never-remove principle (do-not-change list item
+               23) applied to the one genuinely specialist material this page has. Simple mode folds it;
+               Advanced mode and a rejected submission both start it open, because a block folded over
+               the field the server just complained about (usually the host key — see WhyUnusable) is
+               an error nobody can see. The type toggle below still governs whether this whole block is
+               shown at all; the fold is one layer inside it, for the six fields themselves. *@
+            <div data-when-sftp style="display:none">
+                <partial name="Design/_AdvancedStart" model="@(new AdvancedSectionModel(
+                    isFa ? "اطلاعات اتصال SFTP" : "SFTP connection details", Model.SftpAdvancedOpen, "key-round"))" />
+                    <div class="space-y-2 border-t border-line p-3">
+                        <input name="sftpHost" value="@Model.RejectedSftp?.Host"
+                               placeholder="backup.example.com" dir="ltr" class="form-control text-sm" />
+                        <input name="sftpPort" type="number" value="@(Model.RejectedSftp?.Port ?? 22)" dir="ltr"
+                               class="form-control text-sm" />
+                        <input name="sftpUsername" value="@Model.RejectedSftp?.Username"
+                               placeholder="harbora" dir="ltr" class="form-control text-sm" />
+                        <input name="sftpPassword" type="password" placeholder="password" dir="ltr"
+                               class="form-control text-sm" />
+                        <input name="sftpDirectory" value="@Model.RejectedSftp?.Directory"
+                               placeholder="/srv/harbora-backups" dir="ltr" class="form-control text-sm" />
+                        <textarea name="sftpHostKey" rows="2" dir="ltr" placeholder="backup.example.com ssh-ed25519 AAAA…"
+                                  class="form-control font-mono text-xs">@Model.RejectedSftp?.HostKey</textarea>
+                        <p class="text-xs text-ink-faint">
+                            @(isFa
+                                ? "کلید میزبان لازم است. با «ssh-keyscan your-host» بگیرید — بدون آن نمی‌توان مطمئن شد بکاپ به سرور درست می‌رود."
+                                : "The host key is required. Get it with `ssh-keyscan your-host` — without it there is no way to know the backup is going to the right server.")
+                        </p>
+                    </div>
+                <partial name="Design/_AdvancedEnd" />
+            </div>
+            <button class="btn-secondary w-full justify-center py-2 text-sm">@T["Save"]</button>
+        </form>
+    </section>
+</div>

@@ -1,6 +1,7 @@
 @model BackupsPageViewModel
 @using Harbora.Domain.Common
 @using Harbora.Domain.Backups
+@inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @{
     ViewData["Title"] = "Backups";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -14,12 +15,12 @@
     // through a megabyte division rounded a real measurement down to nothing.
     string Size(long b) => b <= 0 ? "—" : Harbora.Infrastructure.Tenancy.ByteSize.Measured(b);
 
-    string StatusClass(BackupStatus s) => s switch
+    string StatusTone(BackupStatus s) => s switch
     {
-        BackupStatus.Completed => "is-ok",
-        BackupStatus.Failed => "is-danger",
-        BackupStatus.Running or BackupStatus.Pending => "is-info",
-        _ => "is-warn"
+        BackupStatus.Completed => Tone.Ok,
+        BackupStatus.Failed => Tone.Error,
+        BackupStatus.Running or BackupStatus.Pending => Tone.Info,
+        _ => Tone.Warn
     };
 
     // What a schedule or a backup is OF, in the words the target list already uses. A bare guid on
@@ -37,8 +38,6 @@
     var completed = Model.Backups.Count(b => b.Status == BackupStatus.Completed);
     var failedCount = Model.Backups.Count(b => b.Status == BackupStatus.Failed);
     var storedBytes = Model.Backups.Sum(b => b.SizeBytes);
-    var unverified = Model.Backups.Count(b =>
-        b.Status == BackupStatus.Completed && b.VerifiedRestorable is null);
     var latest = Model.Backups
         .Where(b => b.Status == BackupStatus.Completed)
         .OrderByDescending(b => b.CreatedAt)
@@ -72,6 +71,40 @@
             : Harbora.Infrastructure.Monitoring.MetricDisplay.ForText(
                 Dates.Ago(latest.CreatedAt, DateTimeOffset.UtcNow, isFa)),
         latest?.CreatedAt.LocalDateTime.ToString(Dates.Stamp));
+
+    // ---- SFTP add-destination fold (PanelMode fold-never-remove, do-not-change list item 23) ----
+    // Simple mode folds the SFTP connection fields; Advanced mode and a rejection both start them
+    // open — a block folded over the field the server just complained about (usually the missing
+    // host key) is an error nobody can see.
+    var destinationSftpRejected = TempData["DestinationSftpRejected"] is true;
+    var sftpAdvancedOpen = Harbora.Infrastructure.Navigation.PanelSections.StartsOpen(
+        await PanelModes.GetAsync(), destinationSftpRejected);
+
+    // Everything but the password travels back across the redirect, so a rejected submission is one
+    // field to fix — not the whole form to retype. Read with ToString() rather than `as string`:
+    // TempData re-types a GUID-shaped string as a System.Guid on the way back, and a plain `as string`
+    // would silently come back null for one.
+    Harbora.Web.ViewModels.RejectedSftpSubmission? rejectedSftp = destinationSftpRejected
+        ? new Harbora.Web.ViewModels.RejectedSftpSubmission(
+            TempData["RejectedDestinationName"]?.ToString(),
+            TempData["RejectedSftpHost"]?.ToString(),
+            int.TryParse(TempData["RejectedSftpPort"]?.ToString(), out var rejectedPort) ? rejectedPort : 22,
+            TempData["RejectedSftpUsername"]?.ToString(),
+            TempData["RejectedSftpDirectory"]?.ToString(),
+            TempData["RejectedSftpHostKey"]?.ToString())
+        : null;
+
+    var context = new Harbora.Web.ViewModels.BackupsViewContext
+    {
+        Page = Model,
+        IsFa = isFa,
+        TargetLabel = TargetLabel,
+        DestinationName = DestinationName,
+        Size = Size,
+        StatusTone = StatusTone,
+        SftpAdvancedOpen = sftpAdvancedOpen,
+        RejectedSftp = rejectedSftp
+    };
 }
 
 <div class="mb-6">
@@ -97,530 +130,11 @@
 }
 @if (err is not null){<div class="alert-danger mb-4">@err</div>}
 
-@if (unverified > 0)
-{
-    @* Said once at the top rather than only as a pill per row. A backup taken nightly for a year and
-       never checked is a year of assumption, and the count is the only way to see how much of it there
-       is without reading every row. *@
-    <div class="alert-warning mb-6">
-        <i data-lucide="triangle-alert" class="h-4 w-4 shrink-0"></i>
-        <span>@(isFa
-            ? $"{unverified} نسخهٔ پشتیبان هرگز بررسی نشده‌اند. «بررسی بازیابی» فایل را می‌خواند و سالم بودنش را ثابت می‌کند، بدون دست زدن به داده‌های زنده."
-            : $"{unverified} backup(s) have never been checked. The restore check reads the artifact and proves it is intact, without touching live data.")</span>
-    </div>
-}
-
-@* ---- doing something now ----
-   Two cards side by side because they are one decision made in opposite directions: take a copy of
-   something here, or bring a copy in from elsewhere. *@
-<div class="mb-6 grid gap-4 lg:grid-cols-2">
-    <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="mb-1 text-[15px] font-semibold text-ink">@T["Run backup"]</h2>
-        <p class="mb-3 text-xs text-ink-faint">
-            @(isFa
-                ? "همین حالا یک نسخه گرفته می‌شود و به مقصدی که انتخاب می‌کنید فرستاده می‌شود."
-                : "A copy is taken now and stored at the destination you choose.")
-        </p>
-        <form asp-controller="Backups" asp-action="Run" method="post" class="space-y-3">
-            @Html.AntiForgeryToken()
-            <label class="form-field">
-                <span>@T["Target"]</span>
-                <select name="target" class="form-control">
-                    @foreach (var (val, label) in Model.Targets){<option value="@val">@label</option>}
-                </select>
-            </label>
-            <label class="form-field">
-                <span>@T["Destination"]</span>
-                <select name="destinationId" class="form-control">
-                    @foreach (var d in Model.Destinations){<option value="@d.Id">@d.Name (@d.Type)</option>}
-                </select>
-            </label>
-            <button class="btn-primary w-full justify-center">
-                <i data-lucide="cloud-upload" class="h-4 w-4"></i>@T["Run backup"]
-            </button>
-        </form>
-    </section>
-
-    @* ---- bringing one in ----
-       A backup that had been downloaded and kept somewhere safe was, until now, unusable: the restore
-       path only read artifacts this install's own runs had produced, so a rebuilt panel could not
-       restore its own backups and one Harbora could not take over from another. *@
-    <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="mb-1 text-[15px] font-semibold text-ink">
-            @(isFa ? "بارگذاری یک نسخهٔ پشتیبان" : "Upload a backup")
-        </h2>
-        <p class="mb-3 text-xs text-ink-faint">
-            @(isFa
-                ? "فایلی که قبلاً از همین‌جا — یا از یک Harbora دیگر — دانلود شده. Harbora داخل فایل را نمی‌بیند، پس پیش از اتکا به آن «بررسی بازیابی» را اجرا کنید."
-                : "A file downloaded from here, or from another Harbora. Harbora cannot see inside it, so run the restore check before relying on it.")
-        </p>
-        <form asp-controller="Backups" asp-action="Upload" method="post" enctype="multipart/form-data" class="space-y-3">
-            @Html.AntiForgeryToken()
-            <label class="form-field">
-                <span>@(isFa ? "این نسخه، پشتیبانِ چه چیزی است؟" : "What is this a backup of?")</span>
-                <select name="target" class="form-control">
-                    @foreach (var (val, label) in Model.Targets){<option value="@val">@label</option>}
-                </select>
-                <small>
-                    @(isFa
-                        ? "بازگردانی روی همین هدف انجام می‌شود، پس اشتباه انتخاب کردنش یعنی بازنویسی چیز دیگری."
-                        : "A restore writes to whatever is chosen here, so the wrong choice overwrites something else.")
-                </small>
-            </label>
-            <label class="form-field">
-                <span>@(isFa ? "کجا ذخیره شود" : "Where to store it")</span>
-                <select name="destinationId" class="form-control">
-                    @foreach (var d in Model.Destinations){<option value="@d.Id">@d.Name (@d.Type)</option>}
-                </select>
-            </label>
-            <label class="form-field">
-                <span>@(isFa ? "فایل" : "File")</span>
-                <input name="file" type="file" required class="form-control text-sm" />
-            </label>
-            <button class="btn-secondary w-full justify-center">
-                <i data-lucide="upload-cloud" class="h-4 w-4"></i>@(isFa ? "بارگذاری" : "Upload")
-            </button>
-        </form>
-    </section>
-</div>
-
-@* ---- destinations ----
-   Each is a card with its own form open, rather than a name in a list beside one shared "+ add"
-   accordion. They could only be created before: a rotated key or a moved bucket meant adding a second
-   destination and leaving the first one on the page failing every night. *@
-<h2 class="mb-3 text-lg font-semibold text-ink">@T["Destinations"]</h2>
-<div class="mb-6 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-    @foreach (var d in Model.Destinations)
-    {
-        var backupsHere = Model.Backups.Count(b => b.DestinationId == d.Id);
-        var schedulesHere = Model.Schedules.Count(s => s.DestinationId == d.Id);
-
-        <section class="rounded-xl border border-line bg-surface p-4">
-            <div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-                <h3 class="font-semibold text-ink">@d.Name</h3>
-                <span class="flex items-center gap-1.5">
-                    <span class="status-pill bg-surface-2 text-ink-muted">@d.Type</span>
-                    @if (d.IsDefault)
-                    {
-                        <span class="status-pill bg-accent-soft text-accent-text">@(isFa ? "پیش‌فرض" : "default")</span>
-                    }
-                </span>
-            </div>
-
-            <p class="mb-3 text-[11px] text-ink-faint">
-                @(isFa
-                    ? $"{backupsHere} نسخه و {schedulesHere} زمان‌بندی به اینجا اشاره می‌کنند."
-                    : $"{backupsHere} backup(s) and {schedulesHere} schedule(s) point here.")
-            </p>
-
-            <form asp-controller="Backups" asp-action="UpdateDestination" asp-route-id="@d.Id"
-                  method="post" class="space-y-2">
-                @Html.AntiForgeryToken()
-                <label class="form-field"><span>@(isFa ? "نام" : "Name")</span>
-                    <input name="name" value="@d.Name" class="form-control text-sm" /></label>
-
-                @* The type is deliberately not editable: every other column means something different
-                   per type, so turning a directory into a bucket would leave a path nothing reads and
-                   a destination pointing at nowhere while looking configured. *@
-                @if (d.Type == BackupDestinationType.Local)
-                {
-                    <label class="form-field"><span>@(isFa ? "مسیر" : "Path")</span>
-                        <input name="localPath" value="@d.LocalPath" dir="ltr"
-                               placeholder="/var/lib/harbora/backups" class="form-control text-sm" /></label>
-                }
-                else if (d.Type == BackupDestinationType.S3)
-                {
-                    <label class="form-field"><span>Endpoint</span>
-                        <input name="endpoint" value="@d.Endpoint" dir="ltr" class="form-control text-sm" /></label>
-                    <div class="grid grid-cols-2 gap-2">
-                        <label class="form-field"><span>Bucket</span>
-                            <input name="bucket" value="@d.Bucket" dir="ltr" class="form-control text-sm" /></label>
-                        <label class="form-field"><span>Region</span>
-                            <input name="region" value="@d.Region" dir="ltr" class="form-control text-sm" /></label>
-                    </div>
-                    <label class="form-field"><span>@(isFa ? "کلید دسترسی" : "Access key")</span>
-                        <input name="accessKey" value="@d.AccessKey" dir="ltr" class="form-control text-sm" /></label>
-                    @* Blank leaves the stored one alone. The form cannot show what is there — it is
-                       encrypted — so an empty box is somebody who did not want to change it, not
-                       somebody asking for the destination to lose its credentials. *@
-                    <label class="form-field"><span>@(isFa ? "کلید مخفی" : "Secret key")</span>
-                        <input name="secretKey" type="password" autocomplete="new-password" dir="ltr"
-                               placeholder="@(d.EncryptedSecretKey is null
-                                   ? (isFa ? "تنظیم نشده" : "not set")
-                                   : (isFa ? "ذخیره شده — برای تغییر بنویسید" : "stored — type to change"))"
-                               class="form-control text-sm" /></label>
-                }
-                else
-                {
-                    <div class="grid grid-cols-[1fr_auto] gap-2">
-                        <label class="form-field"><span>@(isFa ? "میزبان" : "Host")</span>
-                            <input name="sftpHost" value="@d.SftpHost" dir="ltr" class="form-control text-sm" /></label>
-                        <label class="form-field"><span>@(isFa ? "پورت" : "Port")</span>
-                            <input name="sftpPort" type="number" value="@d.SftpPort" dir="ltr"
-                                   class="form-control w-20 text-sm" /></label>
-                    </div>
-                    <label class="form-field"><span>@(isFa ? "نام کاربری" : "Username")</span>
-                        <input name="sftpUsername" value="@d.SftpUsername" dir="ltr" class="form-control text-sm" /></label>
-                    <label class="form-field"><span>@(isFa ? "رمز" : "Password")</span>
-                        <input name="sftpPassword" type="password" autocomplete="new-password" dir="ltr"
-                               placeholder="@(d.EncryptedSftpPassword is null
-                                   ? (isFa ? "تنظیم نشده" : "not set")
-                                   : (isFa ? "ذخیره شده — برای تغییر بنویسید" : "stored — type to change"))"
-                               class="form-control text-sm" /></label>
-                    <label class="form-field"><span>@(isFa ? "پوشه" : "Directory")</span>
-                        <input name="sftpDirectory" value="@d.SftpDirectory" dir="ltr" class="form-control text-sm" /></label>
-                    @* Required, not optional: without it Harbora cannot tell the real server from
-                       anything else answering on that address, and would hand it the backup and the
-                       password to reach it. Blank keeps whatever is stored. *@
-                    <label class="form-field"><span>@(isFa ? "کلید میزبان" : "Host key")</span>
-                        <textarea name="sftpHostKey" rows="2" dir="ltr"
-                                  class="form-control font-mono text-xs">@d.SftpHostKey</textarea>
-                        <small>@(isFa ? "با ssh-keyscan بگیرید." : "Get it with `ssh-keyscan`.")</small></label>
-                }
-
-                <button class="btn-secondary w-full justify-center py-2 text-sm">@T["Save"]</button>
-            </form>
-
-            <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
-                @* A real round trip, not a settings check: every way a destination fails looks the
-                   same as a correct form until something is actually sent. *@
-                <form asp-controller="Backups" asp-action="TestDestination" asp-route-id="@d.Id" method="post">
-                    @Html.AntiForgeryToken()
-                    <button class="btn-secondary px-3 py-1.5 text-xs">
-                        <i data-lucide="plug-zap" class="h-3.5 w-3.5"></i>@(isFa ? "تست اتصال" : "Test")
-                    </button>
-                </form>
-
-                <form asp-controller="Backups" asp-action="DeleteDestination" asp-route-id="@d.Id" method="post"
-                      onsubmit="return confirm('@(isFa ? "این مقصد برداشته شود؟" : "Remove this destination?")');">
-                    @Html.AntiForgeryToken()
-                    <button class="px-2 py-1.5 text-xs text-danger">@T["Delete"]</button>
-                </form>
-            </div>
-        </section>
-    }
-
-    <section class="rounded-xl border border-dashed border-line bg-surface-2 p-4">
-        <h3 class="mb-3 font-semibold text-ink">+ @T["Add destination"]</h3>
-        <form asp-controller="Backups" asp-action="CreateDestination" method="post" class="space-y-2" data-dest-form>
-            @Html.AntiForgeryToken()
-            <label class="form-field"><span>@(isFa ? "نام" : "Name")</span>
-                <input name="name" required class="form-control text-sm" /></label>
-            <label class="form-field"><span>@(isFa ? "نوع" : "Type")</span>
-                <select name="type" data-dest-type class="form-control text-sm">
-                    <option value="Local">Local</option><option value="S3">S3-compatible</option><option value="Sftp">SFTP</option>
-                </select></label>
-
-            <div data-when-local>
-                <label class="form-field"><span>@(isFa ? "مسیر" : "Path")</span>
-                    <input name="localPath" placeholder="/var/lib/harbora/backups" dir="ltr" class="form-control text-sm" /></label>
-            </div>
-            <div data-when-s3 class="space-y-2" style="display:none">
-                <input name="endpoint" placeholder="https://s3.example.com" dir="ltr" class="form-control text-sm" />
-                <input name="bucket" placeholder="bucket" dir="ltr" class="form-control text-sm" />
-                <input name="region" placeholder="us-east-1" dir="ltr" class="form-control text-sm" />
-                <input name="accessKey" placeholder="access key" dir="ltr" class="form-control text-sm" />
-                <input name="secretKey" type="password" placeholder="secret key" dir="ltr" class="form-control text-sm" />
-            </div>
-            <div data-when-sftp class="space-y-2" style="display:none">
-                <input name="sftpHost" placeholder="backup.example.com" dir="ltr" class="form-control text-sm" />
-                <input name="sftpPort" type="number" value="22" dir="ltr" class="form-control text-sm" />
-                <input name="sftpUsername" placeholder="harbora" dir="ltr" class="form-control text-sm" />
-                <input name="sftpPassword" type="password" placeholder="password" dir="ltr" class="form-control text-sm" />
-                <input name="sftpDirectory" placeholder="/srv/harbora-backups" dir="ltr" class="form-control text-sm" />
-                <textarea name="sftpHostKey" rows="2" dir="ltr" placeholder="backup.example.com ssh-ed25519 AAAA…"
-                          class="form-control font-mono text-xs"></textarea>
-                <p class="text-xs text-ink-faint">
-                    @(isFa
-                        ? "کلید میزبان لازم است. با «ssh-keyscan your-host» بگیرید — بدون آن نمی‌توان مطمئن شد بکاپ به سرور درست می‌رود."
-                        : "The host key is required. Get it with `ssh-keyscan your-host` — without it there is no way to know the backup is going to the right server.")
-                </p>
-            </div>
-            <button class="btn-secondary w-full justify-center py-2 text-sm">@T["Save"]</button>
-        </form>
-    </section>
-</div>
-
-@* ---- schedules ----
-   Editable now, and pausable. They could only be created and deleted, so changing an interval meant
-   losing the row — and pausing one for a maintenance window was not possible at all, which is what
-   IsEnabled was on the entity for. *@
-<h2 class="mb-3 text-lg font-semibold text-ink">@T["Schedules"]</h2>
-<div class="mb-6 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-    @foreach (var s in Model.Schedules)
-    {
-        <section class="rounded-xl border border-line bg-surface p-4 @(s.IsEnabled ? "" : "opacity-70")">
-            <div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-                <h3 class="min-w-0 truncate font-semibold text-ink">@TargetLabel(s.Type, s.TargetRef)</h3>
-                @if (!s.IsEnabled)
-                {
-                    <span class="status-pill bg-warn-soft text-warn">@(isFa ? "متوقف" : "paused")</span>
-                }
-            </div>
-            <p class="mb-3 text-[11px] text-ink-faint">
-                @(isFa ? "به" : "to") @DestinationName(s.DestinationId)
-                @if (s.NextRunAt is { } next && s.IsEnabled)
-                {
-                    <span> · @(isFa ? "بعدی" : "next") <span dir="ltr">@next.LocalDateTime.ToString(Dates.Stamp)</span></span>
-                }
-                else if (s.LastRunAt is { } last)
-                {
-                    <span> · @(isFa ? "آخرین" : "last") <span dir="ltr">@last.LocalDateTime.ToString(Dates.Stamp)</span></span>
-                }
-            </p>
-
-            <form asp-controller="Backups" asp-action="UpdateSchedule" asp-route-id="@s.Id" method="post" class="space-y-2">
-                @Html.AntiForgeryToken()
-                <div class="grid grid-cols-2 gap-2">
-                    <label class="form-field"><span>@T["Interval (hours)"]</span>
-                        <input name="intervalHours" type="number" min="1" value="@s.IntervalHours" dir="ltr"
-                               class="form-control text-sm" /></label>
-                    <label class="form-field"><span>@T["Retention"]</span>
-                        <input name="retentionCount" type="number" min="1" value="@s.RetentionCount" dir="ltr"
-                               class="form-control text-sm" /></label>
-                </div>
-                @* A hidden false in FRONT of the checkbox: an unchecked box posts nothing at all, and
-                   last value wins — after the checkbox it would overwrite every tick. *@
-                <input type="hidden" name="enabled" value="false" />
-                <label class="flex items-center gap-2 text-xs text-ink">
-                    <input type="checkbox" name="enabled" value="true" checked="@s.IsEnabled" />
-                    <span>@(isFa ? "فعال" : "Enabled")</span>
-                </label>
-                <button class="btn-secondary w-full justify-center py-2 text-sm">@T["Save"]</button>
-            </form>
-
-            <form asp-controller="Backups" asp-action="DeleteSchedule" asp-route-id="@s.Id" method="post"
-                  class="mt-3 border-t border-line pt-3"
-                  onsubmit="return confirm('@(isFa ? "این زمان‌بندی پاک شود؟ نسخه‌های گرفته‌شده می‌مانند." : "Delete this schedule? The backups it took are kept.")');">
-                @Html.AntiForgeryToken()
-                <button class="text-xs text-danger">
-                    @(isFa ? "حذف زمان‌بندی" : "Delete schedule")
-                </button>
-            </form>
-        </section>
-    }
-
-    <section class="rounded-xl border border-dashed border-line bg-surface-2 p-4">
-        <h3 class="mb-3 font-semibold text-ink">+ @T["Add schedule"]</h3>
-        <form asp-controller="Backups" asp-action="CreateSchedule" method="post" class="space-y-2">
-            @Html.AntiForgeryToken()
-            <label class="form-field"><span>@T["Target"]</span>
-                <select name="target" class="form-control text-sm">
-                    @foreach (var (val, label) in Model.Targets){<option value="@val">@label</option>}
-                </select></label>
-            <label class="form-field"><span>@T["Destination"]</span>
-                <select name="destinationId" class="form-control text-sm">
-                    @foreach (var d in Model.Destinations){<option value="@d.Id">@d.Name</option>}
-                </select></label>
-            <div class="grid grid-cols-2 gap-2">
-                <label class="form-field"><span>@T["Interval (hours)"]</span>
-                    <input name="intervalHours" type="number" min="1" value="24" dir="ltr" class="form-control text-sm" /></label>
-                <label class="form-field"><span>@T["Retention"]</span>
-                    <input name="retentionCount" type="number" min="1" value="7" dir="ltr" class="form-control text-sm" /></label>
-            </div>
-            <button class="btn-secondary w-full justify-center py-2 text-sm">@T["Add schedule"]</button>
-        </form>
-    </section>
-</div>
-
-@* ---- delivery: a copy of every backup, sent where you can reach it ---- *@
-<h2 class="mb-1 text-lg font-semibold text-ink">@(isFa ? "ارسال بکاپ" : "Send backups to")</h2>
-<p class="mb-3 text-xs text-ink-muted">
-    @(isFa
-        ? "از هر بکاپ (زمان‌بندی‌شده یا دستی) یک کپی به این مقصدها فرستاده می‌شود. نسخه‌ی اصلی همان‌جا که هست می‌ماند، چون بازگردانی از روی چت یا ایمیل ممکن نیست."
-        : "A copy of every backup — scheduled or run by hand — is sent here. The stored artifact stays where it is: a chat or a mailbox is not something a restore can read from.")
-</p>
-<div class="mb-6 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-    @foreach (var d in Model.Deliveries)
-    {
-        <section class="rounded-xl border border-line bg-surface p-4">
-            <div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-                <h3 class="min-w-0 truncate font-semibold text-ink">@d.Name</h3>
-                <span class="status-pill bg-surface-2 text-ink-muted">@d.Channel</span>
-            </div>
-            <p class="mb-3 text-[11px]">
-                @if (d.LastError is not null)
-                {
-                    <span class="text-danger">@(isFa ? "ناموفق" : "failing")</span>
-                }
-                else if (d.LastAttemptAt is not null)
-                {
-                    <span class="text-ok">@(isFa ? "سالم" : "delivering")</span>
-                }
-                else
-                {
-                    @* Never attempted is not the same as working, and must not read as it. *@
-                    <span class="text-ink-faint">@(isFa ? "هنوز چیزی فرستاده نشده" : "nothing sent yet")</span>
-                }
-            </p>
-            @if (d.LastError is not null)
-            {
-                <p class="mb-3 break-all text-xs text-danger/90">@d.LastError</p>
-            }
-            <div class="flex items-center gap-2 border-t border-line pt-3">
-                <form asp-controller="Backups" asp-action="TestDelivery" asp-route-id="@d.Id" method="post">
-                    @Html.AntiForgeryToken()
-                    <button class="btn-secondary px-3 py-1.5 text-xs">
-                        <i data-lucide="plug-zap" class="h-3.5 w-3.5"></i>@(isFa ? "تست" : "Test")
-                    </button>
-                </form>
-                <form asp-controller="Backups" asp-action="DeleteDelivery" asp-route-id="@d.Id" method="post">
-                    @Html.AntiForgeryToken()
-                    <button class="px-2 py-1.5 text-xs text-danger">@T["Delete"]</button>
-                </form>
-            </div>
-        </section>
-    }
-
-    <section class="rounded-xl border border-dashed border-line bg-surface-2 p-4">
-        <h3 class="mb-3 font-semibold text-ink">+ @(isFa ? "افزودن مقصد ارسال" : "Add a delivery channel")</h3>
-        <form asp-controller="Backups" asp-action="CreateDelivery" method="post" class="space-y-2" data-delivery-form>
-            @Html.AntiForgeryToken()
-            <input name="name" placeholder="@(isFa ? "نام" : "Name")" class="form-control text-sm" />
-            <select name="channel" data-delivery-channel class="form-control text-sm">
-                <option value="Telegram">Telegram</option>
-                <option value="Email">Email</option>
-            </select>
-
-            <div data-channel="Telegram" class="space-y-2">
-                <p class="text-xs text-ink-muted">
-                    @(isFa
-                        ? "۱) در تلگرام از @@BotFather یک ربات بساز و توکنش را اینجا بگذار. ۲) ربات را باز کن و Start را بزن. ۳) دکمه‌ی زیر آی‌دی چت را پیدا می‌کند."
-                        : "1) Create a bot with @@BotFather and paste its token. 2) Open the bot and press Start. 3) The button below finds your chat id.")
-                </p>
-                <input name="botToken" data-bot-token placeholder="123456:ABC-DEF..." dir="ltr"
-                       class="form-control font-mono text-sm" />
-                <div class="flex gap-2">
-                    <input name="chatId" data-chat-id placeholder="@(isFa ? "آی‌دی چت" : "Chat id")" dir="ltr"
-                           class="form-control flex-1 font-mono text-sm" />
-                    <button type="button" data-find-chats class="btn-secondary whitespace-nowrap px-3 py-2 text-sm">
-                        @(isFa ? "پیدا کن" : "Find")
-                    </button>
-                </div>
-                <p data-chat-hint class="hidden text-xs text-ink-muted"></p>
-            </div>
-
-            <div data-channel="Email" class="hidden space-y-2">
-                <div class="flex gap-2">
-                    <input name="smtpHost" placeholder="smtp.example.com" dir="ltr" class="form-control flex-1 text-sm" />
-                    <input name="smtpPort" type="number" value="587" dir="ltr" class="form-control w-24 text-sm" />
-                </div>
-                <input name="smtpUser" placeholder="@(isFa ? "نام کاربری" : "SMTP user")" dir="ltr" class="form-control text-sm" />
-                <input name="smtpPassword" type="password" placeholder="@(isFa ? "رمز" : "SMTP password")" dir="ltr" class="form-control text-sm" />
-                <input name="emailFrom" placeholder="backups@@example.com" dir="ltr" class="form-control text-sm" />
-                <input name="emailTo" placeholder="you@@example.com" dir="ltr" class="form-control text-sm" />
-            </div>
-
-            <label class="form-field">
-                <span>@(isFa ? "بیشترین حجم (مگابایت)" : "Max size (MB)")</span>
-                <input name="maxSizeMb" type="number" min="0" placeholder="0" dir="ltr" class="form-control text-sm" />
-                <small>@(isFa ? "خالی = پیش‌فرض همان کانال" : "blank = the channel's own limit")</small>
-            </label>
-
-            <button class="btn-primary w-full justify-center py-2 text-sm">@(isFa ? "افزودن" : "Add")</button>
-        </form>
-    </section>
-</div>
-
-@* ---- history ---- *@
-<h2 class="mb-3 text-lg font-semibold text-ink">@T["History"]</h2>
-<div class="overflow-x-auto rounded-xl border border-line bg-surface">
-    <table class="resource-table min-w-[820px]">
-        <thead>
-            <tr>
-                <th>@T["Target"]</th><th>@T["Type"]</th>
-                <th>@T["Status"]</th><th>@(isFa ? "بازیابی" : "Restore check")</th><th>@(isFa ? "حجم" : "Size")</th>
-                <th>@T["Destination"]</th><th class="text-end">@T["Actions"]</th>
-            </tr>
-        </thead>
-        <tbody>
-        @if (Model.Backups.Count == 0)
-        {
-            <tr><td colspan="7" class="p-8 text-center text-sm text-ink-faint">
-                @(isFa ? "هنوز پشتیبانی گرفته نشده." : "No backup has been taken yet.")
-            </td></tr>
-        }
-        @foreach (var b in Model.Backups)
-        {
-            <tr>
-                <td class="table-primary">
-                    @TargetLabel(b.Type, b.TargetRef)
-                    <span class="block text-[11px] text-ink-faint" dir="ltr">
-                        @b.CreatedAt.LocalDateTime.ToString(Dates.Stamp)
-                        @if (!b.IsScheduled)
-                        {
-                            <span>· @(isFa ? "دستی" : "manual")</span>
-                        }
-                    </span>
-                </td>
-                <td>@b.Type</td>
-                <td><span class="resource-status @StatusClass(b.Status)"><i></i>@b.Status</span></td>
-                @* What matters about a backup is not that it ran, which is already visible, but
-                   whether anyone has confirmed it would restore — and how long ago. *@
-                <td>
-                    @if (b.VerifiedRestorable == true)
-                    {
-                        <span class="resource-status is-ok" title="@b.VerifiedAt?.UtcDateTime.ToString(Dates.Stamp) UTC">
-                            <i></i>@(isFa ? "تأیید شد" : "checked")</span>
-                    }
-                    else if (b.VerifiedRestorable == false)
-                    {
-                        <span class="resource-status is-danger" title="@b.VerificationNote">
-                            <i></i>@(isFa ? "بازیابی نمی‌شود" : "will not restore")</span>
-                    }
-                    else if (b.Status == BackupStatus.Completed)
-                    {
-                        @* Deliberately not blank: "not checked yet" and "checked and fine" are
-                           different things and must not look the same. *@
-                        <span class="resource-status is-warn" title="@b.VerificationNote">
-                            <i></i>@(isFa ? "بررسی نشده" : "not checked")</span>
-                    }
-                </td>
-                <td class="table-secondary" dir="ltr">@Size(b.SizeBytes)</td>
-                <td class="table-secondary">@(b.Destination?.Name ?? DestinationName(b.DestinationId))</td>
-                <td>
-                    <div class="row-actions">
-                        @if (b.Status == BackupStatus.Completed)
-                        {
-                            <a href="/backups/@b.Id/download" title="@T["Download"]">
-                                <i data-lucide="download" class="h-4 w-4"></i></a>
-
-                            <form asp-controller="Backups" asp-action="Verify" asp-route-id="@b.Id" method="post" class="inline">
-                                @Html.AntiForgeryToken()
-                                <button title="@(isFa ? "بررسی بازیابی" : "Restore check")">
-                                    <i data-lucide="shield-check" class="h-4 w-4"></i></button>
-                            </form>
-
-                            <form asp-controller="Backups" asp-action="Restore" asp-route-id="@b.Id" method="post"
-                                  class="inline" data-confirm-word="RESTORE"
-                                  data-confirm-prompt="@(isFa ? "این عملیات داده‌ی فعلی را بازنویسی می‌کند. برای تأیید RESTORE را تایپ کنید:" : "This overwrites current data. Type RESTORE to confirm:")">
-                                @Html.AntiForgeryToken()
-                                <input type="hidden" name="confirm" />
-                                <button class="text-warn" title="@T["Restore"]">
-                                    <i data-lucide="rotate-cw" class="h-4 w-4"></i></button>
-                            </form>
-                        }
-
-                        @* Deleting the last copy of something is what retention already does on a
-                           timer; this is the same operation by hand, so it asks for the same typed
-                           confirmation a restore does — and for a stronger reason. A restore
-                           overwrites data that can be taken again; this removes what it would be
-                           taken from. *@
-                        <form asp-controller="Backups" asp-action="Delete" asp-route-id="@b.Id" method="post"
-                              class="inline" data-confirm-word="DELETE"
-                              data-confirm-prompt="@(isFa ? "این نسخه و فایلش برای همیشه پاک می‌شود. برای تأیید DELETE را تایپ کنید:" : "This permanently removes the backup and its stored file. Type DELETE to confirm:")">
-                            @Html.AntiForgeryToken()
-                            <input type="hidden" name="confirm" />
-                            <button class="text-danger" title="@T["Delete"]">
-                                <i data-lucide="trash-2" class="h-4 w-4"></i></button>
-                        </form>
-                    </div>
-                </td>
-            </tr>
-        }
-        </tbody>
-    </table>
-</div>
+<partial name="_QuickActions" model="context" />
+<partial name="_Destinations" model="context" />
+<partial name="_Schedules" model="context" />
+<partial name="_Deliveries" model="context" />
+<partial name="_History" model="context" />
 
 @section Scripts {
 <script>

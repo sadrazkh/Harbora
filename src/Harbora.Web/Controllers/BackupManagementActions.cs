@@ -230,15 +230,30 @@ public sealed partial class BackupsController
     /// download and restore buttons beside them stop working with no explanation. Said with a count,
     /// because "in use" without saying by what leaves somebody hunting.
     /// </para>
+    ///
+    /// <para>
+    /// Confirmed by typing the same word the backup Delete and Restore actions already ask for
+    /// (do-not-change list item 19: extend the destructive-confirmation pattern, never downgrade to a
+    /// native <c>confirm()</c> — which is what this button used before, the one native dialog left on
+    /// a page that had otherwise already moved past it).
+    /// </para>
     /// </summary>
     [HttpPost("destinations/{id:guid}/delete")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.BackupsManage)]
-    public async Task<IActionResult> DeleteDestination(Guid id, CancellationToken ct)
+    public async Task<IActionResult> DeleteDestination(Guid id, string confirm, CancellationToken ct)
     {
         var destination = await db.BackupDestinations
             .FirstOrDefaultAsync(d => d.Id == id && d.WorkspaceId == WorkspaceId, ct);
         if (destination is null) return NotFound();
+
+        if (confirm != "DELETE")
+        {
+            TempData["Error"] = IsFa
+                ? "حذف تأیید نشد؛ هیچ مقصدی برداشته نشد."
+                : "The removal was not confirmed. Nothing was removed.";
+            return RedirectToAction(nameof(Index));
+        }
 
         var backups = await db.Backups.CountAsync(b => b.DestinationId == id, ct);
         var schedules = await db.BackupSchedules.CountAsync(s => s.DestinationId == id, ct);

@@ -67,11 +67,25 @@ public sealed partial class BackupsController
         return RedirectToAction(nameof(Index));
     }
 
+    /// <summary>
+    /// Confirmed by typing DELETE. This button previously asked nothing at all before dropping a
+    /// channel that may hold a live bot token or SMTP password — the one destructive action on this
+    /// page with no confirmation of any kind, native or otherwise. Do-not-change list item 19 governs
+    /// the pattern it now follows, the same one the backup Delete and Restore actions already use.
+    /// </summary>
     [HttpPost("deliveries/{id:guid}/delete")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.BackupsManage)]
-    public async Task<IActionResult> DeleteDelivery(Guid id, CancellationToken ct)
+    public async Task<IActionResult> DeleteDelivery(Guid id, string confirm, CancellationToken ct)
     {
+        if (confirm != "DELETE")
+        {
+            TempData["Error"] = IsFa
+                ? "حذف تأیید نشد؛ هیچ مقصد ارسالی پاک نشد."
+                : "The deletion was not confirmed. Nothing was removed.";
+            return RedirectToAction(nameof(Index));
+        }
+
         await db.BackupDeliveries.Where(d => d.Id == id && d.WorkspaceId == WorkspaceId).ExecuteDeleteAsync(ct);
         return RedirectToAction(nameof(Index));
     }

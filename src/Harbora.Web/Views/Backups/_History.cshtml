@@ -1,0 +1,149 @@
+@model BackupsViewContext
+@{
+    var isFa = Model.IsFa;
+    var backups = Model.Page.Backups;
+
+    // Said once at the top rather than only as a pill per row. A backup taken nightly for a year and
+    // never checked is a year of assumption, and the count is the only way to see how much of it
+    // there is without reading every row.
+    var unverified = backups.Count(b =>
+        b.Status == Harbora.Domain.Common.BackupStatus.Completed && b.VerifiedRestorable is null);
+
+    (string Text, string Tone, string? Title) StatusPillFor(Harbora.Domain.Backups.Backup b) =>
+        (b.Status.ToString(), Model.StatusTone(b.Status), null);
+
+    (string Text, string Tone, string? Title)? RestoreCheckPillFor(Harbora.Domain.Backups.Backup b)
+    {
+        // What matters about a backup is not that it ran, which is already visible, but whether
+        // anyone has confirmed it would restore — and how long ago.
+        if (b.VerifiedRestorable == true)
+            return (isFa ? "تأیید شد" : "checked", Tone.Ok, b.VerifiedAt?.UtcDateTime.ToString(Dates.Stamp) + " UTC");
+        if (b.VerifiedRestorable == false)
+            return (isFa ? "بازیابی نمی‌شود" : "will not restore", Tone.Error, b.VerificationNote);
+        if (b.Status == Harbora.Domain.Common.BackupStatus.Completed)
+            // Deliberately not blank: "not checked yet" and "checked and fine" are different things
+            // and must not look the same.
+            return (isFa ? "بررسی نشده" : "not checked", Tone.Warn, b.VerificationNote);
+        return null;
+    }
+}
+@if (unverified > 0)
+{
+    <div class="alert-warning mb-6">
+        <i data-lucide="triangle-alert" class="h-4 w-4 shrink-0"></i>
+        <span>@(isFa
+            ? $"{unverified} نسخهٔ پشتیبان هرگز بررسی نشده‌اند. «بررسی بازیابی» فایل را می‌خواند و سالم بودنش را ثابت می‌کند، بدون دست زدن به داده‌های زنده."
+            : $"{unverified} backup(s) have never been checked. The restore check reads the artifact and proves it is intact, without touching live data.")</span>
+    </div>
+}
+
+@* ---- history: every snapshot taken, and the restore/delete actions over it ----
+   A div-based grid rather than a <table>: on a narrow screen a table can only scroll sideways, which
+   hides whichever columns did not fit — this collapses the secondary columns into one compact line
+   per row instead, the same idiom Views/Apps/Index.cshtml's resource list already uses. The Type
+   column the table used to have is gone: TargetLabel's icon and parenthetical ("📦 shop (config)")
+   already say what a row is, the same redundancy the Applications redesign removed from its own
+   SOURCE column. *@
+<h2 class="mb-3 text-lg font-semibold text-ink">@T["History"]</h2>
+<div class="overflow-hidden rounded-xl border border-line bg-surface">
+    @if (backups.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel(
+            "history",
+            isFa ? "هنوز پشتیبانی گرفته نشده." : "No backup has been taken yet."))" />
+    }
+    else
+    {
+        <div class="hidden gap-3 border-b border-line bg-surface-2 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-ink-faint sm:grid sm:grid-cols-[1.6fr_0.9fr_1fr_0.7fr_1fr_112px]" role="row">
+            <span role="columnheader">@T["Target"]</span>
+            <span role="columnheader">@T["Status"]</span>
+            <span role="columnheader">@(isFa ? "بازیابی" : "Restore check")</span>
+            <span role="columnheader">@(isFa ? "حجم" : "Size")</span>
+            <span role="columnheader">@T["Destination"]</span>
+            <span role="columnheader"></span>
+        </div>
+        <div role="table" aria-label="@T["History"]">
+        @foreach (var b in backups)
+        {
+            var status = StatusPillFor(b);
+            var check = RestoreCheckPillFor(b);
+            var destinationName = b.Destination?.Name ?? Model.DestinationName(b.DestinationId);
+
+            <div class="grid grid-cols-[1fr_auto] items-start gap-x-3 gap-y-2 border-b border-line px-4 py-3.5 last:border-b-0 sm:grid-cols-[1.6fr_0.9fr_1fr_0.7fr_1fr_112px] sm:items-center sm:gap-3" role="row">
+                <div role="cell" class="min-w-0">
+                    <span class="table-primary">@Model.TargetLabel(b.Type, b.TargetRef)</span>
+                    <span class="block text-[11px] text-ink-faint" dir="ltr">
+                        @b.CreatedAt.LocalDateTime.ToString(Dates.Stamp)
+                        @if (!b.IsScheduled)
+                        {
+                            <span>· @(isFa ? "دستی" : "manual")</span>
+                        }
+                    </span>
+                </div>
+                <div role="cell" class="hidden sm:block">
+                    <partial name="Design/_StatusPill" model="@(new StatusPillModel(status.Text, status.Tone))" />
+                </div>
+                <div role="cell" class="hidden sm:block">
+                    @if (check is { } c)
+                    {
+                        <partial name="Design/_StatusPill" model="@(new StatusPillModel(c.Text, c.Tone, c.Title))" />
+                    }
+                </div>
+                <div role="cell" class="hidden font-mono text-xs text-ink-muted sm:block" dir="ltr">@Model.Size(b.SizeBytes)</div>
+                <div role="cell" class="hidden truncate text-xs text-ink-muted sm:block">@destinationName</div>
+
+                @* One condensed line replaces the four columns above on a narrow screen — a two-line
+                   list, per the shared implementation rules, rather than a table nobody can scroll
+                   sideways on a phone without losing which row they were reading. *@
+                <div role="cell" class="col-span-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-ink-muted sm:hidden">
+                    <partial name="Design/_StatusPill" model="@(new StatusPillModel(status.Text, status.Tone))" />
+                    @if (check is { } cMobile)
+                    {
+                        <partial name="Design/_StatusPill" model="@(new StatusPillModel(cMobile.Text, cMobile.Tone, cMobile.Title))" />
+                    }
+                    <span dir="ltr" class="font-mono">@Model.Size(b.SizeBytes)</span>
+                    <span aria-hidden="true">·</span>
+                    <span class="truncate">@destinationName</span>
+                </div>
+
+                <div role="cell" class="row-actions">
+                    @if (b.Status == Harbora.Domain.Common.BackupStatus.Completed)
+                    {
+                        <a href="/backups/@b.Id/download" title="@T["Download"]">
+                            <i data-lucide="download" class="h-4 w-4"></i></a>
+
+                        <form asp-controller="Backups" asp-action="Verify" asp-route-id="@b.Id" method="post" class="inline">
+                            @Html.AntiForgeryToken()
+                            <button title="@(isFa ? "بررسی بازیابی" : "Restore check")">
+                                <i data-lucide="shield-check" class="h-4 w-4"></i></button>
+                        </form>
+
+                        <form asp-controller="Backups" asp-action="Restore" asp-route-id="@b.Id" method="post"
+                              class="inline" data-confirm-word="RESTORE"
+                              data-confirm-prompt="@(isFa ? "این عملیات داده‌ی فعلی را بازنویسی می‌کند. برای تأیید RESTORE را تایپ کنید:" : "This overwrites current data. Type RESTORE to confirm:")">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="confirm" />
+                            <button class="text-warn" title="@T["Restore"]">
+                                <i data-lucide="rotate-cw" class="h-4 w-4"></i></button>
+                        </form>
+                    }
+
+                    @* Deleting the last copy of something is what retention already does on a
+                       timer; this is the same operation by hand, so it asks for the same typed
+                       confirmation a restore does — and for a stronger reason. A restore
+                       overwrites data that can be taken again; this removes what it would be
+                       taken from. *@
+                    <form asp-controller="Backups" asp-action="Delete" asp-route-id="@b.Id" method="post"
+                          class="inline" data-confirm-word="DELETE"
+                          data-confirm-prompt="@(isFa ? "این نسخه و فایلش برای همیشه پاک می‌شود. برای تأیید DELETE را تایپ کنید:" : "This permanently removes the backup and its stored file. Type DELETE to confirm:")">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="confirm" />
+                        <button class="text-danger" title="@T["Delete"]">
+                            <i data-lucide="trash-2" class="h-4 w-4"></i></button>
+                    </form>
+                </div>
+            </div>
+        }
+        </div>
+    }
+</div>
