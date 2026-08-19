@@ -629,7 +629,6 @@
   .attention-header-dot { @apply h-2 w-2 shrink-0 rounded-full bg-danger; }
   .attention-header-title { @apply text-[13.5px] font-semibold text-ink; }
   .attention-header-note { @apply text-xs text-ink-muted; }
-  .attention-header-mute { @apply ms-auto whitespace-nowrap text-[11.5px] font-medium text-ink-muted; }
   .attention-row { @apply flex items-center gap-3.5 border-b border-line px-[18px] py-[15px] last:border-b-0; }
   .attention-badge { @apply shrink-0 rounded-md px-[7px] py-[5px] text-[9.5px] font-semibold uppercase tracking-wide leading-none; }
   .attention-badge.is-critical { @apply bg-danger text-white; }
@@ -638,6 +637,16 @@
   .attention-title { @apply text-[13px] font-medium leading-snug text-ink; }
   .attention-detail { @apply mt-1.5 text-[11.5px] leading-normal text-ink-muted; }
   .attention-action { @apply ms-auto shrink-0 whitespace-nowrap rounded-lg bg-ink px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90; }
+  /* Simple mode's fold over the verbatim technical line (do-not-change item 23: fold, never remove).
+     Deliberately a bare <details> rather than .advanced-panel — that one is a full bordered card,
+     which inside a table row would outweigh the sentence it belongs to. */
+  .attention-detail-fold > summary { @apply mt-1.5 cursor-pointer list-none text-[11.5px] text-ink-faint hover:text-ink-muted; }
+  .attention-detail-fold > summary::-webkit-details-marker { display: none; }
+  .attention-detail-fold > summary::before { content: '›'; @apply me-1 inline-block transition-transform duration-150; }
+  .attention-detail-fold[open] > summary::before { @apply rotate-90; }
+  @media (prefers-reduced-motion: reduce) {
+    .attention-detail-fold > summary::before { @apply transition-none; }
+  }
 
   /* Setup progress: replaces the old full getting-started panel + conic-gradient ring with one
      line beside the page heading — a 56×4px track and a link to the single next step. */

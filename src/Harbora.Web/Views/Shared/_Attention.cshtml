@@ -1,8 +1,22 @@
 @using System.Text.RegularExpressions
 @using Microsoft.AspNetCore.Html
+@inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
 @model IReadOnlyList<Harbora.Infrastructure.Dashboard.AttentionItem>
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    // Do-not-change item 23, the PanelMode fold-never-remove principle. Simple mode folds the
+    // verbatim technical line — exit codes, npm output, a certificate's own error — because the
+    // sentence above it and the button beside it are the whole story for somebody who is not going
+    // to read a build log. Folded, never dropped: one click reaches it, in either mode.
+    //
+    // Deliberately folded at every level, including Critical. Exempting Critical was the first
+    // design and it was wrong: in Attention.Build, every item that carries DetailText is Critical
+    // except one certificate case, so the exemption would have left a fold that almost never folded
+    // — a control that looks like it does something and does nothing. The line it defers is the
+    // first line of a build log, and the action button on the same row goes to that log.
+    var detailUnfolded = Harbora.Infrastructure.Navigation.PanelSections.StartsOpen(
+        await PanelModes.GetAsync());
 
     // Status is never carried by colour alone — each level has its own word, spoken by the badge
     // itself (aria-label / title), not inferred from a colour a screen reader cannot see.
@@ -73,10 +87,10 @@
                         ? "تولید در حال سرویس‌دهی است — هیچ‌کدام از این موارد قطعی نیستند"
                         : "Production is serving traffic — none of these are outages")
                 </span>
-                @* Inert on purpose, like the reference design's own mockup: nothing here silences a
-                   real alert channel yet, and a button that looks wired but does nothing would be
-                   worse than no button at all. *@
-                <span class="attention-header-mute">@(isFa ? "بی‌صدا برای ۲۴ ساعت" : "Mute for 24h")</span>
+                @* The reference mockup puts a "Mute for 24h" control here and it was carried over as
+                   inert text. Removed: nothing in the platform can silence these yet, and offering it
+                   in words is the same claim as offering it as a button — this panel exists precisely
+                   to stop the page reporting things it has not done. It comes back when muting does. *@
             </div>
             @foreach (var item in Model)
             {
@@ -89,7 +103,17 @@
                         {
                             @* Verbatim data from the failing thing itself — a summarised error, never
                                localised — so the whole line is technical and always reads LTR. *@
-                            <div class="attention-detail font-mono" dir="ltr">@item.DetailText</div>
+                            if (detailUnfolded)
+                            {
+                                <div class="attention-detail font-mono" dir="ltr" data-detail="open">@item.DetailText</div>
+                            }
+                            else
+                            {
+                                <details class="attention-detail-fold" data-detail="folded">
+                                    <summary>@(isFa ? "جزئیات فنی" : "Technical detail")</summary>
+                                    <div class="attention-detail font-mono" dir="ltr">@item.DetailText</div>
+                                </details>
+                            }
                         }
                         else if (item.DetailKey is not null)
                         {
