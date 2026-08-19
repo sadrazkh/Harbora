@@ -12,7 +12,15 @@ public sealed class MonitoringDashboardViewModel
     public long DiskTotal { get; set; }
     public long MemTotal { get; set; }
     public int ContainersRunning { get; set; }
-    public double CpuPercent { get; set; }
+
+    /// <summary>
+    /// The host's latest <c>cpu.percent</c> sample, or null when the collector has never written one.
+    /// Nullable on purpose (2026-08-19 monitoring redesign) — it used to be a plain <c>double</c>
+    /// defaulted by EF's <c>FirstOrDefaultAsync</c> to <c>0</c> when no row existed at all, so a fresh
+    /// install whose collector had not ticked yet read as a confidently measured "0%" rather than as
+    /// "not collected yet". See <c>MonitoringController.Index</c> for the query this backs.
+    /// </summary>
+    public double? CpuPercent { get; set; }
 
     /// <summary>
     /// The configured fraction of disk that counts as a problem
@@ -49,4 +57,18 @@ public sealed record AppHealth(string Name, string Slug, string Status, string? 
 {
     /// <summary>Needed by the threshold-alert picker, which has to post an application id.</summary>
     public Guid Id { get; init; }
+
+    /// <summary>
+    /// The fraction of the last 30 days this app's container was observed running, or null when
+    /// nothing was ever collected for it — the same figure and the same honesty gate the app's own
+    /// Overview tab already shows (<c>LifecycleHistory.UptimePercentAsync</c>, Phase 6 M3). Surfaced
+    /// here too so a worried person reading the monitoring page does not have to open every app in
+    /// turn to find out which one has actually been flaky.
+    /// </summary>
+    public double? UptimePercent30d { get; init; }
+
+    /// <summary>Restarts attributed to the last 30 days, alongside <see cref="UptimePercent30d"/> —
+    /// null under the same "never collected" gate, zero when it was watched the whole window and
+    /// genuinely never restarted.</summary>
+    public int? RestartCount30d { get; init; }
 }

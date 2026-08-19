@@ -25,6 +25,7 @@ public sealed class MonitoringController(
     Harbora.Infrastructure.Monitoring.IncidentService incidents,
     ISystemClock clock,
     IOptions<Harbora.Infrastructure.Monitoring.MonitoringOptions> monitoringOptions,
+    Harbora.Infrastructure.Monitoring.LifecycleHistory lifecycle,
     ILogger<MonitoringController> logger) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -103,18 +104,49 @@ public sealed class MonitoringController(
             logger.LogWarning(ex, "Docker unavailable for monitoring.");
         }
 
-        // Latest aggregate CPU sample, if the collector has run.
+        // Latest aggregate CPU sample, if the collector has run. Selected as a nullable projection —
+        // not `.Select(m => m.Value)` — so an empty result (nothing collected yet) reaches the view
+        // as null rather than as EF's own default(double), which is 0 and reads as a confidently
+        // measured "0%" rather than "not collected". This was the one place on this page that broke
+        // the "unmeasured ≠ zero" rule everywhere else on it already follows (2026-08-19 fix).
         vm.CpuPercent = await db.MonitoringMetrics
             .Where(m => m.Name == "cpu.percent" && m.ResourceRef == null)
-            .OrderByDescending(m => m.Timestamp).Select(m => m.Value).FirstOrDefaultAsync(ct);
+            .OrderByDescending(m => m.Timestamp).Select(m => (double?)m.Value).FirstOrDefaultAsync(ct);
 
         var apps = await db.Apps.Where(a => a.WorkspaceId == WorkspaceId).ToListAsync(ct);
+        var lifecycleSince = clock.UtcNow.AddDays(-30);
         foreach (var app in apps)
         {
             var lastDeploy = await db.Deployments.Where(d => d.AppId == app.Id)
                 .OrderByDescending(d => d.Number).Select(d => d.Status.ToString()).FirstOrDefaultAsync(ct);
+
+            // The same container-name rule the app's own Overview tab uses for its 30-day uptime and
+            // restart figures (AppsController.Overview) — active deployment, falling back to the most
+            // recent success — so a number shown here and on that page never disagree about which
+            // container it describes. An app that has never deployed successfully falls through to
+            // the legacy name, which LifecycleHistory simply has no samples for, and reports unknown.
+            var activeNumber = app.ActiveDeploymentId is { } activeId
+                ? await db.Deployments.AsNoTracking().Where(d => d.Id == activeId)
+                    .Select(d => (int?)d.Number).FirstOrDefaultAsync(ct)
+                : null;
+            activeNumber ??= await db.Deployments.AsNoTracking()
+                .Where(d => d.AppId == app.Id && d.Status == DeploymentStatus.Succeeded)
+                .OrderByDescending(d => d.Number).Select(d => (int?)d.Number).FirstOrDefaultAsync(ct);
+
+            var containerName = activeNumber is { } number
+                ? Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(app.WorkspaceId, app.Slug, number)
+                : Harbora.Infrastructure.Deployments.DeploymentPlanning.LegacyContainerName(app.Slug);
+
+            var uptimePercent30d = await lifecycle.UptimePercentAsync(app.ServerId, containerName, lifecycleSince, clock.UtcNow, ct);
+            var restartCount30d = await lifecycle.RestartCountAsync(app.ServerId, containerName, lifecycleSince, clock.UtcNow, ct);
+
             vm.Apps.Add(new AppHealth(app.Name, app.Slug, app.Status.ToString(), lastDeploy,
-                containerState.GetValueOrDefault(app.Slug, "unknown")) { Id = app.Id });
+                containerState.GetValueOrDefault(app.Slug, "unknown"))
+            {
+                Id = app.Id,
+                UptimePercent30d = uptimePercent30d,
+                RestartCount30d = restartCount30d
+            });
         }
 
         vm.RecentDeploys = await db.Deployments.Include(d => d.App)
