@@ -1,7 +1,6 @@
 ﻿import './app.css';
 import { createApp } from 'vue';
 import DeploymentLogs from './islands/DeploymentLogs.vue';
-import RouteDesigner from './islands/RouteDesigner.vue';
 import MetricsChart from './islands/MetricsChart.vue';
 import TerminalIsland from './islands/Terminal.vue';
 import { mountDeployProgress } from './deployProgress';
@@ -20,13 +19,24 @@ const islands: Record<string, IslandMounter> = {
     // Tell the Razor fallback poller to stand down — the island owns the stream now.
     (window as any).__harboraLogsMounted = true;
   },
+  // Routing is a page most workspaces open rarely, and the retokenised designer carries its own
+  // diffing logic on top of Vue — the same reasoning as CodeEditor below: `import()` here, not a
+  // static import, is what keeps it out of every page's entry bundle and gives it a chunk of its
+  // own instead.
+  //
+  // The mount point wraps the Razor-rendered "Loading route designer…" placeholder, not an empty
+  // div, so a chunk that never resolves leaves a legible message rather than a blank card.
   'route-designer': (el) => {
-    createApp(RouteDesigner, {
-      initialRoutes: JSON.parse(el.dataset.routes || '[]'),
-      targets: JSON.parse(el.dataset.targets || '[]'),
-      csrf: el.dataset.csrf || '',
-      lang: el.dataset.lang || 'en',
-    }).mount(el);
+    import('./islands/RouteDesigner.vue').then(({ default: RouteDesigner }) => {
+      createApp(RouteDesigner, {
+        initialRoutes: JSON.parse(el.dataset.routes || '[]'),
+        targets: JSON.parse(el.dataset.targets || '[]'),
+        csrf: el.dataset.csrf || '',
+        lang: el.dataset.lang || 'en',
+      }).mount(el);
+    }).catch(() => {
+      // Leave the placeholder exactly as it is - see the comment above.
+    });
   },
   'app-terminal': (el) => {
     createApp(TerminalIsland, {
