@@ -1,29 +1,55 @@
-﻿@model IReadOnlyList<Harbora.Infrastructure.Dashboard.AttentionItem>
+@using System.Text.RegularExpressions
+@using Microsoft.AspNetCore.Html
+@model IReadOnlyList<Harbora.Infrastructure.Dashboard.AttentionItem>
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
-    // Status is never carried by colour alone — each level has its own mark and word.
-    (string mark, string text, string border, string word) Style(Harbora.Infrastructure.Dashboard.AttentionLevel level) =>
+    // Status is never carried by colour alone — each level has its own word, spoken by the badge
+    // itself (aria-label / title), not inferred from a colour a screen reader cannot see.
+    (string badgeClass, string word) Style(Harbora.Infrastructure.Dashboard.AttentionLevel level) =>
         level switch
         {
             Harbora.Infrastructure.Dashboard.AttentionLevel.Critical =>
-                ("✗", "text-danger", "border-danger", isFa ? "بحرانی" : "critical"),
+                ("attention-badge is-critical", isFa ? "بحرانی" : "critical"),
             Harbora.Infrastructure.Dashboard.AttentionLevel.Warning =>
-                ("!", "text-warn", "border-warn", isFa ? "هشدار" : "warning"),
-            _ => ("→", "text-ink", "border-line", isFa ? "پیشنهاد" : "suggestion")
+                ("attention-badge is-warning", isFa ? "هشدار" : "warning"),
+            _ => ("attention-badge is-info", isFa ? "پیشنهاد" : "suggestion")
         };
+
+    // Turns a resource key ("{0}: deploy failed") plus its arguments into markup where every
+    // interpolated value — an app name, a deploy number, a host — sits inside its own monospace,
+    // dir="ltr" span, exactly like every other technical token on this page (binding rule: "every
+    // technical token... monospace, dir=ltr, even in Persian"). The surrounding prose stays in the
+    // page's own language and direction; only the data inside it is pinned to LTR.
+    //
+    // Reads the raw resource value rather than calling the indexer with the args, because the
+    // indexer's own formatting has nowhere to hang a <span> around one argument and not the rest.
+    IHtmlContent Sentence(string key, IReadOnlyList<string> args)
+    {
+        var template = T[key].Value;
+        if (args.Count == 0) return new HtmlString(Html.Encode(template));
+
+        var sb = new System.Text.StringBuilder();
+        var last = 0;
+        foreach (Match m in Regex.Matches(template, @"\{(\d+)\}"))
+        {
+            sb.Append(Html.Encode(template[last..m.Index]));
+            var index = int.Parse(m.Groups[1].Value);
+            var arg = index < args.Count ? args[index] : string.Empty;
+            sb.Append("<span class=\"font-mono\" dir=\"ltr\">").Append(Html.Encode(arg)).Append("</span>");
+            last = m.Index + m.Length;
+        }
+        sb.Append(Html.Encode(template[last..]));
+        return new HtmlString(sb.ToString());
+    }
 }
 
 <section class="mb-6">
-    <h2 class="text-sm font-semibold text-ink-muted mb-2">
-        @(isFa ? "نیازمند توجه شما" : "Needs your attention")
-    </h2>
-
     @if (Model.Count == 0)
     {
         @* The good case says so plainly, instead of leaving a blank space that reads as broken. *@
         <div class="rounded-xl border border-line bg-surface p-4 flex items-center gap-3">
-            <span class="text-ok">●</span>
+            <span class="h-2 w-2 rounded-full bg-ok"></span>
             <div>
                 <div class="text-sm text-ink">@(isFa ? "همه‌چیز مرتب است" : "Everything looks fine")</div>
                 <div class="text-xs text-ink-faint">
@@ -36,37 +62,43 @@
     }
     else
     {
-        <div class="space-y-2">
+        <div class="attention-card">
+            <div class="attention-header">
+                <span class="attention-header-dot"></span>
+                <span class="attention-header-title">
+                    @(isFa ? $"{Model.Count} مورد نیاز به توجه شما دارد" : Model.Count == 1 ? "1 thing needs you" : $"{Model.Count} things need you")
+                </span>
+                <span class="attention-header-note">
+                    @(isFa
+                        ? "تولید در حال سرویس‌دهی است — هیچ‌کدام از این موارد قطعی نیستند"
+                        : "Production is serving traffic — none of these are outages")
+                </span>
+                @* Inert on purpose, like the reference design's own mockup: nothing here silences a
+                   real alert channel yet, and a button that looks wired but does nothing would be
+                   worse than no button at all. *@
+                <span class="attention-header-mute">@(isFa ? "بی‌صدا برای ۲۴ ساعت" : "Mute for 24h")</span>
+            </div>
             @foreach (var item in Model)
             {
                 var s = Style(item.Level);
-                @* The rule hands over keys and arguments; the sentence is assembled here, where the
-                   culture is known. T[key, args] formats and HTML-encodes the arguments. A missing
-                   entry falls back to the key, which is the English text. *@
-                <div class="rounded-xl border @s.border bg-surface p-3 flex items-start justify-between gap-3">
-                    <div class="flex items-start gap-3 min-w-0">
-                        <span class="@s.text mt-0.5" title="@s.word" aria-label="@s.word">@s.mark</span>
-                        <div class="min-w-0">
-                            <div class="text-sm font-medium text-ink">@T[item.TitleKey, item.TitleArgs.Cast<object>().ToArray()]</div>
-                            <div class="text-xs text-ink-muted break-words">
-                                @if (item.DetailText is not null)
-                                {
-                                    @* A summarised error message — data, deliberately untranslated. *@
-                                    @item.DetailText
-                                }
-                                else if (item.DetailKey is not null)
-                                {
-                                    @T[item.DetailKey, item.DetailArgs.Cast<object>().ToArray()]
-                                }
-                            </div>
-                        </div>
+                <div class="attention-row">
+                    <span class="@s.badgeClass" title="@s.word" aria-label="@s.word">@s.word</span>
+                    <div class="min-w-0 flex-1">
+                        <div class="attention-title">@Sentence(item.TitleKey, item.TitleArgs)</div>
+                        @if (item.DetailText is not null)
+                        {
+                            @* Verbatim data from the failing thing itself — a summarised error, never
+                               localised — so the whole line is technical and reads left-to-right. *@
+                            <div class="attention-detail font-mono" dir="ltr">@item.DetailText</div>
+                        }
+                        else if (item.DetailKey is not null)
+                        {
+                            <div class="attention-detail">@Sentence(item.DetailKey, item.DetailArgs)</div>
+                        }
                     </div>
                     @if (item.ActionUrl is not null && item.ActionKey is not null)
                     {
-                        <a href="@item.ActionUrl"
-                           class="shrink-0 rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-xs">
-                            @T[item.ActionKey]
-                        </a>
+                        <a href="@item.ActionUrl" class="attention-action">@T[item.ActionKey]</a>
                     }
                 </div>
             }

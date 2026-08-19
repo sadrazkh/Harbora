@@ -619,6 +619,25 @@
   .team-list small { @apply block truncate text-[9px] text-ink-faint; }
   .team-list em { @apply text-[9px] not-italic text-ink-muted; }
   .invite-button { @apply mt-3 flex items-center justify-center gap-2 rounded-xl border border-line py-2 text-xs font-medium text-accent-text hover:border-accent/30; }
+
+  /* ---- Dashboard v2 (3a redesign): "what needs you" card ----
+     Replaces the old plain-list attention block with the actionable card the spec calls out as the
+     single highest-impact change: a severity badge, a human sentence, a monospace technical line and
+     one dark action, all reusing existing tokens — nothing here is a new colour. */
+  .attention-card { @apply overflow-hidden rounded-xl border border-line bg-surface; }
+  .attention-header { @apply flex flex-wrap items-center gap-3 border-b border-danger/15 bg-danger-soft px-[18px] py-[14px]; }
+  .attention-header-dot { @apply h-2 w-2 shrink-0 rounded-full bg-danger; }
+  .attention-header-title { @apply text-[13.5px] font-semibold text-ink; }
+  .attention-header-note { @apply text-xs text-ink-muted; }
+  .attention-header-mute { @apply ms-auto whitespace-nowrap text-[11.5px] font-medium text-ink-muted; }
+  .attention-row { @apply flex items-center gap-3.5 border-b border-line px-[18px] py-[15px] last:border-b-0; }
+  .attention-badge { @apply shrink-0 rounded-md px-[7px] py-[5px] text-[9.5px] font-semibold uppercase tracking-wide leading-none; }
+  .attention-badge.is-critical { @apply bg-danger text-white; }
+  .attention-badge.is-warning { @apply border border-warn/40 bg-warn-soft text-warn; }
+  .attention-badge.is-info { @apply border border-idle/40 bg-idle-soft text-idle; }
+  .attention-title { @apply text-[13px] font-medium leading-snug text-ink; }
+  .attention-detail { @apply mt-1.5 text-[11.5px] leading-normal text-ink-muted; }
+  .attention-action { @apply ms-auto shrink-0 whitespace-nowrap rounded-lg bg-ink px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90; }
 }
 
 /* The compact sidebar is a real alternate layout, not merely hidden text: the content gains the
