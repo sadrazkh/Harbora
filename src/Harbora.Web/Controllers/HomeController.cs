@@ -16,8 +16,6 @@ public sealed class HomeController(
     HarboraDbContext db,
     IDockerEngine docker,
     Harbora.Infrastructure.Dashboard.AttentionService attention,
-    Harbora.Infrastructure.Monitoring.NetworkHistory network,
-    IManagedServiceEngine engine,
     ICurrentUser currentUser,
     ILogger<HomeController> logger) : Controller
 {
@@ -39,22 +37,6 @@ public sealed class HomeController(
         {
             Attention = await attention.BuildAsync(workspaceId, ct,
                 isOperator: User.IsInRole("Owner") || User.IsInRole("Admin")),
-            Projects = await db.Projects
-                .Where(p => p.WorkspaceId == workspaceId)
-                .OrderBy(p => p.Name)
-                .Select(p => new ProjectSummary
-                {
-                    Id = p.Id, Name = p.Name, Slug = p.Slug,
-                    Environments = p.Environments.Count,
-                    Services = db.Apps.Count(a => a.Environment!.ProjectId == p.Id),
-                    Databases = db.ManagedServices.Count(s => s.Environment!.ProjectId == p.Id),
-                    Unhealthy = db.Apps.Count(a => a.Environment!.ProjectId == p.Id
-                                                   && (a.Status == AppStatus.Crashed || a.Status == AppStatus.Failed))
-                })
-                .Take(6)
-                .ToListAsync(ct),
-            Apps = await db.Apps.Where(a => a.WorkspaceId == workspaceId)
-                .OrderByDescending(a => a.UpdatedAt).Take(8).ToListAsync(ct),
             RecentDeployments = await db.Deployments
                 .Include(d => d.App)
                 .Where(d => d.App!.WorkspaceId == workspaceId)
@@ -71,136 +53,104 @@ public sealed class HomeController(
         vm.FailedDeployments = await db.Deployments
             .CountAsync(d => d.App!.WorkspaceId == workspaceId && d.Status == DeploymentStatus.Failed, ct);
 
-        // Platform health strip: servers, domains/SSL.
+        // Platform health strip: servers, domains/SSL — the fifth cell of the redesigned stat bar.
         vm.ServersTotal = await db.Servers.CountAsync(ct);
         vm.ServersOnline = await db.Servers.CountAsync(s => s.Status == ServerStatus.Online, ct);
         vm.DomainsTotal = await db.Domains.CountAsync(d => d.App!.WorkspaceId == workspaceId, ct);
-        vm.DomainsSsl = await db.Domains.CountAsync(d => d.App!.WorkspaceId == workspaceId && d.SslEnabled, ct);
 
-        var monthStart = new DateTimeOffset(DateTimeOffset.UtcNow.Year, DateTimeOffset.UtcNow.Month, 1, 0, 0, 0, TimeSpan.Zero);
-        vm.BackupsThisMonth = await db.Backups.CountAsync(b => b.WorkspaceId == workspaceId && b.CreatedAt >= monthStart, ct);
         vm.BackupSchedulesEnabled = await db.BackupSchedules
             .CountAsync(b => b.WorkspaceId == workspaceId && b.IsEnabled, ct);
-        vm.LatestBackupAt = await db.Backups
-            .Where(b => b.WorkspaceId == workspaceId && b.Status == BackupStatus.Completed)
-            .OrderByDescending(b => b.FinishedAt ?? b.CreatedAt)
-            .Select(b => (DateTimeOffset?)(b.FinishedAt ?? b.CreatedAt))
-            .FirstOrDefaultAsync(ct);
 
-        vm.RecentDomains = await db.Domains.AsNoTracking()
-            .Where(d => d.App!.WorkspaceId == workspaceId)
-            .OrderByDescending(d => d.CreatedAt).Take(4)
-            .Select(d => new DashboardDomain(d.Host, d.SslEnabled, d.App!.Name, d.AppId))
-            .ToListAsync(ct);
-
-        vm.TeamMembers = await db.WorkspaceMembers.AsNoTracking()
-            .Where(m => m.WorkspaceId == workspaceId && m.User != null)
-            .OrderBy(m => m.Role).ThenBy(m => m.User!.DisplayName).Take(4)
-            .Select(m => new DashboardTeamMember(
-                string.IsNullOrWhiteSpace(m.User!.DisplayName) ? m.User.Email : m.User.DisplayName,
-                m.User.Email, m.Role.ToString()))
-            .ToListAsync(ct);
-
-        // Latest aggregate samples from the collector (they survive Docker being briefly down).
-        // Cast to a nullable before the default kicks in: on a double, FirstOrDefaultAsync answers
-        // "0" for "there are no rows", and the dashboard printed that as a measured 0%.
-        vm.CpuPercent = await db.MonitoringMetrics
-            .Where(m => m.Name == "cpu.percent" && m.ResourceRef == null)
-            .OrderByDescending(m => m.Timestamp).Select(m => (double?)m.Value).FirstOrDefaultAsync(ct);
-
-        vm.MemoryUsed = await db.MonitoringMetrics
-            .Where(m => m.Name == "mem.used" && m.ResourceRef == null)
-            .OrderByDescending(m => m.Timestamp).Select(m => (long?)m.Value).FirstOrDefaultAsync(ct);
-
-        // The two things the reference dashboard leads with. Read from the templates that are
-        // actually installed and enabled — a tile for something that is not there deploys nothing.
-        var templates = await db.AppTemplates.AsNoTracking()
-            .Where(t => t.IsEnabled)
-            .OrderBy(t => t.Name)
-            .Select(t => new StarterTemplate(t.Id, t.Key, t.Name, t.NameFa, t.Category, t.IconUrl))
-            .ToListAsync(ct);
-
-        // The operator's choice, in their order. This used to be "the first eight alphabetically",
-        // which is not an order anybody picked — a template added later could quietly push one off
-        // the page.
-        var offerable = templates.Where(t => t.Category != "database").ToList();
-        var featured = Harbora.Infrastructure.Templates.FeaturedTemplates.Resolve(
-            Harbora.Infrastructure.Templates.FeaturedTemplates.Parse(
-                await db.Settings.IgnoreQueryFilters()
-                    .Where(s => s.Key == Harbora.Domain.Settings.SettingKeys.FeaturedTemplates)
-                    .Select(s => s.Value).FirstOrDefaultAsync(ct)),
-            offerable.Select(t => t.Key).ToList());
-
-        vm.StarterApps = featured
-            .Select(key => offerable.First(t => t.Key == key))
-            .ToList();
-
-        // Databases are provisioned from the engine catalog, not from app templates. Reading the
-        // catalog means a tile exists only for an engine this installation can really start.
-        vm.StarterDatabases = engine.Catalog
+        // ---- Resources in Production (3a redesign): apps and databases, one table -------------
+        // Reuses the exact row shape /apps and /databases already build from — same metric join,
+        // same "no metrics" honesty — rather than a second, dashboard-only formatting of the same
+        // facts drifting out of step with the pages that own them.
+        var resourceApps = await db.Apps.AsNoTracking()
+            .Where(a => a.WorkspaceId == workspaceId)
+            .Include(a => a.Domains.Where(d => d.IsPrimary))
+            .Include(a => a.Deployments.OrderByDescending(d => d.Number).Take(1))
+            .OrderByDescending(a => a.UpdatedAt)
             .Take(4)
-            .Select(c => new StarterDatabase(c.Type.ToString(), c.DisplayName, c.DisplayNameFa))
+            .ToListAsync(ct);
+
+        var activeDeploymentIds = resourceApps
+            .Where(a => a.ActiveDeploymentId is not null && a.SourceType != AppSourceType.DockerCompose)
+            .Select(a => a.ActiveDeploymentId!.Value)
             .ToList();
+        var activeNumbers = activeDeploymentIds.Count == 0
+            ? new Dictionary<Guid, int>()
+            : await db.Deployments.AsNoTracking()
+                .Where(d => activeDeploymentIds.Contains(d.Id))
+                .ToDictionaryAsync(d => d.Id, d => d.Number, ct);
+        var appMetricRefs = resourceApps
+            .Where(a => a.ActiveDeploymentId is { } id && activeNumbers.ContainsKey(id))
+            .ToDictionary(
+                a => a.Id,
+                a => Harbora.Infrastructure.Deployments.DeploymentPlanning.ContainerName(
+                    a.WorkspaceId, a.Slug, activeNumbers[a.ActiveDeploymentId!.Value]));
+        var appResourceRefs = appMetricRefs.Values.Distinct().ToList();
+        var appMetrics = appResourceRefs.Count == 0
+            ? new List<Harbora.Domain.Monitoring.MonitoringMetric>()
+            : await db.MonitoringMetrics.AsNoTracking()
+                .Where(m => m.ResourceRef != null && appResourceRefs.Contains(m.ResourceRef)
+                            && (m.Name == "cpu.percent" || m.Name == "mem.used"))
+                .OrderByDescending(m => m.Timestamp).Take(500).ToListAsync(ct);
 
-        // Recent errors: failed deploys (with reason) + crashed apps.
-        var failed = await db.Deployments.Include(d => d.App)
-            .Where(d => d.App!.WorkspaceId == workspaceId && d.Status == DeploymentStatus.Failed)
-            .OrderByDescending(d => d.CreatedAt).Take(4).ToListAsync(ct);
-        foreach (var d in failed)
-            vm.RecentErrors.Add(new DashboardError(
-                $"Deploy failed · {d.App?.Name} #{d.Number}",
-                d.ErrorMessage ?? "—", d.FinishedAt ?? d.CreatedAt, $"/deployments/details/{d.Id}"));
-        var crashed = await db.Apps
-            .Where(a => a.WorkspaceId == workspaceId && a.Status == AppStatus.Crashed)
-            .OrderByDescending(a => a.UpdatedAt).Take(3).ToListAsync(ct);
-        foreach (var a in crashed)
-            vm.RecentErrors.Add(new DashboardError($"App crashed · {a.Name}", "Container exited unexpectedly.", a.UpdatedAt, $"/apps/details/{a.Id}"));
-        vm.RecentErrors = vm.RecentErrors.OrderByDescending(e => e.At).Take(5).ToList();
+        vm.ResourceApps = resourceApps.Select(a =>
+        {
+            var deployment = a.Deployments.OrderByDescending(d => d.Number).FirstOrDefault();
+            appMetricRefs.TryGetValue(a.Id, out var metricRef);
+            var cpu = metricRef is null ? null : appMetrics
+                .FirstOrDefault(m => m.ResourceRef == metricRef && m.Name == "cpu.percent")?.Value;
+            var memory = metricRef is null ? null : appMetrics
+                .FirstOrDefault(m => m.ResourceRef == metricRef && m.Name == "mem.used")?.Value;
+            return new ApplicationRowViewModel(
+                a.Id, a.Name, a.Slug, a.SourceType, a.Kind, a.Status,
+                "—", "—",
+                a.Domains.FirstOrDefault(d => d.IsPrimary)?.Host,
+                a.InstanceSizeKey, deployment?.Status, deployment?.Number,
+                deployment?.FinishedAt ?? deployment?.CreatedAt, null,
+                CanOperate: true, cpu, memory is null ? null : (long?)memory.Value, a.MemoryLimitBytes);
+        }).ToList();
 
-        // Live host + Traefik state (best-effort; never crash the dashboard).
+        var resourceDbs = await db.ManagedServices.AsNoTracking()
+            .Where(s => s.WorkspaceId == workspaceId)
+            .OrderByDescending(s => s.CreatedAt)
+            .Take(4)
+            .ToListAsync(ct);
+        var dbTargetRefs = resourceDbs.Select(s => s.Id.ToString()).ToList();
+        var dbLastBackups = dbTargetRefs.Count == 0
+            ? new List<Harbora.Domain.Backups.Backup>()
+            : await db.Backups.AsNoTracking()
+                .Where(b => dbTargetRefs.Contains(b.TargetRef))
+                .OrderByDescending(b => b.CreatedAt)
+                .GroupBy(b => b.TargetRef)
+                .Select(g => g.OrderByDescending(b => b.CreatedAt).First())
+                .ToListAsync(ct);
+
+        vm.ResourceDatabases = resourceDbs.Select(s =>
+        {
+            var lastBackup = dbLastBackups.FirstOrDefault(b => b.TargetRef == s.Id.ToString());
+            return new DatabaseRowViewModel(
+                s.Id, s.Name, s.Type, s.Version, s.Status, "—", "—",
+                s.ContainerName, s.InternalPort, s.Username, s.DatabaseName, s.VolumeName,
+                s.StorageBytes, s.StorageMeasuredAt, null, null, LinkedApps: 0,
+                lastBackup?.FinishedAt ?? lastBackup?.CreatedAt, lastBackup?.Status,
+                s.MemoryLimitBytes, s.ErrorMessage);
+        }).ToList();
+
+        // Live Docker reachability — the in-page banner below, and nothing else on this page depends
+        // on it: everything the old monitoring/backups/team summary panels showed is one click away
+        // on /monitoring, /backups and /users, which is where that detail actually lives.
         try
         {
-            var host = await docker.GetHostInfoAsync(ct);
+            await docker.GetHostInfoAsync(ct);
             vm.DockerAvailable = true;
-            vm.DockerVersion = host.DockerVersion;
-            vm.MemoryTotal = host.TotalMemoryBytes;
-            vm.DiskTotal = host.TotalDiskBytes;
-            vm.DiskUsed = host.TotalDiskBytes - host.FreeDiskBytes;
-            vm.ContainersRunning = host.ContainersRunning;
-
-            var containers = await docker.ListContainersAsync(null, ct);
-            vm.TraefikRunning = containers.Any(c =>
-                c.Name.Contains("traefik", StringComparison.OrdinalIgnoreCase) &&
-                c.State.Equals("running", StringComparison.OrdinalIgnoreCase));
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Docker host info unavailable.");
             vm.DockerAvailable = false;
-            vm.TraefikRunning = null;
-        }
-
-        // Throughput comes from stored counters, not from the live daemon, so it survives Docker
-        // being briefly unreachable — and stays null rather than zero when there is nothing to work
-        // it out from.
-        try
-        {
-            var server = await db.Servers.IgnoreQueryFilters()
-                .Where(s => s.IsLocal).Select(s => (Guid?)s.Id).FirstOrDefaultAsync(ct);
-
-            if (server is { } serverId)
-            {
-                var since = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(30);
-                vm.NetworkInPerSecond = Harbora.Infrastructure.Monitoring.NetworkHistory.Latest(
-                    await network.ForAsync(serverId, "net.rx", since, null, ct));
-                vm.NetworkOutPerSecond = Harbora.Infrastructure.Monitoring.NetworkHistory.Latest(
-                    await network.ForAsync(serverId, "net.tx", since, null, ct));
-            }
-        }
-        catch (Exception ex)
-        {
-            // A missing rate is a blank panel, never a wrong number.
-            logger.LogWarning(ex, "Network throughput unavailable.");
         }
 
         return View(vm);

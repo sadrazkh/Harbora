@@ -27,8 +27,6 @@ public class ErrorPageTests
         return new HomeController(db, new FakeDockerEngine(),
             new Harbora.Infrastructure.Dashboard.AttentionService(db, new FixedClock(),
                 Microsoft.Extensions.Options.Options.Create(new Harbora.Infrastructure.Monitoring.MonitoringOptions())),
-            new Harbora.Infrastructure.Monitoring.NetworkHistory(db),
-            new Harbora.Tests.Fakes.FakeManagedServiceEngine(),
             new AnonymousUser(), NullLogger<HomeController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }

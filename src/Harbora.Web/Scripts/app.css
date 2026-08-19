@@ -638,6 +638,29 @@
   .attention-title { @apply text-[13px] font-medium leading-snug text-ink; }
   .attention-detail { @apply mt-1.5 text-[11.5px] leading-normal text-ink-muted; }
   .attention-action { @apply ms-auto shrink-0 whitespace-nowrap rounded-lg bg-ink px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90; }
+
+  /* Setup progress: replaces the old full getting-started panel + conic-gradient ring with one
+     line beside the page heading — a 56×4px track and a link to the single next step. */
+  .setup-progress { @apply flex items-center gap-2.5 whitespace-nowrap rounded-lg border border-line bg-surface px-[11px] py-2; }
+  .setup-progress-label { @apply text-[11.5px] text-ink-muted; }
+  .setup-progress-track { @apply h-1 w-14 shrink-0 overflow-hidden rounded-full bg-surface-2; }
+  .setup-progress-track > i { @apply block h-full rounded-full bg-accent; }
+  .setup-progress-next { @apply text-[11.5px] font-medium text-accent-text hover:underline; }
+
+  /* Five hairline-divided cells replace the five icon cards of the old dashboard-stat-grid. */
+  .stat-bar { @apply grid grid-cols-2 overflow-hidden rounded-xl border border-line bg-surface sm:grid-cols-5; }
+  .stat-bar > a { @apply border-b border-e border-line px-[18px] py-[14px] last:border-e-0 hover:bg-surface-2 sm:border-b-0; }
+  .stat-bar-label { @apply text-[11px] text-ink-muted; }
+  .stat-bar-value { @apply mt-[9px] block font-mono text-xl font-semibold text-ink; }
+  .stat-bar-value span { @apply ms-1.5 font-sans text-[11px] font-normal; }
+
+  /* Activity panel: a coloured dot, a sentence, a monospace timestamp line — the redesign's
+     replacement for the old numbered "Deployment status" list. */
+  .activity-list { @apply flex flex-col; }
+  .activity-item { @apply flex gap-[11px] border-b border-line py-[11px] last:border-b-0; }
+  .activity-dot { @apply mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full; }
+  .activity-text { @apply text-xs leading-6 text-ink; }
+  .activity-meta { @apply mt-[3px] text-[10.5px] text-ink-faint; }
 }
 
 /* The compact sidebar is a real alternate layout, not merely hidden text: the content gains the

@@ -128,9 +128,6 @@ public sealed class DashboardViewModel
     /// <summary>What needs a person's attention, most serious first. Empty is the good case.</summary>
     public IReadOnlyList<Harbora.Infrastructure.Dashboard.AttentionItem> Attention { get; set; } = [];
 
-    /// <summary>The workspace's projects, which are now the way into everything else.</summary>
-    public List<ProjectSummary> Projects { get; set; } = [];
-
     public int AppCount { get; set; }
     public int ProjectCount { get; set; }
     public int DatabaseCount { get; set; }
@@ -138,49 +135,29 @@ public sealed class DashboardViewModel
     public int RunningCount { get; set; }
     public int FailedDeployments { get; set; }
     public int DeploymentsTotal { get; set; }
-    /// <summary>Null when nothing has been sampled. Never 0 for "we did not look".</summary>
-    public double? CpuPercent { get; set; }
-    /// <summary>Null when nothing has been sampled.</summary>
-    public long? MemoryUsed { get; set; }
 
-    /// <summary>Installed, enabled templates people can start from — never a hardcoded menu.</summary>
-    public List<StarterTemplate> StarterApps { get; set; } = [];
-    public List<StarterDatabase> StarterDatabases { get; set; } = [];
-    public long MemoryTotal { get; set; }
-    public long DiskUsed { get; set; }
-    public long DiskTotal { get; set; }
-    public int ContainersRunning { get; set; }
-    public string DockerVersion { get; set; } = "—";
     public bool DockerAvailable { get; set; }
 
-    /// <summary>
-    /// Bytes per second in and out, or null when it could not be worked out — no samples yet, or a
-    /// container restarted and the counters are not comparable across it. Never 0 for "unknown".
-    /// </summary>
-    public double? NetworkInPerSecond { get; set; }
-    public double? NetworkOutPerSecond { get; set; }
-
-    // Platform health strip
+    // Platform health strip (redesign 3a: the fifth cell of the stat bar).
     public int ServersOnline { get; set; }
     public int ServersTotal { get; set; }
-    /// <summary>null = unknown (Docker unreachable / dev machine).</summary>
-    public bool? TraefikRunning { get; set; }
     public int DomainsTotal { get; set; }
-    public int DomainsSsl { get; set; }
 
+    /// <summary>Recent releases — the deployment half of the Activity panel and the "last deploy"
+    /// column of Resources in Production.</summary>
     public List<Deployment> RecentDeployments { get; set; } = new();
-    public List<App> Apps { get; set; } = new();
-    public List<DashboardError> RecentErrors { get; set; } = new();
-    public int BackupsThisMonth { get; set; }
-    public int BackupSchedulesEnabled { get; set; }
-    public DateTimeOffset? LatestBackupAt { get; set; }
-    public List<DashboardDomain> RecentDomains { get; set; } = [];
-    public List<DashboardTeamMember> TeamMembers { get; set; } = [];
-}
 
-public sealed record DashboardError(string Title, string Detail, DateTimeOffset At, string Link);
-public sealed record DashboardDomain(string Host, bool SslEnabled, string AppName, Guid AppId);
-public sealed record DashboardTeamMember(string Name, string Email, string Role);
+    /// <summary>
+    /// Apps and managed databases together, newest first within each kind — the redesign's unified
+    /// "Resources in Production" table replaces the three separate Projects/Apps/Databases lists the
+    /// dashboard used to carry. Reuses the exact row shape <c>/apps</c> and <c>/databases</c> already
+    /// render with, rather than inventing a parallel one.
+    /// </summary>
+    public List<ApplicationRowViewModel> ResourceApps { get; set; } = [];
+    public List<DatabaseRowViewModel> ResourceDatabases { get; set; } = [];
+
+    public int BackupSchedulesEnabled { get; set; }
+}
 
 /// <summary>Backs the rollback confirmation screen: what would be restored, or why it can't be.</summary>
 public sealed record RollbackViewModel(
@@ -321,9 +298,3 @@ public sealed class LandingViewModel
 public sealed record LandingFeature(string Icon, string Title, string Body);
 public sealed record LandingStep(string Title, string Body);
 public sealed record LandingFaq(string Question, string Answer);
-
-/// <summary>One tile on the dashboard's starter rows.</summary>
-public sealed record StarterTemplate(Guid Id, string Key, string Name, string? NameFa, string Category, string? IconUrl);
-
-/// <summary>One database engine tile — from the catalog, so it can actually be provisioned.</summary>
-public sealed record StarterDatabase(string Type, string Name, string? NameFa);
