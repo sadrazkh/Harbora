@@ -165,14 +165,16 @@
                 <div class="apps-row grid grid-cols-[1fr_auto] items-start gap-x-3 gap-y-2 border-b border-line px-4 py-3.5 transition duration-150 last:border-b-0 hover:bg-surface-2/70 sm:grid-cols-[1.9fr_1.5fr_1.2fr_1.4fr_130px] sm:items-center sm:gap-3"
                      role="row" data-name="@($"{app.Name} {app.Slug} {app.Domain} {SourceLabel(app.SourceType)} {app.Kind}".ToLowerInvariant())" data-status="@filterStatus" data-environment="@app.Environment"
                      data-health="@(!hasReading ? "no-metrics" : isIdle ? "idle" : "normal")" data-deployed="@everDeployed.ToString().ToLowerInvariant()">
-                    <div role="cell" class="flex min-w-0 items-center gap-2.5">
-                        <a href="/apps/details/@app.Id" class="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg bg-accent-soft text-accent-text">
-                            <i data-lucide="@SourceIcon(app.SourceType)" class="h-3.5 w-3.5"></i>
+                    <div role="cell">
+                        <a href="/apps/details/@app.Id" class="resource-identity">
+                            <span class="resource-avatar h-[26px] w-[26px] rounded-lg bg-accent-soft text-accent-text">
+                                <i data-lucide="@SourceIcon(app.SourceType)" class="h-3.5 w-3.5"></i>
+                            </span>
+                            <span>
+                                <strong dir="ltr" class="font-mono text-[13px]">@app.Name</strong>
+                                <small>@app.Kind · @SourceLabel(app.SourceType)</small>
+                            </span>
                         </a>
-                        <div class="min-w-0">
-                            <a href="/apps/details/@app.Id" dir="ltr" class="block truncate font-mono text-[13px] font-medium text-ink hover:text-accent-text">@app.Name</a>
-                            <div class="mt-1.5 truncate text-[10.5px] text-ink-faint">@app.Kind · @SourceLabel(app.SourceType)</div>
-                        </div>
                     </div>
                     <div role="cell" class="apps-cell-health hidden min-w-0 sm:block">
                         <div class="flex items-center gap-2">
