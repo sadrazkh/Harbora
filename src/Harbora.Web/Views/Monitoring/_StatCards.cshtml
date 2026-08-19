@@ -1,0 +1,39 @@
+@model MonitoringDashboardViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    // Routed through the honesty gate so an unreachable daemon — or a fresh collector that has not
+    // ticked yet — shows "not collected yet" rather than a confident 0%. The mockup's uptime, request
+    // count, error rate and p95 latency are not collected at all yet, so they are absent rather than
+    // fabricated.
+    var cpuStat = new StatCardModel("server", T["CPU"].Value,
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(Model.DockerAvailable ? Model.CpuPercent : null, "%"),
+        isFa ? "میانگین نود" : "node average");
+
+    double? diskPct = Model.DiskTotal > 0 ? (double)Model.DiskUsed / Model.DiskTotal * 100 : null;
+    var diskStat = new StatCardModel("archive", T["Disk"].Value,
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(diskPct, "%"),
+        Model.DiskTotal > 0 ? $"{Harbora.Infrastructure.Tenancy.ByteSize.Format(Model.DiskUsed)} / {Harbora.Infrastructure.Tenancy.ByteSize.Format(Model.DiskTotal)}" : null);
+
+    var memStat = new StatCardModel("layers", T["Memory"].Value,
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(
+            Model.MemTotal > 0 ? Model.MemTotal / 1073741824.0 : null, " GB"),
+        isFa ? "کل نود" : "node total");
+
+    var containerStat = new StatCardModel("boxes",
+        isFa ? "کانتینرها" : "Containers",
+        Harbora.Infrastructure.Monitoring.MetricDisplay.For(Model.DockerAvailable ? Model.ContainersRunning : null),
+        isFa ? "در حال اجرا" : "running");
+}
+<div class="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
+    <partial name="Design/_StatCard" model="cpuStat" />
+    <partial name="Design/_StatCard" model="diskStat" />
+    <partial name="Design/_StatCard" model="memStat" />
+    <partial name="Design/_StatCard" model="containerStat" />
+</div>
+
+<!-- CPU chart (Vue island) -->
+<div class="rounded-xl border border-line bg-surface p-4 mb-6">
+    <div class="text-sm text-ink-muted mb-2">CPU % (@(isFa ? "۶۰ دقیقه اخیر" : "last 60 min"))</div>
+    <div id="metrics-chart" data-name="cpu.percent" data-label="CPU %" data-color="#818cf8" style="min-height:120px"></div>
+</div>

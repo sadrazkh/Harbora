@@ -1,0 +1,58 @@
+@model MonitoringDashboardViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var open = Model.Incidents.Where(i => i.ClosedAt is null).ToList();
+}
+@* The reason this page exists: what is wrong right now, before anything else. Pulled from the same
+   Model.Incidents the full timeline below reads — this is a highlighted view of it, not a second
+   source of truth, the same relationship the dashboard's own "needs you" block has to its full
+   activity list. N3 (2026-08-16 notification-system spec) moved the open-incident count here from the
+   topbar's bell, unchanged in every other respect: still only open incidents, still a workspace fact. *@
+<section class="rounded-xl border border-line bg-surface mb-6" data-open-incidents>
+    <div class="flex items-center justify-between gap-2 px-5 py-3.5 border-b border-line">
+        <h2 class="flex items-center gap-2 text-[15px] font-semibold text-ink">
+            <i data-lucide="@(open.Count > 0 ? "shield-alert" : "shield-check")" class="h-4 w-4 @(open.Count > 0 ? "text-danger" : "text-ok")"></i>
+            @(isFa ? "نیازمند توجه اکنون" : "Needs attention now")
+        </h2>
+        @if (open.Count > 0)
+        {
+            <span class="rounded-full bg-danger/15 px-2 py-0.5 text-xs text-danger" data-open-incident-count="@open.Count">
+                @open.Count @(isFa ? "باز" : "open")
+            </span>
+        }
+    </div>
+    <div class="p-5">
+        @if (open.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("shield-check",
+                isFa ? "چیزی نیاز به توجه شما ندارد — همه چیز آرام است." : "Nothing needs you right now — all quiet."))" />
+        }
+        else
+        {
+            <div class="space-y-2">
+                @foreach (var incident in open)
+                {
+                    <div class="rounded-lg bg-danger-soft/60 border border-danger/20 px-3 py-2 text-sm"
+                         data-incident-row data-incident-id="@incident.Id"
+                         data-incident-condition="@incident.Condition" data-incident-subject="@(incident.SubjectRef ?? "")"
+                         data-incident-open="true" data-incident-closed-reason="">
+                        <div class="flex items-center justify-between gap-2">
+                            <span>
+                                <strong>@MonitoringLabels.ConditionLabel(incident.Condition, isFa)</strong>
+                                <span class="text-ink-faint">· @incident.Title</span>
+                            </span>
+                            <div class="flex shrink-0 items-center gap-2">
+                                <partial name="Design/_StatusPill" model="@(new StatusPillModel(isFa ? "باز" : "open", Tone.Error))" />
+                                <form asp-controller="Monitoring" asp-action="AcknowledgeIncident" asp-route-id="@incident.Id" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <button class="text-xs text-accent-text" aria-label="@(isFa ? $"تأیید {incident.Title}" : $"Acknowledge {incident.Title}")">@(isFa ? "تأیید" : "acknowledge")</button>
+                                </form>
+                            </div>
+                        </div>
+                        <p class="mt-1 text-xs text-ink-faint break-all">@incident.Body</p>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</section>

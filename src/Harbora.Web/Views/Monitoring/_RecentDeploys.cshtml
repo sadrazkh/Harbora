@@ -1,0 +1,25 @@
+@model MonitoringDashboardViewModel
+<section class="rounded-xl border border-line bg-surface">
+    <div class="px-4 py-3 border-b border-line font-semibold flex items-center justify-between">
+        <span>@T["Recent Deployments"]</span>
+        @if (Model.FailedDeploys > 0)
+        {
+            <span class="text-xs text-danger">@Model.FailedDeploys @T["Failed"]</span>
+        }
+    </div>
+    <div class="divide-y divide-line">
+        @if (Model.RecentDeploys.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("rocket",
+                System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa"
+                    ? "هنوز استقراری ثبت نشده است." : "No deployments yet."))" />
+        }
+        @foreach (var d in Model.RecentDeploys)
+        {
+            <a href="/deployments/details/@d.Id" class="flex items-center justify-between p-3 hover:bg-surface-2">
+                <span class="text-sm">@d.App?.Name #@d.Number</span>
+                <partial name="_DeployStatusBadge" model="d.Status" />
+            </a>
+        }
+    </div>
+</section>

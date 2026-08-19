@@ -1,0 +1,54 @@
+@model MonitoringDashboardViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+@* What changed recently: everything that fired, open or closed, newest first — the M4 timeline. The
+   open ones are already highlighted above; this is where "how did it stop firing" lives, since a
+   deploy or backup failure never resolves on its own and the reason it closed is the one interesting
+   fact a bare "closed" would have lost (see IncidentClosedReason's own doc comment). *@
+<section id="timeline" class="rounded-xl border border-line bg-surface p-5">
+    <h2 class="text-[15px] font-semibold text-ink flex items-center gap-2 mb-3">
+        <i data-lucide="history" class="h-4 w-4"></i>
+        @(isFa ? "جدول زمانی رخدادها" : "Incident timeline")
+    </h2>
+    <div class="space-y-2">
+        @if (Model.Incidents.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("history",
+                isFa ? "هنوز رخدادی ثبت نشده است." : "No incidents yet."))" />
+        }
+        @foreach (var incident in Model.Incidents)
+        {
+            var isOpen = incident.ClosedAt is null;
+            <div class="rounded-lg bg-surface-2 px-3 py-2 text-sm"
+                 data-incident-row data-incident-id="@incident.Id"
+                 data-incident-condition="@incident.Condition" data-incident-subject="@(incident.SubjectRef ?? "")"
+                 data-incident-open="@(isOpen ? "true" : "false")"
+                 data-incident-closed-reason="@(incident.ClosedReason?.ToString() ?? "")">
+                <div class="flex items-center justify-between gap-2">
+                    <span>
+                        <strong>@MonitoringLabels.ConditionLabel(incident.Condition, isFa)</strong>
+                        <span class="text-ink-faint">· @incident.Title</span>
+                    </span>
+                    <div class="flex shrink-0 items-center gap-2">
+                        @if (isOpen)
+                        {
+                            <partial name="Design/_StatusPill" model="@(new StatusPillModel(isFa ? "باز" : "open", Tone.Error))" />
+                            <form asp-controller="Monitoring" asp-action="AcknowledgeIncident" asp-route-id="@incident.Id" method="post">
+                                @Html.AntiForgeryToken()
+                                <button class="text-xs text-accent-text" aria-label="@(isFa ? $"تأیید {incident.Title}" : $"Acknowledge {incident.Title}")">@(isFa ? "تأیید" : "acknowledge")</button>
+                            </form>
+                        }
+                        else
+                        {
+                            <span data-incident-reason-label>
+                                <partial name="Design/_StatusPill" model="@(new StatusPillModel(MonitoringLabels.ReasonLabel(incident.ClosedReason!.Value, isFa), Tone.Ok))" />
+                            </span>
+                        }
+                    </div>
+                </div>
+                <p class="mt-1 text-xs text-ink-faint break-all">@incident.Body</p>
+            </div>
+        }
+    </div>
+</section>

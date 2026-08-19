@@ -1,0 +1,23 @@
+@model MonitoringDashboardViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<section class="rounded-xl border border-line bg-surface mt-6">
+    <div class="px-4 py-3 border-b border-line font-semibold">SSL &amp; @T["Domains"]</div>
+    <div class="divide-y divide-line">
+        @if (Model.Domains.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("globe",
+                isFa ? "هنوز دامنه‌ای متصل نشده است." : "No domains connected yet.", isFa ? "افزودن دامنه" : "Add domain", "/domains"))" />
+        }
+        @foreach (var d in Model.Domains)
+        {
+            <div class="flex items-center justify-between p-3 text-sm">
+                <span class="font-mono" dir="ltr">@d.Host</span>
+                <partial name="Design/_StatusPill" model="@(new StatusPillModel(
+                    d.SslEnabled ? "🔒 Let's Encrypt" : (isFa ? "بدون SSL" : "no SSL"),
+                    d.SslEnabled ? Tone.Ok : Tone.Idle))" />
+            </div>
+        }
+    </div>
+</section>

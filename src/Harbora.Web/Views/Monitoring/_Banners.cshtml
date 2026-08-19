@@ -1,0 +1,45 @@
+@model MonitoringDashboardViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+    string Gb(long b) => b <= 0 ? "—" : Harbora.Infrastructure.Tenancy.ByteSize.Format(b);
+}
+@* Whatever a worried person needs to know before anything else: a message from the action they just
+   took, a refusal, or a platform-wide fact (Docker unreachable, disk nearly full, backups stale).
+   These stay banners rather than toasts on purpose — a toast is gone by the time a person who just
+   navigated here from an alert email has finished reading the page. *@
+@if (msg is not null)
+{
+    <div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>
+}
+@if (err is not null)
+{
+    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>
+}
+@if (!Model.DockerAvailable)
+{
+    <div class="alert-warning mb-4">@(isFa ? "دسترسی به Docker daemon نیست — سنجه‌های زنده متوقف‌اند." : "Docker daemon unreachable — live metrics paused.")</div>
+}
+@if (Model.DiskWarning)
+{
+    <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm" data-disk-warning data-disk-warn-ratio="@Model.DiskWarnRatio.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)">
+        ⚠ @(isFa ? "فضای دیسک رو به اتمام است" : "Disk space is running low") — <span dir="ltr" class="font-mono">@Gb(Model.DiskUsed) / @Gb(Model.DiskTotal)</span>
+    </div>
+}
+@if (User.IsInRole("Owner") || User.IsInRole("Admin"))
+{
+    @* Removes only Harbora's own build images: orphans of deleted apps, and anything past each
+       app's rollback window. Customer images are never candidates, and an image still in use is
+       left alone by the engine's own contract. Kept beside the disk banner rather than folded away
+       — it is the one action a person reading a disk warning actually wants right now. *@
+    <form asp-controller="Monitoring" asp-action="Cleanup" method="post" class="mb-4 flex items-center gap-3">
+        @Html.AntiForgeryToken()
+        <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">🧹 @(isFa ? "پاک‌سازی دیسک" : "Clean up disk")</button>
+        <span class="text-xs text-ink-faint">@(isFa ? "فقط ایمیج‌های ساخت خود Harbora؛ بازهٔ بازگردانی دست نمی‌خورد." : "Only Harbora's own build images; the rollback window is untouched.")</span>
+    </form>
+}
+@if (Model.BackupWarning)
+{
+    <div class="alert-warning mb-4" data-backup-warning>⚠ @Model.BackupWarningText</div>
+}

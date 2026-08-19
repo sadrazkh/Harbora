@@ -1,0 +1,44 @@
+@model MonitoringDashboardViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+@* Delivery log (N1, 2026-08-16 notification-system spec): one durable row per (message x
+   destination) — what actually went out, or failed to, in reply to everything above. LastError on an
+   alert rule below is a convenience mirror of the newest row here, not the record any more. *@
+<section id="deliveries" class="rounded-xl border border-line bg-surface p-5">
+    <h2 class="text-[15px] font-semibold text-ink mb-3 flex items-center gap-2">
+        <i data-lucide="send" class="h-4 w-4"></i>
+        @(isFa ? "گزارش ارسال اعلان‌ها" : "Notification delivery log")
+    </h2>
+    <div class="space-y-2">
+        @if (Model.Deliveries.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("send",
+                isFa ? "هنوز اعلانی صف نشده است." : "No deliveries queued yet."))" />
+        }
+        @foreach (var d in Model.Deliveries)
+        {
+            <div class="rounded-lg bg-surface-2 px-3 py-2 text-sm"
+                 data-delivery-row data-delivery-id="@d.Id" data-delivery-status="@d.Status"
+                 data-delivery-purpose="@d.Purpose" data-delivery-channel="@d.Channel"
+                 data-delivery-attempts="@d.Attempts">
+                <div class="flex items-center justify-between gap-2">
+                    <span>
+                        <strong>@d.Subject</strong>
+                        <span class="text-ink-faint">· @MonitoringLabels.DeliveryPurposeLabel(d.Purpose, isFa) · @d.Channel</span>
+                    </span>
+                    <span data-delivery-status-label class="shrink-0">
+                        <partial name="Design/_StatusPill" model="@(new StatusPillModel(MonitoringLabels.DeliveryStatusLabel(d.Status, isFa), MonitoringLabels.DeliveryStatusTone(d.Status)))" />
+                    </span>
+                </div>
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa ? $"تلاش‌ها: {d.Attempts}" : $"attempts: {d.Attempts}")
+                </p>
+                @if (d.LastError is not null)
+                {
+                    <p class="mt-1 text-xs text-danger/90 break-all" data-delivery-last-error>@d.LastError</p>
+                }
+            </div>
+        }
+    </div>
+</section>
