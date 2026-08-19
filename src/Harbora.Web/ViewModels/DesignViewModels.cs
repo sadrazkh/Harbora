@@ -63,6 +63,20 @@ public sealed record MetricModel(MetricView View, string Label);
 /// <summary>The title block every page opens with.</summary>
 public sealed record PageHeaderModel(string Title, string? Description = null, string? Badge = null);
 
+/// <summary>
+/// One sidebar row — a pinned essential or a member of a collapsible group, drawn the same way
+/// either side of that line so a group that folds and one that never does still look like one
+/// family of controls. <c>Entry</c> already carries the locked/feature-gated state
+/// <c>NavigationMap.Draw</c> computed; this model only adds the resolved label and, for a pinned
+/// row, the one live count the redesign's stat strip also shows.
+/// </summary>
+public sealed record SidebarItemModel(
+    Harbora.Infrastructure.Navigation.NavEntry Entry,
+    string Label,
+    bool Active,
+    string? Count = null,
+    bool CountDanger = false);
+
 /// <summary>One row of the users table.</summary>
 /// <param name="LastLoginAt">Null for an account that has never been used — not a date of zero.</param>
 public sealed record UserRow(

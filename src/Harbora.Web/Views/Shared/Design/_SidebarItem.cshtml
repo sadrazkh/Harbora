@@ -1,0 +1,29 @@
+@model Harbora.Web.ViewModels.SidebarItemModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var item = Model.Entry.Item;
+}
+@if (Model.Entry.Locked)
+{
+    @* It still goes somewhere, and that is the whole design: the destination is the page that says
+       what this is and who can switch it on, not the feature itself. A grey entry that does nothing
+       at all teaches people the sidebar lies. *@
+    <a href="/features/@item.Feature" title="@(isFa ? "برای شما فعال نیست" : "Not enabled for you")"
+       class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink-faint/70 transition hover:bg-surface-2">
+        <i data-lucide="@item.Icon" class="h-4 w-4 shrink-0 opacity-60"></i>
+        <span class="sidebar-label truncate">@Model.Label</span>
+        <i data-lucide="lock" class="sidebar-footer-copy ms-auto h-3 w-3 shrink-0"></i>
+    </a>
+}
+else
+{
+    <a asp-controller="@item.Controller" asp-action="@item.Action"
+       class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition @(Model.Active ? "bg-accent-soft text-accent-text font-medium" : "text-ink-muted hover:bg-surface-2 hover:text-ink")">
+        <i data-lucide="@item.Icon" class="h-4 w-4 shrink-0"></i>
+        <span class="sidebar-label truncate">@Model.Label</span>
+        @if (Model.Count is not null)
+        {
+            <span class="sidebar-label ms-auto font-mono text-[10.5px] font-medium @(Model.CountDanger ? "text-danger" : "text-ink-faint")" dir="ltr">@Model.Count</span>
+        }
+    </a>
+}

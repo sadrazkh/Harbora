@@ -3,8 +3,11 @@
 @inject Microsoft.Extensions.Options.IOptions<Harbora.Modules.Backup.Infrastructure.BackupFeatureOptions> BackupFeatures
 @inject Microsoft.Extensions.Options.IOptions<Harbora.Modules.Sync.Infrastructure.SyncFeatureOptions> SyncFeatures
 @inject Harbora.Web.Infrastructure.FeatureView Features
+@inject Harbora.Data.HarboraDbContext Db
+@inject Harbora.Application.Abstractions.ICurrentUser CurrentUser
 @using Harbora.Web.Infrastructure
 @using Harbora.Domain.Features
+@using Microsoft.EntityFrameworkCore
 @{
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     // Simple hides the specialist destinations; their routes stay live, so a bookmark or a link in
@@ -28,6 +31,38 @@
     var groups = NavigationMap.Draw(navSource, NavigationCapabilities.For(User), panelMode,
         key => featureStates.TryGetValue(key, out var state) ? state : FeatureState.Locked);
     var currentController = (string?)ViewContext.RouteData.Values["controller"];
+
+    // Redesign 3a: four destinations pinned above the fold with a live count, everything else
+    // folds into collapsible groups below. Pulled from `groups` rather than NavigationMap.All
+    // directly, so a pinned entry still respects whatever capability/feature check already decided
+    // whether this person can see it — the sidebar's one hard rule, unchanged by this redesign.
+    string[] pinnedKeys = ["dashboard", "applications", "services", "deployments"];
+    var allEntries = groups.SelectMany(g => g.Entries).ToList();
+    var pinned = pinnedKeys
+        .Select(key => allEntries.FirstOrDefault(e => e.Item.Key == key))
+        .Where(e => e is not null)
+        .Select(e => e!)
+        .ToList();
+    var collapsibleGroups = groups
+        .Select(g => new NavRow(g.Key, g.Entries.Where(e => !pinnedKeys.Contains(e.Item.Key)).ToList()))
+        .Where(g => g.Entries.Count > 0)
+        .ToList();
+
+    // Live counts for the three pinned resource types, the same facts the redesigned stat bar
+    // shows — read here too because the sidebar renders on every page, not only the dashboard.
+    var workspaceId = CurrentUser.WorkspaceId ?? Guid.Empty;
+    var pinnedAppCount = await Db.Apps.CountAsync(a => a.WorkspaceId == workspaceId);
+    var pinnedDatabaseCount = await Db.ManagedServices.CountAsync(s => s.WorkspaceId == workspaceId);
+    var pinnedFailedDeployments = await Db.Deployments
+        .CountAsync(d => d.App!.WorkspaceId == workspaceId && d.Status == Harbora.Domain.Common.DeploymentStatus.Failed);
+
+    (string? Count, bool Danger) PinnedBadge(string key) => key switch
+    {
+        "applications" => (pinnedAppCount.ToString(), false),
+        "services" => (pinnedDatabaseCount.ToString(), false),
+        "deployments" => (pinnedFailedDeployments > 0 ? pinnedFailedDeployments.ToString() : null, true),
+        _ => (null, false)
+    };
 
     string GroupLabel(string key) => (key, isFa) switch
     {
@@ -82,41 +117,39 @@
         _ => key
     };
 }
-<nav class="flex-1 overflow-y-auto px-3 py-4 space-y-5 scrollbar-thin">
-    @foreach (var group in groups)
+<nav class="flex-1 overflow-y-auto px-3 py-4 space-y-1 scrollbar-thin">
+    @* Redesign 3a: four always-visible essentials with a live count, instead of every destination
+       carrying equal weight inside eight named groups. *@
+    <div class="space-y-0.5 pb-3 mb-2 border-b border-line">
+        @foreach (var entry in pinned)
+        {
+            var badge = PinnedBadge(entry.Item.Key);
+            var active = string.Equals(currentController, entry.Item.Controller, StringComparison.OrdinalIgnoreCase);
+            <partial name="Design/_SidebarItem" model="@(new Harbora.Web.ViewModels.SidebarItemModel(entry, ItemLabel(entry.Item.Key), active, badge.Count, badge.Danger))" />
+        }
+    </div>
+
+    @* Everything else folds away by default and remembers whether this person opened it — per
+       device, the same way the whole-sidebar collapse button below already works, since a full-page
+       round trip on every expand/collapse click would be a worse interaction than what the rail
+       already does for that. A group that holds the page currently open starts expanded regardless,
+       so arriving here by URL never hides where you already are. *@
+    @foreach (var group in collapsibleGroups)
     {
-        <div>
-            <div class="sidebar-group-label px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[.12em] text-ink-faint">
-                @GroupLabel(group.Key)
-            </div>
-            <div class="space-y-0.5">
+        var hasActive = group.Entries.Any(e => string.Equals(currentController, e.Item.Controller, StringComparison.OrdinalIgnoreCase));
+        <details class="group sidebar-group" data-sidebar-group="@group.Key" open="@hasActive">
+            <summary class="sidebar-group-label flex list-none items-center gap-2 rounded-lg px-3 py-2 cursor-pointer select-none [&::-webkit-details-marker]:hidden hover:text-ink-muted">
+                <span class="flex-1 text-[10px] font-semibold uppercase tracking-[.12em] text-ink-faint">@GroupLabel(group.Key)</span>
+                <i data-lucide="chevron-down" class="h-3 w-3 text-ink-faint transition-transform duration-150 group-open:rotate-180"></i>
+            </summary>
+            <div class="space-y-0.5 pb-2">
                 @foreach (var entry in group.Entries)
                 {
-                    var item = entry.Item;
-                    var active = string.Equals(currentController, item.Controller, StringComparison.OrdinalIgnoreCase);
-                    if (entry.Locked)
-                    {
-                        @* It still goes somewhere, and that is the whole design: the destination is the
-                           page that says what this is and who can switch it on, not the feature itself.
-                           A grey entry that does nothing at all teaches people the sidebar lies. *@
-                        <a href="/features/@item.Feature" title="@(isFa ? "برای شما فعال نیست" : "Not enabled for you")"
-                           class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink-faint/70 transition hover:bg-surface-2">
-                            <i data-lucide="@item.Icon" class="h-4 w-4 shrink-0 opacity-60"></i>
-                            <span class="sidebar-label truncate">@ItemLabel(item.Key)</span>
-                            <i data-lucide="lock" class="sidebar-footer-copy ms-auto h-3 w-3 shrink-0"></i>
-                        </a>
-                    }
-                    else
-                    {
-                        <a asp-controller="@item.Controller" asp-action="@item.Action"
-                           class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition @(active ? "bg-accent-soft text-accent-text font-medium" : "text-ink-muted hover:bg-surface-2 hover:text-ink")">
-                            <i data-lucide="@item.Icon" class="h-4 w-4 shrink-0"></i>
-                            <span class="sidebar-label truncate">@ItemLabel(item.Key)</span>
-                        </a>
-                    }
+                    var active = string.Equals(currentController, entry.Item.Controller, StringComparison.OrdinalIgnoreCase);
+                    <partial name="Design/_SidebarItem" model="@(new Harbora.Web.ViewModels.SidebarItemModel(entry, ItemLabel(entry.Item.Key), active))" />
                 }
             </div>
-        </div>
+        </details>
     }
 </nav>
 

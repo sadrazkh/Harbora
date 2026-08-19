@@ -175,6 +175,27 @@ collapseButton?.addEventListener('click', () => {
   localStorage.setItem('harbora-sidebar', next ? 'collapsed' : 'expanded');
 });
 
+// The redesigned sidebar's collapsible groups (NETWORKING/DATA/AI/… — everything but the four
+// pinned essentials) fold the same way: a per-device choice, not a server round trip. The server
+// still renders a sensible default per group (open when it holds the page you are on), so this
+// only ever overrides that for a group somebody has deliberately touched before.
+const sidebarGroups = Array.from(document.querySelectorAll<HTMLDetailsElement>('[data-sidebar-group]'));
+let storedGroups: Record<string, boolean> = {};
+try {
+  storedGroups = JSON.parse(localStorage.getItem('harbora-sidebar-groups') ?? '{}');
+} catch {
+  storedGroups = {};
+}
+for (const details of sidebarGroups) {
+  const key = details.dataset.sidebarGroup;
+  if (!key) continue;
+  if (key in storedGroups) details.open = storedGroups[key];
+  details.addEventListener('toggle', () => {
+    storedGroups[key] = details.open;
+    localStorage.setItem('harbora-sidebar-groups', JSON.stringify(storedGroups));
+  });
+}
+
 // Command palette: the top-bar search is intentionally a button, because a text field that accepts
 // input and does nothing is worse than no search. The palette filters only routes the current user
 // is authorised to see because its entries come from the same navigation map as the sidebar.
