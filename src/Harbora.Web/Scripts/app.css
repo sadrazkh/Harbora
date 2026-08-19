@@ -790,3 +790,19 @@ html.dark .auth-card { box-shadow: 0 20px 60px rgb(0 0 0 / 0.4); }
 @media (prefers-reduced-motion: reduce) {
   .apps-row { transition: none; }
 }
+
+/* ---- App create flow: the catalogue folds into "choose a source" (2026-08-19 create-redesign) ----
+   The image-address list used to be its own section fighting the form for the top of the page. It is
+   now a plain <details> under the template grid — no script needed to open it, so it survives with
+   JavaScript off exactly as well as everything else here. This is deliberately not `.advanced-panel`:
+   that class is reserved for the PanelMode Simple/Advanced fold, whose `open` state PanelSectionTests
+   binds to PanelSections.StartsOpen — this disclosure folds every time, in both modes, and has
+   nothing to do with that setting. */
+@layer components {
+  .catalog-disclosure summary i:last-child { @apply transition duration-150; }
+  .catalog-disclosure[open] summary i:last-child { @apply rotate-180; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .catalog-disclosure summary i:last-child { transition: none; }
+}

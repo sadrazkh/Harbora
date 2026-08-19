@@ -13,6 +13,10 @@
     var environments = ViewBag.Environments as List<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem> ?? [];
     var quickStarts = ViewBag.QuickStarts as IReadOnlyList<TemplateCatalogItemViewModel> ?? [];
 
+    // Kept beside the template grid rather than as a section of its own: it is the same question
+    // ("what do I deploy?") answered a second way — take the tag and wire it up by hand — not a
+    // separate topic competing with step 1 for room on the page.
+    var addressableTemplates = quickStarts.Where(q => !string.IsNullOrWhiteSpace(q.Manifest.Image)).ToList();
 }
 
 <nav class="breadcrumb mb-4" aria-label="breadcrumb">
@@ -27,66 +31,83 @@
     </div>
 </div>
 
-@if (quickStarts.Count > 0)
-{
-    <section id="quick-start" class="create-section mb-6">
-        <div class="section-heading">
-            <div><h2><i data-lucide="sparkles" class="h-4 w-4 text-accent-text"></i>@(isFa ? "شروع سریع با قالب آماده" : "Quick start with a template")</h2><p>@(isFa ? "منابع واقعی قالب را پیش از ایجاد مرور می‌کنید." : "Review the real resource plan before anything is created.")</p></div>
-            <a href="/templates">@(isFa ? "همه قالب‌ها" : "All templates")<i data-lucide="arrow-right" class="h-3.5 w-3.5 rtl:rotate-180"></i></a>
-        </div>
-        <div class="create-template-grid">
-            @foreach (var item in quickStarts)
-            {
-                <a href="/templates/@item.Template.Id/deploy" class="create-template-card">
-                    <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(item.Template.Key, item.Name))" />
-                    <span class="min-w-0 flex-1"><strong>@item.Name</strong><small>@(item.IsManagedService ? (isFa ? "دیتابیس مدیریت‌شده" : "Managed database") : item.IsStack ? $"{item.ResourceCount} resources" : item.Template.Category)</small></span>
-                    @if (item.Manifest.Featured) { <span class="featured-dot" title="Featured"><i data-lucide="star" class="h-3 w-3"></i></span> }
-                    <i data-lucide="chevron-right" class="h-4 w-4 text-ink-faint rtl:rotate-180"></i>
-                </a>
-            }
-        </div>
-    </section>
-}
-
-@if (quickStarts.Any(q => !string.IsNullOrWhiteSpace(q.Manifest.Image)))
-{
-    <section class="create-section">
-        <div class="section-heading"><div><h2><i data-lucide="container" class="h-4 w-4"></i>@(isFa ? "آدرس ایمیج اپ‌های آماده" : "Ready-app image addresses")</h2><p>@(isFa ? "اگر ترجیح می‌دهید خودتان راه‌اندازی کنید، آدرس را بردارید. با کلیک کپی می‌شود." : "If you would rather wire it up yourself, take the address. Click to copy.")</p></div></div>
-        <div class="grid gap-2 sm:grid-cols-2">
-            @foreach (var item in quickStarts.Where(q => !string.IsNullOrWhiteSpace(q.Manifest.Image)))
-            {
-                <div class="flex items-center gap-3 rounded-xl border border-line bg-surface-2 p-3">
-                    <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(item.Template.Key, item.Name))" />
-                    <div class="min-w-0 flex-1">
-                        <strong class="block truncate text-sm text-ink">@item.Name</strong>
-                        @* The stable tag, which is what the deploy form would pick by default. *@
-                        <code dir="ltr" class="mt-0.5 block truncate text-[11px] text-ink-muted" data-copy-text>@item.Manifest.Image</code>
-                    </div>
-                    <div class="flex shrink-0 flex-col items-end gap-1">
-                        @if (item.Manifest.WebsiteUrl is { Length: > 0 } site)
-                        {
-                            <a href="@site" target="_blank" rel="noopener noreferrer" class="text-[11px] text-accent-text hover:underline">@(isFa ? "سایت" : "Site")</a>
-                        }
-                        @if (item.Manifest.DocumentationUrl is { Length: > 0 } docs)
-                        {
-                            <a href="@docs" target="_blank" rel="noopener noreferrer" class="text-[11px] text-accent-text hover:underline">@(isFa ? "مستندات" : "Docs")</a>
-                        }
-                    </div>
-                </div>
-            }
-        </div>
-    </section>
-}
-
-<div class="create-divider"><span>@(isFa ? "یا سورس خودتان را متصل کنید" : "or connect your own source")</span></div>
-
 <form asp-controller="Apps" asp-action="Create" method="post" class="create-layout">
     @Html.AntiForgeryToken()
     <div class="min-w-0 space-y-5">
         <div asp-validation-summary="All" class="alert-danger"></div>
 
-        <section class="create-section">
-            <div class="section-heading"><div><h2><span>1</span>@(isFa ? "روش استقرار" : "Deployment source")</h2><p>@(isFa ? "Harbora بر اساس این انتخاب فقط تنظیمات مرتبط را نشان می‌دهد." : "Only the settings relevant to this source are shown.")</p></div></div>
+        @* Step 1 answers one question two ways: pick a reviewed template (its own flow, at
+           /templates/{id}/deploy) or connect a source of your own, configured in the steps below it.
+           Both are "choosing a source" — this used to be a whole catalogue region sitting above the
+           form, with its own divider, before a *second* "choose a source" step began the form proper.
+           One decision gets one step now; the catalogue no longer competes with the form for the top
+           of the page, it is folded into how the form starts. *@
+        <section class="create-section" id="quick-start">
+            <div class="section-heading">
+                <div><h2><span>1</span>@(isFa ? "روش استقرار" : "Deployment source")</h2><p>@(isFa ? "قالب آماده را با یک کلیک مستقر کنید یا سورس خودتان را متصل کنید؛ فقط تنظیمات مرتبط با انتخاب شما نشان داده می‌شود." : "Deploy a ready template in one click, or connect a source of your own — only the settings it needs are shown below.")</p></div>
+                @if (quickStarts.Count > 0)
+                {
+                    <a href="/templates">@(isFa ? "همه قالب‌ها" : "All templates")<i data-lucide="arrow-right" class="h-3.5 w-3.5 rtl:rotate-180"></i></a>
+                }
+            </div>
+
+            @if (quickStarts.Count > 0)
+            {
+                <div class="create-template-grid">
+                    @foreach (var item in quickStarts)
+                    {
+                        <a href="/templates/@item.Template.Id/deploy" class="create-template-card">
+                            <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(item.Template.Key, item.Name))" />
+                            <span class="min-w-0 flex-1"><strong>@item.Name</strong><small>@(item.IsManagedService ? (isFa ? "دیتابیس مدیریت‌شده" : "Managed database") : item.IsStack ? $"{item.ResourceCount} resources" : item.Template.Category)</small></span>
+                            @if (item.Manifest.Featured) { <span class="featured-dot" title="Featured"><i data-lucide="star" class="h-3 w-3"></i></span> }
+                            <i data-lucide="chevron-right" class="h-4 w-4 text-ink-faint rtl:rotate-180"></i>
+                        </a>
+                    }
+                </div>
+
+                @if (addressableTemplates.Count > 0)
+                {
+                    @* A plain <details> — no script required to open it, so it survives with
+                       JavaScript off exactly as well as everything else on this page. Not
+                       `.advanced-panel`: that class is reserved for the Simple/Advanced fold that
+                       PanelSectionTests binds to PanelSections.StartsOpen, and this disclosure has
+                       nothing to do with that setting — it folds every time, in both modes. *@
+                    <details class="catalog-disclosure mt-3 overflow-hidden rounded-xl border border-line bg-surface-2">
+                        <summary class="flex cursor-pointer list-none items-center justify-between gap-2 p-3 text-xs font-medium text-ink-muted hover:text-ink">
+                            <span class="flex items-center gap-1.5"><i data-lucide="container" class="h-3.5 w-3.5"></i>@(isFa ? "یا آدرس ایمیج یکی از این‌ها را مستقیم بردارید" : "Or take one of these image addresses directly")</span>
+                            <i data-lucide="chevron-down" class="h-3.5 w-3.5 shrink-0"></i>
+                        </summary>
+                        <div class="grid gap-2 border-t border-line p-3 sm:grid-cols-2">
+                            @foreach (var item in addressableTemplates)
+                            {
+                                <div class="flex items-center gap-3 rounded-xl border border-line bg-surface p-3">
+                                    <partial name="Design/_TemplateLogo" model="@(new TemplateLogoModel(item.Template.Key, item.Name))" />
+                                    <div class="min-w-0 flex-1">
+                                        <strong class="block truncate text-sm text-ink">@item.Name</strong>
+                                        @* The stable tag, which is what the deploy form would pick by default. *@
+                                        <code dir="ltr" class="mt-0.5 block truncate text-[11px] text-ink-muted" data-copy-text>@item.Manifest.Image</code>
+                                    </div>
+                                    <div class="flex shrink-0 flex-col items-end gap-1">
+                                        @if (item.Manifest.WebsiteUrl is { Length: > 0 } site)
+                                        {
+                                            <a href="@site" target="_blank" rel="noopener noreferrer" class="text-[11px] text-accent-text hover:underline">@(isFa ? "سایت" : "Site")</a>
+                                        }
+                                        @if (item.Manifest.DocumentationUrl is { Length: > 0 } docs)
+                                        {
+                                            <a href="@docs" target="_blank" rel="noopener noreferrer" class="text-[11px] text-accent-text hover:underline">@(isFa ? "مستندات" : "Docs")</a>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </details>
+                }
+
+                <div class="my-5 flex items-center gap-3 text-[10px] font-medium uppercase tracking-widest text-ink-faint">
+                    <span class="h-px flex-1 bg-line"></span>@(isFa ? "یا سورس خودتان را متصل کنید" : "or connect your own source")<span class="h-px flex-1 bg-line"></span>
+                </div>
+            }
+
             <div class="source-card-grid">
                 <label class="source-card">
                     <input class="sr-only" type="radio" asp-for="SourceType" value="GitRepository" data-src />
