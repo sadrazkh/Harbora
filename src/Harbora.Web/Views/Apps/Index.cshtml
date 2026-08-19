@@ -172,7 +172,15 @@
                             </span>
                             <span>
                                 <strong dir="ltr" class="font-mono text-[13px]">@app.Name</strong>
-                                <small>@app.Kind · @SourceLabel(app.SourceType)</small>
+                                @* The project only earns a place when the list actually spans more
+                                   than one. This page is workspace-scoped, not project-scoped, so
+                                   two similarly named apps in different projects would otherwise be
+                                   indistinguishable — but repeating one project's name on every row
+                                   says nothing. *@
+                                <small data-app-subtitle>
+                                    @app.Kind · @SourceLabel(app.SourceType)@if (Model.SpansProjects && !string.IsNullOrWhiteSpace(app.Project))
+                                    {<text> · </text><span data-app-project dir="ltr" class="font-mono">@app.Project</span>}
+                                </small>
                             </span>
                         </a>
                     </div>

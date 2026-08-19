@@ -12,6 +12,26 @@ public sealed class ApplicationsPageViewModel
     public int Building => Apps.Count(a => a.Status == AppStatus.Deploying);
     public int Stopped => Apps.Count(a => a.Status == AppStatus.Stopped);
     public int Failed => Apps.Count(a => a.Status is AppStatus.Failed or AppStatus.Crashed);
+
+    /// <summary>
+    /// Whether this list is showing more than one project, and so has to say which one each row
+    /// belongs to.
+    ///
+    /// <para>
+    /// The redesign dropped the PROJECT column on the premise that every row shares the project
+    /// named in the top switcher. That holds for environment but not for project:
+    /// <c>AppsController.Index</c> scopes its query to the workspace, not to one project, so a
+    /// workspace with several projects lists them all together — and two apps with similar names in
+    /// different projects would be indistinguishable. Conditional rather than always shown, because
+    /// in the ordinary single-project case the label would repeat itself on every row and say
+    /// nothing.
+    /// </para>
+    /// </summary>
+    public bool SpansProjects => Apps
+        .Select(a => a.Project)
+        .Where(p => !string.IsNullOrWhiteSpace(p))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Count() > 1;
 }
 
 public sealed record ApplicationRowViewModel(

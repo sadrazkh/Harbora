@@ -291,6 +291,68 @@ public class AppsListRedesignHttpTests
             "the redesign replaces the old horizontal-scroll wrapper with a grid that folds into a mobile card");
     }
 
+    // ---- the project, when there is more than one ------------------------------------------------
+    //
+    // The redesign dropped the PROJECT column because the top switcher already names the project.
+    // That premise holds for environment but not for project: AppsController.Index scopes its query
+    // to the workspace, so a workspace with two projects lists both together. These two tests hold
+    // the conditional from both sides — it must appear when it distinguishes rows, and stay out of
+    // the way when it would only repeat itself.
+
+    [Fact]
+    public async Task The_project_appears_on_each_row_once_the_list_covers_more_than_one()
+    {
+        var panel = GivenAFreshPanel("proj-many");
+        await using var factory = panel.Factory;
+
+        panel.Factory.Seed(db =>
+        {
+            var otherProjectId = Guid.CreateVersion7();
+            var otherEnvironmentId = Guid.CreateVersion7();
+            db.Projects.Add(new Harbora.Domain.Projects.Project
+            { Id = otherProjectId, WorkspaceId = panel.WorkspaceId, Name = "Billing", Slug = "billing-proj-many" });
+            db.Environments.Add(new Harbora.Domain.Projects.Environment
+            {
+                Id = otherEnvironmentId, WorkspaceId = panel.WorkspaceId, ProjectId = otherProjectId,
+                Name = "Production", Slug = "production"
+            });
+
+            db.Apps.Add(NewApp(panel, "shop-web", AppStatus.Running));
+            var other = NewApp(panel, "billing-web", AppStatus.Running);
+            other.EnvironmentId = otherEnvironmentId;
+            db.Apps.Add(other);
+        });
+
+        var client = await panel.Factory.SignedInAs("203.0.113.60", "apps-redesign-proj-many@example.com");
+
+        var html = await client.GetStringAsync("/apps");
+
+        html.Should().Contain("data-app-project",
+            "with two projects in one list, a row that does not name its project is ambiguous");
+        html.Should().Contain(">Billing<");
+        html.Should().Contain(">Shop<");
+    }
+
+    [Fact]
+    public async Task The_project_stays_off_the_row_when_every_app_shares_one()
+    {
+        var panel = GivenAFreshPanel("proj-one");
+        await using var factory = panel.Factory;
+        panel.Factory.Seed(db =>
+        {
+            db.Apps.Add(NewApp(panel, "only-web", AppStatus.Running));
+            db.Apps.Add(NewApp(panel, "only-api", AppStatus.Running));
+        });
+        var client = await panel.Factory.SignedInAs("203.0.113.61", "apps-redesign-proj-one@example.com");
+
+        var html = await client.GetStringAsync("/apps");
+
+        html.Should().NotContain("data-app-project",
+            "repeating one project's name on every row costs space and tells the reader nothing");
+        html.Should().Contain("data-app-subtitle",
+            "the subtitle still renders — it is the project fragment inside it that is conditional");
+    }
+
     // ---- fixtures -----------------------------------------------------------------------------
 
     private sealed record DeployedAppFixture(App App, Deployment Deployment);
