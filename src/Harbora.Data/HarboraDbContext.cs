@@ -43,6 +43,19 @@ public class HarboraDbContext : DbContext
     public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<EmailVerificationToken> EmailVerificationTokens => Set<EmailVerificationToken>();
     public DbSet<ExternalLogin> ExternalLogins => Set<ExternalLogin>();
+
+    /// <summary>
+    /// Periods during which a platform administrator was signed in as a customer's user.
+    ///
+    /// Deliberately carries NO global workspace filter, like <see cref="ApiTokens"/> and
+    /// <see cref="UserSessions"/> beside it: the request that reads a row here is running inside the
+    /// customer's workspace scope while the row belongs to the platform's side of the arrangement,
+    /// and the expiry check happens in middleware where there is no scope to speak of yet. Every
+    /// tenant-facing read of this table therefore carries an explicit
+    /// <c>TargetWorkspaceId ==</c>, which is the only thing keeping one customer's support history
+    /// out of another's page.
+    /// </summary>
+    public DbSet<SupportSession> SupportSessions => Set<SupportSession>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<WorkspaceMember> WorkspaceMembers => Set<WorkspaceMember>();
     public DbSet<WorkspaceInvitation> WorkspaceInvitations => Set<WorkspaceInvitation>();
@@ -199,6 +212,19 @@ public class HarboraDbContext : DbContext
             e.Property(x => x.UserAgent).HasMaxLength(512);
             e.HasOne(x => x.User).WithMany(u => u.Sessions).HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<SupportSession>(e =>
+        {
+            // Two reads, two indexes. The middleware looks a live session up by its own id on every
+            // request under it; the customer's page lists their workspace's sessions newest first.
+            e.HasIndex(x => new { x.TargetWorkspaceId, x.StartedAt });
+            e.HasIndex(x => new { x.TargetUserId, x.EndedAt });
+            e.Property(x => x.AdminEmail).HasMaxLength(256).IsRequired();
+            e.Property(x => x.Reason).HasMaxLength(SupportAccess.MaxReasonLength).IsRequired();
+            e.Property(x => x.IpAddress).HasMaxLength(64);
+            // No navigation to User on purpose: AdminEmail is copied onto the row so a deleted
+            // administrator does not turn a customer's support history into a list of blanks.
         });
 
         b.Entity<EmailVerificationToken>(e =>
@@ -718,7 +744,14 @@ public class HarboraDbContext : DbContext
 
         b.Entity<Harbora.Domain.Tenancy.Plan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
         b.Entity<Harbora.Domain.Tenancy.UsageRecord>(e => e.HasIndex(x => new { x.WorkspaceId, x.Period }).IsUnique());
-        b.Entity<AuditLog>(e => e.HasIndex(x => x.CreatedAt));
+        b.Entity<AuditLog>(e =>
+        {
+            e.HasIndex(x => x.CreatedAt);
+            // The customer's support-access page asks "what did support do while they were me" once
+            // per session; without this it is a table scan of every audit row the platform ever
+            // wrote, on a page a worried customer opens.
+            e.HasIndex(x => x.SupportSessionId);
+        });
 
         b.Entity<Harbora.Domain.Billing.Wallet>(e =>
         {
