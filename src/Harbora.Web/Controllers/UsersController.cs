@@ -53,8 +53,9 @@ public sealed class UsersController(
         var personal = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
             .Where(w => w.IsPersonal && w.OwnerUserId != null)
             .ToDictionaryAsync(w => w.OwnerUserId!.Value, w => w.Id, ct);
-        var membershipCounts = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
-            .GroupBy(m => m.UserId).ToDictionaryAsync(g => g.Key, g => g.Count(), ct);
+        // Projected before materialising — see WorkspaceMembershipCounts for why a bare
+        // GroupBy(...).ToDictionaryAsync(...) is the wrong shape here.
+        var membershipCounts = await Harbora.Infrastructure.Security.WorkspaceMembershipCounts.ByUserAsync(db, ct);
         var scopedUsers = await db.WorkspaceMembers.IgnoreQueryFilters().AsNoTracking()
             .Where(m => m.ScopedToProjects).Select(m => m.UserId).Distinct().ToListAsync(ct);
         users = users.Select(u => u with
