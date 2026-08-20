@@ -9,6 +9,30 @@ instruction, so they are left alone deliberately).
 
 ---
 
+## 2026-08-20 — the backlog tracker is now real
+
+`docs/product-audit/backlog.json`'s 66 items previously carried no `status` field, and that absence
+had a cost: work was spent re-discovering, three separate times, that an item was already fixed
+(HARBORA-0008 and, once actually checked, HARBORA-0009 beside it — both closed by `995ebe7` on
+2026-08-07 while their entries still read as open problems).
+
+Every item now carries `"status": "done" | "open" | "partial" | "withdrawn"`, and every non-open
+item carries a `statusEvidence` string naming a commit sha, a `file:line`, or a one-line
+justification — a bare status is exactly as unverifiable as no status at all, so the census test
+below refuses to let one through. Audited against current code, not against each item's own
+(sometimes stale) wording: **32 done, 13 partial, 21 open, 0 withdrawn.** `BacklogStatusTests.cs`
+reads the file itself and fails on any item missing a status, or a non-open status missing
+evidence — the same idiom `DetailTabCensusTests`/`AppAddressCensusTests`/`NotificationTemplateCensusTests`
+already use, pointed at process data instead of source.
+
+The audit surfaced several items that were more done than believed (HARBORA-0009, 0012–0022 as a
+block, 0023–0029, 0047's DR runbook already exists) and at least one the planning notes had
+believed done in error (HARBORA-0065 — the job-concurrency setting existing in code is not the
+same claim as it being reachable through `deploy/.env` on a compose install, and it is not). See
+the sub-project 1 implementation report for the full breakdown.
+
+---
+
 ## Done and live
 
 | | What |

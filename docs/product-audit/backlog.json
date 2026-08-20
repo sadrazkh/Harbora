@@ -1,6 +1,8 @@
 [
   {
     "id": "HARBORA-0001",
+    "status": "done",
+    "statusEvidence": "src/Harbora.Infrastructure/Jobs/JobWorker.cs:56-187 (bounded concurrency + per-target locks via Job.ExcludesOn); JobQueueOptions.cs:31-44 (Jobs:MaxConcurrency); commits beb2f40b, ab669759; tests/Harbora.Tests/JobConcurrencyTests.cs covers all four acceptance criteria including MaxConcurrency=1 restoring serial behavior.",
     "title": "Parallel job execution with per-target locks",
     "category": "job-queue",
     "type": "tech-debt",
@@ -19,6 +21,8 @@
   },
   {
     "id": "HARBORA-0002",
+    "status": "done",
+    "statusEvidence": "src/Harbora.Infrastructure/Jobs/JobExecutionPolicy.cs (per-kind TimeoutFor/MaxAttemptsFor/BackoffFor); JobWorker.cs:219-282; tests/Harbora.Tests/DurableJobQueueTests.cs (A_job_that_never_finishes_is_failed_at_its_deadline; deployments never auto-retry).",
     "title": "Per-kind job timeouts and selective retry",
     "category": "job-queue",
     "type": "tech-debt",
@@ -37,6 +41,8 @@
   },
   {
     "id": "HARBORA-0003",
+    "status": "done",
+    "statusEvidence": "src/Harbora.Data/Migrations/20260807151317_BackupInterruptionRecovery.cs (partial unique index over snapshots and restores); BackupSnapshotService.cs:60-230 (crash reconciliation, staging cleanup); commit e99d38e1; tests/Harbora.Tests/BackupCrashRecoveryTests.cs.",
     "title": "Backup crash reconciliation and DB-level target uniqueness",
     "category": "backup",
     "type": "bug",
@@ -55,6 +61,8 @@
   },
   {
     "id": "HARBORA-0004",
+    "status": "done",
+    "statusEvidence": "src/Harbora.Infrastructure/Deployments/DeploymentPipeline.cs:1733-1748 (failed proxy apply -> deployment Failed + DeployFailed incident + rollback), :1882 (VerifyThroughProxyAsync optional post-cutover probe); HarboraRuntimeOptions.cs:94.",
     "title": "Deployment fails when Traefik apply fails; optional through-proxy probe",
     "category": "deployment",
     "type": "bug",
@@ -73,6 +81,8 @@
   },
   {
     "id": "HARBORA-0005",
+    "status": "done",
+    "statusEvidence": "BackupEngine.cs:1065-1157 (ResolveHostAsync/RequireCapableHost via IServerEngineFactory, named refusal); DiskCleanupService.cs:86-102 (iterates db.Servers); DockerTcpGateway.cs:48-51 (engines.ResolveAsync(service.ServerId)).",
     "title": "Backups, disk cleanup and TCP gateway resolve engines per server",
     "category": "multi-node",
     "type": "bug",
@@ -91,6 +101,8 @@
   },
   {
     "id": "HARBORA-0006",
+    "status": "done",
+    "statusEvidence": "src/Harbora.Infrastructure/Jobs/JobStartupGate.cs; DependencyInjection.cs registers JobReconciler before JobWorker behind the gate; commit d0adab98; tests/Harbora.Tests/DurableJobQueueTests.cs (The_worker_claims_nothing_until_startup_reconciliation_has_finished).",
     "title": "Fix JobWorker vs reconcilers boot race",
     "category": "job-queue",
     "type": "bug",
@@ -109,6 +121,8 @@
   },
   {
     "id": "HARBORA-0007",
+    "status": "done",
+    "statusEvidence": "src/Harbora.Infrastructure/Deployments/CronJobRunner.cs:130-195 (NetworkPlan.Primary(environmentNetwork, workspaceNetwork)); commit d73b44a; tests/Harbora.Tests/CronRunnerTests.cs.",
     "title": "Cron jobs join the environment network",
     "category": "networking",
     "type": "bug",
@@ -127,6 +141,8 @@
   },
   {
     "id": "HARBORA-0008",
+    "status": "done",
+    "statusEvidence": "commit 995ebe7 (2026-08-07); current src/Harbora.Web/Views/Backups/_Destinations.cshtml:132-162 (SFTP fields inside the destination form, not the schedules loop); tests/Harbora.Tests/BackupDestinationFormTests.cs.",
     "title": "Backups UI: move SFTP fields out of the schedules loop",
     "category": "ui",
     "type": "bug",
@@ -145,6 +161,8 @@
   },
   {
     "id": "HARBORA-0009",
+    "status": "done",
+    "statusEvidence": "commit 995ebe7 (2026-08-07) fixed all four acceptance criteria in the same commit as 0008: _Topbar.cshtml bell link, Networks/Index.cshtml database link, Terminal/Index.cshtml breadcrumb, 17 lucide icons (main.ts), four empty states, Routes dev copy, Tenants stale phase note, Terminal.vue text-success class; tests/Harbora.Tests/{LinkTargetTests,IconCoverageTests,EmptyStateCoverageTests}.cs all pass. Not called out as done in the plan's own 'known at planning time' list; found only by auditing behind the same commit that fixed 0008.",
     "title": "UX small-fix bundle: dead links, icons, empty states, stray copy",
     "category": "ui",
     "type": "bug",
@@ -163,6 +181,8 @@
   },
   {
     "id": "HARBORA-0010",
+    "status": "done",
+    "statusEvidence": "src/Harbora.Web/Controllers/Api/ApiV1Controller.cs:232-255 (POST deployments/{id}/cancel); Harbora.Cli CancelCommand; Views/Deployments/Details.cshtml + Views/Activity/Index.cshtml (queue position + cancel button); QueuePosition.cs; tests DeploymentQueueAndCancelTests.cs, CliCancelTests.cs, QueuePositionTests.cs (62/62 passing).",
     "title": "Deployment queue transparency and cancel everywhere",
     "category": "deployment",
     "type": "feature-gap",
@@ -181,6 +201,8 @@
   },
   {
     "id": "HARBORA-0011",
+    "status": "partial",
+    "statusEvidence": "The three named static defects are fixed: deploy/install.sh:316,525 writes NodeAgent__PublicUrl/TrustForwardedClientCertificate; deploy/traefik/node-agent.yml.template templates the host instead of hardcoding panel.example.com; AdminCommands.cs:200-215 implements 'harbora node-ca'. A nightly live-host E2E lane (deploy/live-host-proof.sh step 7 + .github/workflows/nightly-live-host.yml) now automates exactly the acceptance criteria's 'enroll a node, deploy onto it, verify Online and Traefik-routed' scenario, but this environment has no gh CLI or live-infra access to confirm that lane has ever gone green, so the live round trip itself remains unverified from here.",
     "title": "Node Agent v1 works out of the box",
     "category": "node-agent",
     "type": "bug",
@@ -199,6 +221,8 @@
   },
   {
     "id": "HARBORA-0012",
+    "status": "done",
+    "statusEvidence": "src/Harbora.Infrastructure/Maintenance/DataRetentionSweeper.cs covers all seven named tables (DeploymentLogs, AuditLogs, CronRuns, NodeCommandRecord, NodeEventRecord, IdempotencyRecord, PasswordResetToken) plus more, each with a Retention:* option and a documented default; hosted service registered DependencyInjection.cs:243-245; tests/Harbora.Tests/DataRetentionSweeperTests.cs uses a fake clock. Production separately overrides retention values via an untracked compose override, which is a deployment/config decision, not evidence the sweeper itself is missing or broken.",
     "title": "Retention sweeper for unbounded tables",
     "category": "operations",
     "type": "tech-debt",
@@ -217,6 +241,8 @@
   },
   {
     "id": "HARBORA-0013",
+    "status": "done",
+    "statusEvidence": "src/Modules/Backup/Harbora.Modules.Backup.Infrastructure/BackupSnapshotService.cs:157 (auto-enqueues BackupVerify after every snapshot); BackupJobHandlers.cs:61-141; BackupCenterController.cs:264-274 + Views/BackupCenter/Index.cshtml:378-380 ('verify now' button).",
     "title": "Module backup verification actually runs",
     "category": "backup",
     "type": "bug",
@@ -235,6 +261,8 @@
   },
   {
     "id": "HARBORA-0014",
+    "status": "done",
+    "statusEvidence": "src/Modules/Backup/Harbora.Modules.Backup.Domain/RestoreJob.cs:87 (SafetySnapshotRef); RestoreService.cs:314-337 (safety snapshot taken and required before an overwriting restore proceeds); commit b2a12cb0; shown in Views/BackupCenter/Index.cshtml:428.",
     "title": "Module restore takes a safety snapshot first",
     "category": "backup",
     "type": "feature-gap",
@@ -253,6 +281,8 @@
   },
   {
     "id": "HARBORA-0015",
+    "status": "done",
+    "statusEvidence": "src/Harbora.Infrastructure/Services/DatabaseAccessService.cs:256-334 (RotateAsync branches on CanOpenLocally exactly like IssueAsync/CloseAsync); commit 4aaa3a81. Confirmed on master -- the unmerged fix/rotation-attach-keys worktree branch has zero commits ahead of master, so nothing relevant is stranded off-branch.",
     "title": "External DB access rotation honors CanOpenLocally",
     "category": "database",
     "type": "bug",
@@ -271,6 +301,8 @@
   },
   {
     "id": "HARBORA-0016",
+    "status": "done",
+    "statusEvidence": "src/Harbora.Data/Migrations/20260808061352_MetricRollupChartIndex.cs creates IX_MetricRollups_ServerId_Name_ResourceRef_Period_PeriodStart, the exact composite index requested.",
     "title": "Index MetricRollups",
     "category": "monitoring",
     "type": "tech-debt",
@@ -289,6 +321,8 @@
   },
   {
     "id": "HARBORA-0017",
+    "status": "done",
+    "statusEvidence": "tests/Harbora.Tests/DocumentationDriftTests.cs (23 tests, all passing) pins README/RUNBOOK/node-doc claims to values read from code (verb counts, DB engine list, Redis-unused note, compose env keys); docs/overhaul/{12,15,16,17}*.md carry a 'superseded for planning' banner naming docs/product-audit/17-implementation-roadmap.md as the single roadmap.",
     "title": "Documentation truth pass",
     "category": "documentation",
     "type": "tech-debt",
@@ -307,6 +341,8 @@
   },
   {
     "id": "HARBORA-0018",
+    "status": "done",
+    "statusEvidence": "ci.yml now has dotnet/postgres/frontend/scripts/node-agent-publish jobs plus a 'complete' gate requiring all; the scripts job runs bash -n/shellcheck over every tracked deploy script; release-cli.yml:56-64 emits .sha256 for CLI assets; the NuGet push gate's unreachable if: condition is fixed to a two-step decide-then-push pattern.",
     "title": "CI consolidation, shellcheck, CLI checksums",
     "category": "ci",
     "type": "tech-debt",
@@ -325,6 +361,8 @@
   },
   {
     "id": "HARBORA-0019",
+    "status": "done",
+    "statusEvidence": "src/Harbora.NodeAgent/Hosting/HeartbeatReporter.cs:114-129 (ActiveDatabaseGrants/ActiveTunnels populated from live component reads); NodeConditionTracker.cs (edge-detects and publishes DiskPressure/MemoryPressure/CpuPressure/CertificateExpiring/CertificateRotated/ContainerStateChanged/TunnelStateChanged, the seven previously-silent kinds); tests/Harbora.NodeAgent.Tests/NodeConditionTrackerTests.cs, HeartbeatTests.cs.",
     "title": "Populate heartbeat gauges and publish declared node events",
     "category": "node-agent",
     "type": "bug",
@@ -343,6 +381,8 @@
   },
   {
     "id": "HARBORA-0020",
+    "status": "done",
+    "statusEvidence": "tests/Harbora.Postgres.Tests/ project runs against a real Testcontainers postgres:16-alpine; MigrationTests.cs has Every_migration_applies_to_an_empty_database and An_install_at_the_previous_release_can_be_carried_across; .github/workflows/ci.yml 'postgres' job (lines 139-170) is required by the 'complete' gate. Could not execute locally (no Docker on this dev machine), but the wiring is unambiguous from static inspection.",
     "title": "Testcontainers Postgres test lane",
     "category": "testing",
     "type": "tech-debt",
@@ -361,6 +401,8 @@
   },
   {
     "id": "HARBORA-0021",
+    "status": "done",
+    "statusEvidence": "tests/Harbora.Tests/Http/ (48 *HttpTests.cs files on HarboraWebFactory : WebApplicationFactory) cover the capability matrix, webhook HMAC (GitHub/Gitea/GitLab), antiforgery, 429 rate limiting, SetupGuard, and the API v1 error contract. Ran locally: 311/311 pass.",
     "title": "HTTP integration lane (WebApplicationFactory)",
     "category": "testing",
     "type": "tech-debt",
@@ -379,6 +421,8 @@
   },
   {
     "id": "HARBORA-0022",
+    "status": "partial",
+    "statusEvidence": "A real nightly lane exists: .github/workflows/nightly-live-host.yml (cron, disposable hosts) triggers deploy/live-host-proof.sh, which walks install -> node enroll -> deploy -> domain/TLS -> backup/restore point -> upgrade end to end against real infrastructure. This resolves the item's core problem (no automated live-host proof existed at all), but the specific acceptance bar 'twice consecutively before phase exit' describes an actual run history this environment cannot see (no gh CLI, no live-infra access) -- whether the lane has ever gone green, let alone twice in a row, is unconfirmed from here.",
     "title": "Live-host E2E CI lane (R0 proof)",
     "category": "testing",
     "type": "tech-debt",
@@ -397,6 +441,8 @@
   },
   {
     "id": "HARBORA-0023",
+    "status": "done",
+    "statusEvidence": "commit b82cde8; src/Harbora.Data/Migrations/20260817214810_EnvironmentRequired.cs (backfill then non-nullable AlterColumn + required FK); App.cs:24 and ManagedService.cs:15 now non-nullable Guid EnvironmentId; NetworkPlan.cs:28-34 always attaches exactly one network; NetworkPlanTests.cs, CrossTenantIsolationTests.cs.",
     "title": "Finish the environment model (required EnvironmentId, single network)",
     "category": "application",
     "type": "tech-debt",
@@ -415,6 +461,8 @@
   },
   {
     "id": "HARBORA-0024",
+    "status": "done",
+    "statusEvidence": "ManagedServiceEngine.cs:212-243 (FailAsync sets ErrorMessage, opens an AlertIncident, sends a notification); DatabasesController.cs:517-541 (Reprovision doubles as retry); Views/Databases/Details.cshtml:267-271 shows the error; commits c1b6db7, d6494f7.",
     "title": "Surface managed-service provisioning failures",
     "category": "database",
     "type": "bug",
@@ -433,6 +481,8 @@
   },
   {
     "id": "HARBORA-0025",
+    "status": "done",
+    "statusEvidence": "DatabasesController.cs:639-699 (Rotate -> RotateConfirm listing attached apps -> RotateQueueRedeploys); Views/Databases/RotateConfirm.cshtml; ManagedServiceEngine.cs:403-502 RotatePasswordAsync returns the affected app list.",
     "title": "DB rotation offers batch redeploy of attached apps",
     "category": "database",
     "type": "bug",
@@ -451,6 +501,8 @@
   },
   {
     "id": "HARBORA-0026",
+    "status": "done",
+    "statusEvidence": "ActivityController.cs + Views/Activity/Index.cshtml (workspace-scoped job list, status chips, cancel) covers the jobs that actually queue (backup/restore/verify); BackupsController.cs/BackupCenterController.cs set TempData['MessageLinksToActivity'] so toasts link to the row. Clone/cleanup/measure run synchronously in-request and have no JobKind, so the original 'fire-and-forget with no way to watch' complaint does not apply to them post-redesign.",
     "title": "/activity job list page with long-operation toasts linking to it",
     "category": "ui",
     "type": "feature-gap",
@@ -469,6 +521,8 @@
   },
   {
     "id": "HARBORA-0027",
+    "status": "done",
+    "statusEvidence": "commits 179230bb, 0ccbd6d; DeploymentsController.cs:221-254 (Retry, gated on Failed); Views/Apps/Details.cshtml:671-673 (build-arg checkbox, also applied to compose builds); tests/Harbora.Tests/Http/DeploymentRetryHttpTests.cs, BuildArgCheckboxHttpTests.cs.",
     "title": "Deploy retry action and build args",
     "category": "deployment",
     "type": "feature-gap",
@@ -487,6 +541,8 @@
   },
   {
     "id": "HARBORA-0028",
+    "status": "done",
+    "statusEvidence": "commit 6cabe55; DeploymentEngine.cs:73-118 (quota + scheduler.CheckAsync -> CapacityRefusedException + disk check -> LowDiskRefusedException at queue time); HostPortAllocator.cs:82-175 (live TCP-bind probe + self-healing NextViablePort); tests/Harbora.Tests/DeploymentPreflightTests.cs.",
     "title": "Redeploy capacity re-check, OS port-burn handling, disk pre-flight",
     "category": "deployment",
     "type": "tech-debt",
@@ -505,6 +561,8 @@
   },
   {
     "id": "HARBORA-0029",
+    "status": "done",
+    "statusEvidence": "AlertsController.cs:92-166 (Edit, Toggle, all-or-nothing threshold validation); MonitoringOptions.cs (DiskWarnRatio, BackupStalenessHours options-bound with documented defaults); tests/Harbora.Tests/Http/AlertManagementHttpTests.cs.",
     "title": "Alert management: edit/toggle, validation, configurable thresholds",
     "category": "monitoring",
     "type": "bug",
@@ -523,6 +581,8 @@
   },
   {
     "id": "HARBORA-0030",
+    "status": "partial",
+    "statusEvidence": "LifecycleHistory.cs + AlertMetric.RestartRate + MetricsCollector.cs:145-150 give real uptime percent, restart count, and a restart-rate alert rule (LifecycleHistoryTests.cs), surfaced at AppsController.cs:668-716 / MonitoringController.cs:140-148. But Views/Monitoring/_AppHealth.cshtml:20-23 and Apps/Details.cshtml:392-409 render the restart count as plain text ('X restarts - last 30d'), not the sparkline the acceptance criteria names -- no restart-series _Sparkline usage exists anywhere.",
     "title": "Uptime and restart-count collection",
     "category": "monitoring",
     "type": "feature-gap",
@@ -541,6 +601,8 @@
   },
   {
     "id": "HARBORA-0031",
+    "status": "partial",
+    "statusEvidence": "AlertIncident.cs (open/resolve/acknowledge/expire lifecycle) and Views/Monitoring/_OpenIncidents.cshtml (timeline UI) are fully built and tested (AlertIncidentServiceTests.cs, 10 tests). But UnreadNotificationsViewComponent.cs:8-20 documents a deliberate later redesign (N3, commit 95c6d8f): the bell now counts unread per-user notifications, not open incidents, so 'bell badge counts open incidents' is no longer true as literally written, even though an open-incident badge does exist elsewhere on /monitoring itself.",
     "title": "Alert incident lifecycle and timeline",
     "category": "monitoring",
     "type": "feature-gap",
@@ -559,6 +621,7 @@
   },
   {
     "id": "HARBORA-0032",
+    "status": "open",
     "title": "Database logical export/import and connection snippets",
     "category": "database",
     "type": "feature-gap",
@@ -577,6 +640,8 @@
   },
   {
     "id": "HARBORA-0033",
+    "status": "partial",
+    "statusEvidence": "Volume.cs:16-26 has a Protected flag that blocks delete (doc-commented HARBORA-0033); AppsController.cs:942-1004 RemoveVolume(deleteData) + Views/Apps/Volumes.cshtml:38-116 offer a keep/delete choice with tailored confirmation text. But VolumeOrphanReport.cs:26-35 self-documents that IDockerEngine still has no volume-listing method, so its 'section three' (real unowned Docker volumes on disk) always prints 'not checked' rather than an actual enumeration -- tests/Harbora.Tests/VolumeOrphanReportTests.cs:165-166 pins that honesty. The orphan-report acceptance criterion is not met; the other two are.",
     "title": "Volume safety: Protected flag, orphan report, deleteData in UI",
     "category": "storage",
     "type": "feature-gap",
@@ -595,6 +660,7 @@
   },
   {
     "id": "HARBORA-0034",
+    "status": "open",
     "title": "Move an application between servers",
     "category": "multi-node",
     "type": "feature-gap",
@@ -613,6 +679,8 @@
   },
   {
     "id": "HARBORA-0035",
+    "status": "partial",
+    "statusEvidence": "WorkspacesController.cs:341-364 TransferOwnership is now a real, audited, owner-gated self-service UI action -- the item's own 'only via recovery CLI' claim no longer holds. But ProjectGrant.cs still has no AppId column (per-app grants unimplemented) and ApiToken.cs is still strictly UserId-bound (no workspace-scoped service tokens).",
     "title": "Per-app grants, ownership transfer, service accounts",
     "category": "identity",
     "type": "feature-gap",
@@ -631,6 +699,8 @@
   },
   {
     "id": "HARBORA-0036",
+    "status": "done",
+    "statusEvidence": "NotificationService.cs, NotificationDeliveryJobHandler.cs, AlertDedup.cs/AlertDedupWindow.cs, NotificationTemplateCatalog.cs (fa+en), UnreadNotificationsViewComponent.cs, NotificationsController.cs; three-times retry with backoff at JobExecutionPolicy.cs:112; delivery log at MonitoringController.cs:196; commits across N1-N5 (4b889ca, 633f462, 66230a7, a27acf9, 3bd1cb4); tests NotificationDeliveryRetryTests.cs, NotificationTemplateCensusTests.cs, NotificationInAppFanOutTests.cs. Matches docs/superpowers/STATUS.md's own claim that Phase 9 (N1-N5) is done and deployed.",
     "title": "Notification system core",
     "category": "notifications",
     "type": "feature-gap",
@@ -649,6 +719,8 @@
   },
   {
     "id": "HARBORA-0037",
+    "status": "done",
+    "statusEvidence": "NotificationsController.cs:123-182 (preference matrix + quiet-hours endpoints), Views/Notifications/Preferences.cshtml; NotificationDigestRunner.cs/NotificationDigestScheduler.cs (digest fold); QuietHours.cs (downgrades non-critical to digest); RunWeeklyReportAsync; tests NotificationPreferenceRoutingTests.cs, NotificationDigestRunnerTests.cs, NotificationPreferenceRulesTests.cs. The backlog's 'hourly/daily' phrasing is realized as one hourly digest mode plus a separate weekly report, matching doc 09 section 4.2's own plan rather than a per-user hourly-vs-daily toggle.",
     "title": "Notification preferences, digest, quiet hours, weekly report",
     "category": "notifications",
     "type": "feature-gap",
@@ -667,6 +739,7 @@
   },
   {
     "id": "HARBORA-0038",
+    "status": "open",
     "title": "Customer email service phase 1: BYO providers + ingest relay + Dev Inbox",
     "category": "email",
     "type": "feature-gap",
@@ -685,6 +758,7 @@
   },
   {
     "id": "HARBORA-0039",
+    "status": "open",
     "title": "Harbora-managed email relay",
     "category": "email",
     "type": "feature-gap",
@@ -703,6 +777,7 @@
   },
   {
     "id": "HARBORA-0040",
+    "status": "open",
     "title": "PR preview environments to GA",
     "category": "deployment",
     "type": "feature-gap",
@@ -721,6 +796,7 @@
   },
   {
     "id": "HARBORA-0041",
+    "status": "open",
     "title": "Repo-committed IaC apply (harbora.yml services)",
     "category": "cli-api",
     "type": "feature-gap",
@@ -739,6 +815,8 @@
   },
   {
     "id": "HARBORA-0042",
+    "status": "partial",
+    "statusEvidence": "ApiV1Controller.cs now has nine endpoints including POST deployments/{id}/cancel (commit fd7ab3ce) and GET deployments/{id}; CLI Commands.cs:471 calls cancel -- genuine progress beyond the item's original evidence. But env-var management, domain management, rollback, a deployments-list endpoint, --json output, OpenAPI (no Swashbuckle/AddOpenApi/MapOpenApi anywhere), and idempotency keys are all still absent.",
     "title": "API v1 expansion, OpenAPI, CLI phase 2",
     "category": "cli-api",
     "type": "feature-gap",
@@ -757,6 +835,7 @@
   },
   {
     "id": "HARBORA-0043",
+    "status": "open",
     "title": "Marketplace growth with CI validation harness",
     "category": "templates",
     "type": "feature-gap",
@@ -775,6 +854,7 @@
   },
   {
     "id": "HARBORA-0044",
+    "status": "open",
     "title": "Multi-service template live proof and broker requirements",
     "category": "templates",
     "type": "feature-gap",
@@ -793,6 +873,7 @@
   },
   {
     "id": "HARBORA-0045",
+    "status": "open",
     "title": "Simple/Advanced in-page coverage and localization consolidation",
     "category": "ui",
     "type": "ux",
@@ -811,6 +892,8 @@
   },
   {
     "id": "HARBORA-0046",
+    "status": "partial",
+    "statusEvidence": "Substantial convergence landed since the item was written: BackupDeliveryService (delivery channels), KopiaCommands.cs:226-234 (maintenance/GC now wired), snapshot progress tracking, conflict-strategy handling. But appsettings.json:100 still has 'Backup': false (the GA flip never happened) and no 'legacy = maintenance mode' badge exists in the Backups views; IBackupNotificationService.cs:27 NoRecentBackup is still an unreferenced dead enum member.",
     "title": "Backup module parity and GA flip",
     "category": "backup",
     "type": "feature-gap",
@@ -829,6 +912,8 @@
   },
   {
     "id": "HARBORA-0047",
+    "status": "done",
+    "statusEvidence": "docs/disaster-recovery.md exists (291 lines, commits 837184e6 and a00cc3f5, 2026-08-08, both ancestors of HEAD on master), covering exactly the three named scenarios (panel-host loss, app loss, node loss) plus a quarterly drill checklist. The item was assumed open both by the plan's own planning-time list and by the premise of the plan's later Sub-project 12 -- it is not; independently confirmed present (15KB, 23 section headers) in this worktree.",
     "title": "Disaster-recovery runbook and restore drill checklist",
     "category": "documentation",
     "type": "tech-debt",
@@ -847,6 +932,7 @@
   },
   {
     "id": "HARBORA-0048",
+    "status": "open",
     "title": "Platform admin operations pack",
     "category": "admin",
     "type": "feature-gap",
@@ -865,6 +951,7 @@
   },
   {
     "id": "HARBORA-0049",
+    "status": "open",
     "title": "Metering covers services, volumes and buckets",
     "category": "tenancy",
     "type": "feature-gap",
@@ -883,6 +970,8 @@
   },
   {
     "id": "HARBORA-0050",
+    "status": "partial",
+    "statusEvidence": "DNS-01 wildcard support via Cloudflare is now real and admin-configurable (deploy/RUNBOOK.md:94-99, deploy/cloudflare.compose.yml:24-27 dnschallenge.provider=cloudflare), covering panel/apps-root/S3 domains. But custom certificate upload wired to Traefik still does not exist in DomainsController.cs/RoutesController.cs; README.md:66-69 still describes wildcard as DNS-01-only, without documenting the Cloudflare path either.",
     "title": "Custom certificates and DNS-01 wildcard support",
     "category": "domains",
     "type": "feature-gap",
@@ -901,6 +990,8 @@
   },
   {
     "id": "HARBORA-0051",
+    "status": "done",
+    "statusEvidence": "docs/node-agent/merge-notes.md:42-56 (explicit 'Deprecated as of v0.2.0' notice); Views/Servers/Index.cshtml:21-38 (in-page deprecation banner); deploy/RUNBOOK.md:235-238 (legacy agent removed from the primary path); tests/Harbora.Tests/DocumentationDriftTests.cs ties the notice to Harbora.Agent's continued existence. Cross-confirmed by docs/product-audit/18-open-questions.md Q3: 'ANSWERED, Phase 2 Task 9' -- the EOL date itself is deliberately deferred pending Node v1 GA telemetry, which the acceptance criteria itself allows ('recorded after node v1 GA telemetry').",
     "title": "Legacy HTTP agent deprecation policy",
     "category": "node-agent",
     "type": "tech-debt",
@@ -919,6 +1010,8 @@
   },
   {
     "id": "HARBORA-0052",
+    "status": "partial",
+    "statusEvidence": "A rolling cleanup list, not swept as a whole. AlertEvent.ThresholdBreached is now wired in (MetricsCollector.cs:165,196,211,218, commits a27acf9/512a7c6), no longer dead. But the flagship example the item names, the unused StackExchange.Redis dependency, is still referenced (Harbora.Infrastructure.csproj:23) and the redis service still runs unused in docker-compose.yml:74-79 (the compose file's own comment admits it); DeploymentStatus.Pushing is still never assigned. Not exhaustively checked against the full P3 list per the audit's own scope guidance.",
     "title": "Dead-surface cleanup bundle",
     "category": "code-health",
     "type": "tech-debt",
@@ -937,6 +1030,8 @@
   },
   {
     "id": "HARBORA-0053",
+    "status": "partial",
+    "statusEvidence": "Views/Home/Index.cshtml's dashboard checklist now includes a backups step (BackupSchedulesEnabled > 0 -> 'Enable backups', commit 0ee73cbe, 2026-08-19), closing part of the gap. But Views/Setup/Index.cshtml is still one flat unstepped form, and the checklist still has no SMTP/notifications step.",
     "title": "Onboarding: setup wizard steps and protect-it checklist",
     "category": "onboarding",
     "type": "ux",
@@ -955,6 +1050,8 @@
   },
   {
     "id": "HARBORA-0054",
+    "status": "partial",
+    "statusEvidence": "The interim honesty bar the item's own acceptance criteria allows ('Until then: preview banner + hidden in Simple mode') is fully met: Views/Ai/Index.cshtml:17-38 has a preview banner explicitly citing HARBORA-0054, and NavigationMap.cs:94-104 marks the ai nav entry Advanced-only, both confirmed by docs/product-audit/18-open-questions.md Q4 ('HALF ANSWERED... (c) is done... (a) is not'). But the primary condition, one real OpenRouter round-trip, is unmet and cannot be verified from this environment (no provider account or key here); doc 18 itself says plainly '0054 stays open on (a) alone', so this is not fully resolved despite the real interim work.",
     "title": "AI gateway real-provider verification or honest gating",
     "category": "ai",
     "type": "investigation",
@@ -973,6 +1070,7 @@
   },
   {
     "id": "HARBORA-0055",
+    "status": "open",
     "title": "MonitoringMetrics index is mis-shaped for the query that reads it",
     "category": "monitoring",
     "type": "tech-debt",
@@ -991,6 +1089,7 @@
   },
   {
     "id": "HARBORA-0056",
+    "status": "open",
     "title": "Decide and implement what a workspace operator sees in the audit log",
     "category": "tenancy",
     "type": "investigation",
@@ -1009,6 +1108,7 @@
   },
   {
     "id": "HARBORA-0057",
+    "status": "open",
     "title": "Deployment coalescing is an unguarded read-then-insert",
     "category": "deployment",
     "type": "tech-debt",
@@ -1027,6 +1127,8 @@
   },
   {
     "id": "HARBORA-0058",
+    "status": "done",
+    "statusEvidence": "commits 3b57fc28, 55fc6d83, bb478450, b4617453 unified every host-minting call site (AppsController, TemplateDeploymentService.cs:266, PreviewEnvironmentService.cs:212, EnvironmentCloner, FunctionsController) behind AppAddressAssigner.AssignAsync, which consults ReservedHosts.ForPlatform and names the host in its refusal; tests/Harbora.Tests/AppAddressCensusTests.cs source-scans every db.Apps.Add( call site so a fifth cannot be added without going through it.",
     "title": "Reserved-host guard is missing on the template and preview host paths",
     "category": "networking",
     "type": "bug",
@@ -1045,6 +1147,7 @@
   },
   {
     "id": "HARBORA-0059",
+    "status": "open",
     "title": "Database grants and Adminer still inject the local Docker engine",
     "category": "multi-node",
     "type": "bug",
@@ -1063,6 +1166,7 @@
   },
   {
     "id": "HARBORA-0060",
+    "status": "open",
     "title": "No startup re-apply of the proxy configuration",
     "category": "deployment",
     "type": "bug",
@@ -1081,6 +1185,8 @@
   },
   {
     "id": "HARBORA-0061",
+    "status": "partial",
+    "statusEvidence": "The core leak (an unfindable orphaned restore dump) is fixed differently than the acceptance criteria prescribe: staging directories are now named deterministically from the restore job's own id (commit 68c02071, BackupStagingLayout.DatabaseRestoreDirectory(job.Id)), so the reconciler can always find and sweep it on the next restart (tests/Harbora.Tests/BackupCrashRecoveryTests.cs:319). But RestoreJob.StagingPath itself was never added, and unlike BackupSnapshot.StagingPath (a persisted pointer retried across restarts if delete fails), a restore row settled to Failed has no persisted retry pointer -- a delete that fails on a busy mount is not retried on a later boot, and nothing tests that gap.",
     "title": "RestoreJob has no StagingPath, so a restore's staged copy has no retry pointer",
     "category": "backup",
     "type": "tech-debt",
@@ -1099,6 +1205,7 @@
   },
   {
     "id": "HARBORA-0062",
+    "status": "open",
     "title": "The retention sweep's result has no consumer, so a clean sweep says nothing",
     "category": "operations",
     "type": "tech-debt",
@@ -1117,6 +1224,7 @@
   },
   {
     "id": "HARBORA-0063",
+    "status": "open",
     "title": "Decide what runningWorkloads and activeTunnels mean on the Nodes page",
     "category": "node-agent",
     "type": "investigation",
@@ -1135,6 +1243,7 @@
   },
   {
     "id": "HARBORA-0064",
+    "status": "open",
     "title": "SftpTransfer.Download's local-name substitution is unproven",
     "category": "testing",
     "type": "tech-debt",
@@ -1153,6 +1262,7 @@
   },
   {
     "id": "HARBORA-0065",
+    "status": "open",
     "title": "Jobs:MaxConcurrency cannot be set on a compose install",
     "category": "operations",
     "type": "bug",
@@ -1171,6 +1281,7 @@
   },
   {
     "id": "HARBORA-0066",
+    "status": "open",
     "title": "Adminer's route save and proxy apply are outside its own failure path",
     "category": "database",
     "type": "bug",
