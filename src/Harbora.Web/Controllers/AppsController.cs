@@ -1586,6 +1586,61 @@ public sealed partial class AppsController(
         return RedirectToAction(nameof(Details), new { id });
     }
 
+    /// <summary>
+    /// Turns maintenance mode on: the app's own hosts start answering with the panel's themed 503
+    /// instead of the container, which keeps running untouched. An immediate operational act, not a
+    /// draft — <see cref="IAppOperationsService.SetMaintenanceModeAsync"/> applies through the proxy
+    /// before this even returns, so there is nothing here to publish later.
+    ///
+    /// <para>
+    /// Honesty on failure: a refused apply comes back as <c>result.Success == false</c>, and
+    /// <c>App.MaintenanceMode</c> was never written — the error banner is the only trace, exactly the
+    /// pattern the route designer's own apply-result banner established (never "Maintenance enabled"
+    /// for an apply that failed).
+    /// </para>
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
+    public async Task<IActionResult> EnableMaintenance(
+        Guid id, string? maintenanceMessage, string? maintenanceMessageFa, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+
+        var result = await ops.SetMaintenanceModeAsync(id, true, maintenanceMessage, maintenanceMessageFa, ct);
+        if (!result.Success)
+        {
+            TempData["Error"] = result.Error;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await audit.LogAsync("app.maintenance.on", "app", id.ToString(), ClientIp, ct: ct);
+        TempData["Message"] = IsFa
+            ? "حالت تعمیر روشن شد؛ بازدیدکنندگان صفحه تعمیر را می‌بینند."
+            : "Maintenance mode turned on; visitors now see the maintenance page.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>Turns maintenance mode off: the app's own routes go back to the real container.</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
+    public async Task<IActionResult> DisableMaintenance(Guid id, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+
+        var result = await ops.SetMaintenanceModeAsync(id, false, null, null, ct);
+        if (!result.Success)
+        {
+            TempData["Error"] = result.Error;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await audit.LogAsync("app.maintenance.off", "app", id.ToString(), ClientIp, ct: ct);
+        TempData["Message"] = IsFa ? "حالت تعمیر خاموش شد." : "Maintenance mode turned off.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
     [HttpPost]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.AppsDelete)]

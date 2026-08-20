@@ -97,6 +97,14 @@ public sealed class HarboraWebFactory(
         builder.UseSetting("Harbora:DataProtectionKeysPath", Path.Combine(_stateDirectory, "keys"));
         builder.UseSetting("Harbora:WorkDir", Path.Combine(_stateDirectory, "work"));
 
+        // appsettings.json's default is /etc/harbora/traefik/dynamic/harbora.yml. IProxyEngine is NOT
+        // substituted here — the real TraefikProxyEngine runs, so a test that actually reaches
+        // ApplyAllAsync (maintenance mode's toggle, unlike Deploy, which the recording engine above
+        // intercepts before anything routes) writes and reads back a real YAML file. Pointed at this
+        // run's own scratch directory rather than the shipped default so that stays true on a dev
+        // machine instead of reaching for a path that does not exist here.
+        builder.UseSetting("Traefik:DynamicConfigPath", Path.Combine(_stateDirectory, "traefik", "harbora.yml"));
+
         // Overrides HarboraRuntimeOptions.ImageRetentionCount (default 5) for tests that need to
         // prove a behaviour follows the configured depth rather than that literal default — e.g. the
         // Deployments tab's rollback-depth marker moving when the depth does.

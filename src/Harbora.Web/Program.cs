@@ -254,6 +254,11 @@ app.UseForwardedHeaders();
 
 app.UseRequestLocalization(app.Services.GetRequiredService<
     Microsoft.Extensions.Options.IOptions<RequestLocalizationOptions>>().Value);
+
+// A visitor to an app currently in maintenance must never reach a static file or a real panel route
+// under that host — see the middleware's own doc for why it sits here, ahead of both.
+app.UseMiddleware<Harbora.Web.Infrastructure.MaintenanceModeMiddleware>();
+
 app.UseStaticFiles();
 // The node channel is the only WebSocket the panel serves besides SignalR's. The keep-alive is
 // shorter than a typical proxy idle timeout, so an idle channel is held open by pings rather than

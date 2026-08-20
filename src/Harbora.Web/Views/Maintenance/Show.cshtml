@@ -1,0 +1,42 @@
+@model Harbora.Web.Infrastructure.MaintenanceInfo
+@{
+    // The panel's own minimal, chrome-free layout (login/2FA/etc already render into it) — a visitor
+    // to a customer's app must never see the panel's sidebar or navigation, and this is the layout
+    // that already draws nothing but a centered card on the semantic-token background, dark-mode
+    // capable, no new hex.
+    Layout = "_Auth";
+
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    ViewData["Title"] = isFa ? "در حال تعمیر" : "Under maintenance";
+
+    // Bilingual fallback: whichever language the visitor is reading falls back to whichever message
+    // the customer actually wrote, rather than showing nothing because they only wrote one. The
+    // fallback is marked with its own dir, because a Persian page showing an English-only message
+    // verbatim (or the reverse) is exactly the case "every technical token in dir=ltr" does not
+    // cover — this is prose, not a token, and still needs its own direction when it disagrees with
+    // the page's.
+    string? message; bool messageIsFa;
+    if (isFa && !string.IsNullOrWhiteSpace(Model.MessageFa)) { message = Model.MessageFa; messageIsFa = true; }
+    else if (!isFa && !string.IsNullOrWhiteSpace(Model.MessageEn)) { message = Model.MessageEn; messageIsFa = false; }
+    else if (!string.IsNullOrWhiteSpace(Model.MessageFa)) { message = Model.MessageFa; messageIsFa = true; }
+    else if (!string.IsNullOrWhiteSpace(Model.MessageEn)) { message = Model.MessageEn; messageIsFa = false; }
+    else { message = null; messageIsFa = isFa; }
+}
+<div class="text-center space-y-3" data-maintenance-page="true" data-app-id="@Model.AppId">
+    <h1 class="text-xl font-bold text-ink">@(isFa ? "در حال تعمیر" : "Under maintenance")</h1>
+    <p class="text-sm text-ink-muted">
+        <span class="font-mono" dir="ltr">@Model.AppName</span>
+        @(isFa ? "موقتاً در دسترس نیست." : "is temporarily unavailable.")
+    </p>
+    @if (message is not null)
+    {
+        <p class="text-sm text-ink" dir="@(messageIsFa ? "rtl" : "ltr")">@message</p>
+    }
+    @if (Model.Since is { } since)
+    {
+        <p class="text-xs text-ink-faint">
+            @(isFa ? "از" : "since")
+            <span class="font-mono" dir="ltr">@since.UtcDateTime.ToString(Dates.Stamp) UTC</span>
+        </p>
+    }
+</div>

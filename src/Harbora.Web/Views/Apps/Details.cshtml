@@ -566,6 +566,68 @@
             }
         </section>
 
+        @* ---- Maintenance mode (P5, 2026-08-20 platform-options plan) ----
+           The containers keep running; only what the proxy routes visitors to changes. Stopping the
+           app is a separate, existing action — this section never touches it. *@
+        <section class="rounded-xl border border-line bg-surface">
+            <div class="px-4 py-3 border-b border-line font-semibold flex items-center gap-2">
+                @(isFa ? "حالت تعمیر" : "Maintenance mode")
+                @if (app.MaintenanceMode)
+                {
+                    <partial name="Design/_StatusPill" model="@(new StatusPillModel(isFa ? "روشن" : "On", "warn"))" />
+                }
+            </div>
+            <div class="p-4 space-y-3">
+                @if (app.MaintenanceMode)
+                {
+                    <p class="text-sm text-ink-muted">
+                        @(isFa ? "بازدیدکنندگان به‌جای این اپ صفحه‌ی تعمیر را می‌بینند." : "Visitors see the maintenance page instead of this app.")
+                        @if (app.MaintenanceSince is { } since)
+                        {
+                            <span>@(isFa ? "از" : "since") <span class="font-mono" dir="ltr">@since.UtcDateTime.ToString(Dates.Stamp) UTC</span></span>
+                        }
+                    </p>
+                    @if (!string.IsNullOrWhiteSpace(app.MaintenanceMessage) || !string.IsNullOrWhiteSpace(app.MaintenanceMessageFa))
+                    {
+                        <div class="rounded-lg bg-surface-2 border border-line px-3 py-2 text-sm text-ink-muted space-y-1">
+                            @if (!string.IsNullOrWhiteSpace(app.MaintenanceMessageFa))
+                            {
+                                <p>@app.MaintenanceMessageFa</p>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(app.MaintenanceMessage))
+                            {
+                                <p dir="ltr">@app.MaintenanceMessage</p>
+                            }
+                        </div>
+                    }
+                    <form asp-controller="Apps" asp-action="DisableMaintenance" asp-route-id="@app.Id" method="post"
+                          onsubmit="return confirm('@(isFa ? "حالت تعمیر خاموش شود؟ اپ دوباره برای بازدیدکنندگان در دسترس خواهد بود." : "Turn maintenance mode off? The app will be reachable by visitors again.")')">
+                        @Html.AntiForgeryToken()
+                        <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@(isFa ? "خاموش کردن حالت تعمیر" : "Turn off maintenance")</button>
+                    </form>
+                }
+                else
+                {
+                    <p class="text-sm text-ink-muted">@(isFa ? "بازدیدکنندگان اپ را می‌بینند؛ کانتینر همچنان اجرا می‌شود. با روشن کردن، به‌جای اپ صفحه‌ی تعمیر نمایش داده می‌شود." : "Visitors currently reach the app; the container keeps running either way. Turning this on shows them a maintenance page instead.")</p>
+                    <form asp-controller="Apps" asp-action="EnableMaintenance" asp-route-id="@app.Id" method="post" class="space-y-2"
+                          onsubmit="return confirm('@(isFa ? "حالت تعمیر روشن شود؟ بازدیدکنندگان صفحه‌ی تعمیر را می‌بینند؛ اپ همچنان اجرا می‌شود." : "Turn maintenance mode on? Visitors will see a maintenance page; the app keeps running.")')">
+                        @Html.AntiForgeryToken()
+                        <div>
+                            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "پیام برای بازدیدکنندگان — فارسی (اختیاری)" : "Message for visitors — Persian (optional)")</label>
+                            <textarea name="maintenanceMessageFa" rows="2" maxlength="500"
+                                      class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm"></textarea>
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "پیام برای بازدیدکنندگان — انگلیسی (اختیاری)" : "Message for visitors — English (optional)")</label>
+                            <textarea name="maintenanceMessage" rows="2" maxlength="500" dir="ltr"
+                                      class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm"></textarea>
+                        </div>
+                        <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm font-semibold">@(isFa ? "روشن کردن حالت تعمیر" : "Turn on maintenance")</button>
+                    </form>
+                }
+            </div>
+        </section>
+
         @* ---- Git auto-deploy ---- *@
         @if (app.GitRepository is not null)
         {
