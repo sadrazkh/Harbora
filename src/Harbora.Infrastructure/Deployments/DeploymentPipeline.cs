@@ -1374,8 +1374,12 @@ public sealed class DeploymentPipeline(
             .Where(sb => sb.StorageBucket is not null)
             .Select(sb => new AttachedBucketEnv(
                 sb.AttachOrder, sb.StorageBucketId, sb.StorageBucket!.Name,
-                Storage.BucketEnvKeys.EntriesFor(
-                        sb.StorageBucket!, _storageOpt.CustomerEndpoint, SafeUnprotect(sb.StorageBucket!.EncryptedSecretKey))
+                // Ciphertext stays ciphertext here — the secret entry is decrypted exactly once,
+                // below, where every other IsSecret entry in the merge is (SafeUnprotect(e.Value)).
+                // Decrypting it a second time here would hand SafeUnprotect a plaintext string to
+                // "unprotect", which is not valid ciphertext and fails silently to "".
+                Harbora.Domain.Storage.BucketEnvKeys.EntriesFor(
+                        sb.StorageBucket!, _storageOpt.CustomerEndpoint, sb.StorageBucket!.EncryptedSecretKey)
                     .Select(e => new BucketEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
 
         var merged = ConfigGroupMerge.Merge(

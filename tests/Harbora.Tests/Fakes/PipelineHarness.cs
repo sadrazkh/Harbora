@@ -32,6 +32,15 @@ public sealed class PipelineHarness : IDisposable
     public FakeGitService Git { get; }
     public FixedClock Clock { get; } = new();
     public HarboraRuntimeOptions Options { get; }
+    /// <summary>F5 (2026-08-21 functions-and-services plan): where a bucket attach's S3_ENDPOINT
+    /// comes from — see <c>DeploymentPipeline</c>'s own <c>IOptions&lt;ObjectStorageOptions&gt;</c>
+    /// dependency. A public endpoint set here is what a test can assert an attached bucket's env
+    /// carries.</summary>
+    public Harbora.Infrastructure.Storage.ObjectStorageOptions StorageOptions { get; } = new()
+    {
+        Endpoint = "http://harbora-minio:9000",
+        PublicEndpoint = "https://s3.acme.test"
+    };
     public PassthroughProtector Protector { get; } = new();
 
     public Workspace Workspace { get; }
@@ -312,6 +321,7 @@ public sealed class PipelineHarness : IDisposable
         // leaving a nullable dependency that would swallow publishing in production too.
         Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
         Events,
+        Microsoft.Extensions.Options.Options.Create(StorageOptions),
         NullLogger<DeploymentPipeline>.Instance);
 
     /// <summary>Shared with the pipeline, so a test can assert on what it bound.</summary>

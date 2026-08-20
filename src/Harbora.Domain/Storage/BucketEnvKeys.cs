@@ -21,17 +21,21 @@ public static class BucketEnvKeys
     public const string Bucket = "S3_BUCKET";
 
     /// <summary>
-    /// The four variables an attached bucket contributes. <paramref name="secretKeyPlaintext"/> is
-    /// decrypted by the caller — this method never touches <c>ISecretProtector</c> itself, the same
-    /// split <see cref="Apps.ConfigGroupMerge"/> draws between assembling the merge and deciding when
-    /// to decrypt.
+    /// The four variables an attached bucket contributes. <paramref name="secretKeyCiphertext"/> is
+    /// passed through unchanged — this method never touches <c>ISecretProtector</c> itself, exactly
+    /// the split <see cref="Apps.ConfigGroupMerge"/> draws between assembling the merge and deciding
+    /// when to decrypt: whoever assembles the final container environment (or renders a page that
+    /// actually needs the plaintext) is the one place that calls <c>ISecretProtector.Unprotect</c>,
+    /// once. A caller that decrypts before handing a value in here would have it decrypted a second
+    /// time wherever <see cref="Apps.ConfigGroupMerge.Merge"/>'s own <c>IsSecret</c> entries are
+    /// unprotected — which fails silently, since a plaintext string is not valid ciphertext.
     /// </summary>
     public static IReadOnlyList<(string Key, string Value, bool IsSecret)> EntriesFor(
-        StorageBucket bucket, string customerEndpoint, string secretKeyPlaintext) =>
+        StorageBucket bucket, string customerEndpoint, string secretKeyCiphertext) =>
     [
         (Endpoint, customerEndpoint, false),
         (AccessKey, bucket.AccessKey, false),
-        (SecretKey, secretKeyPlaintext, true),
+        (SecretKey, secretKeyCiphertext, true),
         (Bucket, bucket.Name, false)
     ];
 }
