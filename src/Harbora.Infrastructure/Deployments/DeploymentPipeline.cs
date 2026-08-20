@@ -65,6 +65,10 @@ public sealed class DeploymentPipeline(
             .Include(a => a.Volumes)
             .Include(a => a.Domains)
             .Include(a => a.GitRepository)!.ThenInclude(r => r!.Provider)
+            // Sub-project 9 (2026-08-20 platform-options plan): the attached groups' own current
+            // entries, loaded alongside the app's own EnvironmentVariables — BuildEnv below is the
+            // single place both are merged into what the container actually receives.
+            .Include(a => a.ConfigGroups).ThenInclude(cg => cg.ConfigGroup!).ThenInclude(g => g.Entries)
             .FirstAsync(a => a.Id == deployment.AppId, ct);
 
         // Resolve the container engine for this app's server (local or remote agent).
@@ -588,6 +592,10 @@ public sealed class DeploymentPipeline(
                 await MarkFunctionsRolledBackAsync(app, ct);
             else
                 await MarkFunctionsPublishedAsync(app, ct);
+            // Sub-project 9: this deployment's container was built from whatever the attached groups
+            // say right now (BuildEnv above), rollback or not, so every group this app carries is
+            // applied the instant the deployment succeeds.
+            await MarkConfigGroupsAppliedAsync(app, ct);
             await functionEvents.PublishAsync(
                 Domain.Functions.FunctionEvent.Create(
                     Domain.Functions.FunctionEvents.DeploymentSucceeded, app.WorkspaceId, app.Slug,
@@ -1336,11 +1344,22 @@ public sealed class DeploymentPipeline(
             .Where(e => e.AvailableAtBuild)
             .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
+    /// <summary>
+    /// The env-assembly point (Sub-project 9, 2026-08-20 platform-options plan): where
+    /// <see cref="EnvironmentVariable"/> rows and every attached <see cref="ConfigGroup"/>'s current
+    /// entries become the dictionary a container actually receives. Both the single-container path
+    /// and each compose service's own build call this — one merge, never two — so the precedence
+    /// <see cref="ConfigGroupMerge"/> decides is exactly what the app's env page shows and exactly
+    /// what the container gets.
+    /// </summary>
     private Dictionary<string, string> BuildEnv(App app)
     {
-        var env = app.EnvironmentVariables.ToDictionary(
-            e => e.Key,
-            e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
+        var merged = ConfigGroupMerge.Merge(
+            app.EnvironmentVariables,
+            app.ConfigGroups.Select(cg => new AttachedGroupEntries(
+                cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])));
+
+        var env = merged.ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
         // A function host refuses an unsigned invocation, so the secret has to reach the container —
         // and it is injected here rather than stored as an ordinary variable so nobody can rename,
@@ -1349,6 +1368,23 @@ public sealed class DeploymentPipeline(
             env[Functions.FunctionProject.SecretEnvVar] = SafeUnprotect(secret);
 
         return env;
+    }
+
+    /// <summary>
+    /// Clears the "applies on next deploy" flag on every group attached to this app, mirroring
+    /// <see cref="MarkFunctionsPublishedAsync"/> — unconditionally on any successful deployment,
+    /// including a rollback. Unlike function code, group entries are never baked into the image: every
+    /// container start (rollback or not) reads whatever the groups currently say via
+    /// <see cref="BuildEnv"/>, so there is no window where "published" could be a claim ahead of what
+    /// actually shipped.
+    /// </summary>
+    private async Task MarkConfigGroupsAppliedAsync(App app, CancellationToken ct)
+    {
+        var attachments = await db.AppConfigGroups
+            .Where(cg => cg.AppId == app.Id && cg.HasUnpublishedChanges)
+            .ToListAsync(ct);
+
+        foreach (var a in attachments) a.HasUnpublishedChanges = false;
     }
 
     /// <summary>
