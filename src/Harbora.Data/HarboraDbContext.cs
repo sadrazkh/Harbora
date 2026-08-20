@@ -42,6 +42,7 @@ public class HarboraDbContext : DbContext
     public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<EmailVerificationToken> EmailVerificationTokens => Set<EmailVerificationToken>();
+    public DbSet<ExternalLogin> ExternalLogins => Set<ExternalLogin>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<WorkspaceMember> WorkspaceMembers => Set<WorkspaceMember>();
     public DbSet<WorkspaceInvitation> WorkspaceInvitations => Set<WorkspaceInvitation>();
@@ -199,6 +200,29 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => x.TokenHash).IsUnique();
             e.HasIndex(x => new { x.UserId, x.UsedAt, x.ExpiresAt });
             e.Property(x => x.TokenHash).HasMaxLength(64).IsRequired();
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Deliberately NOT workspace-filtered — unfiltered-but-user-keyed, the same pattern ApiToken
+        // and UserSession already use (doc 14 §3). It has to be: the sign-in page reads this table
+        // before any workspace is known, and a filter would make every external sign-in find nothing
+        // and read as "no such account".
+        b.Entity<ExternalLogin>(e =>
+        {
+            // The identity, and the reason this table exists: one person at one provider is one row,
+            // whatever address that provider reports today.
+            e.HasIndex(x => new { x.Provider, x.Subject }).IsUnique();
+
+            // And one account of each provider per person. Nothing in the product needs a second
+            // Google on the same account, and allowing it would make the settings page ambiguous
+            // about which row an unlink button means.
+            e.HasIndex(x => new { x.UserId, x.Provider }).IsUnique();
+
+            e.Property(x => x.Provider).HasMaxLength(32).IsRequired();
+            e.Property(x => x.Subject).HasMaxLength(256).IsRequired();
+            e.Property(x => x.Email).HasMaxLength(256);
+            e.Property(x => x.DisplayName).HasMaxLength(128);
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
