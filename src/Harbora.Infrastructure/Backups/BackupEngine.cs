@@ -45,6 +45,7 @@ public sealed class BackupEngine(
     IEventPublisher events,
     Monitoring.IncidentService incidents,
     BackupDeliveryService delivery,
+    BackupDownloadTokens downloadTokens,
     ISystemClock clock,
     IOptions<BackupOptions> options,
     IOptions<Deployments.HarboraRuntimeOptions> runtime,
@@ -56,12 +57,22 @@ public sealed class BackupEngine(
     private readonly ArtifactRelayRegistry _relays = relays ?? new ArtifactRelayRegistry(TimeProvider.System);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
 
-    public async Task<Guid> QueueBackupAsync(Guid workspaceId, BackupType type, string targetRef, Guid destinationId, bool scheduled, CancellationToken ct)
+    public Task<Guid> QueueBackupAsync(Guid workspaceId, BackupType type, string targetRef, Guid destinationId, bool scheduled, CancellationToken ct) =>
+        QueueCoreAsync(workspaceId, type, targetRef, destinationId, scheduled, expiresAt: null, ct);
+
+    /// <inheritdoc />
+    public Task<Guid> QueueSelfServeExportAsync(Guid workspaceId, string targetRef, Guid destinationId, TimeSpan artifactLifetime, CancellationToken ct) =>
+        QueueCoreAsync(workspaceId, BackupType.Database, targetRef, destinationId, scheduled: false, expiresAt: clock.UtcNow + artifactLifetime, ct);
+
+    private async Task<Guid> QueueCoreAsync(
+        Guid workspaceId, BackupType type, string targetRef, Guid destinationId, bool scheduled,
+        DateTimeOffset? expiresAt, CancellationToken ct)
     {
         var backup = new Backup
         {
             WorkspaceId = workspaceId, Type = type, TargetRef = targetRef,
-            DestinationId = destinationId, Status = BackupStatus.Pending, IsScheduled = scheduled
+            DestinationId = destinationId, Status = BackupStatus.Pending, IsScheduled = scheduled,
+            ExpiresAt = expiresAt
         };
         db.Backups.Add(backup);
         await db.SaveChangesAsync(ct);
@@ -480,6 +491,7 @@ public sealed class BackupEngine(
         var stamp = clock.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
         var safetyKey = $"pre-restore-{svc.Name}-{stamp}";
         var safety = DatabaseDumpPlan.For(svc.Type, creds, $"/backup/{safetyKey}");
+        Backup? safetyBackup = null;
         if (safety is not null)
         {
             safetyKey += safety.FileExtension;
@@ -493,6 +505,14 @@ public sealed class BackupEngine(
                     "The database could not be exported before restoring, so the restore was not " +
                     "started — there would have been nothing to go back to.");
             logger.LogInformation("Pre-restore dump of {Name} written to {Key}.", svc.Name, safetyKey);
+
+            // Recorded as a normal, completed Backup — not left as a bare file in staging — so a
+            // failed restore below can point at something the customer can actually act on: verify
+            // it, download it, or restore it, through the same page and the same buttons every other
+            // backup already has. The snapshot must exist before the restore that follows touches
+            // anything, which is exactly the ordering this line is on: it only runs after the safety
+            // dump above has already exited 0.
+            safetyBackup = await PersistSafetyDumpAsync(backup, safetyKey, ct);
         }
 
         // The artifact has to be where the helper can see it: the staging volume, by name.
@@ -513,8 +533,65 @@ public sealed class BackupEngine(
         if (exit != 0)
             throw new InvalidOperationException(
                 $"The restore failed (exit {exit}). The database may be partly restored; the export " +
-                $"taken just before it is stored as {safetyKey}. " +
+                $"taken just before it started is saved as backup {safetyBackup?.Id.ToString() ?? safetyKey} " +
+                $"and can be restored from there. " +
                 Deployments.LogText.Clean(output.ToString()).Trim());
+    }
+
+    /// <summary>
+    /// Publishes the pre-restore dump <see cref="RestoreDatabaseAsync"/> just took to
+    /// <paramref name="original"/>'s own destination, as an ordinary completed <see cref="Backup"/>.
+    ///
+    /// <para>
+    /// Before this, the safety dump was a file left in the shared staging directory and named only in
+    /// a sentence — real if the restore then failed, but nothing on the Backups page could show it,
+    /// download it, or restore from it, and nothing swept it if the restore succeeded. Publishing it
+    /// the same way an ordinary backup is published means it is verified, downloaded and restored
+    /// through the exact machinery every other backup already uses, and pruned by the same
+    /// <see cref="EnforceRetentionAsync"/> pass once newer backups push it out of the keep window.
+    /// </para>
+    /// </summary>
+    private async Task<Backup?> PersistSafetyDumpAsync(Backup original, string safetyKey, CancellationToken ct)
+    {
+        var stagedPath = Path.Combine(_opt.StagingDir, safetyKey);
+        if (!File.Exists(stagedPath))
+        {
+            // Same shape of failure BackupDatabaseAsync already guards: the helper reported success
+            // but the panel cannot see the file. The restore itself is still safe to proceed with —
+            // the dump genuinely happened — so this is logged rather than thrown; the failure message
+            // below falls back to naming the raw key when there is no Backup row to point at instead.
+            logger.LogWarning(
+                "Pre-restore dump {Key} reported success but is not visible at {Path}; it was not recorded as a backup.",
+                safetyKey, stagedPath);
+            return null;
+        }
+
+        var checksum = await Sha256Async(stagedPath, ct);
+        var (artifactRef, size) = await storage.PutFileAsync(original.Destination!, safetyKey, stagedPath, ct);
+
+        var safetyBackup = new Backup
+        {
+            WorkspaceId = original.WorkspaceId,
+            DestinationId = original.DestinationId,
+            Type = BackupType.Database,
+            TargetRef = original.TargetRef,
+            Status = BackupStatus.Completed,
+            ArtifactPath = artifactRef,
+            SizeBytes = size,
+            Checksum = checksum,
+            StartedAt = clock.UtcNow,
+            FinishedAt = clock.UtcNow,
+            IsScheduled = false,
+            VerificationNote = "Automatic safety snapshot taken just before a restore overwrote this database."
+        };
+        db.Backups.Add(safetyBackup);
+        await db.SaveChangesAsync(ct);
+
+        if (!string.Equals(Path.GetFullPath(artifactRef), Path.GetFullPath(stagedPath), StringComparison.OrdinalIgnoreCase)
+            && File.Exists(stagedPath))
+            File.Delete(stagedPath);
+
+        return safetyBackup;
     }
 
     private async Task RestoreAppConfigAsync(Backup backup, string localPath, CancellationToken ct)
@@ -584,6 +661,13 @@ public sealed class BackupEngine(
             db.Backups.Remove(expired);
         }
         if (timedOut.Count > 0) await db.SaveChangesAsync(ct);
+
+        // Sub-project 10: the download links minted against those (and any other) self-serve
+        // exports, on the same tick — no dedicated sweeper of its own. A token whose Backup was just
+        // removed above is gone already (BackupDownloadToken.BackupId cascades on delete); this also
+        // catches a token that is merely spent or past its own hour while its artifact still has
+        // days left on ExpiresAt.
+        await downloadTokens.SweepAsync(ct);
 
         var completed = await db.Backups.Include(b => b.Destination)
             .Where(b => b.Status == BackupStatus.Completed)

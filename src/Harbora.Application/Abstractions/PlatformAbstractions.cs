@@ -18,6 +18,16 @@ public interface IBackupEngine
     /// <summary>Create the backup row and queue the work on the background worker; returns the backup id.</summary>
     Task<Guid> QueueBackupAsync(Guid workspaceId, Domain.Common.BackupType type, string targetRef, Guid destinationId, bool scheduled, CancellationToken ct);
 
+    /// <summary>
+    /// The same queued dump as <see cref="QueueBackupAsync"/>, but stamped with an expiry — sub-project
+    /// 10's self-serve export. Reuses the exact dump machinery every other database backup runs
+    /// through; the only difference is <c>Backup.ExpiresAt</c>, which
+    /// <c>BackupEngine.EnforceRetentionAsync</c> already sweeps on its ordinary tick. See
+    /// <c>DatabaseExportPlan.ArtifactLifetime</c> for why this window is separate from (and longer
+    /// than) a single minted download link's own lifetime.
+    /// </summary>
+    Task<Guid> QueueSelfServeExportAsync(Guid workspaceId, string targetRef, Guid destinationId, TimeSpan artifactLifetime, CancellationToken ct);
+
     /// <summary>Restore a completed backup. Destructive — callers must confirm first.</summary>
     Task RestoreAsync(Guid backupId, CancellationToken ct);
 

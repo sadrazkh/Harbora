@@ -696,6 +696,17 @@ public class HarboraDbContext : DbContext
             e.HasOne<App>().WithMany().HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<Volume>().WithMany().HasForeignKey(x => x.VolumeId).OnDelete(DeleteBehavior.Cascade);
         });
+
+        // Sub-project 10: same reasoning as VolumeDownloadToken just above — the route that redeems
+        // this token runs with no session, so no workspace filter here either. The cascade on Backup
+        // means a self-serve export's artifact and the link that reaches it are removed together,
+        // whether that happens by hand or by BackupEngine.EnforceRetentionAsync's expiry sweep.
+        b.Entity<BackupDownloadToken>(e =>
+        {
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.Property(x => x.TokenHash).HasMaxLength(64).IsRequired();
+            e.HasOne<Backup>().WithMany().HasForeignKey(x => x.BackupId).OnDelete(DeleteBehavior.Cascade);
+        });
         // Entitlements. No workspace query filter here, and that is the decision rather than an
         // omission: these rows are platform configuration read by the cron scheduler and the event
         // bus, neither of which has a session. A filtered table read without one comes back empty,

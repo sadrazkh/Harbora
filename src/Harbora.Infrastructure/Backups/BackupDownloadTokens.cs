@@ -5,9 +5,6 @@ using Harbora.Data;
 using Harbora.Domain.Backups;
 using Harbora.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace Harbora.Infrastructure.Backups;
 
@@ -25,6 +22,14 @@ public sealed record BackupDownloadRedemption(bool Ok, Guid BackupId)
 /// 10. See <see cref="BackupDownloadToken"/> for the rules that make handing one to somebody with no
 /// panel session acceptable; this reuses the exact shape <c>VolumeDownloadTokens</c> (D4) established
 /// for the same purpose, retargeted at a <see cref="Backup"/> instead of a volume file.
+///
+/// <para>
+/// Deliberately no dedicated <c>BackgroundService</c> here, unlike <c>VolumeDownloadTokenSweeper</c>.
+/// The backup this token names is already swept by <c>BackupEngine.EnforceRetentionAsync</c>, which
+/// <c>BackupScheduler</c> already runs every five minutes — a second timer sweeping the same kind of
+/// row on its own schedule would be the "second sweeper" the brief for this sub-project explicitly
+/// warned against, so <see cref="SweepAsync"/> is called from inside that existing tick instead.
+/// </para>
 /// </summary>
 public sealed class BackupDownloadTokens(HarboraDbContext db, ISystemClock clock)
 {
@@ -108,33 +113,4 @@ public sealed class BackupDownloadTokens(HarboraDbContext db, ISystemClock clock
 
     private static string Hash(string raw) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
-}
-
-/// <summary>Retires expired and spent backup download tokens on the same tick <c>VolumeDownloadTokenSweeper</c> uses.</summary>
-public sealed class BackupDownloadTokenSweeper(
-    IServiceScopeFactory scopeFactory,
-    ILogger<BackupDownloadTokenSweeper> logger) : BackgroundService
-{
-    private static readonly TimeSpan Tick = TimeSpan.FromMinutes(5);
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        try { await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken); }
-        catch (OperationCanceledException) { return; }
-
-        using var timer = new PeriodicTimer(Tick);
-        do
-        {
-            try
-            {
-                using var scope = scopeFactory.CreateScope();
-                var tokens = scope.ServiceProvider.GetRequiredService<BackupDownloadTokens>();
-
-                var closed = await tokens.SweepAsync(stoppingToken);
-                if (closed > 0) logger.LogInformation("Retired {Count} backup download token(s).", closed);
-            }
-            catch (Exception ex) { logger.LogError(ex, "Sweeping backup download tokens failed."); }
-        }
-        while (await timer.WaitForNextTickAsync(stoppingToken));
-    }
 }

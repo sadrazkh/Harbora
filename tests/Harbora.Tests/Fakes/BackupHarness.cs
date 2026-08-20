@@ -75,9 +75,13 @@ public sealed class BackupHarness : IDisposable
     /// </summary>
     public NoopJobQueue Jobs { get; } = new();
 
+    /// <summary>Mints/redeems self-serve export download links — sub-project 10.</summary>
+    public BackupDownloadTokens DownloadTokens => new(Db, Clock);
+
     public BackupEngine Engine() => new(
         Db, Engines, Storage, new PassthroughProtector(), Jobs,
-        Notifications, Events, new Harbora.Infrastructure.Monitoring.IncidentService(Db), Delivery(), Clock, Options.AsOptions(),
+        Notifications, Events, new Harbora.Infrastructure.Monitoring.IncidentService(Db), Delivery(), DownloadTokens,
+        Clock, Options.AsOptions(),
         Microsoft.Extensions.Options.Options.Create(Runtime),
         NullLogger<BackupEngine>.Instance);
 

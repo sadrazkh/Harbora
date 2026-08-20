@@ -168,6 +168,11 @@ public static class DependencyInjection
         // module, so a second module does not have to depend on the first to reuse the table.
         services.AddScoped<IIdempotencyStore, Common.IdempotencyStore>();
         services.AddScoped<Backups.BackupEngine>();
+        // Mints and redeems the one-time links a self-serve database export is downloaded through —
+        // sub-project 10. No dedicated sweeper: BackupEngine.EnforceRetentionAsync retires spent and
+        // expired rows on the tick BackupScheduler already runs, the same reasoning that keeps this
+        // from being a second sweeper beside VolumeDownloadTokenSweeper.
+        services.AddScoped<Backups.BackupDownloadTokens>();
         // Sends a copy of each finished backup to Telegram/email, alongside the stored artifact.
         services.AddScoped<Backups.BackupDeliveryService>();
         // Runs before migrations at startup: an upgrade of an existing install gets a restore point.
