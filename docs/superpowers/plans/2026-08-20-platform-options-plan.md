@@ -142,7 +142,8 @@ deviate.
 | Announcements do NOT exist | no matches outside unrelated text |
 | Cross-workspace revenue view does NOT exist | no admin surface reads the ledger across workspaces |
 | Custom-domain machinery exists per app | `src/Harbora.Domain/Networking/DomainName.cs` (Host, SslEnabled, CertificateId), `DomainDiagnosis.cs`, `ReservedHosts.cs`, Cloudflare/cert infra in `Infrastructure/Networking` |
-| Reserved-host guard exists but is MISSING on template + preview host paths | backlog HARBORA-0058 — do not add a third unguarded path |
+| ~~Reserved-host guard is MISSING on template + preview host paths~~ **CORRECTED 2026-08-20: it is not.** Both call sites route through `AppAddressAssigner.AssignAsync` → `ReservedHosts.ForPlatform`. HARBORA-0058 is done. | The backlog entry was stale; this table repeated it without checking the code. Sub-project 7 should reuse that guard, not repair it |
+| **A full disaster-recovery runbook ALREADY EXISTS** — `docs/disaster-recovery.md`, 15 KB, 2026-08-08: three scenarios (panel host gone, app lost, node lost), a "Rehearse it" section, and the node-volume backup gap. HARBORA-0047 is done. | Found 2026-08-20 while sub-project 12 was already running. **What is missing is only the drill** — `grep -ci drill` returns 0. Sub-project 12 was re-scoped mid-flight to build the drill and extend the existing document |
 | Per-app 30-day uptime/restart history exists | `LifecycleHistory` (Phase 6 M3), surfaced on Apps/Details and Monitoring |
 | Temporary signed download links exist | `src/Harbora.Domain/Storage/VolumeDownloadToken.cs` (D4; expiry carried as int unix because of the TempData trap) |
 | pg_dump/restore machinery exists inside the backup engine | `Infrastructure/Backups/BackupEngine.cs`, `DatabaseDumpPlan.cs`, `UpgradeSafetyPlan/Service.cs` (safety-snapshot-before-restore idiom) |
@@ -487,19 +488,28 @@ refusal if applicable); 2FA challenge still fires after external sign-in for a 2
 
 ---
 
-## Sub-project 12 — DR runbook + restore drill (operator)
+## Sub-project 12 — restore drill (operator)
 
-**Files:** new `deploy/DR-RUNBOOK.md` · new `deploy/restore-drill.sh` · a "last drill" surface in
-the admin area · (no migration unless the drill result needs a row — planner default: one
-`Setting` key, no new table).
+> **RE-SCOPED 2026-08-20, mid-flight.** This was planned as "DR runbook + restore drill". The
+> runbook **already exists** — `docs/disaster-recovery.md`, 15 KB, written 2026-08-08, with three
+> full scenarios and its own "Rehearse it" section. The plan asserted otherwise without checking,
+> which is the sixteenth instance in this programme of assuming a capability missing when it
+> already existed — and the first where the wrong assumption was in the plan itself.
+> **Do not write a second runbook.** The drill is what is missing: `grep -ci drill` on that
+> document returns 0. Nothing anywhere proves the backups would restore, and nobody has checked.
+
+**Files:** new `deploy/restore-drill.sh` · a "last drill" surface in the admin area · a short
+section added to the **existing** `docs/disaster-recovery.md` beside its "Rehearse it" heading ·
+(no migration unless the drill result needs a row — planner default: one `Setting` key, no new
+table).
 
 **Design (planner decisions)**
-- **The runbook is written against the real install**, not an imagined one: `/opt/harbora/app`,
-  compose in `deploy/`, the untracked production compose override (it exists — retention is
-  overridden in production; the runbook must tell the operator to preserve it), `.env`, Postgres,
-  MinIO, Traefik certs, per-app volumes. Full-loss order: infra → compose → DB restore → volume
-  restores → cert recovery → verification checklist. Read `deploy/RUNBOOK.md` first; DR extends
-  it, does not duplicate it.
+- **Read `docs/disaster-recovery.md` before writing anything**, and extend it rather than
+  repeating it. Two production facts must appear somewhere in it — check whether they already do,
+  and add only what is missing: the untracked production compose override (retention is
+  overridden in production; a restore that rebuilds from the tracked compose file alone silently
+  changes it), and the pinned-host-key `plink` access whose stale cached key produces a
+  misleading "POTENTIAL SECURITY BREACH" warning that is local state, not an attack.
 - **The drill script restores the latest database backup into a scratch Postgres container**
   (the server has Docker; the dev machine does not — the drill runs on the server), runs sanity
   queries (migrations table count, workspaces count, newest ledger row age), prints a dated
