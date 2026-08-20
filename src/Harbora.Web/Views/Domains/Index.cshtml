@@ -43,6 +43,10 @@
 
 <div class="mb-6">
     <partial name="Design/_PageHeader" model="header" />
+    <p class="mt-2 text-xs text-ink-faint">
+        @(isFa ? "می‌خواهید کاربران خود را از وضعیت سرویس‌هایتان مطلع کنید؟" : "Want to let your own users know how your services are doing?")
+        <a href="/status-page" class="text-accent-text">@(isFa ? "صفحه وضعیت عمومی" : "Public status page")</a>
+    </p>
 </div>
 
 @{

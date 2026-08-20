@@ -1,0 +1,160 @@
+@model StatusPageSettingsViewModel
+@{
+    ViewData["Title"] = "Status page";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+}
+<div class="mb-6">
+    <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+        isFa ? "صفحه وضعیت عمومی" : "Public status page",
+        isFa
+            ? "به کاربران خود نشان دهید سرویس‌هایتان چطور کار می‌کنند — بدون افشای جزئیات داخلی."
+            : "Show your own users how your services are doing — without exposing internal details."))" />
+</div>
+
+@if (err is not null)
+{
+    <div class="alert-warning rounded-lg px-4 py-3 text-sm mb-4">@err</div>
+}
+
+<section class="rounded-xl border border-line bg-surface p-5 mb-6" data-status-page-toggle
+          data-status-page-enabled="@(Model.IsEnabled ? "true" : "false")">
+    <div class="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+            <div class="flex items-center gap-2">
+                <partial name="Design/_StatusPill" model="@(Model.IsEnabled
+                    ? new StatusPillModel(isFa ? "فعال" : "Enabled", Tone.Ok)
+                    : new StatusPillModel(isFa ? "غیرفعال" : "Disabled", Tone.Idle))" />
+                @if (Model.PublicHost is not null)
+                {
+                    <code class="text-xs text-ink-faint font-mono" dir="ltr">@Model.PublicHost</code>
+                }
+            </div>
+            <p class="mt-2 text-xs text-ink-faint max-w-md">
+                @(isFa
+                    ? "تا وقتی فعال نکنید، این صفحه برای هیچ‌کس در دسترس نیست — حتی اگر سرویسی به آن اضافه کرده باشید."
+                    : "Nothing here is public until you enable it — even if you have already added services to it.")
+            </p>
+        </div>
+        @if (Model.IsEnabled)
+        {
+            <form asp-controller="StatusPageSettings" asp-action="Disable" method="post">
+                @Html.AntiForgeryToken()
+                <button class="rounded-lg border border-line-strong px-4 py-2 text-sm font-medium text-ink hover:bg-surface-2">
+                    @(isFa ? "غیرفعال کردن" : "Disable")
+                </button>
+            </form>
+        }
+        else
+        {
+            <form asp-controller="StatusPageSettings" asp-action="Enable" method="post">
+                @Html.AntiForgeryToken()
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                    @(isFa ? "فعال کردن" : "Enable")
+                </button>
+            </form>
+        }
+    </div>
+</section>
+
+<section class="rounded-xl border border-line bg-surface p-5 mb-6" data-status-page-components>
+    <h2 class="text-sm font-semibold mb-3">@(isFa ? "سرویس‌های نمایش‌داده‌شده" : "Services shown")</h2>
+
+    @if (Model.Components.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel("Boxes",
+            isFa ? "هنوز سرویسی برای این صفحه انتخاب نشده است." : "No services chosen for this page yet."))" />
+    }
+    else
+    {
+        <div class="space-y-2 mb-4">
+            @foreach (var c in Model.Components)
+            {
+                <div class="flex items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm"
+                     data-status-component-row data-status-component-id="@c.Id">
+                    <span>@c.DisplayName <span class="text-ink-faint">· @c.AppName</span></span>
+                    <form asp-controller="StatusPageSettings" asp-action="RemoveComponent" asp-route-id="@c.Id" method="post">
+                        @Html.AntiForgeryToken()
+                        <button class="text-xs text-danger" aria-label="@(isFa ? $"حذف {c.DisplayName}" : $"Remove {c.DisplayName}")">✕</button>
+                    </form>
+                </div>
+            }
+        </div>
+    }
+
+    @if (Model.AvailableApps.Count > 0)
+    {
+        <details>
+            <summary class="cursor-pointer text-sm text-accent-text">+ @(isFa ? "افزودن سرویس" : "Add a service")</summary>
+            <form asp-controller="StatusPageSettings" asp-action="AddComponent" method="post" class="mt-3 grid sm:grid-cols-2 gap-3">
+                @Html.AntiForgeryToken()
+                <select name="appId" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                    @foreach (var app in Model.AvailableApps)
+                    {
+                        <option value="@app.Id">@app.Name</option>
+                    }
+                </select>
+                <input name="displayName" placeholder="@(isFa ? "نامی که کاربران می‌بینند (مثلاً «وب‌سایت»)" : "The name your users will see (e.g. \"Website\")")"
+                       class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <div class="sm:col-span-2">
+                    <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                        @(isFa ? "افزودن" : "Add")
+                    </button>
+                </div>
+            </form>
+        </details>
+    }
+</section>
+
+<section class="rounded-xl border border-line bg-surface p-5" data-status-page-incidents>
+    <h2 class="text-sm font-semibold mb-3">@(isFa ? "یادداشت‌های رخداد" : "Incident notes")</h2>
+
+    @if (Model.Incidents.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel("Bell",
+            isFa ? "هنوز رخدادی ثبت نشده است." : "No incidents posted yet."))" />
+    }
+    else
+    {
+        <div class="space-y-2 mb-4">
+            @foreach (var i in Model.Incidents)
+            {
+                <div class="rounded-lg bg-surface-2 px-3 py-2 text-sm" data-status-incident-row
+                     data-status-incident-id="@i.Id" data-status-incident-resolved="@(i.ResolvedAt is null ? "false" : "true")">
+                    <div class="flex items-center justify-between gap-2">
+                        <span>@i.TitleEn <span class="text-ink-faint" dir="rtl">· @i.TitleFa</span></span>
+                        @if (i.ResolvedAt is null)
+                        {
+                            <form asp-controller="StatusPageSettings" asp-action="ResolveIncident" asp-route-id="@i.Id" method="post">
+                                @Html.AntiForgeryToken()
+                                <button class="text-xs text-accent-text">@(isFa ? "پایان‌یافته علامت بزن" : "Mark resolved")</button>
+                            </form>
+                        }
+                        else
+                        {
+                            <span class="text-xs text-ink-faint">@(isFa ? "پایان‌یافته" : "resolved")</span>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    <details>
+        <summary class="cursor-pointer text-sm text-accent-text">+ @(isFa ? "ثبت رخداد" : "Post an incident")</summary>
+        <form asp-controller="StatusPageSettings" asp-action="PostIncident" method="post" class="mt-3 grid sm:grid-cols-2 gap-3">
+            @Html.AntiForgeryToken()
+            <input name="titleEn" placeholder="Title (English)" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            <input name="titleFa" placeholder="عنوان (فارسی)" dir="rtl" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            <textarea name="bodyEn" placeholder="Details (English, optional)" rows="2"
+                      class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm"></textarea>
+            <textarea name="bodyFa" placeholder="جزئیات (فارسی، اختیاری)" dir="rtl" rows="2"
+                      class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm"></textarea>
+            <div class="sm:col-span-2">
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                    @(isFa ? "ثبت رخداد" : "Post incident")
+                </button>
+            </div>
+        </form>
+    </details>
+</section>
