@@ -1,0 +1,58 @@
+@using System.Globalization
+@inject SupportSessionView Support
+@{
+    // Nothing at all when nobody is impersonating — which is every request but a handful a year.
+    var session = Support.Current;
+}
+@if (session is not null)
+{
+    var isFa = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    @* The customer's protection, so it is a fixture of the page rather than a dismissible notice:
+       there is no button here that makes it go away without ending the session it announces.
+
+       The attribute carries the session's id because that is what a test can assert on. The panel
+       renders Persian by default, so asserting on any sentence below would be asserting on a
+       translation. *@
+    <div data-support-session="@session.Id"
+         class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-warn/25 bg-warn-soft px-4 py-2.5 text-sm text-warn md:px-6"
+         role="status">
+        <i data-lucide="shield-alert" class="h-4 w-4 shrink-0" aria-hidden="true"></i>
+        <span>
+            @if (isFa)
+            {
+                <text>پشتیبانی هُربورا با حساب شما وارد شده است.</text>
+            }
+            else
+            {
+                <text>Harbora support is signed in as you.</text>
+            }
+        </span>
+        <span class="font-mono text-xs" dir="ltr">@session.AdminEmail</span>
+        <span class="text-xs">
+            @* Both moments, not just one. "Since 10:04" without an end time is a banner that could
+               mean five minutes or all afternoon. *@
+            @(isFa ? "از" : "since")
+            <span class="font-mono" dir="ltr">@session.StartedAt.ToLocalTime().ToString(Dates.Stamp)</span>
+            ·
+            @(isFa ? "تا" : "until")
+            <span class="font-mono" dir="ltr">@session.ExpiresAt.ToLocalTime().ToString(Dates.Stamp)</span>
+        </span>
+        <span class="w-full text-xs md:w-auto">
+            @(isFa ? "دلیل:" : "Reason:") @session.Reason
+        </span>
+        <span class="w-full text-xs opacity-90 md:w-auto">
+            @(isFa
+                ? "هر کاری در این مدت انجام شود ثبت می‌شود و در «دسترسی پشتیبانی» فضای کاری شما دیده می‌شود."
+                : "Everything done during this session is recorded and shown on your workspace's support-access page.")
+        </span>
+        <a class="text-xs font-medium underline" href="/workspaces/support-access">@(isFa ? "مشاهده" : "View")</a>
+        <form method="post" action="/support/end" class="ms-auto">
+            @Html.AntiForgeryToken()
+            <button type="submit"
+                    class="inline-flex items-center gap-1.5 rounded-lg border border-warn/40 bg-surface px-3 py-1.5 text-xs font-semibold text-warn hover:bg-surface-2">
+                @(isFa ? "پایان نشست" : "End session")
+            </button>
+        </form>
+    </div>
+}

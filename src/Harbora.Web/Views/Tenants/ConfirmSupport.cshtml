@@ -1,0 +1,89 @@
+@model TenantSupportViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+}
+<div class="max-w-2xl">
+    <a href="/tenants/@Model.WorkspaceId" class="text-accent-text text-sm">← @Model.WorkspaceName</a>
+    <h1 class="text-2xl font-bold tracking-tight text-ink mt-1 mb-4">
+        @(isFa ? "ورود به‌عنوان مشتری" : "Sign in as this customer")
+    </h1>
+
+    @if (err is not null)
+    {
+        <div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>
+    }
+
+    <div class="rounded-xl border border-line bg-surface p-4 mb-4">
+        <div class="text-ink-muted text-sm">@(isFa ? "حسابی که به آن وارد می‌شوید" : "The account you will become")</div>
+        <div class="mt-1 font-mono text-sm text-ink" dir="ltr">@Model.TargetEmail</div>
+        @if (!Model.TargetIsActive)
+        {
+            <div class="mt-2 rounded-lg border border-warn bg-warn-soft px-3 py-2 text-xs text-warn">
+                @(isFa
+                    ? "این حساب معلق است و نمی‌توان با آن وارد شد."
+                    : "This account is suspended, so it cannot be signed in to.")
+            </div>
+        }
+    </div>
+
+    @* Said before it happens, not after. Everything on this list is something the customer will see
+       or be able to read back later, and an administrator who is surprised by any of it afterwards
+       was not told plainly enough here. *@
+    <div class="rounded-xl border border-warn bg-warn-soft p-4 mb-4 text-sm text-warn">
+        <p class="font-semibold">@(isFa ? "این کار پنهان نیست:" : "None of this is silent:")</p>
+        <ul class="mt-2 space-y-1 text-xs">
+            <li>
+                @(isFa
+                    ? "روی هر صفحه‌ای که این مشتری باز کند، نواری نشان می‌دهد شما وارد حسابش شده‌اید — با نشانی شما، زمان شروع و همین دلیل."
+                    : "A banner on every page the customer loads names you, when you started, and this reason.")
+            </li>
+            <li>
+                @(isFa
+                    ? $"نشست پس از {Model.LifetimeMinutes} دقیقه خودبه‌خود تمام می‌شود؛ با دکمهٔ روی همان نوار هم می‌توان زودتر تمامش کرد."
+                    : $"The session ends by itself after {Model.LifetimeMinutes} minutes, and the banner's own button ends it sooner.")
+            </li>
+            <li>
+                @(isFa
+                    ? "هر کار ثبت‌شده‌ای در این مدت، هم نام حساب مشتری و هم نام شما را روی همان سطر دارد."
+                    : "Every audited act in the meantime carries the customer's account and your name on the same row.")
+            </li>
+            <li>
+                @(isFa
+                    ? "تغییر رمز، ایمیل و ورود دومرحله‌ای، بستن نشست‌های دیگر، ساخت توکن API و شارژ کیف پول در این نشست رد می‌شوند."
+                    : "Changing a password, email or two-factor, ending other sessions, creating an API token and crediting a wallet are all refused while it runs.")
+            </li>
+        </ul>
+    </div>
+
+    <form asp-controller="Tenants" asp-action="StartSupport"
+          asp-route-id="@Model.WorkspaceId" asp-route-userId="@Model.TargetUserId"
+          method="post" class="space-y-4">
+        @Html.AntiForgeryToken()
+
+        <div>
+            <label for="support-reason" class="block text-sm text-ink-muted mb-1">
+                @(isFa ? "چرا وارد این حساب می‌شوید؟" : "Why are you signing in as them?")
+            </label>
+            <input id="support-reason" name="reason" value="@Model.Reason" autocomplete="off"
+                   maxlength="@Model.MaxReasonLength"
+                   placeholder="@(isFa ? "مثلاً: بازتولید خطای استقرار shop که مشتری گزارش کرده" : "e.g. reproducing the failing deploy on shop the customer reported")"
+                   class="w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm" />
+            <p class="mt-1 text-xs text-ink-faint">
+                @(isFa
+                    ? "مشتری همین جمله را روی نوار می‌خواند. برای او بنویسید، نه برای شمارهٔ تیکت."
+                    : "The customer reads this sentence on the banner. Write it for them, not for a ticket number.")
+            </p>
+        </div>
+
+        <div class="flex gap-2">
+            <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                @(isFa ? "ورود به‌عنوان این حساب" : "Sign in as this account")
+            </button>
+            <a href="/tenants/@Model.WorkspaceId"
+               class="rounded-lg border border-line px-4 py-2 text-sm text-ink-muted hover:text-ink">
+                @(isFa ? "انصراف" : "Cancel")
+            </a>
+        </div>
+    </form>
+</div>

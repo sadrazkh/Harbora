@@ -26,6 +26,8 @@ public sealed partial class TenantsController(
     IAuditLogger audit,
     Harbora.Infrastructure.Billing.BillingSuspension suspension,
     IFeatureGate features,
+    Harbora.Infrastructure.Identity.SupportSessionService supportSessions,
+    Harbora.Infrastructure.Security.AccountSessionService accountSessions,
     Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Billing.BillingOptions> billing) : Controller
 {
     /// <summary>

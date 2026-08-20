@@ -259,8 +259,15 @@
                             </form>
                         </td>
                         <td class="p-3 text-end">
+                            @* A link to a confirmation page, not a button that signs you in where you
+                               stand: the customer sees a banner the moment this happens, so the
+                               decision is looked at once before it becomes theirs to read. *@
+                            <a class="block text-xs text-accent-text"
+                               href="/tenants/@Model.WorkspaceId/support/@m.UserId">
+                                @(isFa ? "ورود به‌عنوان این کاربر" : "sign in as")
+                            </a>
                             <form asp-controller="Tenants" asp-action="RemoveMember" asp-route-id="@Model.WorkspaceId" asp-route-userId="@m.UserId" method="post"
-                                  onsubmit="return confirm('@(isFa ? "حذف عضو؟" : "Remove member?")')">
+                                  onsubmit="return confirm('@(isFa ? "حذف عضو؟" : "Remove member?")')" class="mt-2">
                                 @Html.AntiForgeryToken()
                                 <button class="text-xs text-danger">@(isFa ? "حذف" : "remove")</button>
                             </form>

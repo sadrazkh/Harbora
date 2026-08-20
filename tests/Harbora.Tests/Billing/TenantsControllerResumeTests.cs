@@ -237,7 +237,7 @@ public class TenantsControllerResumeTests
             NullLogger<BillingSuspension>.Instance);
 
         var controller = new TenantsController(
-            context, null!, null!, null!, null!, null!, suspension, null!, null!)
+            context, null!, null!, null!, null!, null!, suspension, null!, null!, null!, null!)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

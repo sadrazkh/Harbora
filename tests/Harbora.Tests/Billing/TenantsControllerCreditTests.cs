@@ -109,6 +109,9 @@ public class TenantsControllerCreditTests
         var controller = new TenantsController(
             db, new Hasher(), new Quota(), wallet, new Caller(), audit, suspension: null!,
             features: null!,
+            // Support impersonation starts from this same console; neither of its actions is reached
+            // from here, and the HTTP tests drive that half through a real request.
+            supportSessions: null!, accountSessions: null!,
             billing: Microsoft.Extensions.Options.Options.Create(new Harbora.Infrastructure.Billing.BillingOptions()))
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }

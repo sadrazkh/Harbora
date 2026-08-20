@@ -82,6 +82,29 @@ public sealed record TenantFeature(
     Harbora.Domain.Features.FeatureState State,
     Harbora.Domain.Features.FeatureDecision DecidedBy);
 
+/// <summary>
+/// The page an administrator reads before signing in as somebody else.
+///
+/// It exists to make the decision visible once: who they are about to become, for how long, and the
+/// sentence the customer will be shown on every page they load in the meantime.
+/// </summary>
+public sealed class TenantSupportViewModel
+{
+    public Guid WorkspaceId { get; init; }
+    public string WorkspaceName { get; init; } = string.Empty;
+    public Guid TargetUserId { get; init; }
+    public string TargetEmail { get; init; } = string.Empty;
+    public bool TargetIsActive { get; init; }
+
+    /// <summary>Read off <c>SupportAccess.Lifetime</c>, never typed into the page as "60".</summary>
+    public int LifetimeMinutes { get; init; }
+
+    public int MaxReasonLength { get; init; }
+
+    /// <summary>What was typed, handed back when a refusal re-renders the form.</summary>
+    public string? Reason { get; init; }
+}
+
 public sealed record TenantMember(Guid UserId, string Email, string DisplayName, string WorkspaceRole, bool Active)
 {
     /// <summary>When true, this person only reaches the projects listed below.</summary>
