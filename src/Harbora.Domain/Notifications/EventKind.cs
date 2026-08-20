@@ -27,12 +27,17 @@ namespace Harbora.Domain.Notifications;
 /// </para>
 ///
 /// <para>
-/// <see cref="MaintenanceOn"/> and <see cref="MaintenanceOff"/> are reserved for the maintenance-mode
-/// toggle (sub-project 5 of the platform-options plan) — that feature does not exist on this branch,
-/// so nothing publishes them yet and the subscription UI does not offer them as a checkbox: showing a
-/// box that can never be ticked into firing is the fabricated-capability defect class this codebase
-/// has spent weeks removing. The members are reserved here now, rather than appended later, so that
-/// a subscription's stored mask never needs its bit positions renumbered once maintenance mode ships.
+/// <see cref="MaintenanceOn"/> and <see cref="MaintenanceOff"/> were reserved for the maintenance-mode
+/// toggle (sub-project 5 of the platform-options plan) and are now wired: <c>AppOperationsService.
+/// SetMaintenanceModeAsync</c> publishes one of them at the exact seam <c>DeploymentPipeline</c> and
+/// <c>BackupEngine</c> publish their own events, once the proxy apply that toggle depends on is known
+/// to have succeeded. Both are still excluded from <see cref="Publishable"/> on purpose: the
+/// subscription UI does not offer them as a checkbox yet, which is a separate decision (extending
+/// that mask and adding the checkbox) left for whoever picks it up — showing a box that can never be
+/// ticked into firing is the fabricated-capability defect class this codebase has spent weeks
+/// removing, and the reverse (a real event nobody can subscribe to) is the conservative side of that
+/// same rule to be wrong on. The members were reserved here rather than appended later so that a
+/// subscription's stored mask never needs its bit positions renumbered once they are offered.
 /// </para>
 /// </summary>
 [Flags]
@@ -46,9 +51,11 @@ public enum EventKind
     BackupFailed = 1 << 4,
     ServiceFailed = 1 << 5,
 
-    /// <summary>Reserved — see the type doc. Not publishable yet; not offered in the subscription UI.</summary>
+    /// <summary>Published by AppOperationsService.SetMaintenanceModeAsync — see the type doc. Not yet
+    /// offered in the subscription UI (excluded from <see cref="Publishable"/>).</summary>
     MaintenanceOn = 1 << 6,
-    /// <summary>Reserved — see the type doc. Not publishable yet; not offered in the subscription UI.</summary>
+    /// <summary>Published by AppOperationsService.SetMaintenanceModeAsync — see the type doc. Not yet
+    /// offered in the subscription UI (excluded from <see cref="Publishable"/>).</summary>
     MaintenanceOff = 1 << 7,
 
     /// <summary>Every event this codebase can actually raise today — what the subscription UI offers

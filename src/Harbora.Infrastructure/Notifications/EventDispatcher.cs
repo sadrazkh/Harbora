@@ -74,10 +74,13 @@ public sealed class EventDispatcher(
     /// <summary>
     /// The wire name each event goes out under — the plan's own vocabulary
     /// (<c>deployment.succeeded</c>, <c>backup.failed</c>, …), not the C# member name.
-    /// <see cref="EventKind.MaintenanceOn"/>/<see cref="EventKind.MaintenanceOff"/> are reserved (see
-    /// that type's own doc) and deliberately unmapped: nothing publishes them yet, so reaching this
-    /// with either is a caller bug worth throwing on rather than silently inventing a wire name for an
-    /// event that cannot really have happened.
+    /// <see cref="EventKind.MaintenanceOn"/>/<see cref="EventKind.MaintenanceOff"/> (P5, 2026-08-20
+    /// platform-options plan) are mapped here even though they are still excluded from
+    /// <see cref="EventKind.Publishable"/> and so cannot be subscribed to yet — the wire name a
+    /// future subscription would need to match on is a fact about the event, not about whether
+    /// anyone can hear it, and <c>AppOperationsService.SetMaintenanceModeAsync</c> already publishes
+    /// both. Any kind actually reaching this default case is a genuine caller bug worth throwing on:
+    /// every real publishable event has a case above.
     /// </summary>
     private static string WireName(EventKind kind) => kind switch
     {
