@@ -72,6 +72,9 @@ public class HarboraDbContext : DbContext
     public DbSet<GitRepository> GitRepositories => Set<GitRepository>();
     public DbSet<App> Apps => Set<App>();
     public DbSet<EnvironmentVariable> EnvironmentVariables => Set<EnvironmentVariable>();
+    public DbSet<ConfigGroup> ConfigGroups => Set<ConfigGroup>();
+    public DbSet<ConfigGroupEntry> ConfigGroupEntries => Set<ConfigGroupEntry>();
+    public DbSet<AppConfigGroup> AppConfigGroups => Set<AppConfigGroup>();
     public DbSet<Volume> Volumes => Set<Volume>();
     public DbSet<Deployment> Deployments => Set<Deployment>();
     public DbSet<CronRun> CronRuns => Set<CronRun>();
@@ -346,6 +349,26 @@ public class HarboraDbContext : DbContext
         });
 
         b.Entity<EnvironmentVariable>(e => e.HasIndex(x => new { x.AppId, x.Key }).IsUnique());
+
+        // --- shared environment-variable groups (Sub-project 9, 2026-08-20 platform-options plan) ---
+        b.Entity<ConfigGroup>(e =>
+        {
+            e.HasIndex(x => new { x.WorkspaceId, x.Name }).IsUnique();
+            e.Property(x => x.Name).HasMaxLength(120).IsRequired();
+            e.HasMany(x => x.Entries).WithOne(v => v.ConfigGroup).HasForeignKey(v => v.ConfigGroupId).OnDelete(DeleteBehavior.Cascade);
+        });
+        b.Entity<ConfigGroupEntry>(e => e.HasIndex(x => new { x.ConfigGroupId, x.Key }).IsUnique());
+        b.Entity<AppConfigGroup>(e =>
+        {
+            e.HasIndex(x => new { x.AppId, x.ConfigGroupId }).IsUnique();
+            e.HasOne(x => x.App).WithMany(a => a.ConfigGroups).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+            // Restrict, not Cascade: a group with apps still attached must be refused by the named-list
+            // check in ConfigGroupsController.Delete (the ProjectsController.Delete idiom) before this
+            // is ever reached — the same relationship EnvironmentId has to Project, where the comment on
+            // App's own FK explains why the application-level refusal has to exist regardless of what
+            // the database would do on its own.
+            e.HasOne(x => x.ConfigGroup).WithMany(g => g.Apps).HasForeignKey(x => x.ConfigGroupId).OnDelete(DeleteBehavior.Restrict);
+        });
 
         // --- node agent v1 ---
         //
@@ -1164,6 +1187,11 @@ public class HarboraDbContext : DbContext
         // They are only ever reached through their parent — which is filtered — so a navigation
         // filter would add a join to every read, and the same inner-join hazard, for no extra
         // protection.
+
+        // ConfigGroup is workspace-level like GitProvider, so it is filtered directly. Its entries and
+        // its join to App follow the EnvironmentVariable rule above instead: reached only through the
+        // group (or through App, itself filtered), so they stay unfiltered on purpose.
+        b.Entity<ConfigGroup>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
     }
 
     public override async Task<int> SaveChangesAsync(CancellationToken ct = default)

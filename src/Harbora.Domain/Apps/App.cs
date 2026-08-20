@@ -176,4 +176,8 @@ public class App : BaseEntity
     public ICollection<Volume> Volumes { get; set; } = new List<Volume>();
     public ICollection<DomainName> Domains { get; set; } = new List<DomainName>();
     public ICollection<Deployment> Deployments { get; set; } = new List<Deployment>();
+
+    /// <summary>Shared <see cref="ConfigGroup"/>s this app receives environment variables from,
+    /// lowest-to-highest precedence order — see <see cref="ConfigGroupMerge"/>.</summary>
+    public ICollection<AppConfigGroup> ConfigGroups { get; set; } = new List<AppConfigGroup>();
 }
