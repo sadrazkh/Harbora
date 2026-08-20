@@ -1,0 +1,34 @@
+@model IReadOnlyList<ExternalProviderButton>
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var returnUrl = ViewData["ExternalReturnUrl"] as string;
+}
+@* Nothing at all when no provider is configured — the shipped state. An "or sign in with" rule
+   above an empty row is a promise the platform cannot keep. *@
+@if (Model.Count > 0)
+{
+    <div class="mt-6" data-external-providers="@Model.Count">
+        <div class="flex items-center gap-3">
+            <span class="h-px flex-1 bg-line"></span>
+            <span class="text-xs text-ink-faint">@(isFa ? "یا" : "or")</span>
+            <span class="h-px flex-1 bg-line"></span>
+        </div>
+
+        <div class="mt-4 grid gap-2">
+            @foreach (var provider in Model)
+            {
+                <form asp-controller="Account" asp-action="ExternalStart"
+                      asp-route-provider="@provider.Provider" method="post"
+                      data-external-provider="@provider.Provider">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="returnUrl" value="@returnUrl" />
+                    <button type="submit"
+                            class="flex w-full items-center justify-center gap-2 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm font-medium text-ink hover:bg-surface-3">
+                        <i data-lucide="key-round" class="h-4 w-4 text-ink-muted"></i>
+                        <span>@(isFa ? $"ورود با {provider.Name}" : $"Continue with {provider.Name}")</span>
+                    </button>
+                </form>
+            }
+        </div>
+    </div>
+}

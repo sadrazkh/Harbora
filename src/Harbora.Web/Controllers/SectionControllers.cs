@@ -362,6 +362,7 @@ public sealed class SettingsController(
     Harbora.Application.Abstractions.ISystemClock clock,
     IAuditLogger audit,
     ICurrentUser currentUser,
+    Harbora.Infrastructure.Security.ExternalLoginSettingsService externalLogins,
     Harbora.Infrastructure.Security.AccountSessionService accountSessions) : Controller
 {
     private bool IsProvider => User.IsInRole("Owner") || User.IsInRole("Admin");
@@ -409,12 +410,57 @@ public sealed class SettingsController(
         ViewBag.TotpDraft = me?.TotpEnabledAt is null && me?.TotpSecretEncrypted is not null;
         ViewBag.AccountEmail = me?.Email;
         ViewBag.EmailVerified = me?.EmailVerifiedAt is not null;
+        await BuildExternalLoginsAsync(ct);
         ViewBag.CurrentSessionId = User.FindFirstValue(Harbora.Web.Infrastructure.HarboraClaims.Session);
         ViewBag.Sessions = await db.UserSessions.AsNoTracking()
             .Where(s => s.UserId == currentUser.UserId && s.RevokedAt == null && s.ExpiresAt > clock.UtcNow)
             .OrderByDescending(s => s.LastSeenAt).ToListAsync(ct);
 
         return View();
+    }
+
+    /// <summary>
+    /// Which providers this account is connected to, which ones it could still connect, and — for
+    /// each connected one — whether disconnecting it is something this panel will actually do.
+    ///
+    /// <para>
+    /// The last question is answered here rather than only at the POST, so the page does not offer a
+    /// Disconnect button beside the only door into the account and then refuse it. Both sides ask
+    /// <c>ExternalLoginPolicy</c>, so they cannot drift apart.
+    /// </para>
+    /// </summary>
+    private async Task BuildExternalLoginsAsync(CancellationToken ct)
+    {
+        var config = await externalLogins.GetAsync(ct);
+        var oidcName = config.For(Harbora.Domain.Identity.ExternalLoginProviders.Oidc).DisplayName;
+
+        var links = await db.ExternalLogins.IgnoreQueryFilters().AsNoTracking()
+            .Where(l => l.UserId == currentUser.UserId)
+            .OrderBy(l => l.LinkedAt)
+            .ToListAsync(ct);
+
+        var passwordHash = await db.Users.IgnoreQueryFilters()
+            .Where(u => u.Id == currentUser.UserId).Select(u => u.PasswordHash).FirstOrDefaultAsync(ct);
+        var hasPassword = Harbora.Infrastructure.Security.ExternalLoginPolicy.HasUsablePassword(passwordHash);
+
+        ViewBag.ExternalLinks = links
+            .Select(l => new Harbora.Web.ViewModels.ExternalLinkViewModel(
+                l.Provider,
+                Harbora.Domain.Identity.ExternalLoginProviders.DisplayName(l.Provider, oidcName, IsFa),
+                l.Email,
+                l.LinkedAt,
+                !Harbora.Infrastructure.Security.ExternalLoginPolicy.WouldLeaveNoWayIn(
+                    hasPassword, links.Count(other => other.Provider != l.Provider))))
+            .ToList();
+
+        // Only what is both configured and not already connected — a "Connect" button beside a
+        // provider that is already connected is a button with nothing to do.
+        ViewBag.ExternalOffered = config.Offered
+            .Where(p => links.All(l => l.Provider != p.Provider))
+            .Select(p => new Harbora.Web.ViewModels.ExternalProviderButton(
+                p.Provider,
+                Harbora.Domain.Identity.ExternalLoginProviders.DisplayName(p.Provider, oidcName, IsFa)))
+            .ToList();
     }
 
     /// <summary>Provider-only: update the platform display settings.</summary>

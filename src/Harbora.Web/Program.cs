@@ -116,7 +116,12 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
             : CookieSecurePolicy.Always;
     })
     .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TokenAuthenticationHandler>(
-        TokenAuthenticationHandler.SchemeName, _ => { });
+        TokenAuthenticationHandler.SchemeName, _ => { })
+    // Google, GitHub and a generic OIDC provider, each configured from the settings table and each
+    // showing no button at all until an operator has configured it. They sign into a short-lived
+    // cookie of their own, never into the session — the rules in AccountController.External decide
+    // whether an external identity becomes a signed-in person.
+    .AddHarboraExternalLogin();
 
 // Action-level RBAC: one policy per capability, evaluated against the caller's role (doc 10 §2.12).
 builder.Services.AddCapabilityAuthorization();

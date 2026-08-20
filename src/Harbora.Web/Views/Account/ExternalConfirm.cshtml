@@ -1,0 +1,40 @@
+@model ExternalConfirmViewModel
+@{
+    ViewData["Title"] = "Connect";
+    Layout = "_Auth";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+@* The page that refuses to link by address alone. It says whose account is about to gain a way in,
+   and asks for the one thing only that person has. Asserted by data-external-confirm, never by a
+   sentence — the panel renders Persian by default. *@
+<h1 class="title">@(isFa ? "این حساب از قبل هست" : "This account already exists")</h1>
+<p class="subtitle">
+    @(isFa
+        ? $"یک حساب Harbora با این نشانی وجود دارد. برای وصل‌کردن {Model.ProviderName} به آن، رمز همان حساب را وارد کنید."
+        : $"A Harbora account already uses this address. Enter its password to connect {Model.ProviderName} to it.")
+</p>
+
+<form asp-controller="Account" asp-action="ExternalConfirm" method="post"
+      data-external-confirm="@Model.Provider">
+    @Html.AntiForgeryToken()
+    <div asp-validation-summary="All" class="error"></div>
+
+    <div class="field">
+        <label>@T["Email"]</label>
+        @* The address is not a choice here: it is the account the provider's answer pointed at. *@
+        <input type="email" value="@Model.Email" readonly autocomplete="username"
+               dir="ltr" class="font-mono" />
+    </div>
+    <div class="field">
+        <label>@T["Password"]</label>
+        <input type="password" name="password" autocomplete="current-password" required autofocus />
+    </div>
+
+    <button type="submit" class="btn btn-primary">
+        @(isFa ? $"وصل‌کردن {Model.ProviderName} و ورود" : $"Connect {Model.ProviderName} and sign in")
+    </button>
+
+    <p class="subtitle" style="margin-top:.75rem">
+        <a href="/account/login">@(isFa ? "انصراف و ورود معمولی" : "Cancel and sign in normally")</a>
+    </p>
+</form>

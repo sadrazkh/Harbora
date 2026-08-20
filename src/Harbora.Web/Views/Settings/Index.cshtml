@@ -219,6 +219,88 @@
         }
     </section>
 
+    @* ---- Connected sign-in services ----
+       Shown whether or not anything is connected and whether or not a provider is configured: an
+       empty section says "nothing is connected", which is a different sentence from a section that
+       is not there at all, and only one of them is true here. *@
+    @{
+        var externalLinks = ViewBag.ExternalLinks as List<ExternalLinkViewModel> ?? new();
+        var externalOffered = ViewBag.ExternalOffered as List<ExternalProviderButton> ?? new();
+    }
+    <section class="rounded-xl border border-line bg-surface p-5" data-external-logins="@externalLinks.Count">
+        <h2 class="text-[15px] font-semibold text-ink mb-3">@(isFa ? "ورود با سرویس‌های دیگر" : "Other ways to sign in")</h2>
+
+        @if (externalLinks.Count == 0)
+        {
+            <p class="mb-3 text-sm text-ink-muted">
+                @(isFa
+                    ? "هیچ سرویسی به این حساب وصل نیست."
+                    : "No service is connected to this account.")
+            </p>
+        }
+        else
+        {
+            <ul class="mb-3 space-y-2">
+                @foreach (var link in externalLinks)
+                {
+                    <li class="flex items-center justify-between gap-3 rounded-lg border border-line bg-surface-2 px-3 py-2"
+                        data-external-link="@link.Provider">
+                        <span class="min-w-0">
+                            <strong class="block text-sm text-ink">@link.Name</strong>
+                            @if (!string.IsNullOrWhiteSpace(link.Email))
+                            {
+                                @* An address is a technical token, monospace and LTR even in Persian. *@
+                                <small class="block truncate text-[11px] text-ink-faint font-mono" dir="ltr">@link.Email</small>
+                            }
+                        </span>
+                        @if (link.CanDisconnect)
+                        {
+                            <form method="post" action="/account/external/@link.Provider/unlink" class="shrink-0">
+                                @Html.AntiForgeryToken()
+                                <button class="rounded-lg bg-surface-2 hover:bg-surface-3 px-3 py-1.5 text-xs text-danger">
+                                    @(isFa ? "جدا کردن" : "Disconnect")
+                                </button>
+                            </form>
+                        }
+                        else
+                        {
+                            @* Said, not hidden: a control that vanished without explanation reads as
+                               a bug, and the reason is the useful part. *@
+                            <small class="shrink-0 text-[11px] text-warn">
+                                @(isFa ? "تنها راه ورود شما" : "your only way in")
+                            </small>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+
+        @if (externalOffered.Count > 0)
+        {
+            <div class="grid gap-2">
+                @foreach (var provider in externalOffered)
+                {
+                    <form method="post" action="/account/external/@provider.Provider/start"
+                          data-external-connect="@provider.Provider">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="link" value="true" />
+                        <button class="w-full rounded-lg bg-surface-2 hover:bg-surface-3 px-4 py-2 text-sm text-ink">
+                            @(isFa ? $"وصل‌کردن {provider.Name}" : $"Connect {provider.Name}")
+                        </button>
+                    </form>
+                }
+            </div>
+        }
+        else if (externalLinks.Count == 0)
+        {
+            <p class="text-xs text-ink-faint">
+                @(isFa
+                    ? "مدیر پلتفرم هنوز هیچ سرویس ورودی را تنظیم نکرده است."
+                    : "The platform administrator has not configured any sign-in service yet.")
+            </p>
+        }
+    </section>
+
     @* ---- Account sessions ---- *@
     <section class="rounded-xl border border-line bg-surface p-5 lg:col-span-2">
         <div class="flex items-start justify-between gap-4 mb-3">

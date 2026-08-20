@@ -127,6 +127,7 @@ public sealed class HarboraWebFactory(
             services.AddSingleton<IDockerEngine>(Docker);
 
             services.AddSingleton<IStartupFilter, RemoteIpFromHeader>();
+            UseTestExternalProvider(services);
         });
     }
 
@@ -270,6 +271,27 @@ public sealed class HarboraWebFactory(
         services.RemoveAll<DbContextOptions>();
         services.AddDbContext<HarboraDbContext>(o => o.UseInMemoryDatabase(_databaseName));
     }
+
+    /// <summary>
+    /// Points the external sign-in scheme at <see cref="TestExternalAuthHandler"/>.
+    ///
+    /// <para>
+    /// The scheme itself stays exactly where <c>Program.cs</c> put it — only the handler behind it
+    /// changes, so the callback under test authenticates the same scheme name production does. The
+    /// three provider schemes are left alone: they keep their real handlers, which is what proves
+    /// they can be registered unconfigured without taking the pipeline down.
+    /// </para>
+    ///
+    /// <para>
+    /// Replacing the handler type in place rather than adding a scheme, because
+    /// <c>AuthenticationOptions.AddScheme</c> refuses a name that already exists — and this callback
+    /// runs after the panel's own, so the entry is certain to be there.
+    /// </para>
+    /// </summary>
+    private static void UseTestExternalProvider(IServiceCollection services) =>
+        services.Configure<Microsoft.AspNetCore.Authentication.AuthenticationOptions>(o =>
+            o.SchemeMap[Harbora.Web.Infrastructure.ExternalAuth.ExternalScheme].HandlerType =
+                typeof(TestExternalAuthHandler));
 
     /// <summary>
     /// Takes out every hosted service Harbora itself registers, and nothing else — the host's own

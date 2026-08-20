@@ -37,6 +37,36 @@ public sealed class RegisterViewModel
     public string? InvitationToken { get; set; }
 }
 
+/// <summary>
+/// The page that stands between "a provider says this is your address" and "this provider is
+/// connected to your account". Nothing here is editable but the password: the address is the one the
+/// account already has, shown so the person can see which account is about to gain a way in.
+/// </summary>
+/// <summary>
+/// One button on the sign-in page. Only providers an operator has fully configured produce one —
+/// a button that leads to somebody else's error page is worse than no button.
+/// </summary>
+/// <param name="Provider">The stored provider key, which is also what the form posts.</param>
+/// <param name="Name">What to call it on screen.</param>
+public sealed record ExternalProviderButton(string Provider, string Name);
+
+/// <summary>
+/// One provider already connected to this account.
+/// </summary>
+/// <param name="Email">What the provider called the address when it was connected — shown so a
+/// person with two Google accounts can tell which one this is.</param>
+/// <param name="CanDisconnect">False when this is the only way into the account, so the page can say
+/// why instead of offering a button that will refuse.</param>
+public sealed record ExternalLinkViewModel(
+    string Provider, string Name, string? Email, DateTimeOffset LinkedAt, bool CanDisconnect);
+
+public sealed class ExternalConfirmViewModel
+{
+    public string Provider { get; set; } = string.Empty;
+    public string ProviderName { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+}
+
 public sealed class TotpViewModel
 {
     [Required(ErrorMessage = "A code is required.")] public string Code { get; set; } = string.Empty;

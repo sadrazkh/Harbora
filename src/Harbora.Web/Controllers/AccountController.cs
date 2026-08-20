@@ -17,7 +17,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Web.Controllers;
 
-public sealed class AccountController(
+public sealed partial class AccountController(
     HarboraDbContext db,
     IPasswordHasher hasher,
     IAuditLogger audit,
@@ -28,6 +28,7 @@ public sealed class AccountController(
     Harbora.Web.Infrastructure.PanelModeProvider panelModes,
     WorkspaceAccountService workspaceAccounts,
     AccountSessionService sessions,
+    ExternalLoginSettingsService externalLogins,
     IJobQueue jobs) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -41,6 +42,11 @@ public sealed class AccountController(
         // The forgot-password link only exists when the platform can actually send the email.
         // A link that leads to "ask your administrator" is a support ticket with extra steps.
         ViewBag.CanResetPassword = await mailer.IsConfiguredAsync(ct);
+        ViewBag.ExternalProviders = await OfferedProvidersAsync(ct);
+        // A provider that answered with a refusal, or a browser that lost its correlation cookie,
+        // comes back here. The reason rides in the query string because TempData re-types what it
+        // carries and this message crosses a redirect issued outside MVC entirely.
+        ViewBag.ExternalFailed = Request.Query["sso"] == "failed";
         return View(new LoginViewModel { ReturnUrl = returnUrl });
     }
 
@@ -300,6 +306,12 @@ public sealed class AccountController(
             .Select(m => new { m.WorkspaceId, m.Role }).SingleAsync();
         await db.SaveChangesAsync();
         await SignInAsync(user, membership.WorkspaceId, membership.Role);
+
+        // An external provider proven earlier in this same conversation becomes a link here, and
+        // only here — after the password and any second factor, at the one moment the person has
+        // demonstrably got both. See AccountController.External.cs for why a matching address is
+        // never enough on its own.
+        await SpendPendingLinkAsync(user, HttpContext.RequestAborted);
 
         await audit.LogAsync("user.login", "user", user.Id.ToString(), ClientIp,
             actorEmailOverride: user.Email, userIdOverride: user.Id);

@@ -8,6 +8,14 @@
 
 @if (TempData["Message"] is string message){<div class="success">@message</div>}
 @if (TempData["Error"] is string error){<div class="error">@error</div>}
+@if (ViewBag.ExternalFailed == true)
+{
+    <div class="error" data-external-failed>
+        @(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa"
+            ? "ورود از آن سرویس کامل نشد. دوباره تلاش کنید."
+            : "That sign-in did not complete. Try again.")
+    </div>
+}
 
 <form asp-controller="Account" asp-action="Login" method="post">
     @Html.AntiForgeryToken()
@@ -32,3 +40,8 @@
     }
     <p class="subtitle" style="margin-top:.75rem"><a href="/account/register">@(System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "ساخت حساب جدید" : "Create a new account")</a></p>
 </form>
+
+@* Outside the password form: each provider is its own POST, and a nested form would be swallowed
+   silently — the defect FunctionEditorHttpTests was written to catch. *@
+@{ ViewData["ExternalReturnUrl"] = Model.ReturnUrl; }
+<partial name="_ExternalProviders" model="@((IReadOnlyList<ExternalProviderButton>)(ViewBag.ExternalProviders ?? new List<ExternalProviderButton>()))" />
