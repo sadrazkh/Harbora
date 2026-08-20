@@ -550,7 +550,18 @@ public class HarboraDbContext : DbContext
         // P7 (2026-08-20 platform-options plan): at most one status page per workspace — the settings
         // screen creates it lazily on first open, so a second concurrent open must find the same row
         // rather than a second one racing it into existence.
-        b.Entity<Harbora.Domain.Status.StatusPage>(e => e.HasIndex(x => x.WorkspaceId).IsUnique());
+        b.Entity<Harbora.Domain.Status.StatusPage>(e =>
+        {
+            e.HasIndex(x => x.WorkspaceId).IsUnique();
+
+            // P8: at most one custom domain per status page. The FK lives on DomainName (the
+            // dependent, same shape App.Domains already uses) rather than a DomainId column here —
+            // HasForeignKey<DomainName> is what makes this a true one-to-one, which is also what
+            // gives DomainName.StatusPageId its own unique index for free.
+            e.HasOne(x => x.Domain).WithOne(d => d.StatusPage)
+                .HasForeignKey<Harbora.Domain.Networking.DomainName>(d => d.StatusPageId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
 
         // One row per (page, app) — choosing the same app twice would give the public page two cards
         // for one component rather than refusing the second pick.
@@ -1261,7 +1272,9 @@ public class HarboraDbContext : DbContext
         // EnvironmentVariable, Volume, DomainName and DeploymentLog are deliberately NOT filtered.
         // They are only ever reached through their parent — which is filtered — so a navigation
         // filter would add a join to every read, and the same inner-join hazard, for no extra
-        // protection.
+        // protection. DomainName now has two possible parents (App, and StatusPage as of P8) rather
+        // than one; the reasoning is unchanged because both are filtered and a row is always reached
+        // through whichever one it belongs to, never both.
 
         // ConfigGroup is workspace-level like GitProvider, so it is filtered directly. Its entries and
         // its join to App follow the EnvironmentVariable rule above instead: reached only through the

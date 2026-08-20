@@ -85,7 +85,7 @@ public sealed class ProjectDeletionService(
         var appIds = apps.Select(a => a.Id).ToList();
         var domainHosts = appIds.Count == 0
             ? []
-            : await db.Domains.Where(d => appIds.Contains(d.AppId))
+            : await db.Domains.Where(d => d.AppId != null && appIds.Contains(d.AppId!.Value))
                 .OrderBy(d => d.Host).Select(d => d.Host).ToListAsync(ct);
 
         // Also cascades with its app (FunctionDefinition.AppId is DeleteBehavior.Cascade). Counted

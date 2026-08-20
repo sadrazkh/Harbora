@@ -1,4 +1,5 @@
 using Harbora.Domain.Common;
+using Harbora.Domain.Networking;
 
 namespace Harbora.Domain.Status;
 
@@ -29,6 +30,15 @@ public class StatusPage : BaseEntity
 
     public ICollection<StatusPageComponent> Components { get; set; } = new List<StatusPageComponent>();
     public ICollection<StatusIncident> Incidents { get; set; } = new List<StatusIncident>();
+
+    /// <summary>
+    /// At most one customer-supplied domain (sub-project 8, 2026-08-20 platform-options plan) —
+    /// <c>status.their.com</c> walking the same <see cref="DomainName"/> attach flow an app's own
+    /// domain walks, rather than a second machinery. The platform subdomain
+    /// (<c>status-{Workspace.Slug}.&lt;platform root domain&gt;</c>) keeps answering whether or not
+    /// this is set; see <c>StatusPageDomainService</c>.
+    /// </summary>
+    public DomainName? Domain { get; set; }
 }
 
 /// <summary>
