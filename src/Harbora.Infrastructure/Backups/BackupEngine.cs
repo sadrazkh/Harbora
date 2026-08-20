@@ -738,13 +738,20 @@ public sealed class BackupEngine(
         await using (var file = File.Create(stagedPath))
             await content.CopyToAsync(file, ct);
 
+        // Read in the finally below to decide whether the staging copy IS the published artifact —
+        // a Local destination with no LocalPath of its own publishes into StagingDir too (see
+        // BackupStorage.LocalRoot), so PutFileAsync returns the same path it was given rather than a
+        // copy. Deleting "the staging copy" there would delete the only file this backup ever named.
+        string? artifactRef = null;
+
         try
         {
             // Deliberately NOT through ProtectArtifactAsync. A downloaded artifact is already in its
             // stored form, so encrypting it again would wrap it twice and nothing would restore it. The
             // checksum is over the bytes that actually land, which is what verification recomputes.
             var checksum = await Sha256Async(stagedPath, ct);
-            var (artifactRef, size) = await storage.PutFileAsync(destination, key, stagedPath, ct);
+            long size;
+            (artifactRef, size) = await storage.PutFileAsync(destination, key, stagedPath, ct);
 
             var backup = new Backup
             {
@@ -781,8 +788,14 @@ public sealed class BackupEngine(
         finally
         {
             // The staging copy goes whether the publish worked or not: a failed import must not leave
-            // somebody's archive sitting in a shared directory.
-            if (File.Exists(stagedPath))
+            // somebody's archive sitting in a shared directory. But when the destination published IN
+            // PLACE — the artifact reference IS the staged path, not a copy of it, exactly the check
+            // RunAsync already makes for an ordinary backup's own staging cleanup — deleting it here
+            // would delete the artifact this import just recorded, and every restore of it would then
+            // fail with "the backup artifact is missing from its destination."
+            var isSameFile = artifactRef is not null &&
+                string.Equals(Path.GetFullPath(artifactRef), Path.GetFullPath(stagedPath), StringComparison.OrdinalIgnoreCase);
+            if (!isSameFile && File.Exists(stagedPath))
                 try { File.Delete(stagedPath); } catch { /* best effort, as everywhere else here */ }
         }
     }
