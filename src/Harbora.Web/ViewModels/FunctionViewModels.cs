@@ -43,6 +43,9 @@ public sealed class FunctionFormModel
     public string? EventKey { get; set; }
     public string? Code { get; set; }
     public bool IsEnabled { get; set; } = true;
+
+    /// <summary>Only meaningful for an HTTP trigger — see <see cref="FunctionDefinition.IsPublic"/>.</summary>
+    public bool IsPublic { get; set; }
 }
 
 /// <summary>One past call, as the history table shows it.</summary>
@@ -64,10 +67,18 @@ public sealed record FunctionRevisionRow(Guid Id, DateTimeOffset CreatedAt, bool
 /// so when this is true the editor says so beside the button — running is instant and honest, and the
 /// alternative (rebuilding on every press) would make Run now a second name for Publish.
 /// </param>
+/// <param name="FunctionUrl">
+/// The exact address a visitor would use to reach this function once it is <c>Public</c> and
+/// published — <c>https://{app's own host}/{FunctionProject.RouteFor(fn)}</c>, the very route the
+/// generated host answers on, so the page and the container cannot disagree. Null when the app has
+/// no host yet (never assigned, or the platform has no root domain configured) or the function is not
+/// an existing HTTP trigger — there is nothing honest to show yet.
+/// </param>
 public sealed record FunctionEditViewModel(
     Guid AppId, string AppName, FunctionRuntime Runtime, Guid? FunctionId,
     FunctionFormModel Form, IReadOnlyList<FunctionEventKind> Events,
     IReadOnlyList<FunctionRunRow>? Runs = null,
     bool IsPublished = false,
     bool HasUnpublishedChanges = false,
-    IReadOnlyList<FunctionRevisionRow>? Revisions = null);
+    IReadOnlyList<FunctionRevisionRow>? Revisions = null,
+    string? FunctionUrl = null);

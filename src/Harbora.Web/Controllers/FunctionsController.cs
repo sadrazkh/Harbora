@@ -270,6 +270,15 @@ public sealed class FunctionsController(
         var recent = await functions.RecentInvocationsAsync(fn.Id, 20, ct);
         var revisions = await functions.RecentRevisionsAsync(fn.Id, ct);
 
+        // The same lookup Details already makes for the same reason: Domains, not AppAddress itself —
+        // the app was already assigned a host when it was created, and this is where that decision
+        // was recorded. RouteFor is the one place that decides where a visitor lands, so reusing it
+        // here is what keeps this URL from ever disagreeing with the container that answers it.
+        var host = await db.Domains.Where(d => d.AppId == app.Id).Select(d => d.Host).FirstOrDefaultAsync(ct);
+        var functionUrl = host is { Length: > 0 } && fn.Trigger == FunctionTrigger.Http
+            ? $"https://{host}/{FunctionProject.RouteFor(fn)}"
+            : null;
+
         return View(new FunctionEditViewModel(
             app.Id, app.Name, app.FunctionRuntime ?? FunctionRuntime.CSharp, fn.Id,
             new FunctionFormModel
@@ -280,14 +289,16 @@ public sealed class FunctionsController(
                 CronExpression = fn.CronExpression,
                 EventKey = fn.EventKey,
                 Code = fn.Code,
-                IsEnabled = fn.IsEnabled
+                IsEnabled = fn.IsEnabled,
+                IsPublic = fn.IsPublic
             },
             FunctionEvents.All,
             recent.Select(i => new FunctionRunRow(
                 i.StartedAt, i.Trigger, i.StatusCode, i.Succeeded, i.DurationMs, i.Error, i.CompletedAt is null)).ToList(),
             IsPublished: app.ActiveDeploymentId is not null,
             HasUnpublishedChanges: fn.HasUnpublishedChanges,
-            Revisions: revisions.Select((r, index) => new FunctionRevisionRow(r.Id, r.CreatedAt, IsCurrent: index == 0)).ToList()));
+            Revisions: revisions.Select((r, index) => new FunctionRevisionRow(r.Id, r.CreatedAt, IsCurrent: index == 0)).ToList(),
+            FunctionUrl: functionUrl));
     }
 
     [HttpPost("{id:guid}/save")]
@@ -353,6 +364,10 @@ public sealed class FunctionsController(
         candidate.EventKey = model.Trigger == FunctionTrigger.Event ? model.EventKey : null;
         candidate.Code = model.Code ?? "";
         candidate.IsEnabled = model.IsEnabled;
+        // Meaningless for anything but an HTTP trigger — a Cron or Event function never sits behind
+        // the visitor route this flag gates — so it is forced off rather than stored and ignored,
+        // the same guard Route already gets a few lines above.
+        candidate.IsPublic = model.Trigger == FunctionTrigger.Http && model.IsPublic;
 
         var validation = FunctionAppService.Validate(candidate, existing, functionId);
         if (!validation.Ok)
