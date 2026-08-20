@@ -48,6 +48,17 @@ public static class HttpConversation
         await client.PostAsync(path, new FormUrlEncodedContent(fields.ToDictionary(f => f.Key, f => f.Value)));
 
     /// <summary>
+    /// A GET as if it arrived on a different <c>Host</c> header — the actual shape of a request to a
+    /// host-resolved anonymous route (P7's <c>status-{slug}.&lt;platform domain&gt;</c> status pages,
+    /// and whatever else resolves tenancy from the host rather than a route value or a session).
+    /// </summary>
+    public static Task<HttpResponseMessage> GetWithHostAsync(this HttpClient client, string path, string host)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, path) { Headers = { Host = host } };
+        return client.SendAsync(request);
+    }
+
+    /// <summary>
     /// Signs in over the real login form: render, take the token, post the credentials, keep the auth
     /// cookie. Nothing here is faked, so the returned client is one the cookie scheme has authenticated.
     /// </summary>

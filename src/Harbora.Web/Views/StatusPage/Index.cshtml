@@ -1,0 +1,124 @@
+@using Harbora.Infrastructure.Status
+@model PublicStatusPageView
+@{
+    Layout = "_PublicStatusLayout";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    (string Text, string Tone) StateView(PublicAppState state) => (state, isFa) switch
+    {
+        (PublicAppState.Operational, true) => ("عملیاتی", Tone.Ok),
+        (PublicAppState.Operational, false) => ("Operational", Tone.Ok),
+        (PublicAppState.Degraded, true) => ("مختل", Tone.Warn),
+        (PublicAppState.Degraded, false) => ("Degraded", Tone.Warn),
+        (PublicAppState.Maintenance, true) => ("در حال تعمیر و نگهداری", Tone.Info),
+        (PublicAppState.Maintenance, false) => ("Under maintenance", Tone.Info),
+        (PublicAppState.Unknown, true) => ("نامشخص", Tone.Idle),
+        (PublicAppState.Unknown, false) => ("Unknown", Tone.Idle),
+        _ => (state.ToString(), Tone.Idle)
+    };
+
+    var allOperational = Model.Components.Count > 0 && Model.Components.All(c => c.State == PublicAppState.Operational);
+    var openIncidents = Model.Incidents.Where(i => i.ResolvedAt is null).ToList();
+    var resolvedIncidents = Model.Incidents.Where(i => i.ResolvedAt is not null).ToList();
+}
+<div data-status-page data-status-workspace="@Model.WorkspaceName">
+    <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+        Model.WorkspaceName,
+        isFa ? "وضعیت سرویس‌ها" : "Service status"))" />
+
+    <div class="mt-6 rounded-xl border border-line bg-surface p-4" data-status-summary
+         data-status-summary-state="@(allOperational ? "operational" : "attention")">
+        @if (Model.Components.Count == 0)
+        {
+            <p class="text-sm text-ink-muted">
+                @(isFa ? "این صفحه هنوز هیچ سرویسی را نشان نمی‌دهد." : "This page is not showing any services yet.")
+            </p>
+        }
+        else if (allOperational)
+        {
+            <p class="text-sm font-medium text-ok">
+                @(isFa ? "همه سرویس‌ها عملیاتی هستند." : "All services are operational.")
+            </p>
+        }
+        else
+        {
+            <p class="text-sm font-medium text-warn">
+                @(isFa ? "برخی سرویس‌ها نیاز به توجه دارند." : "Some services need attention.")
+            </p>
+        }
+    </div>
+
+    @if (Model.Components.Count > 0)
+    {
+        <div class="mt-4 divide-y divide-line rounded-xl border border-line bg-surface" data-status-components>
+            @foreach (var component in Model.Components)
+            {
+                var (text, tone) = StateView(component.State);
+                <div class="flex items-center justify-between gap-4 px-4 py-3" data-status-component
+                     data-status-component-state="@component.State.ToString().ToLowerInvariant()"
+                     data-status-component-uptime-has-data="@(component.Uptime30d.HasData ? "true" : "false")">
+                    <span class="text-sm font-medium text-ink">@component.DisplayName</span>
+                    <div class="flex items-center gap-4">
+                        <div class="text-end">
+                            <partial name="Design/_Metric" model="@(new MetricModel(component.Uptime30d,
+                                isFa ? "آپتایم ۳۰ روز" : "30-day uptime"))" />
+                        </div>
+                        <partial name="Design/_StatusPill" model="@(new StatusPillModel(text, tone))" />
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    @if (openIncidents.Count > 0)
+    {
+        <div class="mt-8" data-status-open-incidents>
+            <h2 class="text-sm font-semibold text-ink mb-3">@(isFa ? "رخدادهای باز" : "Open incidents")</h2>
+            <div class="space-y-3">
+                @foreach (var incident in openIncidents)
+                {
+                    <div class="rounded-xl border border-warn bg-warn-soft p-4" data-status-incident data-status-incident-id="@incident.Id" data-status-incident-open="true">
+                        <div class="flex items-center justify-between gap-3">
+                            <p class="text-sm font-semibold text-warn">@incident.Title</p>
+                            <span class="text-xs text-ink-faint" dir="ltr">@incident.StartedAt.ToString(Dates.Stamp)</span>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(incident.Body))
+                        {
+                            <p class="mt-1.5 text-sm text-ink-muted">@incident.Body</p>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    @if (resolvedIncidents.Count > 0)
+    {
+        <div class="mt-8" data-status-incident-history>
+            <h2 class="text-sm font-semibold text-ink mb-3">@(isFa ? "تاریخچه رخدادها" : "Incident history")</h2>
+            <div class="space-y-2">
+                @foreach (var incident in resolvedIncidents)
+                {
+                    <div class="rounded-lg bg-surface-2 px-4 py-2.5" data-status-incident data-status-incident-id="@incident.Id" data-status-incident-open="false">
+                        <div class="flex items-center justify-between gap-3">
+                            <p class="text-sm text-ink">@incident.Title</p>
+                            <span class="text-xs text-ink-faint" dir="ltr">@incident.ResolvedAt?.ToString(Dates.Stamp)</span>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(incident.Body))
+                        {
+                            <p class="mt-1 text-xs text-ink-faint">@incident.Body</p>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    @if (Model.Components.Count == 0 && Model.Incidents.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel("Activity",
+            isFa ? "چیزی برای نمایش نیست." : "Nothing to show yet."))" />
+    }
+
+    <p class="mt-10 text-center text-xs text-ink-faint">Harbora</p>
+</div>

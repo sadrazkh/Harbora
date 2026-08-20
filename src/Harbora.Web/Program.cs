@@ -252,6 +252,11 @@ app.Use(async (context, next) =>
 // Must run before anything that reads the client IP (rate limiter, audit logging).
 app.UseForwardedHeaders();
 
+// Resolves status-{workspaceSlug}.<platform domain> from the Host header and rewrites the request
+// under StatusPageController's own path prefix — must run before UseRouting so the rewritten path is
+// what endpoint matching actually sees. No auth/session state depends on it either way.
+app.UseMiddleware<StatusPageHostMiddleware>();
+
 app.UseRequestLocalization(app.Services.GetRequiredService<
     Microsoft.Extensions.Options.IOptions<RequestLocalizationOptions>>().Value);
 

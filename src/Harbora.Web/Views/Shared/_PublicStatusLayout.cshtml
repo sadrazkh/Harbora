@@ -1,0 +1,50 @@
+@using System.Globalization
+@inject ViteManifest Vite
+@{
+    // The public status page's own layout (P7, 2026-08-20 platform-options plan) — no sidebar, no
+    // topbar, no account controls, no session, no cookie this page sets itself. Pattern-matched off
+    // _Auth.cshtml, the panel's other zero-chrome anonymous layout: same Vite CSS/JS bundle (so
+    // _StatusPill/_EmptyState/_Metric/_PageHeader render with the same tokens the panel itself uses),
+    // same dark-mode-before-paint script reading the same localStorage key (not a cookie, and nothing
+    // this page writes — a returning visitor who set dark mode in the panel on this same browser sees
+    // it here too, on a page nobody had to sign in to reach).
+    var culture = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+    var dir = culture == "fa" ? "rtl" : "ltr";
+    var (viteJs, viteCss) = Vite.Resolve("Scripts/main.ts");
+}
+<!DOCTYPE html>
+<html lang="@culture" dir="@dir" class="h-full">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"]</title>
+    <meta name="theme-color" content="#f8f7fd" />
+    <link rel="icon" href="~/favicon.ico" />
+
+    @if (Vite.UseDevServer)
+    {
+        <script type="module" src="@(Vite.DevServerUrl)/@@vite/client"></script>
+        <script type="module" src="@(Vite.DevServerUrl)/Scripts/main.ts"></script>
+    }
+    else
+    {
+        foreach (var css in viteCss) { <link rel="stylesheet" href="@css" /> }
+        if (viteCss.Count == 0) { <link rel="stylesheet" href="~/css/fallback.css" asp-append-version="true" /> }
+    }
+
+    <script>
+        (function () {
+            var t = localStorage.getItem('harbora-theme') || 'light';
+            var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+            document.documentElement.classList.toggle('dark', dark);
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute('content', dark ? '#0f0d17' : '#f8f7fd');
+        })();
+    </script>
+</head>
+<body class="min-h-full bg-canvas text-ink antialiased">
+    <div class="mx-auto max-w-2xl px-4 py-10 sm:py-16">
+        @RenderBody()
+    </div>
+</body>
+</html>
