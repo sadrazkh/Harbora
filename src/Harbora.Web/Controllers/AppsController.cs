@@ -42,6 +42,10 @@ public sealed partial class AppsController(
     ICurrentUser currentUser,
     Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling,
     Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Deployments.HarboraRuntimeOptions> runtimeOptions,
+    // F5 (2026-08-21 functions-and-services plan): the same options DeploymentPipeline reads to
+    // build S3_ENDPOINT, so this page's effective-env preview can never disagree with what a
+    // deploy would actually inject.
+    Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Storage.ObjectStorageOptions> storageOptions,
     AppAddressAssigner addresses,
     Harbora.Modules.Backup.Infrastructure.BackupSnapshotService backupSnapshots,
     Harbora.Infrastructure.Monitoring.LifecycleHistory lifecycle) : Controller
@@ -531,15 +535,35 @@ public sealed partial class AppsController(
             // Sub-project 9 (2026-08-20 platform-options plan): the attached groups' own current
             // entries, so this page can render the exact same merge BuildEnv assembles for a container.
             .Include(a => a.ConfigGroups).ThenInclude(cg => cg.ConfigGroup!).ThenInclude(g => g.Entries)
+            // F5 (2026-08-21 functions-and-services plan): the same shape, one attachment kind later.
+            .Include(a => a.StorageBuckets).ThenInclude(sb => sb.StorageBucket)
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
+
+        var attachedBuckets = app.StorageBuckets
+            .Where(sb => sb.StorageBucket is not null)
+            .Select(sb => new Harbora.Domain.Apps.AttachedBucketEnv(
+                sb.AttachOrder, sb.StorageBucketId, sb.StorageBucket!.Name,
+                // Ciphertext stays ciphertext — this page always masks a secret entry regardless of
+                // its value (see the env-row partial below), so nothing here ever needs to decrypt it.
+                Harbora.Domain.Storage.BucketEnvKeys.EntriesFor(
+                        sb.StorageBucket!, storageOptions.Value.CustomerEndpoint, sb.StorageBucket!.EncryptedSecretKey)
+                    .Select(e => new Harbora.Domain.Apps.BucketEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
+            .ToList();
 
         // The effective environment, with provenance — the same ConfigGroupMerge the deploy pipeline
         // calls, so this page can never show a value the container would not actually receive.
         ViewBag.EffectiveEnv = Harbora.Domain.Apps.ConfigGroupMerge.Merge(
             app.EnvironmentVariables,
             app.ConfigGroups.Select(cg => new Harbora.Domain.Apps.AttachedGroupEntries(
-                cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])));
+                cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])),
+            attachedBuckets);
+
+        ViewBag.AttachedStorageBuckets = app.StorageBuckets
+            .OrderBy(sb => sb.AttachOrder)
+            .Select(sb => new AppStorageBucketRow(
+                sb.StorageBucketId, sb.StorageBucket?.Name ?? "", sb.AttachOrder, sb.HasUnpublishedChanges))
+            .ToList();
 
         ViewBag.AttachedConfigGroups = app.ConfigGroups
             .OrderBy(cg => cg.AttachOrder)

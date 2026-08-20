@@ -92,3 +92,11 @@ public sealed record AppDatabaseElsewhereViewModel(
 /// </summary>
 public sealed record AppConfigGroupRow(
     Guid ConfigGroupId, string Name, int AttachOrder, bool HasUnpublishedChanges, int EntryCount);
+
+/// <summary>
+/// One <see cref="Harbora.Domain.Storage.StorageBucket"/> attached to this app, in the same
+/// precedence order the Details env section shows it in (F5, 2026-08-21 functions-and-services
+/// plan) — the bucket-side mirror of <see cref="AppConfigGroupRow"/>.
+/// </summary>
+public sealed record AppStorageBucketRow(
+    Guid StorageBucketId, string Name, int AttachOrder, bool HasUnpublishedChanges);

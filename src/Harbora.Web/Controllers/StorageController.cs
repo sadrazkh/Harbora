@@ -29,7 +29,8 @@ public sealed class StorageController(
     Harbora.Infrastructure.Storage.BucketObjectService objects,
     ISecretProtector protector,
     IAuditLogger audit,
-    ICurrentUser currentUser) : Controller
+    ICurrentUser currentUser,
+    Harbora.Infrastructure.Security.ProjectAccessService access) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -133,6 +134,23 @@ public sealed class StorageController(
             .OrderBy(b => b.Name)
             .ToListAsync(ct);
 
+        // F5 (2026-08-21 functions-and-services plan): every attachment, read once and grouped by
+        // bucket — the same "who is this wired to" question DatabasesController.Index already asks
+        // and answers in a single query rather than one per row.
+        var bucketIds = buckets.Select(b => b.Id).ToList();
+        var attachments = bucketIds.Count == 0
+            ? []
+            : await db.AppStorageBuckets.AsNoTracking()
+                .Where(sb => bucketIds.Contains(sb.StorageBucketId))
+                .Select(sb => new { sb.StorageBucketId, sb.AppId, sb.HasUnpublishedChanges, AppName = sb.App!.Name })
+                .ToListAsync(ct);
+
+        var apps = await db.Apps.AsNoTracking()
+            .Where(a => a.WorkspaceId == WorkspaceId)
+            .OrderBy(a => a.Name)
+            .Select(a => new { a.Id, a.Name })
+            .ToListAsync(ct);
+
         return View(new StoragePageViewModel
         {
             IsConfigured = storage.IsConfigured,
@@ -140,13 +158,22 @@ public sealed class StorageController(
             Endpoint = storage.CustomerEndpoint,
             Plans = await db.StoragePlans.Where(p => p.IsEnabled)
                 .OrderBy(p => p.SortOrder).ThenBy(p => p.MonthlyPrice).ToListAsync(ct),
-            Buckets = buckets.Select(b => new StorageBucketViewModel(
-                b.Id, b.Name, b.AccessKey,
-                // Revealed only for the one bucket asked for, and only on an explicit click. A page
-                // that prints every secret is a page nobody can screen-share.
-                reveal == b.Id ? Unprotect(b.EncryptedSecretKey) : null,
-                b.QuotaBytes, b.UsedBytes, b.MeasuredAt, b.Status, b.FailureReason,
-                b.StoragePlan?.Name)).ToList(),
+            Buckets = buckets.Select(b =>
+            {
+                var attachedAppIds = attachments.Where(a => a.StorageBucketId == b.Id)
+                    .Select(a => a.AppId).ToHashSet();
+                return new StorageBucketViewModel(
+                    b.Id, b.Name, b.AccessKey,
+                    // Revealed only for the one bucket asked for, and only on an explicit click. A page
+                    // that prints every secret is a page nobody can screen-share.
+                    reveal == b.Id ? Unprotect(b.EncryptedSecretKey) : null,
+                    b.QuotaBytes, b.UsedBytes, b.MeasuredAt, b.Status, b.FailureReason,
+                    b.StoragePlan?.Name,
+                    attachments.Where(a => a.StorageBucketId == b.Id)
+                        .Select(a => new StorageAttachedAppViewModel(a.AppId, a.AppName, a.HasUnpublishedChanges)).ToList(),
+                    apps.Where(a => !attachedAppIds.Contains(a.Id))
+                        .Select(a => new StorageAttachableAppViewModel(a.Id, a.Name)).ToList());
+            }).ToList(),
             RevealedBucketId = reveal
         });
     }
@@ -241,6 +268,13 @@ public sealed class StorageController(
             error: used is null);
     }
 
+    /// <summary>
+    /// Refuses while any app is still attached, naming them — the <c>ProjectsController.Delete</c> /
+    /// <c>ConfigGroupsController.Delete</c> idiom, reused rather than reinvented (F5, 2026-08-21
+    /// functions-and-services plan) — rather than letting the FK's <c>DeleteBehavior.Restrict</c>
+    /// surface as a raw constraint failure, or worse, deleting credentials an app's next deploy is
+    /// still going to ask for.
+    /// </summary>
     [HttpPost("buckets/{id:guid}/delete")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
@@ -248,6 +282,19 @@ public sealed class StorageController(
     {
         var bucket = await db.StorageBuckets.FirstOrDefaultAsync(b => b.Id == id, ct);
         if (bucket is null) return NotFound();
+
+        var attachedTo = await db.AppStorageBuckets.AsNoTracking()
+            .Where(sb => sb.StorageBucketId == id)
+            .Select(sb => sb.App!.Name)
+            .ToListAsync(ct);
+
+        if (attachedTo.Count > 0)
+        {
+            return Back(IsFa
+                ? $"این باکت هنوز به {NamedList(attachedTo)} متصل است. برای حذف، ابتدا آن را از همه‌ی اپ‌ها جدا کنید."
+                : $"This bucket is still attached to {NamedList(attachedTo)}. Detach it from every app first, then delete it.",
+                error: true);
+        }
 
         var result = await storage.DeleteAsync(bucket.Name, bucket.AccessKey, ct);
 
@@ -260,6 +307,90 @@ public sealed class StorageController(
         await audit.LogAsync("storage.bucket_deleted", "bucket", bucket.Name, ClientIp, ct: ct);
 
         return Back(IsFa ? "باکت حذف شد." : "The bucket was deleted.");
+    }
+
+    /// <summary>
+    /// Attaches a bucket to an app at the back of its precedence order — the same
+    /// <c>AttachConfigGroup</c> shape: current max <c>AttachOrder</c> + 1, never reused, and starts
+    /// <c>HasUnpublishedChanges</c> true because nothing here is live until the app's own next
+    /// deploy assembles its environment (F5, 2026-08-21 functions-and-services plan).
+    /// </summary>
+    [HttpPost("buckets/{id:guid}/attach")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> AttachBucket(Guid id, Guid appId, string? returnUrl, CancellationToken ct)
+    {
+        var bucket = await db.StorageBuckets.FirstOrDefaultAsync(b => b.Id == id && b.WorkspaceId == WorkspaceId, ct);
+        if (bucket is null) return NotFound();
+
+        if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();
+        var appExists = await db.Apps.AsNoTracking().AnyAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
+        if (!appExists) return NotFound();
+
+        if (await db.AppStorageBuckets.AnyAsync(sb => sb.AppId == appId && sb.StorageBucketId == id, ct))
+            return BackTo(returnUrl, IsFa ? "این باکت از قبل به این اپ متصل است." : "This bucket is already attached.", error: true);
+
+        var maxOrder = await db.AppStorageBuckets
+            .Where(sb => sb.AppId == appId)
+            .Select(sb => (int?)sb.AttachOrder)
+            .MaxAsync(ct) ?? 0;
+
+        db.AppStorageBuckets.Add(new AppStorageBucket
+        {
+            AppId = appId, StorageBucketId = id, AttachOrder = maxOrder + 1, HasUnpublishedChanges = true
+        });
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("storage.bucket_attached", "bucket", $"{id}:{appId}", ClientIp, ct: ct);
+
+        return BackTo(returnUrl, IsFa
+            ? $"باکت «{bucket.Name}» متصل شد. متغیرهایش با استقرار بعدی این اپ اعمال می‌شوند."
+            : $"Attached '{bucket.Name}'. Its variables apply on this app's next deploy.");
+    }
+
+    /// <summary>Removes the join row. The running container keeps the variables until the app's own
+    /// next deploy — same as detaching a config group (F5, 2026-08-21 functions-and-services plan).</summary>
+    [HttpPost("buckets/{id:guid}/detach")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> DetachBucket(Guid id, Guid appId, string? returnUrl, CancellationToken ct)
+    {
+        var bucket = await db.StorageBuckets.FirstOrDefaultAsync(b => b.Id == id && b.WorkspaceId == WorkspaceId, ct);
+        if (bucket is null) return NotFound();
+
+        if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();
+
+        var join = await db.AppStorageBuckets.FirstOrDefaultAsync(sb => sb.AppId == appId && sb.StorageBucketId == id, ct);
+        if (join is null) return NotFound();
+
+        db.AppStorageBuckets.Remove(join);
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("storage.bucket_detached", "bucket", $"{id}:{appId}", ClientIp, ct: ct);
+
+        return BackTo(returnUrl, IsFa
+            ? "باکت جدا شد. تا استقرار بعدی، کانتینر در حال اجرا هنوز متغیرهای آن را دارد."
+            : "Detached. Until the next deploy, the running container still has its variables.");
+    }
+
+    /// <summary>
+    /// "2 apps: api, worker" — or past three, "5 apps: api, worker, cron and 2 more". The
+    /// <c>ProjectsController.Delete</c> refusal idiom, reused exactly as
+    /// <c>ConfigGroupsController</c> already reused it.
+    /// </summary>
+    private string NamedList(IReadOnlyList<string> names)
+    {
+        const int shown = 3;
+        var listed = names.Count > shown
+            ? string.Join(IsFa ? "، " : ", ", names.Take(shown)) +
+              (IsFa ? $" و {names.Count - shown} مورد دیگر" : $" and {names.Count - shown} more")
+            : string.Join(IsFa ? "، " : ", ", names);
+
+        return IsFa ? $"{names.Count} اپ: {listed}" : $"{names.Count} app{(names.Count == 1 ? "" : "s")}: {listed}";
+    }
+
+    private IActionResult BackTo(string? returnUrl, string? message, bool error = false)
+    {
+        TempData[error ? "Error" : "Message"] = message;
+        return string.IsNullOrWhiteSpace(returnUrl) ? RedirectToAction(nameof(Index)) : LocalRedirect(returnUrl);
     }
 
     private string? Unprotect(string value)

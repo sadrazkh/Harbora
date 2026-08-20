@@ -242,6 +242,8 @@ public class QuotaRefusalBilingualismTests
                     new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
             runtimeOptions: Microsoft.Extensions.Options.Options.Create(
                 new Harbora.Infrastructure.Deployments.HarboraRuntimeOptions()),
+            storageOptions: Microsoft.Extensions.Options.Options.Create(
+                new Harbora.Infrastructure.Storage.ObjectStorageOptions()),
             addresses: new Harbora.Infrastructure.Networking.AppAddressAssigner(db, new ConfigurationBuilder().Build()),
             backupSnapshots: new Harbora.Modules.Backup.Infrastructure.BackupSnapshotService(
                 db, new UnusedBackupDependency(), new UnusedBackupDependency(), new UnusedBackupDependency(),

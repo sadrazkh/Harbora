@@ -106,6 +106,7 @@ public class AppsControllerLogSearchTests
                 db, new FixedClock(DateTimeOffset.UnixEpoch),
                 Options.Create(new BillingOptions { Enabled = false })),
             runtimeOptions: Options.Create(new HarboraRuntimeOptions()),
+            storageOptions: Options.Create(new Harbora.Infrastructure.Storage.ObjectStorageOptions()),
             addresses: new Harbora.Infrastructure.Networking.AppAddressAssigner(db, new ConfigurationBuilder().Build()),
             backupSnapshots: null!,
             lifecycle: new Harbora.Infrastructure.Monitoring.LifecycleHistory(db))

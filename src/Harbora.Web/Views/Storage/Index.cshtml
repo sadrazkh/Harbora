@@ -130,6 +130,64 @@ else if (Model.Buckets.Count > 0)
                         </dd>
                     </div>
                 </dl>
+
+                @* ---- attach to app ----
+                   F5 (2026-08-21 functions-and-services plan): the same affordance
+                   DatabasesController.Attach gives a managed database, here for a bucket — the four
+                   S3_* variables reach the app's environment on its own next deploy, the same
+                   "applies on next deploy" idiom config groups and databases already use. *@
+                <div class="mt-4 border-t border-line pt-3" data-bucket-attach-panel data-bucket-id="@bucket.Id">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <span class="text-xs font-semibold text-ink-muted">@(isFa ? "اپ‌های متصل" : "Attached apps")</span>
+                    </div>
+
+                    @if (bucket.AttachedApps.Count == 0)
+                    {
+                        <p class="text-xs text-ink-faint">@(isFa ? "به هیچ اپی متصل نیست." : "Not attached to any app.")</p>
+                    }
+                    else
+                    {
+                        <div class="space-y-1.5">
+                            @foreach (var a in bucket.AttachedApps)
+                            {
+                                <div class="flex items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-1.5 text-xs" data-attached-app="@a.AppName">
+                                    <span>
+                                        <span class="font-medium">@a.AppName</span>
+                                        @if (a.HasUnpublishedChanges)
+                                        {
+                                            <span data-bucket-attach-state="unpublished" class="ms-1 rounded-md bg-warn-soft px-1.5 py-0.5 text-warn">@(isFa ? "با استقرار بعدی اعمال می‌شود" : "applies on next deploy")</span>
+                                        }
+                                        else
+                                        {
+                                            <span data-bucket-attach-state="live" class="ms-1 rounded-md bg-ok-soft px-1.5 py-0.5 text-ok">@(isFa ? "به‌روز" : "live")</span>
+                                        }
+                                    </span>
+                                    <form asp-action="DetachBucket" asp-route-id="@bucket.Id" method="post">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="appId" value="@a.AppId" />
+                                        <button class="text-danger" aria-label="@(isFa ? $"جدا کردن {a.AppName}" : $"Detach {a.AppName}")">✕</button>
+                                    </form>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (bucket.AvailableApps.Count > 0)
+                    {
+                        <form asp-action="AttachBucket" asp-route-id="@bucket.Id" method="post" class="mt-2 flex gap-2">
+                            @Html.AntiForgeryToken()
+                            <select name="appId" class="flex-1 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-xs">
+                                @foreach (var a in bucket.AvailableApps)
+                                {
+                                    <option value="@a.Id">@a.Name</option>
+                                }
+                            </select>
+                            <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-xs font-semibold">
+                                @(isFa ? "اتصال" : "Attach")
+                            </button>
+                        </form>
+                    }
+                </div>
             </section>
         }
     </div>

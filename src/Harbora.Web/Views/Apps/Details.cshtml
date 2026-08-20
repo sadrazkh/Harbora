@@ -714,22 +714,31 @@
         <details class="advanced-panel" open="@advancedOpen">
             <summary><span><i data-lucide="file-code-2" class="h-4 w-4"></i>@T["Environment Variables"]</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
 
-            @* Sub-project 9 (2026-08-20 platform-options plan): the EFFECTIVE set — the app's own
-               variables merged with every attached group's current entries, exactly the way BuildEnv
-               assembles a container's environment — with where each row came from always visible. A
-               merged value whose origin is invisible is a debugging trap. *@
+            @* Sub-project 9 (2026-08-20 platform-options plan; buckets added by F5, 2026-08-21
+               functions-and-services plan): the EFFECTIVE set — the app's own variables merged with
+               every attached group's and every attached bucket's current entries, exactly the way
+               BuildEnv assembles a container's environment — with where each row came from always
+               visible. A merged value whose origin is invisible is a debugging trap. *@
             <div class="divide-y divide-line" data-effective-env>
                 @if (!effectiveEnv.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
                 @foreach (var e in effectiveEnv)
                 {
                     var own = e.Source == Harbora.Domain.Apps.ConfigSource.App;
-                    <div class="flex items-center justify-between p-3 text-sm font-mono" data-env-row data-env-key="@e.Key" data-env-source="@(own ? "app" : "group")">
+                    var fromBucket = e.Source == Harbora.Domain.Apps.ConfigSource.Bucket;
+                    var sourceAttr = own ? "app" : (fromBucket ? "bucket" : "group");
+                    <div class="flex items-center justify-between p-3 text-sm font-mono" data-env-row data-env-key="@e.Key" data-env-source="@sourceAttr">
                         <span class="text-ink">
                             @e.Key
                             @if (e.IsSecret){<span class="text-[10px] not-italic rounded bg-surface-2 px-1 text-warn font-sans">secret</span>}
                             @if (own)
                             {
                                 <span class="text-[10px] not-italic rounded bg-surface-2 px-1 text-ink-faint font-sans">@(isFa ? "خودِ اپ" : "own")</span>
+                            }
+                            else if (fromBucket)
+                            {
+                                <span class="text-[10px] not-italic rounded bg-info-soft px-1 text-info font-sans" data-env-provenance="@e.SourceBucketName">
+                                    @(isFa ? $"از باکت «{e.SourceBucketName}»" : $"from bucket '{e.SourceBucketName}'")
+                                </span>
                             }
                             else
                             {
@@ -744,6 +753,12 @@
                             {
                                 var ownRow = app.EnvironmentVariables.First(v => v.Key == e.Key);
                                 <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@app.Id" asp-route-envId="@ownRow.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف متغیر {e.Key}" : $"Delete variable {e.Key}")">✕</button></form>
+                            }
+                            else if (fromBucket)
+                            {
+                                <span class="text-xs text-ink-faint" title="@(isFa ? "برای مدیریت، به صفحهٔ فضای ذخیره‌سازی بروید" : "Manage this from the Storage page")">
+                                    <i data-lucide="lock" class="h-3 w-3"></i>
+                                </span>
                             }
                             else
                             {
@@ -827,6 +842,54 @@
                             @(isFa ? "اتصال" : "Attach")
                         </button>
                     </form>
+                }
+            </div>
+
+            @* ---- Storage buckets: which buckets feed this app's env, and in what order (F5,
+               2026-08-21 functions-and-services plan) — the bucket-side mirror of the config-groups
+               panel above. Attach/detach lives on the bucket's own page (Views/Storage/Index.cshtml),
+               the same split DatabasesController draws between a service and the apps wired to it;
+               this is read-only, so "where did this come from" never needs a second navigation. *@
+            @{
+                var attachedBuckets2 = (IReadOnlyList<AppStorageBucketRow>)(ViewBag.AttachedStorageBuckets ?? Array.Empty<AppStorageBucketRow>());
+            }
+            <div class="p-3 border-t border-line" data-storage-buckets-panel>
+                <div class="flex items-center justify-between gap-2 mb-2">
+                    <span class="text-xs font-semibold text-ink-muted">@(isFa ? "باکت‌های متصل" : "Attached buckets")</span>
+                    <a href="/storage" class="text-xs text-accent-text">@(isFa ? "مدیریت باکت‌ها" : "Manage buckets")</a>
+                </div>
+
+                @if (attachedBuckets2.Count == 0)
+                {
+                    <p class="text-xs text-ink-faint">@(isFa ? "به هیچ باکتی متصل نیست." : "Not attached to any bucket.")</p>
+                }
+                else
+                {
+                    <div class="space-y-1.5">
+                        @foreach (var b in attachedBuckets2)
+                        {
+                            <div class="flex items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-1.5 text-xs" data-attached-storage-bucket="@b.Name" data-attached-storage-bucket-order="@b.AttachOrder">
+                                <span>
+                                    <span class="font-medium">@b.Name</span>
+                                    <span class="text-ink-faint">· @(isFa ? $"ترتیب {b.AttachOrder}" : $"order {b.AttachOrder}")</span>
+                                    @if (b.HasUnpublishedChanges)
+                                    {
+                                        <span data-storage-bucket-state="unpublished" class="ms-1 rounded-md bg-warn-soft px-1.5 py-0.5 text-warn">@(isFa ? "با استقرار بعدی اعمال می‌شود" : "applies on next deploy")</span>
+                                    }
+                                    else
+                                    {
+                                        <span data-storage-bucket-state="live" class="ms-1 rounded-md bg-ok-soft px-1.5 py-0.5 text-ok">@(isFa ? "به‌روز" : "live")</span>
+                                    }
+                                </span>
+                                <form asp-controller="Storage" asp-action="DetachBucket" asp-route-id="@b.StorageBucketId" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="appId" value="@app.Id" />
+                                    <input type="hidden" name="returnUrl" value="@(Context.Request.Path + Context.Request.QueryString)" />
+                                    <button class="text-danger" aria-label="@(isFa ? $"جدا کردن {b.Name}" : $"Detach {b.Name}")">✕</button>
+                                </form>
+                            </div>
+                        }
+                    </div>
                 }
             </div>
         </details>
