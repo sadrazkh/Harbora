@@ -26,7 +26,16 @@ public enum CertificateIssue
 public enum ChannelKind
 {
     Alert = 0,
-    BackupDelivery = 1
+    BackupDelivery = 1,
+
+    /// <summary>
+    /// An <c>EventSubscription</c> (P6, 2026-08-20 platform-options plan) — extends this enum rather
+    /// than forking a second "broken channel" concept, per the plan's own instruction: a subscription
+    /// whose deliveries keep failing surfaces through this same existing path into the dashboard
+    /// Attention block, exactly like a broken <see cref="Alert"/> or <see cref="BackupDelivery"/>
+    /// channel already does.
+    /// </summary>
+    EventSubscription = 2
 }
 
 /// <summary>
@@ -152,7 +161,9 @@ public static class AttentionRules
     public const string ChannelTitle = "{0} is not delivering";
     public const string ChannelAlertDetail = "Alert channel: {0}";
     public const string ChannelBackupDetail = "Backup delivery: {0}";
+    public const string ChannelEventDetail = "Event subscription: {0}";
     public const string AlertsAction = "Open alerts";
+    public const string EventSubscriptionsAction = "Open event subscriptions";
     public const string DiskTitle = "Disk is filling up";
     public const string DiskDetail = "{0}% used. Builds and backups fail once it is full.";
     public const string MonitoringAction = "Open monitoring";
@@ -175,7 +186,7 @@ public static class AttentionRules
         CertificateExpiredDetail, CertificateExpiringDetail, CertificateFailedDetail, CertificateAction,
         BackupFailedTitle, BackupFailedDetail, BackupsAction,
         ServiceFailedTitle, ServiceFailedDetail, ServiceFailedAction,
-        ChannelTitle, ChannelAlertDetail, ChannelBackupDetail, AlertsAction,
+        ChannelTitle, ChannelAlertDetail, ChannelBackupDetail, ChannelEventDetail, AlertsAction, EventSubscriptionsAction,
         DiskTitle, DiskDetail, MonitoringAction,
         NeverDeployedTitle, NeverDeployedDetail, NeverDeployedAction,
         NoBackupsTitle, NoBackupsDetail, NoBackupsAction,
@@ -264,10 +275,25 @@ public static class AttentionRules
                 Level = AttentionLevel.Warning,
                 // A channel that fails silently is the reason nobody hears about any of the above.
                 TitleKey = ChannelTitle, TitleArgs = [name],
-                DetailKey = kind == ChannelKind.BackupDelivery ? ChannelBackupDetail : ChannelAlertDetail,
+                DetailKey = kind switch
+                {
+                    ChannelKind.BackupDelivery => ChannelBackupDetail,
+                    ChannelKind.EventSubscription => ChannelEventDetail,
+                    _ => ChannelAlertDetail
+                },
                 DetailArgs = [Summarise(error) ?? string.Empty],
-                ActionKey = kind == ChannelKind.BackupDelivery ? BackupsAction : AlertsAction,
-                ActionUrl = kind == ChannelKind.BackupDelivery ? "/backups" : "/monitoring"
+                ActionKey = kind switch
+                {
+                    ChannelKind.BackupDelivery => BackupsAction,
+                    ChannelKind.EventSubscription => EventSubscriptionsAction,
+                    _ => AlertsAction
+                },
+                ActionUrl = kind switch
+                {
+                    ChannelKind.BackupDelivery => "/backups",
+                    ChannelKind.EventSubscription => "/notifications/webhooks",
+                    _ => "/monitoring"
+                }
             });
 
         if (facts.DiskUsedRatio >= diskWarnRatio)

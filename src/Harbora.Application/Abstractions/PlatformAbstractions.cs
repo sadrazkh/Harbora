@@ -179,4 +179,62 @@ public interface INotificationService
     /// it runs again.
     /// </summary>
     Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct);
+
+    /// <summary>
+    /// Sends one Telegram message through the exact HTTP call, target-JSON shape
+    /// (<c>{"botToken":"...","chatId":"..."}</c>, decrypted from <paramref name="encryptedTarget"/>)
+    /// and response handling an <c>Alert</c>'s own Telegram channel already uses — reused, not
+    /// forked, by <c>EventDispatcher</c> (P6, 2026-08-20 platform-options plan, "event subscriptions,
+    /// not channels") so a Telegram <c>EventSubscription</c> goes out exactly the way a Telegram
+    /// <c>Alert</c> already does. Throws <c>Harbora.Infrastructure.Notifications.NotificationChannelException</c>
+    /// on a non-2xx response or on the shared delivery timeout, same as every other channel here.
+    /// </summary>
+    Task SendTelegramAsync(string encryptedTarget, string title, string body, CancellationToken ct);
+}
+
+/// <summary>
+/// Publish seam for outbound event subscriptions (P6, 2026-08-20 platform-options plan). Deliberately
+/// not <see cref="INotificationService"/>: that interface fans a raise site's fact out to <c>Alert</c>
+/// rules, which are a person's own configured channels; this fans the same kind of fact out to
+/// <c>EventSubscription</c> rows, which are a workspace's *other* workspaces or systems. The two are
+/// raised from the same lifecycle seams (a deploy pipeline, a backup engine, the crash reconciler,
+/// managed-service provisioning) but are two different audiences with two different vocabularies
+/// (<see cref="Domain.Common.AlertEvent"/> has no "succeeded" member; <see cref="Domain.Notifications.EventKind"/>
+/// does), so they stay two calls at each seam rather than one call trying to serve both.
+///
+/// <para>
+/// <b>Enqueue only.</b> <see cref="PublishAsync"/> never makes an HTTP call itself — it matches
+/// enabled, subscribed rows and writes durable <see cref="Domain.Notifications.EventDelivery"/> rows,
+/// the actual send happening later on the job queue (<c>EventDispatcher.ExecuteQueuedDeliveryAsync</c>,
+/// registered as an <c>IJobHandler</c>). The plan's own words: "the publish seams must not slow or
+/// fail the acts they observe" — a deploy pipeline or backup engine that awaited a customer's webhook
+/// endpoint directly would hang or fail on that endpoint's schedule, not its own. Also never throws:
+/// every raise site treats this exactly as it already treats <see cref="INotificationService.NotifyAsync"/> —
+/// best-effort, logged, not allowed to turn a successful deploy or backup into a failed one.
+/// </para>
+/// </summary>
+public interface IEventPublisher
+{
+    /// <param name="workspaceId">Whose subscriptions to match — always the workspace the underlying
+    /// fact belongs to, stamped by the caller exactly as every other raise site in this codebase
+    /// stamps a WorkspaceId onto background work.</param>
+    /// <param name="kind">Exactly one <see cref="Domain.Notifications.EventKind"/> bit — the event
+    /// that happened, matched against each subscription's own mask.</param>
+    /// <param name="resource">Named facts about what the event happened to (app name, deployment
+    /// number, error text, …) — the same flat-bag-of-strings idiom
+    /// <see cref="Domain.Notifications.NotificationEventData"/> already uses, carried verbatim into
+    /// the delivered JSON payload's own fields.</param>
+    Task PublishAsync(
+        Guid workspaceId, Domain.Notifications.EventKind kind,
+        IReadOnlyDictionary<string, string> resource, CancellationToken ct);
+
+    /// <summary>
+    /// One attempt at one queued <c>EventDelivery</c> row — the job body
+    /// <c>EventDeliveryJobHandler</c> runs (the same thin <c>IJobHandler</c> adapter shape as
+    /// <c>NotificationDeliveryJobHandler</c> over <see cref="INotificationService.ExecuteQueuedDeliveryAsync"/>).
+    /// Updates the row regardless of outcome and rethrows on a retryable failure, so
+    /// <c>Harbora.Infrastructure.Jobs.JobExecutionPolicy</c>'s retry/backoff decides whether it runs
+    /// again.
+    /// </summary>
+    Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct);
 }

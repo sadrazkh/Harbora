@@ -49,6 +49,9 @@ public class AlertTestButtonTests
 
         public Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct)
             => Task.CompletedTask;
+
+        public Task SendTelegramAsync(string encryptedTarget, string title, string body, CancellationToken ct)
+            => Task.CompletedTask;
     }
 
     private static (AlertsController Controller, Alert Rule, StubNotifications Notifications) Build(

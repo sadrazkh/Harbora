@@ -25,6 +25,9 @@ public sealed class PipelineHarness : IDisposable
     public RecordingProxyEngine Proxy { get; }
     public RecordingLogStream Stream { get; } = new();
     public RecordingNotificationService Notifications { get; } = new();
+    /// <summary>P6 (2026-08-20 platform-options plan): what the pipeline published for a workspace's
+    /// own event subscriptions, alongside <see cref="Notifications"/>'s own recording of Alert dispatch.</summary>
+    public RecordingEventPublisher Events { get; } = new();
     public StubHttpClientFactory Http { get; } = new();
     public FakeGitService Git { get; }
     public FixedClock Clock { get; } = new();
@@ -308,6 +311,7 @@ public sealed class PipelineHarness : IDisposable
         // Nothing here subscribes to platform events; the null bus says so out loud rather than
         // leaving a nullable dependency that would swallow publishing in production too.
         Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
+        Events,
         NullLogger<DeploymentPipeline>.Instance);
 
     /// <summary>Shared with the pipeline, so a test can assert on what it bound.</summary>

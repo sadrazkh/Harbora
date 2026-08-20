@@ -17,6 +17,7 @@ public sealed class MetricsCollector(
     HarboraDbContext db,
     IServerEngineFactory engineFactory,
     INotificationService notifications,
+    IEventPublisher events,
     IncidentService incidents,
     AlertDedup dedup,
     ISystemClock clock,
@@ -422,6 +423,10 @@ public sealed class MetricsCollector(
                 await notifications.NotifyAsync(app.WorkspaceId,
                     NotificationEventData.Create(AlertEvent.AppCrashed, ("AppName", app.Name), ("Reason", reasonKey)),
                     AlertSeverity.Critical, ct);
+                // P6 (2026-08-20 platform-options plan): the same seam, for a workspace's own event
+                // subscriptions rather than its Alert rules. Enqueue only, never throws on its own.
+                await events.PublishAsync(app.WorkspaceId, EventKind.AppCrashed,
+                    new Dictionary<string, string> { ["app"] = app.Name, ["reason"] = reasonKey }, ct);
             }
             else if (wasCrashed)
             {

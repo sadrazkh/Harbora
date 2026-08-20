@@ -324,6 +324,11 @@ public static class DependencyInjection
         // Registered as an IJobHandler so JobDispatcher finds it without the core referencing this
         // namespace by name — the same seam the backup module and function invocations already use.
         services.AddScoped<IJobHandler, Notifications.NotificationDeliveryJobHandler>();
+        // P6 (2026-08-20 platform-options plan): event subscriptions — a second, narrower fan-out
+        // over the same lifecycle facts NotifyAsync's raise sites already produce. See
+        // EventDispatcher's own doc for exactly what it reuses from the two registrations above.
+        services.AddScoped<Application.Abstractions.IEventPublisher, Notifications.EventDispatcher>();
+        services.AddScoped<IJobHandler, Notifications.EventDeliveryJobHandler>();
         // Opens, resolves, acknowledges and expires AlertIncident rows — the "things that fire also
         // stop firing" half of monitoring, kept separate from NotificationService because a resolve is
         // not a notification (see the type doc).

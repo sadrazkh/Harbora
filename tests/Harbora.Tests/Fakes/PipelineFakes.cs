@@ -203,6 +203,33 @@ public sealed class RecordingNotificationService : INotificationService
     /// <summary>Not exercised by the pipeline tests this fake serves — they raise through
     /// NotifyAsync/NotifyRuleAsync, never by running a queued delivery's job body directly.</summary>
     public Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>Not exercised by the pipeline tests this fake serves — none of them subscribe an
+    /// EventSubscription of Telegram's own channel.</summary>
+    public Task SendTelegramAsync(string encryptedTarget, string title, string body, CancellationToken ct) =>
+        Task.CompletedTask;
+}
+
+/// <summary>
+/// Records what a raise site published for a workspace's own event subscriptions (P6, 2026-08-20
+/// platform-options plan) — the same recording idiom <see cref="RecordingNotificationService"/> gives
+/// <c>INotificationService</c>, for <c>IEventPublisher</c>.
+/// </summary>
+public sealed class RecordingEventPublisher : IEventPublisher
+{
+    public sealed record Published(Guid Workspace, Harbora.Domain.Notifications.EventKind Kind, IReadOnlyDictionary<string, string> Resource);
+
+    public List<Published> Events { get; } = [];
+
+    public Task PublishAsync(
+        Guid workspaceId, Harbora.Domain.Notifications.EventKind kind,
+        IReadOnlyDictionary<string, string> resource, CancellationToken ct)
+    {
+        Events.Add(new Published(workspaceId, kind, resource));
+        return Task.CompletedTask;
+    }
+
+    public Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct) => Task.CompletedTask;
 }
 
 public sealed class FixedClock(DateTimeOffset now) : ISystemClock

@@ -76,6 +76,15 @@ public sealed class AttentionService(
             .Take(3)
             .ToListAsync(ct);
 
+        // P6 (2026-08-20 platform-options plan): an event subscription whose deliveries keep failing
+        // surfaces here exactly like a broken Alert or backup-delivery channel does — extending
+        // ChannelKind rather than a second "broken channel" list.
+        var brokenEventSubscriptions = await db.EventSubscriptions
+            .Where(s => s.WorkspaceId == workspaceId && s.IsEnabled && s.LastError != null)
+            .Select(s => new { s.Name, s.LastError })
+            .Take(3)
+            .ToListAsync(ct);
+
         // Recorded by the certificate watcher's daily TLS handshake, not probed here.
         var hosts = await db.Domains
             .Where(d => d.SslEnabled && d.App!.WorkspaceId == workspaceId)
@@ -112,6 +121,7 @@ public sealed class AttentionService(
                 BrokenChannels =
                     brokenAlerts.Select(a => (a.Name, ChannelKind.Alert, a.LastError!))
                         .Concat(brokenDeliveries.Select(d => (d.Name, ChannelKind.BackupDelivery, d.LastError!)))
+                        .Concat(brokenEventSubscriptions.Select(s => (s.Name, ChannelKind.EventSubscription, s.LastError!)))
                         .ToList(),
                 CertificateProblems = certificates.Select(c => DescribeCertificate(c.Host, c.Status, c.ExpiresAt, c.LastError)).ToList(),
                 DiskUsedRatio = disk,

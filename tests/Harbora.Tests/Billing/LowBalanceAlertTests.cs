@@ -519,6 +519,9 @@ public class LowBalanceAlertTests
 
         public Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct) =>
             throw new NotSupportedException();
+
+        public Task SendTelegramAsync(string encryptedTarget, string title, string body, CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     [Fact]

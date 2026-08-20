@@ -34,6 +34,7 @@ public sealed class DeploymentPipeline(
     HostPortAllocator hostPorts,
     Nodes.NodeIngressRouter ingressRouter,
     IFunctionEventBus functionEvents,
+    IEventPublisher events,
     ILogger<DeploymentPipeline> logger)
 {
     private readonly HarboraRuntimeOptions _opt = options.Value;
@@ -593,6 +594,16 @@ public sealed class DeploymentPipeline(
                     ("app", app.Slug), ("deployment", deployment.Number.ToString()),
                     ("commit", deployment.CommitSha)),
                 ct);
+            // P6 (2026-08-20 platform-options plan): the same seam FunctionEvents.DeploymentSucceeded
+            // just published from, for a workspace's own event subscriptions rather than its
+            // functions. Enqueue only — see IEventPublisher's own doc for why this can never turn
+            // this successful deployment into a failed one.
+            await events.PublishAsync(app.WorkspaceId, EventKind.DeploymentSucceeded,
+                new Dictionary<string, string>
+                {
+                    ["app"] = app.Name, ["deployment"] = deployment.Number.ToString(),
+                    ["commit"] = deployment.CommitSha ?? ""
+                }, ct);
 
             // Only after the deployment is recorded as succeeded — pruning is housekeeping and must
             // never be able to turn a live, working deployment into a failure. Ordering is half of
@@ -741,6 +752,17 @@ public sealed class DeploymentPipeline(
                         ("app", app.Slug), ("deployment", deployment.Number.ToString()), ("reason", reason)),
                     CancellationToken.None),
                 "function subscribers");
+            // A fifth surface (P6, 2026-08-20 platform-options plan): a workspace's own event
+            // subscriptions, guarded the same way — IEventPublisher.PublishAsync already never
+            // throws on its own, but TellSomebody is the one place this method promises every
+            // surface after the row is saved gets an equal, isolated attempt.
+            await TellSomebody(
+                () => events.PublishAsync(app.WorkspaceId, EventKind.DeploymentFailed,
+                    new Dictionary<string, string>
+                    {
+                        ["app"] = app.Name, ["deployment"] = deployment.Number.ToString(), ["reason"] = reason
+                    }, CancellationToken.None),
+                "event subscriptions");
         }
     }
 

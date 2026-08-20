@@ -24,6 +24,9 @@ public sealed class BackupHarness : IDisposable
     public FixedClock Clock { get; } = new();
     public LocalOnlyStorage Storage { get; }
     public RecordingNotificationService Notifications { get; } = new();
+    /// <summary>P6 (2026-08-20 platform-options plan): what the engine published for a workspace's own
+    /// event subscriptions, alongside <see cref="Notifications"/>'s own recording of Alert dispatch.</summary>
+    public RecordingEventPublisher Events { get; } = new();
 
     /// <summary>This panel's own daemon — the machine a backup must NOT reach for by default.</summary>
     public FakeDockerEngine Docker { get; } = new();
@@ -74,7 +77,7 @@ public sealed class BackupHarness : IDisposable
 
     public BackupEngine Engine() => new(
         Db, Engines, Storage, new PassthroughProtector(), Jobs,
-        Notifications, new Harbora.Infrastructure.Monitoring.IncidentService(Db), Delivery(), Clock, Options.AsOptions(),
+        Notifications, Events, new Harbora.Infrastructure.Monitoring.IncidentService(Db), Delivery(), Clock, Options.AsOptions(),
         Microsoft.Extensions.Options.Options.Create(Runtime),
         NullLogger<BackupEngine>.Instance);
 

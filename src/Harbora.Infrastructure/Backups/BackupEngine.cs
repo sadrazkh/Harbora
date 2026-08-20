@@ -42,6 +42,7 @@ public sealed class BackupEngine(
     ISecretProtector protector,
     IJobQueue jobs,
     INotificationService notifications,
+    IEventPublisher events,
     Monitoring.IncidentService incidents,
     BackupDeliveryService delivery,
     ISystemClock clock,
@@ -140,6 +141,15 @@ public sealed class BackupEngine(
             backup.FinishedAt = clock.UtcNow;
             await db.SaveChangesAsync(ct);
 
+            // P6 (2026-08-20 platform-options plan): a workspace's own event subscriptions, at the
+            // same seam the row was just marked Completed on. Enqueue only — never throws on its own,
+            // never a reason a completed backup could read as failed.
+            await events.PublishAsync(backup.WorkspaceId, EventKind.BackupSucceeded,
+                new Dictionary<string, string>
+                {
+                    ["type"] = backup.Type.ToString(), ["target"] = backup.TargetRef ?? ""
+                }, ct);
+
             await EnforceRetentionAsync(ct);
         }
         catch (Exception ex)
@@ -165,6 +175,13 @@ public sealed class BackupEngine(
             var evt = NotificationEventData.Create(AlertEvent.BackupFailed,
                 ("TargetRef", $"{backup.Type} · {backup.TargetRef}"), ("Detail", ex.Message));
             await notifications.NotifyAsync(backup.WorkspaceId, evt, AlertSeverity.Warning, ct);
+            // P6 (2026-08-20 platform-options plan): the same seam, for a workspace's own event
+            // subscriptions rather than its Alert rules.
+            await events.PublishAsync(backup.WorkspaceId, EventKind.BackupFailed,
+                new Dictionary<string, string>
+                {
+                    ["type"] = backup.Type.ToString(), ["target"] = backup.TargetRef ?? "", ["error"] = ex.Message
+                }, ct);
         }
     }
 

@@ -36,7 +36,19 @@ public enum JobKind
     /// encrypted body — the same reason <see cref="FunctionInvoke"/>'s target is a row rather than a
     /// payload. Appended, never renumbered.
     /// </summary>
-    NotificationDelivery = 11
+    NotificationDelivery = 11,
+
+    /// <summary>
+    /// One attempt at one <c>Harbora.Domain.Notifications.EventDelivery</c> row (P6, 2026-08-20
+    /// platform-options plan, "Outbound event notifications"). Same shape as
+    /// <see cref="NotificationDelivery"/> and for the same reason: the target is the delivery row,
+    /// which already holds the subscription id, the event and the rendered payload, so the queue
+    /// keeps carrying nothing but a kind and an id. A distinct kind rather than reusing
+    /// <see cref="NotificationDelivery"/> because the two are dispatched by different code
+    /// (<c>EventDispatcher</c>, not <c>NotificationService</c>) against a different retry budget.
+    /// Appended, never renumbered.
+    /// </summary>
+    EventDelivery = 12
 }
 
 public enum JobStatus

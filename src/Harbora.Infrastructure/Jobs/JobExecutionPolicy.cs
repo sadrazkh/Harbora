@@ -71,6 +71,11 @@ public static class JobExecutionPolicy
         // behind that budget, not a competing one.
         JobKind.NotificationDelivery => TimeSpan.FromMinutes(2),
 
+        // One webhook POST or one Telegram send (P6, 2026-08-20 platform-options plan). Same shape
+        // as NotificationDelivery immediately above, and the same reasoning: this is the backstop
+        // behind NotificationOptions.DeliveryTimeout, not a competing budget.
+        JobKind.EventDelivery => TimeSpan.FromMinutes(2),
+
         // A kind appended to the enum without a deadline still gets one. "For ever" is the defect
         // this class exists to remove, so it cannot be the default.
         _ => TimeSpan.FromHours(1)
@@ -110,6 +115,11 @@ public static class JobExecutionPolicy
         // is a transient 502; one attempt was the defect this exists to fix, and a channel still
         // refusing after three, thirty-one minutes apart, is not going to be fixed by a fourth.
         JobKind.NotificationDelivery => 3,
+
+        // Same budget as NotificationDelivery immediately above, and the same §7 Q4(a) reasoning —
+        // a webhook endpoint or Telegram chat still refusing after three attempts, thirty-one
+        // minutes apart, needs a person, not a fourth try.
+        JobKind.EventDelivery => 3,
 
         // Unknown work is assumed to have side effects, which is the safe assumption to be wrong about.
         _ => 1

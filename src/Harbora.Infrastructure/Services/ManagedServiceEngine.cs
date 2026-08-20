@@ -1,6 +1,7 @@
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
+using Harbora.Domain.Notifications;
 using Harbora.Domain.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,7 +36,8 @@ public sealed class ManagedServiceEngine(
     ILogger<ManagedServiceEngine> logger,
     ISecretRedactor? redactor = null,
     INotificationService? notifications = null,
-    Monitoring.IncidentService? incidents = null) : IManagedServiceEngine
+    Monitoring.IncidentService? incidents = null,
+    IEventPublisher? events = null) : IManagedServiceEngine
 {
     private readonly HarboraRuntimeOptions _opt = options.Value;
 
@@ -240,6 +242,13 @@ public sealed class ManagedServiceEngine(
                 logger.LogWarning(notifyError, "Could not notify about the provisioning failure of {Svc}.", svc.Name);
             }
         }
+
+        // P6 (2026-08-20 platform-options plan): the same seam, for a workspace's own event
+        // subscriptions rather than its Alert rules. IEventPublisher.PublishAsync never throws on its
+        // own, so this needs no guard of its own the way the notifications call above does.
+        if (events is not null)
+            await events.PublishAsync(svc.WorkspaceId, EventKind.ServiceFailed,
+                new Dictionary<string, string> { ["service"] = svc.Name, ["reason"] = reason }, ct);
     }
 
     /// <summary>The private network for this resource's environment, or null while it has none.</summary>

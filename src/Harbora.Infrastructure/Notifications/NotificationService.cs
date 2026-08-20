@@ -416,6 +416,16 @@ public sealed class NotificationService(
     }
 
     /// <summary>
+    /// <inheritdoc cref="INotificationService.SendTelegramAsync"/> Delegates straight to
+    /// <see cref="DispatchOnceAsync"/> — the exact private method an Alert's own Telegram channel
+    /// runs through — rather than duplicating the HTTP call, the target JSON shape or the
+    /// response/timeout handling. Severity is <see cref="AlertSeverity.Info"/>: Telegram's own sender
+    /// (<see cref="SendTelegram"/>) never reads it, unlike Discord's colour-coded embed.
+    /// </summary>
+    public Task SendTelegramAsync(string encryptedTarget, string title, string body, CancellationToken ct) =>
+        DispatchOnceAsync(AlertChannel.Telegram, encryptedTarget, AlertSeverity.Info, title, new ChannelBody(body, null), ct);
+
+    /// <summary>
     /// Whether this delivery will route through the platform's own SMTP rather than a channel that
     /// carries its own server — an alert whose Email target names no host of its own, or any purpose
     /// with no alert at all (every transactional message and the admin fallback below).

@@ -115,6 +115,12 @@ public class HarboraDbContext : DbContext
         Set<Harbora.Domain.Notifications.NotificationPreference>();
     public DbSet<Harbora.Domain.Notifications.NotificationDigestEntry> NotificationDigestEntries =>
         Set<Harbora.Domain.Notifications.NotificationDigestEntry>();
+    // P6 (2026-08-20 platform-options plan): event subscriptions, not a new channel — see the type's
+    // own doc.
+    public DbSet<Harbora.Domain.Notifications.EventSubscription> EventSubscriptions =>
+        Set<Harbora.Domain.Notifications.EventSubscription>();
+    public DbSet<Harbora.Domain.Notifications.EventDelivery> EventDeliveries =>
+        Set<Harbora.Domain.Notifications.EventDelivery>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
     public DbSet<AppTemplateVersion> AppTemplateVersions => Set<AppTemplateVersion>();
     public DbSet<Harbora.Domain.Ai.AiProvider> AiProviders => Set<Harbora.Domain.Ai.AiProvider>();
@@ -1081,6 +1087,14 @@ public class HarboraDbContext : DbContext
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Alert>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<AlertIncident>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        // P6 (2026-08-20 platform-options plan): unlike NotificationDelivery, every EventSubscription
+        // and EventDelivery row always belongs to exactly one workspace (no platform-level rows), so
+        // both are filtered the same way Alert/AlertIncident are. The background dispatcher scopes
+        // explicitly with IgnoreQueryFilters + WorkspaceId == — see EventDispatcher.
+        b.Entity<Harbora.Domain.Notifications.EventSubscription>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Notifications.EventDelivery>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<GitProvider>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<WorkspaceMember>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<WorkspaceInvitation>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
