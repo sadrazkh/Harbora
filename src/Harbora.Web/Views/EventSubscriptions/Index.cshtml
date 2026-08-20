@@ -19,18 +19,24 @@
         (EventKind.BackupFailed, false) => "Backup failed",
         (EventKind.ServiceFailed, true) => "شکست راه‌اندازی دیتابیس",
         (EventKind.ServiceFailed, false) => "Database failed to provision",
+        (EventKind.MaintenanceOn, true) => "شروع حالت تعمیر",
+        (EventKind.MaintenanceOn, false) => "Maintenance turned on",
+        (EventKind.MaintenanceOff, true) => "پایان حالت تعمیر",
+        (EventKind.MaintenanceOff, false) => "Maintenance turned off",
         (_, true) => e.ToString(),
         (_, false) => e.ToString()
     };
 
     // Every wireable event this workspace can subscribe to, in one fixed order — the checkboxes both
-    // forms render and the chips the list reads back. MaintenanceOn/Off stay out of both: nothing
-    // publishes them yet (see EventKind's own doc), and a checkbox that can never fire is the
+    // forms render and the chips the list reads back. Kept in sync with EventKind.Publishable: a
+    // member missing from this list is offered nowhere even though it fires (the half-connected gap
+    // MaintenanceOn/Off used to be), and one added here without a real publisher would be the
     // fabricated-capability defect class this codebase removes on sight.
     var wireable = new[]
     {
         EventKind.DeploymentSucceeded, EventKind.DeploymentFailed, EventKind.AppCrashed,
-        EventKind.BackupSucceeded, EventKind.BackupFailed, EventKind.ServiceFailed
+        EventKind.BackupSucceeded, EventKind.BackupFailed, EventKind.ServiceFailed,
+        EventKind.MaintenanceOn, EventKind.MaintenanceOff
     };
 
     string StatusText(Harbora.Domain.Common.NotificationDeliveryStatus s) => (s, isFa) switch
@@ -173,7 +179,9 @@
                         EventKind.AppCrashed => "onAppCrashed",
                         EventKind.BackupSucceeded => "onBackupSucceeded",
                         EventKind.BackupFailed => "onBackupFailed",
-                        _ => "onServiceFailed"
+                        EventKind.ServiceFailed => "onServiceFailed",
+                        EventKind.MaintenanceOn => "onMaintenanceOn",
+                        _ => "onMaintenanceOff"
                     };
                     <label class="flex items-center gap-1">
                         <input type="checkbox" name="@field" value="true" data-event-checkbox="@e" /> @EventLabel(e)

@@ -157,6 +157,39 @@ public class EventDispatcherTests
         await act.Should().NotThrowAsync("the plan requires the publish seam to never break the act it observes");
     }
 
+    /// <summary>
+    /// Gap 2 of the maintenance-mode follow-up: MaintenanceOn/Off fire for real
+    /// (AppOperationsService.SetMaintenanceModeAsync) and must be reachable through the same mask
+    /// matching every other event uses — a subscription to them is not a second code path.
+    /// </summary>
+    [Fact]
+    public async Task A_subscription_to_a_maintenance_event_receives_it_like_any_other()
+    {
+        var h = Build();
+        var sub = WebhookSub(Workspace, EventKind.MaintenanceOn);
+        h.Db.EventSubscriptions.Add(sub);
+        await h.Db.SaveChangesAsync();
+
+        await h.Dispatcher.PublishAsync(Workspace, EventKind.MaintenanceOn,
+            new Dictionary<string, string> { ["app"] = "shop" }, default);
+
+        var deliveries = await h.Db.EventDeliveries.ToListAsync();
+        deliveries.Should().ContainSingle().Which.SubscriptionId.Should().Be(sub.Id);
+    }
+
+    /// <summary>
+    /// Pins the enum contract the subscription page's checkbox list and the controller's own
+    /// <c>BuildMask</c> are kept in sync with by hand — a member missing here is offered nowhere even
+    /// though something publishes it (the gap MaintenanceOn/Off used to be); one present here without
+    /// a real publisher would be the fabricated-capability defect this codebase removes on sight.
+    /// </summary>
+    [Fact]
+    public void Publishable_includes_both_maintenance_events()
+    {
+        EventKind.Publishable.HasFlag(EventKind.MaintenanceOn).Should().BeTrue();
+        EventKind.Publishable.HasFlag(EventKind.MaintenanceOff).Should().BeTrue();
+    }
+
     // ---- webhook: signed payload, verified like a real consumer would --------------------------
 
     [Fact]

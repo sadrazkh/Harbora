@@ -17,6 +17,40 @@ public class EventSubscriptionsHttpTests(HarboraHttpFixture fixture)
 {
     private HarboraWebFactory Panel => fixture.Panel;
 
+    /// <summary>
+    /// Gap 2 of the maintenance-mode follow-up: <c>EventKind.MaintenanceOn</c>/<c>MaintenanceOff</c>
+    /// fire for real (<c>AppOperationsService.SetMaintenanceModeAsync</c>) but used to have no checkbox
+    /// here — an event that fires and cannot be subscribed to is a half-connected feature. Asserted on
+    /// the checkbox's own <c>data-event-checkbox</c> attribute, not the label sentence, because the
+    /// panel renders Persian by default in tests.
+    /// </summary>
+    [Fact]
+    public async Task The_add_subscription_form_offers_both_maintenance_events_as_checkboxes()
+    {
+        Panel.GivenUser(fixture.WorkspaceId, "events-maintenance-checkbox@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.249", "events-maintenance-checkbox@example.com");
+
+        var html = await (await client.GetAsync("/notifications/webhooks")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-event-checkbox=\"MaintenanceOn\"");
+        html.Should().Contain("data-event-checkbox=\"MaintenanceOff\"");
+    }
+
+    [Fact]
+    public async Task Creating_a_subscription_to_maintenance_events_persists_both_bits()
+    {
+        Panel.GivenUser(fixture.WorkspaceId, "events-maintenance-create@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.250", "events-maintenance-create@example.com");
+
+        var token = await client.AntiforgeryTokenFrom("/notifications/webhooks");
+        await client.PostFormAsync("/notifications/webhooks", token,
+            ("name", "maintenance-watch"), ("channel", "Webhook"), ("webhookUrl", "https://hooks.example.com/m"),
+            ("onMaintenanceOn", "true"), ("onMaintenanceOff", "true"));
+
+        var stored = Panel.Read(db => db.EventSubscriptions.Single(s => s.Name == "maintenance-watch"));
+        stored.Events.Should().Be(EventKind.MaintenanceOn | EventKind.MaintenanceOff);
+    }
+
     [Fact]
     public async Task The_page_lists_a_subscription_and_a_disabled_one_by_data_attribute()
     {

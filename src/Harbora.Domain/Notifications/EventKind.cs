@@ -31,13 +31,12 @@ namespace Harbora.Domain.Notifications;
 /// toggle (sub-project 5 of the platform-options plan) and are now wired: <c>AppOperationsService.
 /// SetMaintenanceModeAsync</c> publishes one of them at the exact seam <c>DeploymentPipeline</c> and
 /// <c>BackupEngine</c> publish their own events, once the proxy apply that toggle depends on is known
-/// to have succeeded. Both are still excluded from <see cref="Publishable"/> on purpose: the
-/// subscription UI does not offer them as a checkbox yet, which is a separate decision (extending
-/// that mask and adding the checkbox) left for whoever picks it up — showing a box that can never be
-/// ticked into firing is the fabricated-capability defect class this codebase has spent weeks
-/// removing, and the reverse (a real event nobody can subscribe to) is the conservative side of that
-/// same rule to be wrong on. The members were reserved here rather than appended later so that a
-/// subscription's stored mask never needs its bit positions renumbered once they are offered.
+/// to have succeeded. Both are now in <see cref="Publishable"/> too, and offered as a checkbox on the
+/// subscription page — an event that fires with no checkbox to hear it is the same half-connected
+/// state as a checkbox that can never fire, just the mirror image of it, and this codebase treats
+/// both as the same defect. The members were reserved here rather than appended when they were first
+/// wired precisely so that offering them today costs no existing subscription's stored mask a
+/// renumbered bit.
 /// </para>
 /// </summary>
 [Flags]
@@ -51,14 +50,15 @@ public enum EventKind
     BackupFailed = 1 << 4,
     ServiceFailed = 1 << 5,
 
-    /// <summary>Published by AppOperationsService.SetMaintenanceModeAsync — see the type doc. Not yet
-    /// offered in the subscription UI (excluded from <see cref="Publishable"/>).</summary>
+    /// <summary>Published by AppOperationsService.SetMaintenanceModeAsync — see the type doc. Offered
+    /// on the subscription page as of this plan's follow-up.</summary>
     MaintenanceOn = 1 << 6,
-    /// <summary>Published by AppOperationsService.SetMaintenanceModeAsync — see the type doc. Not yet
-    /// offered in the subscription UI (excluded from <see cref="Publishable"/>).</summary>
+    /// <summary>Published by AppOperationsService.SetMaintenanceModeAsync — see the type doc. Offered
+    /// on the subscription page as of this plan's follow-up.</summary>
     MaintenanceOff = 1 << 7,
 
     /// <summary>Every event this codebase can actually raise today — what the subscription UI offers
-    /// as checkboxes. Excludes the two reserved members above.</summary>
-    Publishable = DeploymentSucceeded | DeploymentFailed | AppCrashed | BackupSucceeded | BackupFailed | ServiceFailed
+    /// as checkboxes.</summary>
+    Publishable = DeploymentSucceeded | DeploymentFailed | AppCrashed | BackupSucceeded | BackupFailed |
+        ServiceFailed | MaintenanceOn | MaintenanceOff
 }
