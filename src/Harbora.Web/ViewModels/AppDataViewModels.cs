@@ -85,3 +85,10 @@ public sealed record AppDatabaseElsewhereViewModel(
     Harbora.Domain.Common.ManagedServiceType Type,
     string Where,
     Guid EnvironmentId);
+
+/// <summary>
+/// One <see cref="Harbora.Domain.Apps.ConfigGroup"/> attached to this app, in the same precedence
+/// order the Details env section shows it in (Sub-project 9, 2026-08-20 platform-options plan).
+/// </summary>
+public sealed record AppConfigGroupRow(
+    Guid ConfigGroupId, string Name, int AttachOrder, bool HasUnpublishedChanges, int EntryCount);

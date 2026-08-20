@@ -517,8 +517,31 @@ public sealed partial class AppsController(
             .Include(a => a.EnvironmentVariables)
             .Include(a => a.Domains)
             .Include(a => a.GitRepository)
+            // Sub-project 9 (2026-08-20 platform-options plan): the attached groups' own current
+            // entries, so this page can render the exact same merge BuildEnv assembles for a container.
+            .Include(a => a.ConfigGroups).ThenInclude(cg => cg.ConfigGroup!).ThenInclude(g => g.Entries)
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
+
+        // The effective environment, with provenance — the same ConfigGroupMerge the deploy pipeline
+        // calls, so this page can never show a value the container would not actually receive.
+        ViewBag.EffectiveEnv = Harbora.Domain.Apps.ConfigGroupMerge.Merge(
+            app.EnvironmentVariables,
+            app.ConfigGroups.Select(cg => new Harbora.Domain.Apps.AttachedGroupEntries(
+                cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])));
+
+        ViewBag.AttachedConfigGroups = app.ConfigGroups
+            .OrderBy(cg => cg.AttachOrder)
+            .Select(cg => new AppConfigGroupRow(
+                cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.AttachOrder,
+                cg.HasUnpublishedChanges, cg.ConfigGroup?.Entries.Count ?? 0))
+            .ToList();
+
+        var attachedIds = app.ConfigGroups.Select(cg => cg.ConfigGroupId).ToHashSet();
+        ViewBag.AvailableConfigGroups = await db.ConfigGroups
+            .Where(g => g.WorkspaceId == WorkspaceId && !attachedIds.Contains(g.Id))
+            .OrderBy(g => g.Name)
+            .ToListAsync(ct);
 
         // A scheduled job has no container to look at, so its history IS the app: whether it ran,
         // whether it worked, and what it said. Loaded only for cron services — every other kind

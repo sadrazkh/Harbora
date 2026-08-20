@@ -645,17 +645,50 @@
         }
 
         @* ---- Environment variables ---- *@
+        @{
+            var effectiveEnv = (IReadOnlyList<Harbora.Domain.Apps.EffectiveEnvironmentEntry>)(ViewBag.EffectiveEnv
+                ?? Array.Empty<Harbora.Domain.Apps.EffectiveEnvironmentEntry>());
+        }
         <details class="advanced-panel" open="@advancedOpen">
             <summary><span><i data-lucide="file-code-2" class="h-4 w-4"></i>@T["Environment Variables"]</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
-            <div class="divide-y divide-line">
-                @if (!app.EnvironmentVariables.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
-                @foreach (var e in app.EnvironmentVariables.OrderBy(x => x.Key))
+
+            @* Sub-project 9 (2026-08-20 platform-options plan): the EFFECTIVE set — the app's own
+               variables merged with every attached group's current entries, exactly the way BuildEnv
+               assembles a container's environment — with where each row came from always visible. A
+               merged value whose origin is invisible is a debugging trap. *@
+            <div class="divide-y divide-line" data-effective-env>
+                @if (!effectiveEnv.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
+                @foreach (var e in effectiveEnv)
                 {
-                    <div class="flex items-center justify-between p-3 text-sm font-mono">
-                        <span class="text-ink">@e.Key @if (e.IsSecret){<span class="text-[10px] not-italic rounded bg-surface-2 px-1 text-warn font-sans">secret</span>}@if (e.AvailableAtBuild){<span class="text-[10px] rounded bg-surface-2 px-1 text-info font-sans">build</span>}</span>
+                    var own = e.Source == Harbora.Domain.Apps.ConfigSource.App;
+                    <div class="flex items-center justify-between p-3 text-sm font-mono" data-env-row data-env-key="@e.Key" data-env-source="@(own ? "app" : "group")">
+                        <span class="text-ink">
+                            @e.Key
+                            @if (e.IsSecret){<span class="text-[10px] not-italic rounded bg-surface-2 px-1 text-warn font-sans">secret</span>}
+                            @if (own)
+                            {
+                                <span class="text-[10px] not-italic rounded bg-surface-2 px-1 text-ink-faint font-sans">@(isFa ? "خودِ اپ" : "own")</span>
+                            }
+                            else
+                            {
+                                <span class="text-[10px] not-italic rounded bg-info-soft px-1 text-info font-sans" data-env-provenance="@e.SourceGroupName">
+                                    @(isFa ? $"از گروه «{e.SourceGroupName}»" : $"from group '{e.SourceGroupName}'")
+                                </span>
+                            }
+                        </span>
                         <div class="flex items-center gap-2">
                             <span class="text-ink-faint">@(e.IsSecret ? "••••••" : e.Value)</span>
-                            <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@app.Id" asp-route-envId="@e.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف متغیر {e.Key}" : $"Delete variable {e.Key}")">✕</button></form>
+                            @if (own)
+                            {
+                                var ownRow = app.EnvironmentVariables.First(v => v.Key == e.Key);
+                                <form asp-controller="Apps" asp-action="DeleteEnv" asp-route-id="@app.Id" asp-route-envId="@ownRow.Id" method="post">@Html.AntiForgeryToken()<button class="text-xs text-danger" aria-label="@(isFa ? $"حذف متغیر {e.Key}" : $"Delete variable {e.Key}")">✕</button></form>
+                            }
+                            else
+                            {
+                                <span class="text-xs text-ink-faint" title="@(isFa ? "برای تغییر، گروه را ویرایش کنید" : "Edit the group to change this")">
+                                    <i data-lucide="lock" class="h-3 w-3"></i>
+                                </span>
+                            }
                         </div>
                     </div>
                 }
@@ -673,6 +706,67 @@
                 </label>
                 <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-sm font-semibold">+ @T["Save"]</button>
             </form>
+
+            @* ---- Config groups: which shared groups feed this app, and in what order ---- *@
+            @{
+                var attachedGroups = (IReadOnlyList<AppConfigGroupRow>)(ViewBag.AttachedConfigGroups ?? Array.Empty<AppConfigGroupRow>());
+                var availableGroups = (IReadOnlyList<Harbora.Domain.Apps.ConfigGroup>)(ViewBag.AvailableConfigGroups ?? Array.Empty<Harbora.Domain.Apps.ConfigGroup>());
+            }
+            <div class="p-3 border-t border-line" data-config-groups-panel>
+                <div class="flex items-center justify-between gap-2 mb-2">
+                    <span class="text-xs font-semibold text-ink-muted">@(isFa ? "گروه‌های متصل" : "Attached config groups")</span>
+                    <a href="/config-groups" class="text-xs text-accent-text">@(isFa ? "مدیریت گروه‌ها" : "Manage groups")</a>
+                </div>
+
+                @if (attachedGroups.Count == 0)
+                {
+                    <p class="text-xs text-ink-faint">@(isFa ? "به هیچ گروهی متصل نیست." : "Not attached to any group.")</p>
+                }
+                else
+                {
+                    <div class="space-y-1.5">
+                        @foreach (var g in attachedGroups)
+                        {
+                            <div class="flex items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-1.5 text-xs" data-attached-config-group="@g.Name" data-attached-config-group-order="@g.AttachOrder">
+                                <span>
+                                    <span class="font-medium">@g.Name</span>
+                                    <span class="text-ink-faint">· @(isFa ? $"ترتیب {g.AttachOrder}" : $"order {g.AttachOrder}") · @(isFa ? $"{g.EntryCount} متغیر" : $"{g.EntryCount} variable(s)")</span>
+                                    @if (g.HasUnpublishedChanges)
+                                    {
+                                        @* The Functions unpublished-chip idiom, reused: editing a group never restarts
+                                           anything — it just marks this attachment stale until the app's own next deploy. *@
+                                        <span data-config-group-state="unpublished" class="ms-1 rounded-md bg-warn-soft px-1.5 py-0.5 text-warn">@(isFa ? "با استقرار بعدی اعمال می‌شود" : "applies on next deploy")</span>
+                                    }
+                                    else
+                                    {
+                                        <span data-config-group-state="live" class="ms-1 rounded-md bg-ok-soft px-1.5 py-0.5 text-ok">@(isFa ? "به‌روز" : "live")</span>
+                                    }
+                                </span>
+                                <form asp-controller="Apps" asp-action="DetachConfigGroup" asp-route-id="@app.Id" asp-route-configGroupId="@g.ConfigGroupId" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <button class="text-danger" aria-label="@(isFa ? $"جدا کردن {g.Name}" : $"Detach {g.Name}")">✕</button>
+                                </form>
+                            </div>
+                        }
+                    </div>
+                }
+
+                @if (availableGroups.Count > 0)
+                {
+                    <form asp-controller="Apps" asp-action="AttachConfigGroup" asp-route-id="@app.Id" method="post" class="mt-2 flex gap-2">
+                        @Html.AntiForgeryToken()
+                        <select name="configGroupId" class="flex-1 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-xs">
+                            @foreach (var g in availableGroups)
+                            {
+                                <option value="@g.Id">@g.Name</option>
+                            }
+                        </select>
+                        <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-xs font-semibold">
+                            @(isFa ? "اتصال" : "Attach")
+                        </button>
+                    </form>
+                }
+            </div>
         </details>
     </div>
 
