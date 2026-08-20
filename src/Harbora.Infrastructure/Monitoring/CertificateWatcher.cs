@@ -59,10 +59,24 @@ public sealed class CertificateWatcher(
         var dedup = scope.ServiceProvider.GetRequiredService<AlertDedup>();
 
         // Only domains we actually issue certificates for; one with SSL off has nothing to expire.
-        var domains = await db.Domains
+        // Two queries, then unioned in memory, rather than one projection branching on which of two
+        // navigations is set: the original app-domain shape is left exactly as it was (no regression
+        // risk for the case this watcher has run against since M4), and a status page's own custom
+        // domain (sub-project 8) is added the same explicit-join way StatusPageHostMiddleware's own
+        // custom-domain lookup already resolves one — a shape proven to translate correctly rather
+        // than a conditional-navigation projection that does not. A customer whose status-page
+        // certificate quietly stops renewing deserves the identical warning an app owner already
+        // gets, not a second kind of silence next to the one this class exists to close.
+        var appDomains = await db.Domains
             .Where(d => d.SslEnabled && d.App != null)
-            .Select(d => new { d.Host, d.App!.Name, d.App.WorkspaceId })
+            .Select(d => new { d.Host, Name = d.App!.Name, WorkspaceId = d.App!.WorkspaceId })
             .ToListAsync(ct);
+        var statusPageDomains = await db.Domains
+            .Where(d => d.SslEnabled && d.StatusPageId != null)
+            .Join(db.StatusPages, d => d.StatusPageId, p => p.Id,
+                (d, p) => new { d.Host, Name = "Status page", WorkspaceId = p.WorkspaceId })
+            .ToListAsync(ct);
+        var domains = appDomains.Concat(statusPageDomains).ToList();
 
         foreach (var domain in domains)
         {
