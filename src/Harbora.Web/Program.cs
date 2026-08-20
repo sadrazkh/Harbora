@@ -69,6 +69,11 @@ builder.Services.AddScoped<Harbora.Web.Infrastructure.SizePickerService>();
 builder.Services.AddSingleton<Harbora.Web.Infrastructure.TemplateLogoSet>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUser, HttpCurrentUser>();
+// Who is really at the keyboard, when a platform administrator is signed in as a customer. Replaces
+// the "nobody is" default AddHarboraInfrastructure registered above — only a request has claims.
+builder.Services.AddScoped<ISupportSession, HttpSupportSession>();
+// What the banner draws: the validated row, put on the request by the membership middleware.
+builder.Services.AddScoped<Harbora.Web.Infrastructure.SupportSessionView>();
 // Drives the DbContext's global query filters. Registered here (not in Infrastructure) because only
 // the web host has requests to scope; background work resolves the system scope and spans tenants.
 builder.Services.AddScoped<IWorkspaceScope, HttpWorkspaceScope>();

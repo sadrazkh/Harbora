@@ -44,6 +44,49 @@ public interface ICurrentUser
     Guid? WorkspaceId { get; }
 }
 
+/// <summary>
+/// Whether this request is running under a platform support session, and whose.
+///
+/// <para>
+/// Separate from <see cref="ICurrentUser"/> on purpose: under impersonation the current user IS the
+/// customer, and every tenancy decision in the platform must go on believing that. This answers the
+/// different question of who is really at the keyboard, which only the audit trail, the banner and
+/// the small set of refused acts have any business asking.
+/// </para>
+///
+/// <para>
+/// The values here come off the cookie's claims, so they say what the session was issued saying.
+/// They are enough to label a row and draw a banner; they are NOT the authority on whether the
+/// session is still alive. That is the row, re-read on every request.
+/// </para>
+/// </summary>
+public interface ISupportSession
+{
+    /// <summary>The <c>SupportSession</c> row's id, or null when nobody is impersonating.</summary>
+    Guid? SessionId { get; }
+
+    /// <summary>The platform administrator behind the session.</summary>
+    Guid? AdminUserId { get; }
+
+    /// <summary>Their address, for an audit row that has to be readable a year later.</summary>
+    string? AdminEmail { get; }
+
+    /// <summary>Whether a support session is in force at all.</summary>
+    bool IsActive => SessionId is not null;
+}
+
+/// <summary>
+/// The answer everywhere that is not a browser request: nobody is impersonating. Background jobs,
+/// the CLI and the deploy pipeline have no claims to read and must never be labelled as support.
+/// </summary>
+public sealed class NoSupportSession : ISupportSession
+{
+    public static readonly NoSupportSession Instance = new();
+    public Guid? SessionId => null;
+    public Guid? AdminUserId => null;
+    public string? AdminEmail => null;
+}
+
 /// <summary>Removes known secret values from a string before it is logged or displayed.</summary>
 public interface ISecretRedactor
 {

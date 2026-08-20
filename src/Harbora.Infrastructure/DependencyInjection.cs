@@ -88,6 +88,10 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<ISecretRedactor, SecretRedactor>();
         services.AddScoped<ITokenService, TokenService>();
+        // Nobody is impersonating unless a host says otherwise. Registered here rather than left to
+        // each host so a background worker's audit row can never be missing this answer; the web
+        // host replaces it with the claims-reading one after this call returns.
+        services.AddSingleton<ISupportSession>(NoSupportSession.Instance);
         services.AddScoped<IAuditLogger, Auditing.AuditLogger>();
         // "May this person do this here" — asked the same way by every screen.
         services.AddScoped<Security.ProjectAccessService>();
@@ -185,6 +189,9 @@ public static class DependencyInjection
         services.AddScoped<Projects.ProjectDeletionService>();
         services.AddScoped<Security.WorkspaceAccountService>();
         services.AddScoped<Security.AccountSessionService>();
+        // Opens, checks and closes the periods a platform administrator spends inside a customer's
+        // account. Scoped: LiveAsync runs on every request under one and writes the expiry back.
+        services.AddScoped<Identity.SupportSessionService>();
         services.AddScoped<Templates.TemplateDeploymentService>();
         // A branch gets an environment of its own, and loses it again when the branch goes.
         services.AddScoped<Projects.PreviewEnvironmentService>();
