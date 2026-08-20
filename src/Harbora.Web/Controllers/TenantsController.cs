@@ -225,6 +225,7 @@ public sealed partial class TenantsController(
     /// </summary>
     [HttpPost("{id:guid}/credit")]
     [ValidateAntiForgeryToken]
+    [Harbora.Web.Infrastructure.RefuseUnderSupportSession(SupportRestrictedAct.WalletCredit)]
     public async Task<IActionResult> Credit(
         Guid id, Guid creditId, string? amount, string? note, CancellationToken ct)
     {
@@ -388,6 +389,9 @@ public sealed partial class TenantsController(
 
     [HttpPost("{id:guid}/adjustment")]
     [ValidateAntiForgeryToken]
+    // An adjustment moves money in either direction. "Any wallet credit" covers the direction that
+    // puts it in, and a support session correcting a balance downwards is no more its business.
+    [Harbora.Web.Infrastructure.RefuseUnderSupportSession(SupportRestrictedAct.WalletCredit)]
     public async Task<IActionResult> Adjustment(
         Guid id, Guid adjustmentId, string? amount, string? note, CancellationToken ct)
     {

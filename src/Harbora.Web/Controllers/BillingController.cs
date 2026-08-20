@@ -174,6 +174,9 @@ public sealed class BillingController(
     [HttpPost("voucher")]
     [ValidateAntiForgeryToken]
     [EnableRateLimiting("voucher")]
+    // The other way money enters a wallet, and a single-use code spent on the customer's behalf is
+    // spent whether or not they wanted it here. Blocked for the same reason a credit is.
+    [Harbora.Web.Infrastructure.RefuseUnderSupportSession(Harbora.Domain.Authorization.SupportRestrictedAct.WalletCredit)]
     public async Task<IActionResult> RedeemVoucher(string? code, CancellationToken ct)
     {
         if (currentUser.UserId is not { } userId || WorkspaceId == Guid.Empty)

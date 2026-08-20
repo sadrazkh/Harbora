@@ -1,8 +1,21 @@
 @using System.Globalization
+@inject SupportSessionView Support
 @{
     ViewData["Title"] = "Access denied";
     Layout = "_Auth";
+    var isFa = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 }
 <h1 class="title">403</h1>
-<p class="subtitle">@(CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa" ? "به این بخش دسترسی ندارید." : "You don't have access to this area.")</p>
+<p class="subtitle">@(isFa ? "به این بخش دسترسی ندارید." : "You don't have access to this area.")</p>
+@if (Support.Current is not null)
+{
+    @* A support session arrives here for a second reason, and "you don't have access" on its own
+       sends somebody looking for a permission that is not the problem. Which act was refused is on
+       the audit row; what this page owes the reader is why this wall is here at all. *@
+    <p class="subtitle" data-support-denied="true">
+        @(isFa
+            ? "شما در نشست پشتیبانی هستید. تغییر رمز، ایمیل و ورود دومرحله‌ای، بستن نشست‌های دیگر، ساخت توکن API و جابه‌جایی پول در این نشست انجام نمی‌شوند."
+            : "You are in a support session. Changing a password, email or two-factor, ending other sessions, creating an API token and moving money are all refused while it runs.")
+    </p>
+}
 <a class="btn btn-primary" href="/">@T["Dashboard"]</a>

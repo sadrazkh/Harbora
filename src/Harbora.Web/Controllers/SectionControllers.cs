@@ -489,6 +489,7 @@ public sealed class SettingsController(
 
     [HttpPost("/settings/totp/begin")]
     [ValidateAntiForgeryToken]
+    [RefuseUnderSupportSession(SupportRestrictedAct.TwoFactor)]
     public async Task<IActionResult> TotpBegin(CancellationToken ct)
     {
         var me = await db.Users.IgnoreQueryFilters().FirstAsync(u => u.Id == currentUser.UserId, ct);
@@ -506,6 +507,7 @@ public sealed class SettingsController(
 
     [HttpPost("/settings/totp/confirm")]
     [ValidateAntiForgeryToken]
+    [RefuseUnderSupportSession(SupportRestrictedAct.TwoFactor)]
     public async Task<IActionResult> TotpConfirm(string? code, CancellationToken ct)
     {
         var me = await db.Users.IgnoreQueryFilters().FirstAsync(u => u.Id == currentUser.UserId, ct);
@@ -539,6 +541,7 @@ public sealed class SettingsController(
 
     [HttpPost("/settings/totp/disable")]
     [ValidateAntiForgeryToken]
+    [RefuseUnderSupportSession(SupportRestrictedAct.TwoFactor)]
     public async Task<IActionResult> TotpDisable(string? code, CancellationToken ct)
     {
         var me = await db.Users.IgnoreQueryFilters().FirstAsync(u => u.Id == currentUser.UserId, ct);
@@ -576,6 +579,7 @@ public sealed class SettingsController(
 
     [HttpPost("/settings/sessions/{id:guid}/revoke")]
     [ValidateAntiForgeryToken]
+    [RefuseUnderSupportSession(SupportRestrictedAct.Sessions)]
     public async Task<IActionResult> RevokeSession(Guid id, CancellationToken ct)
     {
         await accountSessions.RevokeAsync(currentUser.UserId!.Value, id, ct);
@@ -590,6 +594,7 @@ public sealed class SettingsController(
 
     [HttpPost("/settings/sessions/revoke-others")]
     [ValidateAntiForgeryToken]
+    [RefuseUnderSupportSession(SupportRestrictedAct.Sessions)]
     public async Task<IActionResult> RevokeOtherSessions(CancellationToken ct)
     {
         await accountSessions.RevokeAllAsync(currentUser.UserId!.Value, CurrentSessionId(), ct);
@@ -650,6 +655,7 @@ public sealed class SettingsController(
     /// <summary>Issues a CLI/API token. The plaintext is shown exactly once via TempData.</summary>
     [HttpPost("/settings/tokens")]
     [ValidateAntiForgeryToken]
+    [RefuseUnderSupportSession(SupportRestrictedAct.ApiToken)]
     public async Task<IActionResult> CreateToken(string name, CancellationToken ct)
     {
         var userId = currentUser.UserId ?? Guid.Empty;

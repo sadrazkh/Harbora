@@ -250,6 +250,10 @@ public sealed class UsersController(
 
     [HttpPost("{id:guid}/email/verify")]
     [ValidateAntiForgeryToken]
+    // The nearest thing this panel has to changing somebody's email: marking an address proven
+    // without anybody having proved it. There is no self-serve email-change action to block beside
+    // it — if one is ever added, it belongs on this list and SupportRestrictionCensusTests will say so.
+    [Harbora.Web.Infrastructure.RefuseUnderSupportSession(SupportRestrictedAct.Email)]
     public async Task<IActionResult> VerifyEmail(Guid id, CancellationToken ct)
     {
         var user = await db.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Id == id, ct);
@@ -272,6 +276,7 @@ public sealed class UsersController(
     /// </summary>
     [HttpPost("{id:guid}/totp/reset")]
     [ValidateAntiForgeryToken]
+    [Harbora.Web.Infrastructure.RefuseUnderSupportSession(SupportRestrictedAct.TwoFactor)]
     public async Task<IActionResult> ResetTotp(Guid id, CancellationToken ct)
     {
         var user = await db.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Id == id, ct);
@@ -288,6 +293,7 @@ public sealed class UsersController(
 
     [HttpPost("{id:guid}/password")]
     [ValidateAntiForgeryToken]
+    [Harbora.Web.Infrastructure.RefuseUnderSupportSession(SupportRestrictedAct.Password)]
     public async Task<IActionResult> ResetPassword(Guid id, string password, CancellationToken ct)
     {
         var (user, context) = await ContextForAsync(id, ct);
