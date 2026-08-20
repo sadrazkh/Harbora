@@ -138,6 +138,13 @@ public class HarboraDbContext : DbContext
         Set<Harbora.Domain.Notifications.EventSubscription>();
     public DbSet<Harbora.Domain.Notifications.EventDelivery> EventDeliveries =>
         Set<Harbora.Domain.Notifications.EventDelivery>();
+    // P7 (2026-08-20 platform-options plan): a workspace's public status page, opt-in, and the apps
+    // and manual incident notes it shows — see StatusPage's own doc.
+    public DbSet<Harbora.Domain.Status.StatusPage> StatusPages => Set<Harbora.Domain.Status.StatusPage>();
+    public DbSet<Harbora.Domain.Status.StatusPageComponent> StatusPageComponents =>
+        Set<Harbora.Domain.Status.StatusPageComponent>();
+    public DbSet<Harbora.Domain.Status.StatusIncident> StatusIncidents =>
+        Set<Harbora.Domain.Status.StatusIncident>();
     public DbSet<AppTemplate> AppTemplates => Set<AppTemplate>();
     public DbSet<AppTemplateVersion> AppTemplateVersions => Set<AppTemplateVersion>();
     public DbSet<Harbora.Domain.Ai.AiProvider> AiProviders => Set<Harbora.Domain.Ai.AiProvider>();
@@ -501,6 +508,22 @@ public class HarboraDbContext : DbContext
         // (and updating) whichever one it happened to find first.
         b.Entity<ContainerLifecycleCursor>(e =>
             e.HasIndex(x => new { x.ServerId, x.ResourceRef }).IsUnique());
+
+        // P7 (2026-08-20 platform-options plan): at most one status page per workspace — the settings
+        // screen creates it lazily on first open, so a second concurrent open must find the same row
+        // rather than a second one racing it into existence.
+        b.Entity<Harbora.Domain.Status.StatusPage>(e => e.HasIndex(x => x.WorkspaceId).IsUnique());
+
+        // One row per (page, app) — choosing the same app twice would give the public page two cards
+        // for one component rather than refusing the second pick.
+        b.Entity<Harbora.Domain.Status.StatusPageComponent>(e =>
+            e.HasIndex(x => new { x.StatusPageId, x.AppId }).IsUnique());
+
+        // The public page's own read: one page's incidents. StartedAt trails because
+        // StatusPageReport orders the loaded rows in memory (open before resolved, then newest
+        // first) — the index still earns its keep by narrowing every read to one page's rows.
+        b.Entity<Harbora.Domain.Status.StatusIncident>(e =>
+            e.HasIndex(x => new { x.StatusPageId, x.StartedAt }));
 
         // Two different questions, two different indexes. IncidentService.OpenAsync/ResolveAsync ask
         // "is this exact condition, on this exact subject, already open?" on every collector tick —
@@ -1162,6 +1185,20 @@ public class HarboraDbContext : DbContext
         b.Entity<Harbora.Domain.Notifications.EventSubscription>()
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Harbora.Domain.Notifications.EventDelivery>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        // P7 (2026-08-20 platform-options plan): filtered like EventSubscription/EventDelivery above,
+        // for the identical reason — the settings screen reads these under the normal ambient scope,
+        // and the anonymous public route has none (Guid.Empty, deny-by-default) so it must scope
+        // every read explicitly with IgnoreQueryFilters() + WorkspaceId == the workspace the host
+        // resolved to. StatusPageComponent and StatusIncident both carry their own denormalised
+        // WorkspaceId rather than being reached only through StatusPage, for the same reason
+        // EventDelivery does: the anonymous route must never depend on a join through a row that
+        // could be momentarily absent.
+        b.Entity<Harbora.Domain.Status.StatusPage>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Status.StatusPageComponent>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Status.StatusIncident>()
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<GitProvider>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<WorkspaceMember>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
