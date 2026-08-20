@@ -72,6 +72,11 @@ public sealed partial class AccountController
     [HttpPost("/account/external/{provider}/start")]
     [ValidateAntiForgeryToken]
     [EnableRateLimiting("auth")]
+    // Linking an identity mints a durable, self-owned way into somebody else's account — what an API
+    // token is, and longer-lived — and unlinking takes one of the customer's own ways in away. Every
+    // route in this file is therefore closed to a support session, the callback included, since that
+    // is where the link is actually written.
+    [RefuseUnderSupportSession(Harbora.Domain.Authorization.SupportRestrictedAct.ExternalLogin)]
     public async Task<IActionResult> ExternalStart(string provider, string? returnUrl, bool link, CancellationToken ct)
     {
         var key = ExternalLoginProviders.Normalise(provider);
@@ -113,6 +118,7 @@ public sealed partial class AccountController
     /// a new account, or a refusal in words — never in a link nobody asked for.
     /// </summary>
     [HttpGet(ExternalAuth.CallbackPath)]
+    [RefuseUnderSupportSession(Harbora.Domain.Authorization.SupportRestrictedAct.ExternalLogin)]
     public async Task<IActionResult> ExternalCallback(CancellationToken ct)
     {
         var result = await HttpContext.AuthenticateAsync(ExternalAuth.ExternalScheme);
@@ -311,6 +317,7 @@ public sealed partial class AccountController
     // ---- proving the password before the link ---------------------------------------------------
 
     [HttpGet("/account/external/confirm")]
+    [RefuseUnderSupportSession(Harbora.Domain.Authorization.SupportRestrictedAct.ExternalLogin)]
     public async Task<IActionResult> ExternalConfirm(CancellationToken ct)
     {
         var (pending, user) = await ReadPendingLinkAsync(ct);
@@ -322,6 +329,7 @@ public sealed partial class AccountController
     [HttpPost("/account/external/confirm")]
     [ValidateAntiForgeryToken]
     [EnableRateLimiting("auth")]
+    [RefuseUnderSupportSession(Harbora.Domain.Authorization.SupportRestrictedAct.ExternalLogin)]
     public async Task<IActionResult> ExternalConfirm(string? password, CancellationToken ct)
     {
         var (pending, user) = await ReadPendingLinkAsync(ct);
@@ -463,6 +471,7 @@ public sealed partial class AccountController
     [HttpPost("/account/external/{provider}/unlink")]
     [ValidateAntiForgeryToken]
     [Authorize]
+    [RefuseUnderSupportSession(Harbora.Domain.Authorization.SupportRestrictedAct.ExternalLogin)]
     public async Task<IActionResult> ExternalUnlink(string provider, CancellationToken ct)
     {
         var key = ExternalLoginProviders.Normalise(provider);

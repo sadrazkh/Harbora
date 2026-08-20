@@ -41,6 +41,9 @@ public static class SupportRestrictions
         SupportRestrictedAct.WalletCredit => isFa
             ? "در نشست پشتیبانی نمی‌توان کیف پول را شارژ یا اصلاح کرد."
             : "A support session cannot credit or adjust a wallet.",
+        SupportRestrictedAct.ExternalLogin => isFa
+            ? "در نشست پشتیبانی نمی‌توان حساب ورود خارجی (گوگل، گیت‌هاب، OIDC) را به این حساب وصل یا از آن جدا کرد."
+            : "A support session cannot connect or disconnect an external sign-in (Google, GitHub, OIDC).",
         _ => isFa ? "این کار در نشست پشتیبانی انجام نمی‌شود." : "A support session cannot do this."
     };
 
@@ -63,5 +66,19 @@ public enum SupportRestrictedAct
     TwoFactor = 2,
     Sessions = 3,
     ApiToken = 4,
-    WalletCredit = 5
+    WalletCredit = 5,
+
+    /// <summary>
+    /// Connecting or disconnecting a Google/GitHub/OIDC identity.
+    ///
+    /// <para>
+    /// Not on the plan's original list, because external sign-in did not exist when that list was
+    /// written — it landed from a parallel sub-project while this one was in flight. It belongs
+    /// here by the same rule everything else on the list is here by: linking an identity mints a
+    /// durable, self-owned way into somebody else's account, which is what an API token does and
+    /// worse, and unlinking takes one of the customer's own ways in away. Reported rather than
+    /// slipped in — see the sub-project report.
+    /// </para>
+    /// </summary>
+    ExternalLogin = 6
 }

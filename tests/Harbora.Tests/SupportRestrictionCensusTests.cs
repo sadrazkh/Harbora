@@ -34,7 +34,7 @@ public class SupportRestrictionCensusTests
     /// </summary>
     private static readonly Regex Sensitive = new(
         "Password|Totp|TwoFactor|RevokeSession|RevokeOtherSessions|CreateToken|VerifyEmail|"
-        + "^Credit$|^Adjustment$|RedeemVoucher",
+        + "^Credit$|^Adjustment$|RedeemVoucher|^External",
         RegexOptions.Compiled);
 
     /// <summary>

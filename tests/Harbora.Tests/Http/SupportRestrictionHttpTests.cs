@@ -233,6 +233,31 @@ public class SupportRestrictionHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task A_support_session_cannot_connect_an_external_sign_in_to_the_customers_account()
+    {
+        // Not on the plan's original list, because external sign-in did not exist when that list was
+        // written — it landed from a parallel sub-project while this one was in flight. Linking one
+        // mints a durable, self-owned way into somebody else's account, which is the same thing an
+        // API token is and longer-lived, so it is refused by the same rule.
+        Panel.GivenUser(fixture.WorkspaceId, "res-admin9@example.com", SystemRole.Owner);
+        var (workspaceId, customer) = GivenCustomer("res-tenant-9", "res-customer9@example.com");
+
+        var (support, sessionId) = await Impersonating(
+            "203.0.113.128", "res-admin9@example.com", workspaceId, customer.Id);
+        var token = await support.AntiforgeryTokenFrom("/settings");
+
+        var link = await support.PostFormAsync(
+            "/account/external/google/start", token, ("link", "true"), ("returnUrl", "/settings"));
+        var unlink = await support.PostFormAsync("/account/external/google/unlink", token);
+
+        link.RedirectPath().Should().Be("/account/denied");
+        unlink.RedirectPath().Should().Be("/account/denied");
+        Panel.Read(db => db.ExternalLogins.IgnoreQueryFilters().Count(e => e.UserId == customer.Id))
+            .Should().Be(0);
+        RefusalWasAudited(sessionId, SupportRestrictedAct.ExternalLogin);
+    }
+
+    [Fact]
     public async Task Everything_the_list_does_not_name_is_still_allowed()
     {
         // The list is deliberately short. A support session that could not read a page or press an
