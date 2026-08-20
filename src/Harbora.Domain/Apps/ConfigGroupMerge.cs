@@ -7,16 +7,25 @@ public enum ConfigSource
     App,
 
     /// <summary>A <see cref="ConfigGroup"/> attached to the app.</summary>
-    Group
+    Group,
+
+    /// <summary>A <see cref="Harbora.Domain.Storage.StorageBucket"/> attached to the app (F5,
+    /// 2026-08-21 functions-and-services plan).</summary>
+    Bucket
 }
 
 /// <summary>
 /// One row of an app's effective environment — a merged value whose origin is always attached,
 /// because a merge that hides where a value came from is a debugging trap (Sub-project 9,
-/// 2026-08-20 platform-options plan).
+/// 2026-08-20 platform-options plan). <paramref name="SourceBucketId"/>/<paramref name="SourceBucketName"/>
+/// are set only when <see cref="Source"/> is <see cref="ConfigSource.Bucket"/>, mirroring how
+/// <paramref name="SourceGroupId"/>/<paramref name="SourceGroupName"/> are set only for
+/// <see cref="ConfigSource.Group"/>.
 /// </summary>
 public readonly record struct EffectiveEnvironmentEntry(
-    string Key, string Value, bool IsSecret, ConfigSource Source, Guid? SourceGroupId, string? SourceGroupName);
+    string Key, string Value, bool IsSecret, ConfigSource Source,
+    Guid? SourceGroupId, string? SourceGroupName,
+    Guid? SourceBucketId = null, string? SourceBucketName = null);
 
 /// <summary>
 /// One group's contribution to a merge: its attachment order for the app in question, its identity
@@ -25,29 +34,55 @@ public readonly record struct EffectiveEnvironmentEntry(
 public readonly record struct AttachedGroupEntries(
     int AttachOrder, Guid GroupId, string GroupName, IReadOnlyList<ConfigGroupEntry> Entries);
 
+/// <summary>One env var a bucket contributes — shaped like <see cref="ConfigGroupEntry"/>, but a
+/// bucket's entries are computed (<see cref="Harbora.Domain.Storage.BucketEnvKeys.EntriesFor"/>)
+/// rather than stored rows, so this carries plain values rather than an EF entity.</summary>
+public readonly record struct BucketEnvEntry(string Key, string Value, bool IsSecret);
+
 /// <summary>
-/// The single place app-over-group precedence is decided: <b>the deploy pipeline's env assembly
-/// point</b> (<c>DeploymentPipeline.BuildEnv</c>) calls this to build what a container actually
-/// receives, and the app's env page calls the exact same method to render what it will receive —
-/// one merge, never two, so the container and the page can never disagree about which value won.
+/// One bucket's contribution to a merge: its attachment order for the app in question (F5,
+/// 2026-08-21 functions-and-services plan — the same "second one wins" rule
+/// <see cref="AttachedGroupEntries"/> already gives groups, since a bucket's env var names are
+/// fixed and a second attach would otherwise silently overwrite the first's values), its identity
+/// (for provenance), and its current entries.
+/// </summary>
+public readonly record struct AttachedBucketEnv(
+    int AttachOrder, Guid BucketId, string BucketName, IReadOnlyList<BucketEnvEntry> Entries);
+
+/// <summary>
+/// The single place app-over-group-over-bucket precedence is decided: <b>the deploy pipeline's env
+/// assembly point</b> (<c>DeploymentPipeline.BuildEnv</c>) calls this to build what a container
+/// actually receives, and the app's env page calls the exact same method to render what it will
+/// receive — one merge, never two, so the container and the page can never disagree about which
+/// value won.
 ///
 /// <para>
-/// Precedence: the app's own <see cref="EnvironmentVariable"/> always wins over any group; among
-/// groups, the one with the higher <see cref="AttachedGroupEntries.AttachOrder"/> (attached later)
-/// wins on a shared key. Values are passed through unchanged — ciphertext stays ciphertext — so a
-/// caller decides for itself whether and when to decrypt.
+/// Precedence: the app's own <see cref="EnvironmentVariable"/> always wins over any group or
+/// bucket; among groups, the one with the higher <see cref="AttachedGroupEntries.AttachOrder"/>
+/// (attached later) wins on a shared key; attached buckets are lower precedence than every group —
+/// they exist to hand an app default credentials, not to override a value somebody deliberately set
+/// through a group. Values are passed through unchanged — ciphertext stays ciphertext — so a caller
+/// decides for itself whether and when to decrypt.
 /// </para>
 /// </summary>
 public static class ConfigGroupMerge
 {
     public static IReadOnlyList<EffectiveEnvironmentEntry> Merge(
         IEnumerable<EnvironmentVariable> ownVariables,
-        IEnumerable<AttachedGroupEntries> attachedGroups)
+        IEnumerable<AttachedGroupEntries> attachedGroups,
+        IEnumerable<AttachedBucketEnv>? attachedBuckets = null)
     {
         var byKey = new Dictionary<string, EffectiveEnvironmentEntry>(StringComparer.Ordinal);
 
-        // Lowest precedence first, so a later write in this loop is the one that survives: groups in
-        // attachment order, then the app's own rows last, unconditionally on top.
+        // Lowest precedence first, so a later write in this loop is the one that survives: buckets in
+        // attachment order, then groups in attachment order, then the app's own rows last,
+        // unconditionally on top.
+        foreach (var bucket in (attachedBuckets ?? []).OrderBy(b => b.AttachOrder))
+            foreach (var entry in bucket.Entries)
+                byKey[entry.Key] = new EffectiveEnvironmentEntry(
+                    entry.Key, entry.Value, entry.IsSecret, ConfigSource.Bucket,
+                    null, null, bucket.BucketId, bucket.BucketName);
+
         foreach (var group in attachedGroups.OrderBy(g => g.AttachOrder))
             foreach (var entry in group.Entries)
                 byKey[entry.Key] = new EffectiveEnvironmentEntry(

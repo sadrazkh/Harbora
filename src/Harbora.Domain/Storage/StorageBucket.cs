@@ -53,6 +53,10 @@ public class StorageBucket : BaseEntity
 
     /// <summary>Why provisioning failed, for the screen. Null when nothing went wrong.</summary>
     public string? FailureReason { get; set; }
+
+    /// <summary>Apps attached to this bucket (F5, 2026-08-21 functions-and-services plan) — see
+    /// <see cref="AppStorageBucket"/>.</summary>
+    public ICollection<AppStorageBucket> Apps { get; set; } = new List<AppStorageBucket>();
 }
 
 /// <summary>

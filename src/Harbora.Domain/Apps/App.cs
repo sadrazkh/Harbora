@@ -208,4 +208,11 @@ public class App : BaseEntity
     /// <summary>Shared <see cref="ConfigGroup"/>s this app receives environment variables from,
     /// lowest-to-highest precedence order — see <see cref="ConfigGroupMerge"/>.</summary>
     public ICollection<AppConfigGroup> ConfigGroups { get; set; } = new List<AppConfigGroup>();
+
+    /// <summary>Object-storage buckets attached to this app (F5, 2026-08-21 functions-and-services
+    /// plan) — see <see cref="Harbora.Domain.Storage.AppStorageBucket"/> and
+    /// <see cref="ConfigGroupMerge"/>, which merges them into the effective environment the same way
+    /// it merges <see cref="ConfigGroups"/>.</summary>
+    public ICollection<Harbora.Domain.Storage.AppStorageBucket> StorageBuckets { get; set; } =
+        new List<Harbora.Domain.Storage.AppStorageBucket>();
 }

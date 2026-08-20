@@ -35,9 +35,14 @@ public sealed class DeploymentPipeline(
     Nodes.NodeIngressRouter ingressRouter,
     IFunctionEventBus functionEvents,
     IEventPublisher events,
+    // F5 (2026-08-21 functions-and-services plan): the endpoint an attached bucket's S3_ENDPOINT
+    // gets, resolved the same way ObjectStorageAdmin/StorageController already do — the customer's
+    // reachable address, not the panel's own private one.
+    IOptions<Storage.ObjectStorageOptions> storageOptions,
     ILogger<DeploymentPipeline> logger)
 {
     private readonly HarboraRuntimeOptions _opt = options.Value;
+    private readonly Storage.ObjectStorageOptions _storageOpt = storageOptions.Value;
 
     public async Task ExecuteAsync(Guid deploymentId, CancellationToken ct)
     {
@@ -69,6 +74,10 @@ public sealed class DeploymentPipeline(
             // entries, loaded alongside the app's own EnvironmentVariables — BuildEnv below is the
             // single place both are merged into what the container actually receives.
             .Include(a => a.ConfigGroups).ThenInclude(cg => cg.ConfigGroup!).ThenInclude(g => g.Entries)
+            // F5 (2026-08-21 functions-and-services plan): the same shape, one level further — an
+            // attached bucket's own row, so BuildEnv can compute its S3_* entries without a second
+            // round trip.
+            .Include(a => a.StorageBuckets).ThenInclude(sb => sb.StorageBucket)
             .FirstAsync(a => a.Id == deployment.AppId, ct);
 
         // Resolve the container engine for this app's server (local or remote agent).
@@ -596,6 +605,9 @@ public sealed class DeploymentPipeline(
             // say right now (BuildEnv above), rollback or not, so every group this app carries is
             // applied the instant the deployment succeeds.
             await MarkConfigGroupsAppliedAsync(app, ct);
+            // F5: the same guarantee, for buckets — env is never baked into the image, so a rollback
+            // still applies whatever the attached bucket's credentials say right now.
+            await MarkStorageBucketsAppliedAsync(app, ct);
             await functionEvents.PublishAsync(
                 Domain.Functions.FunctionEvent.Create(
                     Domain.Functions.FunctionEvents.DeploymentSucceeded, app.WorkspaceId, app.Slug,
@@ -1345,19 +1357,32 @@ public sealed class DeploymentPipeline(
             .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
     /// <summary>
-    /// The env-assembly point (Sub-project 9, 2026-08-20 platform-options plan): where
-    /// <see cref="EnvironmentVariable"/> rows and every attached <see cref="ConfigGroup"/>'s current
-    /// entries become the dictionary a container actually receives. Both the single-container path
-    /// and each compose service's own build call this — one merge, never two — so the precedence
-    /// <see cref="ConfigGroupMerge"/> decides is exactly what the app's env page shows and exactly
-    /// what the container gets.
+    /// The env-assembly point (Sub-project 9, 2026-08-20 platform-options plan; buckets added by F5,
+    /// 2026-08-21 functions-and-services plan): where <see cref="EnvironmentVariable"/> rows, every
+    /// attached <see cref="ConfigGroup"/>'s current entries, and every attached
+    /// <see cref="Storage.AppStorageBucket"/>'s current credentials become the dictionary a container
+    /// actually receives. Both the single-container path and each compose service's own build call
+    /// this — one merge, never two — so the precedence <see cref="ConfigGroupMerge"/> decides is
+    /// exactly what the app's env page shows and exactly what the container gets. A function app is
+    /// an ordinary <see cref="App"/> row (<see cref="AppSourceType.InlineCode"/>), so it goes through
+    /// this exact path too — a bucket attached to a function app reaches its generated host for free,
+    /// the same way a database attach already does.
     /// </summary>
     private Dictionary<string, string> BuildEnv(App app)
     {
+        var attachedBuckets = app.StorageBuckets
+            .Where(sb => sb.StorageBucket is not null)
+            .Select(sb => new AttachedBucketEnv(
+                sb.AttachOrder, sb.StorageBucketId, sb.StorageBucket!.Name,
+                Storage.BucketEnvKeys.EntriesFor(
+                        sb.StorageBucket!, _storageOpt.CustomerEndpoint, SafeUnprotect(sb.StorageBucket!.EncryptedSecretKey))
+                    .Select(e => new BucketEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
+
         var merged = ConfigGroupMerge.Merge(
             app.EnvironmentVariables,
             app.ConfigGroups.Select(cg => new AttachedGroupEntries(
-                cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])));
+                cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])),
+            attachedBuckets);
 
         var env = merged.ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
@@ -1382,6 +1407,20 @@ public sealed class DeploymentPipeline(
     {
         var attachments = await db.AppConfigGroups
             .Where(cg => cg.AppId == app.Id && cg.HasUnpublishedChanges)
+            .ToListAsync(ct);
+
+        foreach (var a in attachments) a.HasUnpublishedChanges = false;
+    }
+
+    /// <summary>
+    /// F5 (2026-08-21 functions-and-services plan): the bucket-side mirror of
+    /// <see cref="MarkConfigGroupsAppliedAsync"/> — same reasoning, same idiom, one attachment kind
+    /// later.
+    /// </summary>
+    private async Task MarkStorageBucketsAppliedAsync(App app, CancellationToken ct)
+    {
+        var attachments = await db.AppStorageBuckets
+            .Where(sb => sb.AppId == app.Id && sb.HasUnpublishedChanges)
             .ToListAsync(ct);
 
         foreach (var a in attachments) a.HasUnpublishedChanges = false;

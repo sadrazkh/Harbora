@@ -181,6 +181,7 @@ public class HarboraDbContext : DbContext
     public DbSet<ServerInstanceOffer> ServerInstanceOffers => Set<ServerInstanceOffer>();
 
     public DbSet<Harbora.Domain.Storage.StorageBucket> StorageBuckets => Set<Harbora.Domain.Storage.StorageBucket>();
+    public DbSet<Harbora.Domain.Storage.AppStorageBucket> AppStorageBuckets => Set<Harbora.Domain.Storage.AppStorageBucket>();
     public DbSet<Harbora.Domain.Storage.StoragePlan> StoragePlans => Set<Harbora.Domain.Storage.StoragePlan>();
     public DbSet<Harbora.Domain.Storage.VolumeDownloadToken> VolumeDownloadTokens => Set<Harbora.Domain.Storage.VolumeDownloadToken>();
     public DbSet<Harbora.Domain.Tenancy.UsageRecord> UsageRecords => Set<Harbora.Domain.Tenancy.UsageRecord>();
@@ -774,6 +775,17 @@ public class HarboraDbContext : DbContext
         });
 
         b.Entity<Harbora.Domain.Storage.StoragePlan>(e => e.Property(x => x.MonthlyPrice).HasPrecision(10, 2));
+
+        // --- bucket attach (F5, 2026-08-21 functions-and-services plan) ---
+        // The AppConfigGroup shape exactly: Restrict, not Cascade, on the bucket side — a bucket with
+        // apps still attached must be refused by the named-list check in StorageController.Delete
+        // (the ProjectsController.Delete idiom) before this is ever reached.
+        b.Entity<Harbora.Domain.Storage.AppStorageBucket>(e =>
+        {
+            e.HasIndex(x => new { x.AppId, x.StorageBucketId }).IsUnique();
+            e.HasOne(x => x.App).WithMany(a => a.StorageBuckets).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.StorageBucket).WithMany(sb => sb.Apps).HasForeignKey(x => x.StorageBucketId).OnDelete(DeleteBehavior.Restrict);
+        });
 
         // Deliberately NOT workspace-filtered, unlike StorageBucket just above. The route that
         // redeems this token runs with no session and so no workspace in scope at all — a filter
