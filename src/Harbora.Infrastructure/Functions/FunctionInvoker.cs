@@ -8,6 +8,7 @@ using Harbora.Domain.Functions;
 using Harbora.Domain.Jobs;
 using Harbora.Domain.Notifications;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Harbora.Infrastructure.Functions;
@@ -21,6 +22,24 @@ namespace Harbora.Infrastructure.Functions;
 /// due at the moment the panel restarted is then still made, which is the difference between a cron
 /// feature and a cron feature people trust.
 /// </para>
+///
+/// <para>
+/// F4 (2026-08-21 functions-and-services plan, "Function failures become visible") wants this class to
+/// publish <see cref="EventKind.FunctionFailed"/> the same direct way <c>DeploymentPipeline</c> and
+/// <c>BackupEngine</c> publish their own events — but unlike those two, this class already sits at the
+/// bottom of <see cref="IEventPublisher"/>'s own dependency chain:
+/// <c>EventDispatcher</c> (the <see cref="IEventPublisher"/>) needs <c>INotificationService</c> for its
+/// Telegram delivery path, <c>NotificationService</c> needs <c>IFunctionEventBus</c> to tell functions
+/// about the same platform happenings people hear about, and <c>FunctionEventBus</c> needs
+/// <see cref="IFunctionInvoker"/> — this class — to actually run an event-triggered function. A direct
+/// constructor dependency on <see cref="IEventPublisher"/> here would close that loop into a genuine DI
+/// cycle (caught the hard way: any page that resolves <c>WorkspaceAccountService</c> 500'd). Taking
+/// <see cref="IServiceScopeFactory"/> instead and resolving <see cref="IEventPublisher"/> from a fresh
+/// scope inside <see cref="CompleteAsync"/> defers that resolution past constructor-time graph
+/// validation — the same isolated-scope idiom <c>NotificationService.EnqueueDeliveryAsync</c> and
+/// <c>EventDispatcher.PublishAsync</c> themselves already use, for the same reason: this must persist
+/// regardless of what the caller's own unit of work does next.
+/// </para>
 /// </summary>
 public sealed class FunctionInvoker(
     HarboraDbContext db,
@@ -28,7 +47,7 @@ public sealed class FunctionInvoker(
     ISecretProtector protector,
     IJobQueue jobs,
     IFeatureGate features,
-    IEventPublisher events,
+    IServiceScopeFactory scopeFactory,
     ILogger<FunctionInvoker> logger) : IFunctionInvoker
 {
     /// <summary>
@@ -198,12 +217,19 @@ public sealed class FunctionInvoker(
         // silent. Never called out inline: IEventPublisher.PublishAsync only ever writes durable rows
         // and enqueues a job, and never throws on its own, so this can never turn an invocation that
         // already finished (successfully or not) into something that fails a second time here.
+        //
+        // Resolved from a fresh scope rather than taken as a constructor dependency — see the class
+        // doc for the DI cycle that closes if IEventPublisher is injected here directly.
         if (!ok)
-            await events.PublishAsync(invocation.WorkspaceId, EventKind.FunctionFailed,
+        {
+            using var scope = scopeFactory.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<IEventPublisher>().PublishAsync(
+                invocation.WorkspaceId, EventKind.FunctionFailed,
                 new Dictionary<string, string>
                 {
                     ["function"] = fn?.Name ?? "", ["app"] = app?.Name ?? "", ["error"] = invocation.Error ?? ""
                 }, ct);
+        }
     }
 
     private string? SafeUnprotect(string? ciphertext)

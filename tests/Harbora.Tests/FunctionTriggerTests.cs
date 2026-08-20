@@ -90,8 +90,23 @@ public class FunctionTriggerTests
 
     private static FunctionInvoker InvokerFor(
         HarboraDbContext db, RecordingJobQueue jobs, IEventPublisher? events = null) =>
-        new(db, new NoHttp(), new PlainProtector(), jobs, new FeatureGate(db), events ?? new RecordingEventPublisher(),
+        new(db, new NoHttp(), new PlainProtector(), jobs, new FeatureGate(db),
+            ScopeFactoryFor(events ?? new RecordingEventPublisher()),
             NullLogger<FunctionInvoker>.Instance);
+
+    /// <summary>
+    /// FunctionInvoker resolves its IEventPublisher from a fresh scope rather than taking it as a
+    /// constructor dependency (see that class's own doc for the DI cycle this avoids in the real app).
+    /// A bare ServiceCollection with the given publisher registered as a singleton reproduces that
+    /// shape here: whichever scope CompleteAsync opens resolves back to the same recording instance a
+    /// test still holds a reference to.
+    /// </summary>
+    private static IServiceScopeFactory ScopeFactoryFor(IEventPublisher events)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(events);
+        return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+    }
 
     // ------------------------------------------------------------ queueing
 
@@ -252,8 +267,8 @@ public class FunctionTriggerTests
         var jobs = new RecordingJobQueue();
         var events = new RecordingEventPublisher();
         var invoker = new FunctionInvoker(
-            world.Db, new OkHttp(), new PlainProtector(), jobs, new FeatureGate(world.Db), events,
-            NullLogger<FunctionInvoker>.Instance);
+            world.Db, new OkHttp(), new PlainProtector(), jobs, new FeatureGate(world.Db),
+            ScopeFactoryFor(events), NullLogger<FunctionInvoker>.Instance);
 
         var id = await invoker.QueueAsync(world.Fn.Id, FunctionTrigger.Cron, null, default);
         await invoker.ExecuteAsync(id!.Value, default);
@@ -454,9 +469,10 @@ public class FunctionTriggerTests
         services.AddSingleton<ISecretProtector>(new PlainProtector());
         services.AddSingleton<IHttpClientFactory>(new NoHttp());
         services.AddSingleton<IFeatureGate>(new FeatureGate(db));
+        services.AddSingleton<IEventPublisher>(new RecordingEventPublisher());
         services.AddSingleton<IFunctionInvoker>(sp => new FunctionInvoker(
-            db, new NoHttp(), new PlainProtector(), jobs, new FeatureGate(db), new RecordingEventPublisher(),
-            NullLogger<FunctionInvoker>.Instance));
+            db, new NoHttp(), new PlainProtector(), jobs, new FeatureGate(db),
+            sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<FunctionInvoker>.Instance));
 
         provider = services.BuildServiceProvider();
         return new FunctionCronScheduler(

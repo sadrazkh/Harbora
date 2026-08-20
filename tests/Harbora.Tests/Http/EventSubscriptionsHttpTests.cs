@@ -51,6 +51,39 @@ public class EventSubscriptionsHttpTests(HarboraHttpFixture fixture)
         stored.Events.Should().Be(EventKind.MaintenanceOn | EventKind.MaintenanceOff);
     }
 
+    /// <summary>
+    /// F4 (2026-08-21 functions-and-services plan, "Function failures become visible")'s own
+    /// acceptance criterion, checked the same way the maintenance-event gap above was: the WIP commit
+    /// this session inherited added <c>EventKind.FunctionFailed</c> to <c>Publishable</c> and to
+    /// <c>FunctionInvoker</c>'s own publish seam, but never to this page's own checkbox list — an event
+    /// that fires and cannot be subscribed to, the same half-connected gap this file already guards.
+    /// </summary>
+    [Fact]
+    public async Task The_add_subscription_form_offers_function_failed_as_a_checkbox()
+    {
+        Panel.GivenUser(fixture.WorkspaceId, "events-function-checkbox@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.251", "events-function-checkbox@example.com");
+
+        var html = await (await client.GetAsync("/notifications/webhooks")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-event-checkbox=\"FunctionFailed\"");
+    }
+
+    [Fact]
+    public async Task Creating_a_subscription_to_function_failed_persists_the_bit()
+    {
+        Panel.GivenUser(fixture.WorkspaceId, "events-function-create@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.252", "events-function-create@example.com");
+
+        var token = await client.AntiforgeryTokenFrom("/notifications/webhooks");
+        await client.PostFormAsync("/notifications/webhooks", token,
+            ("name", "function-watch"), ("channel", "Webhook"), ("webhookUrl", "https://hooks.example.com/f"),
+            ("onFunctionFailed", "true"));
+
+        var stored = Panel.Read(db => db.EventSubscriptions.Single(s => s.Name == "function-watch"));
+        stored.Events.Should().Be(EventKind.FunctionFailed);
+    }
+
     [Fact]
     public async Task The_page_lists_a_subscription_and_a_disabled_one_by_data_attribute()
     {

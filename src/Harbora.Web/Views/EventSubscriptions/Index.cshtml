@@ -23,6 +23,8 @@
         (EventKind.MaintenanceOn, false) => "Maintenance turned on",
         (EventKind.MaintenanceOff, true) => "پایان حالت تعمیر",
         (EventKind.MaintenanceOff, false) => "Maintenance turned off",
+        (EventKind.FunctionFailed, true) => "شکست اجرای فانکشن",
+        (EventKind.FunctionFailed, false) => "Function invocation failed",
         (_, true) => e.ToString(),
         (_, false) => e.ToString()
     };
@@ -36,7 +38,7 @@
     {
         EventKind.DeploymentSucceeded, EventKind.DeploymentFailed, EventKind.AppCrashed,
         EventKind.BackupSucceeded, EventKind.BackupFailed, EventKind.ServiceFailed,
-        EventKind.MaintenanceOn, EventKind.MaintenanceOff
+        EventKind.MaintenanceOn, EventKind.MaintenanceOff, EventKind.FunctionFailed
     };
 
     string StatusText(Harbora.Domain.Common.NotificationDeliveryStatus s) => (s, isFa) switch
@@ -181,7 +183,8 @@
                         EventKind.BackupFailed => "onBackupFailed",
                         EventKind.ServiceFailed => "onServiceFailed",
                         EventKind.MaintenanceOn => "onMaintenanceOn",
-                        _ => "onMaintenanceOff"
+                        EventKind.MaintenanceOff => "onMaintenanceOff",
+                        _ => "onFunctionFailed"
                     };
                     <label class="flex items-center gap-1">
                         <input type="checkbox" name="@field" value="true" data-event-checkbox="@e" /> @EventLabel(e)
