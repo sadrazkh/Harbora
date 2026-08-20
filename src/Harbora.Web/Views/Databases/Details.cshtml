@@ -1,6 +1,7 @@
 ﻿@model DatabaseOverviewViewModel
 @using Harbora.Domain.Common
 @using Harbora.Domain.Backups
+@using Harbora.Infrastructure.Backups
 @{
     // The header and breadcrumb now live in _Shell.cshtml, which is typed to DatabaseTabViewModel
     // rather than to the raw row — this local alias is what lets the rest of this file go on reading
@@ -21,6 +22,23 @@
         : bytes < 1024L * 1024 * 1024
             ? $"{bytes / 1024.0 / 1024:0.#} MB"
             : $"{bytes / 1024.0 / 1024 / 1024:0.##} GB";
+
+    // Sub-project 10: minted by ExportDownloadLink, shown once on the next render — the same
+    // int-unix-over-the-redirect idiom AppData/Index.cshtml uses for D4's volume download link, for
+    // the same reason: CookieTempDataProvider re-infers a date-shaped string as a boxed DateTime,
+    // which reads null through `as string` on this side of the redirect.
+    var exportLink = TempData["ExportDownloadLink"] as string;
+    var exportLinkExpiresAtUnix = TempData["ExportDownloadLinkExpiresAtUnix"] as int?;
+    var exportLinkExpiresAtInstant = exportLinkExpiresAtUnix is { } exportUnix
+        ? DateTimeOffset.FromUnixTimeSeconds(exportUnix)
+        : (DateTimeOffset?)null;
+    var exportLinkExpiresAtRaw = exportLinkExpiresAtInstant?.ToString("O") ?? string.Empty;
+    var exportLinkExpiresAtDisplay = exportLinkExpiresAtInstant?.LocalDateTime.ToString(Dates.Stamp) ?? string.Empty;
+
+    // A self-serve export is a Backup with ExpiresAt set (DatabaseExportPlan.ArtifactLifetime) —
+    // ordinary scheduled/manual backups never carry one, so this is what tells the two apart in a
+    // list that holds both.
+    var activeExports = Model.Backups.Where(b => b.ExpiresAt is not null && b.Status == BackupStatus.Completed).ToList();
 }
 
 @if (TempData["AdminToolUrl"] is string toolUrl)
@@ -142,6 +160,86 @@ else if (moving)
             </div>
         }
         <partial name="Design/_PanelEnd" />
+
+        @if (Model.CanExport || Model.CanImport)
+        {
+            @* Sub-project 10: self-serve database export & import. Export needs only BackupsRun —
+               the same capability "back up now" already asks for — so an Operator can export.
+               Import needs the heavier BackupsRestore, the same capability the existing admin
+               Restore button already requires, since it overwrites live data the same way. *@
+            var exportImportPanel = new PanelModel(isFa ? "خروجی و ورودی" : "Export & import");
+            <partial name="Design/_PanelStart" model="exportImportPanel" />
+
+            @if (exportLink is not null)
+            {
+                <div class="alert-success mb-4" data-download-link="@exportLink" data-download-link-expires="@exportLinkExpiresAtRaw">
+                    <p>@(isFa
+                        ? "پیوند دانلود یک‌بارمصرف ساخته شد؛ بدون ورود به پنل هم کار می‌کند:"
+                        : "A one-time download link was created; it works without signing in to the panel:")</p>
+                    <code dir="ltr" class="block break-all">@exportLink</code>
+                    <p class="mt-1 text-[11px] text-ink-faint">
+                        @(isFa
+                            ? $"تا {exportLinkExpiresAtDisplay} معتبر است و فقط یک‌بار قابل استفاده است — بار دوم دیگر کار نمی‌کند."
+                            : $"Valid until {exportLinkExpiresAtDisplay}, and works exactly once — a second attempt with it will not.")
+                    </p>
+                </div>
+            }
+
+            @if (Model.CanExport)
+            {
+                <form asp-action="Export" asp-route-id="@db.Id" method="post" data-export-form class="mb-3">
+                    @Html.AntiForgeryToken()
+                    <button class="btn-secondary w-full justify-center py-2 text-sm">
+                        <i data-lucide="download" class="h-4 w-4"></i>@(isFa ? "خروجی از دیتابیس" : "Export database")
+                    </button>
+                    <p class="mt-1 text-[11px] leading-4 text-ink-faint">
+                        @(isFa
+                            ? $"یک نسخهٔ قابل‌دانلود از داده‌های فعلی می‌سازد و تا {(int)DatabaseExportPlan.ArtifactLifetime.TotalHours} ساعت نگه داشته می‌شود."
+                            : $"Produces a downloadable copy of the current data, kept for {(int)DatabaseExportPlan.ArtifactLifetime.TotalHours} hours.")
+                    </p>
+                </form>
+
+                @if (activeExports.Count > 0)
+                {
+                    <ul class="mb-3 space-y-2" data-export-list>
+                        @foreach (var export in activeExports)
+                        {
+                            <li class="flex items-center justify-between gap-2 text-xs">
+                                <span dir="ltr" class="text-ink-faint">@export.At.LocalDateTime.ToString(Dates.Stamp)</span>
+                                <form asp-action="ExportDownloadLink" asp-route-id="@db.Id" asp-route-backupId="@export.Id" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <button class="btn-ghost px-2 py-1 text-xs" data-export-link-button="@export.Id">
+                                        @(isFa ? "ساخت پیوند دانلود" : "Get download link")
+                                    </button>
+                                </form>
+                            </li>
+                        }
+                    </ul>
+                }
+            }
+
+            @if (Model.CanImport)
+            {
+                <form asp-action="Import" asp-route-id="@db.Id" method="post" enctype="multipart/form-data"
+                      data-import-form class="space-y-2 border-t border-line pt-3">
+                    @Html.AntiForgeryToken()
+                    <p class="text-xs leading-5 text-warn">
+                        @(isFa
+                            ? $"وارد کردن، محتوای فعلی «{db.Name}» را رونویسی می‌کند. پیش از آن یک نسخهٔ ایمنی خودکار گرفته می‌شود."
+                            : $"Importing overwrites \"{db.Name}\"'s current contents. A safety snapshot is taken automatically first.")
+                    </p>
+                    <input type="file" name="file" class="form-control text-sm" required />
+                    <input type="text" name="confirmName" class="form-control text-sm" dir="ltr" autocomplete="off"
+                           placeholder="@db.Name" data-import-confirm-name
+                           aria-label="@(isFa ? "نام دیتابیس را برای تأیید بنویسید" : "Type the database name to confirm")" />
+                    <button class="btn-danger w-full justify-center py-2 text-sm" data-import-submit>
+                        <i data-lucide="upload-cloud" class="h-4 w-4"></i>@(isFa ? "وارد کردن (رونویسی)" : "Import (overwrite)")
+                    </button>
+                </form>
+            }
+
+            <partial name="Design/_PanelEnd" />
+        }
     </div>
 
     <aside class="space-y-6">
