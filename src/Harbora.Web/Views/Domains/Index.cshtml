@@ -193,6 +193,39 @@ else
     </p>
     <code dir="ltr" class="mt-2 block break-all rounded bg-code px-2 py-1.5 text-xs text-code-ink">A @@ → @serverIp</code>
     <partial name="Design/_PanelEnd" />
+
+    @{
+        var dns = ViewBag.DnsSummary as CustomerDnsSummaryViewModel;
+        var customDnsPanel = new PanelModel(
+            isFa ? "DNS سفارشی (Cloudflare)" : "Custom DNS (Cloudflare)",
+            isFa ? "مدیریت رکوردها" : "Manage records", "/domains/dns");
+    }
+    <partial name="Design/_PanelStart" model="customDnsPanel" />
+    @* Read from stored state only — this card never makes a live Cloudflare call, so opening the
+       Domains page never depends on a third party answering. *@
+    @if (dns is null || !dns.HasToken)
+    {
+        <p data-dns-summary-no-token class="text-sm text-ink-faint">
+            @(isFa
+                ? "برای این Workspace هنوز توکن Cloudflare ثبت نشده."
+                : "No Cloudflare token is set for this workspace yet.")
+        </p>
+    }
+    else if (dns.LastVerificationError is { } summaryError)
+    {
+        <p data-dns-summary-error class="text-xs text-danger">@summaryError</p>
+    }
+    else if (dns.LastVerifiedAt is { } verifiedAt)
+    {
+        <p data-dns-summary-verified class="text-xs text-ink-faint" dir="ltr">
+            @(isFa ? "آخرین تأیید موفق:" : "Last verified:") @verifiedAt.LocalDateTime.ToString(Dates.Stamp)
+        </p>
+    }
+    else
+    {
+        <p class="text-xs text-ink-faint">@(isFa ? "توکن ثبت شده، هنوز تأیید نشده." : "Token stored, not yet verified.")</p>
+    }
+    <partial name="Design/_PanelEnd" />
 }
 
 @section Scripts {

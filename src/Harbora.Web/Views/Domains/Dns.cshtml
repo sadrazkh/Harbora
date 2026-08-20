@@ -1,0 +1,231 @@
+@model CustomerDnsPageViewModel
+@using Harbora.Web.ViewModels
+@{
+    ViewData["Title"] = "DNS";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var message = TempData["Message"] as string;
+    var error = TempData["Error"] as string;
+
+    var header = new PageHeaderModel(
+        isFa ? "رکوردهای DNS (Cloudflare)" : "DNS records (Cloudflare)",
+        isFa
+            ? "با توکن Cloudflare خودتان رکوردهای A، AAAA، CNAME، TXT و MX را مدیریت کنید."
+            : "Manage A, AAAA, CNAME, TXT and MX records with your own Cloudflare API token.");
+}
+
+<div class="mb-6">
+    <partial name="Design/_PageHeader" model="header" />
+    <p class="mt-2 text-xs text-ink-faint">
+        <a href="/domains" class="text-accent-text">@(isFa ? "بازگشت به دامنه‌ها" : "Back to Domains")</a>
+    </p>
+</div>
+
+@if (message is not null) { <div class="alert-success mb-4">@message</div> }
+@if (error is not null) { <div class="alert-danger mb-4">@error</div> }
+
+@if (!Model.HasToken)
+{
+    @* No fabricated state: nothing here pretends a token exists, and no empty records table is
+       shown — an empty table reads as "you have no records", which is not this workspace's fact. *@
+    <section data-dns-no-token class="rounded-xl border border-line bg-surface p-5 shadow-panel">
+        <div class="alert-warning mb-4">
+            <i data-lucide="triangle-alert" class="h-4 w-4 shrink-0"></i>
+            <div>
+                <p>
+                    @(isFa
+                        ? "برای این Workspace هیچ توکن Cloudflare ثبت نشده. برای مدیریت رکوردهای DNS یک توکن با دسترسی Zone:Read و Zone:DNS:Edit وارد کنید."
+                        : "No Cloudflare token is set for this workspace. Add one with Zone:Read and Zone:DNS:Edit permissions to manage DNS records.")
+                </p>
+            </div>
+        </div>
+
+        <form data-dns-token-form asp-action="SaveDnsToken" method="post" class="grid gap-3 sm:grid-cols-[1fr_auto]">
+            @Html.AntiForgeryToken()
+            <div>
+                <label class="form-label" for="dns-token">@(isFa ? "توکن Cloudflare API" : "Cloudflare API token")</label>
+                <input id="dns-token" name="token" required class="form-control font-mono" dir="ltr"
+                       autocomplete="off" placeholder="********************" />
+            </div>
+            <div class="self-end">
+                <button class="btn-primary px-4 py-2">@(isFa ? "ذخیره و تأیید" : "Save and verify")</button>
+            </div>
+        </form>
+    </section>
+}
+else
+{
+    <section data-dns-token-summary class="mb-6 rounded-xl border border-line bg-surface p-5 shadow-panel">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <p class="text-sm text-ink">
+                    @(isFa ? "توکن Cloudflare ثبت شده است." : "A Cloudflare token is stored for this workspace.")
+                </p>
+                @if (Model.LastVerificationError is { } verificationError)
+                {
+                    <p data-dns-token-error class="mt-1 text-xs text-danger">@verificationError</p>
+                }
+                else if (Model.LastVerifiedAt is { } at)
+                {
+                    <p class="mt-1 text-xs text-ink-faint" dir="ltr">
+                        @(isFa ? "آخرین تأیید موفق:" : "Last verified:") @at.LocalDateTime.ToString(Dates.Stamp)
+                    </p>
+                }
+                else
+                {
+                    <p class="mt-1 text-xs text-ink-faint">@(isFa ? "هنوز تأیید نشده." : "Not verified yet.")</p>
+                }
+            </div>
+            <form asp-action="RemoveDnsToken" method="post"
+                  onsubmit="return confirm('@(isFa ? "توکن حذف شود؟ مدیریت رکوردهای DNS تا افزودن توکن جدید ممکن نخواهد بود." : "Remove this token? DNS record management stops until a new one is added.")');">
+                @Html.AntiForgeryToken()
+                <button class="btn-secondary px-3 py-1.5 text-xs">@(isFa ? "حذف توکن" : "Remove token")</button>
+            </form>
+        </div>
+    </section>
+
+    @if (Model.ZonesError is { } zonesError)
+    {
+        @* The honest failure this feature exists to prove: a token that cannot list zones says
+           exactly that, in its own words — never an empty zone list standing in for the reason. *@
+        <div data-dns-zones-error class="alert-danger">
+            <i data-lucide="circle-x" class="h-4 w-4 shrink-0"></i>
+            <div>
+                <p>@(isFa ? "دریافت فهرست Zone از Cloudflare ناموفق بود:" : "Could not list zones from Cloudflare:")</p>
+                <p class="mt-1 font-mono text-xs" dir="ltr">@zonesError</p>
+            </div>
+        </div>
+    }
+    else if (Model.Zones.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model='@(new EmptyStateModel("globe",
+            isFa
+                ? "این توکن معتبر است اما به هیچ Zone فعالی دسترسی ندارد."
+                : "This token is valid but cannot see any active zone."))' />
+    }
+    else
+    {
+        <section data-dns-zone-picker class="mb-6 rounded-xl border border-line bg-surface p-5 shadow-panel">
+            <h2 class="mb-3 text-[15px] font-semibold text-ink">@(isFa ? "Zoneها" : "Zones")</h2>
+            <div class="flex flex-wrap gap-2">
+                @foreach (var zone in Model.Zones)
+                {
+                    var active = zone.Id == Model.SelectedZoneId;
+                    <a data-dns-zone="@zone.Id" href="/domains/dns?zone=@zone.Id" dir="ltr"
+                       class="rounded-lg border px-3 py-1.5 text-xs font-mono @(active ? "border-accent bg-accent-soft text-accent-text" : "border-line text-ink-muted hover:bg-surface-2")">
+                        @zone.Name
+                    </a>
+                }
+            </div>
+        </section>
+
+        @if (Model.SelectedZoneId is { } selectedZoneId)
+        {
+            @if (Model.RecordsError is { } recordsError)
+            {
+                <div data-dns-records-error class="alert-danger">
+                    <i data-lucide="circle-x" class="h-4 w-4 shrink-0"></i>
+                    <div>
+                        <p>@(isFa ? $"دریافت رکوردهای {Model.SelectedZoneName} ناموفق بود:" : $"Could not list records for {Model.SelectedZoneName}:")</p>
+                        <p class="mt-1 font-mono text-xs" dir="ltr">@recordsError</p>
+                    </div>
+                </div>
+            }
+            else
+            {
+                var records = Model.Records ?? [];
+                var recordsPanel = new PanelModel(isFa ? $"رکوردهای {Model.SelectedZoneName}" : $"Records for {Model.SelectedZoneName}");
+                <partial name="Design/_PanelStart" model="recordsPanel" />
+                @if (records.Count == 0)
+                {
+                    <partial name="Design/_EmptyState" model='@(new EmptyStateModel("list",
+                        isFa ? "این Zone هنوز رکورد A/AAAA/CNAME/TXT/MX ندارد." : "This zone has no A/AAAA/CNAME/TXT/MX records yet."))' />
+                }
+                else
+                {
+                    <div data-dns-records-table class="-mx-5 -my-5 overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="border-b border-line text-xs text-ink-faint">
+                                    <th class="px-5 py-3 text-start font-medium">@(isFa ? "نوع" : "Type")</th>
+                                    <th class="px-5 py-3 text-start font-medium">@(isFa ? "نام" : "Name")</th>
+                                    <th class="px-5 py-3 text-start font-medium">@(isFa ? "مقدار" : "Content")</th>
+                                    <th class="px-5 py-3 text-start font-medium">TTL</th>
+                                    <th class="px-5 py-3 text-start font-medium">Proxied</th>
+                                    <th class="px-5 py-3 text-end font-medium"></th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-line">
+                                @foreach (var record in records)
+                                {
+                                    <tr data-dns-record="@record.Id">
+                                        <td class="px-5 py-3 font-mono text-xs">@record.Type</td>
+                                        <td class="px-5 py-3 font-mono text-xs" dir="ltr">@record.Name</td>
+                                        <td class="px-5 py-3 font-mono text-xs" dir="ltr">
+                                            @record.Content
+                                            @if (record.Type == "MX" && record.Priority is { } priority)
+                                            {
+                                                <span class="text-ink-faint"> (@(isFa ? "اولویت" : "priority") @priority)</span>
+                                            }
+                                        </td>
+                                        <td class="px-5 py-3 text-ink-muted">@(record.Ttl <= 1 ? (isFa ? "خودکار" : "auto") : record.Ttl.ToString())</td>
+                                        <td class="px-5 py-3 text-ink-muted">@(record.Proxied ? (isFa ? "بله" : "yes") : (isFa ? "خیر" : "no"))</td>
+                                        <td class="px-5 py-3 text-end">
+                                            <form asp-action="DeleteDnsRecord" method="post"
+                                                  onsubmit="return confirm('@(isFa ? "این رکورد حذف شود؟" : "Delete this record?")');">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="zone" value="@selectedZoneId" />
+                                                <input type="hidden" name="recordId" value="@record.Id" />
+                                                <button class="rounded-lg border border-line px-2.5 py-1 text-xs text-danger hover:bg-danger-soft">
+                                                    @(isFa ? "حذف" : "Delete")
+                                                </button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                <partial name="Design/_PanelEnd" />
+
+                <section data-dns-record-form class="mt-6 rounded-xl border border-line bg-surface p-5 shadow-panel">
+                    <h2 class="mb-3 text-[15px] font-semibold text-ink">@(isFa ? "رکورد جدید" : "New record")</h2>
+                    <form asp-action="CreateDnsRecord" method="post" class="grid gap-4 sm:grid-cols-6">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="zone" value="@selectedZoneId" />
+                        <div class="sm:col-span-1">
+                            <label class="form-label" for="rec-type">@(isFa ? "نوع" : "Type")</label>
+                            <select id="rec-type" name="type" class="form-control font-mono">
+                                <option value="A">A</option>
+                                <option value="AAAA">AAAA</option>
+                                <option value="CNAME">CNAME</option>
+                                <option value="TXT">TXT</option>
+                                <option value="MX">MX</option>
+                            </select>
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label class="form-label" for="rec-name">@(isFa ? "نام" : "Name")</label>
+                            <input id="rec-name" name="name" required class="form-control font-mono" dir="ltr"
+                                   placeholder="@Model.SelectedZoneName" />
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label class="form-label" for="rec-content">@(isFa ? "مقدار" : "Content")</label>
+                            <input id="rec-content" name="content" required class="form-control font-mono" dir="ltr" />
+                        </div>
+                        <div class="sm:col-span-1">
+                            <label class="form-label" for="rec-ttl">TTL</label>
+                            <input id="rec-ttl" name="ttl" type="number" value="1" min="1" class="form-control font-mono" dir="ltr" />
+                        </div>
+                        <div class="sm:col-span-1">
+                            <label class="form-label" for="rec-priority">@(isFa ? "اولویت (فقط MX)" : "Priority (MX only)")</label>
+                            <input id="rec-priority" name="priority" type="number" min="0" class="form-control font-mono" dir="ltr" />
+                        </div>
+                        <div class="sm:col-span-6">
+                            <button class="btn-primary px-4 py-2">@(isFa ? "افزودن رکورد" : "Add record")</button>
+                        </div>
+                    </form>
+                </section>
+            }
+        }
+    }
+}

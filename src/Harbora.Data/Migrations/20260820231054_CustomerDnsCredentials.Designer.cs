@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260820231054_CustomerDnsCredentials")]
+    partial class CustomerDnsCredentials
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -4392,39 +4395,6 @@ namespace Harbora.Data.Migrations
                     b.ToTable("StatusPageComponents");
                 });
 
-            modelBuilder.Entity("Harbora.Domain.Storage.AppStorageBucket", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AppId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("AttachOrder")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("HasUnpublishedChanges")
-                        .HasColumnType("boolean");
-
-                    b.Property<Guid>("StorageBucketId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("StorageBucketId");
-
-                    b.HasIndex("AppId", "StorageBucketId")
-                        .IsUnique();
-
-                    b.ToTable("AppStorageBuckets");
-                });
-
             modelBuilder.Entity("Harbora.Domain.Storage.StorageBucket", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5975,25 +5945,6 @@ namespace Harbora.Data.Migrations
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("Harbora.Domain.Storage.AppStorageBucket", b =>
-                {
-                    b.HasOne("Harbora.Domain.Apps.App", "App")
-                        .WithMany("StorageBuckets")
-                        .HasForeignKey("AppId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Harbora.Domain.Storage.StorageBucket", "StorageBucket")
-                        .WithMany("Apps")
-                        .HasForeignKey("StorageBucketId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("App");
-
-                    b.Navigation("StorageBucket");
-                });
-
             modelBuilder.Entity("Harbora.Domain.Storage.StorageBucket", b =>
                 {
                     b.HasOne("Harbora.Domain.Storage.StoragePlan", "StoragePlan")
@@ -6171,8 +6122,6 @@ namespace Harbora.Data.Migrations
 
                     b.Navigation("EnvironmentVariables");
 
-                    b.Navigation("StorageBuckets");
-
                     b.Navigation("Volumes");
                 });
 
@@ -6228,11 +6177,6 @@ namespace Harbora.Data.Migrations
                     b.Navigation("Domain");
 
                     b.Navigation("Incidents");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Storage.StorageBucket", b =>
-                {
-                    b.Navigation("Apps");
                 });
 
             modelBuilder.Entity("Harbora.Modules.Sync.Domain.SyncSpace", b =>

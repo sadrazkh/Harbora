@@ -3,6 +3,7 @@ using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Infrastructure.Networking;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,17 +14,22 @@ namespace Harbora.Web.Controllers;
 /// <summary>
 /// Central view of every domain across the workspace's apps, with the DNS record each needs and
 /// on-demand DNS + SSL health tests (so a customer can self-diagnose "why isn't my domain working").
+/// The customer's own BYO-Cloudflare DNS records (F9) are a second part of this controller —
+/// see <c>DomainsController.Dns.cs</c>.
 /// </summary>
 [Authorize]
 [Route("domains")]
-public sealed class DomainsController(
+public sealed partial class DomainsController(
     HarboraDbContext db,
     ICurrentUser currentUser,
     IHttpClientFactory httpFactory,
-    IDomainInspector domainInspector) : Controller
+    IDomainInspector domainInspector,
+    CustomerCloudflareService customerDns,
+    IAuditLogger audit) : Controller
 {
     private static string? _publicIp;
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
+    private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken ct)
@@ -39,6 +45,18 @@ public sealed class DomainsController(
                 d.Certificate != null ? d.Certificate.ExpiresAt : null))
             .ToListAsync(ct);
         ViewBag.ServerIp = await PublicIpAsync(ct);
+
+        // Stored state only — never a live Cloudflare call. Opening the Domains page must not
+        // depend on a third party answering; the live check happens on the DNS records page itself,
+        // on demand, the same way Storage's "Measure" button is a click rather than a page-load cost.
+        var dns = await customerDns.GetStateAsync(WorkspaceId, ct);
+        ViewBag.DnsSummary = new CustomerDnsSummaryViewModel
+        {
+            HasToken = dns.HasToken,
+            LastVerifiedAt = dns.LastVerifiedAt,
+            LastVerificationError = dns.LastVerificationError
+        };
+
         return View(rows);
     }
 
