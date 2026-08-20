@@ -127,6 +127,9 @@ public static class NavigationMap
             new("users", "Users", "Index", "users", Capabilities.TenantsManage),
             new("vouchers", "Vouchers", "Index", "coins", Capabilities.TenantsManage),
             new("billing-runs", "BillingRuns", "Index", "history", Capabilities.TenantsManage),
+            // What the platform earns, who burns most, whose wallet dies next — a cross-tenant read
+            // of the same ledger the billing runs above write, so it lives beside them.
+            new("revenue", "AdminRevenue", "Index", "trending-up", Capabilities.TenantsManage),
             new("cloudflare", "Cloudflare", "Index", "shield-check", Capabilities.PlatformManage),
             new("servers", "Servers", "Index", "server", Capabilities.ServersManage),
             new("nodes", "Nodes", "Index", "cpu", Capabilities.ServersManage),

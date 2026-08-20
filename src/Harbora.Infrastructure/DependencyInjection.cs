@@ -264,6 +264,10 @@ public static class DependencyInjection
         // switched billing off after a suspension must still be able to lift it.
         services.AddScoped<Billing.WalletService>();
         services.AddScoped<Billing.VoucherService>();
+        // The operator's cross-tenant "what is the platform earning" read. Depends on WalletService
+        // for every runway it shows — registered after it for that reason, though DI order does not
+        // itself matter here.
+        services.AddScoped<Billing.RevenueReport>();
         // The gate every start path asks before a container runs. Registered here rather than beside
         // the deployment engine because the rule it holds is a billing rule, and a second copy of it
         // living next to the thing it refuses is how a rule quietly stops being one. Like the tick

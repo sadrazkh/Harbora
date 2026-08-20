@@ -1,0 +1,182 @@
+@model Harbora.Infrastructure.Billing.RevenueReportResult
+@using Harbora.Infrastructure.Billing
+@{
+    ViewData["Title"] = "Revenue";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+
+<div class="mb-6 flex items-start justify-between gap-4">
+    <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+        isFa ? "درآمد پلتفرم" : "Revenue",
+        isFa
+            ? "آنچه پلتفرم درآمد داشته، چه کسی بیشترین مصرف را دارد، و کدام کیف‌پول زودتر خالی می‌شود."
+            : "What the platform is earning, who is burning the most of it, and whose wallet dies next."))" />
+    <div class="flex flex-wrap gap-2">
+        <a href="/tenants" class="btn-secondary">@(isFa ? "مستأجرها" : "Tenants")</a>
+        <a href="/billing-runs" class="btn-secondary">@(isFa ? "اجرای صورتحساب" : "Billing runs")</a>
+        <a href="/vouchers" class="btn-secondary">@(isFa ? "ووچرها" : "Vouchers")</a>
+    </div>
+</div>
+
+@* ---- monthly totals: charged and credited, the last six calendar months ----------------------
+   Every month renders, even one with nothing behind it — an empty month says so in words rather
+   than printing a bare 0.00, the same rule EnvironmentPlacementReport keeps for an empty section. *@
+<section class="rounded-xl border border-line bg-surface overflow-x-auto mb-6">
+    <div class="p-4 border-b border-line">
+        <h2 class="font-semibold text-ink">@(isFa ? "درآمد ماهانه" : "Monthly revenue")</h2>
+        <p class="text-xs text-ink-faint mt-0.5">
+            @(isFa
+                ? "شش ماه گذشته، در سراسر همهٔ ورک‌اسپیس‌ها."
+                : "The last six months, across every workspace.")
+        </p>
+    </div>
+    <table class="w-full text-sm">
+        <thead class="text-ink-muted border-b border-line">
+            <tr>
+                <th class="p-3 text-start">@(isFa ? "ماه" : "Month")</th>
+                <th class="p-3 text-end">@(isFa ? "کل دریافتی" : "Charged total")</th>
+                <th class="p-3 text-end">@(isFa ? "اعتبار توسط مدیر" : "Admin credits")</th>
+                <th class="p-3 text-end">@(isFa ? "اعتبار ووچر" : "Voucher credits")</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-line">
+            @foreach (var row in Model.MonthlyRevenue)
+            {
+                <tr data-revenue-month="@row.Month"
+                    data-revenue-has-charges="@row.HasChargeRows.ToString().ToLowerInvariant()"
+                    data-revenue-charged-minor="@row.ChargedTotalMinor"
+                    data-revenue-admin-credits-minor="@row.AdminCreditsMinor"
+                    data-revenue-voucher-credits-minor="@row.VoucherCreditsMinor">
+                    <td class="p-3 font-mono text-xs text-ink" dir="ltr">@row.Month</td>
+                    <td class="p-3 text-end">
+                        @if (row.HasChargeRows)
+                        {
+                            <span class="font-semibold text-ink" dir="ltr">@MinorUnits.Format(row.ChargedTotalMinor)</span>
+                        }
+                        else
+                        {
+                            <span class="text-ink-faint text-xs">@(isFa ? "هیچ ردیفی ثبت نشده" : "no charges recorded")</span>
+                        }
+                    </td>
+                    <td class="p-3 text-end">
+                        @if (row.AdminCreditCount > 0)
+                        {
+                            <span class="text-ink-muted" dir="ltr">@MinorUnits.Format(row.AdminCreditsMinor)</span>
+                        }
+                        else
+                        {
+                            <span class="text-ink-faint text-xs">@(isFa ? "هیچ" : "none")</span>
+                        }
+                    </td>
+                    <td class="p-3 text-end">
+                        @if (row.VoucherCreditCount > 0)
+                        {
+                            <span class="text-ink-muted" dir="ltr">@MinorUnits.Format(row.VoucherCreditsMinor)</span>
+                        }
+                        else
+                        {
+                            <span class="text-ink-faint text-xs">@(isFa ? "هیچ" : "none")</span>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</section>
+
+@* ---- top workspaces by 30-day burn --------------------------------------------------------
+   Never padded to ten: a workspace with nothing to show here is not a top burner, and the empty
+   state says plainly that nobody has burned anything in the window rather than rendering ten rows
+   of invented zeros. *@
+<section class="rounded-xl border border-line bg-surface overflow-x-auto">
+    <div class="p-4 border-b border-line">
+        <h2 class="font-semibold text-ink">@(isFa ? "بیشترین مصرف در ۳۰ روز اخیر" : "Highest burn, last 30 days")</h2>
+        <p class="text-xs text-ink-faint mt-0.5">
+            @(isFa
+                ? $"حداکثر {RevenueReport.TopWorkspaceCount} ورک‌اسپیس با بیشترین مصرف."
+                : $"Up to {RevenueReport.TopWorkspaceCount} workspaces, ranked by what they have actually burned.")
+        </p>
+        <p class="text-xs text-ink-faint mt-0.5">
+            @* Same voice the customer's own bill uses for this exact figure — see Billing/Index.cshtml's
+               forecast section — because it is the same figure, read from the same WalletService call. *@
+            @(isFa
+                ? "«پایان اعتبار» یک تخمین است، با این فرض که بار کاری فعلی همان‌طور که اکنون در حال اجراست ادامه یابد."
+                : "\"Runs out\" is an estimate, assuming the workload running right now keeps running as it is.")
+        </p>
+    </div>
+    @if (Model.TopWorkspacesByBurn.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel("trending-up",
+            isFa ? "در ۳۰ روز اخیر هیچ ورک‌اسپیسی چیزی مصرف نکرده است." : "No workspace has burned anything in the last 30 days."))" />
+    }
+    else
+    {
+        <table class="w-full min-w-[900px] text-sm">
+            <thead class="text-ink-muted border-b border-line">
+                <tr>
+                    <th class="p-3 text-start">@(isFa ? "ورک‌اسپیس" : "Workspace")</th>
+                    <th class="p-3 text-end">@(isFa ? "مصرف ۳۰ روزه" : "30-day burn")</th>
+                    <th class="p-3 text-end">@(isFa ? "موجودی" : "Balance")</th>
+                    <th class="p-3 text-start">
+                        @(isFa ? "پایان اعتبار (تخمینی)" : "Runs out (estimate)")
+                    </th>
+                    <th class="p-3 text-end">@(isFa ? "وضعیت" : "Status")</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-line">
+                @foreach (var row in Model.TopWorkspacesByBurn)
+                {
+                    <tr data-burn-workspace-id="@row.WorkspaceId"
+                        data-burn-minor="@row.Burn30DayMinor"
+                        data-burn-balance-minor="@row.BalanceMinor"
+                        data-burn-suspended="@row.Suspended.ToString().ToLowerInvariant()"
+                        data-forecast-state="@(row.Forecast.HasEnoughHistory ? "projected" : "insufficient-history")"
+                        data-forecast-history-hours="@row.Forecast.HistoryHours"
+                        data-forecast-minimum-history-hours="@row.Forecast.MinimumHistoryHours"
+                        data-forecast-runway-hours="@(row.Forecast.RunwayHours?.ToString() ?? "")"
+                        data-forecast-runway-date-unix="@(row.Forecast.RunwayDate?.ToUnixTimeSeconds().ToString() ?? "")"
+                        class="@(row.Suspended ? "opacity-60" : "")">
+                        <td class="p-3">
+                            <a href="/tenants/@row.WorkspaceId" class="font-medium hover:text-accent-text">@row.WorkspaceName</a>
+                            <div class="text-xs text-ink-faint font-mono" dir="ltr">@row.WorkspaceSlug</div>
+                        </td>
+                        <td class="p-3 text-end font-semibold text-ink" dir="ltr">@MinorUnits.Format(row.Burn30DayMinor, row.Currency)</td>
+                        <td class="p-3 text-end text-ink-muted" dir="ltr">@MinorUnits.Format(row.BalanceMinor, row.Currency)</td>
+                        <td class="p-3 text-xs">
+                            @if (!row.Forecast.HasEnoughHistory)
+                            {
+                                <span class="text-ink-faint">
+                                    @(isFa
+                                        ? $"سابقهٔ کافی نیست ({row.Forecast.HistoryHours} از {row.Forecast.MinimumHistoryHours} ساعت)"
+                                        : $"not enough history yet ({row.Forecast.HistoryHours} of {row.Forecast.MinimumHistoryHours} hours)")
+                                </span>
+                            }
+                            else if (row.Forecast.RunwayDate is { } runwayDate)
+                            {
+                                <span class="text-ink" dir="ltr">@runwayDate.LocalDateTime.ToString(Dates.Day)</span>
+                            }
+                            else
+                            {
+                                <span class="text-ink-faint">@(isFa ? "چیزی هزینه ندارد" : "nothing currently costing money")</span>
+                            }
+                        </td>
+                        <td class="p-3 text-end">
+                            @if (row.Suspended)
+                            {
+                                <span class="text-xs rounded bg-danger/15 text-danger px-2 py-0.5">
+                                    @(row.SuspendedReason == Harbora.Domain.Identity.SuspensionReason.NoBalance
+                                        ? (isFa ? "معلق — بی‌اعتبار" : "suspended — no balance")
+                                        : (isFa ? "معلق" : "suspended"))
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="text-xs text-ink-faint">@(isFa ? "فعال" : "active")</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
