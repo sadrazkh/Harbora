@@ -1,6 +1,7 @@
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Identity;
+using Harbora.Infrastructure.DisasterRecovery;
 using Harbora.Infrastructure.Nodes;
 using Harbora.Infrastructure.Projects;
 using Harbora.Infrastructure.Security;
@@ -40,6 +41,7 @@ public static class AdminCommands
                 "node-ca" => await NodeCaAsync(config),
                 "environment-report" => await EnvironmentReportAsync(config),
                 "volume-orphan-report" => await VolumeOrphanReportAsync(config),
+                "record-drill-result" => await RecordDrillResultAsync(args, config),
                 "help" or "--help" or "-h" => Help(),
                 _ => Unknown(command)
             };
@@ -240,6 +242,26 @@ public static class AdminCommands
         return 0;
     }
 
+    /// <summary>
+    /// Sub-project 12 — called by <c>deploy/restore-drill.sh</c> as the last thing it does, whether
+    /// the drill passed or failed, so the admin settings page can show a real "last drill" date and
+    /// verdict instead of silently repeating whatever the previous run said. See
+    /// <see cref="RestoreDrillRecord"/> for what counts as a valid verdict and why.
+    /// </summary>
+    private static async Task<int> RecordDrillResultAsync(string[] args, IConfiguration config)
+    {
+        var verdict = Arg(args, "--verdict");
+        var detail = Arg(args, "--detail");
+
+        await using var db = Open(config);
+        var result = await RestoreDrillRecord.WriteAsync(db, verdict, detail, DateTimeOffset.UtcNow);
+        if (!result.Success)
+            return Fail(result.Error!);
+
+        Console.WriteLine($"✓ Drill result recorded: {result.Verdict} at {result.At:O}");
+        return 0;
+    }
+
     private static int Help()
     {
         Console.WriteLine("""
@@ -258,6 +280,10 @@ public static class AdminCommands
               harbora volume-orphan-report            Read-only: volumes whose owning App or
                                                       Environment row is gone. Writes nothing; safe to
                                                       run any time.
+              harbora record-drill-result             Records a disaster-recovery restore drill's
+                    --verdict pass|fail                outcome (deploy/restore-drill.sh calls this
+                    [--detail TEXT]                     itself; type it by hand only to test the
+                                                        admin settings page's "last drill" surface).
 
             These work even when the panel refuses to start.
             """);

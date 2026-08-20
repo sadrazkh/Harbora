@@ -337,6 +337,13 @@ harbora — Harbora server administration
     harbora environment-report          Workloads with no environment, empty environments,
                                         dual-network workloads, workspaces with no project.
                                         Run this before any migration that touches EnvironmentId.
+    harbora volume-orphan-report        Volumes whose owning App or Environment row is gone.
+
+  Disaster recovery — see docs/disaster-recovery.md ("Rehearse it")
+    harbora record-drill-result         Records a restore drill's outcome so the admin settings
+          --verdict pass|fail            page can show a real "last drill" date and verdict.
+          [--detail TEXT]                deploy/restore-drill.sh calls this itself; type it by
+                                         hand only to test the admin surface.
 
   Lifecycle
     harbora restart | stop
@@ -357,7 +364,7 @@ case "${1:-help}" in
   backups)        shift; cmd_backups "$@" ;;
   backup-db)      shift; cmd_backup_db "$@" ;;
   restore-db)     shift; cmd_restore_db "$@" ;;
-  info|users|reset-password|make-owner|unlock|node-ca|environment-report)
+  info|users|reset-password|make-owner|unlock|node-ca|environment-report|volume-orphan-report|record-drill-result)
                   panel_admin "$@" ;;
   help|--help|-h) cmd_help ;;
   *)              err "Unknown command '$1'."; echo; cmd_help; exit 1 ;;

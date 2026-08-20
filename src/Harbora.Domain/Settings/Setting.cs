@@ -91,4 +91,12 @@ public static class SettingKeys
     /// </summary>
     public static string ServiceVersions(ManagedServiceType type) =>
         $"services.versions.{type.ToString().ToLowerInvariant()}";
+
+    // Sub-project 12 (2026-08-20) — DR restore drill. Written by `harbora record-drill-result`,
+    // which deploy/restore-drill.sh calls unconditionally at the end of every run, pass or fail —
+    // a drill that crashes before recording anything must not leave the admin page silently
+    // repeating the last good verdict. See Harbora.Infrastructure.DisasterRecovery.RestoreDrillRecord.
+    public const string DrLastDrillAt = "dr.last_drill_at";
+    public const string DrLastDrillVerdict = "dr.last_drill_verdict";
+    public const string DrLastDrillDetail = "dr.last_drill_detail";
 }
