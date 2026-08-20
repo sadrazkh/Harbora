@@ -438,5 +438,49 @@
             }
         </div>
         <partial name="Design/_PanelEnd" />
+
+        @* Sub-project 12 — written only by `harbora record-drill-result`, which
+           deploy/restore-drill.sh calls. "Never run" is its own honest state, not a fabricated
+           pass and not folded into the failure pill — do-not-change item 18. *@
+        @{ var drill = Model.DrillStatus; var drillPanel = new PanelModel(isFa ? "تمرین بازیابی از فاجعه" : "Disaster recovery drill"); }
+        <partial name="Design/_PanelStart" model="drillPanel" />
+
+        <div class="space-y-3 text-sm" data-dr-drill-status="@(!drill.HasRun ? "never" : drill.Verdict)" data-dr-drill-stale="@(drill.IsStale ? "true" : "false")">
+            @if (!drill.HasRun)
+            {
+                <partial name="Design/_StatusPill" model="@(new StatusPillModel(isFa ? "هرگز اجرا نشده" : "Never run", "warn"))" />
+                <p class="text-xs leading-5 text-ink-faint">
+                    @(isFa
+                        ? "هنوز تمرینی ثبت نشده. deploy/restore-drill.sh را روی سرور اجرا کنید."
+                        : "No drill has ever recorded a result. Run deploy/restore-drill.sh on the server.")
+                </p>
+            }
+            else
+            {
+                <partial name="Design/_StatusPill" model="@(new StatusPillModel(
+                    drill.Verdict == "pass" ? (isFa ? "موفق" : "pass") : (isFa ? "ناموفق" : "fail"),
+                    drill.Verdict == "pass" ? "ok" : "error"))" />
+                <div class="flex justify-between gap-3">
+                    <dt class="text-ink-faint">@(isFa ? "آخرین تمرین" : "Last drill")</dt>
+                    <dd dir="ltr" class="text-ink">@drill.At?.LocalDateTime.ToString(Harbora.Web.Infrastructure.Dates.Stamp)</dd>
+                </div>
+                @if (drill.IsStale)
+                {
+                    <p class="text-xs leading-5 text-warn">
+                        @(isFa
+                            ? "بیش از ۳۰ روز از آخرین تمرین گذشته."
+                            : "More than 30 days since the last drill.")
+                    </p>
+                }
+                @if (!string.IsNullOrWhiteSpace(drill.Detail))
+                {
+                    <pre dir="ltr" class="whitespace-pre-wrap break-words rounded-lg border border-line bg-surface-2 p-2 text-[11px] text-ink-muted">@drill.Detail</pre>
+                }
+            }
+            <p class="text-[11px] leading-5 text-ink-faint">
+                @(isFa ? "راهنما: " : "Guide: ")<code dir="ltr">docs/disaster-recovery.md</code>
+            </p>
+        </div>
+        <partial name="Design/_PanelEnd" />
     </aside>
 </div>

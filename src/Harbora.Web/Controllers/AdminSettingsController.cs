@@ -311,7 +311,10 @@ public sealed class AdminSettingsController(
                 await ReadAsync(SettingKeys.UpdateCheckEnabled, ct), "true", StringComparison.OrdinalIgnoreCase),
             LatestReleaseTag = await ReadAsync(SettingKeys.UpdateLatestTag, ct),
             RunningVersion = System.Reflection.Assembly.GetEntryAssembly()?
-                .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+
+            DrillStatus = await Harbora.Infrastructure.DisasterRecovery.RestoreDrillRecord
+                .ReadAsync(db, DateTimeOffset.UtcNow, ct)
         };
     }
 }

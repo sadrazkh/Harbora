@@ -89,4 +89,10 @@ public sealed class AdminSettingsViewModel
     /// <summary>What the last check saw, whatever it was. Null until one has run.</summary>
     public string? LatestReleaseTag { get; init; }
     public string? RunningVersion { get; init; }
+
+    /// <summary>
+    /// Sub-project 12's "last drill" surface — read-only here; written only by
+    /// <c>harbora record-drill-result</c>, which <c>deploy/restore-drill.sh</c> calls.
+    /// </summary>
+    public required Harbora.Infrastructure.DisasterRecovery.RestoreDrillStatus DrillStatus { get; init; }
 }
