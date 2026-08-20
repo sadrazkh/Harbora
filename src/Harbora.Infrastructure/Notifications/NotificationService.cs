@@ -540,7 +540,16 @@ public sealed class NotificationService(
     private async Task FanOutToMembersAsync(
         Guid workspaceId, NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
     {
-        var members = await db.WorkspaceMembers
+        // IgnoreQueryFilters(), with workspaceId spelled out explicitly right here as the only tenant
+        // boundary — the trap this codebase's own do-not-change list warns about. Every raise site
+        // before NotifyInAppOnlyAsync (Sub-project 4, 2026-08-20 platform-options plan) ran from a
+        // background job's unscoped context, where WorkspaceMember's global filter is already inert
+        // and this line would have been a no-op. NotifyInAppOnlyAsync's first caller
+        // (AnnouncementNotifier) runs inside an HTTP request instead, fanning out to workspaces other
+        // than the signed-in platform admin's own — without this, the filter silently narrowed every
+        // one of those reads to "member of the admin's own workspace", which is either wrong or, for
+        // every other workspace, empty. AnnouncementHttpTests is what caught it.
+        var members = await db.WorkspaceMembers.IgnoreQueryFilters()
             .Where(m => m.WorkspaceId == workspaceId && m.User!.IsActive)
             .Select(m => new
             {
