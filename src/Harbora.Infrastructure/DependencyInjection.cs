@@ -215,6 +215,10 @@ public static class DependencyInjection
         // for why a restart rollup's Average alone is not the number to show.
         services.AddScoped<Monitoring.LifecycleHistory>();
 
+        // P7 (2026-08-20 platform-options plan): assembles the public status page from App.Status and
+        // LifecycleHistory — the one place both are asked on that page's behalf.
+        services.AddScoped<Status.StatusPageReport>();
+
         // The AI gateway. The adapter is registered against the interface so a second provider
         // shape can be added without touching the routing or metering above it.
         services.AddScoped<Ai.AiGatewayService>();
