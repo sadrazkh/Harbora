@@ -21,6 +21,36 @@ Everything here is a command that exists. Nothing in this document is a plan.
 `harbora env` prints the whole `.env` with secrets masked, which is safe to paste into an issue.
 It is *not* a backup — you need the real values.
 
+### An untracked compose override is a fourth thing to keep off this server
+
+`docker compose` merges `deploy/docker-compose.override.yml` automatically if the file exists, and
+`git pull` never touches it — that is exactly why the "put it back to one build at a time" advice
+in `deploy/RUNBOOK.md`'s *Updating* section tells you to write one. Nothing stops the same file
+from carrying other decisions, and the `Retention__*Days` settings are a real example: `0` means
+*keep for ever* instead of the shipped 90/365/90/30/90/7-day defaults (`RetentionOptions.cs`), and
+the only way to set it is an override, because the tracked `docker-compose.yml` never mentions
+those variables at all.
+
+**The file exists only on this host's disk.** A fresh install from Scenario A below reads only the
+tracked `docker-compose.yml`, so it silently reverts to the shipped defaults — not a data-loss risk
+the way losing the master key is, but a real behaviour change nobody asked for, on a server that
+otherwise looks fully recovered. If you run one, keep a copy of it alongside your master key and
+your database dump, and put it back — deliberately, not by assuming a rebuilt stack remembers a
+choice that was never in git.
+
+### Reaching the server, if a warning greets you
+
+If your own access tooling pins a host key rather than trusting-on-first-use — `plink -hostkey`,
+`ssh -o StrictHostKeyChecking`, or the equivalent for what you use — a local cache from an *older*
+or *unrelated* host can still hold a different key for the same address you are reconnecting to.
+That produces a "the host key does not match" / "POTENTIAL SECURITY BREACH"-style warning that
+looks exactly like an interception in progress. It is frequently just stale local state: your own
+client remembering a key from before, not the server presenting a new one. Verify the fingerprint
+your tool reports against a value you recorded when the server was known-good — never against
+nothing — before deciding either way. Panicking is not the answer, and neither is clearing the
+cache to make the warning go away; both skip the one step that actually tells you which case you
+are in.
+
 ### What the panel's own backups do and do not cover
 
 | Backup type in the UI | What the artifact is | Restores |
@@ -77,6 +107,24 @@ A restore you have never performed is a plan, not a recovery. Once per quarter, 
 4. Throw the scratch host away.
 
 Step 3 is the whole point. Everything else usually works.
+
+**`deploy/restore-drill.sh` automates the part of this that a script can prove, and only that
+part.** Run it on the panel host — it needs Docker, so it runs where the stack itself runs — and it
+restores the newest database backup into a scratch Postgres container of its own, never the real
+one, then checks that the result looks like a real Harbora database (a migrations history, a
+workspace count, the age of the newest billing-ledger row) before printing a dated PASS or FAIL. A
+missing backup, a truncated dump, a restore that errors, or a sanity check that could not be
+answered at all are every one a loud, specific FAIL — never a silent pass on nothing, which is
+worth saying plainly because that exact failure is the reason this script exists. It does **not**
+replace step 3 above: it never touches `HARBORA_MASTER_KEY` or decrypts a single secret, so a drill
+that passes proves the data came back, not that you kept the key that makes it readable. Run it
+often — weekly or nightly, since it costs one scratch container and a few seconds — and still do
+the full quarterly rehearsal, which is the only check that covers the key.
+
+Each run's date and verdict is recorded (`harbora record-drill-result`, called by the script itself)
+and shown on the platform admin settings page, which also warns once a drill is more than 30 days
+old. A drill that has never run says so plainly there too, rather than showing a blank that could
+be mistaken for "nothing to report".
 
 ---
 
@@ -269,6 +317,7 @@ which when one of them misbehaves:
 | `harbora users` · `harbora reset-password` · `harbora make-owner` · `harbora unlock` | Get back in |
 | `harbora fix-key` | Generate a master key when none exists. Read the warning above first |
 | `harbora node-ca` | Print the node CA, for the Traefik mTLS router |
+| `harbora record-drill-result --verdict pass\|fail` | Records a restore drill's outcome — called by `deploy/restore-drill.sh` itself, not normally typed by hand |
 | `harbora restart` · `harbora stop` | Lifecycle |
 
 Installed somewhere other than `/opt/harbora`? `HARBORA_DIR=/your/path harbora doctor`.
