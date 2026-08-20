@@ -151,6 +151,45 @@ public class AttentionRulesTests
         items.Single().DetailKey.Should().Be(AttentionRules.ServiceFailedDetail);
     }
 
+    /// <summary>
+    /// F4 (2026-08-21 functions-and-services plan, "Function failures become visible"). The fact
+    /// itself already carries "repeated" — see AttentionFacts.RepeatedFunctionFailures' own doc for
+    /// why that means two in a row, not one — so the rule's own job is just: Critical, both names in
+    /// the title, and a deep link straight to the function's own page (where the run list already
+    /// shows the failure loudly).
+    /// </summary>
+    [Fact]
+    public void A_repeated_function_failure_links_straight_to_the_function()
+    {
+        var appId = Guid.CreateVersion7();
+        var functionId = Guid.CreateVersion7();
+        var items = AttentionRules.Build(new AttentionFacts
+        {
+            HasAnyApp = true, HasAnyBackupSchedule = true,
+            RepeatedFunctionFailures = [("nightly-report", "reports", appId, functionId, "Could not reach the function app.")]
+        });
+
+        var item = items.Should().ContainSingle().Subject;
+        item.Level.Should().Be(AttentionLevel.Critical);
+        item.TitleKey.Should().Be(AttentionRules.FunctionFailedTitle);
+        item.TitleArgs.Should().Equal("nightly-report", "reports");
+        item.DetailText.Should().Contain("reach the function app", "the error itself is data and travels verbatim");
+        item.DetailKey.Should().BeNull("a real error message beats the generic fallback");
+        item.ActionUrl.Should().Be($"/functions/{appId}/{functionId}");
+    }
+
+    [Fact]
+    public void A_repeated_function_failure_with_no_error_still_says_something()
+    {
+        var items = AttentionRules.Build(new AttentionFacts
+        {
+            HasAnyApp = true, HasAnyBackupSchedule = true,
+            RepeatedFunctionFailures = [("nightly-report", "reports", Guid.CreateVersion7(), Guid.CreateVersion7(), null)]
+        });
+
+        items.Single().DetailKey.Should().Be(AttentionRules.FunctionFailedDetail);
+    }
+
     [Fact]
     public void A_channel_that_stopped_delivering_is_surfaced()
     {
@@ -274,6 +313,11 @@ public class AttentionRulesTests
             CrashedApps = [("c", AppId)],
             FailedBackups = [("d", null), ("e", "x. y")],
             FailedServices = [("svc1", AppId, null), ("svc2", AppId, "x. y")],
+            RepeatedFunctionFailures =
+            [
+                ("fn1", "app1", AppId, Guid.CreateVersion7(), null),
+                ("fn2", "app2", AppId, Guid.CreateVersion7(), "x. y")
+            ],
             BrokenChannels = [("f", ChannelKind.Alert, "x"), ("g", ChannelKind.BackupDelivery, "x")],
             CertificateProblems =
             [

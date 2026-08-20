@@ -87,6 +87,21 @@ public sealed record AttentionFacts
     public IReadOnlyList<(string Name, ChannelKind Kind, string Error)> BrokenChannels { get; init; } = [];
 
     /// <summary>
+    /// A function whose two most recently completed invocations both failed — F4 (2026-08-21
+    /// functions-and-services plan, "Function failures become visible"). "Repeated" is deliberately
+    /// two in a row, not merely one: <see cref="Harbora.Domain.Notifications.EventKind.FunctionFailed"/>
+    /// already tells anyone
+    /// subscribed about a single failed run, and a lone failure is often a transient blip (the app was
+    /// mid-deploy, a dependency hiccuped) that the next scheduled run quietly clears on its own —
+    /// exactly the kind of one-off this dashboard's own rule says is decoration, not attention. Two
+    /// failures with nothing successful between them is no longer a blip; it is a scheduled function
+    /// that has stopped doing its job and, absent this arm, would keep failing silently — the "check
+    /// that reports success for work it never did" defect class this plan exists to close.
+    /// </summary>
+    public IReadOnlyList<(string Function, string App, Guid AppId, Guid FunctionId, string? Error)>
+        RepeatedFunctionFailures { get; init; } = [];
+
+    /// <summary>
     /// Domains whose certificate is missing, expired, or close to it. The argument depends on the
     /// issue — see <see cref="CertificateIssue"/>. Structured on purpose: the first version carried
     /// prose here and the rule sniffed it for the word "expired" to pick a severity, which is a
@@ -164,6 +179,9 @@ public static class AttentionRules
     public const string ChannelEventDetail = "Event subscription: {0}";
     public const string AlertsAction = "Open alerts";
     public const string EventSubscriptionsAction = "Open event subscriptions";
+    public const string FunctionFailedTitle = "{0} ({1}) keeps failing";
+    public const string FunctionFailedDetail = "Its last two runs both failed.";
+    public const string FunctionFailedAction = "Open the function";
     public const string DiskTitle = "Disk is filling up";
     public const string DiskDetail = "{0}% used. Builds and backups fail once it is full.";
     public const string MonitoringAction = "Open monitoring";
@@ -187,6 +205,7 @@ public static class AttentionRules
         BackupFailedTitle, BackupFailedDetail, BackupsAction,
         ServiceFailedTitle, ServiceFailedDetail, ServiceFailedAction,
         ChannelTitle, ChannelAlertDetail, ChannelBackupDetail, ChannelEventDetail, AlertsAction, EventSubscriptionsAction,
+        FunctionFailedTitle, FunctionFailedDetail, FunctionFailedAction,
         DiskTitle, DiskDetail, MonitoringAction,
         NeverDeployedTitle, NeverDeployedDetail, NeverDeployedAction,
         NoBackupsTitle, NoBackupsDetail, NoBackupsAction,
@@ -267,6 +286,16 @@ public static class AttentionRules
                 DetailText = Summarise(error),
                 DetailKey = Summarise(error) is null ? ServiceFailedDetail : null,
                 ActionKey = ServiceFailedAction, ActionUrl = $"/databases/{serviceId}"
+            });
+
+        foreach (var (function, app, appId, functionId, error) in facts.RepeatedFunctionFailures)
+            items.Add(new()
+            {
+                Level = AttentionLevel.Critical,
+                TitleKey = FunctionFailedTitle, TitleArgs = [function, app],
+                DetailText = Summarise(error),
+                DetailKey = Summarise(error) is null ? FunctionFailedDetail : null,
+                ActionKey = FunctionFailedAction, ActionUrl = $"/functions/{appId}/{functionId}"
             });
 
         foreach (var (name, kind, error) in facts.BrokenChannels)

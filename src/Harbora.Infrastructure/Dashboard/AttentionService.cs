@@ -2,6 +2,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using System.Reflection;
 using Harbora.Domain.Common;
+using Harbora.Domain.Functions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -64,6 +65,55 @@ public sealed class AttentionService(
             .Take(3)
             .ToListAsync(ct);
 
+        // F4 (2026-08-21 functions-and-services plan, "Function failures become visible"): the
+        // function whose most recently completed run failed — same "still true right now" shape
+        // failedDeployments above already uses for an app's own most recent deployment. Narrowed to
+        // "repeated" (the run before that also failed, see AttentionFacts.RepeatedFunctionFailures'
+        // own doc for why two rather than one) with one small, bounded follow-up query per candidate —
+        // the same "several independent bounded reads" shape this whole method already uses rather
+        // than one query trying to express a per-function streak, which the in-memory test provider
+        // cannot reliably translate.
+        var currentlyFailingFunctions = await db.FunctionInvocations
+            .Where(i => i.WorkspaceId == workspaceId && i.CompletedAt != null && !i.Succeeded
+                        && !db.FunctionInvocations.Any(later => later.WorkspaceId == workspaceId
+                            && later.FunctionId == i.FunctionId && later.CompletedAt != null
+                            && later.StartedAt > i.StartedAt))
+            .OrderByDescending(i => i.StartedAt)
+            .Select(i => new { i.FunctionId, i.AppId, i.StartedAt, i.Error })
+            .Take(10)
+            .ToListAsync(ct);
+
+        var repeatedFunctionFailures = new List<(Guid FunctionId, Guid AppId, string? Error)>();
+        foreach (var candidate in currentlyFailingFunctions)
+        {
+            var previousRunSucceeded = await db.FunctionInvocations
+                .Where(i => i.WorkspaceId == workspaceId && i.FunctionId == candidate.FunctionId
+                            && i.CompletedAt != null && i.StartedAt < candidate.StartedAt)
+                .OrderByDescending(i => i.StartedAt)
+                .Select(i => (bool?)i.Succeeded)
+                .FirstOrDefaultAsync(ct);
+
+            if (previousRunSucceeded == false)
+                repeatedFunctionFailures.Add((candidate.FunctionId, candidate.AppId, candidate.Error));
+
+            if (repeatedFunctionFailures.Count >= 3) break;
+        }
+
+        var repeatedFunctionIds = repeatedFunctionFailures.Select(r => r.FunctionId).ToList();
+        var repeatedAppIds = repeatedFunctionFailures.Select(r => r.AppId).Distinct().ToList();
+        var repeatedFunctionNames = repeatedFunctionIds.Count == 0
+            ? []
+            : await db.FunctionDefinitions
+                .Where(f => repeatedFunctionIds.Contains(f.Id))
+                .Select(f => new { f.Id, f.Name })
+                .ToListAsync(ct);
+        var repeatedFunctionAppNames = repeatedAppIds.Count == 0
+            ? []
+            : await db.Apps
+                .Where(a => repeatedAppIds.Contains(a.Id))
+                .Select(a => new { a.Id, a.Name })
+                .ToListAsync(ct);
+
         var brokenAlerts = await db.Alerts
             .Where(a => a.WorkspaceId == workspaceId && a.IsEnabled && a.LastError != null)
             .Select(a => new { a.Name, a.LastError })
@@ -118,6 +168,10 @@ public sealed class AttentionService(
                 FailedBackups = failedBackups.Select(b =>
                     (string.IsNullOrWhiteSpace(b.TargetRef) ? b.Type.ToString() : b.TargetRef, b.ErrorMessage)).ToList(),
                 FailedServices = failedServices.Select(s => (s.Name, s.Id, s.ErrorMessage)).ToList(),
+                RepeatedFunctionFailures = repeatedFunctionFailures.Select(r => (
+                    Function: repeatedFunctionNames.FirstOrDefault(f => f.Id == r.FunctionId)?.Name ?? "?",
+                    App: repeatedFunctionAppNames.FirstOrDefault(a => a.Id == r.AppId)?.Name ?? "?",
+                    r.AppId, FunctionId: r.FunctionId, r.Error)).ToList(),
                 BrokenChannels =
                     brokenAlerts.Select(a => (a.Name, ChannelKind.Alert, a.LastError!))
                         .Concat(brokenDeliveries.Select(d => (d.Name, ChannelKind.BackupDelivery, d.LastError!)))

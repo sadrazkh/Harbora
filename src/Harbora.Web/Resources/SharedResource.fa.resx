@@ -233,6 +233,9 @@
   <data name="Event subscription: {0}"><value>اشتراک رویداد: {0}</value></data>
   <data name="Open alerts"><value>باز کردن هشدارها</value></data>
   <data name="Open event subscriptions"><value>باز کردن اشتراک‌های رویداد</value></data>
+  <data name="{0} ({1}) keeps failing"><value>{0} ({1}) مدام شکست می‌خورد</value></data>
+  <data name="Its last two runs both failed."><value>دو اجرای آخرش هر دو ناموفق بودند.</value></data>
+  <data name="Open the function"><value>باز کردن فانکشن</value></data>
   <data name="Disk is filling up"><value>دیسک رو به پر شدن است</value></data>
   <data name="{0}% used. Builds and backups fail once it is full."><value>{0}٪ پر شده. با پر شدن دیسک، build و پشتیبان‌گیری از کار می‌افتند.</value></data>
   <data name="Open monitoring"><value>باز کردن پایش</value></data>
