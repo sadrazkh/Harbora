@@ -108,6 +108,31 @@ public sealed class ExternalLoginHttpTests(HarboraHttpFixture fixture)
             "an unconfigured provider refuses rather than redirecting somebody to a broken consent screen");
     }
 
+    /// <summary>
+    /// The failure mode the placeholder credentials in <c>ExternalAuthenticationRegistration</c>
+    /// exist to prevent, named so it cannot come back quietly.
+    ///
+    /// <para>
+    /// <c>UseAuthentication</c> initialises every remote handler on every request, and initialising
+    /// one validates its options — so three providers registered with empty client ids would throw
+    /// on the way to <i>every</i> page, not just the sign-in one. This panel has all three registered
+    /// and none of them configured, which is the shipped state of every install.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Three_unconfigured_providers_do_not_stop_the_panel_serving_ordinary_pages()
+    {
+        var client = Panel.ClientFrom("203.0.113.85");
+
+        (await client.GetAsync("/account/login")).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.GetAsync("/healthz")).StatusCode.Should().Be(HttpStatusCode.OK);
+        // Their callback paths answer too, rather than throwing: nothing correlates, so the remote
+        // failure handler sends the person back to the sign-in page saying so.
+        var callback = await client.GetAsync("/signin-google");
+        callback.StatusCode.Should().Be(HttpStatusCode.Found);
+        callback.RedirectPath().Should().Be("/account/login");
+    }
+
     [Fact]
     public async Task A_provider_that_is_not_one_of_ours_is_not_a_route()
     {

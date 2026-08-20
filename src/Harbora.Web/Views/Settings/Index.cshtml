@@ -257,7 +257,7 @@
                         {
                             <form method="post" action="/account/external/@link.Provider/unlink" class="shrink-0">
                                 @Html.AntiForgeryToken()
-                                <button class="rounded-lg bg-surface-2 hover:bg-surface-3 px-3 py-1.5 text-xs text-danger">
+                                <button class="rounded-lg bg-surface-2 hover:bg-surface px-3 py-1.5 text-xs text-danger">
                                     @(isFa ? "جدا کردن" : "Disconnect")
                                 </button>
                             </form>
@@ -284,7 +284,7 @@
                           data-external-connect="@provider.Provider">
                         @Html.AntiForgeryToken()
                         <input type="hidden" name="link" value="true" />
-                        <button class="w-full rounded-lg bg-surface-2 hover:bg-surface-3 px-4 py-2 text-sm text-ink">
+                        <button class="w-full rounded-lg bg-surface-2 hover:bg-surface px-4 py-2 text-sm text-ink">
                             @(isFa ? $"وصل‌کردن {provider.Name}" : $"Connect {provider.Name}")
                         </button>
                     </form>

@@ -4,6 +4,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Domain.Identity;
 using Harbora.Infrastructure.Security;
 using Harbora.Web.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -56,6 +57,54 @@ public class ExternalLoginPolicyTests
     {
         ExternalLoginPolicy.WouldLeaveNoWayIn(hasUsablePassword: false, otherLinksRemaining: -1)
             .Should().BeTrue();
+    }
+}
+
+/// <summary>
+/// The uniqueness the whole feature rests on, asserted against the model rather than against a
+/// database.
+///
+/// <para>
+/// It has to be asserted here because the HTTP harness runs on EF InMemory, which does not enforce a
+/// unique index at all — so a controller guard that happened to be removed would leave every
+/// behavioural test green and only fail in production. The index itself is exercised for real in the
+/// Postgres lane and by the migration.
+/// </para>
+/// </summary>
+public class ExternalLoginUniquenessTests
+{
+    private static Microsoft.EntityFrameworkCore.Metadata.IEntityType Entity()
+    {
+        var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<Harbora.Data.HarboraDbContext>()
+            .UseInMemoryDatabase("external-login-model").Options;
+        using var db = new Harbora.Data.HarboraDbContext(options);
+        return db.Model.FindEntityType(typeof(ExternalLogin))!;
+    }
+
+    [Fact]
+    public void One_identity_at_one_provider_is_one_row()
+    {
+        Entity().GetIndexes()
+            .Where(i => i.IsUnique)
+            .Should().Contain(i => i.Properties.Select(p => p.Name).SequenceEqual(
+                new[] { nameof(ExternalLogin.Provider), nameof(ExternalLogin.Subject) }));
+    }
+
+    [Fact]
+    public void And_one_account_holds_at_most_one_of_each_provider()
+    {
+        Entity().GetIndexes()
+            .Where(i => i.IsUnique)
+            .Should().Contain(i => i.Properties.Select(p => p.Name).SequenceEqual(
+                new[] { nameof(ExternalLogin.UserId), nameof(ExternalLogin.Provider) }),
+                "otherwise the settings page could not say which row a Disconnect button means");
+    }
+
+    [Fact]
+    public void Removing_an_account_takes_its_external_logins_with_it()
+    {
+        Entity().GetForeignKeys().Should().ContainSingle()
+            .Which.DeleteBehavior.Should().Be(Microsoft.EntityFrameworkCore.DeleteBehavior.Cascade);
     }
 }
 
