@@ -80,7 +80,7 @@ public sealed class StatusPageReport(HarboraDbContext db, LifecycleHistory lifec
             if (!apps.TryGetValue(component.AppId, out var app)) continue;
 
             var hasEverServed = app.ActiveDeploymentId.HasValue;
-            var state = StatusPageHealth.Resolve(app.Status, hasEverServed);
+            var state = StatusPageHealth.Resolve(app.Status, hasEverServed, app.MaintenanceMode);
 
             var containerName = await ResolveContainerNameAsync(app, ct);
             var uptime = MetricDisplay.For(

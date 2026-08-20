@@ -240,6 +240,39 @@ public class StatusPageHttpTests(HarboraHttpFixture fixture)
         html.Should().Contain("data-status-component-state=\"degraded\"");
     }
 
+    [Fact]
+    public async Task A_maintaining_app_reads_as_maintenance_even_while_still_reported_running()
+    {
+        // App.MaintenanceMode redirects the app's own routes to a themed 503 (sub-project 5) but
+        // leaves the container — and therefore AppStatus — running underneath. The public page must
+        // follow the flag, not the status column, or a visitor sees "operational" for an app the
+        // owner has deliberately taken out of service.
+        var (workspaceId, environmentId, host) = GivenWorkspace("maintenance-page");
+        var appId = Guid.CreateVersion7();
+        var pageId = Guid.CreateVersion7();
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(new App
+            {
+                Id = appId, WorkspaceId = workspaceId, EnvironmentId = environmentId,
+                Name = "under-maintenance", Slug = "under-maintenance", Kind = ServiceKind.Web,
+                SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/maint:1.0",
+                Status = AppStatus.Running, MaintenanceMode = true, MaintenanceSince = DateTimeOffset.UtcNow
+            });
+            db.StatusPages.Add(new StatusPage { Id = pageId, WorkspaceId = workspaceId, IsEnabled = true });
+            db.StatusPageComponents.Add(new StatusPageComponent
+            {
+                WorkspaceId = workspaceId, StatusPageId = pageId, AppId = appId,
+                DisplayName = "Under maintenance", SortOrder = 0
+            });
+        });
+        var client = Panel.ClientFrom("203.0.113.13");
+
+        var html = await (await client.GetWithHostAsync("/", host)).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-status-component-state=\"maintenance\"");
+    }
+
     // ---- manual incident notes ----------------------------------------------------------------
 
     [Fact]

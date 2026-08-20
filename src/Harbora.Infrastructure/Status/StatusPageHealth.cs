@@ -16,10 +16,9 @@ public enum PublicAppState
     Degraded,
 
     /// <summary>
-    /// The owner has deliberately put this app in maintenance. Not produced by
-    /// <see cref="Resolve"/> today — sub-project 5 ("Maintenance mode per app") has not landed in this
-    /// tree yet, so there is no flag to read. <c>StatusPageReport</c> is written so wiring it in later
-    /// is a one-line check ahead of this method, not a rewrite of it.
+    /// The owner has deliberately put this app in maintenance (<c>App.MaintenanceMode</c>, P5) —
+    /// outranks every other signal, since it says more about what a visitor sees right now than any
+    /// combination of <see cref="AppStatus"/> and deployment history could.
     /// </summary>
     Maintenance,
 
@@ -52,14 +51,26 @@ public static class StatusPageHealth
     /// An app on its very first, still-running deploy has never served anything: the honest answer is
     /// Unknown, not a green dot for a deploy that has not finished.
     /// </param>
-    public static PublicAppState Resolve(AppStatus status, bool hasEverServed) => status switch
+    /// <param name="maintenanceMode">
+    /// <c>App.MaintenanceMode</c> — written only after the proxy apply that turns it on has actually
+    /// succeeded (that entity's own doc), so trusting it here carries the same guarantee the panel's
+    /// own Apps/Details page trusts it with. Checked first: a deliberately maintaining app is not
+    /// "degraded" because its containers are momentarily unobserved, and is not "operational" because
+    /// AppStatus still says Running underneath the redirect.
+    /// </param>
+    public static PublicAppState Resolve(AppStatus status, bool hasEverServed, bool maintenanceMode)
     {
-        AppStatus.Created => PublicAppState.Unknown,
-        AppStatus.Deploying => hasEverServed ? PublicAppState.Operational : PublicAppState.Unknown,
-        AppStatus.Running => PublicAppState.Operational,
-        AppStatus.Stopped => PublicAppState.Degraded,
-        AppStatus.Failed => PublicAppState.Degraded,
-        AppStatus.Crashed => PublicAppState.Degraded,
-        _ => PublicAppState.Unknown
-    };
+        if (maintenanceMode) return PublicAppState.Maintenance;
+
+        return status switch
+        {
+            AppStatus.Created => PublicAppState.Unknown,
+            AppStatus.Deploying => hasEverServed ? PublicAppState.Operational : PublicAppState.Unknown,
+            AppStatus.Running => PublicAppState.Operational,
+            AppStatus.Stopped => PublicAppState.Degraded,
+            AppStatus.Failed => PublicAppState.Degraded,
+            AppStatus.Crashed => PublicAppState.Degraded,
+            _ => PublicAppState.Unknown
+        };
+    }
 }
