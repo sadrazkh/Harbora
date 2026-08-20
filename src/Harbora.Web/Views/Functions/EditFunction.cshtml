@@ -104,6 +104,65 @@
                        placeholder="@(isFa ? "خالی = نام فانکشن" : "blank = the function name")" />
             </label>
 
+            @* Only an HTTP trigger ever sits behind the visitor route this flag gates — the controller
+               forces it off for Cron/Event regardless of what is posted here, so hiding it for those
+               triggers matches what the server actually does with it. The warning text sits beside the
+               checkbox itself, unconditionally, so it is read before the box is ever checked — not
+               revealed afterward as a surprise. *@
+            <div class="space-y-2 rounded-xl border border-line bg-surface-2 p-3" data-when="@((int)FunctionTrigger.Http)">
+                <label class="flex items-center gap-2.5 text-sm text-ink">
+                    <input type="checkbox" name="IsPublic" value="true" checked="@Model.Form.IsPublic" data-public-toggle />
+                    <span>@(isFa ? "عمومی" : "Public")</span>
+                </label>
+                <input type="hidden" name="IsPublic" value="false" />
+                <p class="text-xs text-ink-muted" data-public-warning>
+                    @(isFa
+                        ? "هرکسی در اینترنت می‌تواند این آدرس را بدون کلید یا امضا صدا بزند. خاموش (پیش‌فرض) یعنی فقط پنل — زمان‌بندی، رویدادها و «اجرا کن» — می‌تواند این فانکشن را صدا بزند."
+                        : "Anyone on the internet can call this URL — no key, no signature required. Off (the default) means only the panel — schedules, events, and Run now — can reach this function.")
+                </p>
+
+                @if (Model.Form.IsPublic)
+                {
+                    if (Model.FunctionUrl is { } functionUrl)
+                    {
+                        <div class="connection-string" data-function-url>
+                            <code id="functionUrl" dir="ltr">@functionUrl</code>
+                            <button type="button" data-copy-function-url title="@(isFa ? "کپی" : "Copy")">
+                                <i data-lucide="copy" class="h-4 w-4"></i>
+                            </button>
+                        </div>
+                        @* The address is real the moment it is copied, but it only answers once the image
+                           behind it is the one on screen — exposure ships on publish like every other
+                           function change. Saying so here is the same honesty the "Run now" panel already
+                           gives the published-code question. *@
+                        @if (!Model.IsPublished || Model.HasUnpublishedChanges)
+                        {
+                            <p class="text-xs text-warn" data-function-url-not-live>
+                                @(isFa
+                                    ? "تا وقتی «انتشار» را نزنید، این آدرس پاسخی نمی‌دهد."
+                                    : "This address answers nothing until you press Publish.")
+                            </p>
+                        }
+                    }
+                    else
+                    {
+                        <p class="text-xs text-ink-faint" data-function-url-pending>
+                            @(isFa
+                                ? "این اپ هنوز آدرسی ندارد یا منتشر نشده — بعد از انتشار، لینک دقیق اینجا نشان داده می‌شود."
+                                : "This app has no address yet, or has never been published — the exact link appears here once it does.")
+                        </p>
+                    }
+
+                    <p class="text-xs text-ink-faint" data-public-history-note>
+                        @(isFa
+                            ? "پنل تماس‌های عمومی را نمی‌بیند، پس در تاریخچه‌ی این صفحه ثبت نمی‌شوند. آن‌ها را در "
+                            : "The panel never sees a public call, so it is not recorded in the history on this page. Find it in the app's ")
+                        <a href="/apps/@Model.AppId/logs" class="text-accent-text hover:underline">@(isFa ? "لاگ‌های اپ" : "Logs")</a>
+                        @(isFa ? " ببینید که همین حالا هم قابل جست‌وجوست." : ", which already searches them.")
+                    </p>
+                }
+            </div>
+
             <label class="form-field" data-when="@((int)FunctionTrigger.Cron)">
                 <span>@(isFa ? "زمان‌بندی (cron پنج‌بخشی)" : "Schedule (five-field cron)")</span>
                 <input name="CronExpression" value="@Model.Form.CronExpression" class="form-control font-mono" dir="ltr"
@@ -236,6 +295,18 @@
         }
         select.addEventListener('change', paint);
         paint();
+    })();
+
+    // The function's own URL, shown copy-ready once Public — same idiom as the database connection
+    // string box (Views/Databases/Details.cshtml): a <code> the eye can read and a button that copies
+    // the exact text, nothing typed by hand that could drift from what the container actually answers.
+    (function () {
+        var button = document.querySelector('[data-copy-function-url]');
+        var code = document.getElementById('functionUrl');
+        if (!button || !code) return;
+        button.addEventListener('click', function () {
+            navigator.clipboard?.writeText(code.textContent.trim());
+        });
     })();
 
     // Draft protection. Today's only total failure: no dirty tracking, no beforeunload guard, a
