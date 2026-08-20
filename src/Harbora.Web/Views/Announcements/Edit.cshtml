@@ -8,9 +8,6 @@
         isFa ? "ویرایش اعلامیه" : "Edit announcement",
         isFa ? "هر دو زبان همچنان لازم است." : "Both languages are still required.");
     var panel = new PanelModel(Model.Title);
-
-    string Local(DateTimeOffset? value) =>
-        value is { } v ? v.LocalDateTime.ToString("yyyy-MM-ddTHH:mm") : "";
 }
 
 <div class="mb-6">
@@ -60,12 +57,12 @@
         <div class="grid grid-cols-2 gap-2">
             <div>
                 <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "شروع (اختیاری)" : "Starts (optional)")</label>
-                <input name="startsAt" type="datetime-local" dir="ltr" value="@Local(Model.StartsAt)"
+                <input name="startsAt" type="datetime-local" dir="ltr" value="@Dates.LocalInputValue(Model.StartsAt)"
                        class="w-full rounded-lg border border-line bg-surface-2 px-2 py-2 text-xs text-ink" />
             </div>
             <div>
                 <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "پایان (اختیاری)" : "Ends (optional)")</label>
-                <input name="endsAt" type="datetime-local" dir="ltr" value="@Local(Model.EndsAt)"
+                <input name="endsAt" type="datetime-local" dir="ltr" value="@Dates.LocalInputValue(Model.EndsAt)"
                        class="w-full rounded-lg border border-line bg-surface-2 px-2 py-2 text-xs text-ink" />
             </div>
         </div>

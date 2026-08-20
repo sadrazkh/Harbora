@@ -25,6 +25,19 @@ public static class Dates
     public const string Precise = "yyyy-MM-dd HH:mm:ss";
 
     /// <summary>
+    /// The <c>value</c> attribute an <c>&lt;input type="datetime-local"&gt;</c> needs to pre-fill
+    /// itself — not a moment written for a reader, so it does not belong beside <see cref="Stamp"/>:
+    /// the HTML spec fixes this exact shape (<c>yyyy-MM-ddTHH:mm</c>, no seconds, no offset,
+    /// unlocalised) regardless of culture, the same way a machine format like a filename timestamp
+    /// pins <c>InvariantCulture</c> for its own reasons rather than following the ambient one. Kept
+    /// here rather than inline in a view specifically so <c>DateFormattingTests</c>' scan of
+    /// <c>.cshtml</c> files — which this method, living in a <c>.cs</c> file, does not appear in —
+    /// still has exactly one place a date format is spelled out.
+    /// </summary>
+    public static string LocalInputValue(DateTimeOffset? value) =>
+        value is { } v ? v.ToLocalTime().ToString("yyyy-MM-ddTHH:mm") : "";
+
+    /// <summary>
     /// A moment as its distance from now — "۱۹ ساعت پیش" instead of "ساعت 19.2", which is what the
     /// backups card used to print by formatting raw TotalHours.
     ///
