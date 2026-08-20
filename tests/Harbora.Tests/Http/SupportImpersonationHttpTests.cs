@@ -28,6 +28,10 @@ namespace Harbora.Tests;
 [Collection(HarboraHttpCollection.Name)]
 public class SupportImpersonationHttpTests(HarboraHttpFixture fixture)
 {
+    // 203.0.113.108–.137 belongs to the three support-session test classes. Addresses matter here:
+    // the auth rate limiter is per-IP and its window outlives a test, and RateLimitHttpTests
+    // deliberately exhausts .60–.66 — which is where these tests first sat, so they passed alone and
+    // failed in the suite.
     private HarboraWebFactory Panel => fixture.Panel;
 
     /// <summary>A customer workspace with one member in it — what support gets called about.</summary>
@@ -70,7 +74,7 @@ public class SupportImpersonationHttpTests(HarboraHttpFixture fixture)
         Panel.GivenUser(fixture.WorkspaceId, "sup-admin1@example.com", SystemRole.Owner);
         var (workspaceId, customer) = GivenCustomer("sup-tenant-1", "sup-customer1@example.com");
 
-        var client = await GivenSupportSession("203.0.113.60", "sup-admin1@example.com", workspaceId, customer.Id);
+        var client = await GivenSupportSession("203.0.113.108", "sup-admin1@example.com", workspaceId, customer.Id);
 
         var session = LatestSessionFor(workspaceId);
         session.Should().NotBeNull();
@@ -97,7 +101,7 @@ public class SupportImpersonationHttpTests(HarboraHttpFixture fixture)
         // the rest of the time.
         var (workspaceId, _) = GivenCustomer("sup-tenant-2", "sup-customer2@example.com");
         _ = workspaceId;
-        var client = await Panel.SignedInAs("203.0.113.61", "sup-customer2@example.com");
+        var client = await Panel.SignedInAs("203.0.113.109", "sup-customer2@example.com");
 
         var page = await client.GetAsync("/");
 
@@ -111,7 +115,7 @@ public class SupportImpersonationHttpTests(HarboraHttpFixture fixture)
         Panel.GivenUser(fixture.WorkspaceId, "sup-admin3@example.com", SystemRole.Owner);
         var (workspaceId, customer) = GivenCustomer("sup-tenant-3", "sup-customer3@example.com");
 
-        var client = await Panel.SignedInAs("203.0.113.62", "sup-admin3@example.com");
+        var client = await Panel.SignedInAs("203.0.113.110", "sup-admin3@example.com");
         var path = $"/tenants/{workspaceId}/support/{customer.Id}";
         var token = await client.AntiforgeryTokenFrom(path);
 
@@ -128,7 +132,7 @@ public class SupportImpersonationHttpTests(HarboraHttpFixture fixture)
         // A workspace Admin is the most powerful thing a customer can be, and impersonation is not
         // among tenants.manage's grants at any workspace role.
         var (workspaceId, customer) = GivenCustomer("sup-tenant-4", "sup-customer4@example.com");
-        var client = await Panel.SignedInAs("203.0.113.63", "sup-customer4@example.com");
+        var client = await Panel.SignedInAs("203.0.113.111", "sup-customer4@example.com");
 
         var page = await client.GetAsync($"/tenants/{workspaceId}/support/{customer.Id}");
         var post = await client.PostFormWithoutTokenAsync(
@@ -147,7 +151,7 @@ public class SupportImpersonationHttpTests(HarboraHttpFixture fixture)
         var admin = Panel.GivenUser(fixture.WorkspaceId, "sup-admin5@example.com", SystemRole.Owner);
         var (workspaceId, customer) = GivenCustomer("sup-tenant-5", "sup-customer5@example.com");
 
-        await GivenSupportSession("203.0.113.64", "sup-admin5@example.com", workspaceId, customer.Id);
+        await GivenSupportSession("203.0.113.112", "sup-admin5@example.com", workspaceId, customer.Id);
         var session = LatestSessionFor(workspaceId)!;
 
         var row = Panel.Read(db => db.AuditLogs.AsNoTracking()
@@ -164,7 +168,7 @@ public class SupportImpersonationHttpTests(HarboraHttpFixture fixture)
         Panel.GivenUser(fixture.WorkspaceId, "sup-admin6@example.com", SystemRole.Owner);
         var (workspaceId, customer) = GivenCustomer("sup-tenant-6", "sup-customer6@example.com");
 
-        var client = await GivenSupportSession("203.0.113.65", "sup-admin6@example.com", workspaceId, customer.Id);
+        var client = await GivenSupportSession("203.0.113.113", "sup-admin6@example.com", workspaceId, customer.Id);
         var session = LatestSessionFor(workspaceId)!;
 
         // Nothing is done to the cookie: it is untouched, unexpired and perfectly valid. Only the row
@@ -193,7 +197,7 @@ public class SupportImpersonationHttpTests(HarboraHttpFixture fixture)
         var admin = Panel.GivenUser(fixture.WorkspaceId, "sup-admin7@example.com", SystemRole.Owner);
         var (workspaceId, customer) = GivenCustomer("sup-tenant-7", "sup-customer7@example.com");
 
-        var client = await GivenSupportSession("203.0.113.66", "sup-admin7@example.com", workspaceId, customer.Id);
+        var client = await GivenSupportSession("203.0.113.114", "sup-admin7@example.com", workspaceId, customer.Id);
         var session = LatestSessionFor(workspaceId)!;
 
         // The token comes off the customer's own dashboard, which is where the banner's form is
@@ -232,11 +236,11 @@ public class SupportImpersonationHttpTests(HarboraHttpFixture fixture)
         var (workspaceId, first) = GivenCustomer("sup-tenant-8", "sup-customer8a@example.com");
         var second = Panel.GivenUser(workspaceId, "sup-customer8b@example.com", SystemRole.Member);
 
-        await GivenSupportSession("203.0.113.67", "sup-admin8@example.com", workspaceId, first.Id);
+        await GivenSupportSession("203.0.113.115", "sup-admin8@example.com", workspaceId, first.Id);
 
         // Signing in as the administrator again: the support cookie is the customer's, so the second
         // start is made the way the first was, from the console.
-        await GivenSupportSession("203.0.113.68", "sup-admin8@example.com", workspaceId, second.Id);
+        await GivenSupportSession("203.0.113.116", "sup-admin8@example.com", workspaceId, second.Id);
 
         var sessions = Panel.Read(db => db.SupportSessions.IgnoreQueryFilters().AsNoTracking()
             .Where(s => s.TargetWorkspaceId == workspaceId)

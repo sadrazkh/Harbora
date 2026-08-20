@@ -17,7 +17,7 @@ namespace Harbora.Web.Controllers;
 
 [Authorize]
 [Route("workspaces")]
-public sealed class WorkspacesController(
+public sealed partial class WorkspacesController(
     HarboraDbContext db,
     ICurrentUser currentUser,
     WorkspaceAccountService accounts,
@@ -26,6 +26,7 @@ public sealed class WorkspacesController(
     Harbora.Application.Abstractions.ISystemClock clock,
     Harbora.Infrastructure.Billing.BillingSuspension suspension,
     ISecretProtector protector,
+    Harbora.Infrastructure.Identity.SupportSessionService supportSessions,
     IJobQueue jobs) : Controller
 {
     private Guid UserId => currentUser.UserId ?? Guid.Empty;

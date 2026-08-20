@@ -74,7 +74,7 @@ public class SupportRestrictionHttpTests(HarboraHttpFixture fixture)
         var (workspaceId, customer) = GivenCustomer("res-tenant-1", "res-customer1@example.com");
 
         var (support, sessionId) = await Impersonating(
-            "203.0.113.80", "res-admin1@example.com", workspaceId, customer.Id);
+            "203.0.113.118", "res-admin1@example.com", workspaceId, customer.Id);
         var supportToken = await support.AntiforgeryTokenFrom("/settings");
         var refused = await support.PostFormAsync("/settings/tokens", supportToken, ("name", "support-token"));
 
@@ -91,7 +91,7 @@ public class SupportRestrictionHttpTests(HarboraHttpFixture fixture)
         (await denied.Content.ReadAsStringAsync()).Should().Contain("data-support-denied");
 
         // The control: the same route, the same customer, no support session.
-        var theirs = await Panel.SignedInAs("203.0.113.81", "res-customer1@example.com");
+        var theirs = await Panel.SignedInAs("203.0.113.119", "res-customer1@example.com");
         var theirToken = await theirs.AntiforgeryTokenFrom("/settings");
         var allowed = await theirs.PostFormAsync("/settings/tokens", theirToken, ("name", "my-token"));
 
@@ -107,12 +107,12 @@ public class SupportRestrictionHttpTests(HarboraHttpFixture fixture)
         var (workspaceId, customer) = GivenCustomer("res-tenant-2", "res-customer2@example.com");
 
         // The customer's own browser, somewhere else, signed in and staying signed in.
-        await Panel.SignedInAs("203.0.113.82", "res-customer2@example.com");
+        await Panel.SignedInAs("203.0.113.120", "res-customer2@example.com");
         var live = Panel.Read(db => db.UserSessions.Count(s => s.UserId == customer.Id && s.RevokedAt == null));
         live.Should().BeGreaterThan(0);
 
         var (support, sessionId) = await Impersonating(
-            "203.0.113.83", "res-admin2@example.com", workspaceId, customer.Id);
+            "203.0.113.121", "res-admin2@example.com", workspaceId, customer.Id);
         var token = await support.AntiforgeryTokenFrom("/settings");
         var refused = await support.PostFormAsync("/settings/sessions/revoke-others", token);
 
@@ -130,7 +130,7 @@ public class SupportRestrictionHttpTests(HarboraHttpFixture fixture)
         var (workspaceId, customer) = GivenCustomer("res-tenant-3", "res-customer3@example.com");
 
         var (support, sessionId) = await Impersonating(
-            "203.0.113.84", "res-admin3@example.com", workspaceId, customer.Id);
+            "203.0.113.122", "res-admin3@example.com", workspaceId, customer.Id);
         var token = await support.AntiforgeryTokenFrom("/settings");
         var refused = await support.PostFormAsync("/settings/totp/begin", token);
 
@@ -156,7 +156,7 @@ public class SupportRestrictionHttpTests(HarboraHttpFixture fixture)
         var hashBefore = Panel.Read(db => db.Users.IgnoreQueryFilters().Single(u => u.Id == victim.Id).PasswordHash);
 
         var (support, sessionId) = await Impersonating(
-            "203.0.113.85", "res-admin4@example.com", fixture.WorkspaceId, operatorAccount.Id);
+            "203.0.113.123", "res-admin4@example.com", fixture.WorkspaceId, operatorAccount.Id);
         // The token comes off /settings rather than /users: an antiforgery pair is per-browser, not
         // per-page, and /users answers 500 for everybody on master today — an untranslatable GroupBy
         // in its Index, unrelated to any of this and raised separately.
@@ -181,7 +181,7 @@ public class SupportRestrictionHttpTests(HarboraHttpFixture fixture)
         Panel.Seed(db => db.Users.IgnoreQueryFilters().Single(u => u.Id == unverified.Id).EmailVerifiedAt = null);
 
         var (support, sessionId) = await Impersonating(
-            "203.0.113.86", "res-admin5@example.com", fixture.WorkspaceId, operatorAccount.Id);
+            "203.0.113.124", "res-admin5@example.com", fixture.WorkspaceId, operatorAccount.Id);
         var token = await support.AntiforgeryTokenFrom("/settings");
         var refused = await support.PostFormAsync($"/users/{unverified.Id}/email/verify", token);
 
@@ -200,7 +200,7 @@ public class SupportRestrictionHttpTests(HarboraHttpFixture fixture)
         var (payingWorkspace, _) = GivenCustomer("res-tenant-6", "res-customer6@example.com");
 
         var (support, sessionId) = await Impersonating(
-            "203.0.113.87", "res-admin6@example.com", fixture.WorkspaceId, operatorAccount.Id);
+            "203.0.113.125", "res-admin6@example.com", fixture.WorkspaceId, operatorAccount.Id);
 
         // The confirmation page still renders — hiding the form would be the thing this feature is
         // deliberately not doing — and its POST is what refuses.
@@ -223,7 +223,7 @@ public class SupportRestrictionHttpTests(HarboraHttpFixture fixture)
         var (workspaceId, customer) = GivenCustomer("res-tenant-7", "res-customer7@example.com");
 
         var (support, sessionId) = await Impersonating(
-            "203.0.113.88", "res-admin7@example.com", workspaceId, customer.Id);
+            "203.0.113.126", "res-admin7@example.com", workspaceId, customer.Id);
         var token = await support.AntiforgeryTokenFrom("/billing");
         var refused = await support.PostFormAsync("/billing/voucher", token, ("code", "HARBORA-TEST"));
 
@@ -241,7 +241,7 @@ public class SupportRestrictionHttpTests(HarboraHttpFixture fixture)
         var (workspaceId, customer) = GivenCustomer("res-tenant-8", "res-customer8@example.com");
 
         var (support, _) = await Impersonating(
-            "203.0.113.89", "res-admin8@example.com", workspaceId, customer.Id);
+            "203.0.113.127", "res-admin8@example.com", workspaceId, customer.Id);
 
         foreach (var path in new[] { "/", "/apps", "/settings", "/billing" })
             (await support.GetAsync(path)).StatusCode.Should().Be(HttpStatusCode.OK, $"{path} stays open");

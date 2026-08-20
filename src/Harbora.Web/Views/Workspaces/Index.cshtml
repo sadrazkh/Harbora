@@ -13,6 +13,15 @@
     isFa ? "ورک‌اسپیس‌ها و اعضا" : "Workspaces & members",
     isFa ? "فضای شخصی خودتان را نگه دارید، تیم بسازید و بین همهٔ فضاهایی که عضو هستید جابه‌جا شوید." : "Keep a personal space, create teams, and switch between every workspace you belong to."))" />
 
+@* Where a customer goes to check whether anybody from the platform has been inside this workspace.
+   Beside the members list on purpose: it answers the same question — who can reach this — about the
+   one set of people who never appear on that list. *@
+<p class="mb-4 text-sm">
+    <a class="text-accent-text" href="/workspaces/support-access">
+        @(isFa ? "دسترسی پشتیبانی به این فضای کاری" : "Support access to this workspace")
+    </a>
+</p>
+
 @if (message is not null) { <div class="alert-success mb-4">@message</div> }
 @if (error is not null) { <div class="alert-danger mb-4">@error</div> }
 @if (invitationLink is not null)

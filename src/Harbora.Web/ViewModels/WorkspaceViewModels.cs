@@ -33,6 +33,36 @@ public sealed class WorkspaceHubViewModel
     public IReadOnlyList<WorkspaceProjectGrantRow> Grants { get; init; } = [];
 }
 
+/// <summary>
+/// The customer's record of every time somebody from the platform was signed in as one of them.
+/// </summary>
+public sealed class WorkspaceSupportAccessViewModel
+{
+    public Guid WorkspaceId { get; init; }
+    public IReadOnlyList<WorkspaceSupportSessionRow> Sessions { get; init; } = [];
+}
+
+/// <param name="EndedBy">
+/// Null while the session is live. "Ended by hand" and "ran out" are kept apart because they read
+/// differently to somebody checking whether support let themselves out.
+/// </param>
+public sealed record WorkspaceSupportSessionRow(
+    Guid Id,
+    string AdminEmail,
+    string Reason,
+    DateTimeOffset StartedAt,
+    DateTimeOffset ExpiresAt,
+    DateTimeOffset? EndedAt,
+    Harbora.Domain.Identity.SupportSessionEnding? EndedBy,
+    bool IsLive)
+{
+    /// <summary>What was done while it ran. Empty is a real answer: they looked and left.</summary>
+    public IReadOnlyList<WorkspaceSupportActRow> Acts { get; init; } = [];
+}
+
+public sealed record WorkspaceSupportActRow(
+    DateTimeOffset At, string Action, string? TargetType, string? TargetId);
+
 public sealed class AcceptWorkspaceInvitationViewModel
 {
     public string Token { get; init; } = string.Empty;

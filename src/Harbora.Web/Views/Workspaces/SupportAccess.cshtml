@@ -1,0 +1,99 @@
+@model WorkspaceSupportAccessViewModel
+@using Harbora.Domain.Identity
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<div class="space-y-5" data-support-access="@Model.WorkspaceId">
+    <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+        isFa ? "دسترسی پشتیبانی" : "Support access",
+        isFa
+            ? "هر باری که پشتیبانی هُربورا با یکی از حساب‌های این فضای کاری وارد شده است — چه کسی، کِی، چرا، و چه کرد."
+            : "Every time Harbora support was signed in as somebody in this workspace — who, when, why, and what they did."))" />
+
+    @if (Model.Sessions.Count == 0)
+    {
+        @* Nobody has ever been in. Said out loud rather than left as a blank page: an empty table
+           reads as broken, and this particular emptiness is the answer the reader came for. *@
+        <div class="rounded-xl border border-line bg-surface">
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel(
+                "shield-check",
+                isFa
+                    ? "تا امروز هیچ نشست پشتیبانی روی این فضای کاری باز نشده است."
+                    : "No support session has ever been opened on this workspace."))" />
+        </div>
+    }
+    else
+    {
+        <div class="space-y-4">
+            @foreach (var session in Model.Sessions)
+            {
+                var tone = session.IsLive ? "warn" : "idle";
+                var label = session.IsLive
+                    ? (isFa ? "در حال اجرا" : "running now")
+                    : session.EndedBy switch
+                    {
+                        SupportSessionEnding.EndedByOperator => isFa ? "پایان‌یافته" : "ended",
+                        SupportSessionEnding.Expired => isFa ? "منقضی‌شده" : "expired",
+                        _ => isFa ? "نامشخص" : "unknown"
+                    };
+
+                <section class="rounded-xl border border-line bg-surface" data-support-session-row="@session.Id">
+                    <div class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
+                        <partial name="Design/_StatusPill" model="@(new StatusPillModel(label, tone))" />
+                        <span class="font-mono text-sm text-ink" dir="ltr">@session.AdminEmail</span>
+                        <span class="text-xs text-ink-muted">
+                            <span class="font-mono" dir="ltr">@session.StartedAt.ToLocalTime().ToString(Dates.Stamp)</span>
+                            →
+                            <span class="font-mono" dir="ltr">
+                                @((session.EndedAt ?? session.ExpiresAt).ToLocalTime().ToString(Dates.Stamp))
+                            </span>
+                        </span>
+                    </div>
+
+                    <div class="px-4 py-3 text-sm text-ink">
+                        <span class="text-ink-muted">@(isFa ? "دلیل:" : "Reason:")</span> @session.Reason
+                    </div>
+
+                    <div class="border-t border-line">
+                        @if (session.Acts.Count == 0)
+                        {
+                            @* Not a zero and not a dash. A session with no recorded act is a real
+                               outcome — support looked at something and left — and printing "0"
+                               would suggest a count where the honest answer is a sentence. *@
+                            <p class="px-4 py-3 text-xs text-ink-faint">
+                                @(isFa
+                                    ? "هیچ کار ثبت‌شده‌ای در این نشست انجام نشد."
+                                    : "Nothing that this platform records was done during this session.")
+                            </p>
+                        }
+                        else
+                        {
+                            <table class="w-full text-sm">
+                                <tbody class="divide-y divide-line">
+                                    @foreach (var act in session.Acts)
+                                    {
+                                        <tr>
+                                            <td class="px-4 py-2 font-mono text-xs text-ink-muted" dir="ltr">
+                                                @act.At.ToLocalTime().ToString(Dates.Precise)
+                                            </td>
+                                            <td class="px-4 py-2 font-mono text-xs text-ink" dir="ltr">@act.Action</td>
+                                            <td class="px-4 py-2 font-mono text-xs text-ink-muted" dir="ltr">
+                                                @act.TargetType@(act.TargetId is null ? "" : " " + act.TargetId)
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                    </div>
+                </section>
+            }
+        </div>
+    }
+
+    <p class="text-xs text-ink-faint">
+        @(isFa
+            ? "این صفحه فقط نشست‌های پشتیبانی همین فضای کاری را نشان می‌دهد."
+            : "This page shows support sessions for this workspace only.")
+    </p>
+</div>
