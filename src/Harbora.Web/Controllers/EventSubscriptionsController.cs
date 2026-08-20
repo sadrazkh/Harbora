@@ -180,7 +180,7 @@ public sealed class EventSubscriptionsController(
     private static EventKind BuildMask(
         bool deploymentSucceeded, bool deploymentFailed, bool appCrashed,
         bool backupSucceeded, bool backupFailed, bool serviceFailed,
-        bool maintenanceOn, bool maintenanceOff)
+        bool maintenanceOn, bool maintenanceOff, bool functionFailed)
     {
         var mask = EventKind.None;
         if (deploymentSucceeded) mask |= EventKind.DeploymentSucceeded;
@@ -191,6 +191,7 @@ public sealed class EventSubscriptionsController(
         if (serviceFailed) mask |= EventKind.ServiceFailed;
         if (maintenanceOn) mask |= EventKind.MaintenanceOn;
         if (maintenanceOff) mask |= EventKind.MaintenanceOff;
+        if (functionFailed) mask |= EventKind.FunctionFailed;
         return mask;
     }
 }
