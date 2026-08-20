@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# Fake `docker`, PATH-shadowed in front of the real one by
+# tests/Harbora.Tests/RestoreDrillScriptTests.cs, which runs the real deploy/restore-drill.sh
+# against it. No container is ever started; every branch below just answers the way a real
+# `docker run`/`docker exec` would for the scenario the test asked for, via $DRILL_TEST_MODE.
+#
+# This is what lets restore-drill.sh's own failure-detection logic be proven on a machine with no
+# Docker daemon at all — the script under test is completely unmodified; only what it calls is.
+# ---------------------------------------------------------------------------
+mode="${DRILL_TEST_MODE:-happy}"
+
+if [ -n "${DRILL_TEST_DOCKER_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$DRILL_TEST_DOCKER_LOG"
+fi
+
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+  rm)
+    exit 0
+    ;;
+
+  run)
+    if [ "$mode" = "docker-run-fails" ]; then
+      echo "fake docker: cannot start container" >&2
+      exit 1
+    fi
+    echo "fakecontainerid0123456789"
+    exit 0
+    ;;
+
+  exec)
+    interactive=0
+    if [ "${1:-}" = "-i" ]; then interactive=1; shift; fi
+    name="${1:-}"; shift || true
+    prog="${1:-}"; shift || true
+
+    case "$prog" in
+      pg_isready)
+        if [ "$mode" = "never-ready" ]; then
+          exit 1
+        fi
+        exit 0
+        ;;
+
+      psql)
+        # Two distinct call shapes from restore-drill.sh:
+        #   restore step:  psql -q -U user -d db              (reads the dump from stdin)
+        #   sanity step:   psql -tA -U user -d db -c "<sql>"
+        sql=""
+        has_c=0
+        args=("$@")
+        for ((i = 0; i < ${#args[@]}; i++)); do
+          if [ "${args[$i]}" = "-c" ]; then
+            has_c=1
+            sql="${args[$((i + 1))]}"
+          fi
+        done
+
+        if [ "$has_c" -eq 0 ]; then
+          # The restore step. Consume stdin either way, like a real psql would.
+          cat >/dev/null
+          if [ "$mode" = "restore-fails" ]; then
+            echo "fake psql: syntax error near \"GARBAGE\"" >&2
+            exit 1
+          fi
+          exit 0
+        fi
+
+        case "$sql" in
+          *__EFMigrationsHistory*)
+            case "$mode" in
+              sanity-nothing)
+                echo "fake psql: relation \"__EFMigrationsHistory\" does not exist" >&2
+                exit 1
+                ;;
+              sanity-zero-migrations)
+                echo "0"
+                ;;
+              *)
+                echo "5"
+                ;;
+            esac
+            ;;
+          *Workspaces*)
+            case "$mode" in
+              workspaces-query-fails)
+                echo "fake psql: connection to server was lost" >&2
+                exit 1
+                ;;
+              *)
+                echo "3"
+                ;;
+            esac
+            ;;
+          *BillingLedger*)
+            case "$mode" in
+              ledger-query-fails)
+                echo "fake psql: connection to server was lost" >&2
+                exit 1
+                ;;
+              empty-ledger)
+                echo ""
+                ;;
+              *)
+                echo "120"
+                ;;
+            esac
+            ;;
+          *)
+            echo "0"
+            ;;
+        esac
+        exit 0
+        ;;
+
+      *)
+        exit 0
+        ;;
+    esac
+    ;;
+
+  *)
+    exit 0
+    ;;
+esac

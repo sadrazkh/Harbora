@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# Fake `harbora`, PATH-shadowed in front of the real client CLI by
+# tests/Harbora.Tests/RestoreDrillScriptTests.cs. deploy/restore-drill.sh calls
+# `harbora record-drill-result --verdict ... --detail ...` as the last thing it does; this stands
+# in for that call and writes exactly what it was asked to record to $DRILL_TEST_HARBORA_LOG, so
+# the test can assert on it without a real panel or database anywhere nearby.
+# ---------------------------------------------------------------------------
+if [ -n "${DRILL_TEST_HARBORA_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$DRILL_TEST_HARBORA_LOG"
+fi
+exit 0
