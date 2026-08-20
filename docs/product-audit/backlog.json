@@ -1089,7 +1089,8 @@
   },
   {
     "id": "HARBORA-0056",
-    "status": "open",
+    "status": "partial",
+    "statusEvidence": "Support impersonation (sub-project 3) answers the half of this that records somebody else acting as a tenant: AuditLog gained SupportSessionId + SupportAdminUserId, and src/Harbora.Web/Controllers/WorkspacesController.SupportAccess.cs serves /workspaces/support-access -- a workspace-scoped reader over SupportSession rows and the support.* audit rows keyed to them, scoped by an explicit TargetWorkspaceId and tested in both tenancy directions (SupportAccessPageHttpTests). The rest is untouched: AuditController is still platform-admin-only with no workspace scoping, AuditLog still has no WorkspaceId column, so the trail as a whole still cannot be scoped to a tenant, and the decision this item asks for -- provider-only page or workspace-scoped -- is still not recorded in 18-open-questions.md.",
     "title": "Decide and implement what a workspace operator sees in the audit log",
     "category": "tenancy",
     "type": "investigation",
