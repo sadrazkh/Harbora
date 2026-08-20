@@ -514,6 +514,9 @@ public class LowBalanceAlertTests
         public Task<NotificationResult> NotifyRuleAsync(Guid alertId, Harbora.Domain.Notifications.NotificationEventData evt,
             AlertSeverity severity, CancellationToken ct) => throw new NotSupportedException();
 
+        public Task NotifyInAppOnlyAsync(Guid workspaceId, Harbora.Domain.Notifications.NotificationEventData evt,
+            AlertSeverity severity, CancellationToken ct) => throw new NotSupportedException();
+
         public Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct) =>
             throw new NotSupportedException();
 

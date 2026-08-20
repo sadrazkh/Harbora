@@ -9,6 +9,7 @@ using Harbora.Domain.Identity;
 using Harbora.Domain.Monitoring;
 using Harbora.Domain.Mail;
 using Harbora.Domain.Networking;
+using Harbora.Domain.Platform;
 using Harbora.Domain.Servers;
 using Harbora.Domain.Services;
 using Harbora.Domain.Settings;
@@ -161,6 +162,15 @@ public class HarboraDbContext : DbContext
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Harbora.Domain.Jobs.Job> Jobs => Set<Harbora.Domain.Jobs.Job>();
     public DbSet<Setting> Settings => Set<Setting>();
+
+    /// <summary>Sub-project 4 (2026-08-20 platform-options plan). Unfiltered by workspace, like
+    /// <see cref="Users"/> beside it: an announcement is a platform-wide notice, not a tenant's.</summary>
+    public DbSet<Announcement> Announcements => Set<Announcement>();
+
+    /// <summary>Keyed by (AnnouncementId, UserId) — see that type's own doc for why that pair, and
+    /// only that pair, is what keeps one dismissal from ever touching another announcement or
+    /// another person's copy of the same one.</summary>
+    public DbSet<AnnouncementDismissal> AnnouncementDismissals => Set<AnnouncementDismissal>();
     public DbSet<Harbora.Domain.Tenancy.Plan> Plans => Set<Harbora.Domain.Tenancy.Plan>();
     public DbSet<Harbora.Domain.Tenancy.InstanceSize> InstanceSizes => Set<Harbora.Domain.Tenancy.InstanceSize>();
 
@@ -236,6 +246,34 @@ public class HarboraDbContext : DbContext
             e.Property(x => x.IpAddress).HasMaxLength(64);
             // No navigation to User on purpose: AdminEmail is copied onto the row so a deleted
             // administrator does not turn a customer's support history into a list of blanks.
+        });
+
+        // Sub-project 4 (2026-08-20 platform-options plan).
+        b.Entity<Announcement>(e =>
+        {
+            // The banner partial's own read: every announcement whose window covers now, newest
+            // first — see AnnouncementRules.IsActiveAt for the window itself.
+            e.HasIndex(x => new { x.StartsAt, x.EndsAt });
+            e.Property(x => x.Title).HasMaxLength(AnnouncementRules.MaxTitleLength).IsRequired();
+            e.Property(x => x.TitleFa).HasMaxLength(AnnouncementRules.MaxTitleLength).IsRequired();
+            e.Property(x => x.Body).HasMaxLength(AnnouncementRules.MaxBodyLength).IsRequired();
+            e.Property(x => x.BodyFa).HasMaxLength(AnnouncementRules.MaxBodyLength).IsRequired();
+            e.Property(x => x.CreatedByEmail).HasMaxLength(256).IsRequired();
+            // No navigation to User, the same reasoning SupportSession.AdminEmail documents just
+            // above: the byline must survive the administrator's own account being renamed or removed.
+        });
+
+        b.Entity<AnnouncementDismissal>(e =>
+        {
+            // The only read this table ever serves — see the type's own doc — and what makes
+            // dismissing idempotent: a second POST to the same announcement finds the row already
+            // there instead of adding a duplicate for AnnouncementNotifier.
+            e.HasIndex(x => new { x.AnnouncementId, x.UserId }).IsUnique();
+            e.HasOne(x => x.Announcement).WithMany().HasForeignKey(x => x.AnnouncementId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // No navigation to User for the same reason WorkspaceMembers keeps none of its own to
+            // Announcement/AnnouncementDismissal: a person's dismissals are looked up by UserId alone,
+            // matched against the request's own signed-in id, never enumerated off the User entity.
         });
 
         b.Entity<EmailVerificationToken>(e =>

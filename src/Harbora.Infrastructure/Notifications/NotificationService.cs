@@ -151,6 +151,13 @@ public sealed class NotificationService(
     }
 
     /// <summary>
+    /// <inheritdoc cref="INotificationService.NotifyInAppOnlyAsync"/>
+    /// </summary>
+    public Task NotifyInAppOnlyAsync(
+        Guid workspaceId, NotificationEventData evt, AlertSeverity severity, CancellationToken ct) =>
+        FanOutToMembersAsync(workspaceId, evt, severity, ct);
+
+    /// <summary>
     /// One rule, by id. IgnoreQueryFilters because the caller is a background evaluator with no
     /// session — the workspace filter would find nothing and report a clean pass.
     ///
@@ -246,6 +253,11 @@ public sealed class NotificationService(
         AlertEvent.LowBalance => true,
         AlertEvent.ServiceProvisionFailed => true,
         AlertEvent.Test => true,
+        // A platform announcement is never a workspace's own configured Alert channel — it reaches
+        // people only through NotifyInAppOnlyAsync's N3 fan-out, not a Telegram group or webhook a
+        // customer set up for deploy failures. Falls to the default below anyway; named explicitly
+        // because this method's own doc asks every appended event to get a same-day line here.
+        AlertEvent.PlatformAnnouncement => false,
         _ => false
     };
 

@@ -284,6 +284,9 @@ public static class DependencyInjection
         // for every runway it shows — registered after it for that reason, though DI order does not
         // itself matter here.
         services.AddScoped<Billing.RevenueReport>();
+        // Sub-project 4 (2026-08-20 platform-options plan): fans a Warning-severity Announcement out
+        // to every workspace's own N3 in-app rows via INotificationService.NotifyInAppOnlyAsync.
+        services.AddScoped<Platform.AnnouncementNotifier>();
         // The gate every start path asks before a container runs. Registered here rather than beside
         // the deployment engine because the rule it holds is a billing rule, and a second copy of it
         // living next to the thing it refuses is how a rule quietly stops being one. Like the tick

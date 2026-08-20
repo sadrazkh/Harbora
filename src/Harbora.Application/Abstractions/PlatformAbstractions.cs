@@ -165,6 +165,25 @@ public interface INotificationService
     Task<int> NotifyAsync(Guid workspaceId, Domain.Notifications.NotificationEventData evt, Domain.Common.AlertSeverity severity, CancellationToken ct);
 
     /// <summary>
+    /// The in-app half of <see cref="NotifyAsync"/> alone — writes this workspace's own
+    /// <c>UserNotification</c> rows through the exact same per-member preference/quiet-hours
+    /// resolution N3 always has, but never matches an <c>Alert</c> rule and never falls back to
+    /// emailing admins the way <see cref="NotifyAsync"/> does for a workspace with none configured.
+    ///
+    /// <para>
+    /// For a raiser whose event is not one workspace's own configured-channel concern at all — a
+    /// platform announcement (Sub-project 4, 2026-08-20 platform-options plan) reaching every
+    /// workspace on the installation, not the one workspace <see cref="NotifyAsync"/> is scoped to.
+    /// Calling <see cref="NotifyAsync"/> once per workspace instead would, for every workspace that
+    /// has never configured an <c>Alert</c> rule (the ordinary case — see that method's own doc), also
+    /// trip its "nobody would have heard about this" admin-email fallback: exactly the noise an
+    /// operator's own announcement does not need, since the in-app row already reaches everyone
+    /// unconditionally. This method is that fan-out reused on its own, not forked.
+    /// </para>
+    /// </summary>
+    Task NotifyInAppOnlyAsync(Guid workspaceId, Domain.Notifications.NotificationEventData evt, Domain.Common.AlertSeverity severity, CancellationToken ct);
+
+    /// <summary>
     /// Deliver through one specific rule, whatever its event opt-ins say.
     ///
     /// A per-application threshold belongs to the rule that defines it: broadcasting it to every

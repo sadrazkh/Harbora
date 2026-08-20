@@ -183,6 +183,17 @@ public sealed class RecordingNotificationService : INotificationService
         return Task.FromResult(1);
     }
 
+    /// <summary>Recorded the same way as <see cref="NotifyAsync"/> — a test asserting on
+    /// <see cref="Notifications"/> cannot tell which of the two a raise site called, which is correct:
+    /// both are "this workspace's members were told", just with a different alert-channel/fallback
+    /// story around them in the real <c>NotificationService</c> that this fake does not model.</summary>
+    public Task NotifyInAppOnlyAsync(Guid workspaceId, Harbora.Domain.Notifications.NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        Notifications.Add(new Sent(workspaceId, evt.Type, severity, evt));
+        return Task.CompletedTask;
+    }
+
     /// <summary>
     /// A threshold fires through its own rule, so it is recorded under that event.
     ///

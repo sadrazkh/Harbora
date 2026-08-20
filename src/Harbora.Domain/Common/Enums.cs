@@ -258,7 +258,35 @@ public enum AlertEvent
     /// checkbox nobody asked for yet. See <c>NotificationService.Matches</c> for where that is decided.
     /// </para>
     /// </summary>
-    ServiceProvisionFailed = 8
+    ServiceProvisionFailed = 8,
+
+    /// <summary>
+    /// An operator posted a platform-wide announcement at Warning severity or above (Sub-project 4,
+    /// 2026-08-20 platform-options plan). Appended, for the same reason as the two above it.
+    ///
+    /// <para>
+    /// Unlike every neighbour above it, this one is not composed from a machine-observed fact —
+    /// <c>NotificationTemplateCatalog</c>'s case for it (in <c>Harbora.Infrastructure.Notifications</c>)
+    /// reads the operator's own bilingual title and body straight off the fields the raise site hands
+    /// over, rather than interpolating them into a platform-authored sentence.
+    /// </para>
+    ///
+    /// <para>
+    /// Carries no per-rule opt-in flag on <c>Alert</c> and never matches one — see
+    /// <c>NotificationService.Matches</c> — so it never goes out over a workspace's own Telegram or
+    /// webhook channel; it reaches people only through the in-app N3 path
+    /// (<c>INotificationService.NotifyInAppOnlyAsync</c>), the same way the banner itself does not
+    /// depend on anybody having configured a channel.
+    /// </para>
+    ///
+    /// <para>
+    /// Left off <c>NotificationEventClass.IsCritical</c>'s switch on purpose, so it falls to that
+    /// class's own default of <c>true</c> — deliberate there, and the right answer here too: an
+    /// operator posting at Warning severity chose to interrupt every reader, and a preference row
+    /// quietly muting that is the same trap <c>NotificationEventClass</c>'s own doc warns about.
+    /// </para>
+    /// </summary>
+    PlatformAnnouncement = 9
 }
 
 /// <summary>

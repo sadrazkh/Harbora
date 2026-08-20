@@ -111,6 +111,9 @@ public class NotificationTemplateCensusTests
             ("WorkspaceName", "tenant"), ("Hours", "22"), ("RunsOutOn", "2026-08-20")),
         AlertEvent.ServiceProvisionFailed => NotificationEventData.Create(evt,
             ("ServiceName", "orders-db"), ("Reason", "image pull timed out")),
+        AlertEvent.PlatformAnnouncement => NotificationEventData.Create(evt,
+            ("Title", "Scheduled maintenance"), ("Body", "The panel will be briefly unavailable tonight."),
+            ("TitleFa", "تعمیرات برنامه‌ریزی‌شده"), ("BodyFa", "پنل امشب برای مدت کوتاهی در دسترس نخواهد بود.")),
         _ => throw new InvalidOperationException(
             $"{evt} has no sample data yet — add a case here alongside its NotificationTemplateCatalog template.")
     };

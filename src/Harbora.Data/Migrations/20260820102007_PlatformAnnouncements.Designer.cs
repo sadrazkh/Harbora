@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260820102007_PlatformAnnouncements")]
+    partial class PlatformAnnouncements
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -551,18 +554,6 @@ namespace Harbora.Data.Migrations
                     b.Property<int>("Kind")
                         .HasColumnType("integer");
 
-                    b.Property<string>("MaintenanceMessage")
-                        .HasColumnType("text");
-
-                    b.Property<string>("MaintenanceMessageFa")
-                        .HasColumnType("text");
-
-                    b.Property<bool>("MaintenanceMode")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTimeOffset?>("MaintenanceSince")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<long>("MemoryLimitBytes")
                         .HasColumnType("bigint");
 
@@ -636,99 +627,6 @@ namespace Harbora.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("Apps");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Apps.AppConfigGroup", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AppId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("AttachOrder")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("ConfigGroupId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("HasUnpublishedChanges")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ConfigGroupId");
-
-                    b.HasIndex("AppId", "ConfigGroupId")
-                        .IsUnique();
-
-                    b.ToTable("AppConfigGroups");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Apps.ConfigGroup", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("WorkspaceId", "Name")
-                        .IsUnique();
-
-                    b.ToTable("ConfigGroups");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Apps.ConfigGroupEntry", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("ConfigGroupId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("IsSecret")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Key")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Value")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ConfigGroupId", "Key")
-                        .IsUnique();
-
-                    b.ToTable("ConfigGroupEntries");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Apps.CronRun", b =>
@@ -2973,9 +2871,6 @@ namespace Harbora.Data.Migrations
                     b.Property<string>("LoadBalancerHealthCheckPath")
                         .HasColumnType("text");
 
-                    b.Property<bool>("MaintenanceRedirected")
-                        .HasColumnType("boolean");
-
                     b.Property<string>("PathPrefix")
                         .IsRequired()
                         .HasColumnType("text");
@@ -2987,18 +2882,6 @@ namespace Harbora.Data.Migrations
                         .HasColumnType("boolean");
 
                     b.Property<string>("RedirectTo")
-                        .HasColumnType("text");
-
-                    b.Property<string>("SavedExtraUpstreamsJson")
-                        .HasColumnType("text");
-
-                    b.Property<string>("SavedLoadBalancerHealthCheckPath")
-                        .HasColumnType("text");
-
-                    b.Property<int?>("SavedTargetPort")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("SavedTargetService")
                         .HasColumnType("text");
 
                     b.Property<bool>("SslEnabled")
@@ -4244,113 +4127,6 @@ namespace Harbora.Data.Migrations
                     b.ToTable("Settings");
                 });
 
-            modelBuilder.Entity("Harbora.Domain.Status.StatusIncident", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("BodyEn")
-                        .HasColumnType("text");
-
-                    b.Property<string>("BodyFa")
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("CreatedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset?>("ResolvedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("StartedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("StatusPageId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("TitleEn")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("TitleFa")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("StatusPageId", "StartedAt");
-
-                    b.ToTable("StatusIncidents");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Status.StatusPage", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("IsEnabled")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("WorkspaceId")
-                        .IsUnique();
-
-                    b.ToTable("StatusPages");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Status.StatusPageComponent", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AppId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("DisplayName")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("SortOrder")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("StatusPageId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("StatusPageId", "AppId")
-                        .IsUnique();
-
-                    b.ToTable("StatusPageComponents");
-                });
-
             modelBuilder.Entity("Harbora.Domain.Storage.StorageBucket", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5527,36 +5303,6 @@ namespace Harbora.Data.Migrations
                     b.Navigation("GitRepository");
                 });
 
-            modelBuilder.Entity("Harbora.Domain.Apps.AppConfigGroup", b =>
-                {
-                    b.HasOne("Harbora.Domain.Apps.App", "App")
-                        .WithMany("ConfigGroups")
-                        .HasForeignKey("AppId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Harbora.Domain.Apps.ConfigGroup", "ConfigGroup")
-                        .WithMany("Apps")
-                        .HasForeignKey("ConfigGroupId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("App");
-
-                    b.Navigation("ConfigGroup");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Apps.ConfigGroupEntry", b =>
-                {
-                    b.HasOne("Harbora.Domain.Apps.ConfigGroup", "ConfigGroup")
-                        .WithMany("Entries")
-                        .HasForeignKey("ConfigGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("ConfigGroup");
-                });
-
             modelBuilder.Entity("Harbora.Domain.Apps.CronRun", b =>
                 {
                     b.HasOne("Harbora.Domain.Apps.App", "App")
@@ -5877,24 +5623,6 @@ namespace Harbora.Data.Migrations
                     b.Navigation("Environment");
                 });
 
-            modelBuilder.Entity("Harbora.Domain.Status.StatusIncident", b =>
-                {
-                    b.HasOne("Harbora.Domain.Status.StatusPage", null)
-                        .WithMany("Incidents")
-                        .HasForeignKey("StatusPageId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Status.StatusPageComponent", b =>
-                {
-                    b.HasOne("Harbora.Domain.Status.StatusPage", null)
-                        .WithMany("Components")
-                        .HasForeignKey("StatusPageId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
             modelBuilder.Entity("Harbora.Domain.Storage.StorageBucket", b =>
                 {
                     b.HasOne("Harbora.Domain.Storage.StoragePlan", "StoragePlan")
@@ -6064,8 +5792,6 @@ namespace Harbora.Data.Migrations
 
             modelBuilder.Entity("Harbora.Domain.Apps.App", b =>
                 {
-                    b.Navigation("ConfigGroups");
-
                     b.Navigation("Deployments");
 
                     b.Navigation("Domains");
@@ -6073,13 +5799,6 @@ namespace Harbora.Data.Migrations
                     b.Navigation("EnvironmentVariables");
 
                     b.Navigation("Volumes");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Apps.ConfigGroup", b =>
-                {
-                    b.Navigation("Apps");
-
-                    b.Navigation("Entries");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Deployments.Deployment", b =>
@@ -6118,13 +5837,6 @@ namespace Harbora.Data.Migrations
             modelBuilder.Entity("Harbora.Domain.Projects.Project", b =>
                 {
                     b.Navigation("Environments");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Status.StatusPage", b =>
-                {
-                    b.Navigation("Components");
-
-                    b.Navigation("Incidents");
                 });
 
             modelBuilder.Entity("Harbora.Modules.Sync.Domain.SyncSpace", b =>

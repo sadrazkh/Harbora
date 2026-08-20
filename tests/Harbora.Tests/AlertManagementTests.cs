@@ -41,6 +41,9 @@ public class AlertManagementTests
         public Task<NotificationResult> NotifyRuleAsync(Guid alertId, Harbora.Domain.Notifications.NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
             => Task.FromResult(NotificationResult.Ok);
 
+        public Task NotifyInAppOnlyAsync(Guid workspaceId, Harbora.Domain.Notifications.NotificationEventData evt, AlertSeverity severity, CancellationToken ct)
+            => Task.CompletedTask;
+
         public Task<NotificationResult> SendTestAsync(Guid alertId, CancellationToken ct)
             => Task.FromResult(NotificationResult.Ok);
 

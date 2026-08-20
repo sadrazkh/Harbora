@@ -19,6 +19,8 @@
         (AlertEvent.ThresholdBreached, false) => "Resource threshold breached",
         (AlertEvent.LowBalance, true) => "اعتبار رو به پایان",
         (AlertEvent.LowBalance, false) => "Low balance",
+        (AlertEvent.PlatformAnnouncement, true) => "اعلامیه‌های پلتفرم",
+        (AlertEvent.PlatformAnnouncement, false) => "Platform announcements",
         (_, true) => evt.ToString(),
         (_, false) => evt.ToString()
     };

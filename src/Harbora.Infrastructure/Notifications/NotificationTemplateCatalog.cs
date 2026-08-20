@@ -136,6 +136,12 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
             $"راه‌اندازی ناموفق: {d.Get("ServiceName")}",
             $"راه‌اندازی سرویس «{d.Get("ServiceName")}» با شکست مواجه شد.\n\n{d.Get("Reason")}"),
 
+        // Not composed from a machine fact like every template above it — the operator's own words,
+        // written in Announcement.TitleFa/BodyFa and handed over verbatim. AnnouncementNotifier is the
+        // one raise site for this event, and it always sets both language pairs, so there is no
+        // "field missing" case to degrade gracefully from the way the other templates' Get() calls do.
+        AlertEvent.PlatformAnnouncement => (d.Get("TitleFa"), d.Get("BodyFa")),
+
         // Test (a synchronous, unlocalised ping — see NotificationService.DispatchSafe) and any future
         // member appended without a same-day template both land here rather than throwing: a reader
         // still gets a notification, and NotificationTemplateCensusTests is what notices the gap.
@@ -173,6 +179,8 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
         AlertEvent.ServiceProvisionFailed => (
             $"Provisioning failed: {d.Get("ServiceName")}",
             $"Provisioning of service \"{d.Get("ServiceName")}\" failed.\n\n{d.Get("Reason")}"),
+
+        AlertEvent.PlatformAnnouncement => (d.Get("Title"), d.Get("Body")),
 
         _ => ($"Event: {d.Type}", "")
     };
