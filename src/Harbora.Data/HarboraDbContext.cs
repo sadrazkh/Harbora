@@ -81,6 +81,9 @@ public class HarboraDbContext : DbContext
     public DbSet<CronRun> CronRuns => Set<CronRun>();
     public DbSet<DeploymentLog> DeploymentLogs => Set<DeploymentLog>();
     public DbSet<DomainName> Domains => Set<DomainName>();
+    /// <summary>A workspace's own BYO Cloudflare token (F9) — never the platform's own, which lives
+    /// in <see cref="Setting"/> rows instead.</summary>
+    public DbSet<CustomerDnsCredential> CustomerDnsCredentials => Set<CustomerDnsCredential>();
     public DbSet<Route> Routes => Set<Route>();
     public DbSet<Certificate> Certificates => Set<Certificate>();
     public DbSet<ManagedService> ManagedServices => Set<ManagedService>();
@@ -785,6 +788,19 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => new { x.AppId, x.StorageBucketId }).IsUnique();
             e.HasOne(x => x.App).WithMany(a => a.StorageBuckets).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.StorageBucket).WithMany(sb => sb.Apps).HasForeignKey(x => x.StorageBucketId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // --- customer DNS (F9, same plan) ---
+        b.Entity<CustomerDnsCredential>(e =>
+        {
+            // A workspace's own Cloudflare token, visible only through this workspace — without the
+            // filter the Domains page's DNS section would resolve whichever tenant's token a request
+            // happened to be scoped to, the exact platform/customer credential mixing F9 forbids.
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            // One token per workspace: Cloudflare's own token is already scoped to whatever zones its
+            // owner granted, so a second row for the same workspace would only be a second grant of
+            // the same kind, not a new capability the page would know how to offer differently.
+            e.HasIndex(x => x.WorkspaceId).IsUnique();
         });
 
         // Deliberately NOT workspace-filtered, unlike StorageBucket just above. The route that
