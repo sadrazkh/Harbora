@@ -218,6 +218,9 @@ public static class DependencyInjection
         // P7 (2026-08-20 platform-options plan): assembles the public status page from App.Status and
         // LifecycleHistory — the one place both are asked on that page's behalf.
         services.AddScoped<Status.StatusPageReport>();
+        // P8: makes the status page's hosts (platform subdomain, and a customer's own custom domain)
+        // genuinely reachable through the same Route/IProxyEngine writer every other route uses.
+        services.AddScoped<Status.StatusPageDomainService>();
 
         // The AI gateway. The adapter is registered against the interface so a second provider
         // shape can be added without touching the routing or metering above it.

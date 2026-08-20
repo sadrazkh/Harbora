@@ -1,8 +1,10 @@
 @model StatusPageSettingsViewModel
+@using Harbora.Domain.Common
 @{
     ViewData["Title"] = "Status page";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var err = TempData["Error"] as string;
+    var msg = TempData["Message"] as string;
 }
 <div class="mb-6">
     <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
@@ -15,6 +17,10 @@
 @if (err is not null)
 {
     <div class="alert-warning rounded-lg px-4 py-3 text-sm mb-4">@err</div>
+}
+@if (msg is not null)
+{
+    <div class="rounded-lg border border-line bg-ok-soft px-4 py-3 text-sm mb-4 text-ok">@msg</div>
 }
 
 <section class="rounded-xl border border-line bg-surface p-5 mb-6" data-status-page-toggle
@@ -55,6 +61,59 @@
             </form>
         }
     </div>
+</section>
+
+<section class="rounded-xl border border-line bg-surface p-5 mb-6" data-status-page-domain>
+    <h2 class="text-sm font-semibold mb-3">@(isFa ? "دامنهٔ اختصاصی" : "Custom domain")</h2>
+    <p class="text-xs text-ink-faint mb-3 max-w-md">
+        @(isFa
+            ? "این صفحه همچنان روی آدرس بالا هم در دسترس می‌ماند، حتی پس از اتصال دامنهٔ اختصاصی."
+            : "This page keeps answering on the address above even after you attach your own domain.")
+    </p>
+
+    @if (Model.CustomDomain is { } custom)
+    {
+        (string Text, string Tone) state = custom.CertificateStatus switch
+        {
+            CertificateStatus.Issued => (isFa ? "فعال" : "active", Tone.Ok),
+            CertificateStatus.Pending => (isFa ? "در انتظار" : "pending", Tone.Warn),
+            CertificateStatus.Expired => (isFa ? "منقضی" : "expired", Tone.Error),
+            CertificateStatus.Failed => (isFa ? "ناموفق" : "failed", Tone.Error),
+            CertificateStatus.Revoked => (isFa ? "باطل" : "revoked", Tone.Error),
+            _ => (isFa ? "صادر نشده" : "not issued yet", Tone.Idle)
+        };
+        <div data-host="@custom.Host" class="rounded-lg bg-surface-2 px-3 py-2.5 text-sm">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+                <div class="flex items-center gap-2">
+                    <a href="https://@custom.Host" target="_blank" rel="noopener" dir="ltr"
+                       class="font-mono font-medium text-accent-text hover:underline">@custom.Host</a>
+                    <partial name="Design/_StatusPill" model="new StatusPillModel(state.Text, state.Tone)" />
+                </div>
+                <div class="flex items-center gap-1.5">
+                    <button data-test="dns" class="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-2">DNS</button>
+                    <button data-test="ssl" class="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-2">SSL</button>
+                    <form asp-controller="StatusPageSettings" asp-action="RemoveDomain" method="post">
+                        @Html.AntiForgeryToken()
+                        <button class="rounded-lg border border-line px-2.5 py-1 text-xs text-danger hover:bg-surface-2">
+                            @(isFa ? "حذف" : "Remove")
+                        </button>
+                    </form>
+                </div>
+            </div>
+            <div data-result class="mt-1 text-xs"></div>
+        </div>
+    }
+    else
+    {
+        <form asp-controller="StatusPageSettings" asp-action="AttachDomain" method="post" class="flex gap-2 flex-wrap">
+            @Html.AntiForgeryToken()
+            <input name="host" dir="ltr" placeholder="status.example.com"
+                   class="flex-1 min-w-[14rem] rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm font-mono" />
+            <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                @(isFa ? "اتصال" : "Attach")
+            </button>
+        </form>
+    }
 </section>
 
 <section class="rounded-xl border border-line bg-surface p-5 mb-6" data-status-page-components>
@@ -158,3 +217,39 @@
         </form>
     </details>
 </section>
+
+@section Scripts {
+<script>
+    // The same live DNS/TLS check the Domains page uses (/domains/test-dns, /domains/test-ssl) —
+    // DomainsController.OwnsHostAsync recognises a status page's own domain exactly as it recognises
+    // an app's, so this is the one check, not a second one.
+    const fa = @(isFa ? "true" : "false");
+    function tag(ok, txt) {
+        const cls = ok ? 'text-ok' : 'text-danger';
+        return `<span class="${cls}">${ok ? '✓' : '✗'} ${txt}</span>`;
+    }
+    document.querySelectorAll('[data-host]').forEach(row => {
+        const host = row.dataset.host;
+        const out = row.querySelector('[data-result]');
+        row.querySelectorAll('[data-test]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const kind = btn.dataset.test;
+                out.innerHTML = fa ? 'در حال بررسی…' : 'Checking…';
+                try {
+                    const r = await fetch(`/domains/test-${kind}?host=${encodeURIComponent(host)}`);
+                    const j = await r.json();
+                    if (kind === 'dns') {
+                        const resolved = (j.resolved || []).join(', ') || (fa ? 'رزولوو نشد' : 'not resolvable');
+                        out.innerHTML = tag(j.ok, 'DNS → ' + resolved) +
+                            (j.ok ? '' : ` <span class="text-ink-faint">(${fa ? 'انتظار' : 'expected'} ${j.expected})</span>`);
+                    } else {
+                        out.innerHTML = j.ok
+                            ? tag(true, (fa ? 'گواهی معتبر · ' : 'valid cert · ') + (j.issuer || '') + (j.expires ? ` · ${fa ? 'انقضا' : 'exp'} ${j.expires}` : ''))
+                            : tag(false, (fa ? 'SSL ناموفق: ' : 'SSL failed: ') + (j.error || `HTTP ${j.status}`));
+                    }
+                } catch (e) { out.innerHTML = tag(false, String(e)); }
+            });
+        });
+    });
+</script>
+}

@@ -1,4 +1,6 @@
 using System.Text.RegularExpressions;
+using Harbora.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Web.Infrastructure;
 
@@ -10,20 +12,17 @@ namespace Harbora.Web.Infrastructure;
 /// <see cref="PathPrefix"/>, which only <see cref="Controllers.StatusPageController"/> answers.
 ///
 /// <para>
-/// <b>The extension point for sub-project 8.</b> A custom domain (<c>status.their.com</c>) is a
-/// second host shape pointing at the same public endpoint — Traefik, not this middleware, is what
-/// will bind that host to a router whose backend is this panel, the same way <c>node-agent.yml</c>
-/// binds the node channel's host today. When that lands, this class gains a second recognised shape
-/// (a DB lookup by custom domain) beside the regex below; the controller and everything downstream of
-/// it — <c>StatusPageReport</c>, tenancy, honesty rules — do not change, because they were never told
-/// which shape resolved the slug, only what it resolved to.
-/// </para>
-///
-/// <para>
-/// No database read happens here on purpose. Whether the resolved slug is a real, enabled status page
-/// is <see cref="Infrastructure.Status.StatusPageReport"/>'s question to answer, once, inside the
-/// request — this middleware's only job is host pattern matching, so it stays trivially unit-testable
-/// and never becomes a second place tenancy could be gotten wrong.
+/// <b>Sub-project 8's custom-domain shape.</b> A customer's own domain (<c>status.their.com</c>) is a
+/// second host shape pointing at the same public endpoint, bound by an ordinary <c>Route</c> whose
+/// backend is this panel — see <c>StatusPageDomainService</c>. When the regex below does not match,
+/// this falls back to one indexed lookup on <c>DomainName.Host</c>, exactly the shape and exactly the
+/// reasoning <c>MaintenanceModeMiddleware</c> already established for the same question ("does this
+/// request's host mean something other than ordinary panel routing") on a host that also toggles
+/// rather than being fixed at install time: no cache, because correctness beats one avoidable query,
+/// and a stale cache would either strand a customer's real domain on a 404 after it was attached or
+/// keep answering after it was removed. The controller and everything downstream of it —
+/// <c>StatusPageReport</c>, tenancy, honesty rules — do not change: both shapes resolve to the same
+/// <see cref="SlugItemKey"/>, and neither the controller nor the report was ever told which one did it.
 /// </para>
 /// </summary>
 public sealed class StatusPageHostMiddleware(RequestDelegate next)
@@ -46,12 +45,18 @@ public sealed class StatusPageHostMiddleware(RequestDelegate next)
         @"^status-(?<slug>[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public Task InvokeAsync(HttpContext context)
+    public async Task InvokeAsync(HttpContext context, HarboraDbContext db)
     {
-        var match = HostPattern.Match(context.Request.Host.Host);
-        if (match.Success)
+        var host = context.Request.Host.Host;
+        var match = HostPattern.Match(host);
+
+        var slug = match.Success
+            ? match.Groups["slug"].Value.ToLowerInvariant()
+            : await CustomDomainSlugAsync(db, host, context.RequestAborted);
+
+        if (slug is not null)
         {
-            context.Items[SlugItemKey] = match.Groups["slug"].Value.ToLowerInvariant();
+            context.Items[SlugItemKey] = slug;
 
             var path = context.Request.Path.Value;
             context.Request.Path = string.IsNullOrEmpty(path) || path == "/"
@@ -59,6 +64,25 @@ public sealed class StatusPageHostMiddleware(RequestDelegate next)
                 : PathPrefix + path;
         }
 
-        return next(context);
+        await next(context);
+    }
+
+    /// <summary>
+    /// The workspace slug behind a status page's custom domain, or null when <paramref name="host"/>
+    /// is not one — unfiltered on both sides, the same as <c>MaintenanceModeMiddleware</c>'s own
+    /// lookup: a visitor here has no session and no workspace, and <c>DomainName.Host</c> is unique
+    /// across the platform, so this can resolve at most one workspace regardless of whose domain it
+    /// turns out to be.
+    /// </summary>
+    private static async Task<string?> CustomDomainSlugAsync(HarboraDbContext db, string host, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(host)) return null;
+
+        return await db.Domains.IgnoreQueryFilters()
+            .Where(d => d.Host == host && d.StatusPageId != null)
+            .Join(db.StatusPages.IgnoreQueryFilters(), d => d.StatusPageId, p => p.Id, (d, p) => p.WorkspaceId)
+            .Join(db.Workspaces.IgnoreQueryFilters().Where(w => w.DeletedAt == null),
+                workspaceId => workspaceId, w => w.Id, (workspaceId, w) => w.Slug)
+            .FirstOrDefaultAsync(ct);
     }
 }

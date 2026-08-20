@@ -101,8 +101,15 @@ public sealed class DomainsController(
         }
     }
 
+    /// <summary>
+    /// A host belongs to this workspace whether it is an app's domain or, as of sub-project 8, a
+    /// status page's — the live DNS/TLS check buttons are one machinery serving both owners, the same
+    /// way <c>DomainDiagnosis</c> and <c>TraefikProxyEngine</c> already are.
+    /// </summary>
     private Task<bool> OwnsHostAsync(string host, CancellationToken ct) =>
-        db.Domains.AnyAsync(d => d.Host == host && d.App!.WorkspaceId == WorkspaceId, ct);
+        db.Domains.AnyAsync(d => d.Host == host &&
+            ((d.App != null && d.App.WorkspaceId == WorkspaceId) ||
+             (d.StatusPage != null && d.StatusPage.WorkspaceId == WorkspaceId)), ct);
 
     private async Task<string> PublicIpAsync(CancellationToken ct)
     {
