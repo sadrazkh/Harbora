@@ -254,6 +254,10 @@ public sealed class EventDispatcher(
             request.Headers.TryAddWithoutValidation("X-Harbora-Delivery", delivery.EventId);
 
             using var response = await client.SendAsync(request, timeout.Token);
+            // Recorded before the success check so a refusal's own status code is on the row too —
+            // "every attempt writes a row with its real outcome" includes what code the far end gave,
+            // not only whether it counted as accepted.
+            delivery.HttpStatusCode = (int)response.StatusCode;
             if (!response.IsSuccessStatusCode)
             {
                 var detail = "";

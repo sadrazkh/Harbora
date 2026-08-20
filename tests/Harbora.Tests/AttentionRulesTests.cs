@@ -183,6 +183,27 @@ public class AttentionRulesTests
     }
 
     [Fact]
+    public void A_failing_event_subscription_extends_ChannelKind_rather_than_forking_a_second_broken_channel_list()
+    {
+        // P6 (2026-08-20 platform-options plan): "a subscription whose deliveries keep failing
+        // surfaces through the existing broken-channel path in the dashboard Attention block —
+        // extend ChannelKind, don't fork it." This is that extension, proven the same way the two
+        // tests above prove Alert and BackupDelivery.
+        var items = AttentionRules.Build(new AttentionFacts
+        {
+            HasAnyApp = true, HasAnyBackupSchedule = true,
+            BrokenChannels = [("payments-webhook", ChannelKind.EventSubscription, "The webhook returned 500 Internal Server Error")]
+        });
+
+        var item = items.Should().ContainSingle().Subject;
+        item.TitleArgs.Should().Contain("payments-webhook");
+        item.DetailKey.Should().Be(AttentionRules.ChannelEventDetail);
+        item.DetailArgs.Single().Should().Contain("500");
+        item.ActionKey.Should().Be(AttentionRules.EventSubscriptionsAction);
+        item.ActionUrl.Should().Be("/notifications/webhooks");
+    }
+
+    [Fact]
     public void A_full_disk_is_reported_but_a_normal_one_is_not()
     {
         var quiet = AttentionRules.Build(new AttentionFacts { HasAnyApp = true, HasAnyBackupSchedule = true, DiskUsedRatio = 0.5 });

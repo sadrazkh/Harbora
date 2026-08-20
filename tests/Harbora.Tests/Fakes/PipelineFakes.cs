@@ -153,6 +153,14 @@ public sealed class RecordingNotificationService : INotificationService
 
     public List<Sent> Notifications { get; } = [];
 
+    /// <summary>P6 (2026-08-20 platform-options plan): what <c>EventDispatcher</c> sent through the
+    /// Telegram reuse seam — <see cref="SendTelegramAsync"/> — so a test can assert a Telegram event
+    /// subscription really went out through <c>NotificationService</c>'s own channel code rather than
+    /// a second implementation.</summary>
+    public sealed record TelegramSent(string EncryptedTarget, string Title, string Body);
+
+    public List<TelegramSent> TelegramMessages { get; } = [];
+
     /// <summary>
     /// Refuses a cancelled token, like the real <c>NotificationService</c>: it queries the
     /// workspace's alert rules and posts to Discord/Telegram/a webhook with the token it was given,
@@ -204,10 +212,11 @@ public sealed class RecordingNotificationService : INotificationService
     /// NotifyAsync/NotifyRuleAsync, never by running a queued delivery's job body directly.</summary>
     public Task ExecuteQueuedDeliveryAsync(Guid deliveryId, CancellationToken ct) => Task.CompletedTask;
 
-    /// <summary>Not exercised by the pipeline tests this fake serves — none of them subscribe an
-    /// EventSubscription of Telegram's own channel.</summary>
-    public Task SendTelegramAsync(string encryptedTarget, string title, string body, CancellationToken ct) =>
-        Task.CompletedTask;
+    public Task SendTelegramAsync(string encryptedTarget, string title, string body, CancellationToken ct)
+    {
+        TelegramMessages.Add(new TelegramSent(encryptedTarget, title, body));
+        return Task.CompletedTask;
+    }
 }
 
 /// <summary>
