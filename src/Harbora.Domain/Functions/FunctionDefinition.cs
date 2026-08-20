@@ -85,6 +85,17 @@ public class FunctionDefinition : BaseEntity
     /// a person is most likely to mistake for "live".
     /// </summary>
     public bool HasUnpublishedChanges { get; set; }
+
+    /// <summary>
+    /// Off (the default) is exactly as closed as every function was before this flag existed: only
+    /// the panel's own signed door (<see cref="FunctionInvocation"/> via <c>FunctionInvoker</c>) can
+    /// reach it — cron ticks, platform events and a manual "Run now" all arrive that way regardless of
+    /// this flag. On opens a second, unauthenticated route at the function's own URL, for an
+    /// <see cref="FunctionTrigger.Http"/> function that needs to answer a visitor directly — a
+    /// payment callback, an SMS delivery report, a webhook. Meaningless for <see cref="FunctionTrigger.Cron"/>
+    /// or <see cref="FunctionTrigger.Event"/>, which never sit behind a visitor route to begin with.
+    /// </summary>
+    public bool IsPublic { get; set; }
 }
 
 /// <summary>

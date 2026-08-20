@@ -19,7 +19,7 @@ public class FunctionProjectTests
 {
     private static FunctionDefinition Fn(
         string slug, FunctionTrigger trigger = FunctionTrigger.Http,
-        string? route = null, string code = "// code", bool enabled = true) =>
+        string? route = null, string code = "// code", bool enabled = true, bool isPublic = false) =>
         new()
         {
             Name = slug,
@@ -28,6 +28,7 @@ public class FunctionProjectTests
             Route = route,
             Code = code,
             IsEnabled = enabled,
+            IsPublic = isPublic,
             CronExpression = trigger == FunctionTrigger.Cron ? "0 3 * * *" : null,
             EventKey = trigger == FunctionTrigger.Event ? FunctionEvents.DeploymentSucceeded : null
         };
@@ -126,6 +127,71 @@ public class FunctionProjectTests
 
         File(files, "server.mjs").Should().Contain("enabled: false");
         files.Should().ContainSingle(f => f.Path == "functions/a.mjs");
+    }
+
+    // ---------------------------------------------------- F1: the public door
+
+    [Fact]
+    public void A_new_functions_registry_row_says_protected_in_every_runtime()
+    {
+        // Protected is the default: a function that never touched the new toggle must be exactly as
+        // closed as it was before this flag existed.
+        File(FunctionProject.Generate(FunctionRuntime.CSharp, [Fn("hello")]), "Program.cs")
+            .Should().Contain("\"hello\", \"hello\", \"http\", true, false,");
+
+        File(FunctionProject.Generate(FunctionRuntime.JavaScript, [Fn("hello")]), "server.mjs")
+            .Should().Contain("enabled: true, public: false,");
+
+        File(FunctionProject.Generate(FunctionRuntime.Python, [Fn("hello")]), "server.py")
+            .Should().Contain("'enabled': True, 'public': False,");
+    }
+
+    [Fact]
+    public void A_public_functions_registry_row_says_so_in_every_runtime()
+    {
+        File(FunctionProject.Generate(FunctionRuntime.CSharp, [Fn("hello", isPublic: true)]), "Program.cs")
+            .Should().Contain("\"hello\", \"hello\", \"http\", true, true,");
+
+        File(FunctionProject.Generate(FunctionRuntime.JavaScript, [Fn("hello", isPublic: true)]), "server.mjs")
+            .Should().Contain("enabled: true, public: true,");
+
+        File(FunctionProject.Generate(FunctionRuntime.Python, [Fn("hello", isPublic: true)]), "server.py")
+            .Should().Contain("'enabled': True, 'public': True,");
+    }
+
+    [Fact]
+    public void The_visitor_route_refuses_a_protected_function_with_401_in_every_runtime()
+    {
+        // This is the acceptance test for "a protected one still 401s": the visitor route (not the
+        // panel's own invoke door, which already 401s an unsigned caller) now carries its own refusal
+        // for exactly the function rows that never opted into being public.
+        File(FunctionProject.Generate(FunctionRuntime.CSharp, [Fn("hello")]), "Program.cs")
+            .Should().Contain("if (!fn.Public) return Results.StatusCode(401);");
+
+        var js = File(FunctionProject.Generate(FunctionRuntime.JavaScript, [Fn("hello")]), "server.mjs");
+        js.Should().Contain("if (!fn.public)");
+        js.Should().Contain("status: 401");
+
+        var python = File(FunctionProject.Generate(FunctionRuntime.Python, [Fn("hello")]), "server.py");
+        python.Should().Contain("if not fn['public']:");
+        python.Should().Contain("self._send(401, {}, '')");
+    }
+
+    [Theory]
+    [InlineData(FunctionRuntime.CSharp)]
+    [InlineData(FunctionRuntime.JavaScript)]
+    [InlineData(FunctionRuntime.Python)]
+    public void The_secret_door_keeps_demanding_the_secret_even_for_a_public_function(FunctionRuntime runtime)
+    {
+        // A Public function gets an *additional* route, never a replacement: the panel's own door —
+        // where cron, events and "Run now" arrive — must still refuse an unsigned call exactly as it
+        // always did, whatever this function's exposure is set to.
+        var files = FunctionProject.Generate(runtime, [Fn("hello", isPublic: true)]);
+        var host = string.Concat(files.Select(f => f.Content));
+
+        host.Should().Contain("The panel's own door: cron and events arrive here, never through a public route.");
+        host.Should().Contain(FunctionProject.SecretHeader);
+        host.Should().Contain(FunctionProject.SecretEnvVar);
     }
 
     [Fact]

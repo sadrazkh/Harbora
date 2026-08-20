@@ -221,7 +221,7 @@ public static class FunctionProject
             registry.Append(
                 $"""
                         ["{fn.Slug}"] = new Registration(
-                            "{fn.Slug}", "{Escape(RouteFor(fn))}", "{TriggerName(fn.Trigger)}", {Lower(fn.IsEnabled)},
+                            "{fn.Slug}", "{Escape(RouteFor(fn))}", "{TriggerName(fn.Trigger)}", {Lower(fn.IsEnabled)}, {Lower(fn.IsPublic)},
                             (req, ctx) => Harbora.Fn.{type}.Function.Run(req, ctx)),
 
                 """);
@@ -297,6 +297,11 @@ public static class FunctionProject
                     ?? (http_fns.Count == 1 ? http_fns[0] : null);
 
                 if (fn is null) return Results.NotFound(new { error = "No function is routed here.", path });
+                // Protected is the default and the closedness every function had before this flag
+                // existed: only a function whose owner flipped it Public answers a visitor here.
+                // Everyone else — cron, events, a manual Run now — still reaches it through the
+                // panel's signed door above, which this check never touches.
+                if (!fn.Public) return Results.StatusCode(401);
 
                 using var reader = new StreamReader(http.Body);
                 var body = await reader.ReadToEndAsync();
@@ -342,7 +347,7 @@ public static class FunctionProject
                     ? ct : "text/plain; charset=utf-8";
 
             internal sealed record Registration(
-                string Slug, string Route, string Trigger, bool Enabled,
+                string Slug, string Route, string Trigger, bool Enabled, bool Public,
                 Func<FnRequest, FnContext, Task<FnResponse>> Handler);
 
             internal sealed record Envelope(string? Trigger, string? Body, EnvelopeEvent? Event);
@@ -400,7 +405,7 @@ public static class FunctionProject
             var id = FunctionSlug.ToIdentifier(fn.Slug);
             imports.AppendLine($"import fn_{id} from './functions/{fn.Slug}.mjs';");
             registry.AppendLine(
-                $"  {{ slug: '{fn.Slug}', route: '{Escape(RouteFor(fn))}', trigger: '{TriggerName(fn.Trigger)}', enabled: {Lower(fn.IsEnabled)}, handler: fn_{id} }},");
+                $"  {{ slug: '{fn.Slug}', route: '{Escape(RouteFor(fn))}', trigger: '{TriggerName(fn.Trigger)}', enabled: {Lower(fn.IsEnabled)}, public: {Lower(fn.IsPublic)}, handler: fn_{id} }},");
         }
 
         return
@@ -516,6 +521,14 @@ public static class FunctionProject
                 send(res, { status: 404, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: 'No function is routed here.', path }) });
                 return;
               }
+              // Protected is the default and the closedness every function had before this flag
+              // existed: only a function whose owner flipped it Public answers a visitor here.
+              // Everyone else — cron, events, a manual Run now — still reaches it through the panel's
+              // signed door above, which this check never touches.
+              if (!fn.public) {
+                send(res, { status: 401, headers: {}, body: '' });
+                return;
+              }
 
               const body = await readBody(req);
               const request = {
@@ -569,7 +582,7 @@ public static class FunctionProject
             var module = FunctionSlug.ToIdentifier(fn.Slug);
             imports.AppendLine($"from functions import {module} as fn_{module}");
             registry.AppendLine(
-                $"    {{'slug': '{fn.Slug}', 'route': '{Escape(RouteFor(fn))}', 'trigger': '{TriggerName(fn.Trigger)}', 'enabled': {(fn.IsEnabled ? "True" : "False")}, 'handler': fn_{module}.run}},");
+                $"    {{'slug': '{fn.Slug}', 'route': '{Escape(RouteFor(fn))}', 'trigger': '{TriggerName(fn.Trigger)}', 'enabled': {(fn.IsEnabled ? "True" : "False")}, 'public': {(fn.IsPublic ? "True" : "False")}, 'handler': fn_{module}.run}},");
         }
 
         // Only the standard library: pip install at image build would need the network, would fail
@@ -686,6 +699,13 @@ public static class FunctionProject
                     if fn is None:
                         self._send(404, {'content-type': 'application/json'},
                                    json.dumps({'error': 'No function is routed here.', 'path': path}))
+                        return
+                    # Protected is the default and the closedness every function had before this flag
+                    # existed: only a function whose owner flipped it Public answers a visitor here.
+                    # Everyone else — cron, events, a manual Run now — still reaches it through the
+                    # panel's signed door above, which this check never touches.
+                    if not fn['public']:
+                        self._send(401, {}, '')
                         return
 
                     request = {'method': self.command, 'path': path,
