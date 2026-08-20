@@ -315,7 +315,10 @@ public class QuotaRefusalBilingualismTests
             creationBilling: new Harbora.Infrastructure.Billing.ResourceCreationBilling(
                 db, clock, Microsoft.Extensions.Options.Options.Create(
                     new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
-            deploymentEngine: unused)
+            deploymentEngine: unused,
+            // Sub-project 10's export/import actions are not exercised by these quota-refusal tests.
+            backupEngine: null!,
+            downloadTokens: null!)
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };

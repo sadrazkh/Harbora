@@ -42,7 +42,9 @@ public sealed partial class DatabasesController(
     INodeAgentClient node,
     ICurrentUser currentUser,
     Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling,
-    IDeploymentEngine deploymentEngine) : Controller
+    IDeploymentEngine deploymentEngine,
+    IBackupEngine backupEngine,
+    Harbora.Infrastructure.Backups.BackupDownloadTokens downloadTokens) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 
@@ -129,6 +131,8 @@ public sealed partial class DatabasesController(
         {
             var service = services.First(s => s.Id == selectedRow.Id);
             var canManage = await access.CanTouchServiceAsync(service.Id, Capabilities.DatabasesManage, ct);
+            var canExport = await access.CanTouchServiceAsync(service.Id, Capabilities.BackupsRun, ct);
+            var canImport = await access.CanTouchServiceAsync(service.Id, Capabilities.BackupsRestore, ct);
             var conn = await engine.GetConnectionInfoAsync(service.Id, ct);
             var network = await db.Environments.AsNoTracking().Where(e => e.Id == service.EnvironmentId)
                 .Select(e => Harbora.Infrastructure.Networking.EnvironmentNetwork.For(e.Project!.Slug, e.Slug, e.Id))
@@ -138,7 +142,7 @@ public sealed partial class DatabasesController(
             var selectedBackups = backups.Where(b => b.TargetRef == service.Id.ToString()).Take(6)
                 .Select(b => new BackupEventViewModel(
                     b.Id, b.Status, b.SizeBytes, b.FinishedAt ?? b.StartedAt ?? b.CreatedAt,
-                    b.IsScheduled, b.VerifiedRestorable)).ToList();
+                    b.IsScheduled, b.VerifiedRestorable, b.ExpiresAt)).ToList();
             var schedule = await db.BackupSchedules.AsNoTracking()
                 .Where(s => s.TargetRef == service.Id.ToString() && s.IsEnabled)
                 .OrderBy(s => s.NextRunAt).FirstOrDefaultAsync(ct);
@@ -149,6 +153,8 @@ public sealed partial class DatabasesController(
                 Version = selectedRow.Version, Status = selectedRow.Status,
                 Project = selectedRow.Project, Environment = selectedRow.Environment,
                 CanManage = canManage,
+                CanExport = canExport,
+                CanImport = canImport,
                 CurrentTab = "overview",
                 Database = selectedRow,
                 Connection = reveal && canManage ? conn.ConnectionString : conn.ConnectionStringMasked,
@@ -188,6 +194,8 @@ public sealed partial class DatabasesController(
         if (service is null) return null;
 
         var canManage = await access.CanTouchServiceAsync(service.Id, Capabilities.DatabasesManage, ct);
+        var canExport = await access.CanTouchServiceAsync(service.Id, Capabilities.BackupsRun, ct);
+        var canImport = await access.CanTouchServiceAsync(service.Id, Capabilities.BackupsRestore, ct);
         var conn = await engine.GetConnectionInfoAsync(service.Id, ct);
 
         var metrics = await db.MonitoringMetrics.AsNoTracking()
@@ -213,7 +221,7 @@ public sealed partial class DatabasesController(
             .OrderByDescending(b => b.CreatedAt).Take(6)
             .Select(b => new BackupEventViewModel(
                 b.Id, b.Status, b.SizeBytes, b.FinishedAt ?? b.StartedAt ?? b.CreatedAt,
-                b.IsScheduled, b.VerifiedRestorable)).ToListAsync(ct);
+                b.IsScheduled, b.VerifiedRestorable, b.ExpiresAt)).ToListAsync(ct);
 
         var schedule = await db.BackupSchedules.AsNoTracking()
             .Where(s => s.TargetRef == service.Id.ToString() && s.IsEnabled)
@@ -226,6 +234,8 @@ public sealed partial class DatabasesController(
             Id = row.Id, Name = row.Name, Type = row.Type, Version = row.Version, Status = row.Status,
             Project = row.Project, Environment = row.Environment,
             CanManage = canManage,
+            CanExport = canExport,
+            CanImport = canImport,
             CurrentTab = "overview",
             Database = row,
             Connection = reveal && canManage ? conn.ConnectionString : conn.ConnectionStringMasked,

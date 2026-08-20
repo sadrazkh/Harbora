@@ -47,6 +47,20 @@ public sealed class DatabaseOverviewViewModel : DatabaseTabViewModel
     public DateTimeOffset? NextBackupAt { get; init; }
     public int? BackupIntervalHours { get; init; }
 
+    /// <summary>
+    /// Sub-project 10. Export needs only <c>backups.run</c> — the same capability the "back up now"
+    /// button elsewhere already asks for — so an Operator, who has that but not the heavier restore
+    /// capability, can export without being able to import.
+    /// </summary>
+    public bool CanExport { get; init; }
+
+    /// <summary>
+    /// Sub-project 10. Import is gated on <c>backups.restore</c>, the same capability the existing
+    /// admin restore button already requires: it overwrites the database's current contents, which
+    /// is the heavier of the two acts this page can ask the backup engine to do.
+    /// </summary>
+    public bool CanImport { get; init; }
+
     /// <summary>What the container is actually running, so version drift can be shown.</summary>
     public string? RunningImage { get; init; }
 

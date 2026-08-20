@@ -121,4 +121,10 @@ public sealed record BackupEventViewModel(
     long SizeBytes,
     DateTimeOffset At,
     bool IsScheduled,
-    bool? VerifiedRestorable);
+    bool? VerifiedRestorable,
+    /// <summary>
+    /// Set only for a self-serve export (sub-project 10) — null for every ordinary scheduled/manual
+    /// backup. Its presence is what the Overview tab uses to offer "get a download link" only where
+    /// it makes sense, rather than on every completed backup in the list.
+    /// </summary>
+    DateTimeOffset? ExpiresAt = null);

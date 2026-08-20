@@ -11,8 +11,13 @@ namespace Harbora.Infrastructure.Backups;
 /// <summary>What a mint produced: the raw token to put in the link, and when it stops working.</summary>
 public sealed record BackupDownloadMint(string Token, DateTimeOffset ExpiresAt);
 
-/// <summary>What a redemption found, or nothing at all.</summary>
-public sealed record BackupDownloadRedemption(bool Ok, Guid BackupId)
+/// <summary>
+/// What a redemption found — enough to stream the artifact through <see cref="IBackupStorage"/> — or
+/// nothing at all. Carries the resolved <see cref="Backup"/> and <see cref="BackupDestination"/> so the
+/// unauthenticated download route adds no query of its own, the same split
+/// <c>VolumeDownloadRedemption</c> makes for a volume file.
+/// </summary>
+public sealed record BackupDownloadRedemption(bool Ok, Guid BackupId, Backup? Backup = null, BackupDestination? Destination = null)
 {
     public static readonly BackupDownloadRedemption Refused = new(false, default);
 }
@@ -78,9 +83,10 @@ public sealed class BackupDownloadTokens(HarboraDbContext db, ISystemClock clock
         if (record is null || record.IsSpent || AdminerSession.Expired(record.CreatedAt, now))
             return BackupDownloadRedemption.Refused;
 
-        var backup = await db.Backups.IgnoreQueryFilters()
+        var backup = await db.Backups.IgnoreQueryFilters().Include(b => b.Destination)
             .FirstOrDefaultAsync(b => b.Id == record.BackupId, ct);
-        if (backup is null || backup.Status != Domain.Common.BackupStatus.Completed || backup.ArtifactPath is null)
+        if (backup is null || backup.Status != Domain.Common.BackupStatus.Completed
+            || backup.ArtifactPath is null || backup.Destination is null)
             return BackupDownloadRedemption.Refused;
 
         // Spent now, before anything is streamed — not after. A stream that fails partway must not
@@ -88,7 +94,7 @@ public sealed class BackupDownloadTokens(HarboraDbContext db, ISystemClock clock
         record.UsedAt = now;
         await db.SaveChangesAsync(ct);
 
-        return new BackupDownloadRedemption(true, backup.Id);
+        return new BackupDownloadRedemption(true, backup.Id, backup, backup.Destination);
     }
 
     /// <summary>

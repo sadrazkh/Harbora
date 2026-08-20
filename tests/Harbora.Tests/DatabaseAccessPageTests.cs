@@ -176,7 +176,10 @@ public class DatabaseAccessPageTests
             new Harbora.Infrastructure.Billing.ResourceCreationBilling(
                 db, clock, Microsoft.Extensions.Options.Options.Create(
                     new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
-            deploymentEngine: new NeverAskedDeploymentEngine())
+            deploymentEngine: new NeverAskedDeploymentEngine(),
+            // Sub-project 10's export/import actions are not exercised by these access-page tests.
+            backupEngine: null!,
+            downloadTokens: null!)
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
@@ -249,7 +252,10 @@ public class DatabaseAccessPageTests
             new Harbora.Infrastructure.Billing.ResourceCreationBilling(
                 db, new Clock(), Microsoft.Extensions.Options.Options.Create(
                     new Harbora.Infrastructure.Billing.BillingOptions { Enabled = false })),
-            deploymentEngine: new NeverAskedDeploymentEngine())
+            deploymentEngine: new NeverAskedDeploymentEngine(),
+            // Sub-project 10's export/import actions are not exercised by these access-page tests.
+            backupEngine: null!,
+            downloadTokens: null!)
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
