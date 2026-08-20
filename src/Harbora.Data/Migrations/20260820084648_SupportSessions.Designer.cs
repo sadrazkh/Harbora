@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    [Migration("20260820080005_SupportSessions")]
+    [Migration("20260820084648_SupportSessions")]
     partial class SupportSessions
     {
         /// <inheritdoc />
@@ -1758,6 +1758,52 @@ namespace Harbora.Data.Migrations
                     b.HasIndex("UserId", "UsedAt", "ExpiresAt");
 
                     b.ToTable("EmailVerificationTokens");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Identity.ExternalLogin", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<DateTimeOffset>("LinkedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Provider", "Subject")
+                        .IsUnique();
+
+                    b.HasIndex("UserId", "Provider")
+                        .IsUnique();
+
+                    b.ToTable("ExternalLogins");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Identity.PasswordResetToken", b =>
@@ -5164,6 +5210,17 @@ namespace Harbora.Data.Migrations
                 });
 
             modelBuilder.Entity("Harbora.Domain.Identity.EmailVerificationToken", b =>
+                {
+                    b.HasOne("Harbora.Domain.Identity.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Identity.ExternalLogin", b =>
                 {
                     b.HasOne("Harbora.Domain.Identity.User", "User")
                         .WithMany()
