@@ -58,6 +58,29 @@ public class AppAddressTests
     }
 
     [Fact]
+    public void An_app_slug_that_starts_with_the_status_page_prefix_is_refused()
+    {
+        // Sub-project 7: status-{workspaceSlug} is reserved under the tenant root domain so no app's
+        // own derived name can collide with a workspace's status page — the same Reserved outcome a
+        // platform host produces, not a new one, because a tenant-facing "why" is identical either way.
+        var decision = AppAddress.Decide(ServiceKind.Web, requested: null, slug: "status-acme",
+            rootDomain: "apps.example.com", reservedHosts: NoReservedHosts);
+
+        decision.Host.Should().BeNull();
+        decision.Outcome.Should().Be(AppAddressOutcome.Reserved);
+    }
+
+    [Fact]
+    public void A_typed_hostname_under_the_status_page_prefix_is_refused_too()
+    {
+        var decision = AppAddress.Decide(ServiceKind.Web, requested: "status-acme.apps.example.com", slug: "shop",
+            rootDomain: "apps.example.com", reservedHosts: NoReservedHosts);
+
+        decision.Host.Should().BeNull();
+        decision.Outcome.Should().Be(AppAddressOutcome.Reserved);
+    }
+
+    [Fact]
     public void A_typed_name_wins_over_the_derived_one()
     {
         var decision = AppAddress.Decide(ServiceKind.Web, requested: "Shop.Example.COM", slug: "shop",

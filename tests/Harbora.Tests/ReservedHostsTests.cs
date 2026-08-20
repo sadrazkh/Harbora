@@ -113,3 +113,80 @@ public class ReservedHostsTests
             .Should().BeEquivalentTo(["panel.acme.test", "nodes.panel.acme.test", "s3.acme.test"]);
     }
 }
+
+/// <summary>
+/// Sub-project 7 (2026-08-20 platform-options plan, "Public status page on a platform subdomain"):
+/// every workspace's status page lives at <c>status-{workspace.Slug}</c> under the tenant root
+/// domain, minted on demand rather than drawn from a fixed list — <see cref="ReservedHosts.ForPlatform"/>
+/// cannot enumerate a name that does not exist yet. This is a second, narrower rule: a leftmost-label
+/// <em>prefix</em> check scoped to the root domain apps already live under, so
+/// <c>AppAddress.Decide</c> can refuse a tenant app the same name would otherwise be free to claim
+/// — the same guard, reused, not a second reserved-host mechanism next to it.
+/// </summary>
+public class ReservedHostPrefixTests
+{
+    [Fact]
+    public void The_status_page_prefix_is_reserved_under_the_tenant_root_domain()
+    {
+        ReservedHosts.IsReservedPrefix("status-acme.apps.example.com", "apps.example.com").Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_tenant_app_whose_name_merely_contains_the_word_status_is_not_caught()
+    {
+        // "mystatus-acme" does not start with the reserved label — a substring match here would take
+        // away names that were never the platform's to reserve.
+        ReservedHosts.IsReservedPrefix("mystatus-acme.apps.example.com", "apps.example.com").Should().BeFalse();
+    }
+
+    [Fact]
+    public void The_bare_word_status_with_no_dash_is_an_ordinary_tenant_name()
+    {
+        // The pattern is "status-{something}"; "status" alone never collides with a minted page.
+        ReservedHosts.IsReservedPrefix("status.apps.example.com", "apps.example.com").Should().BeFalse();
+    }
+
+    [Fact]
+    public void The_root_domain_itself_is_not_caught()
+    {
+        ReservedHosts.IsReservedPrefix("apps.example.com", "apps.example.com").Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_label_deeper_than_the_leftmost_one_is_not_caught()
+    {
+        // Reserving a leftmost label, never a suffix — the same narrowness ReservedHosts.ForPlatform
+        // insists on for its own exact names.
+        ReservedHosts.IsReservedPrefix("a.status-acme.apps.example.com", "apps.example.com").Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("STATUS-Acme.Apps.Example.Com")]
+    [InlineData("  status-acme.apps.example.com  ")]
+    [InlineData("status-acme.apps.example.com.")]
+    public void Case_padding_and_a_trailing_dot_do_not_get_round_it(string typed)
+    {
+        ReservedHosts.IsReservedPrefix(typed, "apps.example.com").Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_status_prefixed_host_on_a_different_domain_is_not_this_rules_business()
+    {
+        // A customer's own custom domain (sub-project 8) is a different check entirely — this rule
+        // only guards the names AppAddress hands out under the platform's own root domain.
+        ReservedHosts.IsReservedPrefix("status-acme.customer-owned-domain.com", "apps.example.com").Should().BeFalse();
+    }
+
+    [Fact]
+    public void No_root_domain_configured_reserves_nothing()
+    {
+        ReservedHosts.IsReservedPrefix("status-acme.apps.example.com", null).Should().BeFalse();
+    }
+
+    [Fact]
+    public void An_empty_candidate_is_not_reserved()
+    {
+        ReservedHosts.IsReservedPrefix("", "apps.example.com").Should().BeFalse();
+        ReservedHosts.IsReservedPrefix(null, "apps.example.com").Should().BeFalse();
+    }
+}

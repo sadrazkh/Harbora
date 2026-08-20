@@ -75,7 +75,10 @@ public static class AppAddress
             || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
             return new(null, AppAddressOutcome.NoRootDomain);
 
-        return ReservedHosts.IsReserved(host, reservedHosts)
+        // Sub-project 7 (2026-08-20 platform-options plan): status-{workspaceSlug} is reserved the
+        // same way — one guard, asked twice, rather than a second reservation mechanism next to this
+        // one. See ReservedHosts.IsReservedPrefix for why a prefix check exists at all.
+        return ReservedHosts.IsReserved(host, reservedHosts) || ReservedHosts.IsReservedPrefix(host, rootDomain)
             ? new(null, AppAddressOutcome.Reserved)
             : new(host, AppAddressOutcome.Assigned);
     }

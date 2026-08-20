@@ -73,6 +73,42 @@ public static class ReservedHosts
         Normalise(host) is { Length: > 0 } candidate
         && platformHosts.Any(h => string.Equals(Normalise(h), candidate, StringComparison.Ordinal));
 
+    /// <summary>The leftmost-label prefix the platform's own status pages claim under the tenant root domain.</summary>
+    public const string StatusPagePrefix = "status-";
+
+    /// <summary>
+    /// True when <paramref name="host"/> is a leftmost label under <paramref name="rootDomain"/> that
+    /// starts with <see cref="StatusPagePrefix"/> — <c>status-acme.apps.example.com</c> under a root
+    /// domain of <c>apps.example.com</c>, never the root domain itself and never a label further down.
+    ///
+    /// <para>
+    /// A prefix, not an exact list, because <see cref="ForPlatform"/>'s four names are known at boot
+    /// from configuration and a status page's host is not: <c>status-{workspace.Slug}</c> is minted
+    /// per workspace, on demand, and there is no fixed set to enumerate ahead of that. This still lives
+    /// beside <see cref="IsReserved"/> rather than as a second reservation mechanism — both answer the
+    /// same question ("can an app claim this host"), and <see cref="Harbora.Infrastructure.Networking.AppAddress.Decide"/>
+    /// asks both of one host in one place.
+    /// </para>
+    ///
+    /// <para>
+    /// Scoped to the root domain apps already live under, deliberately: a customer's own domain
+    /// starting with "status-" is that customer's business, not this rule's — see
+    /// sub-project 8, which attaches a workspace's own status page to a domain the customer supplies.
+    /// </para>
+    /// </summary>
+    public static bool IsReservedPrefix(string? host, string? rootDomain)
+    {
+        var candidate = Normalise(host);
+        var root = Normalise(rootDomain);
+        if (candidate is null || root is null) return false;
+        if (!candidate.EndsWith("." + root, StringComparison.Ordinal)) return false;
+
+        var label = candidate[..^(root.Length + 1)];
+        return label.Length > 0
+            && !label.Contains('.')
+            && label.StartsWith(StatusPagePrefix, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// The host part of a configuration value, whether it arrives as a URL or as a bare name. The
     /// two shapes are mixed on purpose in <c>.env</c>: <c>PANEL_DOMAIN</c> is a name and
