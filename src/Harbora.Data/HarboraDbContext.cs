@@ -82,6 +82,7 @@ public class HarboraDbContext : DbContext
     public DbSet<ManagedService> ManagedServices => Set<ManagedService>();
     public DbSet<BackupDestination> BackupDestinations => Set<BackupDestination>();
     public DbSet<Backup> Backups => Set<Backup>();
+    public DbSet<BackupDownloadToken> BackupDownloadTokens => Set<BackupDownloadToken>();
     public DbSet<BackupSchedule> BackupSchedules => Set<BackupSchedule>();
     public DbSet<BackupDelivery> BackupDeliveries => Set<BackupDelivery>();
     public DbSet<MailServer> MailServers => Set<MailServer>();

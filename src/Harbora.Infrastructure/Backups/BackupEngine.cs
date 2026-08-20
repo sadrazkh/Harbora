@@ -566,6 +566,25 @@ public sealed class BackupEngine(
 
     public async Task EnforceRetentionAsync(CancellationToken ct)
     {
+        // Sub-project 10: a self-serve database export is not a retained backup — it is a one-off
+        // artifact minted so a customer can download it once, and it has no business outliving the
+        // download link minted from it. Rather than a second sweeper on its own timer, this reuses the
+        // tick that already runs every five minutes (BackupScheduler) and the ExpiresAt column that
+        // has existed on Backup since the first schema but that nothing ever set or read until now —
+        // ordinary scheduled/manual backups never carry an ExpiresAt, so this touches only what a
+        // caller explicitly time-boxed.
+        var timedOut = await db.Backups.Include(b => b.Destination)
+            .Where(b => b.ExpiresAt != null && b.ExpiresAt <= clock.UtcNow)
+            .ToListAsync(ct);
+
+        foreach (var expired in timedOut)
+        {
+            try { if (expired.Destination is not null && expired.ArtifactPath is not null) await storage.DeleteAsync(expired.Destination, expired.ArtifactPath, ct); }
+            catch (Exception ex) { logger.LogWarning(ex, "Failed to delete the expired artifact for backup {Id}.", expired.Id); }
+            db.Backups.Remove(expired);
+        }
+        if (timedOut.Count > 0) await db.SaveChangesAsync(ct);
+
         var completed = await db.Backups.Include(b => b.Destination)
             .Where(b => b.Status == BackupStatus.Completed)
             .OrderByDescending(b => b.CreatedAt).ToListAsync(ct);
