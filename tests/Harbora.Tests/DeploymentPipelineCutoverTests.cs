@@ -549,6 +549,96 @@ public class DeploymentPipelineCutoverTests
         h.Proxy.ApplyCount.Should().Be(0, "there is nothing to route yet");
     }
 
+    // ---- a redeploy must not silently escape maintenance mode ----
+
+    /// <summary>
+    /// The defect this closes: a redeploy of an app already in maintenance used to silently repoint
+    /// its routes back to the real container while <c>App.MaintenanceMode</c> still read "on" — a
+    /// panel telling the customer visitors see a maintenance page while they actually reach the app.
+    ///
+    /// <para>
+    /// Asserted on the <i>rendered</i> proxy configuration (<see cref="RecordingProxyEngine.Live"/>),
+    /// not merely the database flag — the flag alone is exactly what still read "true" while this
+    /// bug was live, which is the whole shape of the defect class this plan names.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_redeploy_of_a_maintaining_app_keeps_visitors_on_the_maintenance_page()
+    {
+        using var h = new PipelineHarness().WithDomain();
+        await h.RunAsync(h.QueueDeployment(number: 1));   // ships for real, so the Route row is genuine
+
+        var route = await h.Db.Routes.FirstAsync(r => r.AppId == h.App.Id);
+        // Mirrors exactly what AppOperationsService.SetMaintenanceModeAsync(enabled: true) does: the
+        // real upstream saved onto the row, the route itself repointed at the panel.
+        route.SavedTargetService = route.TargetService;
+        route.SavedTargetPort = route.TargetPort;
+        route.SavedExtraUpstreamsJson = route.ExtraUpstreamsJson;
+        route.SavedLoadBalancerHealthCheckPath = route.LoadBalancerHealthCheckPath;
+        route.TargetService = h.Options.PanelContainerName;
+        route.TargetPort = h.Options.PanelHttpPort;
+        route.MaintenanceRedirected = true;
+        h.App.MaintenanceMode = true;
+        h.App.MaintenanceSince = h.Clock.UtcNow;
+        h.Db.SaveChanges();
+
+        var result = await h.RunAsync(h.QueueDeployment(number: 2));
+
+        result.Status.Should().Be(DeploymentStatus.Succeeded, "a redeploy during maintenance still ships");
+
+        var live = h.Proxy.Live.Should().ContainSingle().Subject;
+        live.TargetService.Should().Be(h.Options.PanelContainerName,
+            "the rendered config must still send visitors to the maintenance page, not the new container");
+        live.TargetPort.Should().Be(h.Options.PanelHttpPort);
+
+        var app = await h.Db.Apps.AsNoTracking().FirstAsync(a => a.Id == h.App.Id);
+        app.MaintenanceMode.Should().BeTrue("nothing about a redeploy turns maintenance off");
+
+        var reloadedRoute = await h.Db.Routes.AsNoTracking().FirstAsync(r => r.AppId == h.App.Id);
+        reloadedRoute.MaintenanceRedirected.Should().BeTrue();
+        reloadedRoute.SavedTargetService.Should().Be(h.ContainerFor(2),
+            "turning maintenance off later must restore to what THIS deploy built, not the stale container");
+    }
+
+    /// <summary>
+    /// Exercises <c>WireProxyAsync</c>'s own revert-then-republish path (not merely a health-check
+    /// failure, which never reaches wiring at all): the new container comes up and passes health, and
+    /// only the proxy apply itself is refused — the same shape
+    /// <c>DeploymentPipelineCutoverTests</c>'s other failure tests already probe for the ordinary
+    /// (non-maintenance) case.
+    /// </summary>
+    [Fact]
+    public async Task A_redeploy_of_a_maintaining_app_whose_proxy_apply_fails_restores_the_saved_upstream_it_found()
+    {
+        using var h = new PipelineHarness().WithDomain();
+        await h.RunAsync(h.QueueDeployment(number: 1));
+
+        var route = await h.Db.Routes.FirstAsync(r => r.AppId == h.App.Id);
+        var realUpstream = route.TargetService;
+        route.SavedTargetService = realUpstream;
+        route.SavedTargetPort = route.TargetPort;
+        route.TargetService = h.Options.PanelContainerName;
+        route.TargetPort = h.Options.PanelHttpPort;
+        route.MaintenanceRedirected = true;
+        h.App.MaintenanceMode = true;
+        h.Db.SaveChanges();
+
+        h.Proxy.Result = new(false, "refused", false);   // health passes; only the apply is refused
+        var result = await h.RunAsync(h.QueueDeployment(number: 2));
+
+        result.Status.Should().Be(DeploymentStatus.Failed);
+
+        var reloadedRoute = await h.Db.Routes.AsNoTracking().FirstAsync(r => r.AppId == h.App.Id);
+        reloadedRoute.TargetService.Should().Be(h.Options.PanelContainerName,
+            "a failed redeploy must leave the maintenance routing exactly as it found it");
+        reloadedRoute.SavedTargetService.Should().Be(realUpstream,
+            "the saved upstream must still point at the container that is actually still running, " +
+            "not at whatever the failed attempt tried to build");
+
+        var app = await h.Db.Apps.AsNoTracking().FirstAsync(a => a.Id == h.App.Id);
+        app.MaintenanceMode.Should().BeTrue();
+    }
+
     // ---- work that is already over ----
 
     [Fact]

@@ -1775,11 +1775,36 @@ public sealed class DeploymentPipeline(
             if (undo.All(u => !ReferenceEquals(u.Route, route)))
                 undo.Add(new RouteRevert(route, isNew, route.TargetService, route.TargetPort,
                     route.ExtraUpstreamsJson, route.LoadBalancerHealthCheckPath,
-                    route.SslEnabled, route.RedirectHttpToHttps, route.IsEnabled));
-            route.TargetService = primary.Host;
-            route.TargetPort = primary.Port;
-            route.ExtraUpstreamsJson = extraJson;
-            route.LoadBalancerHealthCheckPath = lbHealthPath;
+                    route.SslEnabled, route.RedirectHttpToHttps, route.IsEnabled,
+                    route.MaintenanceRedirected, route.SavedTargetService, route.SavedTargetPort,
+                    route.SavedExtraUpstreamsJson, route.SavedLoadBalancerHealthCheckPath));
+
+            if (app.MaintenanceMode)
+            {
+                // A redeploy must never silently repoint a maintaining app's routes back at the real
+                // container while App.MaintenanceMode still reads "on" — a panel telling the customer
+                // visitors see a maintenance page while they actually reach the app. What this
+                // deployment just built becomes the target
+                // AppOperationsService.SetMaintenanceModeAsync(enabled: false) restores to later — the
+                // same Saved* fields that method already owns and is the only other writer of — while
+                // the live route keeps pointing at the panel, exactly as turning maintenance on does.
+                route.SavedTargetService = primary.Host;
+                route.SavedTargetPort = primary.Port;
+                route.SavedExtraUpstreamsJson = extraJson;
+                route.SavedLoadBalancerHealthCheckPath = lbHealthPath;
+                route.TargetService = _opt.PanelContainerName;
+                route.TargetPort = _opt.PanelHttpPort;
+                route.ExtraUpstreamsJson = null;
+                route.LoadBalancerHealthCheckPath = null;
+                route.MaintenanceRedirected = true;
+            }
+            else
+            {
+                route.TargetService = primary.Host;
+                route.TargetPort = primary.Port;
+                route.ExtraUpstreamsJson = extraJson;
+                route.LoadBalancerHealthCheckPath = lbHealthPath;
+            }
             route.SslEnabled = domain.SslEnabled;
             route.RedirectHttpToHttps = domain.ForceHttps;
             route.IsEnabled = true;
@@ -1873,7 +1898,14 @@ public sealed class DeploymentPipeline(
     private sealed record RouteRevert(
         Route Route, bool WasAdded, string TargetService, int TargetPort,
         string? ExtraUpstreamsJson, string? LoadBalancerHealthCheckPath,
-        bool SslEnabled, bool RedirectHttpToHttps, bool IsEnabled);
+        bool SslEnabled, bool RedirectHttpToHttps, bool IsEnabled,
+        // Maintenance mode's own half of the row (P5, 2026-08-20 platform-options plan): a redeploy
+        // of a maintaining app rewrites these too (see the loop above), so a refused apply has to put
+        // them back exactly as it does the rest — otherwise turning maintenance off after a failed
+        // redeploy would restore to the container that failed attempt tried to build, not the one
+        // still actually serving.
+        bool MaintenanceRedirected, string? SavedTargetService, int? SavedTargetPort,
+        string? SavedExtraUpstreamsJson, string? SavedLoadBalancerHealthCheckPath);
 
     /// <summary>
     /// Put the routes back as this deployment found them: rows it created are removed, rows it
@@ -1901,6 +1933,11 @@ public sealed class DeploymentPipeline(
                 previous.Route.SslEnabled = previous.SslEnabled;
                 previous.Route.RedirectHttpToHttps = previous.RedirectHttpToHttps;
                 previous.Route.IsEnabled = previous.IsEnabled;
+                previous.Route.MaintenanceRedirected = previous.MaintenanceRedirected;
+                previous.Route.SavedTargetService = previous.SavedTargetService;
+                previous.Route.SavedTargetPort = previous.SavedTargetPort;
+                previous.Route.SavedExtraUpstreamsJson = previous.SavedExtraUpstreamsJson;
+                previous.Route.SavedLoadBalancerHealthCheckPath = previous.SavedLoadBalancerHealthCheckPath;
             }
             // CancellationToken.None deliberately: a cancelled deployment is exactly when this has to
             // run, and passing the cancelled token would skip the cleanup its cancellation created.
