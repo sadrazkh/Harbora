@@ -278,5 +278,14 @@ public class SupportRestrictionHttpTests(HarboraHttpFixture fixture)
 
         switched.StatusCode.Should().Be(HttpStatusCode.Found);
         switched.RedirectPath().Should().NotBe("/account/denied");
+
+        // Do-not-change item 23, and the one place it is not a matter of taste: Simple mode folds
+        // advanced material away and never removes it, and the banner is not advanced material at
+        // all. A customer who prefers the simpler panel is not a customer who opted out of being
+        // told somebody else is signed in as them.
+        var simple = await support.GetAsync("/");
+        simple.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await simple.Content.ReadAsStringAsync()).Should().Contain("data-support-session",
+            "the banner is operational information, and operational information is never folded");
     }
 }
