@@ -30,6 +30,21 @@ public sealed class HarboraRuntimeOptions
     /// <summary>Panel container name; joined to each tenant network so it can HTTP health-probe apps by name.</summary>
     public string PanelContainerName { get; set; } = "harbora-panel";
 
+    /// <summary>
+    /// The port the panel container itself listens on, as the proxy reaches it over the container
+    /// network — <c>ASPNETCORE_URLS</c> in the <c>Dockerfile</c>, which is 8080, and what
+    /// <c>deploy/docker-compose.yml</c>'s own <c>harbora</c> router label
+    /// (<c>traefik.http.services.harbora.loadbalancer.server.port=8080</c>) already targets.
+    ///
+    /// <para>
+    /// Configurable for the same reason <see cref="ProxyHttpPort"/> is: <see cref="PanelContainerName"/>
+    /// already is, and a maintenance-mode route built from the name but a hardcoded port would aim at
+    /// a container that answers on a port nothing is listening on the moment either knob is changed
+    /// without the other.
+    /// </para>
+    /// </summary>
+    public int PanelHttpPort { get; set; } = 8080;
+
     /// <summary>Per-workspace network name pattern giving tenant-to-tenant isolation.</summary>
     public string WorkspaceNetwork(string slug) => $"harbora-ws-{slug}";
 

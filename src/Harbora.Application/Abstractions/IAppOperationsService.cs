@@ -29,4 +29,36 @@ public interface IAppOperationsService
     Task<LogSearchResult> SearchLogsAsync(
         IReadOnlyList<Guid> appIds, string? text, bool problemsOnly, TimeSpan? window, int maxLinesPerApp,
         CancellationToken ct);
+
+    /// <summary>
+    /// Turn maintenance mode on or off (P5, 2026-08-20 platform-options plan). The app's containers
+    /// are never touched — only the router for its hosts changes, through the exact same
+    /// <c>IProxyEngine.ApplyAllAsync</c> path <c>RoutesController.Save</c> uses. Stopping the app is a
+    /// separate, pre-existing action.
+    ///
+    /// <para>
+    /// <b>Honesty on failure:</b> <c>App.MaintenanceMode</c> is written only after the apply is known
+    /// to have succeeded. When it has not, every route this touched is put back exactly as it found
+    /// it and the platform's proxy config is re-published from the reverted rows — the same
+    /// "revert, then re-apply" shape <c>DeploymentPipeline.WireProxyAsync</c>'s own failure path
+    /// uses — so a failed toggle leaves both the flag and the live routing exactly where they were.
+    /// </para>
+    /// </summary>
+    /// <param name="messageEn">Optional message shown on the maintenance page (English/default).
+    /// Ignored when <paramref name="enabled"/> is false.</param>
+    /// <param name="messageFa">The Persian counterpart, independently optional. Ignored when
+    /// <paramref name="enabled"/> is false.</param>
+    Task<MaintenanceToggleResult> SetMaintenanceModeAsync(
+        Guid appId, bool enabled, string? messageEn, string? messageFa, CancellationToken ct);
+}
+
+/// <summary>
+/// What happened when maintenance mode was toggled. Mirrors <see cref="ProxyApplyResult"/>'s own
+/// honesty shape — a caller that only checks "did it throw" is exactly how a failed apply once read
+/// as a success.
+/// </summary>
+public sealed record MaintenanceToggleResult(bool Success, string? Error)
+{
+    public static readonly MaintenanceToggleResult Ok = new(true, null);
+    public static MaintenanceToggleResult Failed(string error) => new(false, error);
 }

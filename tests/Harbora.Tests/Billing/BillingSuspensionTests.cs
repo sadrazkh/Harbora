@@ -94,6 +94,9 @@ internal sealed class FakeAppOperations(BillingContext own) : IAppOperationsServ
     public Task<LogSearchResult> SearchLogsAsync(
         IReadOnlyList<Guid> appIds, string? text, bool problemsOnly, TimeSpan? window, int maxLinesPerApp,
         CancellationToken ct) => throw new NotSupportedException();
+    public Task<MaintenanceToggleResult> SetMaintenanceModeAsync(
+        Guid appId, bool enabled, string? messageEn, string? messageFa, CancellationToken ct) =>
+        throw new NotSupportedException();
 }
 
 /// <summary>

@@ -62,4 +62,27 @@ public class Route : BaseEntity
     public string? RedirectTo { get; set; }
 
     public bool IsEnabled { get; set; } = true;
+
+    // --- Maintenance mode (P5, 2026-08-20 platform-options plan) ---
+    //
+    // A route belonging to an app in maintenance is temporarily repointed at the panel's own
+    // maintenance endpoint instead of the app's real container — the exact same TargetService/
+    // TargetPort/ExtraUpstreamsJson/LoadBalancerHealthCheckPath fields DeploymentPipeline.WireProxyAsync
+    // already treats as "the live upstream", overwritten the same way and for the same reason. The
+    // difference is lifetime: a deployment's own revert is an in-memory list that only has to survive
+    // one failed request, while maintenance can stay on for days, so what it overwrote has to be
+    // persisted here rather than held in a local variable.
+
+    /// <summary>Whether this route is currently redirected to the panel's maintenance endpoint rather
+    /// than the app's real upstream. Set and cleared only by
+    /// <c>AppOperationsService.SetMaintenanceModeAsync</c>.</summary>
+    public bool MaintenanceRedirected { get; set; }
+
+    /// <summary>The real <see cref="TargetService"/> this route pointed at before maintenance mode
+    /// overwrote it, so turning maintenance off restores exactly what was there — never re-derived,
+    /// for the same reason a deployment's own revert never re-derives it either.</summary>
+    public string? SavedTargetService { get; set; }
+    public int? SavedTargetPort { get; set; }
+    public string? SavedExtraUpstreamsJson { get; set; }
+    public string? SavedLoadBalancerHealthCheckPath { get; set; }
 }

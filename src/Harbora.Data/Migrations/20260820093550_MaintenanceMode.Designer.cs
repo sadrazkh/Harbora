@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260820093550_MaintenanceMode")]
+    partial class MaintenanceMode
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -638,99 +641,6 @@ namespace Harbora.Data.Migrations
                     b.ToTable("Apps");
                 });
 
-            modelBuilder.Entity("Harbora.Domain.Apps.AppConfigGroup", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AppId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("AttachOrder")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("ConfigGroupId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("HasUnpublishedChanges")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ConfigGroupId");
-
-                    b.HasIndex("AppId", "ConfigGroupId")
-                        .IsUnique();
-
-                    b.ToTable("AppConfigGroups");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Apps.ConfigGroup", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("WorkspaceId", "Name")
-                        .IsUnique();
-
-                    b.ToTable("ConfigGroups");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Apps.ConfigGroupEntry", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("ConfigGroupId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("IsSecret")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Key")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Value")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ConfigGroupId", "Key")
-                        .IsUnique();
-
-                    b.ToTable("ConfigGroupEntries");
-                });
-
             modelBuilder.Entity("Harbora.Domain.Apps.CronRun", b =>
                 {
                     b.Property<Guid>("Id")
@@ -875,12 +785,6 @@ namespace Harbora.Data.Migrations
                     b.Property<string>("MetadataJson")
                         .HasColumnType("text");
 
-                    b.Property<Guid?>("SupportAdminUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid?>("SupportSessionId")
-                        .HasColumnType("uuid");
-
                     b.Property<string>("TargetId")
                         .HasColumnType("text");
 
@@ -896,8 +800,6 @@ namespace Harbora.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CreatedAt");
-
-                    b.HasIndex("SupportSessionId");
 
                     b.ToTable("AuditLogs");
                 });
@@ -1105,38 +1007,6 @@ namespace Harbora.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("BackupDestinations");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Backups.BackupDownloadToken", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("BackupId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("TokenHash")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset?>("UsedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BackupId");
-
-                    b.HasIndex("TokenHash")
-                        .IsUnique();
-
-                    b.ToTable("BackupDownloadTokens");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Backups.BackupSchedule", b =>
@@ -1972,61 +1842,6 @@ namespace Harbora.Data.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("PasswordResetTokens");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Identity.SupportSession", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("AdminEmail")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<Guid>("AdminUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset?>("EndedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int?>("EndedBy")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("IpAddress")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("Reason")
-                        .IsRequired()
-                        .HasMaxLength(280)
-                        .HasColumnType("character varying(280)");
-
-                    b.Property<DateTimeOffset>("StartedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("TargetUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("TargetWorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TargetUserId", "EndedAt");
-
-                    b.HasIndex("TargetWorkspaceId", "StartedAt");
-
-                    b.ToTable("SupportSessions");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Identity.User", b =>
@@ -5337,36 +5152,6 @@ namespace Harbora.Data.Migrations
                     b.Navigation("GitRepository");
                 });
 
-            modelBuilder.Entity("Harbora.Domain.Apps.AppConfigGroup", b =>
-                {
-                    b.HasOne("Harbora.Domain.Apps.App", "App")
-                        .WithMany("ConfigGroups")
-                        .HasForeignKey("AppId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Harbora.Domain.Apps.ConfigGroup", "ConfigGroup")
-                        .WithMany("Apps")
-                        .HasForeignKey("ConfigGroupId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("App");
-
-                    b.Navigation("ConfigGroup");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Apps.ConfigGroupEntry", b =>
-                {
-                    b.HasOne("Harbora.Domain.Apps.ConfigGroup", "ConfigGroup")
-                        .WithMany("Entries")
-                        .HasForeignKey("ConfigGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("ConfigGroup");
-                });
-
             modelBuilder.Entity("Harbora.Domain.Apps.CronRun", b =>
                 {
                     b.HasOne("Harbora.Domain.Apps.App", "App")
@@ -5409,15 +5194,6 @@ namespace Harbora.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Destination");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Backups.BackupDownloadToken", b =>
-                {
-                    b.HasOne("Harbora.Domain.Backups.Backup", null)
-                        .WithMany()
-                        .HasForeignKey("BackupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("Harbora.Domain.Deployments.Deployment", b =>
@@ -5845,8 +5621,6 @@ namespace Harbora.Data.Migrations
 
             modelBuilder.Entity("Harbora.Domain.Apps.App", b =>
                 {
-                    b.Navigation("ConfigGroups");
-
                     b.Navigation("Deployments");
 
                     b.Navigation("Domains");
@@ -5854,13 +5628,6 @@ namespace Harbora.Data.Migrations
                     b.Navigation("EnvironmentVariables");
 
                     b.Navigation("Volumes");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Apps.ConfigGroup", b =>
-                {
-                    b.Navigation("Apps");
-
-                    b.Navigation("Entries");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Deployments.Deployment", b =>

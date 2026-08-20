@@ -172,6 +172,34 @@ public class App : BaseEntity
     /// </summary>
     public Guid? TemplateVersionId { get; set; }
 
+    // --- Maintenance mode (P5, 2026-08-20 platform-options plan) ---
+
+    /// <summary>
+    /// Whether visitors to this app's hosts currently see a themed maintenance page instead of the
+    /// app itself. The containers keep running — this changes only what the proxy routes to.
+    /// Stopping the app is a separate, pre-existing action and this flag says nothing about it.
+    ///
+    /// <para>
+    /// Written only after <c>IProxyEngine.ApplyAllAsync</c> has actually succeeded
+    /// (<c>AppOperationsService.SetMaintenanceModeAsync</c>) — never optimistically before the apply
+    /// is known to have worked. A flag that reads "on" while the proxy never learned about it would
+    /// be the defect class this codebase spent 2026-08-20 removing from the monitoring page, worn
+    /// here instead.
+    /// </para>
+    /// </summary>
+    public bool MaintenanceMode { get; set; }
+
+    /// <summary>Optional message shown on the maintenance page (English/default). Null shows a
+    /// generic sentence instead.</summary>
+    public string? MaintenanceMessage { get; set; }
+
+    /// <summary>The Persian counterpart of <see cref="MaintenanceMessage"/> — independently
+    /// optional, per the panel's bilingual-fallback rule (either, both, or neither may be set).</summary>
+    public string? MaintenanceMessageFa { get; set; }
+
+    /// <summary>When maintenance mode was last turned on; null while off.</summary>
+    public DateTimeOffset? MaintenanceSince { get; set; }
+
     public ICollection<EnvironmentVariable> EnvironmentVariables { get; set; } = new List<EnvironmentVariable>();
     public ICollection<Volume> Volumes { get; set; } = new List<Volume>();
     public ICollection<DomainName> Domains { get; set; } = new List<DomainName>();

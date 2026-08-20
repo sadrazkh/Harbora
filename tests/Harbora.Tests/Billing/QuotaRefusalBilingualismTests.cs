@@ -102,6 +102,9 @@ public class QuotaRefusalBilingualismTests
         public Task<LogSearchResult> SearchLogsAsync(
             IReadOnlyList<Guid> appIds, string? text, bool problemsOnly, TimeSpan? window, int maxLinesPerApp,
             CancellationToken ct) => Task.FromResult(new LogSearchResult([], []));
+        public Task<MaintenanceToggleResult> SetMaintenanceModeAsync(
+            Guid appId, bool enabled, string? messageEn, string? messageFa, CancellationToken ct) =>
+            Task.FromResult(MaintenanceToggleResult.Ok);
     }
 
     /// <summary>The one method these tests exercise; everything else is <see cref="FakeManagedServiceEngine"/>'s own refusal.</summary>

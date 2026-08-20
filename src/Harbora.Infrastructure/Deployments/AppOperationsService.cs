@@ -2,8 +2,11 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
+using Harbora.Domain.Networking;
+using Harbora.Domain.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Harbora.Infrastructure.Deployments;
 
@@ -25,8 +28,20 @@ public sealed class AppOperationsService(
     IProxyEngine proxy,
     IBillingGate billing,
     HostPortAllocator hostPorts,
-    ILogger<AppOperationsService> logger) : IAppOperationsService
+    ILogger<AppOperationsService> logger,
+    ISystemClock? clock = null,
+    IEventPublisher? events = null,
+    IOptions<HarboraRuntimeOptions>? runtimeOptions = null) : IAppOperationsService
 {
+    // Defaulted rather than required, the same shape ManagedServiceEngine's own trailing
+    // IEventPublisher? already uses: five existing test files construct this type positionally
+    // (AppsControllerLogSearchTests, LogSearchTests x2, LogsControllerTenancyTests, WalletServiceTests)
+    // to exercise Restart/Stop/Delete/log search, none of which this touches and none of which cares
+    // about maintenance mode. A required 9th/10th/11th positional parameter would have broken every
+    // one of them for a feature they never use; SetMaintenanceModeAsync is the only method that ever
+    // reads these three, and DI always supplies real ones in production.
+    private readonly HarboraRuntimeOptions _runtime = runtimeOptions?.Value ?? new HarboraRuntimeOptions();
+
     public async Task RestartAsync(Guid appId, CancellationToken ct)
     {
         await RefuseIfUnpaidAsync(appId, ct);
@@ -87,6 +102,128 @@ public sealed class AppOperationsService(
         if (id is not null) await docker.StopContainerAsync(id, ct);
         await SetStatusAsync(app, AppStatus.Stopped, ct);
     }
+
+    /// <inheritdoc/>
+    public async Task<MaintenanceToggleResult> SetMaintenanceModeAsync(
+        Guid appId, bool enabled, string? messageEn, string? messageFa, CancellationToken ct)
+    {
+        // Unfiltered for the same reason ResolveAsync/SetStatusAsync are: BillingSuspension's own
+        // resume path and any future sessionless caller must be able to reach this, not only a
+        // request bound to the app's own workspace. Ownership stays the caller's to check — every
+        // request-bound entry point (AppsController) already asks CanTouchAppAsync before this runs.
+        var app = await db.Apps.IgnoreQueryFilters().FirstOrDefaultAsync(a => a.Id == appId, ct);
+        if (app is null)
+            return MaintenanceToggleResult.Failed("No such app.");
+
+        var routes = await db.Routes.IgnoreQueryFilters().Where(r => r.AppId == appId).ToListAsync(ct);
+
+        // Captured before either branch below mutates anything, so a failed apply can put every row
+        // back to exactly what it said on the way in — the same "capture before overwrite" shape
+        // DeploymentPipeline.WireProxyAsync's own RouteRevert uses, just kept until the apply below
+        // is known to have worked rather than only until this method returns.
+        var undo = routes.Select(r => (
+            Route: r, r.TargetService, r.TargetPort, r.ExtraUpstreamsJson, r.LoadBalancerHealthCheckPath,
+            r.MaintenanceRedirected, r.SavedTargetService, r.SavedTargetPort,
+            r.SavedExtraUpstreamsJson, r.SavedLoadBalancerHealthCheckPath)).ToList();
+
+        if (enabled)
+        {
+            foreach (var r in routes)
+            {
+                // Only the first toggle-on saves the real upstream. A second enable while already on
+                // (the toggle re-submitted, or a message edited) must not save the panel's own
+                // address as if it were the app's real one — that would make the app unreachable
+                // forever once maintenance is turned back off.
+                if (!r.MaintenanceRedirected)
+                {
+                    r.SavedTargetService = r.TargetService;
+                    r.SavedTargetPort = r.TargetPort;
+                    r.SavedExtraUpstreamsJson = r.ExtraUpstreamsJson;
+                    r.SavedLoadBalancerHealthCheckPath = r.LoadBalancerHealthCheckPath;
+                }
+                r.TargetService = _runtime.PanelContainerName;
+                r.TargetPort = _runtime.PanelHttpPort;
+                // Cleared, not carried over: RouteUpstreams.All renders every extra upstream as a
+                // second loadBalancer server, and the app's old replica addresses are meaningless
+                // (and possibly gone) once the target is the panel. LoadBalancerHealthCheckPath would
+                // otherwise keep polling the app's own health path against the panel, which answers
+                // nothing at it.
+                r.ExtraUpstreamsJson = null;
+                r.LoadBalancerHealthCheckPath = null;
+                r.MaintenanceRedirected = true;
+            }
+        }
+        else
+        {
+            foreach (var r in routes.Where(r => r.MaintenanceRedirected))
+            {
+                r.TargetService = r.SavedTargetService ?? r.TargetService;
+                r.TargetPort = r.SavedTargetPort ?? r.TargetPort;
+                r.ExtraUpstreamsJson = r.SavedExtraUpstreamsJson;
+                r.LoadBalancerHealthCheckPath = r.SavedLoadBalancerHealthCheckPath;
+                r.MaintenanceRedirected = false;
+                r.SavedTargetService = null;
+                r.SavedTargetPort = null;
+                r.SavedExtraUpstreamsJson = null;
+                r.SavedLoadBalancerHealthCheckPath = null;
+            }
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        var result = await proxy.ApplyAllAsync(app.WorkspaceId, ct);
+        if (!result.Success)
+        {
+            // Put every row back exactly as `undo` captured it, then re-publish from the reverted
+            // rows — DeploymentPipeline.WireProxyAsync's own "revert, then re-apply" shape, because a
+            // refused apply may already have changed the live file (the engine drops only the routes
+            // that failed validation, not the whole apply) and between our save and this failure any
+            // other caller's apply could have published what we just wrote.
+            foreach (var (route, targetService, targetPort, extraUpstreamsJson, healthCheckPath,
+                     maintenanceRedirected, savedTargetService, savedTargetPort,
+                     savedExtraUpstreamsJson, savedHealthCheckPath) in undo)
+            {
+                route.TargetService = targetService;
+                route.TargetPort = targetPort;
+                route.ExtraUpstreamsJson = extraUpstreamsJson;
+                route.LoadBalancerHealthCheckPath = healthCheckPath;
+                route.MaintenanceRedirected = maintenanceRedirected;
+                route.SavedTargetService = savedTargetService;
+                route.SavedTargetPort = savedTargetPort;
+                route.SavedExtraUpstreamsJson = savedExtraUpstreamsJson;
+                route.SavedLoadBalancerHealthCheckPath = savedHealthCheckPath;
+            }
+            await db.SaveChangesAsync(ct);
+
+            try { await proxy.ApplyAllAsync(app.WorkspaceId, CancellationToken.None); }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Could not re-apply the proxy config after a failed maintenance-mode toggle.");
+            }
+
+            return MaintenanceToggleResult.Failed(ProxyDiagnosis.ExplainApplyFailure(result));
+        }
+
+        // Only now — after the proxy is known to have accepted the new routing — does the
+        // customer-visible flag change. See App.MaintenanceMode's own doc for why.
+        app.MaintenanceMode = enabled;
+        app.MaintenanceMessage = enabled ? NullIfBlank(messageEn) : null;
+        app.MaintenanceMessageFa = enabled ? NullIfBlank(messageFa) : null;
+        app.MaintenanceSince = enabled ? (clock?.UtcNow ?? DateTimeOffset.UtcNow) : null;
+        await db.SaveChangesAsync(ct);
+
+        // Best-effort, never a reason a toggle that already worked reads as failed — the same rule
+        // DeploymentPipeline and BackupEngine already apply at their own equivalent seams.
+        if (events is not null)
+            await events.PublishAsync(
+                app.WorkspaceId, enabled ? EventKind.MaintenanceOn : EventKind.MaintenanceOff,
+                new Dictionary<string, string> { ["app"] = app.Name }, ct);
+
+        return MaintenanceToggleResult.Ok;
+    }
+
+    private static string? NullIfBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     public async Task DeleteAsync(Guid appId, bool removeVolumes, CancellationToken ct)
     {
