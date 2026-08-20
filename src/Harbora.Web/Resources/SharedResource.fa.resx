@@ -230,7 +230,9 @@
   <data name="{0} is not delivering"><value>{0} پیام نمی‌رساند</value></data>
   <data name="Alert channel: {0}"><value>کانال هشدار: {0}</value></data>
   <data name="Backup delivery: {0}"><value>تحویل بکاپ: {0}</value></data>
+  <data name="Event subscription: {0}"><value>اشتراک رویداد: {0}</value></data>
   <data name="Open alerts"><value>باز کردن هشدارها</value></data>
+  <data name="Open event subscriptions"><value>باز کردن اشتراک‌های رویداد</value></data>
   <data name="Disk is filling up"><value>دیسک رو به پر شدن است</value></data>
   <data name="{0}% used. Builds and backups fail once it is full."><value>{0}٪ پر شده. با پر شدن دیسک، build و پشتیبان‌گیری از کار می‌افتند.</value></data>
   <data name="Open monitoring"><value>باز کردن پایش</value></data>

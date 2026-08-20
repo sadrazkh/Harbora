@@ -1,0 +1,242 @@
+@using Harbora.Domain.Notifications
+@model EventSubscriptionsPageViewModel
+@{
+    ViewData["Title"] = "Event subscriptions";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+
+    string EventLabel(EventKind e) => (e, isFa) switch
+    {
+        (EventKind.DeploymentSucceeded, true) => "استقرار موفق",
+        (EventKind.DeploymentSucceeded, false) => "Deployment succeeded",
+        (EventKind.DeploymentFailed, true) => "استقرار ناموفق",
+        (EventKind.DeploymentFailed, false) => "Deployment failed",
+        (EventKind.AppCrashed, true) => "کرش برنامه",
+        (EventKind.AppCrashed, false) => "App crashed",
+        (EventKind.BackupSucceeded, true) => "پشتیبان‌گیری موفق",
+        (EventKind.BackupSucceeded, false) => "Backup succeeded",
+        (EventKind.BackupFailed, true) => "پشتیبان‌گیری ناموفق",
+        (EventKind.BackupFailed, false) => "Backup failed",
+        (EventKind.ServiceFailed, true) => "شکست راه‌اندازی دیتابیس",
+        (EventKind.ServiceFailed, false) => "Database failed to provision",
+        (_, true) => e.ToString(),
+        (_, false) => e.ToString()
+    };
+
+    // Every wireable event this workspace can subscribe to, in one fixed order — the checkboxes both
+    // forms render and the chips the list reads back. MaintenanceOn/Off stay out of both: nothing
+    // publishes them yet (see EventKind's own doc), and a checkbox that can never fire is the
+    // fabricated-capability defect class this codebase removes on sight.
+    var wireable = new[]
+    {
+        EventKind.DeploymentSucceeded, EventKind.DeploymentFailed, EventKind.AppCrashed,
+        EventKind.BackupSucceeded, EventKind.BackupFailed, EventKind.ServiceFailed
+    };
+
+    string StatusText(Harbora.Domain.Common.NotificationDeliveryStatus s) => (s, isFa) switch
+    {
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Sent, true) => "ارسال‌شده",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Sent, false) => "sent",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Failed, true) => "ناموفق",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Failed, false) => "failed",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Pending, true) => "در انتظار",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Pending, false) => "pending",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Suppressed, true) => "نادیده‌گرفته‌شده",
+        (Harbora.Domain.Common.NotificationDeliveryStatus.Suppressed, false) => "suppressed",
+        (_, true) => s.ToString(),
+        (_, false) => s.ToString()
+    };
+
+    string StatusTone(Harbora.Domain.Common.NotificationDeliveryStatus s) => s switch
+    {
+        Harbora.Domain.Common.NotificationDeliveryStatus.Sent => Tone.Ok,
+        Harbora.Domain.Common.NotificationDeliveryStatus.Failed => Tone.Error,
+        Harbora.Domain.Common.NotificationDeliveryStatus.Pending => Tone.Info,
+        _ => Tone.Idle
+    };
+}
+<div class="mb-6">
+    <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+        isFa ? "اشتراک‌های رویداد" : "Event subscriptions",
+        isFa
+            ? "وقتی چیزی در این فضای کاری رخ می‌دهد، به یک وب‌هوک یا تلگرام خبر دهید."
+            : "Tell a webhook or Telegram chat when something happens in this workspace."))" />
+</div>
+
+@if (err is not null)
+{
+    <div class="alert-warning rounded-lg px-4 py-3 text-sm mb-4">@err</div>
+}
+@if (TempData["Message"] is string msg)
+{
+    <div class="rounded-lg bg-ok-soft text-ok px-4 py-3 text-sm mb-4">@msg</div>
+}
+
+@if (Model.NewSecret is not null)
+{
+    <div class="rounded-lg border border-warn bg-warn-soft px-4 py-3 text-sm mb-6" data-new-secret="@Model.NewSecret">
+        <p class="font-semibold text-warn">
+            @(isFa ? "این کلید امضا فقط همین یک‌بار نمایش داده می‌شود — همین حالا آن را کپی کنید." : "This signing secret is shown once — copy it now.")
+        </p>
+        <code class="mt-2 block rounded bg-surface px-2 py-1.5 font-mono text-xs break-all" dir="ltr">@Model.NewSecret</code>
+        <p class="mt-2 text-xs text-ink-faint">
+            @(isFa
+                ? "هر بدنهٔ درخواست با این کلید به‌صورت HMAC-SHA256 امضا می‌شود و در سربرگ X-Harbora-Signature ارسال می‌گردد."
+                : "Every request body is signed with this key (HMAC-SHA256) and sent in the X-Harbora-Signature header.")
+        </p>
+    </div>
+}
+
+<section class="rounded-xl border border-line bg-surface p-5 mb-6" data-event-subscriptions>
+    <h2 class="text-sm font-semibold mb-3">@(isFa ? "اشتراک‌ها" : "Subscriptions")</h2>
+
+    @if (Model.Subscriptions.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel("bell",
+            isFa ? "هنوز اشتراکی تعریف نشده است." : "No event subscriptions yet."))" />
+    }
+    else
+    {
+        <div class="space-y-2 mb-5">
+            @foreach (var s in Model.Subscriptions)
+            {
+                <div class="rounded-lg bg-surface-2 px-3 py-2 text-sm@(s.IsEnabled ? "" : " opacity-60")"
+                     data-subscription-row data-subscription-id="@s.Id"
+                     data-subscription-enabled="@(s.IsEnabled ? "true" : "false")"
+                     data-subscription-channel="@s.Channel">
+                    <div class="flex items-center justify-between gap-2">
+                        <span>@s.Name <span class="text-ink-faint">· @s.Channel</span>
+                            @if (!s.IsEnabled)
+                            {
+                                <span class="text-xs text-ink-faint">· @(isFa ? "غیرفعال" : "disabled")</span>
+                            }
+                            @if (s.LastError is not null)
+                            {
+                                <span class="text-xs text-danger" data-subscription-failing>· @(isFa ? "ناموفق" : "failing")</span>
+                            }
+                            else if (s.LastAttemptAt is not null)
+                            {
+                                <span class="text-xs text-ok">· @(isFa ? "سالم" : "delivering")</span>
+                            }
+                        </span>
+                        <div class="flex items-center gap-2 shrink-0">
+                            <form asp-controller="EventSubscriptions" asp-action="Toggle" asp-route-id="@s.Id" method="post">
+                                @Html.AntiForgeryToken()
+                                <button class="text-xs text-accent-text" aria-label="@(isFa ? $"تغییر وضعیت {s.Name}" : $"Toggle {s.Name}")">
+                                    @(s.IsEnabled ? (isFa ? "غیرفعال کردن" : "disable") : (isFa ? "فعال کردن" : "enable"))
+                                </button>
+                            </form>
+                            <form asp-controller="EventSubscriptions" asp-action="Delete" asp-route-id="@s.Id" method="post">
+                                @Html.AntiForgeryToken()
+                                <button class="text-xs text-danger" aria-label="@(isFa ? $"حذف {s.Name}" : $"Delete {s.Name}")">✕</button>
+                            </form>
+                        </div>
+                    </div>
+                    <p class="mt-1 text-xs text-ink-faint">
+                        @string.Join(" · ", wireable.Where(e => (s.Events & e) == e).Select(EventLabel))
+                    </p>
+                    @if (s.LastError is not null)
+                    {
+                        <p class="mt-1 text-xs text-danger/90 break-all">@s.LastError</p>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    <details>
+        <summary class="cursor-pointer text-sm text-accent-text">+ @(isFa ? "افزودن اشتراک" : "Add subscription")</summary>
+        <form asp-controller="EventSubscriptions" asp-action="Create" method="post" class="mt-3 grid sm:grid-cols-2 gap-3" data-subscription-form>
+            @Html.AntiForgeryToken()
+            <input name="name" placeholder="@(isFa ? "نام" : "Name")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            <select name="channel" data-subscription-channel-select class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm">
+                <option value="Webhook">@(isFa ? "وب‌هوک HTTP" : "HTTP webhook")</option>
+                <option value="Telegram">Telegram</option>
+            </select>
+
+            <div data-ch="Webhook" class="sm:col-span-2">
+                <input name="webhookUrl" placeholder="https://example.com/webhook" dir="ltr"
+                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm font-mono" />
+            </div>
+            <div data-ch="Telegram" class="grid grid-cols-2 gap-2 sm:col-span-2" style="display:none">
+                <input name="telegramToken" placeholder="@(isFa ? "توکن ربات" : "Bot token")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <input name="telegramChatId" placeholder="@(isFa ? "شناسه چت" : "Chat id")" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+            </div>
+
+            <div class="sm:col-span-2 flex flex-wrap gap-3 text-sm">
+                @foreach (var e in wireable)
+                {
+                    var field = e switch
+                    {
+                        EventKind.DeploymentSucceeded => "onDeploymentSucceeded",
+                        EventKind.DeploymentFailed => "onDeploymentFailed",
+                        EventKind.AppCrashed => "onAppCrashed",
+                        EventKind.BackupSucceeded => "onBackupSucceeded",
+                        EventKind.BackupFailed => "onBackupFailed",
+                        _ => "onServiceFailed"
+                    };
+                    <label class="flex items-center gap-1">
+                        <input type="checkbox" name="@field" value="true" data-event-checkbox="@e" /> @EventLabel(e)
+                    </label>
+                }
+            </div>
+
+            <div class="sm:col-span-2">
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                    @(isFa ? "ایجاد اشتراک" : "Create subscription")
+                </button>
+            </div>
+        </form>
+    </details>
+</section>
+
+<section class="rounded-xl border border-line bg-surface p-5" data-event-delivery-log>
+    <h2 class="text-sm font-semibold mb-3">@(isFa ? "گزارش تحویل" : "Delivery log")</h2>
+
+    @if (Model.RecentDeliveries.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel("send",
+            isFa ? "هنوز رویدادی تحویل داده نشده است." : "Nothing has been delivered yet."))" />
+    }
+    else
+    {
+        <div class="space-y-1.5">
+            @foreach (var d in Model.RecentDeliveries)
+            {
+                <div class="flex items-center justify-between gap-3 rounded-lg bg-surface-2 px-3 py-2 text-xs"
+                     data-delivery-row data-delivery-id="@d.Id" data-delivery-status="@d.Status">
+                    <div class="min-w-0">
+                        <span class="font-medium">@d.SubscriptionName</span>
+                        <span class="text-ink-faint">· @EventLabel(d.Event)</span>
+                        @if (d.HttpStatusCode is { } code)
+                        {
+                            <span class="text-ink-faint font-mono" dir="ltr">· @code</span>
+                        }
+                        @if (d.Error is not null)
+                        {
+                            <p class="mt-0.5 text-danger/90 break-all">@d.Error</p>
+                        }
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                        <span class="text-ink-faint">@(isFa ? "تلاش" : "attempt") @d.Attempts</span>
+                        <partial name="Design/_StatusPill" model="@(new StatusPillModel(StatusText(d.Status), StatusTone(d.Status)))" />
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</section>
+
+@section Scripts {
+<script>
+    document.querySelectorAll('[data-subscription-form]').forEach(function (form) {
+        var sel = form.querySelector('[data-subscription-channel-select]');
+        function sync() {
+            form.querySelectorAll('[data-ch]').forEach(function (el) {
+                el.style.display = el.getAttribute('data-ch') === sel.value ? '' : 'none';
+            });
+        }
+        sel.addEventListener('change', sync); sync();
+    });
+</script>
+}

@@ -142,6 +142,11 @@
         }
     </div>
 
+    <p class="mb-4 text-xs text-ink-faint">
+        @(isFa ? "دنبال اطلاع‌رسانی رویدادها به یک سیستم دیگر (وب‌هوک/تلگرام) هستید؟" : "Looking to notify another system on deploy/backup/crash events (webhook/Telegram)?")
+        <a href="/notifications/webhooks" class="text-accent-text">@(isFa ? "اشتراک‌های رویداد" : "Event subscriptions")</a>
+    </p>
+
     <details>
         <summary class="cursor-pointer text-sm text-accent-text">+ @(isFa ? "افزودن هشدار" : "Add alert")</summary>
         <form asp-controller="Alerts" asp-action="Create" method="post" class="mt-3 grid sm:grid-cols-2 gap-3" data-alert-form>
