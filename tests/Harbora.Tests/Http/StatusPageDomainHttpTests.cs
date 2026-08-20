@@ -217,6 +217,38 @@ public class StatusPageDomainHttpTests(HarboraHttpFixture fixture)
             .Any(d => d.Host == $"status-somebody-elses-workspace.{RootDomain}")).Should().BeFalse();
     }
 
+    /// <summary>
+    /// Discovered while building this sub-project: <c>AppsController.AddDomain</c>'s own reserved-host
+    /// guard only ever called <c>ReservedHosts.IsReserved</c> (the platform's exact own names), never
+    /// <c>ReservedHosts.IsReservedPrefix</c> — so an app could claim <c>status-anything.&lt;root
+    /// domain&gt;</c> by typing it into "Add domain", even though <c>AppAddress.Decide</c> (the
+    /// create-app path) already refuses the identical string. Closed alongside this sub-project's own
+    /// use of the same prefix rather than left for someone to find it re-broken by drift.
+    /// </summary>
+    [Fact]
+    public async Task An_app_cannot_claim_the_status_prefix_through_AddDomain_either()
+    {
+        var (workspaceId, environmentId, _) = GivenWorkspace("refuse-app-claims-prefix");
+        var appId = Guid.CreateVersion7();
+        Panel.Seed(db => db.Apps.Add(new App
+        {
+            Id = appId, WorkspaceId = workspaceId, EnvironmentId = environmentId,
+            Name = "web", Slug = "refuse-app-claims-prefix-app", SourceType = AppSourceType.PrebuiltImage,
+            PrebuiltImage = "ghcr.io/example/web:1.0"
+        }));
+        Panel.GivenUser(workspaceId, "sp8-app-prefix@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.53", "sp8-app-prefix@example.com");
+
+        var token = await client.AntiforgeryTokenFrom($"/apps/details/{appId}");
+        var response = await client.PostFormAsync($"/apps/{appId}/domains", token,
+            ("host", $"status-squatting-attempt.{RootDomain}"), ("ssl", "true"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        Panel.Read(db => db.Domains.IgnoreQueryFilters()
+            .Any(d => d.Host == $"status-squatting-attempt.{RootDomain}")).Should().BeFalse(
+            "the status- prefix under the platform's root domain is reserved for status pages, the same rule AppAddress.Decide already enforces on app creation");
+    }
+
     [Fact]
     public async Task Attaching_a_host_already_used_by_an_app_is_refused()
     {

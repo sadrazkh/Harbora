@@ -52,7 +52,12 @@ public sealed partial class AppsController(
 
     /// <summary>
     /// Whether a typed host is one the platform answers on itself — see <see cref="ReservedHosts"/>
-    /// for what claiming the node channel's host silently costs.
+    /// for what claiming the node channel's host silently costs — or a status page's own reserved
+    /// prefix under the platform's root domain (sub-project 8), the same rule
+    /// <see cref="Infrastructure.Networking.AppAddress.Decide"/> already applies to a new app's
+    /// derived/typed address. <see cref="AddDomain"/> is the one path that attaches a domain to an
+    /// existing app without going through <c>AppAddressAssigner.AssignAsync</c>, so it is the one
+    /// path that has to ask both questions itself.
     ///
     /// <para>
     /// Read from configuration on each call rather than cached or mirrored into the database: these
@@ -61,9 +66,15 @@ public sealed partial class AppsController(
     /// change under a running panel, and a second copy is a second thing to be wrong.
     /// </para>
     /// </summary>
-    private bool IsReservedHost(string? host) =>
-        ReservedHosts.IsReserved(host, ReservedHosts.ForPlatform(
-            config["PANEL_DOMAIN"], config["NodeAgent:PublicUrl"], config["Storage:S3:PublicEndpoint"]));
+    private async Task<bool> IsReservedHostAsync(string? host, CancellationToken ct)
+    {
+        if (ReservedHosts.IsReserved(host, ReservedHosts.ForPlatform(
+                config["PANEL_DOMAIN"], config["NodeAgent:PublicUrl"], config["Storage:S3:PublicEndpoint"])))
+            return true;
+
+        var rootDomain = await addresses.RootDomainAsync(ct);
+        return ReservedHosts.IsReservedPrefix(host, rootDomain);
+    }
 
     private string ReservedHostRefusal(string host) => IsFa
         ? $"«{host}» یکی از نام‌های خودِ سامانه است و نمی‌توان آن را به یک اپ داد."
@@ -1836,7 +1847,7 @@ public sealed partial class AppsController(
         // and the node channel's host is the one where taking it costs more than it looks: see
         // ReservedHosts for why a second router on that SNI name turns mTLS off instead of adding
         // a route.
-        if (IsReservedHost(host)) { TempData["Error"] = ReservedHostRefusal(host); return RedirectToAction(nameof(Details), new { id }); }
+        if (await IsReservedHostAsync(host, ct)) { TempData["Error"] = ReservedHostRefusal(host); return RedirectToAction(nameof(Details), new { id }); }
 
         await using var quotaReservation = await quota.AcquireCreationLockAsync(WorkspaceId, ct);
         var quotaCheck = await quota.CanAddGovernedResourcesAsync(WorkspaceId,
