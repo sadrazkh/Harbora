@@ -1,0 +1,183 @@
+@model List<AnnouncementRow>
+@using Harbora.Domain.Common
+@using Harbora.Web.ViewModels
+@{
+    ViewData["Title"] = "Announcements";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var msg = TempData["Message"] as string;
+    var err = TempData["Error"] as string;
+
+    var header = new PageHeaderModel(
+        isFa ? "اعلامیه‌های پلتفرم" : "Platform announcements",
+        isFa ? "پیامی که روی هر صفحه‌ی پنل، برای هر کاربر نمایش داده می‌شود."
+             : "A notice shown as a banner on every panel page, for every user.");
+
+    var listPanel = new PanelModel(isFa ? $"{Model.Count} اعلامیه" : $"{Model.Count} announcement(s)");
+    var createPanel = new PanelModel(isFa ? "اعلامیه تازه" : "New announcement");
+
+    string SeverityLabel(AlertSeverity s) => (s, isFa) switch
+    {
+        (AlertSeverity.Warning, true) => "هشدار",
+        (AlertSeverity.Warning, false) => "Warning",
+        (_, true) => "اطلاع‌رسانی",
+        (_, false) => "Info"
+    };
+}
+
+<div class="mb-6">
+    <partial name="Design/_PageHeader" model="header" />
+</div>
+
+@if (msg is not null)
+{
+    <div class="mb-4 rounded-lg border border-ok bg-ok-soft px-4 py-2 text-sm text-ok">@msg</div>
+}
+@if (err is not null)
+{
+    <div class="mb-4 rounded-lg border border-danger bg-danger-soft px-4 py-2 text-sm text-danger">@err</div>
+}
+
+<partial name="Design/_PanelStart" model="listPanel" />
+@if (Model.Count == 0)
+{
+    <partial name="Design/_EmptyState" model="@(new EmptyStateModel("megaphone",
+        isFa ? "هنوز هیچ اعلامیه‌ای ثبت نشده است." : "No announcements have been posted yet."))" />
+}
+else
+{
+<div class="-mx-5 -my-5 overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead>
+            <tr class="border-b border-line text-xs text-ink-faint">
+                <th class="px-5 py-3 text-start font-medium">@(isFa ? "عنوان" : "Title")</th>
+                <th class="px-5 py-3 text-start font-medium">@(isFa ? "شدت" : "Severity")</th>
+                <th class="px-5 py-3 text-start font-medium">@(isFa ? "بازه" : "Window")</th>
+                <th class="px-5 py-3 text-start font-medium">@(isFa ? "وضعیت" : "Status")</th>
+                <th class="px-5 py-3 text-start font-medium">@(isFa ? "نویسنده" : "Posted by")</th>
+                <th class="px-5 py-3 text-end font-medium">@(isFa ? "اقدام" : "Actions")</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-line">
+            @foreach (var a in Model)
+            {
+                var statusPill = a.IsActiveNow
+                    ? new StatusPillModel(isFa ? "فعال" : "active", Tone.Ok)
+                    : new StatusPillModel(isFa ? "غیرفعال" : "inactive", Tone.Idle);
+                var severityPill = new StatusPillModel(SeverityLabel(a.Severity),
+                    a.Severity == AlertSeverity.Warning ? Tone.Warn : Tone.Info);
+
+                <tr class="align-top" data-announcement-row="@a.Id">
+                    <td class="px-5 py-3">
+                        <div class="font-medium text-ink">@a.Title</div>
+                        <div class="text-xs text-ink-faint" dir="rtl">@a.TitleFa</div>
+                    </td>
+                    <td class="px-5 py-3">
+                        <partial name="Design/_StatusPill" model="severityPill" />
+                    </td>
+                    <td class="px-5 py-3 text-ink-muted">
+                        <div class="text-xs">
+                            @(isFa ? "از" : "from")
+                            @if (a.StartsAt is { } starts)
+                            {
+                                <span class="font-mono" dir="ltr">@starts.LocalDateTime.ToString(Dates.Stamp)</span>
+                            }
+                            else
+                            {
+                                <span class="text-ink-faint">@(isFa ? "همیشه" : "always")</span>
+                            }
+                        </div>
+                        <div class="text-xs">
+                            @(isFa ? "تا" : "until")
+                            @if (a.EndsAt is { } ends)
+                            {
+                                <span class="font-mono" dir="ltr">@ends.LocalDateTime.ToString(Dates.Stamp)</span>
+                            }
+                            else
+                            {
+                                <span class="text-ink-faint">@(isFa ? "نامحدود" : "no end")</span>
+                            }
+                        </div>
+                    </td>
+                    <td class="px-5 py-3">
+                        <partial name="Design/_StatusPill" model="statusPill" />
+                    </td>
+                    <td class="px-5 py-3 text-ink-muted">
+                        <span dir="ltr" class="text-xs">@a.CreatedByEmail</span>
+                    </td>
+                    <td class="px-5 py-3">
+                        <div class="flex flex-wrap justify-end gap-1.5">
+                            <a href="/announcements/@a.Id/edit"
+                               class="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-2">
+                                @(isFa ? "ویرایش" : "Edit")
+                            </a>
+                            <form asp-action="Delete" asp-route-id="@a.Id" method="post"
+                                  onsubmit="return confirm('@(isFa ? "این اعلامیه حذف شود؟" : "Remove this announcement?")');">
+                                @Html.AntiForgeryToken()
+                                <button class="rounded-lg border border-line px-2.5 py-1 text-xs text-danger hover:bg-surface-2">
+                                    @(isFa ? "حذف" : "Delete")
+                                </button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+}
+<partial name="Design/_PanelEnd" />
+
+@section RightRail {
+    <partial name="Design/_PanelStart" model="createPanel" />
+    <form asp-action="Create" method="post" class="space-y-3">
+        @Html.AntiForgeryToken()
+        <div>
+            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "عنوان انگلیسی" : "English title")</label>
+            <input name="title" required maxlength="200" dir="ltr"
+                   class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink" />
+        </div>
+        <div>
+            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "متن انگلیسی" : "English body")</label>
+            <textarea name="body" required maxlength="4000" rows="3" dir="ltr"
+                      class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink"></textarea>
+        </div>
+        <div>
+            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "عنوان فارسی" : "Persian title")</label>
+            <input name="titleFa" required maxlength="200" dir="rtl"
+                   class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink" />
+        </div>
+        <div>
+            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "متن فارسی" : "Persian body")</label>
+            <textarea name="bodyFa" required maxlength="4000" rows="3" dir="rtl"
+                      class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink"></textarea>
+        </div>
+        <div>
+            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "شدت" : "Severity")</label>
+            <select name="severity" class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink">
+                <option value="@AlertSeverity.Info">@(isFa ? "اطلاع‌رسانی — فقط بنر" : "Info — banner only")</option>
+                <option value="@AlertSeverity.Warning">@(isFa ? "هشدار — بنر + اعلان درون‌برنامه‌ای" : "Warning — banner + in-app notification")</option>
+            </select>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+            <div>
+                <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "شروع (اختیاری)" : "Starts (optional)")</label>
+                <input name="startsAt" type="datetime-local" dir="ltr"
+                       class="w-full rounded-lg border border-line bg-surface-2 px-2 py-2 text-xs text-ink" />
+            </div>
+            <div>
+                <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "پایان (اختیاری)" : "Ends (optional)")</label>
+                <input name="endsAt" type="datetime-local" dir="ltr"
+                       class="w-full rounded-lg border border-line bg-surface-2 px-2 py-2 text-xs text-ink" />
+            </div>
+        </div>
+        <p class="text-[11px] text-ink-faint">
+            @(isFa
+                ? "هر دو زبان لازم است — نیمی از کاربران پنل فارسی می‌خوانند و نیمی انگلیسی."
+                : "Both languages are required — half this panel's readers use Persian, half English.")
+        </p>
+        <button class="w-full rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover">
+            @(isFa ? "انتشار اعلامیه" : "Post announcement")
+        </button>
+    </form>
+    <partial name="Design/_PanelEnd" />
+}

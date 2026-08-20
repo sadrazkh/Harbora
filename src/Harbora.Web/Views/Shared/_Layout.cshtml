@@ -63,6 +63,10 @@
     <div class="flex-1 flex flex-col min-w-0">
         @* Draws nothing unless a platform administrator is signed in as this account. *@
         <partial name="_SupportSessionBanner" />
+        @* Draws one row per active, undismissed platform announcement. Composes with the banner
+           above rather than fighting it — both are plain, unconditionally-rendered partials, so a
+           support session and an announcement can be on screen at the same time. *@
+        <partial name="_AnnouncementBanner" />
         <partial name="Design/_Topbar" />
 
         @* The rail is rendered exactly once. A Razor section cannot be rendered twice, so its

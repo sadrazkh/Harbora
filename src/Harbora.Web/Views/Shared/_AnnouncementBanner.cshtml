@@ -1,0 +1,58 @@
+@using System.Globalization
+@using Harbora.Domain.Common
+@using Microsoft.EntityFrameworkCore
+@inject Harbora.Data.HarboraDbContext Db
+@inject Harbora.Application.Abstractions.ICurrentUser CurrentUser
+@inject Harbora.Application.Abstractions.ISystemClock Clock
+@{
+    // Nothing at all for an anonymous request — _Auth (login, etc.) never includes this partial in
+    // the first place, but a request-less read is still handled defensively, the same as
+    // _SupportSessionBanner's own null-friendly Current.
+    List<Harbora.Domain.Platform.Announcement> active = [];
+    if (CurrentUser.UserId is { } userId)
+    {
+        var now = Clock.UtcNow;
+
+        // Do-not-change item 23 (PanelMode fold-never-remove) is about folding *advanced* material in
+        // Simple mode. An operator's own announcement is operational information, not advanced
+        // material, so it is never folded — this partial is rendered unconditionally from _Layout,
+        // outside any _AdvancedStart/_AdvancedEnd wrapper, in both modes. Do not "fix" that.
+        var dismissed = await Db.AnnouncementDismissals.AsNoTracking()
+            .Where(d => d.UserId == userId).Select(d => d.AnnouncementId).ToListAsync();
+
+        active = await Db.Announcements.IgnoreQueryFilters().AsNoTracking()
+            .Where(a => (a.StartsAt == null || a.StartsAt <= now) && (a.EndsAt == null || a.EndsAt >= now))
+            .Where(a => !dismissed.Contains(a.Id))
+            .OrderByDescending(a => a.CreatedAt)
+            .ToListAsync();
+    }
+
+    var isFa = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var returnUrl = Context.Request.Path + Context.Request.QueryString;
+}
+@* A new announcement is a new banner: each one carries its own data-announcement id, its own
+   dismiss form, and its own row in AnnouncementDismissal — dismissing one never touches the next,
+   because the query above already excluded only the ids this exact person already dismissed. *@
+@foreach (var a in active)
+{
+    var isWarn = a.Severity == AlertSeverity.Warning;
+    var toneBorder = isWarn ? "border-warn/25" : "border-line";
+    var toneBg = isWarn ? "bg-warn-soft" : "bg-surface-2";
+    var toneText = isWarn ? "text-warn" : "text-ink";
+
+    <div data-announcement="@a.Id"
+         class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b @toneBorder @toneBg px-4 py-2.5 text-sm @toneText md:px-6"
+         role="status">
+        <i data-lucide="megaphone" class="h-4 w-4 shrink-0" aria-hidden="true"></i>
+        <span class="font-medium">@(isFa ? a.TitleFa : a.Title)</span>
+        <span class="text-ink-muted">@(isFa ? a.BodyFa : a.Body)</span>
+        <form method="post" action="/announcements/@a.Id/dismiss" class="ms-auto">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="returnUrl" value="@returnUrl" />
+            <button type="submit" data-dismiss-announcement="@a.Id"
+                    class="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-ink-muted hover:bg-surface-2">
+                @(isFa ? "بستن" : "Dismiss")
+            </button>
+        </form>
+    </div>
+}

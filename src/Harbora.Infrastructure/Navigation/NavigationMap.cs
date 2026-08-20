@@ -129,6 +129,10 @@ public static class NavigationMap
         ]),
         new("platform", [
             new("users", "Users", "Index", "users", Capabilities.TenantsManage),
+            // Operator-authored platform-wide notices — reachable wherever the users they are
+            // written for are, not folded into Advanced (do-not-change item 23 is about specialist
+            // material, and operational information is never that — see the controller's own doc).
+            new("announcements", "Announcements", "Index", "megaphone", Capabilities.TenantsManage),
             new("vouchers", "Vouchers", "Index", "coins", Capabilities.TenantsManage),
             new("billing-runs", "BillingRuns", "Index", "history", Capabilities.TenantsManage),
             // What the platform earns, who burns most, whose wallet dies next — a cross-tenant read

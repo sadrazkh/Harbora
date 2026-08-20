@@ -1,0 +1,82 @@
+@model AnnouncementRow
+@using Harbora.Domain.Common
+@{
+    ViewData["Title"] = "Edit announcement";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    var header = new PageHeaderModel(
+        isFa ? "ویرایش اعلامیه" : "Edit announcement",
+        isFa ? "هر دو زبان همچنان لازم است." : "Both languages are still required.");
+    var panel = new PanelModel(Model.Title);
+
+    string Local(DateTimeOffset? value) =>
+        value is { } v ? v.LocalDateTime.ToString("yyyy-MM-ddTHH:mm") : "";
+}
+
+<div class="mb-6">
+    <partial name="Design/_PageHeader" model="header" />
+</div>
+
+<div class="max-w-xl">
+    <partial name="Design/_PanelStart" model="panel" />
+    <form asp-action="Edit" asp-route-id="@Model.Id" method="post" class="space-y-3">
+        @Html.AntiForgeryToken()
+        <div>
+            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "عنوان انگلیسی" : "English title")</label>
+            <input name="title" required maxlength="200" dir="ltr" value="@Model.Title"
+                   class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink" />
+        </div>
+        <div>
+            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "متن انگلیسی" : "English body")</label>
+            <textarea name="body" required maxlength="4000" rows="3" dir="ltr"
+                      class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink">@Model.Body</textarea>
+        </div>
+        <div>
+            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "عنوان فارسی" : "Persian title")</label>
+            <input name="titleFa" required maxlength="200" dir="rtl" value="@Model.TitleFa"
+                   class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink" />
+        </div>
+        <div>
+            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "متن فارسی" : "Persian body")</label>
+            <textarea name="bodyFa" required maxlength="4000" rows="3" dir="rtl"
+                      class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink">@Model.BodyFa</textarea>
+        </div>
+        <div>
+            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "شدت" : "Severity")</label>
+            <select name="severity" class="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink">
+                <option value="@AlertSeverity.Info" selected="@(Model.Severity == AlertSeverity.Info)">
+                    @(isFa ? "اطلاع‌رسانی — فقط بنر" : "Info — banner only")
+                </option>
+                <option value="@AlertSeverity.Warning" selected="@(Model.Severity == AlertSeverity.Warning)">
+                    @(isFa ? "هشدار — بنر + اعلان درون‌برنامه‌ای" : "Warning — banner + in-app notification")
+                </option>
+            </select>
+            <p class="mt-1 text-[11px] text-ink-faint">
+                @(isFa
+                    ? "تغییر شدت به هشدار در ویرایش دوباره اعلان درون‌برنامه‌ای نمی‌سازد — فقط هنگام انتشار اولیه ارسال می‌شود."
+                    : "Changing severity to Warning here does not re-fan-out the in-app notification — that only happens once, at first posting.")
+            </p>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+            <div>
+                <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "شروع (اختیاری)" : "Starts (optional)")</label>
+                <input name="startsAt" type="datetime-local" dir="ltr" value="@Local(Model.StartsAt)"
+                       class="w-full rounded-lg border border-line bg-surface-2 px-2 py-2 text-xs text-ink" />
+            </div>
+            <div>
+                <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "پایان (اختیاری)" : "Ends (optional)")</label>
+                <input name="endsAt" type="datetime-local" dir="ltr" value="@Local(Model.EndsAt)"
+                       class="w-full rounded-lg border border-line bg-surface-2 px-2 py-2 text-xs text-ink" />
+            </div>
+        </div>
+        <div class="flex gap-2">
+            <button class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover">
+                @(isFa ? "ذخیره" : "Save")
+            </button>
+            <a href="/announcements" class="rounded-lg border border-line px-4 py-2 text-sm text-ink-muted hover:bg-surface-2">
+                @(isFa ? "انصراف" : "Cancel")
+            </a>
+        </div>
+    </form>
+    <partial name="Design/_PanelEnd" />
+</div>
