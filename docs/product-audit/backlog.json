@@ -12,11 +12,28 @@
     "operationalValue": "Removes platform-wide head-of-line blocking; multi-tenant credibility.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Jobs"],
-    "acceptanceCriteria": ["Two different apps deploy concurrently", "Same-app deployments remain serial", "Backup does not delay a deploy", "Jobs:MaxConcurrency=1 restores serial behavior"],
-    "requiredTests": ["Concurrency matrix test", "Per-target mutual exclusion test", "DurableJobQueueTests stay green"],
-    "risks": ["Hidden shared-state assumptions under parallelism", "Lock-ordering deadlocks"],
-    "evidence": ["src/Harbora.Infrastructure/Jobs/JobWorker.cs:40-100", "src/Harbora.Infrastructure/DependencyInjection.cs:100"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Jobs"
+    ],
+    "acceptanceCriteria": [
+      "Two different apps deploy concurrently",
+      "Same-app deployments remain serial",
+      "Backup does not delay a deploy",
+      "Jobs:MaxConcurrency=1 restores serial behavior"
+    ],
+    "requiredTests": [
+      "Concurrency matrix test",
+      "Per-target mutual exclusion test",
+      "DurableJobQueueTests stay green"
+    ],
+    "risks": [
+      "Hidden shared-state assumptions under parallelism",
+      "Lock-ordering deadlocks"
+    ],
+    "evidence": [
+      "src/Harbora.Infrastructure/Jobs/JobWorker.cs:40-100",
+      "src/Harbora.Infrastructure/DependencyInjection.cs:100"
+    ],
     "recommendedPhase": 1
   },
   {
@@ -31,12 +48,29 @@
     "userValue": "Stuck operations end with a clear failure instead of freezing the platform.",
     "operationalValue": "Self-healing for transient failures; bounded worst case.",
     "scope": "M",
-    "dependencies": ["HARBORA-0001"],
-    "affectedComponents": ["Harbora.Infrastructure/Jobs", "Harbora.Infrastructure/Deployments"],
-    "acceptanceCriteria": ["Hung handler fails with TimedOut at the per-kind deadline", "Retryable kinds re-enqueue with backoff up to MaxAttempts", "Deployments never auto-retry mid-flight"],
-    "requiredTests": ["Timeout with fake clock", "Retry classification tests"],
-    "risks": ["Wrong timeout defaults kill legitimate long builds"],
-    "evidence": ["src/Harbora.Infrastructure/Jobs/JobReconciler.cs:47-49", "src/Harbora.Infrastructure/Jobs/JobWorker.cs:132"],
+    "dependencies": [
+      "HARBORA-0001"
+    ],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Jobs",
+      "Harbora.Infrastructure/Deployments"
+    ],
+    "acceptanceCriteria": [
+      "Hung handler fails with TimedOut at the per-kind deadline",
+      "Retryable kinds re-enqueue with backoff up to MaxAttempts",
+      "Deployments never auto-retry mid-flight"
+    ],
+    "requiredTests": [
+      "Timeout with fake clock",
+      "Retry classification tests"
+    ],
+    "risks": [
+      "Wrong timeout defaults kill legitimate long builds"
+    ],
+    "evidence": [
+      "src/Harbora.Infrastructure/Jobs/JobReconciler.cs:47-49",
+      "src/Harbora.Infrastructure/Jobs/JobWorker.cs:132"
+    ],
     "recommendedPhase": 1
   },
   {
@@ -52,11 +86,25 @@
     "operationalValue": "Removes a data-loss-class dead end.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Modules/Backup/Harbora.Modules.Backup.Infrastructure"],
-    "acceptanceCriteria": ["Kill -9 mid-backup: after restart the snapshot is Failed(interrupted), staging cleaned, next backup accepted", "Concurrent snapshot requests produce exactly one row via partial unique index"],
-    "requiredTests": ["Kill-mid-backup harness test", "Unique-index concurrency test"],
-    "risks": ["Reconciler must not touch snapshots legitimately owned by a second instance (future HA)"],
-    "evidence": ["BackupSnapshotService.cs:60-69", "RestoreService.cs:138-143", "JobReconciler.cs:40-54"],
+    "affectedComponents": [
+      "Modules/Backup/Harbora.Modules.Backup.Infrastructure"
+    ],
+    "acceptanceCriteria": [
+      "Kill -9 mid-backup: after restart the snapshot is Failed(interrupted), staging cleaned, next backup accepted",
+      "Concurrent snapshot requests produce exactly one row via partial unique index"
+    ],
+    "requiredTests": [
+      "Kill-mid-backup harness test",
+      "Unique-index concurrency test"
+    ],
+    "risks": [
+      "Reconciler must not touch snapshots legitimately owned by a second instance (future HA)"
+    ],
+    "evidence": [
+      "BackupSnapshotService.cs:60-69",
+      "RestoreService.cs:138-143",
+      "JobReconciler.cs:40-54"
+    ],
     "recommendedPhase": 1
   },
   {
@@ -72,11 +120,25 @@
     "operationalValue": "Restores the honest-software guarantee; alerts fire on real failures.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Deployments/DeploymentPipeline.cs", "Harbora.Infrastructure/Proxy/TraefikProxyEngine.cs"],
-    "acceptanceCriteria": ["Failing proxy apply yields Failed + DeployFailed alert + config rollback", "Optional post-cutover HTTP probe through Traefik for domained apps"],
-    "requiredTests": ["Pipeline test with failing proxy engine", "First-ever ApplyAsync rollback test"],
-    "risks": ["Probe false-negatives behind CDN; probe must target loopback with Host header"],
-    "evidence": ["DeploymentPipeline.cs:1112-1115", "IProxyEngine doc comment promising verify"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Deployments/DeploymentPipeline.cs",
+      "Harbora.Infrastructure/Proxy/TraefikProxyEngine.cs"
+    ],
+    "acceptanceCriteria": [
+      "Failing proxy apply yields Failed + DeployFailed alert + config rollback",
+      "Optional post-cutover HTTP probe through Traefik for domained apps"
+    ],
+    "requiredTests": [
+      "Pipeline test with failing proxy engine",
+      "First-ever ApplyAsync rollback test"
+    ],
+    "risks": [
+      "Probe false-negatives behind CDN; probe must target loopback with Host header"
+    ],
+    "evidence": [
+      "DeploymentPipeline.cs:1112-1115",
+      "IProxyEngine doc comment promising verify"
+    ],
     "recommendedPhase": 1
   },
   {
@@ -92,11 +154,27 @@
     "operationalValue": "Data-loss-class correctness on multi-server fleets.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Backups/BackupEngine.cs", "Harbora.Infrastructure/Maintenance/DiskCleanupService.cs", "Harbora.Infrastructure/Services/DockerTcpGateway.cs"],
-    "acceptanceCriteria": ["Backup of a remote-server service resolves that server's engine or records a named refusal", "Cleanup iterates per server"],
-    "requiredTests": ["Fake-engine resolution test", "Refusal-path test for legacy agent and v1 nodes"],
-    "risks": ["v1 nodes need the snapshot verbs dispatched (follow-up HARBORA-0034 completes the story)"],
-    "evidence": ["BackupEngine.cs:25", "DiskCleanupService.cs:43", "DockerTcpGateway.cs:27"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Backups/BackupEngine.cs",
+      "Harbora.Infrastructure/Maintenance/DiskCleanupService.cs",
+      "Harbora.Infrastructure/Services/DockerTcpGateway.cs"
+    ],
+    "acceptanceCriteria": [
+      "Backup of a remote-server service resolves that server's engine or records a named refusal",
+      "Cleanup iterates per server"
+    ],
+    "requiredTests": [
+      "Fake-engine resolution test",
+      "Refusal-path test for legacy agent and v1 nodes"
+    ],
+    "risks": [
+      "v1 nodes need the snapshot verbs dispatched (follow-up HARBORA-0034 completes the story)"
+    ],
+    "evidence": [
+      "BackupEngine.cs:25",
+      "DiskCleanupService.cs:43",
+      "DockerTcpGateway.cs:27"
+    ],
     "recommendedPhase": 1
   },
   {
@@ -112,11 +190,22 @@
     "operationalValue": "Clean restart semantics.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Jobs", "Harbora.Infrastructure/Deployments/DeploymentReconciler.cs"],
-    "acceptanceCriteria": ["Boot interleave produces exactly one terminal transition", "Worker starts only after reconcilers complete"],
-    "requiredTests": ["Boot-race interleave test"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Jobs",
+      "Harbora.Infrastructure/Deployments/DeploymentReconciler.cs"
+    ],
+    "acceptanceCriteria": [
+      "Boot interleave produces exactly one terminal transition",
+      "Worker starts only after reconcilers complete"
+    ],
+    "requiredTests": [
+      "Boot-race interleave test"
+    ],
     "risks": [],
-    "evidence": ["JobWorker.cs:84-90", "DeploymentReconciler registration order DependencyInjection.cs:99-115"],
+    "evidence": [
+      "JobWorker.cs:84-90",
+      "DeploymentReconciler registration order DependencyInjection.cs:99-115"
+    ],
     "recommendedPhase": 1
   },
   {
@@ -132,11 +221,19 @@
     "operationalValue": "Removes a silent connectivity failure class.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Deployments/CronJobRunner.cs"],
-    "acceptanceCriteria": ["Cron app in non-default environment resolves its DB by hostname"],
-    "requiredTests": ["Regression test with non-default environment"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Deployments/CronJobRunner.cs"
+    ],
+    "acceptanceCriteria": [
+      "Cron app in non-default environment resolves its DB by hostname"
+    ],
+    "requiredTests": [
+      "Regression test with non-default environment"
+    ],
     "risks": [],
-    "evidence": ["CronJobRunner.cs:98"],
+    "evidence": [
+      "CronJobRunner.cs:98"
+    ],
     "recommendedPhase": 1
   },
   {
@@ -152,11 +249,20 @@
     "operationalValue": "Backend SFTP support (with host-key pinning) becomes reachable.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Web/Views/Backups/Index.cshtml"],
-    "acceptanceCriteria": ["Destination type switcher shows the right fields for Local/S3/SFTP", "SFTP destination creatable end-to-end"],
-    "requiredTests": ["Source-reading view-structure test"],
+    "affectedComponents": [
+      "Harbora.Web/Views/Backups/Index.cshtml"
+    ],
+    "acceptanceCriteria": [
+      "Destination type switcher shows the right fields for Local/S3/SFTP",
+      "SFTP destination creatable end-to-end"
+    ],
+    "requiredTests": [
+      "Source-reading view-structure test"
+    ],
     "risks": [],
-    "evidence": ["Views/Backups/Index.cshtml:125-146,321"],
+    "evidence": [
+      "Views/Backups/Index.cshtml:125-146,321"
+    ],
     "recommendedPhase": 1
   },
   {
@@ -172,11 +278,27 @@
     "operationalValue": "Restores UI trust cheaply.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Web/Views", "Harbora.Web/Scripts/main.ts"],
-    "acceptanceCriteria": ["All three links resolve", "All referenced icons render", "Empty states present on the four pages", "No developer copy in production views"],
-    "requiredTests": ["Link-target convention test", "Icon-import source test"],
+    "affectedComponents": [
+      "Harbora.Web/Views",
+      "Harbora.Web/Scripts/main.ts"
+    ],
+    "acceptanceCriteria": [
+      "All three links resolve",
+      "All referenced icons render",
+      "Empty states present on the four pages",
+      "No developer copy in production views"
+    ],
+    "requiredTests": [
+      "Link-target convention test",
+      "Icon-import source test"
+    ],
     "risks": [],
-    "evidence": ["_Topbar.cshtml:79", "Networks/Index.cshtml:126", "Terminal/Index.cshtml:11", "Scripts/main.ts:73-94"],
+    "evidence": [
+      "_Topbar.cshtml:79",
+      "Networks/Index.cshtml:126",
+      "Terminal/Index.cshtml:11",
+      "Scripts/main.ts:73-94"
+    ],
     "recommendedPhase": 1
   },
   {
@@ -191,12 +313,28 @@
     "userValue": "Users see why a deploy waits and can cancel it.",
     "operationalValue": "Fewer support questions about stuck deploys.",
     "scope": "M",
-    "dependencies": ["HARBORA-0001"],
-    "affectedComponents": ["Harbora.Web", "Harbora.Cli", "Harbora.Infrastructure/Jobs"],
-    "acceptanceCriteria": ["Queued card shows position and blocking job type", "Cancel button on queued/running deploys", "harbora cancel <deploymentId> works"],
-    "requiredTests": ["Cancel API test", "CLI cancel test"],
+    "dependencies": [
+      "HARBORA-0001"
+    ],
+    "affectedComponents": [
+      "Harbora.Web",
+      "Harbora.Cli",
+      "Harbora.Infrastructure/Jobs"
+    ],
+    "acceptanceCriteria": [
+      "Queued card shows position and blocking job type",
+      "Cancel button on queued/running deploys",
+      "harbora cancel <deploymentId> works"
+    ],
+    "requiredTests": [
+      "Cancel API test",
+      "CLI cancel test"
+    ],
     "risks": [],
-    "evidence": ["DeploymentEngine.CancelAsync", "no cancel endpoint in ApiV1Controller"],
+    "evidence": [
+      "DeploymentEngine.CancelAsync",
+      "no cancel endpoint in ApiV1Controller"
+    ],
     "recommendedPhase": 1
   },
   {
@@ -212,11 +350,26 @@
     "operationalValue": "Kills the biggest onboarding dead end.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["deploy/install.sh", "deploy/traefik/dynamic/node-agent.yml", "Harbora.Web/Infrastructure/AdminCommands.cs"],
-    "acceptanceCriteria": ["Fresh two-VPS run: panel install then node install with minted token ends with node Online and a deploy routed through Traefik", "harbora node-ca prints the CA"],
-    "requiredTests": ["DeploymentArtifactTests-style installer assertions", "Live-host E2E lane step"],
-    "risks": ["Installer templating must stay idempotent"],
-    "evidence": ["deploy/traefik/dynamic/node-agent.yml:23,26,46,55", "AdminCommands.cs:31-35"],
+    "affectedComponents": [
+      "deploy/install.sh",
+      "deploy/traefik/dynamic/node-agent.yml",
+      "Harbora.Web/Infrastructure/AdminCommands.cs"
+    ],
+    "acceptanceCriteria": [
+      "Fresh two-VPS run: panel install then node install with minted token ends with node Online and a deploy routed through Traefik",
+      "harbora node-ca prints the CA"
+    ],
+    "requiredTests": [
+      "DeploymentArtifactTests-style installer assertions",
+      "Live-host E2E lane step"
+    ],
+    "risks": [
+      "Installer templating must stay idempotent"
+    ],
+    "evidence": [
+      "deploy/traefik/dynamic/node-agent.yml:23,26,46,55",
+      "AdminCommands.cs:31-35"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -232,11 +385,24 @@
     "operationalValue": "Bounded database growth; predictable disk.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Maintenance"],
-    "acceptanceCriteria": ["Nightly sweeper with per-table Retention:* config", "Defaults documented", "Fake-clock proof test"],
-    "requiredTests": ["Retention sweep tests per table"],
-    "risks": ["Audit retention is a policy choice - default 365d configurable"],
-    "evidence": ["IdempotencyRecord.cs:36-42", "no ExecuteDeleteAsync targets DeploymentLogs"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Maintenance"
+    ],
+    "acceptanceCriteria": [
+      "Nightly sweeper with per-table Retention:* config",
+      "Defaults documented",
+      "Fake-clock proof test"
+    ],
+    "requiredTests": [
+      "Retention sweep tests per table"
+    ],
+    "risks": [
+      "Audit retention is a policy choice - default 365d configurable"
+    ],
+    "evidence": [
+      "IdempotencyRecord.cs:36-42",
+      "no ExecuteDeleteAsync targets DeploymentLogs"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -252,11 +418,23 @@
     "operationalValue": "Parity step toward module GA.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Modules/Backup"],
-    "acceptanceCriteria": ["Verify auto-enqueued after each snapshot", "Verify-now button", "Fresh snapshots reach Passed/Failed within an hour"],
-    "requiredTests": ["Enqueue-on-complete test", "Verification outcome tests"],
+    "affectedComponents": [
+      "Modules/Backup"
+    ],
+    "acceptanceCriteria": [
+      "Verify auto-enqueued after each snapshot",
+      "Verify-now button",
+      "Fresh snapshots reach Passed/Failed within an hour"
+    ],
+    "requiredTests": [
+      "Enqueue-on-complete test",
+      "Verification outcome tests"
+    ],
     "risks": [],
-    "evidence": ["BackupJobHandlers.cs:60-140", "BackupModuleServiceCollectionExtensions.cs:88"],
+    "evidence": [
+      "BackupJobHandlers.cs:60-140",
+      "BackupModuleServiceCollectionExtensions.cs:88"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -272,11 +450,21 @@
     "operationalValue": "Ports a proven safety property to the future backup system.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Modules/Backup/RestoreService.cs"],
-    "acceptanceCriteria": ["DB/filesystem restore refuses to start when the safety snapshot fails", "SafetySnapshotRef populated and shown"],
-    "requiredTests": ["Safety-refusal test mirroring legacy BackupEngine.cs:326-341"],
+    "affectedComponents": [
+      "Modules/Backup/RestoreService.cs"
+    ],
+    "acceptanceCriteria": [
+      "DB/filesystem restore refuses to start when the safety snapshot fails",
+      "SafetySnapshotRef populated and shown"
+    ],
+    "requiredTests": [
+      "Safety-refusal test mirroring legacy BackupEngine.cs:326-341"
+    ],
     "risks": [],
-    "evidence": ["RestoreJob.cs:56", "HarboraDbContext.cs:481"],
+    "evidence": [
+      "RestoreJob.cs:56",
+      "HarboraDbContext.cs:481"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -292,11 +480,21 @@
     "operationalValue": "Removes a fake-client path from production behavior.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Services/DatabaseAccessService.cs"],
-    "acceptanceCriteria": ["Local grants rotate via the local executor", "Node-hosted grants show 'not yet supported' until the real client ships"],
-    "requiredTests": ["Local rotation test"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Services/DatabaseAccessService.cs"
+    ],
+    "acceptanceCriteria": [
+      "Local grants rotate via the local executor",
+      "Node-hosted grants show 'not yet supported' until the real client ships"
+    ],
+    "requiredTests": [
+      "Local rotation test"
+    ],
     "risks": [],
-    "evidence": ["DatabaseAccessService.cs:233-253", "DependencyInjection.cs:210"],
+    "evidence": [
+      "DatabaseAccessService.cs:233-253",
+      "DependencyInjection.cs:210"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -312,11 +510,20 @@
     "operationalValue": "Query cost bounded.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Data"],
-    "acceptanceCriteria": ["Composite index migration applied"],
-    "requiredTests": ["MigrationConsistencyTests"],
+    "affectedComponents": [
+      "Harbora.Data"
+    ],
+    "acceptanceCriteria": [
+      "Composite index migration applied"
+    ],
+    "requiredTests": [
+      "MigrationConsistencyTests"
+    ],
     "risks": [],
-    "evidence": ["Migrations/20260731150727_MetricRollups.cs", "MonitoringController.cs:197-200"],
+    "evidence": [
+      "Migrations/20260731150727_MetricRollups.cs",
+      "MonitoringController.cs:197-200"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -332,11 +539,25 @@
     "operationalValue": "Enforces the project's own honest-docs delivery rule.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["README.md", "README.fa.md", "deploy/RUNBOOK.md", "docs/node-agent", "contracts/node-agent/v1/CHANGELOG.md"],
-    "acceptanceCriteria": ["Every named drift corrected", "Verb-count drift test added", "docs/product-audit/17 declared the single roadmap"],
-    "requiredTests": ["Verb-count vs catalog test"],
+    "affectedComponents": [
+      "README.md",
+      "README.fa.md",
+      "deploy/RUNBOOK.md",
+      "docs/node-agent",
+      "contracts/node-agent/v1/CHANGELOG.md"
+    ],
+    "acceptanceCriteria": [
+      "Every named drift corrected",
+      "Verb-count drift test added",
+      "docs/product-audit/17 declared the single roadmap"
+    ],
+    "requiredTests": [
+      "Verb-count vs catalog test"
+    ],
     "risks": [],
-    "evidence": ["audit doc 03 R-16 list"],
+    "evidence": [
+      "audit doc 03 R-16 list"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -352,11 +573,23 @@
     "operationalValue": "One green check means everything ran.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": [".github/workflows"],
-    "acceptanceCriteria": ["PR workflow runs all three suites", "shellcheck/bash -n on all deploy scripts", "CLI assets ship .sha256", "NuGet gate fixed or removed"],
-    "requiredTests": ["Workflow self-checks"],
+    "affectedComponents": [
+      ".github/workflows"
+    ],
+    "acceptanceCriteria": [
+      "PR workflow runs all three suites",
+      "shellcheck/bash -n on all deploy scripts",
+      "CLI assets ship .sha256",
+      "NuGet gate fixed or removed"
+    ],
+    "requiredTests": [
+      "Workflow self-checks"
+    ],
     "risks": [],
-    "evidence": ["ci.yml:30", "release-cli.yml:66-70"],
+    "evidence": [
+      "ci.yml:30",
+      "release-cli.yml:66-70"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -372,11 +605,22 @@
     "operationalValue": "Observability parity with the contract.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.NodeAgent"],
-    "acceptanceCriteria": ["Heartbeat fields non-zero after a grant/tunnel", "Pressure/cert/tunnel events appear in the node event feed"],
-    "requiredTests": ["Heartbeat content assertion (currently none)", "Event emission tests"],
+    "affectedComponents": [
+      "Harbora.NodeAgent"
+    ],
+    "acceptanceCriteria": [
+      "Heartbeat fields non-zero after a grant/tunnel",
+      "Pressure/cert/tunnel events appear in the node event feed"
+    ],
+    "requiredTests": [
+      "Heartbeat content assertion (currently none)",
+      "Event emission tests"
+    ],
     "risks": [],
-    "evidence": ["NodeAgentWorker.cs:404-417", "Frames.cs:245-264"],
+    "evidence": [
+      "NodeAgentWorker.cs:404-417",
+      "Frames.cs:245-264"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -392,11 +636,23 @@
     "operationalValue": "Real-database confidence per PR.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["tests/Harbora.Tests", ".github/workflows/ci.yml"],
-    "acceptanceCriteria": ["L2 lane green in CI with postgres:16 container", "Migration up-from-empty and up-from-previous-release tests"],
-    "requiredTests": ["The lane itself"],
-    "risks": ["CI runtime growth - keep the lane scoped"],
-    "evidence": ["Harbora.Tests.csproj packages (InMemory only)"],
+    "affectedComponents": [
+      "tests/Harbora.Tests",
+      ".github/workflows/ci.yml"
+    ],
+    "acceptanceCriteria": [
+      "L2 lane green in CI with postgres:16 container",
+      "Migration up-from-empty and up-from-previous-release tests"
+    ],
+    "requiredTests": [
+      "The lane itself"
+    ],
+    "risks": [
+      "CI runtime growth - keep the lane scoped"
+    ],
+    "evidence": [
+      "Harbora.Tests.csproj packages (InMemory only)"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -411,12 +667,25 @@
     "userValue": "Route-level regressions caught before users.",
     "operationalValue": "Contract confidence for CLI/API growth.",
     "scope": "M",
-    "dependencies": ["HARBORA-0020"],
-    "affectedComponents": ["tests"],
-    "acceptanceCriteria": ["Capability matrix per route group", "Webhook HMAC/token paths", "429 behavior", "API v1 contract tests incl. error bodies"],
-    "requiredTests": ["The lane itself"],
+    "dependencies": [
+      "HARBORA-0020"
+    ],
+    "affectedComponents": [
+      "tests"
+    ],
+    "acceptanceCriteria": [
+      "Capability matrix per route group",
+      "Webhook HMAC/token paths",
+      "429 behavior",
+      "API v1 contract tests incl. error bodies"
+    ],
+    "requiredTests": [
+      "The lane itself"
+    ],
     "risks": [],
-    "evidence": ["no WebApplicationFactory/TestServer usage in tests"],
+    "evidence": [
+      "no WebApplicationFactory/TestServer usage in tests"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -431,12 +700,26 @@
     "userValue": "Nightly proof the advertised product works end to end.",
     "operationalValue": "Release gate; closes the verified-by-tests-only caveat.",
     "scope": "M",
-    "dependencies": ["HARBORA-0011"],
-    "affectedComponents": [".github/workflows", "deploy"],
-    "acceptanceCriteria": ["Nightly scripted run on a disposable host completes the full chain unattended, twice consecutively before phase exit"],
-    "requiredTests": ["The lane itself; ACME staging CA for cert steps"],
-    "risks": ["Runner cost/flakiness - nightly cadence, generous timeouts"],
-    "evidence": ["docs/overhaul/17-next-roadmap.md R0", "MERGE_GUIDE.md:345-381 NOT RUN list"],
+    "dependencies": [
+      "HARBORA-0011"
+    ],
+    "affectedComponents": [
+      ".github/workflows",
+      "deploy"
+    ],
+    "acceptanceCriteria": [
+      "Nightly scripted run on a disposable host completes the full chain unattended, twice consecutively before phase exit"
+    ],
+    "requiredTests": [
+      "The lane itself; ACME staging CA for cert steps"
+    ],
+    "risks": [
+      "Runner cost/flakiness - nightly cadence, generous timeouts"
+    ],
+    "evidence": [
+      "docs/overhaul/17-next-roadmap.md R0",
+      "MERGE_GUIDE.md:345-381 NOT RUN list"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -452,11 +735,29 @@
     "operationalValue": "Closes the longest-open architectural transition.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Domain", "Harbora.Data", "Harbora.Infrastructure/Networking"],
-    "acceptanceCriteria": ["Backfill + required columns in a staged migration", "New workloads attach exactly one Harbora network", "Isolation test suites stay green"],
-    "requiredTests": ["EnvironmentNetworkTests", "CrossTenantIsolationTests", "migration dry-run report"],
-    "risks": ["Live-data migration - ship a dry-run report command first"],
-    "evidence": ["App.cs:17-22", "ManagedService.cs:13", "NetworkPlan.cs:22-37"],
+    "affectedComponents": [
+      "Harbora.Domain",
+      "Harbora.Data",
+      "Harbora.Infrastructure/Networking"
+    ],
+    "acceptanceCriteria": [
+      "Backfill + required columns in a staged migration",
+      "New workloads attach exactly one Harbora network",
+      "Isolation test suites stay green"
+    ],
+    "requiredTests": [
+      "EnvironmentNetworkTests",
+      "CrossTenantIsolationTests",
+      "migration dry-run report"
+    ],
+    "risks": [
+      "Live-data migration - ship a dry-run report command first"
+    ],
+    "evidence": [
+      "App.cs:17-22",
+      "ManagedService.cs:13",
+      "NetworkPlan.cs:22-37"
+    ],
     "recommendedPhase": 3
   },
   {
@@ -471,12 +772,24 @@
     "userValue": "A failed database creation is visible and explains itself.",
     "operationalValue": "Removes silent failure class.",
     "scope": "S",
-    "dependencies": ["HARBORA-0002"],
-    "affectedComponents": ["Harbora.Infrastructure/Services/ManagedServiceEngine.cs"],
-    "acceptanceCriteria": ["Failure reason persisted and shown", "Alert raised", "Retry action available"],
-    "requiredTests": ["Provision-failure surfacing test"],
+    "dependencies": [
+      "HARBORA-0002"
+    ],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Services/ManagedServiceEngine.cs"
+    ],
+    "acceptanceCriteria": [
+      "Failure reason persisted and shown",
+      "Alert raised",
+      "Retry action available"
+    ],
+    "requiredTests": [
+      "Provision-failure surfacing test"
+    ],
     "risks": [],
-    "evidence": ["ManagedServiceEngine.cs:133-138"],
+    "evidence": [
+      "ManagedServiceEngine.cs:133-138"
+    ],
     "recommendedPhase": 3
   },
   {
@@ -492,11 +805,20 @@
     "operationalValue": "Predictable credential lifecycle.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Services/ManagedServiceEngine.cs", "Harbora.Web"],
-    "acceptanceCriteria": ["Post-rotation prompt lists attached apps and queues redeploys on confirm"],
-    "requiredTests": ["Rotation flow test"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Services/ManagedServiceEngine.cs",
+      "Harbora.Web"
+    ],
+    "acceptanceCriteria": [
+      "Post-rotation prompt lists attached apps and queues redeploys on confirm"
+    ],
+    "requiredTests": [
+      "Rotation flow test"
+    ],
     "risks": [],
-    "evidence": ["ManagedServiceEngine.RotatePasswordAsync:304-321"],
+    "evidence": [
+      "ManagedServiceEngine.RotatePasswordAsync:304-321"
+    ],
     "recommendedPhase": 3
   },
   {
@@ -511,12 +833,24 @@
     "userValue": "Every long operation is observable in one place.",
     "operationalValue": "Support burden drops; jobs table finally has a face.",
     "scope": "M",
-    "dependencies": ["HARBORA-0001"],
-    "affectedComponents": ["Harbora.Web"],
-    "acceptanceCriteria": ["/activity lists running/queued/recent jobs with status chips", "Started-toasts link to the row", "Workspace-scoped visibility"],
-    "requiredTests": ["Page test in L3 lane"],
+    "dependencies": [
+      "HARBORA-0001"
+    ],
+    "affectedComponents": [
+      "Harbora.Web"
+    ],
+    "acceptanceCriteria": [
+      "/activity lists running/queued/recent jobs with status chips",
+      "Started-toasts link to the row",
+      "Workspace-scoped visibility"
+    ],
+    "requiredTests": [
+      "Page test in L3 lane"
+    ],
     "risks": [],
-    "evidence": ["audit doc 12 section 3.1"],
+    "evidence": [
+      "audit doc 12 section 3.1"
+    ],
     "recommendedPhase": 3
   },
   {
@@ -532,11 +866,22 @@
     "operationalValue": "Less manual re-configuration.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Web", "Harbora.Infrastructure/Deployments"],
-    "acceptanceCriteria": ["Retry re-enqueues with the same config snapshot", "Build args persisted per app and passed to builds"],
-    "requiredTests": ["Retry test", "Build-arg pass-through test"],
+    "affectedComponents": [
+      "Harbora.Web",
+      "Harbora.Infrastructure/Deployments"
+    ],
+    "acceptanceCriteria": [
+      "Retry re-enqueues with the same config snapshot",
+      "Build args persisted per app and passed to builds"
+    ],
+    "requiredTests": [
+      "Retry test",
+      "Build-arg pass-through test"
+    ],
     "risks": [],
-    "evidence": ["audit doc 02 sections 4-5"],
+    "evidence": [
+      "audit doc 02 sections 4-5"
+    ],
     "recommendedPhase": 3
   },
   {
@@ -552,11 +897,24 @@
     "operationalValue": "Fewer stuck fleets.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Deployments", "Harbora.Infrastructure/Servers"],
-    "acceptanceCriteria": ["Quota/capacity validated at queue time", "Bind failure burns the port and retries the next", "Low-disk refusal names the threshold"],
-    "requiredTests": ["Port-burn test", "Disk-gate test"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Deployments",
+      "Harbora.Infrastructure/Servers"
+    ],
+    "acceptanceCriteria": [
+      "Quota/capacity validated at queue time",
+      "Bind failure burns the port and retries the next",
+      "Low-disk refusal names the threshold"
+    ],
+    "requiredTests": [
+      "Port-burn test",
+      "Disk-gate test"
+    ],
     "risks": [],
-    "evidence": ["HostPortAllocator.cs", "audit doc 03 R-22..24"],
+    "evidence": [
+      "HostPortAllocator.cs",
+      "audit doc 03 R-22..24"
+    ],
     "recommendedPhase": 3
   },
   {
@@ -572,11 +930,24 @@
     "operationalValue": "Tunable noise levels.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Web/Controllers/AlertsController.cs", "Harbora.Infrastructure/Monitoring"],
-    "acceptanceCriteria": ["Edit and enable/disable routes + UI", "Threshold form validates as a unit", "Thresholds options-bound"],
-    "requiredTests": ["Controller tests", "Options tests"],
+    "affectedComponents": [
+      "Harbora.Web/Controllers/AlertsController.cs",
+      "Harbora.Infrastructure/Monitoring"
+    ],
+    "acceptanceCriteria": [
+      "Edit and enable/disable routes + UI",
+      "Threshold form validates as a unit",
+      "Thresholds options-bound"
+    ],
+    "requiredTests": [
+      "Controller tests",
+      "Options tests"
+    ],
     "risks": [],
-    "evidence": ["AlertsController.cs:62-67", "MetricsCollector.cs:23-26"],
+    "evidence": [
+      "AlertsController.cs:62-67",
+      "MetricsCollector.cs:23-26"
+    ],
     "recommendedPhase": 6
   },
   {
@@ -592,11 +963,23 @@
     "operationalValue": "Crash-loop trends visible before users report.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Monitoring", "Harbora.Web"],
-    "acceptanceCriteria": ["Uptime percent and restart sparkline per app", "Restart-rate alert rule"],
-    "requiredTests": ["Collector tests", "Display honesty tests"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Monitoring",
+      "Harbora.Web"
+    ],
+    "acceptanceCriteria": [
+      "Uptime percent and restart sparkline per app",
+      "Restart-rate alert rule"
+    ],
+    "requiredTests": [
+      "Collector tests",
+      "Display honesty tests"
+    ],
     "risks": [],
-    "evidence": ["Inventory.cs:101-114", "Views/Monitoring/Index.cshtml:48-51"],
+    "evidence": [
+      "Inventory.cs:101-114",
+      "Views/Monitoring/Index.cshtml:48-51"
+    ],
     "recommendedPhase": 6
   },
   {
@@ -611,17 +994,31 @@
     "userValue": "What happened last night is a page, not an email archaeology.",
     "operationalValue": "Foundation for notification digests and status pages.",
     "scope": "M",
-    "dependencies": ["HARBORA-0029"],
-    "affectedComponents": ["Harbora.Domain/Monitoring", "Harbora.Infrastructure/Monitoring", "Harbora.Web"],
-    "acceptanceCriteria": ["AlertIncident rows open/resolve for threshold, disk, SSL, crash events", "Timeline UI on /monitoring", "Bell badge counts open incidents"],
-    "requiredTests": ["Lifecycle transition tests"],
+    "dependencies": [
+      "HARBORA-0029"
+    ],
+    "affectedComponents": [
+      "Harbora.Domain/Monitoring",
+      "Harbora.Infrastructure/Monitoring",
+      "Harbora.Web"
+    ],
+    "acceptanceCriteria": [
+      "AlertIncident rows open/resolve for threshold, disk, SSL, crash events",
+      "Timeline UI on /monitoring",
+      "Bell badge counts open incidents"
+    ],
+    "requiredTests": [
+      "Lifecycle transition tests"
+    ],
     "risks": [],
-    "evidence": ["audit doc 08 B2.4"],
+    "evidence": [
+      "audit doc 08 B2.4"
+    ],
     "recommendedPhase": 6
   },
   {
     "id": "HARBORA-0032",
-    "status": "open",
+    "status": "done",
     "title": "Database logical export/import and connection snippets",
     "category": "database",
     "type": "feature-gap",
@@ -631,12 +1028,24 @@
     "operationalValue": "Reuses containerized dump commands already built for backups.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Web", "Harbora.Infrastructure/Services"],
-    "acceptanceCriteria": ["Download dump for PG/MySQL/MariaDB", "Upload-restore with typed confirm", "Snippets for C#/Node/Python/PHP/Go beside connection info"],
-    "requiredTests": ["Dump round-trip in L5 lane"],
+    "affectedComponents": [
+      "Harbora.Web",
+      "Harbora.Infrastructure/Services"
+    ],
+    "acceptanceCriteria": [
+      "Download dump for PG/MySQL/MariaDB",
+      "Upload-restore with typed confirm",
+      "Snippets for C#/Node/Python/PHP/Go beside connection info"
+    ],
+    "requiredTests": [
+      "Dump round-trip in L5 lane"
+    ],
     "risks": [],
-    "evidence": ["DatabaseDumpCommands.cs"],
-    "recommendedPhase": 7
+    "evidence": [
+      "DatabaseDumpCommands.cs"
+    ],
+    "recommendedPhase": 7,
+    "statusEvidence": "Shipped 2026-08-20 as sub-project 10 (commits 9dafad7..809d46d): DatabaseExportPlan reuses BackupEngine/DatabaseDumpPlan rather than shelling to pg_dump a second way; BackupDownloadTokens mints a signed link carrying an int unix expiry (the CookieTempDataProvider retype trap); import takes a safety snapshot FIRST, proven by DatabaseRestoreSafetySnapshotTests, and a failed import names the snapshot to restore from. Export gates on BackupsRun, import on BackupsRestore."
   },
   {
     "id": "HARBORA-0033",
@@ -651,11 +1060,27 @@
     "operationalValue": "Reclaims disk; prevents accidents.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Domain/Apps/Volume.cs", "Harbora.Application/IDockerEngine", "Harbora.Web"],
-    "acceptanceCriteria": ["Protected volumes block app-delete-with-volumes", "Unmount offers keep/delete with typed confirm", "Orphan report lists unowned harbora volumes per server"],
-    "requiredTests": ["Protection tests", "Orphan enumeration test"],
-    "risks": ["ListVolumes is an additive engine method - v1 nodes need a verb or report unsupported"],
-    "evidence": ["Apps/Details.cshtml:256", "AppsController.cs:626"],
+    "affectedComponents": [
+      "Harbora.Domain/Apps/Volume.cs",
+      "Harbora.Application/IDockerEngine",
+      "Harbora.Web"
+    ],
+    "acceptanceCriteria": [
+      "Protected volumes block app-delete-with-volumes",
+      "Unmount offers keep/delete with typed confirm",
+      "Orphan report lists unowned harbora volumes per server"
+    ],
+    "requiredTests": [
+      "Protection tests",
+      "Orphan enumeration test"
+    ],
+    "risks": [
+      "ListVolumes is an additive engine method - v1 nodes need a verb or report unsupported"
+    ],
+    "evidence": [
+      "Apps/Details.cshtml:256",
+      "AppsController.cs:626"
+    ],
     "recommendedPhase": 7
   },
   {
@@ -669,12 +1094,31 @@
     "userValue": "Fleet rebalancing without manual surgery.",
     "operationalValue": "Completes the node story; enables drain-and-move.",
     "scope": "L",
-    "dependencies": ["HARBORA-0005", "HARBORA-0011"],
-    "affectedComponents": ["Harbora.Infrastructure/Nodes", "Harbora.Infrastructure/Deployments", "Harbora.Web"],
-    "acceptanceCriteria": ["Stop-first move with byte-identical volume content and rewired routes/ports", "Refusal on legacy-agent source", "Under 60s downtime for the reference app"],
-    "requiredTests": ["L5 move drill", "Artifact transport decision from open question Q7"],
-    "risks": ["Artifact transport design (tunnel vs presigned upload)"],
-    "evidence": ["NodeCommands SnapshotVolume/RestoreVolume", "no panel dispatch sites"],
+    "dependencies": [
+      "HARBORA-0005",
+      "HARBORA-0011"
+    ],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Nodes",
+      "Harbora.Infrastructure/Deployments",
+      "Harbora.Web"
+    ],
+    "acceptanceCriteria": [
+      "Stop-first move with byte-identical volume content and rewired routes/ports",
+      "Refusal on legacy-agent source",
+      "Under 60s downtime for the reference app"
+    ],
+    "requiredTests": [
+      "L5 move drill",
+      "Artifact transport decision from open question Q7"
+    ],
+    "risks": [
+      "Artifact transport design (tunnel vs presigned upload)"
+    ],
+    "evidence": [
+      "NodeCommands SnapshotVolume/RestoreVolume",
+      "no panel dispatch sites"
+    ],
     "recommendedPhase": 5
   },
   {
@@ -690,11 +1134,22 @@
     "operationalValue": "CI tokens that do not break when a person leaves.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Domain/Authorization", "Harbora.Web"],
-    "acceptanceCriteria": ["ProjectGrant optional AppId honored across controllers", "Transfer-ownership UI", "Workspace-scoped service tokens"],
-    "requiredTests": ["HTTP capability matrix additions"],
+    "affectedComponents": [
+      "Harbora.Domain/Authorization",
+      "Harbora.Web"
+    ],
+    "acceptanceCriteria": [
+      "ProjectGrant optional AppId honored across controllers",
+      "Transfer-ownership UI",
+      "Workspace-scoped service tokens"
+    ],
+    "requiredTests": [
+      "HTTP capability matrix additions"
+    ],
     "risks": [],
-    "evidence": ["ProjectGrant.cs:15"],
+    "evidence": [
+      "ProjectGrant.cs:15"
+    ],
     "recommendedPhase": 4
   },
   {
@@ -709,12 +1164,26 @@
     "userValue": "Users learn about failures where they work, in their language.",
     "operationalValue": "Consolidates three ad-hoc channel systems onto one outbox.",
     "scope": "L",
-    "dependencies": ["HARBORA-0001", "HARBORA-0002"],
-    "affectedComponents": ["new Modules/Notifications or Infrastructure/Notifications", "Harbora.Web"],
-    "acceptanceCriteria": ["Doc 09 section 6 bundle: durable events, retry x3, dedup windows, fa+en HTML templates, in-app center with unread count, delivery log"],
-    "requiredTests": ["Doc 09 section 7 suite"],
-    "risks": ["Migration of legacy Alert rows must be lossless"],
-    "evidence": ["audit doc 09"],
+    "dependencies": [
+      "HARBORA-0001",
+      "HARBORA-0002"
+    ],
+    "affectedComponents": [
+      "new Modules/Notifications or Infrastructure/Notifications",
+      "Harbora.Web"
+    ],
+    "acceptanceCriteria": [
+      "Doc 09 section 6 bundle: durable events, retry x3, dedup windows, fa+en HTML templates, in-app center with unread count, delivery log"
+    ],
+    "requiredTests": [
+      "Doc 09 section 7 suite"
+    ],
+    "risks": [
+      "Migration of legacy Alert rows must be lossless"
+    ],
+    "evidence": [
+      "audit doc 09"
+    ],
     "recommendedPhase": 9
   },
   {
@@ -729,12 +1198,25 @@
     "userValue": "Noise control per user.",
     "operationalValue": "Digest engine reused by reports.",
     "scope": "M",
-    "dependencies": ["HARBORA-0036"],
-    "affectedComponents": ["Notifications module", "Harbora.Web"],
-    "acceptanceCriteria": ["Preference matrix UI", "Hourly/daily digests", "Quiet hours downgrade non-critical to digest"],
-    "requiredTests": ["Digest grouping and quiet-hours boundary tests"],
+    "dependencies": [
+      "HARBORA-0036"
+    ],
+    "affectedComponents": [
+      "Notifications module",
+      "Harbora.Web"
+    ],
+    "acceptanceCriteria": [
+      "Preference matrix UI",
+      "Hourly/daily digests",
+      "Quiet hours downgrade non-critical to digest"
+    ],
+    "requiredTests": [
+      "Digest grouping and quiet-hours boundary tests"
+    ],
     "risks": [],
-    "evidence": ["audit doc 09 section 5"],
+    "evidence": [
+      "audit doc 09 section 5"
+    ],
     "recommendedPhase": 9
   },
   {
@@ -748,12 +1230,27 @@
     "userValue": "App sends transactional email minutes after attach; staging can never leak email to real users.",
     "operationalValue": "Provider-swappable credentials; unified logs/limits; category-first Dev Inbox.",
     "scope": "L",
-    "dependencies": ["HARBORA-0001", "HARBORA-0036"],
-    "affectedComponents": ["new Modules/Email", "deploy/docker-compose.yml (ingest container)", "Harbora.Web"],
-    "acceptanceCriteria": ["Doc 10 section 8 bundle: domain DNS guide with live checks, credential rotation without redeploy, delivery log with provider outcomes, sandbox gates, Dev Inbox capture for non-production"],
-    "requiredTests": ["Doc 10 section 9 suite incl. fake-upstream e2e"],
-    "risks": ["New SMTP listener surface - authenticated relay only, rate-limited"],
-    "evidence": ["audit docs 10 and 11"],
+    "dependencies": [
+      "HARBORA-0001",
+      "HARBORA-0036"
+    ],
+    "affectedComponents": [
+      "new Modules/Email",
+      "deploy/docker-compose.yml (ingest container)",
+      "Harbora.Web"
+    ],
+    "acceptanceCriteria": [
+      "Doc 10 section 8 bundle: domain DNS guide with live checks, credential rotation without redeploy, delivery log with provider outcomes, sandbox gates, Dev Inbox capture for non-production"
+    ],
+    "requiredTests": [
+      "Doc 10 section 9 suite incl. fake-upstream e2e"
+    ],
+    "risks": [
+      "New SMTP listener surface - authenticated relay only, rate-limited"
+    ],
+    "evidence": [
+      "audit docs 10 and 11"
+    ],
     "recommendedPhase": 10
   },
   {
@@ -767,12 +1264,27 @@
     "userValue": "Email included with no third-party account.",
     "operationalValue": "Margin option; SES-style production-access gate protects shared reputation.",
     "scope": "L",
-    "dependencies": ["HARBORA-0038"],
-    "affectedComponents": ["Modules/Email"],
-    "acceptanceCriteria": ["Sandbox -> verified-domain -> production-access lifecycle", "Bounce/complaint webhooks feed suppression", "Plan-driven quotas"],
-    "requiredTests": ["Sandbox gate matrix", "Webhook normalization per provider"],
-    "risks": ["Deliverability support burden; abuse handling"],
-    "evidence": ["audit doc 11 part 1 option C/D"],
+    "dependencies": [
+      "HARBORA-0038"
+    ],
+    "affectedComponents": [
+      "Modules/Email"
+    ],
+    "acceptanceCriteria": [
+      "Sandbox -> verified-domain -> production-access lifecycle",
+      "Bounce/complaint webhooks feed suppression",
+      "Plan-driven quotas"
+    ],
+    "requiredTests": [
+      "Sandbox gate matrix",
+      "Webhook normalization per provider"
+    ],
+    "risks": [
+      "Deliverability support burden; abuse handling"
+    ],
+    "evidence": [
+      "audit doc 11 part 1 option C/D"
+    ],
     "recommendedPhase": 14
   },
   {
@@ -786,12 +1298,29 @@
     "userValue": "Every PR gets a shareable URL; the single highest-wow competitive flow.",
     "operationalValue": "Reuses clone/quota/sweeper machinery already shipped.",
     "scope": "L",
-    "dependencies": ["HARBORA-0023"],
-    "affectedComponents": ["Harbora.Infrastructure/Projects/PreviewEnvironmentService.cs", "WebhooksController"],
-    "acceptanceCriteria": ["PR open creates pr-{n} environment with URL", "Merge/close tears down", "Idle sweep proof stays"],
-    "requiredTests": ["Webhook PR event mapping per provider (open question Q5)", "L5 lifecycle test"],
-    "risks": ["Provider PR payload differences"],
-    "evidence": ["progress.md phase 9 admission", "PreviewEnvironmentService.cs"],
+    "dependencies": [
+      "HARBORA-0023"
+    ],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Projects/PreviewEnvironmentService.cs",
+      "WebhooksController"
+    ],
+    "acceptanceCriteria": [
+      "PR open creates pr-{n} environment with URL",
+      "Merge/close tears down",
+      "Idle sweep proof stays"
+    ],
+    "requiredTests": [
+      "Webhook PR event mapping per provider (open question Q5)",
+      "L5 lifecycle test"
+    ],
+    "risks": [
+      "Provider PR payload differences"
+    ],
+    "evidence": [
+      "progress.md phase 9 admission",
+      "PreviewEnvironmentService.cs"
+    ],
     "recommendedPhase": 3
   },
   {
@@ -805,12 +1334,28 @@
     "userValue": "Render-Blueprints-class clone-and-deploy.",
     "operationalValue": "Config drift becomes diffable.",
     "scope": "L",
-    "dependencies": ["HARBORA-0042"],
-    "affectedComponents": ["Harbora.Cli/ProjectConfig.cs", "Harbora.Web api"],
-    "acceptanceCriteria": ["env/domains/volumes keys real with panel-side apply + diff preview", "Unknown keys still tolerated"],
-    "requiredTests": ["Parser tests", "Apply-diff tests"],
-    "risks": ["Secret values must never live in the file - reference-only design"],
-    "evidence": ["ProjectConfig.cs:112-122", "examples/harbora.yml:5-12"],
+    "dependencies": [
+      "HARBORA-0042"
+    ],
+    "affectedComponents": [
+      "Harbora.Cli/ProjectConfig.cs",
+      "Harbora.Web api"
+    ],
+    "acceptanceCriteria": [
+      "env/domains/volumes keys real with panel-side apply + diff preview",
+      "Unknown keys still tolerated"
+    ],
+    "requiredTests": [
+      "Parser tests",
+      "Apply-diff tests"
+    ],
+    "risks": [
+      "Secret values must never live in the file - reference-only design"
+    ],
+    "evidence": [
+      "ProjectConfig.cs:112-122",
+      "examples/harbora.yml:5-12"
+    ],
     "recommendedPhase": 11
   },
   {
@@ -825,12 +1370,29 @@
     "userValue": "Full headless lifecycle for CI and scripts.",
     "operationalValue": "The ~35 existing node/backup/sync endpoints gain a consumer story.",
     "scope": "L",
-    "dependencies": ["HARBORA-0021"],
-    "affectedComponents": ["Harbora.Web/Controllers/Api", "Harbora.Cli"],
-    "acceptanceCriteria": ["CLI runs create-deploy-domain-env-rollback headless with --json and stable exit codes", "OpenAPI served and CI-validated", "Idempotency keys on mutating deploy endpoints"],
-    "requiredTests": ["Contract tests per endpoint", "CLI e2e against test host"],
-    "risks": ["Error-contract stability - documented table remains source of truth"],
-    "evidence": ["docs/cli-deploy.md:186-334", "audit doc 02 section 13"],
+    "dependencies": [
+      "HARBORA-0021"
+    ],
+    "affectedComponents": [
+      "Harbora.Web/Controllers/Api",
+      "Harbora.Cli"
+    ],
+    "acceptanceCriteria": [
+      "CLI runs create-deploy-domain-env-rollback headless with --json and stable exit codes",
+      "OpenAPI served and CI-validated",
+      "Idempotency keys on mutating deploy endpoints"
+    ],
+    "requiredTests": [
+      "Contract tests per endpoint",
+      "CLI e2e against test host"
+    ],
+    "risks": [
+      "Error-contract stability - documented table remains source of truth"
+    ],
+    "evidence": [
+      "docs/cli-deploy.md:186-334",
+      "audit doc 02 section 13"
+    ],
     "recommendedPhase": 11
   },
   {
@@ -844,12 +1406,27 @@
     "userValue": "Trustworthy one-click apps with versions.",
     "operationalValue": "Every published template is deploy-tested nightly.",
     "scope": "L",
-    "dependencies": ["HARBORA-0022"],
-    "affectedComponents": ["Harbora.Infrastructure/Templates", "docs"],
-    "acceptanceCriteria": ["~30 curated templates", "Screenshots + backup notes per template", "L5 harness deploys every published template"],
-    "requiredTests": ["Template validation lane"],
-    "risks": ["Maintenance treadmill - cap catalog size deliberately"],
-    "evidence": ["audit doc 11 Coolify row"],
+    "dependencies": [
+      "HARBORA-0022"
+    ],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Templates",
+      "docs"
+    ],
+    "acceptanceCriteria": [
+      "~30 curated templates",
+      "Screenshots + backup notes per template",
+      "L5 harness deploys every published template"
+    ],
+    "requiredTests": [
+      "Template validation lane"
+    ],
+    "risks": [
+      "Maintenance treadmill - cap catalog size deliberately"
+    ],
+    "evidence": [
+      "audit doc 11 Coolify row"
+    ],
     "recommendedPhase": 11
   },
   {
@@ -863,12 +1440,25 @@
     "userValue": "WordPress+DB-class stacks install as one unit incl. broker-backed apps.",
     "operationalValue": "Resolves open question Q1 with evidence.",
     "scope": "M",
-    "dependencies": ["HARBORA-0022"],
-    "affectedComponents": ["Harbora.Infrastructure/Templates/TemplateDeploymentService.cs"],
-    "acceptanceCriteria": ["Live-host proof of a two-service template", "Broker service types accepted in manifests"],
-    "requiredTests": ["L5 template test", "Parser extension tests"],
+    "dependencies": [
+      "HARBORA-0022"
+    ],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Templates/TemplateDeploymentService.cs"
+    ],
+    "acceptanceCriteria": [
+      "Live-host proof of a two-service template",
+      "Broker service types accepted in manifests"
+    ],
+    "requiredTests": [
+      "L5 template test",
+      "Parser extension tests"
+    ],
     "risks": [],
-    "evidence": ["TemplateDeploymentService.cs:315", "docs contradiction #3 in audit record"],
+    "evidence": [
+      "TemplateDeploymentService.cs:315",
+      "docs contradiction #3 in audit record"
+    ],
     "recommendedPhase": 11
   },
   {
@@ -883,11 +1473,26 @@
     "operationalValue": "Single string catalog; single nav-label source.",
     "scope": "L",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Web/Views", "Resources/SharedResource.fa.resx", "Scripts/islands"],
-    "acceptanceCriteria": ["Fold discipline inside App/DB/Create pages", "Resx coverage >90% with no-new-ternary test", "Nav labels single-sourced", "Native confirm() eliminated for irreversibles"],
-    "requiredTests": ["Extended localization source tests"],
-    "risks": ["Mechanical churn - one PR per area"],
-    "evidence": ["audit doc 12 sections 3.2 and 4"],
+    "affectedComponents": [
+      "Harbora.Web/Views",
+      "Resources/SharedResource.fa.resx",
+      "Scripts/islands"
+    ],
+    "acceptanceCriteria": [
+      "Fold discipline inside App/DB/Create pages",
+      "Resx coverage >90% with no-new-ternary test",
+      "Nav labels single-sourced",
+      "Native confirm() eliminated for irreversibles"
+    ],
+    "requiredTests": [
+      "Extended localization source tests"
+    ],
+    "risks": [
+      "Mechanical churn - one PR per area"
+    ],
+    "evidence": [
+      "audit doc 12 sections 3.2 and 4"
+    ],
     "recommendedPhase": 12
   },
   {
@@ -902,18 +1507,36 @@
     "userValue": "One backup system with the strengths of both.",
     "operationalValue": "Ends dual-system maintenance; enables default-on module.",
     "scope": "L",
-    "dependencies": ["HARBORA-0003", "HARBORA-0013", "HARBORA-0014", "HARBORA-0022"],
-    "affectedComponents": ["Modules/Backup"],
-    "acceptanceCriteria": ["Doc 08 A1 convergence sequence complete", "L5 restore drill green", "Features:Backup default true; legacy badged maintenance"],
-    "requiredTests": ["Parity suite", "Live drill"],
-    "risks": ["Kopia S3 decision (open question Q6)"],
-    "evidence": ["audit doc 08 part A"],
+    "dependencies": [
+      "HARBORA-0003",
+      "HARBORA-0013",
+      "HARBORA-0014",
+      "HARBORA-0022"
+    ],
+    "affectedComponents": [
+      "Modules/Backup"
+    ],
+    "acceptanceCriteria": [
+      "Doc 08 A1 convergence sequence complete",
+      "L5 restore drill green",
+      "Features:Backup default true; legacy badged maintenance"
+    ],
+    "requiredTests": [
+      "Parity suite",
+      "Live drill"
+    ],
+    "risks": [
+      "Kopia S3 decision (open question Q6)"
+    ],
+    "evidence": [
+      "audit doc 08 part A"
+    ],
     "recommendedPhase": 8
   },
   {
     "id": "HARBORA-0047",
     "status": "done",
-    "statusEvidence": "docs/disaster-recovery.md exists (291 lines, commits 837184e6 and a00cc3f5, 2026-08-08, both ancestors of HEAD on master), covering exactly the three named scenarios (panel-host loss, app loss, node loss) plus a quarterly drill checklist. The item was assumed open both by the plan's own planning-time list and by the premise of the plan's later Sub-project 12 -- it is not; independently confirmed present (15KB, 23 section headers) in this worktree.",
+    "statusEvidence": "Runbook: docs/disaster-recovery.md (291 lines, 837184e6 and a00cc3f5, 2026-08-08). Restore drill: added 2026-08-20 as sub-project 12 (3261c34..25f8575) - deploy/restore-drill.sh restores the latest backup into a scratch Postgres and fails loudly and specifically on no-backup / truncated dump / restore error / empty sanity query, with fixture tests running the real script; the last drill's date and verdict show in admin settings and warn past 30 days. The drill has never been RUN on a real server - that remains the one unproven step.",
     "title": "Disaster-recovery runbook and restore drill checklist",
     "category": "documentation",
     "type": "tech-debt",
@@ -923,16 +1546,24 @@
     "operationalValue": "Names the current node-volume gap honestly until fixed.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["docs"],
-    "acceptanceCriteria": ["docs/disaster-recovery.md with three scenarios and drill checklist"],
-    "requiredTests": ["Drill executed once on the L5 lane"],
+    "affectedComponents": [
+      "docs"
+    ],
+    "acceptanceCriteria": [
+      "docs/disaster-recovery.md with three scenarios and drill checklist"
+    ],
+    "requiredTests": [
+      "Drill executed once on the L5 lane"
+    ],
     "risks": [],
-    "evidence": ["audit doc 08 A3"],
+    "evidence": [
+      "audit doc 08 A3"
+    ],
     "recommendedPhase": 2
   },
   {
     "id": "HARBORA-0048",
-    "status": "open",
+    "status": "partial",
     "title": "Platform admin operations pack",
     "category": "admin",
     "type": "feature-gap",
@@ -941,13 +1572,27 @@
     "userValue": "Tenants get told about maintenance; operators get an ops cockpit.",
     "operationalValue": "Reads mostly existing tables (/activity, notification deliveries).",
     "scope": "L",
-    "dependencies": ["HARBORA-0026", "HARBORA-0036"],
-    "affectedComponents": ["Harbora.Web admin area"],
-    "acceptanceCriteria": ["Announcement banner + notification", "Flag toggles with audit", "Failed-job and delivery dashboards"],
-    "requiredTests": ["Admin route capability tests"],
+    "dependencies": [
+      "HARBORA-0026",
+      "HARBORA-0036"
+    ],
+    "affectedComponents": [
+      "Harbora.Web admin area"
+    ],
+    "acceptanceCriteria": [
+      "Announcement banner + notification",
+      "Flag toggles with audit",
+      "Failed-job and delivery dashboards"
+    ],
+    "requiredTests": [
+      "Admin route capability tests"
+    ],
     "risks": [],
-    "evidence": ["audit doc 02 section 15"],
-    "recommendedPhase": 13
+    "evidence": [
+      "audit doc 02 section 15"
+    ],
+    "recommendedPhase": 13,
+    "statusEvidence": "Two of the four parts shipped 2026-08-20. Maintenance announcements: sub-project 4 (b749c12..f9502e3) - bilingual, windowed, per-user per-announcement dismissal, warn severity fanning out through the existing N3 path. Support tooling: sub-project 3 (2559132..5dede07) - impersonation with a visible customer banner, two-sided audit, six blocked acts and one-hour server-side expiry. Still open: feature-flag UI (config-file only) and failed-job / failed-delivery overviews - though EventDelivery rows now exist for the second, so it is a page, not a mechanism."
   },
   {
     "id": "HARBORA-0049",
@@ -961,11 +1606,19 @@
     "operationalValue": "Complete billing basis for the provider story.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Tenancy/MeteringService.cs"],
-    "acceptanceCriteria": ["Service/volume/bucket GB-hours in UsageRecord and tenant CSV"],
-    "requiredTests": ["Metering accumulation tests"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Tenancy/MeteringService.cs"
+    ],
+    "acceptanceCriteria": [
+      "Service/volume/bucket GB-hours in UsageRecord and tenant CSV"
+    ],
+    "requiredTests": [
+      "Metering accumulation tests"
+    ],
     "risks": [],
-    "evidence": ["MeteringService.cs:45-67"],
+    "evidence": [
+      "MeteringService.cs:45-67"
+    ],
     "recommendedPhase": 13
   },
   {
@@ -981,11 +1634,23 @@
     "operationalValue": "Cloudflare-token DNS-01 first.",
     "scope": "L",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Proxy", "deploy/traefik"],
-    "acceptanceCriteria": ["Custom cert upload wired to Traefik", "DNS-01 provider plumbing with Cloudflare"],
-    "requiredTests": ["L5 cert scenarios with staging CA"],
-    "risks": ["Traefik config surface growth"],
-    "evidence": ["README SSL section"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Proxy",
+      "deploy/traefik"
+    ],
+    "acceptanceCriteria": [
+      "Custom cert upload wired to Traefik",
+      "DNS-01 provider plumbing with Cloudflare"
+    ],
+    "requiredTests": [
+      "L5 cert scenarios with staging CA"
+    ],
+    "risks": [
+      "Traefik config surface growth"
+    ],
+    "evidence": [
+      "README SSL section"
+    ],
     "recommendedPhase": 16
   },
   {
@@ -1000,12 +1665,22 @@
     "userValue": "Clear guidance on which agent to run.",
     "operationalValue": "Freezes an untested surface.",
     "scope": "S",
-    "dependencies": ["HARBORA-0011"],
-    "affectedComponents": ["docs", "Harbora.Web servers page"],
-    "acceptanceCriteria": ["Deprecated badge + docs removal from primary paths + migration note", "EOL decision recorded after node v1 GA telemetry"],
+    "dependencies": [
+      "HARBORA-0011"
+    ],
+    "affectedComponents": [
+      "docs",
+      "Harbora.Web servers page"
+    ],
+    "acceptanceCriteria": [
+      "Deprecated badge + docs removal from primary paths + migration note",
+      "EOL decision recorded after node v1 GA telemetry"
+    ],
     "requiredTests": [],
     "risks": [],
-    "evidence": ["docs/node-agent/merge-notes.md:42-50"],
+    "evidence": [
+      "docs/node-agent/merge-notes.md:42-50"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -1021,11 +1696,19 @@
     "operationalValue": "Rides along area PRs; never standalone churn.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["various"],
-    "acceptanceCriteria": ["Each area PR removes its listed dead surface or wires it deliberately"],
-    "requiredTests": ["Existing suites stay green"],
+    "affectedComponents": [
+      "various"
+    ],
+    "acceptanceCriteria": [
+      "Each area PR removes its listed dead surface or wires it deliberately"
+    ],
+    "requiredTests": [
+      "Existing suites stay green"
+    ],
     "risks": [],
-    "evidence": ["audit doc 03 P3 list"],
+    "evidence": [
+      "audit doc 03 P3 list"
+    ],
     "recommendedPhase": 16
   },
   {
@@ -1040,12 +1723,26 @@
     "userValue": "New installs reach a protected, notifying state, not just a deployed app.",
     "operationalValue": "Reduces day-2 surprises.",
     "scope": "M",
-    "dependencies": ["HARBORA-0036"],
-    "affectedComponents": ["Harbora.Web/Views/Setup", "Home dashboard checklist"],
-    "acceptanceCriteria": ["Stepped setup with progress", "Checklist steps 5-6: schedule first backup, configure SMTP/notifications", "Contextual doc links per page"],
-    "requiredTests": ["L6 onboarding smoke"],
+    "dependencies": [
+      "HARBORA-0036"
+    ],
+    "affectedComponents": [
+      "Harbora.Web/Views/Setup",
+      "Home dashboard checklist"
+    ],
+    "acceptanceCriteria": [
+      "Stepped setup with progress",
+      "Checklist steps 5-6: schedule first backup, configure SMTP/notifications",
+      "Contextual doc links per page"
+    ],
+    "requiredTests": [
+      "L6 onboarding smoke"
+    ],
     "risks": [],
-    "evidence": ["Views/Setup/Index.cshtml", "audit doc 12 section 2"],
+    "evidence": [
+      "Views/Setup/Index.cshtml",
+      "audit doc 12 section 2"
+    ],
     "recommendedPhase": 15
   },
   {
@@ -1061,11 +1758,24 @@
     "operationalValue": "Prevents support burn on an unproven surface.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Ai", "Harbora.Web/Views/Ai"],
-    "acceptanceCriteria": ["One real OpenRouter round-trip in a gated CI step or manual runbook", "Until then: preview banner + hidden in Simple mode"],
-    "requiredTests": ["Provider smoke (gated)"],
-    "risks": ["External account/cost dependency"],
-    "evidence": ["platform-expansion-v1.md not-built section", "progress.md AI note"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Ai",
+      "Harbora.Web/Views/Ai"
+    ],
+    "acceptanceCriteria": [
+      "One real OpenRouter round-trip in a gated CI step or manual runbook",
+      "Until then: preview banner + hidden in Simple mode"
+    ],
+    "requiredTests": [
+      "Provider smoke (gated)"
+    ],
+    "risks": [
+      "External account/cost dependency"
+    ],
+    "evidence": [
+      "platform-expansion-v1.md not-built section",
+      "progress.md AI note"
+    ],
     "recommendedPhase": 2
   },
   {
@@ -1080,11 +1790,26 @@
     "operationalValue": "Removes a scan that grows with retention on the largest table on the install.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Data/HarboraDbContext.cs", "Harbora.Web/Controllers/MonitoringController.cs"],
-    "acceptanceCriteria": ["Index is (ServerId, Name, ResourceRef, Timestamp) with the ranged column last", "The raw-points query is answered from the index without a sort", "Additive migration only; no data movement"],
-    "requiredTests": ["Postgres-lane EXPLAIN assertion, as MigrationTests already does for MetricRollups"],
-    "risks": ["Index build time on a large MonitoringMetrics table during upgrade"],
-    "evidence": ["src/Harbora.Data/HarboraDbContext.cs:268", "src/Harbora.Web/Controllers/MonitoringController.cs:224", "found while implementing Phase 2 task 4"],
+    "affectedComponents": [
+      "Harbora.Data/HarboraDbContext.cs",
+      "Harbora.Web/Controllers/MonitoringController.cs"
+    ],
+    "acceptanceCriteria": [
+      "Index is (ServerId, Name, ResourceRef, Timestamp) with the ranged column last",
+      "The raw-points query is answered from the index without a sort",
+      "Additive migration only; no data movement"
+    ],
+    "requiredTests": [
+      "Postgres-lane EXPLAIN assertion, as MigrationTests already does for MetricRollups"
+    ],
+    "risks": [
+      "Index build time on a large MonitoringMetrics table during upgrade"
+    ],
+    "evidence": [
+      "src/Harbora.Data/HarboraDbContext.cs:268",
+      "src/Harbora.Web/Controllers/MonitoringController.cs:224",
+      "found while implementing Phase 2 task 4"
+    ],
     "recommendedPhase": 6
   },
   {
@@ -1100,11 +1825,25 @@
     "operationalValue": "Closes the last unexamined reader of a deliberately unfiltered table.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Web/Controllers/AuditController.cs", "Harbora.Domain/Auditing"],
-    "acceptanceCriteria": ["A decision recorded in 18-open-questions.md: provider-only page, or scoped by workspace", "Whichever is chosen is enforced in the controller", "Cross-tenant test over the audit page"],
-    "requiredTests": ["CrossTenantIsolationTests extension over the audit page"],
-    "risks": ["Scoping it hides platform events that have no workspace, which is most of them"],
-    "evidence": ["src/Harbora.Web/Controllers/AuditController.cs:102", "found while writing the retention sweeper in Phase 2"],
+    "affectedComponents": [
+      "Harbora.Web/Controllers/AuditController.cs",
+      "Harbora.Domain/Auditing"
+    ],
+    "acceptanceCriteria": [
+      "A decision recorded in 18-open-questions.md: provider-only page, or scoped by workspace",
+      "Whichever is chosen is enforced in the controller",
+      "Cross-tenant test over the audit page"
+    ],
+    "requiredTests": [
+      "CrossTenantIsolationTests extension over the audit page"
+    ],
+    "risks": [
+      "Scoping it hides platform events that have no workspace, which is most of them"
+    ],
+    "evidence": [
+      "src/Harbora.Web/Controllers/AuditController.cs:102",
+      "found while writing the retention sweeper in Phase 2"
+    ],
     "recommendedPhase": 4
   },
   {
@@ -1119,11 +1858,25 @@
     "operationalValue": "Moves the at-most-one-active-deployment rule from a check into a constraint.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Deployments/DeploymentEngine.cs", "Harbora.Data"],
-    "acceptanceCriteria": ["Partial unique index on (AppId) where the status is in-flight", "Concurrent double-queue produces one row and the loser returns the winner's id", "Rollback-versus-deploy intent mismatch still fails loudly rather than coalescing"],
-    "requiredTests": ["Postgres-lane concurrency test, as PartialUniqueIndexTests does for backups"],
-    "risks": ["An index that also matched Cancelled or TimedOut would block the next legitimate deploy"],
-    "evidence": ["src/Harbora.Infrastructure/Deployments/DeploymentEngine.cs:29-59", "found during Phase 1 review"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Deployments/DeploymentEngine.cs",
+      "Harbora.Data"
+    ],
+    "acceptanceCriteria": [
+      "Partial unique index on (AppId) where the status is in-flight",
+      "Concurrent double-queue produces one row and the loser returns the winner's id",
+      "Rollback-versus-deploy intent mismatch still fails loudly rather than coalescing"
+    ],
+    "requiredTests": [
+      "Postgres-lane concurrency test, as PartialUniqueIndexTests does for backups"
+    ],
+    "risks": [
+      "An index that also matched Cancelled or TimedOut would block the next legitimate deploy"
+    ],
+    "evidence": [
+      "src/Harbora.Infrastructure/Deployments/DeploymentEngine.cs:29-59",
+      "found during Phase 1 review"
+    ],
     "recommendedPhase": 3
   },
   {
@@ -1139,11 +1892,25 @@
     "operationalValue": "One rule, enforced wherever a host is minted rather than wherever somebody remembered.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Templates/TemplateDeploymentService.cs", "Harbora.Infrastructure/Projects/PreviewEnvironmentService.cs", "Harbora.Domain/Networking/ReservedHosts.cs"],
-    "acceptanceCriteria": ["Every path that mints a host consults ReservedHosts", "A refusal names the host and why it is reserved", "A test enumerates the host-minting call sites so a fifth cannot be added without one"],
-    "requiredTests": ["ReservedHostsTests extended to the generated-host paths"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Templates/TemplateDeploymentService.cs",
+      "Harbora.Infrastructure/Projects/PreviewEnvironmentService.cs",
+      "Harbora.Domain/Networking/ReservedHosts.cs"
+    ],
+    "acceptanceCriteria": [
+      "Every path that mints a host consults ReservedHosts",
+      "A refusal names the host and why it is reserved",
+      "A test enumerates the host-minting call sites so a fifth cannot be added without one"
+    ],
+    "requiredTests": [
+      "ReservedHostsTests extended to the generated-host paths"
+    ],
     "risks": [],
-    "evidence": ["src/Harbora.Infrastructure/Templates/TemplateDeploymentService.cs:253", "src/Harbora.Infrastructure/Projects/PreviewEnvironmentService.cs:187", "ReservedHosts is referenced only from AppsController"],
+    "evidence": [
+      "src/Harbora.Infrastructure/Templates/TemplateDeploymentService.cs:253",
+      "src/Harbora.Infrastructure/Projects/PreviewEnvironmentService.cs:187",
+      "ReservedHosts is referenced only from AppsController"
+    ],
     "recommendedPhase": 3
   },
   {
@@ -1157,12 +1924,30 @@
     "userValue": "External access to a database on a node either works or is refused before it is offered.",
     "operationalValue": "Finishes the engine-seam sweep; removes the last two silent wrong-host actors.",
     "scope": "M",
-    "dependencies": ["HARBORA-0005"],
-    "affectedComponents": ["Harbora.Infrastructure/Services/DatabaseGrantExecutor.cs", "Harbora.Infrastructure/Services/AdminerService.cs", "Harbora.Infrastructure/Services/ExternalAccessAvailability.cs"],
-    "acceptanceCriteria": ["Both resolve their engine per the resource's server through IServerEngineFactory", "A capability the resolved engine lacks is refused by name, not attempted locally", "The UI does not offer external access where it cannot be delivered"],
-    "requiredTests": ["Remote-engine resolution tests, as added for BackupEngine in Phase 1"],
-    "risks": ["Adminer needs a published route to a container on another host, which the tunnel work owns"],
-    "evidence": ["src/Harbora.Infrastructure/Services/DatabaseGrantExecutor.cs:17", "src/Harbora.Infrastructure/Services/AdminerService.cs:42", "audit doc 03 engine-seam list"],
+    "dependencies": [
+      "HARBORA-0005"
+    ],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Services/DatabaseGrantExecutor.cs",
+      "Harbora.Infrastructure/Services/AdminerService.cs",
+      "Harbora.Infrastructure/Services/ExternalAccessAvailability.cs"
+    ],
+    "acceptanceCriteria": [
+      "Both resolve their engine per the resource's server through IServerEngineFactory",
+      "A capability the resolved engine lacks is refused by name, not attempted locally",
+      "The UI does not offer external access where it cannot be delivered"
+    ],
+    "requiredTests": [
+      "Remote-engine resolution tests, as added for BackupEngine in Phase 1"
+    ],
+    "risks": [
+      "Adminer needs a published route to a container on another host, which the tunnel work owns"
+    ],
+    "evidence": [
+      "src/Harbora.Infrastructure/Services/DatabaseGrantExecutor.cs:17",
+      "src/Harbora.Infrastructure/Services/AdminerService.cs:42",
+      "audit doc 03 engine-seam list"
+    ],
     "recommendedPhase": 7
   },
   {
@@ -1177,11 +1962,27 @@
     "operationalValue": "Makes the routing file a function of the rows again after any hard stop.",
     "scope": "M",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Web/Program.cs", "Harbora.Infrastructure/Proxy/TraefikProxyEngine.cs", "Harbora.Infrastructure/Deployments/DeploymentReconciler.cs"],
-    "acceptanceCriteria": ["Boot re-applies the whole platform's routing once, after migrate and seed", "A failure there is logged and does not stop the panel starting", "Invalid rows are left out exactly as an ordinary apply leaves them out"],
-    "requiredTests": ["Boot-path test asserting one ApplyAllAsync", "Crash-then-restart test over a half-wired route"],
-    "risks": ["An apply during boot competes with the reconcilers and must not block the health endpoint"],
-    "evidence": ["src/Harbora.Web/Program.cs boot sequence contains no proxy apply", "found during Phase 1 review of WireProxyAsync"],
+    "affectedComponents": [
+      "Harbora.Web/Program.cs",
+      "Harbora.Infrastructure/Proxy/TraefikProxyEngine.cs",
+      "Harbora.Infrastructure/Deployments/DeploymentReconciler.cs"
+    ],
+    "acceptanceCriteria": [
+      "Boot re-applies the whole platform's routing once, after migrate and seed",
+      "A failure there is logged and does not stop the panel starting",
+      "Invalid rows are left out exactly as an ordinary apply leaves them out"
+    ],
+    "requiredTests": [
+      "Boot-path test asserting one ApplyAllAsync",
+      "Crash-then-restart test over a half-wired route"
+    ],
+    "risks": [
+      "An apply during boot competes with the reconcilers and must not block the health endpoint"
+    ],
+    "evidence": [
+      "src/Harbora.Web/Program.cs boot sequence contains no proxy apply",
+      "found during Phase 1 review of WireProxyAsync"
+    ],
     "recommendedPhase": 3
   },
   {
@@ -1196,12 +1997,27 @@
     "userValue": "No plaintext database dump is left behind by a restore that was interrupted.",
     "operationalValue": "Gives restores the durable cleanup claim backups already have.",
     "scope": "S",
-    "dependencies": ["HARBORA-0003"],
-    "affectedComponents": ["Modules/Backup/Harbora.Modules.Backup.Domain/RestoreJob.cs", "Modules/Backup/Harbora.Modules.Backup.Infrastructure/BackupModuleReconciler.cs"],
-    "acceptanceCriteria": ["RestoreJob.StagingPath is written before the dump is staged and cleared when it is removed", "The reconciler sweeps restore staging paths and retries what it cannot delete", "A killed restore leaves nothing readable after the next sweep"],
-    "requiredTests": ["Kill-mid-restore harness test, mirroring the kill-mid-backup one"],
+    "dependencies": [
+      "HARBORA-0003"
+    ],
+    "affectedComponents": [
+      "Modules/Backup/Harbora.Modules.Backup.Domain/RestoreJob.cs",
+      "Modules/Backup/Harbora.Modules.Backup.Infrastructure/BackupModuleReconciler.cs"
+    ],
+    "acceptanceCriteria": [
+      "RestoreJob.StagingPath is written before the dump is staged and cleared when it is removed",
+      "The reconciler sweeps restore staging paths and retries what it cannot delete",
+      "A killed restore leaves nothing readable after the next sweep"
+    ],
+    "requiredTests": [
+      "Kill-mid-restore harness test, mirroring the kill-mid-backup one"
+    ],
     "risks": [],
-    "evidence": ["src/Modules/Backup/Harbora.Modules.Backup.Domain/RestoreJob.cs has no StagingPath", "BackupSnapshot.cs:79", "BackupModuleReconciler.cs:347"],
+    "evidence": [
+      "src/Modules/Backup/Harbora.Modules.Backup.Domain/RestoreJob.cs has no StagingPath",
+      "BackupSnapshot.cs:79",
+      "BackupModuleReconciler.cs:347"
+    ],
     "recommendedPhase": 8
   },
   {
@@ -1216,11 +2032,22 @@
     "operationalValue": "Lets monitoring assert the nightly sweep happened, not only that it deleted something.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Maintenance/DataRetentionSweeper.cs"],
-    "acceptanceCriteria": ["Every sweep logs one line, including a sweep that deleted nothing", "Failed tables are named in that line as well as at Error", "The line's shape is stable enough for a monitoring rule to key on"],
-    "requiredTests": ["DataRetentionSweeperTests assertion over a zero-deletion pass"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Maintenance/DataRetentionSweeper.cs"
+    ],
+    "acceptanceCriteria": [
+      "Every sweep logs one line, including a sweep that deleted nothing",
+      "Failed tables are named in that line as well as at Error",
+      "The line's shape is stable enough for a monitoring rule to key on"
+    ],
+    "requiredTests": [
+      "DataRetentionSweeperTests assertion over a zero-deletion pass"
+    ],
     "risks": [],
-    "evidence": ["src/Harbora.Infrastructure/Maintenance/DataRetentionSweeper.cs:218-221", "RetentionSweepResult has one producer and no consumers in src/"],
+    "evidence": [
+      "src/Harbora.Infrastructure/Maintenance/DataRetentionSweeper.cs:218-221",
+      "RetentionSweepResult has one producer and no consumers in src/"
+    ],
     "recommendedPhase": 6
   },
   {
@@ -1235,11 +2062,26 @@
     "operationalValue": "Settles two figures an operator will otherwise reconcile against Docker and mistrust.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.NodeAgent/Hosting/HeartbeatReporter.cs", "Harbora.Web/Views/Nodes", "contracts/node-agent/v1"],
-    "acceptanceCriteria": ["A decision recorded in 18-open-questions.md for each figure", "Either the labels say containers and tunnels-including-ingress, or additive contract fields carry the other reading", "No existing field changes meaning within v1"],
-    "requiredTests": ["Heartbeat content assertion pinning whichever meaning is chosen"],
-    "risks": ["Redefining an existing field within v1 would break the compatibility rule the contract rests on"],
-    "evidence": ["src/Harbora.NodeAgent/Hosting/HeartbeatReporter.cs:109-129", "src/Harbora.NodeAgent/Tunnels/TunnelSupervisor.cs:35"],
+    "affectedComponents": [
+      "Harbora.NodeAgent/Hosting/HeartbeatReporter.cs",
+      "Harbora.Web/Views/Nodes",
+      "contracts/node-agent/v1"
+    ],
+    "acceptanceCriteria": [
+      "A decision recorded in 18-open-questions.md for each figure",
+      "Either the labels say containers and tunnels-including-ingress, or additive contract fields carry the other reading",
+      "No existing field changes meaning within v1"
+    ],
+    "requiredTests": [
+      "Heartbeat content assertion pinning whichever meaning is chosen"
+    ],
+    "risks": [
+      "Redefining an existing field within v1 would break the compatibility rule the contract rests on"
+    ],
+    "evidence": [
+      "src/Harbora.NodeAgent/Hosting/HeartbeatReporter.cs:109-129",
+      "src/Harbora.NodeAgent/Tunnels/TunnelSupervisor.cs:35"
+    ],
     "recommendedPhase": 6
   },
   {
@@ -1254,11 +2096,21 @@
     "operationalValue": "Removes a false-Critical path from the alert stream for the cost of one test.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Backups/SftpTransfer.cs", "tests/Harbora.Tests/SftpTransferTests.cs"],
-    "acceptanceCriteria": ["A test asserts the get command's local path with and without localFileName"],
-    "requiredTests": ["SftpTransferTests case for the local-name substitution"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Backups/SftpTransfer.cs",
+      "tests/Harbora.Tests/SftpTransferTests.cs"
+    ],
+    "acceptanceCriteria": [
+      "A test asserts the get command's local path with and without localFileName"
+    ],
+    "requiredTests": [
+      "SftpTransferTests case for the local-name substitution"
+    ],
     "risks": [],
-    "evidence": ["src/Harbora.Infrastructure/Backups/SftpTransfer.cs:64-74", "tests/Harbora.Tests/SftpTransferTests.cs:90,98 call the six-argument overload only"],
+    "evidence": [
+      "src/Harbora.Infrastructure/Backups/SftpTransfer.cs:64-74",
+      "tests/Harbora.Tests/SftpTransferTests.cs:90,98 call the six-argument overload only"
+    ],
     "recommendedPhase": 8
   },
   {
@@ -1272,12 +2124,30 @@
     "userValue": "None directly.",
     "operationalValue": "The one rollback lever for the parallel-worker change actually works, and by the same route as every other setting.",
     "scope": "S",
-    "dependencies": ["HARBORA-0001"],
-    "affectedComponents": ["deploy/docker-compose.yml", "deploy/install.sh", "deploy/RUNBOOK.md"],
-    "acceptanceCriteria": ["The panel service passes Jobs__MaxConcurrency from .env with the code's default when unset", "install.sh backfills the key on update, only when absent", "A test asserts every operator-settable option named in the RUNBOOK reaches the container"],
-    "requiredTests": ["Compose-to-runbook drift test extended from documented-variable to reachable-variable"],
-    "risks": ["Substituting an empty value must not bind an empty string over the code's default"],
-    "evidence": ["deploy/docker-compose.yml panel.environment has no Jobs__ key and no env_file", "src/Harbora.Infrastructure/Jobs/JobQueueOptions.cs:31", "src/Harbora.Web/appsettings.json Jobs._comment_concurrency describes the setting"],
+    "dependencies": [
+      "HARBORA-0001"
+    ],
+    "affectedComponents": [
+      "deploy/docker-compose.yml",
+      "deploy/install.sh",
+      "deploy/RUNBOOK.md"
+    ],
+    "acceptanceCriteria": [
+      "The panel service passes Jobs__MaxConcurrency from .env with the code's default when unset",
+      "install.sh backfills the key on update, only when absent",
+      "A test asserts every operator-settable option named in the RUNBOOK reaches the container"
+    ],
+    "requiredTests": [
+      "Compose-to-runbook drift test extended from documented-variable to reachable-variable"
+    ],
+    "risks": [
+      "Substituting an empty value must not bind an empty string over the code's default"
+    ],
+    "evidence": [
+      "deploy/docker-compose.yml panel.environment has no Jobs__ key and no env_file",
+      "src/Harbora.Infrastructure/Jobs/JobQueueOptions.cs:31",
+      "src/Harbora.Web/appsettings.json Jobs._comment_concurrency describes the setting"
+    ],
     "recommendedPhase": 3
   },
   {
@@ -1292,11 +2162,24 @@
     "operationalValue": "Closes the last unguarded write on a path that publishes a route.",
     "scope": "S",
     "dependencies": [],
-    "affectedComponents": ["Harbora.Infrastructure/Services/AdminerService.cs"],
-    "acceptanceCriteria": ["A cancellation at the save or the apply withdraws the route and the container the same way a returned failure does", "The withdrawal continues to run on CancellationToken.None", "A test cancels between the save and the apply and asserts no route row survives"],
-    "requiredTests": ["AdminerSessionTests case cancelling mid-open"],
-    "risks": ["Catching OperationCanceledException here must not swallow shutdown"],
-    "evidence": ["src/Harbora.Infrastructure/Services/AdminerService.cs:121-124", "the returned-failure path at :126-158 was added by 7dd1d7e and covers only that case"],
+    "affectedComponents": [
+      "Harbora.Infrastructure/Services/AdminerService.cs"
+    ],
+    "acceptanceCriteria": [
+      "A cancellation at the save or the apply withdraws the route and the container the same way a returned failure does",
+      "The withdrawal continues to run on CancellationToken.None",
+      "A test cancels between the save and the apply and asserts no route row survives"
+    ],
+    "requiredTests": [
+      "AdminerSessionTests case cancelling mid-open"
+    ],
+    "risks": [
+      "Catching OperationCanceledException here must not swallow shutdown"
+    ],
+    "evidence": [
+      "src/Harbora.Infrastructure/Services/AdminerService.cs:121-124",
+      "the returned-failure path at :126-158 was added by 7dd1d7e and covers only that case"
+    ],
     "recommendedPhase": 7
   }
 ]
