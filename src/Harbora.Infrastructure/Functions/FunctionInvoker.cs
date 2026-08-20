@@ -6,6 +6,7 @@ using Harbora.Domain.Common;
 using Harbora.Domain.Features;
 using Harbora.Domain.Functions;
 using Harbora.Domain.Jobs;
+using Harbora.Domain.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -27,6 +28,7 @@ public sealed class FunctionInvoker(
     ISecretProtector protector,
     IJobQueue jobs,
     IFeatureGate features,
+    IEventPublisher events,
     ILogger<FunctionInvoker> logger) : IFunctionInvoker
 {
     /// <summary>
@@ -95,14 +97,14 @@ public sealed class FunctionInvoker(
 
         if (fn is null || app is null)
         {
-            await CompleteAsync(invocation, null, false, "The function no longer exists.", 0, ct);
+            await CompleteAsync(invocation, fn, app, null, false, "The function no longer exists.", 0, ct);
             return;
         }
 
         var address = await ResolveAddressAsync(app, ct);
         if (address is null)
         {
-            await CompleteAsync(invocation, null, false,
+            await CompleteAsync(invocation, fn, app, null, false,
                 "The function app is not reachable from the panel — it may be stopped.", 0, ct);
             return;
         }
@@ -112,7 +114,7 @@ public sealed class FunctionInvoker(
         {
             // The host refuses an unsigned call, so an app with no secret would fail with a 401 that
             // reads like a bug. Say the real thing: it has not been published since the secret existed.
-            await CompleteAsync(invocation, null, false,
+            await CompleteAsync(invocation, fn, app, null, false,
                 "This app has no invoke secret. Publish it again to issue one.", 0, ct);
             return;
         }
@@ -134,7 +136,7 @@ public sealed class FunctionInvoker(
             var elapsed = (int)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             var ok = (int)response.StatusCode < 400;
 
-            await CompleteAsync(invocation, (int)response.StatusCode, ok,
+            await CompleteAsync(invocation, fn, app, (int)response.StatusCode, ok,
                 ok ? null : $"The function answered {(int)response.StatusCode}.", elapsed, ct);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
@@ -145,7 +147,7 @@ public sealed class FunctionInvoker(
             var reason = ex is TaskCanceledException && !ct.IsCancellationRequested
                 ? $"No answer within {Timeout.TotalSeconds:0}s."
                 : "Could not reach the function app.";
-            await CompleteAsync(invocation, null, false, reason, elapsed, ct);
+            await CompleteAsync(invocation, fn, app, null, false, reason, elapsed, ct);
         }
     }
 
@@ -177,7 +179,8 @@ public sealed class FunctionInvoker(
     }
 
     private async Task CompleteAsync(
-        FunctionInvocation invocation, int? status, bool ok, string? error, int elapsedMs, CancellationToken ct)
+        FunctionInvocation invocation, FunctionDefinition? fn, Domain.Apps.App? app,
+        int? status, bool ok, string? error, int elapsedMs, CancellationToken ct)
     {
         invocation.StatusCode = status;
         invocation.Succeeded = ok;
@@ -186,6 +189,21 @@ public sealed class FunctionInvoker(
         invocation.CompletedAt = DateTimeOffset.UtcNow;
         invocation.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
+
+        // F4 (2026-08-21 functions-and-services plan, "Function failures become visible"): the same
+        // "enqueue only, right where the row is already marked failed" shape DeploymentPipeline,
+        // BackupEngine, MetricsCollector and ManagedServiceEngine already use for their own failure
+        // events. A scheduled function that fails at 3am and tells nobody is the same defect class as
+        // a check that reports success for work it never did — this is the seam that stops it being
+        // silent. Never called out inline: IEventPublisher.PublishAsync only ever writes durable rows
+        // and enqueues a job, and never throws on its own, so this can never turn an invocation that
+        // already finished (successfully or not) into something that fails a second time here.
+        if (!ok)
+            await events.PublishAsync(invocation.WorkspaceId, EventKind.FunctionFailed,
+                new Dictionary<string, string>
+                {
+                    ["function"] = fn?.Name ?? "", ["app"] = app?.Name ?? "", ["error"] = invocation.Error ?? ""
+                }, ct);
     }
 
     private string? SafeUnprotect(string? ciphertext)

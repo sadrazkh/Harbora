@@ -190,6 +190,39 @@ public class EventDispatcherTests
         EventKind.Publishable.HasFlag(EventKind.MaintenanceOff).Should().BeTrue();
     }
 
+    /// <summary>
+    /// F4 (2026-08-21 functions-and-services plan, "Function failures become visible")'s own
+    /// acceptance criterion: a subscription checkbox exists for the new kind. The 2026-08-20 lesson
+    /// was an event that fires but cannot be subscribed to — this is the same guard that pins
+    /// MaintenanceOn/Off, now covering FunctionFailed too.
+    /// </summary>
+    [Fact]
+    public void Publishable_includes_function_failed()
+    {
+        EventKind.Publishable.HasFlag(EventKind.FunctionFailed).Should().BeTrue();
+    }
+
+    /// <summary>A subscription to FunctionFailed is matched and delivered exactly like any other
+    /// event — FunctionInvoker publishes through this same PublishAsync seam, not a second path.</summary>
+    [Fact]
+    public async Task A_subscription_to_a_function_failed_event_receives_it_like_any_other()
+    {
+        var h = Build();
+        var sub = WebhookSub(Workspace, EventKind.FunctionFailed);
+        h.Db.EventSubscriptions.Add(sub);
+        await h.Db.SaveChangesAsync();
+
+        await h.Dispatcher.PublishAsync(Workspace, EventKind.FunctionFailed,
+            new Dictionary<string, string> { ["function"] = "nightly", ["app"] = "fns" }, default);
+        var delivery = await h.Db.EventDeliveries.SingleAsync();
+
+        await h.Dispatcher.ExecuteQueuedDeliveryAsync(delivery.Id, default);
+
+        h.Handler.LastHeaders!.GetValues("X-Harbora-Event").Single().Should().Be("function.failed");
+        var stored = await h.Db.EventDeliveries.AsNoTracking().SingleAsync(d => d.Id == delivery.Id);
+        stored.Status.Should().Be(NotificationDeliveryStatus.Sent);
+    }
+
     // ---- webhook: signed payload, verified like a real consumer would --------------------------
 
     [Fact]

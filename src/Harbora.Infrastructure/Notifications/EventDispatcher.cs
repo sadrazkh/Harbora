@@ -92,6 +92,7 @@ public sealed class EventDispatcher(
         EventKind.ServiceFailed => "service.failed",
         EventKind.MaintenanceOn => "maintenance.on",
         EventKind.MaintenanceOff => "maintenance.off",
+        EventKind.FunctionFailed => "function.failed",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Not a single publishable event.")
     };
 

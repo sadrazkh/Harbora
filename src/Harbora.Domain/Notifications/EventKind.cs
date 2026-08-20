@@ -57,8 +57,19 @@ public enum EventKind
     /// on the subscription page as of this plan's follow-up.</summary>
     MaintenanceOff = 1 << 7,
 
+    /// <summary>
+    /// Published by <c>FunctionInvoker.CompleteAsync</c> at the exact point it writes a failed
+    /// <c>FunctionInvocation</c> row (F4, 2026-08-21 functions-and-services plan, "Function
+    /// failures become visible"). A scheduled function that fails at 3am and tells nobody is the same
+    /// class of defect as a check that reports success for work it never did — this is the checkbox
+    /// that lets a workspace hear about it the same way it already hears about a failed deployment or
+    /// backup. Appended, not reserved: nothing published this before today, so there was no earlier
+    /// point to reserve a bit at.
+    /// </summary>
+    FunctionFailed = 1 << 8,
+
     /// <summary>Every event this codebase can actually raise today — what the subscription UI offers
     /// as checkboxes.</summary>
     Publishable = DeploymentSucceeded | DeploymentFailed | AppCrashed | BackupSucceeded | BackupFailed |
-        ServiceFailed | MaintenanceOn | MaintenanceOff
+        ServiceFailed | MaintenanceOn | MaintenanceOff | FunctionFailed
 }

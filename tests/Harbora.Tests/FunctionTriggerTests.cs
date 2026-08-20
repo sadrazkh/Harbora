@@ -7,10 +7,12 @@ using Harbora.Domain.Features;
 using Harbora.Domain.Functions;
 using Harbora.Domain.Identity;
 using Harbora.Domain.Jobs;
+using Harbora.Domain.Notifications;
 using Harbora.Domain.Tenancy;
 using Harbora.Infrastructure.Features;
 using Harbora.Infrastructure.Functions;
 using Harbora.Infrastructure.Maintenance;
+using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -86,8 +88,9 @@ public class FunctionTriggerTests
         return new World(db, workspace.Id, app, fn);
     }
 
-    private static FunctionInvoker InvokerFor(HarboraDbContext db, RecordingJobQueue jobs) =>
-        new(db, new NoHttp(), new PlainProtector(), jobs, new FeatureGate(db),
+    private static FunctionInvoker InvokerFor(
+        HarboraDbContext db, RecordingJobQueue jobs, IEventPublisher? events = null) =>
+        new(db, new NoHttp(), new PlainProtector(), jobs, new FeatureGate(db), events ?? new RecordingEventPublisher(),
             NullLogger<FunctionInvoker>.Instance);
 
     // ------------------------------------------------------------ queueing
@@ -210,6 +213,53 @@ public class FunctionTriggerTests
         await invoker.ExecuteAsync(id.Value, default);
 
         (await world.Db.FunctionInvocations.IgnoreQueryFilters().SingleAsync()).Error.Should().Be(firstError);
+    }
+
+    // ------------------------------------------------------- F4: EventKind.FunctionFailed
+
+    /// <summary>
+    /// F4 (2026-08-21 functions-and-services plan, "Function failures become visible")'s own
+    /// acceptance criterion: a failed invocation publishes exactly one event. Uses the "no secret"
+    /// failure path because it is deterministic with no HTTP involved — <c>CompleteAsync</c> is the
+    /// one place every failure path in this class converges on, so this exercises the seam directly
+    /// rather than any one particular reason a call can fail.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_invocation_publishes_exactly_one_function_failed_event()
+    {
+        var world = await SeedAsync();
+        world.App.FunctionInvokeSecret = null;
+        await world.Db.SaveChangesAsync();
+        var jobs = new RecordingJobQueue();
+        var events = new RecordingEventPublisher();
+        var invoker = InvokerFor(world.Db, jobs, events);
+
+        var id = await invoker.QueueAsync(world.Fn.Id, FunctionTrigger.Cron, null, default);
+        await invoker.ExecuteAsync(id!.Value, default);
+
+        var published = events.Events.Should().ContainSingle().Subject;
+        published.Kind.Should().Be(EventKind.FunctionFailed);
+        published.Workspace.Should().Be(world.WorkspaceId);
+        published.Resource["function"].Should().Be("nightly");
+        published.Resource["app"].Should().Be("fns");
+        published.Resource["error"].Should().Contain("invoke secret");
+    }
+
+    [Fact]
+    public async Task A_successful_invocation_publishes_no_event()
+    {
+        var world = await SeedAsync();
+        var jobs = new RecordingJobQueue();
+        var events = new RecordingEventPublisher();
+        var invoker = new FunctionInvoker(
+            world.Db, new OkHttp(), new PlainProtector(), jobs, new FeatureGate(world.Db), events,
+            NullLogger<FunctionInvoker>.Instance);
+
+        var id = await invoker.QueueAsync(world.Fn.Id, FunctionTrigger.Cron, null, default);
+        await invoker.ExecuteAsync(id!.Value, default);
+
+        (await world.Db.FunctionInvocations.IgnoreQueryFilters().SingleAsync()).Succeeded.Should().BeTrue();
+        events.Events.Should().BeEmpty("a successful run is not the failure this event exists to surface");
     }
 
     // --------------------------------------------------------------- events
@@ -405,7 +455,7 @@ public class FunctionTriggerTests
         services.AddSingleton<IHttpClientFactory>(new NoHttp());
         services.AddSingleton<IFeatureGate>(new FeatureGate(db));
         services.AddSingleton<IFunctionInvoker>(sp => new FunctionInvoker(
-            db, new NoHttp(), new PlainProtector(), jobs, new FeatureGate(db),
+            db, new NoHttp(), new PlainProtector(), jobs, new FeatureGate(db), new RecordingEventPublisher(),
             NullLogger<FunctionInvoker>.Instance));
 
         provider = services.BuildServiceProvider();
@@ -450,6 +500,18 @@ public class FunctionTriggerTests
         {
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
                 throw new HttpRequestException("connection refused");
+        }
+    }
+
+    /// <summary>Every request answers 200 — the host actually ran the function.</summary>
+    private sealed class OkHttp : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new OkHandler());
+
+        private sealed class OkHandler : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+                Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("ok") });
         }
     }
 

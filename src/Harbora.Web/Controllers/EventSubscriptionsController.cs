@@ -86,7 +86,7 @@ public sealed class EventSubscriptionsController(
         string name, AlertChannel channel, string? webhookUrl, string? telegramToken, string? telegramChatId,
         bool onDeploymentSucceeded, bool onDeploymentFailed, bool onAppCrashed,
         bool onBackupSucceeded, bool onBackupFailed, bool onServiceFailed,
-        bool onMaintenanceOn, bool onMaintenanceOff,
+        bool onMaintenanceOn, bool onMaintenanceOff, bool onFunctionFailed,
         CancellationToken ct)
     {
         if (channel is not (AlertChannel.Webhook or AlertChannel.Telegram))
@@ -104,7 +104,7 @@ public sealed class EventSubscriptionsController(
         }
 
         var mask = BuildMask(onDeploymentSucceeded, onDeploymentFailed, onAppCrashed,
-            onBackupSucceeded, onBackupFailed, onServiceFailed, onMaintenanceOn, onMaintenanceOff);
+            onBackupSucceeded, onBackupFailed, onServiceFailed, onMaintenanceOn, onMaintenanceOff, onFunctionFailed);
         if (mask == EventKind.None)
         {
             TempData["Error"] = IsFa
