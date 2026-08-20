@@ -467,7 +467,10 @@ public sealed class FakeDockerEngine : IDockerEngine
             await Task.Delay(Timeout.Infinite, ct);
         }
 
-        return OneOffExitCode;
+        // A test proving the Nth one-off in a multi-step flow (e.g. a safety dump that must succeed
+        // before the restore it protects is even attempted) dequeues here; every other test keeps
+        // using the single scalar below, unchanged.
+        return OneOffExitCodes.Count > 0 ? OneOffExitCodes.Dequeue() : OneOffExitCode;
     }
 
     /// <summary>Every one-off command line, so destructive operations can be asserted on.</summary>
@@ -477,6 +480,13 @@ public sealed class FakeDockerEngine : IDockerEngine
     public List<DockerOneOffRequest> OneOffRequests { get; } = [];
 
     public int OneOffExitCode { get; set; }
+
+    /// <summary>
+    /// Per-call exit codes for a flow that runs more than one one-off command and needs the Nth to
+    /// answer differently from the (N-1)th — e.g. a pre-restore safety dump that succeeds followed by
+    /// a restore that fails. Empty by default, in which case every call answers <see cref="OneOffExitCode"/>.
+    /// </summary>
+    public Queue<int> OneOffExitCodes { get; } = new();
 
     /// <summary>A one-off that runs for ever — a command waiting for input, or one that was never
     /// actually started because the image's entrypoint swallowed it.</summary>
