@@ -217,6 +217,94 @@
         </form>
         <partial name="Design/_PanelEnd" />
 
+        @{ var ssoPanel = new PanelModel(isFa ? "ورود با سرویس‌های دیگر" : "External sign-in"); }
+        <partial name="Design/_PanelStart" model="ssoPanel" />
+
+        <p class="mb-4 text-sm leading-6 text-ink-muted">
+            @(isFa
+                ? "تا وقتی شناسه و کلید یک سرویس پر نشده باشد، دکمه‌اش در صفحهٔ ورود دیده نمی‌شود. نشانی بازگشت را در پنل خود آن سرویس ثبت کنید."
+                : "A provider shows no button on the sign-in page until its client id and secret are both filled in. Register the redirect address below in the provider's own console.")
+        </p>
+
+        <div class="space-y-4">
+            @foreach (var sso in Model.Sso)
+            {
+                var isOidc = sso.Provider == Harbora.Domain.Identity.ExternalLoginProviders.Oidc;
+                <form asp-action="SaveSso" method="post" class="rounded-xl border border-line bg-surface-2 p-4 space-y-3"
+                      data-sso-provider="@sso.Provider">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="provider" value="@sso.Provider" />
+
+                    <div class="flex items-center justify-between gap-3">
+                        <strong class="text-sm text-ink">@sso.Name</strong>
+                        @* Three states, not two: off, on-and-working, and on-but-incomplete. The
+                           third is the one a single "enabled" pill would report as working. *@
+                        @if (!sso.Enabled)
+                        {
+                            <span class="text-[11px] text-ink-faint">@(isFa ? "خاموش" : "off")</span>
+                        }
+                        else if (sso.IsConfigured)
+                        {
+                            <span class="text-[11px] text-ok">@(isFa ? "روشن" : "on")</span>
+                        }
+                        else
+                        {
+                            <span class="text-[11px] text-warn">@(isFa ? "ناقص — دکمه‌ای نشان داده نمی‌شود" : "incomplete — no button is shown")</span>
+                        }
+                    </div>
+
+                    <label class="flex items-center gap-2 text-sm">
+                        <input type="checkbox" name="enabled" value="true" @(sso.Enabled ? "checked" : "") />
+                        <span>@(isFa ? "فعال" : "Enabled")</span>
+                    </label>
+
+                    <div class="grid gap-3 sm:grid-cols-2">
+                        <div>
+                            <label class="form-label" for="sso-@(sso.Provider)-id">@(isFa ? "شناسهٔ کلاینت" : "Client id")</label>
+                            <input id="sso-@(sso.Provider)-id" name="clientId" value="@sso.ClientId"
+                                   autocomplete="off" class="form-control font-mono" dir="ltr" />
+                        </div>
+                        <div>
+                            <label class="form-label" for="sso-@(sso.Provider)-secret">@(isFa ? "کلید کلاینت" : "Client secret")</label>
+                            @* Never rendered back, only reported as stored — the same rule the SMTP
+                               password follows. Blank keeps whatever is already there. *@
+                            <input id="sso-@(sso.Provider)-secret" name="clientSecret" type="password"
+                                   autocomplete="new-password" class="form-control" dir="ltr"
+                                   data-sso-has-secret="@(sso.HasSecret ? "true" : "false")"
+                                   placeholder="@(sso.HasSecret ? (isFa ? "ذخیره شده — برای تغییر بنویسید" : "stored — type to change") : "")" />
+                        </div>
+
+                        @if (isOidc)
+                        {
+                            <div>
+                                <label class="form-label" for="sso-oidc-authority">@(isFa ? "نشانی صادرکننده (Authority)" : "Authority")</label>
+                                <input id="sso-oidc-authority" name="authority" value="@sso.Authority"
+                                       placeholder="https://sso.example.com" class="form-control font-mono" dir="ltr" />
+                                <small class="mt-1 block text-[11px] text-ink-faint">
+                                    @(isFa
+                                        ? "باید https باشد؛ سند discovery از همین نشانی خوانده می‌شود."
+                                        : "Must be https; the discovery document is read from it.")
+                                </small>
+                            </div>
+                            <div>
+                                <label class="form-label" for="sso-oidc-name">@(isFa ? "نامی که روی دکمه بیاید" : "Name on the button")</label>
+                                <input id="sso-oidc-name" name="displayName" value="@sso.DisplayName"
+                                       placeholder="@(isFa ? "ورود یکپارچه" : "Single sign-on")" class="form-control" />
+                            </div>
+                        }
+                    </div>
+
+                    <div>
+                        <span class="form-label">@(isFa ? "نشانی بازگشت" : "Redirect address")</span>
+                        <code class="block break-all rounded bg-code text-code-ink px-3 py-2 text-xs" dir="ltr">@sso.RedirectUri</code>
+                    </div>
+
+                    <button class="btn-primary">@(isFa ? "ذخیره" : "Save")</button>
+                </form>
+            }
+        </div>
+        <partial name="Design/_PanelEnd" />
+
         @{ var updatePanel = new PanelModel(isFa ? "به‌روزرسانی Harbora" : "Harbora updates"); }
         <partial name="Design/_PanelStart" model="updatePanel" />
 

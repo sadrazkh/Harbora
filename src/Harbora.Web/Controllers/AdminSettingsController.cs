@@ -29,6 +29,8 @@ public sealed class AdminSettingsController(
     Harbora.Application.Abstractions.ISecretProtector protector,
     Harbora.Infrastructure.Notifications.PlatformMailer mailer,
     Harbora.Application.Abstractions.ICurrentUser currentUser,
+    Harbora.Infrastructure.Security.ExternalLoginSettingsService externalLogins,
+    Harbora.Web.Infrastructure.ExternalLoginSchemeCache externalLoginSchemes,
     Microsoft.Extensions.Options.IOptions<Harbora.Modules.Sync.Infrastructure.SyncFeatureOptions> syncFeatures,
     Microsoft.Extensions.Options.IOptions<Harbora.Modules.Backup.Infrastructure.BackupFeatureOptions> backupFeatures) : Controller
 {
@@ -139,6 +141,41 @@ public sealed class AdminSettingsController(
         return RedirectToAction(nameof(Index));
     }
 
+    /// <summary>
+    /// Configures one external sign-in provider.
+    ///
+    /// <para>
+    /// A blank secret keeps the stored one, the same way the SMTP form works and for the same reason.
+    /// The scheme cache is emptied afterwards because the framework holds each scheme's options for
+    /// the life of the process — without this, "Saved" would be true of the database and false of the
+    /// sign-in page until somebody restarted the panel.
+    /// </para>
+    /// </summary>
+    [HttpPost("sso")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SaveSso(
+        string provider, bool enabled, string? clientId, string? clientSecret,
+        string? authority, string? displayName, CancellationToken ct)
+    {
+        if (Harbora.Domain.Identity.ExternalLoginProviders.Normalise(provider) is not { } key)
+            return NotFound();
+
+        await externalLogins.SaveAsync(key, enabled, clientId, clientSecret, authority, displayName, ct);
+        externalLoginSchemes.Forget();
+        await audit.LogAsync("platform.sso_provider", "setting", $"{key}/{(enabled ? "on" : "off")}", ClientIp, ct: ct);
+
+        // Named, and honest about the difference between the switch and the effect: a provider
+        // switched on with no client id shows no button, and a page that said "enabled" would be
+        // reporting work it did not do.
+        var saved = (await externalLogins.GetAsync(ct)).For(key);
+        TempData[saved.Enabled && !saved.IsConfigured ? "Error" : "Message"] = saved.Enabled && !saved.IsConfigured
+            ? (IsFa
+                ? "ذخیره شد، اما تا کامل‌شدن شناسه و کلید، دکمه‌ای نشان داده نمی‌شود."
+                : "Saved — but no button appears until the client id and secret are both filled in.")
+            : (IsFa ? "تنظیمات ورود ذخیره شد." : "Sign-in provider saved.");
+        return RedirectToAction(nameof(Index));
+    }
+
     [HttpPost("updates")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SaveUpdateCheck(bool updateCheck, CancellationToken ct)
@@ -211,8 +248,28 @@ public sealed class AdminSettingsController(
 
         var chosen = FeaturedTemplates.Parse(await ReadAsync(SettingKeys.FeaturedTemplates, ct));
 
+        var sso = await externalLogins.GetAsync(ct);
+
         return new AdminSettingsViewModel
         {
+            Sso = Harbora.Domain.Identity.ExternalLoginProviders.All.Select(provider =>
+            {
+                var config = sso.For(provider);
+                return new SsoProviderViewModel(
+                    provider,
+                    Harbora.Domain.Identity.ExternalLoginProviders.DisplayName(provider, config.DisplayName, IsFa),
+                    config.Enabled,
+                    config.ClientId,
+                    HasSecret: config.ClientSecret is not null,
+                    config.Authority,
+                    config.DisplayName,
+                    // The scheme's own callback path, on this panel's own host — what the provider's
+                    // console has to be told, exactly.
+                    RedirectUri: $"{Request.Scheme}://{Request.Host}" +
+                                 Harbora.Web.Infrastructure.ExternalAuth.ProviderCallbackPath(provider),
+                    config.IsConfigured);
+            }).ToList(),
+
             Templates = templates,
 
             // Chosen first, in their order, so the form reads as the dashboard will.

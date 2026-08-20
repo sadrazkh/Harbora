@@ -8,11 +8,37 @@ public sealed record TemplateChoiceViewModel(
     string Key, string Name, string? NameFa, string Category, string? IconUrl);
 
 /// <summary>
+/// One external sign-in provider as the admin form sees it.
+/// </summary>
+/// <param name="HasSecret">Whether a client secret is stored. The secret itself never travels to the
+/// page — a settings screen that renders one leaks it into every browser cache and screen recording,
+/// which is why the SMTP password is reported the same way.</param>
+/// <param name="RedirectUri">The address to paste into the provider's own console. Derived from the
+/// request rather than typed, because a mistyped one fails at the worst possible moment: on somebody
+/// else's site, after consent.</param>
+/// <param name="IsConfigured">Whether this provider would actually show a button. Switched on with no
+/// client id is not configured, and saying so here is the difference between a switch that works and
+/// one that reads as though it does.</param>
+public sealed record SsoProviderViewModel(
+    string Provider,
+    string Name,
+    bool Enabled,
+    string? ClientId,
+    bool HasSecret,
+    string? Authority,
+    string? DisplayName,
+    string RedirectUri,
+    bool IsConfigured);
+
+/// <summary>
 /// The settings that change how the platform behaves for everybody, as opposed to the preferences
 /// on /settings that change it for one person.
 /// </summary>
 public sealed class AdminSettingsViewModel
 {
+    /// <summary>Google, GitHub and the generic OpenID Connect provider, in that order.</summary>
+    public IReadOnlyList<SsoProviderViewModel> Sso { get; init; } = [];
+
     public IReadOnlyList<TemplateChoiceViewModel> Templates { get; init; } = [];
 
     /// <summary>Chosen keys, in the order they will appear. Empty means the fallback order.</summary>

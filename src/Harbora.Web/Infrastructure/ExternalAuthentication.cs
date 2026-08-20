@@ -34,6 +34,14 @@ public static class ExternalAuth
     /// <summary>Where the panel's own callback lives, once a provider has answered.</summary>
     public const string CallbackPath = "/account/external/callback";
 
+    /// <summary>
+    /// Where the provider itself sends the browser back — the address an operator has to paste into
+    /// the provider's console. Derived in one place because the admin page prints it and the handler
+    /// listens on it, and the two being one character apart is a failure that only shows up on
+    /// somebody else's site, after consent.
+    /// </summary>
+    public static string ProviderCallbackPath(string provider) => "/signin-" + provider;
+
     /// <summary>Whether this sign-in was started from the sign-in page or from account settings.</summary>
     public const string ModeItem = "harbora:mode";
     public const string ModeSignIn = "signin";
@@ -141,7 +149,7 @@ public static class ExternalAuthenticationRegistration
         builder.AddGoogle(ExternalAuth.SchemeFor(ExternalLoginProviders.Google), o =>
         {
             o.SignInScheme = ExternalAuth.ExternalScheme;
-            o.CallbackPath = "/signin-google";
+            o.CallbackPath = ExternalAuth.ProviderCallbackPath(ExternalLoginProviders.Google);
             o.SaveTokens = false;
 
             // Google's userinfo document says whether it has proven the address. Without these the
@@ -158,7 +166,7 @@ public static class ExternalAuthenticationRegistration
             ExternalAuth.SchemeFor(ExternalLoginProviders.GitHub), o =>
         {
             o.SignInScheme = ExternalAuth.ExternalScheme;
-            o.CallbackPath = "/signin-github";
+            o.CallbackPath = ExternalAuth.ProviderCallbackPath(ExternalLoginProviders.GitHub);
             o.AuthorizationEndpoint = "https://github.com/login/oauth/authorize";
             o.TokenEndpoint = "https://github.com/login/oauth/access_token";
             o.UserInformationEndpoint = "https://api.github.com/user";
@@ -178,7 +186,7 @@ public static class ExternalAuthenticationRegistration
         builder.AddOpenIdConnect(ExternalAuth.SchemeFor(ExternalLoginProviders.Oidc), o =>
         {
             o.SignInScheme = ExternalAuth.ExternalScheme;
-            o.CallbackPath = "/signin-oidc";
+            o.CallbackPath = ExternalAuth.ProviderCallbackPath(ExternalLoginProviders.Oidc);
             o.ResponseType = "code";
             o.UsePkce = true;
             o.SaveTokens = false;
