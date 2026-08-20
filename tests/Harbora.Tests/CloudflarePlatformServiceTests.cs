@@ -39,8 +39,8 @@ public class CloudflarePlatformServiceTests
                 ["Cloudflare:EnabledMarkerPath"] = Path.Combine(root, "cloudflare.enabled")
             }).Build();
             var service = new CloudflarePlatformService(
-                db, new AesGcmSecretProtector(Key), new Factory(new CloudflareHandler()), proxy,
-                config, new Clock(), NullLogger<CloudflarePlatformService>.Instance);
+                db, new AesGcmSecretProtector(Key), new CloudflareApiClient(new Factory(new CloudflareHandler())),
+                proxy, config, new Clock(), NullLogger<CloudflarePlatformService>.Instance);
 
             var result = await service.EnableAsync("cf-secret-token", "example.com", proxyRecords: false, default);
 
@@ -83,8 +83,8 @@ public class CloudflarePlatformServiceTests
                 ["Cloudflare:EnabledMarkerPath"] = Path.Combine(root, "cloudflare.enabled")
             }).Build();
             var service = new CloudflarePlatformService(
-                db, new AesGcmSecretProtector(Key), new Factory(new MissingZoneHandler()), new Proxy(),
-                config, new Clock(), NullLogger<CloudflarePlatformService>.Instance);
+                db, new AesGcmSecretProtector(Key), new CloudflareApiClient(new Factory(new MissingZoneHandler())),
+                new Proxy(), config, new Clock(), NullLogger<CloudflarePlatformService>.Instance);
 
             var result = await service.EnableAsync("valid-but-too-narrow", "example.com", false, default);
 

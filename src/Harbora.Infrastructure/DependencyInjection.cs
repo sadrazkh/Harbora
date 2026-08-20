@@ -325,7 +325,11 @@ public static class DependencyInjection
 
         // Tells the truth about custom domains: where DNS points and what certificate is live.
         services.AddScoped<IDomainInspector, Networking.DomainInspector>();
+        // The Cloudflare v4 calling convention, shared by the platform's own token below and a
+        // workspace's BYO token (F9) — one HTTP transport, two entirely separate credential stores.
+        services.AddSingleton<Networking.CloudflareApiClient>();
         services.AddScoped<Networking.CloudflarePlatformService>();
+        services.AddScoped<Networking.CustomerCloudflareService>();
         // The one place every app-creation path asks what hostname an app should get.
         services.AddScoped<Networking.AppAddressAssigner>();
 

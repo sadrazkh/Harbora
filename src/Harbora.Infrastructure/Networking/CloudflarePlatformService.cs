@@ -1,6 +1,4 @@
-using System.Net.Http.Headers;
 using System.Text;
-using System.Text.Json;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Settings;
@@ -32,14 +30,12 @@ public sealed record CloudflareApplyResult(
 public sealed class CloudflarePlatformService(
     HarboraDbContext db,
     ISecretProtector protector,
-    IHttpClientFactory clients,
+    CloudflareApiClient cloudflare,
     IProxyEngine proxy,
     IConfiguration config,
     ISystemClock clock,
     ILogger<CloudflarePlatformService> logger)
 {
-    private const string Api = "https://api.cloudflare.com/client/v4/";
-
     private string TokenFile => config["Cloudflare:TokenFilePath"] ?? "/dynamic/secrets/cloudflare-token";
     private string DynamicConfig => config["Cloudflare:DynamicConfigPath"] ?? "/dynamic/cloudflare.yml";
     private string Marker => config["Cloudflare:EnabledMarkerPath"] ?? "/dynamic/cloudflare.enabled";
@@ -105,7 +101,7 @@ public sealed class CloudflarePlatformService(
 
             // A proxied HTTPS origin must never be left in Flexible mode. Treat an inability to set
             // strict as a failed activation rather than saving a state that is known to loop.
-            await SendAsync(token, HttpMethod.Patch, $"zones/{zoneId}/settings/ssl",
+            await cloudflare.SendAsync(token, HttpMethod.Patch, $"zones/{zoneId}/settings/ssl",
                 "{\"value\":\"strict\"}", ct);
 
             WriteSecretFile(TokenFile, token);
@@ -159,7 +155,7 @@ public sealed class CloudflarePlatformService(
     private async Task<bool> SetExistingRecordProxiedAsync(
         string token, string zoneId, string host, CancellationToken ct)
     {
-        using var doc = await SendAsync(token, HttpMethod.Get,
+        using var doc = await cloudflare.SendAsync(token, HttpMethod.Get,
             $"zones/{zoneId}/dns_records?name={Uri.EscapeDataString(host)}&per_page=100", null, ct);
 
         var changed = false;
@@ -173,7 +169,7 @@ public sealed class CloudflarePlatformService(
                 continue;
             }
 
-            await SendAsync(token, HttpMethod.Patch,
+            await cloudflare.SendAsync(token, HttpMethod.Patch,
                 $"zones/{zoneId}/dns_records/{record.GetProperty("id").GetString()}",
                 "{\"proxied\":true}", ct);
             changed = true;
@@ -181,42 +177,13 @@ public sealed class CloudflarePlatformService(
         return changed;
     }
 
+    /// <summary>Verify-then-locate, in the shape this class has always used: an invalid token fails
+    /// here before any zone lookup, and a valid-but-too-narrow token fails with the same "add
+    /// Zone:Read" wording <see cref="CloudflareApiClient.FindZoneIdAsync"/> already throws.</summary>
     private async Task<string> VerifyAndFindZoneAsync(string token, string zone, CancellationToken ct)
     {
-        await SendAsync(token, HttpMethod.Get, "user/tokens/verify", null, ct);
-        using var zones = await SendAsync(token, HttpMethod.Get,
-            $"zones?name={Uri.EscapeDataString(zone)}&status=active&per_page=1", null, ct);
-        var result = zones.RootElement.GetProperty("result");
-        if (result.GetArrayLength() == 0)
-            throw new InvalidOperationException(
-                $"The token is valid but cannot read active zone {zone}. Add Zone:Read for this zone.");
-        return result[0].GetProperty("id").GetString()
-            ?? throw new InvalidOperationException("Cloudflare returned a zone without an id.");
-    }
-
-    private async Task<JsonDocument> SendAsync(
-        string token, HttpMethod method, string path, string? json, CancellationToken ct)
-    {
-        using var request = new HttpRequestMessage(method, Api + path);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        if (json is not null)
-            request.Content = new StringContent(json, Encoding.UTF8, "application/json");
-
-        var client = clients.CreateClient();
-        client.Timeout = TimeSpan.FromSeconds(15);
-        using var response = await client.SendAsync(request, ct);
-        var body = await response.Content.ReadAsStringAsync(ct);
-        var document = JsonDocument.Parse(body);
-        var success = response.IsSuccessStatusCode &&
-                      document.RootElement.TryGetProperty("success", out var ok) && ok.GetBoolean();
-        if (success) return document;
-
-        var reason = document.RootElement.TryGetProperty("errors", out var errors)
-            ? string.Join("; ", errors.EnumerateArray().Select(e =>
-                e.TryGetProperty("message", out var message) ? message.GetString() : e.ToString()))
-            : $"HTTP {(int)response.StatusCode}";
-        document.Dispose();
-        throw new InvalidOperationException("Cloudflare refused the request: " + reason);
+        await cloudflare.VerifyTokenAsync(token, ct);
+        return await cloudflare.FindZoneIdAsync(token, zone, ct);
     }
 
     private async Task<string> ResolveTokenAsync(string? supplied, CancellationToken ct)
