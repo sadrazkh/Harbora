@@ -73,7 +73,7 @@ public sealed class FunctionsController(
             a.Status,
             counts.TryGetValue(a.Id, out var c) ? c.Count : 0,
             counts.TryGetValue(a.Id, out var d) && d.Dirty > 0,
-            a.ActiveDeploymentId is not null)).ToList(), rootDomain));
+            a.ActiveDeploymentId is not null)).ToList(), rootDomain, await CustomEventKeyRowsAsync(ct)));
     }
 
     [HttpGet("new")]
@@ -253,7 +253,8 @@ public sealed class FunctionsController(
                 Code = FunctionStarters.For(runtime, trigger),
                 IsEnabled = true
             },
-            FunctionEvents.All));
+            FunctionEvents.All,
+            CustomEventKeys: await CustomEventKeysAsync(ct)));
     }
 
     [HttpGet("{id:guid}/{functionId:guid}")]
@@ -298,7 +299,8 @@ public sealed class FunctionsController(
             IsPublished: app.ActiveDeploymentId is not null,
             HasUnpublishedChanges: fn.HasUnpublishedChanges,
             Revisions: revisions.Select((r, index) => new FunctionRevisionRow(r.Id, r.CreatedAt, IsCurrent: index == 0)).ToList(),
-            FunctionUrl: functionUrl));
+            FunctionUrl: functionUrl,
+            CustomEventKeys: await CustomEventKeysAsync(ct)));
     }
 
     [HttpPost("{id:guid}/save")]
@@ -312,7 +314,7 @@ public sealed class FunctionsController(
         var runtime = app.FunctionRuntime ?? FunctionRuntime.CSharp;
         var existing = await functions.ListAsync(app.Id, ct);
 
-        var (candidate, failure) = TryBuildCandidate(app, functionId, model, existing, runtime);
+        var (candidate, failure) = await TryBuildCandidateAsync(app, functionId, model, existing, runtime, ct);
         if (failure is not null) return failure;
 
         if (functionId is null) db.FunctionDefinitions.Add(candidate!);
@@ -347,8 +349,9 @@ public sealed class FunctionsController(
     /// the exact view a caller should return unchanged, with the model state carrying the reason and the
     /// typed code preserved.
     /// </returns>
-    private (FunctionDefinition? Candidate, IActionResult? Failure) TryBuildCandidate(
-        App app, Guid? functionId, FunctionFormModel model, List<FunctionDefinition> existing, FunctionRuntime runtime)
+    private async Task<(FunctionDefinition? Candidate, IActionResult? Failure)> TryBuildCandidateAsync(
+        App app, Guid? functionId, FunctionFormModel model, List<FunctionDefinition> existing, FunctionRuntime runtime,
+        CancellationToken ct)
     {
         var candidate = functionId is { } editing
             ? existing.FirstOrDefault(f => f.Id == editing)
@@ -361,7 +364,16 @@ public sealed class FunctionsController(
         candidate.Route = model.Trigger == FunctionTrigger.Http && !string.IsNullOrWhiteSpace(model.Route)
             ? model.Route.Trim().Trim('/') : null;
         candidate.CronExpression = model.Trigger == FunctionTrigger.Cron ? model.CronExpression?.Trim() : null;
-        candidate.EventKey = model.Trigger == FunctionTrigger.Event ? model.EventKey : null;
+        // A key typed into the free-text box wins over whatever the select happened to carry — typing
+        // one is the more specific act. NormaliseCustomKey is where F3's namespace is forced: this is
+        // the panel's own editor, not the anonymous ingest door, but a customer's own subscription
+        // must land on the exact same custom.* key their app will one day emit, or the two would never
+        // meet. Falling back to null on an all-junk input (rather than the untouched raw text) is
+        // deliberate — it makes Validate refuse with the ordinary "choose an event" message instead of
+        // silently storing something ingest could never normalise to the same value.
+        candidate.EventKey = model.Trigger != FunctionTrigger.Event ? null
+            : !string.IsNullOrWhiteSpace(model.CustomEventKey) ? FunctionEvents.NormaliseCustomKey(model.CustomEventKey)
+            : model.EventKey;
         candidate.Code = model.Code ?? "";
         candidate.IsEnabled = model.IsEnabled;
         // Meaningless for anything but an HTTP trigger — a Cron or Event function never sits behind
@@ -379,7 +391,8 @@ public sealed class FunctionsController(
                 (IsFa ? validation.MessageFa : validation.Message) ?? "Invalid.");
 
             return (null, View("EditFunction", new FunctionEditViewModel(
-                app.Id, app.Name, runtime, functionId, model, FunctionEvents.All)));
+                app.Id, app.Name, runtime, functionId, model, FunctionEvents.All,
+                CustomEventKeys: await CustomEventKeysAsync(ct))));
         }
 
         return (candidate, null);
@@ -500,5 +513,40 @@ public sealed class FunctionsController(
             .ToListAsync(ct);
 
         return new FunctionAppFormViewModel(model, sizes);
+    }
+
+    /// <summary>
+    /// Every <c>custom.*</c> key this workspace's own apps have raised, for the Event trigger's
+    /// picker (F3, 2026-08-21 functions-and-services plan) — newest first, so the key somebody just
+    /// went looking for a subscription for is the one at the top.
+    /// </summary>
+    private Task<List<string>> CustomEventKeysAsync(CancellationToken ct) =>
+        db.FunctionCustomEventKeys
+            .Where(k => k.WorkspaceId == WorkspaceId)
+            .OrderByDescending(k => k.UpdatedAt)
+            .Select(k => k.Key)
+            .ToListAsync(ct);
+
+    /// <summary>
+    /// The same rows, with how many functions already subscribe to each — what the Functions index
+    /// page shows so a key nobody has claimed yet is visible there too, not only inside the editor
+    /// somebody has to already know to open.
+    /// </summary>
+    private async Task<List<FunctionCustomEventKeyRow>> CustomEventKeyRowsAsync(CancellationToken ct)
+    {
+        var seen = await db.FunctionCustomEventKeys
+            .Where(k => k.WorkspaceId == WorkspaceId)
+            .OrderByDescending(k => k.UpdatedAt)
+            .ToListAsync(ct);
+        if (seen.Count == 0) return [];
+
+        var subscriberCounts = await db.FunctionDefinitions
+            .Where(f => f.WorkspaceId == WorkspaceId && f.Trigger == FunctionTrigger.Event && f.EventKey != null)
+            .GroupBy(f => f.EventKey!)
+            .Select(g => new { Key = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.Count, ct);
+
+        return seen.Select(k => new FunctionCustomEventKeyRow(
+            k.Key, k.TimesSeen, k.UpdatedAt, subscriberCounts.GetValueOrDefault(k.Key))).ToList();
     }
 }

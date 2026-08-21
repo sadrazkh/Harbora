@@ -8,7 +8,17 @@ public sealed record FunctionAppRow(
     Guid Id, string Name, string Slug, FunctionRuntime Runtime, AppStatus Status,
     int FunctionCount, bool HasUnpublishedChanges, bool EverPublished);
 
-public sealed record FunctionAppListViewModel(IReadOnlyList<FunctionAppRow> Apps, string? RootDomain);
+/// <summary>
+/// One <c>custom.*</c> key a workspace's own apps have raised (F3, 2026-08-21 functions-and-services
+/// plan). <paramref name="SubscriberCount"/> is what turns "seen" into actionable: zero says plainly
+/// that the key arrived and nothing is listening yet, rather than leaving the page silent about it.
+/// </summary>
+public sealed record FunctionCustomEventKeyRow(
+    string Key, int TimesSeen, DateTimeOffset LastSeenAt, int SubscriberCount);
+
+public sealed record FunctionAppListViewModel(
+    IReadOnlyList<FunctionAppRow> Apps, string? RootDomain,
+    IReadOnlyList<FunctionCustomEventKeyRow>? CustomEvents = null);
 
 /// <summary>What the create form posts.</summary>
 public sealed class FunctionAppFormModel
@@ -41,6 +51,15 @@ public sealed class FunctionFormModel
     public string? Route { get; set; }
     public string? CronExpression { get; set; }
     public string? EventKey { get; set; }
+
+    /// <summary>
+    /// A raw key typed for a <c>custom.*</c> subscription, not yet namespaced. Takes precedence over
+    /// <see cref="EventKey"/> when non-empty — typing a new key is a more specific act than whatever
+    /// the select happened to have selected. See <see cref="Harbora.Domain.Functions.FunctionEvents.NormaliseCustomKey"/>
+    /// for what the server does with it.
+    /// </summary>
+    public string? CustomEventKey { get; set; }
+
     public string? Code { get; set; }
     public bool IsEnabled { get; set; } = true;
 
@@ -74,6 +93,10 @@ public sealed record FunctionRevisionRow(Guid Id, DateTimeOffset CreatedAt, bool
 /// no host yet (never assigned, or the platform has no root domain configured) or the function is not
 /// an existing HTTP trigger — there is nothing honest to show yet.
 /// </param>
+/// <param name="CustomEventKeys">
+/// Every <c>custom.*</c> key this workspace's own apps have raised, for the Event picker's own
+/// "Custom" group (F3, 2026-08-21 functions-and-services plan). Already namespaced.
+/// </param>
 public sealed record FunctionEditViewModel(
     Guid AppId, string AppName, FunctionRuntime Runtime, Guid? FunctionId,
     FunctionFormModel Form, IReadOnlyList<FunctionEventKind> Events,
@@ -81,4 +104,5 @@ public sealed record FunctionEditViewModel(
     bool IsPublished = false,
     bool HasUnpublishedChanges = false,
     IReadOnlyList<FunctionRevisionRow>? Revisions = null,
-    string? FunctionUrl = null);
+    string? FunctionUrl = null,
+    IReadOnlyList<string>? CustomEventKeys = null);

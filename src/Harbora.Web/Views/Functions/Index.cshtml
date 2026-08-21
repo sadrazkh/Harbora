@@ -74,3 +74,45 @@ else
         }
     </div>
 }
+
+@* F3, 2026-08-21 functions-and-services plan, "Custom events from customer apps": a key an app
+   emitted through POST /events/ingest, visible here whether or not anything subscribes to it yet —
+   an unsubscribed custom.* key must never look the same as one that vanished. *@
+@if (Model.CustomEvents is { Count: > 0 })
+{
+    <div class="mt-6 overflow-hidden rounded-2xl border border-line bg-surface shadow-panel" data-custom-events>
+        <div class="border-b border-line px-4 py-3">
+            <div class="text-sm font-semibold text-ink">@(isFa ? "رویدادهای سفارشی دیده‌شده" : "Custom events seen")</div>
+            <p class="text-xs text-ink-muted">
+                @(isFa
+                    ? "اپ‌های این ورک‌اسپیس این کلیدها را از طریق POST /events/ingest ارسال کرده‌اند. برای هر کدام می‌توانید در ویرایشگر فانکشن، تریگر «رویداد» را روی آن تنظیم کنید."
+                    : "This workspace's own apps have posted these keys through POST /events/ingest. Set a function's Event trigger to any of them from the function editor.")
+            </p>
+        </div>
+        <table class="w-full text-sm">
+            <tbody>
+            @foreach (var evt in Model.CustomEvents)
+            {
+                <tr class="border-t border-line" data-custom-event-key="@evt.Key">
+                    <td class="px-4 py-2 font-mono text-xs text-ink" dir="ltr">@evt.Key</td>
+                    <td class="px-4 py-2 text-xs text-ink-faint" dir="ltr">@Dates.Ago(evt.LastSeenAt, DateTimeOffset.UtcNow, isFa)</td>
+                    <td class="px-4 py-2 text-xs">
+                        @if (evt.SubscriberCount > 0)
+                        {
+                            <span class="text-ok" data-custom-event-subscribed>
+                                @(isFa ? $"{evt.SubscriberCount} فانکشن مشترک" : $"{evt.SubscriberCount} function(s) subscribed")
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="text-warn" data-custom-event-unclaimed>
+                                @(isFa ? "هنوز هیچ فانکشنی مشترک نیست" : "nothing subscribed yet")
+                            </span>
+                        }
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}

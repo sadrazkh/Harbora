@@ -171,7 +171,7 @@
 
             <label class="form-field" data-when="@((int)FunctionTrigger.Event)">
                 <span>@(isFa ? "رویداد" : "Event")</span>
-                <select name="EventKey" class="form-control">
+                <select name="EventKey" class="form-control" data-event-select>
                     @foreach (var group in Model.Events.GroupBy(e => e.Group))
                     {
                         <optgroup label="@group.Key">
@@ -181,7 +181,31 @@
                             }
                         </optgroup>
                     }
+                    @* F3, 2026-08-21 functions-and-services plan: custom.* keys a workspace's own
+                       apps have already emitted through /events/ingest. Listed here rather than left
+                       for somebody to type blind — this is the "surface the keys that have been
+                       seen" half of the plan's own visibility requirement. *@
+                    @if (Model.CustomEventKeys is { Count: > 0 })
+                    {
+                        <optgroup label="@(isFa ? "سفارشی (دیده‌شده)" : "Custom (seen)")">
+                            @foreach (var key in Model.CustomEventKeys)
+                            {
+                                <option value="@key" selected="@(string.IsNullOrWhiteSpace(Model.Form.CustomEventKey) && Model.Form.EventKey == key)" dir="ltr">@key</option>
+                            }
+                        </optgroup>
+                    }
                 </select>
+            </label>
+
+            <label class="form-field" data-when="@((int)FunctionTrigger.Event)">
+                <span>@(isFa ? "یا یک کلید سفارشی تازه بنویسید" : "Or type a new custom key")</span>
+                <input name="CustomEventKey" value="@Model.Form.CustomEventKey" class="form-control font-mono" dir="ltr"
+                       placeholder="order.paid" data-custom-event-key />
+                <p class="text-xs text-ink-faint">
+                    @(isFa
+                        ? "با پیشوند «custom.» ذخیره می‌شود، حتی اگر خودتان ننویسید. پر بودن این فیلد، گزینه‌ی انتخاب‌شده در بالا را نادیده می‌گیرد."
+                        : "Stored under the \"custom.\" prefix whether or not you type it. Filled in, this overrides whatever is selected above.")
+                </p>
             </label>
 
             <label class="flex items-center gap-2.5 text-sm text-ink">
