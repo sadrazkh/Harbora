@@ -189,6 +189,12 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Storage.VolumeDownloadToken> VolumeDownloadTokens => Set<Harbora.Domain.Storage.VolumeDownloadToken>();
     public DbSet<Harbora.Domain.Tenancy.UsageRecord> UsageRecords => Set<Harbora.Domain.Tenancy.UsageRecord>();
 
+    /// <summary>BYO SMTP providers, F6 2026-08-21 functions-and-services plan (HARBORA-0038 phase
+    /// 1) — not to be confused with <see cref="MailDomains"/>/<see cref="MailMailboxes"/>, the
+    /// already-shipped, separate feature where Harbora hosts mailboxes on its own mail server.</summary>
+    public DbSet<Harbora.Domain.Email.EmailProvider> EmailProviders => Set<Harbora.Domain.Email.EmailProvider>();
+    public DbSet<Harbora.Domain.Email.AppEmailProvider> AppEmailProviders => Set<Harbora.Domain.Email.AppEmailProvider>();
+
     public DbSet<Harbora.Domain.Billing.Wallet> Wallets => Set<Harbora.Domain.Billing.Wallet>();
     public DbSet<Harbora.Domain.Billing.BillingLedgerEntry> BillingLedger => Set<Harbora.Domain.Billing.BillingLedgerEntry>();
     public DbSet<Harbora.Domain.Billing.BillingRun> BillingRuns => Set<Harbora.Domain.Billing.BillingRun>();
@@ -802,6 +808,24 @@ public class HarboraDbContext : DbContext
             // owner granted, so a second row for the same workspace would only be a second grant of
             // the same kind, not a new capability the page would know how to offer differently.
             e.HasIndex(x => x.WorkspaceId).IsUnique();
+        });
+
+        // --- BYO SMTP providers (F6, 2026-08-21 functions-and-services plan, HARBORA-0038 phase 1) ---
+        b.Entity<Harbora.Domain.Email.EmailProvider>(e =>
+        {
+            // A provider belongs to a workspace and is only ever shown through it — the same reason
+            // StorageBucket is filtered above.
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        });
+
+        // The AppStorageBucket shape exactly (F5): Restrict, not Cascade, on the provider side — a
+        // provider with apps still attached must be refused by the named-list check in
+        // EmailProvidersController.Delete before this is ever reached.
+        b.Entity<Harbora.Domain.Email.AppEmailProvider>(e =>
+        {
+            e.HasIndex(x => new { x.AppId, x.EmailProviderId }).IsUnique();
+            e.HasOne(x => x.App).WithMany(a => a.EmailProviders).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.EmailProvider).WithMany(p => p.Apps).HasForeignKey(x => x.EmailProviderId).OnDelete(DeleteBehavior.Restrict);
         });
 
         // Deliberately NOT workspace-filtered, unlike StorageBucket just above. The route that

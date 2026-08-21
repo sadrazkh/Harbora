@@ -78,6 +78,9 @@ public sealed class DeploymentPipeline(
             // attached bucket's own row, so BuildEnv can compute its S3_* entries without a second
             // round trip.
             .Include(a => a.StorageBuckets).ThenInclude(sb => sb.StorageBucket)
+            // F6 (same plan): the same shape again, one attachment kind later — an attached email
+            // provider's own row, so BuildEnv can compute its SMTP_* entries the same way.
+            .Include(a => a.EmailProviders).ThenInclude(ep => ep.EmailProvider)
             .FirstAsync(a => a.Id == deployment.AppId, ct);
 
         // Resolve the container engine for this app's server (local or remote agent).
@@ -608,6 +611,8 @@ public sealed class DeploymentPipeline(
             // F5: the same guarantee, for buckets — env is never baked into the image, so a rollback
             // still applies whatever the attached bucket's credentials say right now.
             await MarkStorageBucketsAppliedAsync(app, ct);
+            // F6: the same guarantee again, for email providers.
+            await MarkEmailProvidersAppliedAsync(app, ct);
             await functionEvents.PublishAsync(
                 Domain.Functions.FunctionEvent.Create(
                     Domain.Functions.FunctionEvents.DeploymentSucceeded, app.WorkspaceId, app.Slug,
@@ -1382,11 +1387,24 @@ public sealed class DeploymentPipeline(
                         sb.StorageBucket!, _storageOpt.CustomerEndpoint, sb.StorageBucket!.EncryptedSecretKey)
                     .Select(e => new BucketEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
 
+        // F6 (2026-08-21 functions-and-services plan): the same shape as attachedBuckets above, one
+        // attachment kind later — no endpoint translation needed here, unlike a bucket's S3_ENDPOINT,
+        // because a provider's Host is already the address its attached apps must reach directly
+        // (there is no Harbora-run relay in front of it).
+        var attachedEmailProviders = app.EmailProviders
+            .Where(ep => ep.EmailProvider is not null)
+            .Select(ep => new AttachedEmailProviderEnv(
+                ep.AttachOrder, ep.EmailProviderId, ep.EmailProvider!.Name,
+                Harbora.Domain.Email.EmailProviderEnvKeys.EntriesFor(
+                        ep.EmailProvider!, ep.EmailProvider!.EncryptedPassword)
+                    .Select(e => new EmailProviderEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
+
         var merged = ConfigGroupMerge.Merge(
             app.EnvironmentVariables,
             app.ConfigGroups.Select(cg => new AttachedGroupEntries(
                 cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])),
-            attachedBuckets);
+            attachedBuckets,
+            attachedEmailProviders);
 
         var env = merged.ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
@@ -1425,6 +1443,20 @@ public sealed class DeploymentPipeline(
     {
         var attachments = await db.AppStorageBuckets
             .Where(sb => sb.AppId == app.Id && sb.HasUnpublishedChanges)
+            .ToListAsync(ct);
+
+        foreach (var a in attachments) a.HasUnpublishedChanges = false;
+    }
+
+    /// <summary>
+    /// F6 (2026-08-21 functions-and-services plan): the email-provider mirror of
+    /// <see cref="MarkStorageBucketsAppliedAsync"/> — same reasoning, same idiom, one attachment kind
+    /// later.
+    /// </summary>
+    private async Task MarkEmailProvidersAppliedAsync(App app, CancellationToken ct)
+    {
+        var attachments = await db.AppEmailProviders
+            .Where(ep => ep.AppId == app.Id && ep.HasUnpublishedChanges)
             .ToListAsync(ct);
 
         foreach (var a in attachments) a.HasUnpublishedChanges = false;

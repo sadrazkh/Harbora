@@ -310,6 +310,27 @@ public sealed class DbSeeder(HarboraDbContext db)
         },
         new()
         {
+            // F6 (2026-08-21 functions-and-services plan, HARBORA-0038 phase 1): the Dev Inbox half.
+            // Checked first, per the plan's own instruction, whether a one-click template is cheaper
+            // than a bespoke viewer — it is: Mailpit is exactly the Mailtrap-class catch-all SMTP
+            // server doc 10 §3/§5 describes, the platform already runs one-click apps with their own
+            // public URL, and deploying one gives a developer a real inbox (SMTP in, web UI out) for
+            // a JSON manifest instead of a new EmailMessage table, a capture listener and a viewer
+            // page. MP_SMTP_AUTH_ACCEPT_ANY, MP_DATABASE and the /readyz health path are read
+            // straight from Mailpit's own source (cmd/root.go, internal/healthcheck) on 2026-08-21 —
+            // not from documentation paraphrase — and the image is pinned by the real digest Docker
+            // Hub returns for axllent/mailpit:v1.30.7 (verified against the registry the same day),
+            // not invented. No Simple Icons mark exists for it, so it ships here — the simpler,
+            // undigested-icon catalogue — rather than in ReadyAppCatalog, whose own tests require a
+            // real project logo this app has none to offer honestly.
+            Key = "mailpit", Name = "Dev Inbox (Mailpit)", NameFa = "صندوق توسعه (Mailpit)",
+            Category = "developer-tools", IsBuiltIn = true,
+            Description = "A catch-all SMTP server for non-production: attach it like any BYO email provider and every message an app sends lands here instead of a real inbox, with a web UI to read it.",
+            DescriptionFa = "یک سرور SMTP گیرندهٔ همه‌چیز برای محیط‌های غیرتولیدی: مثل هر ارائه‌دهندهٔ ایمیل شخصی آن را متصل کنید تا هر پیامی که اپ می‌فرستد، به‌جای صندوق واقعی، اینجا بنشیند — با یک رابط وب برای خواندنش.",
+            ManifestJson = """{"image":"axllent/mailpit:v1.30.7@sha256:d5ecbb067db3705fa953d79e1b7f81ef84038df67aba6c52825d8c02a1ea748a","port":8025,"healthPath":"/readyz","volumes":[{"mount":"/data"}],"env":[{"key":"MP_DATABASE","default":"/data/mailpit.db"},{"key":"MP_SMTP_AUTH_ACCEPT_ANY","default":"1"},{"key":"MP_MAX_MESSAGES","default":"5000"}],"tags":["Email","Dev Inbox","SMTP","Testing"],"website":"https://mailpit.axllent.org","documentation":"https://mailpit.axllent.org/docs/"}"""
+        },
+        new()
+        {
             Key = "redis-commander", Name = "Redis Commander", NameFa = "ردیس کامندر",
             Category = "developer-tools", IsBuiltIn = true,
             Description = "A web console wired to its own private Redis instance.",

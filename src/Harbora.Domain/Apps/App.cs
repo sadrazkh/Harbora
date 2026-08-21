@@ -215,4 +215,11 @@ public class App : BaseEntity
     /// it merges <see cref="ConfigGroups"/>.</summary>
     public ICollection<Harbora.Domain.Storage.AppStorageBucket> StorageBuckets { get; set; } =
         new List<Harbora.Domain.Storage.AppStorageBucket>();
+
+    /// <summary>SMTP email providers attached to this app (F6, 2026-08-21 functions-and-services
+    /// plan) — see <see cref="Harbora.Domain.Email.AppEmailProvider"/> and
+    /// <see cref="ConfigGroupMerge"/>, which merges them into the effective environment the same way
+    /// it merges <see cref="StorageBuckets"/>.</summary>
+    public ICollection<Harbora.Domain.Email.AppEmailProvider> EmailProviders { get; set; } =
+        new List<Harbora.Domain.Email.AppEmailProvider>();
 }

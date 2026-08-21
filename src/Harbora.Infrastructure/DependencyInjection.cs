@@ -152,6 +152,14 @@ public static class DependencyInjection
             config.GetSection(Storage.ObjectStorageOptions.SectionName));
         services.AddScoped<Storage.ObjectStorageAdmin>();
         services.AddScoped<Storage.BucketObjectService>();
+
+        // BYO SMTP providers (F6, 2026-08-21 functions-and-services plan). The real transport is
+        // System.Net.Mail.SmtpClient, the same one PlatformMailer already uses for the platform's
+        // own outgoing mail — registered behind ISmtpTransport so a test can substitute a fake at
+        // this exact seam instead of opening a real socket.
+        services.AddScoped<Email.ISmtpTransport, Email.SystemNetSmtpTransport>();
+        services.AddScoped<Email.EmailProviderMailer>();
+
         services.AddScoped<Projects.EnvironmentCloner>();
         services.AddScoped<IManagedServiceEngine>(sp => sp.GetRequiredService<Services.ManagedServiceEngine>());
 

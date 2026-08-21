@@ -100,3 +100,11 @@ public sealed record AppConfigGroupRow(
 /// </summary>
 public sealed record AppStorageBucketRow(
     Guid StorageBucketId, string Name, int AttachOrder, bool HasUnpublishedChanges);
+
+/// <summary>
+/// One <see cref="Harbora.Domain.Email.EmailProvider"/> attached to this app, in the same
+/// precedence order the Details env section shows it in (F6, 2026-08-21 functions-and-services
+/// plan) — the email-side mirror of <see cref="AppStorageBucketRow"/>.
+/// </summary>
+public sealed record AppEmailProviderRow(
+    Guid EmailProviderId, string Name, int AttachOrder, bool HasUnpublishedChanges);

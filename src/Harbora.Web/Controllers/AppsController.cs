@@ -537,6 +537,8 @@ public sealed partial class AppsController(
             .Include(a => a.ConfigGroups).ThenInclude(cg => cg.ConfigGroup!).ThenInclude(g => g.Entries)
             // F5 (2026-08-21 functions-and-services plan): the same shape, one attachment kind later.
             .Include(a => a.StorageBuckets).ThenInclude(sb => sb.StorageBucket)
+            // F6 (same plan): the same shape again, one attachment kind later still.
+            .Include(a => a.EmailProviders).ThenInclude(ep => ep.EmailProvider)
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
@@ -551,18 +553,35 @@ public sealed partial class AppsController(
                     .Select(e => new Harbora.Domain.Apps.BucketEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
             .ToList();
 
+        // F6 (2026-08-21 functions-and-services plan): the same shape as attachedBuckets above.
+        var attachedEmailProviders = app.EmailProviders
+            .Where(ep => ep.EmailProvider is not null)
+            .Select(ep => new Harbora.Domain.Apps.AttachedEmailProviderEnv(
+                ep.AttachOrder, ep.EmailProviderId, ep.EmailProvider!.Name,
+                Harbora.Domain.Email.EmailProviderEnvKeys.EntriesFor(
+                        ep.EmailProvider!, ep.EmailProvider!.EncryptedPassword)
+                    .Select(e => new Harbora.Domain.Apps.EmailProviderEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
+            .ToList();
+
         // The effective environment, with provenance — the same ConfigGroupMerge the deploy pipeline
         // calls, so this page can never show a value the container would not actually receive.
         ViewBag.EffectiveEnv = Harbora.Domain.Apps.ConfigGroupMerge.Merge(
             app.EnvironmentVariables,
             app.ConfigGroups.Select(cg => new Harbora.Domain.Apps.AttachedGroupEntries(
                 cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])),
-            attachedBuckets);
+            attachedBuckets,
+            attachedEmailProviders);
 
         ViewBag.AttachedStorageBuckets = app.StorageBuckets
             .OrderBy(sb => sb.AttachOrder)
             .Select(sb => new AppStorageBucketRow(
                 sb.StorageBucketId, sb.StorageBucket?.Name ?? "", sb.AttachOrder, sb.HasUnpublishedChanges))
+            .ToList();
+
+        ViewBag.AttachedEmailProviders = app.EmailProviders
+            .OrderBy(ep => ep.AttachOrder)
+            .Select(ep => new AppEmailProviderRow(
+                ep.EmailProviderId, ep.EmailProvider?.Name ?? "", ep.AttachOrder, ep.HasUnpublishedChanges))
             .ToList();
 
         ViewBag.AttachedConfigGroups = app.ConfigGroups

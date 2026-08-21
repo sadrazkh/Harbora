@@ -83,6 +83,11 @@ public static class NavigationMap
             // and the page says so itself when no S3 server is configured — which is why it is a
             // permanent entry rather than one contributed by a feature flag like sync's.
             new("storage", "Storage", "Index", "hard-drive"),
+            // F6 (2026-08-21 functions-and-services plan, HARBORA-0038 phase 1): BYO SMTP credentials
+            // an app sends through — distinct from "mail" just above, which is Harbora hosting
+            // mailboxes on its own server. Sits beside storage: both are workspace-level backing
+            // credentials an app attaches to, not a single app's own setting.
+            new("email-providers", "EmailProviders", "Index", "send"),
             // Sub-project 9 (2026-08-20 platform-options plan): workspace-level env-var groups an app
             // attaches to — shared config, so it sits beside the other data-shaped destinations rather
             // than under Deploy where a single app's own settings live.

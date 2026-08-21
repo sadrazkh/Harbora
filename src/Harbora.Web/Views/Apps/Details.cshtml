@@ -714,18 +714,20 @@
         <details class="advanced-panel" open="@advancedOpen">
             <summary><span><i data-lucide="file-code-2" class="h-4 w-4"></i>@T["Environment Variables"]</span><i data-lucide="chevron-down" class="h-4 w-4"></i></summary>
 
-            @* Sub-project 9 (2026-08-20 platform-options plan; buckets added by F5, 2026-08-21
-               functions-and-services plan): the EFFECTIVE set — the app's own variables merged with
-               every attached group's and every attached bucket's current entries, exactly the way
-               BuildEnv assembles a container's environment — with where each row came from always
-               visible. A merged value whose origin is invisible is a debugging trap. *@
+            @* Sub-project 9 (2026-08-20 platform-options plan; buckets added by F5, email providers
+               by F6, both 2026-08-21 functions-and-services plan): the EFFECTIVE set — the app's own
+               variables merged with every attached group's, bucket's and email provider's current
+               entries, exactly the way BuildEnv assembles a container's environment — with where
+               each row came from always visible. A merged value whose origin is invisible is a
+               debugging trap. *@
             <div class="divide-y divide-line" data-effective-env>
                 @if (!effectiveEnv.Any()){<div class="p-4 text-ink-muted text-sm">—</div>}
                 @foreach (var e in effectiveEnv)
                 {
                     var own = e.Source == Harbora.Domain.Apps.ConfigSource.App;
                     var fromBucket = e.Source == Harbora.Domain.Apps.ConfigSource.Bucket;
-                    var sourceAttr = own ? "app" : (fromBucket ? "bucket" : "group");
+                    var fromEmailProvider = e.Source == Harbora.Domain.Apps.ConfigSource.EmailProvider;
+                    var sourceAttr = own ? "app" : (fromBucket ? "bucket" : (fromEmailProvider ? "email-provider" : "group"));
                     <div class="flex items-center justify-between p-3 text-sm font-mono" data-env-row data-env-key="@e.Key" data-env-source="@sourceAttr">
                         <span class="text-ink">
                             @e.Key
@@ -738,6 +740,12 @@
                             {
                                 <span class="text-[10px] not-italic rounded bg-info-soft px-1 text-info font-sans" data-env-provenance="@e.SourceBucketName">
                                     @(isFa ? $"از باکت «{e.SourceBucketName}»" : $"from bucket '{e.SourceBucketName}'")
+                                </span>
+                            }
+                            else if (fromEmailProvider)
+                            {
+                                <span class="text-[10px] not-italic rounded bg-info-soft px-1 text-info font-sans" data-env-provenance="@e.SourceEmailProviderName">
+                                    @(isFa ? $"از ارائه‌دهندهٔ ایمیل «{e.SourceEmailProviderName}»" : $"from email provider '{e.SourceEmailProviderName}'")
                                 </span>
                             }
                             else
@@ -757,6 +765,12 @@
                             else if (fromBucket)
                             {
                                 <span class="text-xs text-ink-faint" title="@(isFa ? "برای مدیریت، به صفحهٔ فضای ذخیره‌سازی بروید" : "Manage this from the Storage page")">
+                                    <i data-lucide="lock" class="h-3 w-3"></i>
+                                </span>
+                            }
+                            else if (fromEmailProvider)
+                            {
+                                <span class="text-xs text-ink-faint" title="@(isFa ? "برای مدیریت، به صفحهٔ ارائه‌دهنده‌های SMTP بروید" : "Manage this from the SMTP providers page")">
                                     <i data-lucide="lock" class="h-3 w-3"></i>
                                 </span>
                             }
@@ -886,6 +900,53 @@
                                     <input type="hidden" name="appId" value="@app.Id" />
                                     <input type="hidden" name="returnUrl" value="@(Context.Request.Path + Context.Request.QueryString)" />
                                     <button class="text-danger" aria-label="@(isFa ? $"جدا کردن {b.Name}" : $"Detach {b.Name}")">✕</button>
+                                </form>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            @* ---- Email providers: which SMTP providers feed this app's env, and in what order (F6,
+               2026-08-21 functions-and-services plan) — the email-side mirror of the storage-buckets
+               panel above. Attach/detach lives on the provider's own page
+               (Views/EmailProviders/Index.cshtml), the same split the bucket panel draws. *@
+            @{
+                var attachedEmailProviders2 = (IReadOnlyList<AppEmailProviderRow>)(ViewBag.AttachedEmailProviders ?? Array.Empty<AppEmailProviderRow>());
+            }
+            <div class="p-3 border-t border-line" data-email-providers-panel>
+                <div class="flex items-center justify-between gap-2 mb-2">
+                    <span class="text-xs font-semibold text-ink-muted">@(isFa ? "ارائه‌دهنده‌های ایمیل متصل" : "Attached email providers")</span>
+                    <a href="/email-providers" class="text-xs text-accent-text">@(isFa ? "مدیریت ارائه‌دهنده‌ها" : "Manage email providers")</a>
+                </div>
+
+                @if (attachedEmailProviders2.Count == 0)
+                {
+                    <p class="text-xs text-ink-faint">@(isFa ? "به هیچ ارائه‌دهنده‌ای متصل نیست." : "Not attached to any email provider.")</p>
+                }
+                else
+                {
+                    <div class="space-y-1.5">
+                        @foreach (var p in attachedEmailProviders2)
+                        {
+                            <div class="flex items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-1.5 text-xs" data-attached-email-provider="@p.Name" data-attached-email-provider-order="@p.AttachOrder">
+                                <span>
+                                    <span class="font-medium">@p.Name</span>
+                                    <span class="text-ink-faint">· @(isFa ? $"ترتیب {p.AttachOrder}" : $"order {p.AttachOrder}")</span>
+                                    @if (p.HasUnpublishedChanges)
+                                    {
+                                        <span data-email-provider-attach-state="unpublished" class="ms-1 rounded-md bg-warn-soft px-1.5 py-0.5 text-warn">@(isFa ? "با استقرار بعدی اعمال می‌شود" : "applies on next deploy")</span>
+                                    }
+                                    else
+                                    {
+                                        <span data-email-provider-attach-state="live" class="ms-1 rounded-md bg-ok-soft px-1.5 py-0.5 text-ok">@(isFa ? "به‌روز" : "live")</span>
+                                    }
+                                </span>
+                                <form asp-controller="EmailProviders" asp-action="Detach" asp-route-id="@p.EmailProviderId" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="appId" value="@app.Id" />
+                                    <input type="hidden" name="returnUrl" value="@(Context.Request.Path + Context.Request.QueryString)" />
+                                    <button class="text-danger" aria-label="@(isFa ? $"جدا کردن {p.Name}" : $"Detach {p.Name}")">✕</button>
                                 </form>
                             </div>
                         }
