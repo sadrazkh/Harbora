@@ -199,11 +199,37 @@ public sealed class QueueFunctionConsumerHost(
         var address = new QueueBrokerAddress(
             svc.ContainerName, ServiceCatalog.All[svc.Type].Port, svc.Username, password ?? "");
 
-        await using var connection = await brokerFactory.ConnectAsync(address, ct);
-        await ClearBrokerErrorAsync(functionId, ct);
+        // A broker that will not connect is recorded and returned from, not thrown past this method —
+        // "a broker that is down is not silence" means the record has to happen somewhere that always
+        // runs, and RunWorkerAsync's own catch is a safety net for the truly unexpected, not the
+        // ordinary and expected way a broker being unreachable is discovered.
+        IQueueBrokerConnection connection;
+        try
+        {
+            connection = await brokerFactory.ConnectAsync(address, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await RecordBrokerErrorAsync(functionId, Summarise(ex), ct);
+            return;
+        }
 
-        await connection.ConsumeAsync(
-            fn.QueueName!, (delivery, handleCt) => HandleAsync(functionId, fn.QueueName!, delivery, handleCt), ct);
+        await using (connection)
+        {
+            await ClearBrokerErrorAsync(functionId, ct);
+            try
+            {
+                await connection.ConsumeAsync(
+                    fn.QueueName!, (delivery, handleCt) => HandleAsync(functionId, fn.QueueName!, delivery, handleCt), ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The connection was lost mid-stream (a channel/connection shutdown, a network drop).
+                // Whatever was in flight when that happened stays unacked at the broker, which
+                // redelivers it once this or another consumer reconnects — never silently lost.
+                await RecordBrokerErrorAsync(functionId, Summarise(ex), ct);
+            }
+        }
     }
 
     /// <summary>
