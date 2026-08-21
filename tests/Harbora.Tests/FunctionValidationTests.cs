@@ -122,6 +122,18 @@ public class FunctionValidationTests
             .Ok.Should().BeTrue();
 
     [Fact]
+    public void A_custom_event_key_is_accepted_even_though_it_is_not_in_the_fixed_catalog()
+    {
+        // F3, 2026-08-21 functions-and-services plan: custom.* is not fixed code like the platform's
+        // own vocabulary — it is whatever a workspace's own apps choose to raise, so it cannot live
+        // in FunctionEvents.All, and this refusal must not treat "not in the catalog" as "nothing
+        // raises this" for a key under the customer namespace.
+        FunctionAppService.Validate(
+            Candidate("on-order-paid", FunctionTrigger.Event, eventKey: "custom.order.paid"), [], null)
+            .Ok.Should().BeTrue();
+    }
+
+    [Fact]
     public void A_function_with_no_code_is_refused() =>
         FunctionAppService.Validate(Candidate("empty", code: ""), [], null).Ok.Should().BeFalse();
 
