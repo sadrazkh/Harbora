@@ -30,9 +30,12 @@ public sealed class FunctionEventBus(
     {
         ArgumentNullException.ThrowIfNull(evt);
 
-        if (!FunctionEvents.IsKnown(evt.Key))
+        if (!FunctionEvents.IsSubscribable(evt.Key))
         {
-            // A key nothing can subscribe to is a bug at the call site, not a customer's problem.
+            // A key nothing can ever subscribe to is a bug at the call site, not a customer's
+            // problem — unlike a custom.* key with zero subscribers today, which is a normal state
+            // (F3, 2026-08-21 functions-and-services plan) and reaches the query below same as any
+            // other key; it is the ingest endpoint's own "seen keys" row that keeps that case visible.
             logger.LogWarning("Ignoring function event with unknown key '{Key}'.", evt.Key);
             return;
         }

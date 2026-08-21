@@ -94,7 +94,10 @@ public sealed class FunctionAppService(HarboraDbContext db, ISecretProtector pro
                 break;
 
             case FunctionTrigger.Event:
-                if (!FunctionEvents.IsKnown(candidate.EventKey))
+                // A platform event from the fixed catalog, or a workspace's own custom.* one — the
+                // same acceptance FunctionEventBus itself uses, so a subscription this form accepts
+                // is never one the bus would then discard as unknown.
+                if (!FunctionEvents.IsSubscribable(candidate.EventKey))
                     return FunctionValidation.Fail(nameof(candidate.EventKey),
                         "Choose an event this function should run on.",
                         "رویدادی را که این فانکشن باید با آن اجرا شود انتخاب کنید.");

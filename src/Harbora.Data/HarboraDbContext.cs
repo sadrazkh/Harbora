@@ -203,6 +203,7 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Functions.FunctionDefinition> FunctionDefinitions => Set<Harbora.Domain.Functions.FunctionDefinition>();
     public DbSet<Harbora.Domain.Functions.FunctionInvocation> FunctionInvocations => Set<Harbora.Domain.Functions.FunctionInvocation>();
     public DbSet<Harbora.Domain.Functions.FunctionCodeRevision> FunctionCodeRevisions => Set<Harbora.Domain.Functions.FunctionCodeRevision>();
+    public DbSet<Harbora.Domain.Functions.FunctionCustomEventKey> FunctionCustomEventKeys => Set<Harbora.Domain.Functions.FunctionCustomEventKey>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -874,6 +875,15 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => new { x.FunctionId, x.CreatedAt });
             e.HasOne<Harbora.Domain.Functions.FunctionDefinition>().WithMany()
                 .HasForeignKey(x => x.FunctionId).OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        });
+
+        b.Entity<Harbora.Domain.Functions.FunctionCustomEventKey>(e =>
+        {
+            // One row per key per workspace: the ingest endpoint upserts this on every call, never
+            // inserts a duplicate.
+            e.HasIndex(x => new { x.WorkspaceId, x.Key }).IsUnique();
+            e.Property(x => x.Key).HasMaxLength(64).IsRequired();
             e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         });
 

@@ -1,3 +1,4 @@
+using System.Text;
 using Harbora.Domain.Common;
 
 namespace Harbora.Domain.Functions;
@@ -78,6 +79,65 @@ public static class FunctionEvents
         key is null ? null : All.FirstOrDefault(e => e.Key == key);
 
     /// <summary>
+    /// The namespace every customer-raised event lives in (F3, 2026-08-21 functions-and-services
+    /// plan, "Custom events from customer apps"). Forced server-side by
+    /// <see cref="NormaliseCustomKey"/> — a caller cannot post <c>deployment.succeeded</c> and
+    /// impersonate a platform event; whatever it sends lands under this prefix instead.
+    /// </summary>
+    public const string CustomPrefix = "custom.";
+
+    /// <summary>Longest key <see cref="FunctionDefinition.EventKey"/>'s column can hold.</summary>
+    private const int MaxKeyLength = 64;
+
+    public static bool IsCustom(string? key) =>
+        key is not null && key.StartsWith(CustomPrefix, StringComparison.Ordinal) && key.Length > CustomPrefix.Length;
+
+    /// <summary>
+    /// A key a function may subscribe to — one of the platform's own, or a caller's own
+    /// <c>custom.*</c> one. A custom key never needed a place in <see cref="All"/> to begin with:
+    /// unlike the platform's own vocabulary, it is not fixed code, it is whatever a workspace's own
+    /// apps choose to raise.
+    /// </summary>
+    public static bool IsSubscribable(string? key) => IsKnown(key) || IsCustom(key);
+
+    /// <summary>
+    /// Turns whatever a caller posted as an event key into one under <see cref="CustomPrefix"/>, or
+    /// null when nothing usable survives. This is the one place the namespace is forced — not a
+    /// courtesy the ingest endpoint could skip, the only door custom events have.
+    ///
+    /// <para>
+    /// A leading <c>custom.</c> the caller already typed is not doubled. Anything outside
+    /// <c>[a-z0-9._-]</c> (case folded first) collapses into a single separator, the same idea
+    /// <c>FunctionSlug.Normalise</c> uses for hyphens — a key is an identifier, not free text, and
+    /// letting whitespace or punctuation through verbatim is how two customers' "Order Paid!" and
+    /// "order paid" end up as two keys that look like one in a log line.
+    /// </para>
+    /// </summary>
+    public static string? NormaliseCustomKey(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+
+        var trimmed = raw.Trim().ToLowerInvariant();
+        if (trimmed.StartsWith(CustomPrefix, StringComparison.Ordinal))
+            trimmed = trimmed[CustomPrefix.Length..];
+
+        var sb = new StringBuilder(trimmed.Length);
+        foreach (var c in trimmed)
+        {
+            if (char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')
+                sb.Append(c);
+            else if (sb.Length > 0 && sb[^1] is not ('.' or '_' or '-'))
+                sb.Append('.');
+        }
+
+        var suffix = sb.ToString().Trim('.', '_', '-');
+        var maxSuffixLength = MaxKeyLength - CustomPrefix.Length;
+        if (suffix.Length > maxSuffixLength) suffix = suffix[..maxSuffixLength].Trim('.', '_', '-');
+
+        return suffix.Length == 0 ? null : CustomPrefix + suffix;
+    }
+
+    /// <summary>
     /// The alert this platform already raises, as the event a function subscribes to.
     ///
     /// <para>
@@ -118,4 +178,29 @@ public sealed record FunctionEvent(
     public static FunctionEvent Create(string key, Guid workspaceId, string? subject = null,
         params (string Key, string? Value)[] data) =>
         new(key, workspaceId, subject, data.ToDictionary(d => d.Key, d => d.Value));
+}
+
+/// <summary>
+/// One <c>custom.*</c> key a workspace's own apps have actually raised (F3, 2026-08-21
+/// functions-and-services plan). Not a schema registry — there is no type, no shape, nothing to
+/// validate a payload against — just the fact that this key exists, so it can be found and
+/// subscribed to.
+///
+/// <para>
+/// This is what stands between "unknown keys are dropped silently" and "unknown keys are accepted
+/// but visible": an app emitting <c>custom.order.paid</c> before any function subscribes still
+/// updates this row, so the workspace can see the key was received and go subscribe a function to
+/// it, instead of the event vanishing behind an ingest endpoint's 200 with nothing to show for it.
+/// </para>
+/// </summary>
+public class FunctionCustomEventKey : BaseEntity
+{
+    public Guid WorkspaceId { get; set; }
+
+    /// <summary>Already namespaced — always starts with <see cref="FunctionEvents.CustomPrefix"/>.</summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>How many ingests have carried this key. Not a delivery count — publishing to zero
+    /// subscribers still increments it, which is the whole point: it is what proves the key arrived.</summary>
+    public int TimesSeen { get; set; }
 }

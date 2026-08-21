@@ -312,6 +312,8 @@ public static class DependencyInjection
         services.AddScoped<Functions.FunctionAppService>();
         services.AddScoped<IFunctionInvoker, Functions.FunctionInvoker>();
         services.AddScoped<IFunctionEventBus, Functions.FunctionEventBus>();
+        // F3, 2026-08-21 functions-and-services plan: the other direction through the same door.
+        services.AddScoped<ICustomEventIngestService, Functions.CustomEventIngestService>();
         services.AddScoped<IJobHandler, Functions.FunctionInvokeJobHandler>();
         services.AddHostedService<Functions.FunctionCronScheduler>();
 
