@@ -26,7 +26,8 @@ public class FunctionValidationTests
 
     private static FunctionDefinition Candidate(
         string name, FunctionTrigger trigger = FunctionTrigger.Http,
-        string? route = null, string? cron = null, string? eventKey = null, string code = "x") =>
+        string? route = null, string? cron = null, string? eventKey = null, string code = "x",
+        Guid? queueServiceId = null, string? queueName = null) =>
         new()
         {
             Name = name,
@@ -35,7 +36,9 @@ public class FunctionValidationTests
             Route = route,
             CronExpression = cron,
             EventKey = eventKey,
-            Code = code
+            Code = code,
+            QueueServiceId = queueServiceId,
+            QueueName = queueName
         };
 
     [Fact]
@@ -136,6 +139,70 @@ public class FunctionValidationTests
     [Fact]
     public void A_function_with_no_code_is_refused() =>
         FunctionAppService.Validate(Candidate("empty", code: ""), [], null).Ok.Should().BeFalse();
+
+    // -------------------------------------------------------- F2: Queue trigger
+
+    [Fact]
+    public void A_queue_function_with_no_broker_chosen_is_refused()
+    {
+        var result = FunctionAppService.Validate(
+            Candidate("consume", FunctionTrigger.Queue, queueName: "orders"), [], null);
+
+        result.Ok.Should().BeFalse();
+        result.Field.Should().Be("QueueServiceId");
+    }
+
+    [Fact]
+    public void A_queue_function_with_no_queue_name_is_refused()
+    {
+        var brokerId = Guid.CreateVersion7();
+        var result = FunctionAppService.Validate(
+            Candidate("consume", FunctionTrigger.Queue, queueServiceId: brokerId), [], null,
+            availableQueueBrokers: [brokerId]);
+
+        result.Ok.Should().BeFalse();
+        result.Field.Should().Be("QueueName");
+    }
+
+    [Fact]
+    public void A_queue_function_pointed_at_a_broker_outside_the_available_set_is_refused()
+    {
+        // The one call site that matters (FunctionsController) always passes this workspace's own
+        // RabbitMQ services; a broker id outside it is one belonging to someone else, or nothing at
+        // all.
+        var brokerId = Guid.CreateVersion7();
+        var someoneElsesBroker = Guid.CreateVersion7();
+        var result = FunctionAppService.Validate(
+            Candidate("consume", FunctionTrigger.Queue, queueServiceId: someoneElsesBroker, queueName: "orders"),
+            [], null, availableQueueBrokers: [brokerId]);
+
+        result.Ok.Should().BeFalse();
+        result.Field.Should().Be("QueueServiceId");
+    }
+
+    [Fact]
+    public void A_queue_function_with_a_broker_in_the_available_set_and_a_name_is_accepted()
+    {
+        var brokerId = Guid.CreateVersion7();
+        var result = FunctionAppService.Validate(
+            Candidate("consume", FunctionTrigger.Queue, queueServiceId: brokerId, queueName: "orders"),
+            [], null, availableQueueBrokers: [brokerId]);
+
+        result.Ok.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_null_available_set_skips_the_membership_check_for_callers_that_do_not_supply_one()
+    {
+        // Callers that pass null are trusting the caller to enforce membership itself (or not to
+        // care) — the real controller call site always passes the real set; this is what keeps every
+        // pre-F2 call to Validate in this file compiling unchanged.
+        var result = FunctionAppService.Validate(
+            Candidate("consume", FunctionTrigger.Queue, queueServiceId: Guid.CreateVersion7(), queueName: "orders"),
+            [], null);
+
+        result.Ok.Should().BeTrue();
+    }
 
     [Fact]
     public void Two_cron_functions_may_share_a_schedule()

@@ -50,6 +50,20 @@ public sealed class FunctionsController(
     private IQueryable<App> FunctionApps =>
         db.Apps.Where(a => a.WorkspaceId == WorkspaceId && a.SourceType == AppSourceType.InlineCode);
 
+    /// <summary>
+    /// F2: this workspace's own RabbitMQ services — the whole membership a Queue trigger's dropdown
+    /// may offer, and the same set <see cref="FunctionAppService.Validate"/> is handed to refuse a
+    /// posted id outside it. Filtered here rather than in the pure validator, which is the one call
+    /// site that turns "the tenant-filter trap" from a runtime risk into a set the validator cannot
+    /// have gotten wrong.
+    /// </summary>
+    private async Task<List<QueueBrokerOption>> AvailableQueueBrokersAsync(CancellationToken ct) =>
+        await db.ManagedServices
+            .Where(s => s.WorkspaceId == WorkspaceId && s.Type == ManagedServiceType.RabbitMq)
+            .OrderBy(s => s.Name)
+            .Select(s => new QueueBrokerOption(s.Id, s.Name))
+            .ToListAsync(ct);
+
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -199,12 +213,30 @@ public sealed class FunctionsController(
         var defined = await functions.ListAsync(app.Id, ct);
         var host = await db.Domains.Where(d => d.AppId == app.Id).Select(d => d.Host).FirstOrDefaultAsync(ct);
 
+        // F2: broker names for whichever functions are Queue-triggered, and a dead-letter count per
+        // function — both resolved once here so the list below is plain string interpolation rather
+        // than a query per row.
+        var queueServiceIds = defined.Where(f => f.QueueServiceId is not null)
+            .Select(f => f.QueueServiceId!.Value).Distinct().ToList();
+        var brokerNames = queueServiceIds.Count == 0
+            ? []
+            : await db.ManagedServices.Where(s => queueServiceIds.Contains(s.Id))
+                .Select(s => new { s.Id, s.Name }).ToListAsync(ct);
+        var deadLetterCounts = await db.FunctionQueueDeadLetters.Where(d => d.AppId == app.Id)
+            .GroupBy(d => d.FunctionId).Select(g => new { FunctionId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.FunctionId, x => x.Count, ct);
+
         return View(new FunctionAppDetailsViewModel(
             app.Id, app.Name, app.Slug, app.FunctionRuntime ?? FunctionRuntime.CSharp, app.Status,
             app.ActiveDeploymentId is not null, host,
             defined.Select(f => new FunctionRow(
                 f.Id, f.Name, f.Slug, f.Trigger, FunctionProject.RouteFor(f),
-                f.CronExpression, f.EventKey, f.IsEnabled, f.HasUnpublishedChanges, f.NextRunAt)).ToList()));
+                f.CronExpression, f.EventKey, f.IsEnabled, f.HasUnpublishedChanges, f.NextRunAt,
+                QueueSummary: f.Trigger == FunctionTrigger.Queue
+                    ? $"{f.QueueName} @ {brokerNames.FirstOrDefault(b => b.Id == f.QueueServiceId)?.Name ?? "?"}"
+                    : null,
+                QueueLastError: f.QueueLastError,
+                DeadLetterCount: deadLetterCounts.TryGetValue(f.Id, out var c) ? c : 0)).ToList()));
     }
 
     [HttpPost("{id:guid}/publish")]
@@ -254,7 +286,8 @@ public sealed class FunctionsController(
                 IsEnabled = true
             },
             FunctionEvents.All,
-            CustomEventKeys: await CustomEventKeysAsync(ct)));
+            CustomEventKeys: await CustomEventKeysAsync(ct),
+            AvailableBrokers: await AvailableQueueBrokersAsync(ct)));
     }
 
     [HttpGet("{id:guid}/{functionId:guid}")]
@@ -270,6 +303,7 @@ public sealed class FunctionsController(
         ViewData["Title"] = fn.Name;
         var recent = await functions.RecentInvocationsAsync(fn.Id, 20, ct);
         var revisions = await functions.RecentRevisionsAsync(fn.Id, ct);
+        var deadLetters = await functions.RecentDeadLettersAsync(fn.Id, 20, ct);
 
         // The same lookup Details already makes for the same reason: Domains, not AppAddress itself —
         // the app was already assigned a host when it was created, and this is where that decision
@@ -291,7 +325,9 @@ public sealed class FunctionsController(
                 EventKey = fn.EventKey,
                 Code = fn.Code,
                 IsEnabled = fn.IsEnabled,
-                IsPublic = fn.IsPublic
+                IsPublic = fn.IsPublic,
+                QueueServiceId = fn.QueueServiceId,
+                QueueName = fn.QueueName
             },
             FunctionEvents.All,
             recent.Select(i => new FunctionRunRow(
@@ -300,7 +336,10 @@ public sealed class FunctionsController(
             HasUnpublishedChanges: fn.HasUnpublishedChanges,
             Revisions: revisions.Select((r, index) => new FunctionRevisionRow(r.Id, r.CreatedAt, IsCurrent: index == 0)).ToList(),
             FunctionUrl: functionUrl,
-            CustomEventKeys: await CustomEventKeysAsync(ct)));
+            CustomEventKeys: await CustomEventKeysAsync(ct),
+            AvailableBrokers: await AvailableQueueBrokersAsync(ct),
+            QueueLastError: fn.QueueLastError,
+            DeadLetters: deadLetters.Select(d => new FunctionDeadLetterRow(d.Id, d.CreatedAt, d.Body, d.Reason)).ToList()));
     }
 
     [HttpPost("{id:guid}/save")]
@@ -313,8 +352,9 @@ public sealed class FunctionsController(
 
         var runtime = app.FunctionRuntime ?? FunctionRuntime.CSharp;
         var existing = await functions.ListAsync(app.Id, ct);
+        var availableBrokers = await AvailableQueueBrokersAsync(ct);
 
-        var (candidate, failure) = await TryBuildCandidateAsync(app, functionId, model, existing, runtime, ct);
+        var (candidate, failure) = await TryBuildCandidateAsync(app, functionId, model, existing, runtime, availableBrokers, ct);
         if (failure is not null) return failure;
 
         if (functionId is null) db.FunctionDefinitions.Add(candidate!);
@@ -351,7 +391,7 @@ public sealed class FunctionsController(
     /// </returns>
     private async Task<(FunctionDefinition? Candidate, IActionResult? Failure)> TryBuildCandidateAsync(
         App app, Guid? functionId, FunctionFormModel model, List<FunctionDefinition> existing, FunctionRuntime runtime,
-        CancellationToken ct)
+        List<QueueBrokerOption> availableBrokers, CancellationToken ct)
     {
         var candidate = functionId is { } editing
             ? existing.FirstOrDefault(f => f.Id == editing)
@@ -380,8 +420,13 @@ public sealed class FunctionsController(
         // the visitor route this flag gates — so it is forced off rather than stored and ignored,
         // the same guard Route already gets a few lines above.
         candidate.IsPublic = model.Trigger == FunctionTrigger.Http && model.IsPublic;
+        // Same idiom, F2: meaningless for anything but a Queue trigger, forced off rather than stored
+        // and ignored.
+        candidate.QueueServiceId = model.Trigger == FunctionTrigger.Queue ? model.QueueServiceId : null;
+        candidate.QueueName = model.Trigger == FunctionTrigger.Queue ? model.QueueName?.Trim() : null;
 
-        var validation = FunctionAppService.Validate(candidate, existing, functionId);
+        var validation = FunctionAppService.Validate(
+            candidate, existing, functionId, availableBrokers.Select(b => b.Id).ToList());
         if (!validation.Ok)
         {
             // Detach so a rejected edit does not leave the tracked entity carrying the values that
@@ -392,7 +437,8 @@ public sealed class FunctionsController(
 
             return (null, View("EditFunction", new FunctionEditViewModel(
                 app.Id, app.Name, runtime, functionId, model, FunctionEvents.All,
-                CustomEventKeys: await CustomEventKeysAsync(ct))));
+                CustomEventKeys: await CustomEventKeysAsync(ct),
+                AvailableBrokers: availableBrokers)));
         }
 
         return (candidate, null);
@@ -451,6 +497,30 @@ public sealed class FunctionsController(
         TempData["Message"] = IsFa
             ? "نسخه‌ی قبلی بازگردانده شد. برای اجرا شدن، «انتشار» را بزنید."
             : "Restored an earlier version. Press Publish to make it live.";
+        return RedirectToAction(nameof(EditFunction), new { id, functionId });
+    }
+
+    /// <summary>
+    /// F2: discards one dead letter from this function's own page — the only act offered on one,
+    /// deliberately. There is no "replay" button: replaying means calling the function again with the
+    /// same body, which is exactly what publishing a message onto the queue by hand already does, and
+    /// a second silent path to the same effect would be a second place for "did this actually run" to
+    /// go unanswered. Discarding only removes the row; it never touches the broker or the queue this
+    /// message already left.
+    /// </summary>
+    [HttpPost("{id:guid}/{functionId:guid}/deadletters/{deadLetterId:guid}/discard")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
+    public async Task<IActionResult> DiscardDeadLetter(Guid id, Guid functionId, Guid deadLetterId, CancellationToken ct)
+    {
+        var deadLetter = await db.FunctionQueueDeadLetters
+            .FirstOrDefaultAsync(d => d.Id == deadLetterId && d.FunctionId == functionId && d.AppId == id, ct);
+        if (deadLetter is null) return NotFound();
+
+        db.FunctionQueueDeadLetters.Remove(deadLetter);
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("functions.deadletter.discard", "App", id.ToString(), ct: ct);
+
         return RedirectToAction(nameof(EditFunction), new { id, functionId });
     }
 

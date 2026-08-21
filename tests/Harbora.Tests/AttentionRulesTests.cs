@@ -243,6 +243,26 @@ public class AttentionRulesTests
     }
 
     [Fact]
+    public void A_queue_functions_broker_that_stopped_connecting_extends_ChannelKind_the_same_way()
+    {
+        // F2 (2026-08-21 functions-and-services plan): "a broker that is down is not silence — surface
+        // it through the existing broken-channel path, the same way a failing event subscription
+        // does." Same extension, same proof shape as the two tests above.
+        var items = AttentionRules.Build(new AttentionFacts
+        {
+            HasAnyApp = true, HasAnyBackupSchedule = true,
+            BrokenChannels = [("consume-orders (worker)", ChannelKind.QueueConsumer, "connection refused")]
+        });
+
+        var item = items.Should().ContainSingle().Subject;
+        item.TitleArgs.Should().Contain("consume-orders (worker)");
+        item.DetailKey.Should().Be(AttentionRules.ChannelQueueDetail);
+        item.DetailArgs.Single().Should().Contain("connection refused");
+        item.ActionKey.Should().Be(AttentionRules.FunctionsAction);
+        item.ActionUrl.Should().Be("/functions");
+    }
+
+    [Fact]
     public void A_full_disk_is_reported_but_a_normal_one_is_not()
     {
         var quiet = AttentionRules.Build(new AttentionFacts { HasAnyApp = true, HasAnyBackupSchedule = true, DiskUsedRatio = 0.5 });

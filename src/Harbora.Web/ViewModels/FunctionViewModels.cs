@@ -37,7 +37,25 @@ public sealed record FunctionAppFormViewModel(
 public sealed record FunctionRow(
     Guid Id, string Name, string Slug, FunctionTrigger Trigger, string Route,
     string? CronExpression, string? EventKey, bool IsEnabled, bool HasUnpublishedChanges,
-    DateTimeOffset? NextRunAt);
+    DateTimeOffset? NextRunAt,
+    /// <summary>F2: the queue/broker this function consumes, formatted "queue @ broker" — null for
+    /// any other trigger. Already resolved to a name here so the list page never has to join.</summary>
+    string? QueueSummary = null,
+    /// <summary>F2: why the consumer most recently could not stay connected — null while connected
+    /// or never tried. Mirrors <c>FunctionDefinition.QueueLastError</c>.</summary>
+    string? QueueLastError = null,
+    /// <summary>F2: how many dead letters are waiting on this function's own page.</summary>
+    int DeadLetterCount = 0);
+
+/// <summary>One RabbitMQ service a Queue-triggered function may consume from — this workspace's own,
+/// already filtered, so the editor's dropdown can never even offer another workspace's.</summary>
+public sealed record QueueBrokerOption(Guid Id, string Name);
+
+/// <summary>
+/// One message F2's consumer could not get this function to accept twice in a row, as the function's
+/// own page shows it.
+/// </summary>
+public sealed record FunctionDeadLetterRow(Guid Id, DateTimeOffset CreatedAt, string Body, string Reason);
 
 public sealed record FunctionAppDetailsViewModel(
     Guid Id, string Name, string Slug, FunctionRuntime Runtime, AppStatus Status,
@@ -65,6 +83,12 @@ public sealed class FunctionFormModel
 
     /// <summary>Only meaningful for an HTTP trigger — see <see cref="FunctionDefinition.IsPublic"/>.</summary>
     public bool IsPublic { get; set; }
+
+    /// <summary>Only meaningful for a Queue trigger — see <see cref="FunctionDefinition.QueueServiceId"/>.</summary>
+    public Guid? QueueServiceId { get; set; }
+
+    /// <summary>Only meaningful for a Queue trigger — see <see cref="FunctionDefinition.QueueName"/>.</summary>
+    public string? QueueName { get; set; }
 }
 
 /// <summary>One past call, as the history table shows it.</summary>
@@ -97,6 +121,16 @@ public sealed record FunctionRevisionRow(Guid Id, DateTimeOffset CreatedAt, bool
 /// Every <c>custom.*</c> key this workspace's own apps have raised, for the Event picker's own
 /// "Custom" group (F3, 2026-08-21 functions-and-services plan). Already namespaced.
 /// </param>
+/// <param name="AvailableBrokers">
+/// The RabbitMQ services this workspace has — everything the Queue trigger's dropdown may offer. An
+/// empty list is itself informative: the editor says so, rather than rendering an empty select
+/// nobody can act on.
+/// </param>
+/// <param name="QueueLastError">
+/// F2: why the consumer most recently could not stay connected to this function's attached broker —
+/// null while connected or never tried. Mirrors <c>FunctionDefinition.QueueLastError</c>.
+/// </param>
+/// <param name="DeadLetters">F2: messages the consumer could not get this function to accept twice in a row.</param>
 public sealed record FunctionEditViewModel(
     Guid AppId, string AppName, FunctionRuntime Runtime, Guid? FunctionId,
     FunctionFormModel Form, IReadOnlyList<FunctionEventKind> Events,
@@ -105,4 +139,7 @@ public sealed record FunctionEditViewModel(
     bool HasUnpublishedChanges = false,
     IReadOnlyList<FunctionRevisionRow>? Revisions = null,
     string? FunctionUrl = null,
-    IReadOnlyList<string>? CustomEventKeys = null);
+    IReadOnlyList<string>? CustomEventKeys = null,
+    IReadOnlyList<QueueBrokerOption>? AvailableBrokers = null,
+    string? QueueLastError = null,
+    IReadOnlyList<FunctionDeadLetterRow>? DeadLetters = null);

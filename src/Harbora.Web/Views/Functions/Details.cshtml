@@ -10,6 +10,7 @@
     {
         (FunctionTrigger.Http, true) => "HTTP", (FunctionTrigger.Http, false) => "HTTP",
         (FunctionTrigger.Cron, true) => "زمان‌بندی", (FunctionTrigger.Cron, false) => "Schedule",
+        (FunctionTrigger.Queue, true) => "صف", (FunctionTrigger.Queue, false) => "Queue",
         (_, true) => "رویداد", _ => "Event"
     };
 }
@@ -85,6 +86,21 @@
                             @if (fn.NextRunAt is { } next)
                             {
                                 <div class="text-[11px] text-ink-faint">@(isFa ? "بعدی:" : "next:") @next.LocalDateTime.ToString(Dates.Stamp)</div>
+                            }
+                            break;
+                        case FunctionTrigger.Queue:
+                            <code class="text-xs">@fn.QueueSummary</code>
+                            @if (fn.DeadLetterCount > 0)
+                            {
+                                <div class="text-[11px] text-danger" data-dead-letter-count>
+                                    @(isFa ? $"{fn.DeadLetterCount} پیام ازکارافتاده" : $"{fn.DeadLetterCount} dead letter(s)")
+                                </div>
+                            }
+                            @if (fn.QueueLastError is { Length: > 0 })
+                            {
+                                <div class="text-[11px] text-danger" data-queue-broker-error>
+                                    @(isFa ? "اتصال به بروکر برقرار نیست" : "not connected to the broker")
+                                </div>
                             }
                             break;
                         default:

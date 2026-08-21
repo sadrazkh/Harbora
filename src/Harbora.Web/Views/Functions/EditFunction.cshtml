@@ -95,6 +95,7 @@
                     <option value="@((int)FunctionTrigger.Http)" selected="@(Model.Form.Trigger == FunctionTrigger.Http)">HTTP</option>
                     <option value="@((int)FunctionTrigger.Cron)" selected="@(Model.Form.Trigger == FunctionTrigger.Cron)">@(isFa ? "زمان‌بندی" : "Schedule")</option>
                     <option value="@((int)FunctionTrigger.Event)" selected="@(Model.Form.Trigger == FunctionTrigger.Event)">@(isFa ? "رویداد" : "Event")</option>
+                    <option value="@((int)FunctionTrigger.Queue)" selected="@(Model.Form.Trigger == FunctionTrigger.Queue)">@(isFa ? "صف" : "Queue")</option>
                 </select>
             </label>
 
@@ -208,6 +209,57 @@
                 </p>
             </label>
 
+            @{ var brokers = Model.AvailableBrokers ?? []; }
+            <div class="space-y-3" data-when="@((int)FunctionTrigger.Queue)">
+                @if (brokers.Count == 0)
+                {
+                    <p class="text-xs text-ink-muted" data-no-brokers>
+                        @(isFa
+                            ? "این ورک‌اسپیس سرویس RabbitMQ ندارد. اول یکی از صفحه‌ی سرویس‌ها اضافه کنید."
+                            : "This workspace has no RabbitMQ service yet. Add one from the Services page first.")
+                    </p>
+                }
+                else
+                {
+                    <label class="form-field">
+                        <span>@(isFa ? "بروکر RabbitMQ" : "RabbitMQ service")</span>
+                        <select name="QueueServiceId" class="form-control">
+                            <option value=""></option>
+                            @foreach (var broker in brokers)
+                            {
+                                <option value="@broker.Id" selected="@(Model.Form.QueueServiceId == broker.Id)">@broker.Name</option>
+                            }
+                        </select>
+                    </label>
+                }
+                <label class="form-field">
+                    <span>@(isFa ? "نام صف" : "Queue name")</span>
+                    <input name="QueueName" value="@Model.Form.QueueName" class="form-control font-mono" dir="ltr"
+                           placeholder="orders.created" />
+                    <p class="text-xs text-ink-faint">
+                        @(isFa
+                            ? "اگر این صف روی بروکر وجود نداشته باشد، همان لحظه‌ی اولین اتصال ساخته می‌شود."
+                            : "Declared automatically on first connection if it does not already exist on the broker.")
+                    </p>
+                </label>
+
+                @* Honesty about throughput, said plainly rather than discovered under load — the
+                   plan's own instruction. One panel process, one connection per queue function,
+                   prefetch 1: this is not a scaled worker pool. *@
+                <p class="rounded-lg bg-surface-2 px-3 py-2 text-xs text-ink-muted" data-queue-throughput-note>
+                    @(isFa
+                        ? "این پل توسط یک مصرف‌کننده‌ی سمت پنل اجرا می‌شود، نه یک استخر کارگر مقیاس‌پذیر — پیام‌ها یکی‌یکی پردازش می‌شوند. برای بارهای سنگین هنوز مناسب نیست."
+                        : "This bridge runs as one panel-side consumer, not a scaled worker pool — messages are handled one at a time. Not yet a fit for high-throughput workloads.")
+                </p>
+
+                @if (Model.QueueLastError is { Length: > 0 } queueError)
+                {
+                    <div class="rounded-lg border border-danger bg-danger-soft px-3 py-2 text-xs text-danger" data-queue-broker-error>
+                        @(isFa ? "اتصال به بروکر برقرار نشد: " : "Could not stay connected to the broker: ")@queueError
+                    </div>
+                }
+            </div>
+
             <label class="flex items-center gap-2.5 text-sm text-ink">
                 <input type="checkbox" name="IsEnabled" value="true" checked="@Model.Form.IsEnabled" />
                 <span>@(isFa ? "فعال" : "Enabled")</span>
@@ -302,6 +354,51 @@
                 </li>
             }
         </ul>
+    </div>
+}
+
+@* F2: dead letters — messages the queue consumer could not get this function to accept twice in a
+   row. Deliberately outside the Save form for the same reason revisions are: each row's own
+   discard is its own top-level form, and nesting it would be the parser bug §3(a) already avoided
+   above. Three states, per the design system: data, empty, and — since this section only exists for
+   a Queue-triggered function that has been saved at least once — "not applicable" is folded into not
+   rendering the section at all rather than a fabricated zero. *@
+@if (Model.FunctionId is { } fnIdForDeadLetters && Model.Form.Trigger == FunctionTrigger.Queue)
+{
+    <div class="mt-5 rounded-2xl border border-line bg-surface p-5 shadow-panel">
+        <h2 class="mb-1 text-sm font-semibold text-ink">@(isFa ? "پیام‌های ازکارافتاده" : "Dead letters")</h2>
+        <p class="mb-3 text-xs text-ink-muted">
+            @(isFa
+                ? "پیامی که دو بار (اول و پس از یک تلاش دوباره) رد شد، اینجا نگه داشته می‌شود تا از بین نرود."
+                : "A message that failed twice — once, and once more after a retry — is parked here rather than dropped.")
+        </p>
+        @if (Model.DeadLetters is { Count: > 0 })
+        {
+            <ul class="divide-y divide-line text-xs" data-dead-letters>
+                @foreach (var letter in Model.DeadLetters)
+                {
+                    <li class="space-y-1.5 py-2.5" data-dead-letter-id="@letter.Id">
+                        <div class="flex items-center justify-between gap-3">
+                            <span class="text-ink-muted" dir="ltr">@letter.CreatedAt.LocalDateTime.ToString(Dates.Precise)</span>
+                            <form method="post" action="/functions/@Model.AppId/@fnIdForDeadLetters/deadletters/@letter.Id/discard">
+                                @Html.AntiForgeryToken()
+                                <button type="submit" data-action="discard-dead-letter" class="text-ink-faint underline hover:text-danger">
+                                    @(isFa ? "کنار گذاشتن" : "Discard")
+                                </button>
+                            </form>
+                        </div>
+                        <div class="text-danger">@letter.Reason</div>
+                        <code class="block truncate rounded-lg bg-surface-2 px-2 py-1.5 text-ink" dir="ltr">@letter.Body</code>
+                    </li>
+                }
+            </ul>
+        }
+        else
+        {
+            <p class="text-xs text-ink-faint" data-dead-letters-empty>
+                @(isFa ? "چیزی اینجا نیست." : "Nothing here.")
+            </p>
+        }
     </div>
 }
 
