@@ -328,8 +328,15 @@ public static class FunctionProject
                 // Protected is the default and the closedness every function had before this flag
                 // existed: only a function whose owner flipped it Public answers a visitor here.
                 // Everyone else — cron, events, a manual Run now — still reaches it through the
-                // panel's signed door above, which this check never touches.
-                if (!fn.Public) return Results.StatusCode(401);
+                // panel's signed door above, which this check never touches. The status stays 401; only
+                // the body changed — a bare 401 told an owner nothing about why (2026-08-21
+                // functions-and-services plan follow-up), so this names the real reason in the same
+                // words the editor's own toggle uses.
+                if (!fn.Public) return Results.Json(new
+                {
+                    error = "private_function",
+                    message = "This function is Protected — only the panel (schedules, events, Run now) can call it. To let visitors call it directly: open this function in the editor, turn on \"Public\", then Publish."
+                }, statusCode: 401);
 
                 using var reader = new StreamReader(http.Body);
                 var body = await reader.ReadToEndAsync();
@@ -627,9 +634,19 @@ public static class FunctionProject
               // Protected is the default and the closedness every function had before this flag
               // existed: only a function whose owner flipped it Public answers a visitor here.
               // Everyone else — cron, events, a manual Run now — still reaches it through the panel's
-              // signed door above, which this check never touches.
+              // signed door above, which this check never touches. The status stays 401; only the body
+              // changed — a bare 401 told an owner nothing about why (2026-08-21 functions-and-services
+              // plan follow-up), so this names the real reason in the same words the editor's own
+              // toggle uses.
               if (!fn.public) {
-                send(res, { status: 401, headers: {}, body: '' });
+                send(res, {
+                  status: 401,
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({
+                    error: 'private_function',
+                    message: 'This function is Protected — only the panel (schedules, events, Run now) can call it. To let visitors call it directly: open this function in the editor, turn on "Public", then Publish.'
+                  })
+                });
                 return;
               }
 
@@ -855,9 +872,15 @@ public static class FunctionProject
                     # Protected is the default and the closedness every function had before this flag
                     # existed: only a function whose owner flipped it Public answers a visitor here.
                     # Everyone else — cron, events, a manual Run now — still reaches it through the
-                    # panel's signed door above, which this check never touches.
+                    # panel's signed door above, which this check never touches. The status stays 401;
+                    # only the body changed — a bare 401 told an owner nothing about why (2026-08-21
+                    # functions-and-services plan follow-up), so this names the real reason in the same
+                    # words the editor's own toggle uses.
                     if not fn['public']:
-                        self._send(401, {}, '')
+                        self._send(401, {'content-type': 'application/json'}, json.dumps({
+                            'error': 'private_function',
+                            'message': 'This function is Protected — only the panel (schedules, events, Run now) can call it. To let visitors call it directly: open this function in the editor, turn on "Public", then Publish.'
+                        }))
                         return
 
                     request = {'method': self.command, 'path': path,

@@ -165,7 +165,7 @@ public class FunctionProjectTests
         // panel's own invoke door, which already 401s an unsigned caller) now carries its own refusal
         // for exactly the function rows that never opted into being public.
         File(FunctionProject.Generate(FunctionRuntime.CSharp, [Fn("hello")]), "Program.cs")
-            .Should().Contain("if (!fn.Public) return Results.StatusCode(401);");
+            .Should().Contain("if (!fn.Public) return Results.Json(new");
 
         var js = File(FunctionProject.Generate(FunctionRuntime.JavaScript, [Fn("hello")]), "server.mjs");
         js.Should().Contain("if (!fn.public)");
@@ -173,7 +173,26 @@ public class FunctionProjectTests
 
         var python = File(FunctionProject.Generate(FunctionRuntime.Python, [Fn("hello")]), "server.py");
         python.Should().Contain("if not fn['public']:");
-        python.Should().Contain("self._send(401, {}, '')");
+        python.Should().Contain("self._send(401,");
+    }
+
+    // -------------------------------------------- the 401 explains itself (post-F1 follow-up)
+
+    [Theory]
+    [InlineData(FunctionRuntime.CSharp)]
+    [InlineData(FunctionRuntime.JavaScript)]
+    [InlineData(FunctionRuntime.Python)]
+    public void A_bare_401_now_names_the_real_reason_in_every_runtime(FunctionRuntime runtime)
+    {
+        // The owner's own complaint: a bare 401 with no body says nothing about why. The status stays
+        // 401 (the test above pins that); this pins that the body now explains it, in the same words
+        // the editor's own toggle uses ("Public"), so a person reading the response and a person
+        // reading the panel see the same setting name.
+        var host = string.Concat(FunctionProject.Generate(runtime, [Fn("hello")]).Select(f => f.Content));
+
+        host.Should().Contain("private_function");
+        host.Should().Contain("Public");
+        host.Should().Contain("Publish");
     }
 
     // ------------------------------------------------------- F1 reversal: the host reports back
