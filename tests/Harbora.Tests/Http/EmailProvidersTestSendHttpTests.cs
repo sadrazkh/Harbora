@@ -59,10 +59,13 @@ public class EmailProvidersTestSendHttpTests(HarboraHttpFixture fixture)
         response.StatusCode.Should().Be(HttpStatusCode.Found);
         var html = await (await client.GetAsync(response.RedirectPath())).Content.ReadAsStringAsync();
 
-        html.Should().NotContain("A test email went to",
-            "a connection that was refused must never be reported as sent");
-        html.Should().Contain("Could not send:",
-            "the honest-failure banner idiom AdminSettingsController.TestSmtp already uses for the platform's own mail");
+        // The panel renders Persian by default in tests, so this asserts on the data- attribute the
+        // persisted LastTestSucceeded flag renders as, never on the banner's own sentence — the same
+        // rule every other test in this suite follows.
+        html.Should().NotContain("data-email-provider-test-state=\"ok\"",
+            "a connection that was refused must never be reported as a success");
+        html.Should().Contain("data-email-provider-test-state=\"failed\"",
+            "the honest-failure state AdminSettingsController.TestSmtp's own idiom already gives the platform's own mail");
     }
 
     [Fact]
