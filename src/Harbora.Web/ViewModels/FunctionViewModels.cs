@@ -92,9 +92,17 @@ public sealed class FunctionFormModel
 }
 
 /// <summary>One past call, as the history table shows it.</summary>
+/// <param name="Origin">
+/// Who saw this call happen (<see cref="FunctionInvocationOrigin"/>) — <c>Panel</c> for everything the
+/// panel made itself and watched (schedules, events, Run now), <c>PublicCall</c> for a visitor who
+/// reached this function's own public URL directly, which the panel only knows about because the host
+/// reported it afterwards (F1 reversal, 2026-08-21 functions-and-services plan follow-up). Carried
+/// through so the row can say which kind it is, rather than let a host-reported row read as though the
+/// panel had watched it happen the same way it watches everything else.
+/// </param>
 public sealed record FunctionRunRow(
     DateTimeOffset StartedAt, FunctionTrigger Trigger, int? StatusCode, bool Succeeded,
-    int DurationMs, string? Error, bool StillRunning);
+    int DurationMs, string? Error, bool StillRunning, FunctionInvocationOrigin Origin = FunctionInvocationOrigin.Panel);
 
 /// <summary>One kept revision of a function's code, as the editor's history panel shows it.</summary>
 public sealed record FunctionRevisionRow(Guid Id, DateTimeOffset CreatedAt, bool IsCurrent);

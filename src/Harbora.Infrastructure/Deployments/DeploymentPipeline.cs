@@ -389,7 +389,7 @@ public sealed class DeploymentPipeline(
                 }
             }
 
-            var env = BuildEnv(app);
+            var env = BuildEnv(app, server.IsLocal);
             var labels = new Dictionary<string, string>
             {
                 ["harbora.managed"] = "true",
@@ -1059,7 +1059,7 @@ public sealed class DeploymentPipeline(
 
             // The app's own env vars apply to every service, with the compose file's values winning
             // for that service — the file is the more specific statement.
-            var env = BuildEnv(app);
+            var env = BuildEnv(app, server.IsLocal);
             foreach (var (key, value) in service.Environment) env[key] = value;
 
             env.TryAdd("HARBORA_SERVICE", service.Name);
@@ -1373,7 +1373,7 @@ public sealed class DeploymentPipeline(
     /// this exact path too — a bucket attached to a function app reaches its generated host for free,
     /// the same way a database attach already does.
     /// </summary>
-    private Dictionary<string, string> BuildEnv(App app)
+    private Dictionary<string, string> BuildEnv(App app, bool isLocal)
     {
         var attachedBuckets = app.StorageBuckets
             .Where(sb => sb.StorageBucket is not null)
@@ -1412,10 +1412,35 @@ public sealed class DeploymentPipeline(
         // and it is injected here rather than stored as an ordinary variable so nobody can rename,
         // reveal or delete it from the environment page and lock the scheduler out of its own app.
         if (app.SourceType == AppSourceType.InlineCode && app.FunctionInvokeSecret is { Length: > 0 } secret)
+        {
             env[Functions.FunctionProject.SecretEnvVar] = SafeUnprotect(secret);
+            // F1 reversal (2026-08-21 functions-and-services plan follow-up): where the generated host
+            // POSTs its own fire-and-forget report of a public call. See ReportUrlFor's own doc for why
+            // local and remote placement need different addresses.
+            env[Functions.FunctionProject.ReportUrlEnvVar] = ReportUrlFor(app.Id, isLocal);
+        }
 
         return env;
     }
+
+    /// <summary>
+    /// Where a generated host's own report of a public call (F1 reversal, 2026-08-21
+    /// functions-and-services plan follow-up) reaches this panel.
+    ///
+    /// <para>
+    /// On the local engine the panel already joins every tenant network it deploys to
+    /// (<see cref="_opt.PanelContainerName"/>, connected a few lines above this method's own call site
+    /// — see also <see cref="PanelNetworkRebinder"/>'s doc on why that membership is self-healing), so
+    /// the container-name address is both the shortest path and the one <see cref="Functions.FunctionInvoker.ResolveAddressAsync"/>
+    /// already trusts for the exact reverse call. A remote node shares no such network with the panel —
+    /// its apps are addressed by a published host port, never a Docker network — so it is given the
+    /// panel's own public address instead, over HTTPS, the same one an app deployed anywhere (including
+    /// off this platform entirely) already has to know to call <c>CustomEventIngestService</c>'s door.
+    /// </para>
+    /// </summary>
+    private string ReportUrlFor(Guid appId, bool isLocal) => isLocal
+        ? $"http://{_opt.PanelContainerName}:{_opt.PanelHttpPort}{Functions.FunctionProject.ReportPath(appId)}"
+        : $"https://{Environment.GetEnvironmentVariable("PANEL_DOMAIN")}{Functions.FunctionProject.ReportPath(appId)}";
 
     /// <summary>
     /// Clears the "applies on next deploy" flag on every group attached to this app, mirroring

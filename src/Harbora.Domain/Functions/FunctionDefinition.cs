@@ -135,6 +135,35 @@ public class FunctionDefinition : BaseEntity
 }
 
 /// <summary>
+/// Who saw one <see cref="FunctionInvocation"/> happen.
+///
+/// <para>
+/// Every call the platform makes itself — a schedule, a platform or custom event, a manual "Run
+/// now" — is watched end to end: <c>FunctionInvoker</c> writes the row before it dials out and
+/// completes it from the response it gets back. A public HTTP call (F1, 2026-08-21
+/// functions-and-services plan) is the one shape that is not: a visitor reaches the generated host
+/// directly, the panel is never on that path, and the only account of what happened is whatever the
+/// host itself chooses to say afterwards. This is what keeps the second kind from silently looking
+/// like the first — a row nobody watched must say so, not borrow the credibility of one somebody did.
+/// </para>
+/// </summary>
+public enum FunctionInvocationOrigin
+{
+    /// <summary>The panel made this call and watched it happen — every row before this field existed
+    /// was one of these, which is why it is the default.</summary>
+    Panel = 0,
+
+    /// <summary>
+    /// The generated host answered a visitor's call to this function's public URL and reported back
+    /// what it did, fire-and-forget, authenticated with the same secret it already holds
+    /// (<see cref="Harbora.Infrastructure.Functions.FunctionProject.SecretEnvVar"/>). Best-effort: if
+    /// the panel could not be reached at that moment, there is no row at all rather than a wrong one —
+    /// the host never delays or fails a visitor's own response waiting to find out.
+    /// </summary>
+    PublicCall = 1
+}
+
+/// <summary>
 /// One call of one function, however it was triggered.
 ///
 /// <para>
@@ -150,6 +179,12 @@ public class FunctionInvocation : BaseEntity
     public Guid WorkspaceId { get; set; }
 
     public FunctionTrigger Trigger { get; set; }
+
+    /// <summary>Who saw this call happen — see <see cref="FunctionInvocationOrigin"/>. Defaults to
+    /// <see cref="FunctionInvocationOrigin.Panel"/>, which is exactly right for every row written
+    /// before this field existed: they were all panel-made.</summary>
+    public FunctionInvocationOrigin Origin { get; set; }
+
     public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
     public int DurationMs { get; set; }
 

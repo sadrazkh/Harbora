@@ -331,7 +331,7 @@ public sealed class FunctionsController(
             },
             FunctionEvents.All,
             recent.Select(i => new FunctionRunRow(
-                i.StartedAt, i.Trigger, i.StatusCode, i.Succeeded, i.DurationMs, i.Error, i.CompletedAt is null)).ToList(),
+                i.StartedAt, i.Trigger, i.StatusCode, i.Succeeded, i.DurationMs, i.Error, i.CompletedAt is null, i.Origin)).ToList(),
             IsPublished: app.ActiveDeploymentId is not null,
             HasUnpublishedChanges: fn.HasUnpublishedChanges,
             Revisions: revisions.Select((r, index) => new FunctionRevisionRow(r.Id, r.CreatedAt, IsCurrent: index == 0)).ToList(),

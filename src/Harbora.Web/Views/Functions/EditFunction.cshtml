@@ -58,7 +58,26 @@
                             @* Second precision: two runs of the same schedule inside one minute is the
                                case somebody is looking at this table to understand. *@
                             <td class="px-4 py-2 text-xs text-ink-muted" dir="ltr">@run.StartedAt.LocalDateTime.ToString(Dates.Precise)</td>
-                            <td class="px-4 py-2 text-xs text-ink-faint">@run.Trigger</td>
+                            <td class="px-4 py-2 text-xs text-ink-faint">
+                                @run.Trigger
+                                @* F1 reversal (2026-08-21 functions-and-services plan follow-up): a row
+                                   nobody at the panel watched happen must say so, not blend in with one
+                                   the panel made and observed itself. data-run-origin is the
+                                   language-independent hook — the panel renders Persian by default in
+                                   tests. *@
+                                @if (run.Origin == FunctionInvocationOrigin.PublicCall)
+                                {
+                                    <span data-run-origin="public-call" class="ms-1 rounded bg-surface-2 px-1 py-0.5 text-[10px] text-ink-faint" title="@(isFa
+                                        ? "پنل این تماس را ندید — خودِ فانکشن پس از پاسخ‌دادن، این را گزارش کرد."
+                                        : "The panel never saw this call — the function reported it back itself after answering.")">
+                                        @(isFa ? "گزارش‌شده" : "reported")
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span data-run-origin="panel" class="sr-only"></span>
+                                }
+                            </td>
                             <td class="px-4 py-2 text-xs">
                                 @if (run.StillRunning)
                                 {
@@ -154,12 +173,19 @@
                         </p>
                     }
 
+                    @* F1 reversal (2026-08-21 functions-and-services plan follow-up): this used to say a
+                       public call is never recorded here — that was the wrong call, reversed. The
+                       function itself now reports each one back right after it answers, fire-and-forget,
+                       marked "reported" above so it never blends in with a call the panel actually
+                       watched. Still honest about the gap that leaves: the report can be lost (a panel
+                       mid-restart, mid-deploy) without the visitor's own call failing, so this still
+                       points at the app's Logs for the complete account. *@
                     <p class="text-xs text-ink-faint" data-public-history-note>
                         @(isFa
-                            ? "پنل تماس‌های عمومی را نمی‌بیند، پس در تاریخچه‌ی این صفحه ثبت نمی‌شوند. آن‌ها را در "
-                            : "The panel never sees a public call, so it is not recorded in the history on this page. Find it in the app's ")
-                        <a href="/apps/@Model.AppId/logs" class="text-accent-text hover:underline">@(isFa ? "لاگ‌های اپ" : "Logs")</a>
-                        @(isFa ? " ببینید که همین حالا هم قابل جست‌وجوست." : ", which already searches them.")
+                            ? "تماس‌های عمومی هم اینجا ثبت می‌شوند — خودِ فانکشن، بلافاصله پس از پاسخ‌دادن، آن را به‌صورت best-effort گزارش می‌کند (برچسب «گزارش‌شده» در جدول بالا). اگر همان لحظه پنل در دسترس نبود، گزارشی ثبت نمی‌شود — بدون این‌که پاسخ به بازدیدکننده تأخیر بیفتد یا شکست بخورد. برای فهرست کامل هر تماس، در هر حال، "
+                            : "Public calls are recorded here too — the function reports each one back, best-effort, right after it answers (tagged \"reported\" in the table above). If the panel was unreachable at that exact moment, there is simply no row for it — the visitor's own response never waits on this or fails because of it. For the complete account of every call regardless, ")
+                        <a href="/apps/@Model.AppId/logs" class="text-accent-text hover:underline">@(isFa ? "لاگ‌های اپ" : "the app's Logs")</a>
+                        @(isFa ? " هنوز هم در دسترس است." : " still has it.")
                     </p>
                 }
             </div>

@@ -322,6 +322,9 @@ public static class DependencyInjection
         services.AddScoped<IFunctionEventBus, Functions.FunctionEventBus>();
         // F3, 2026-08-21 functions-and-services plan: the other direction through the same door.
         services.AddScoped<ICustomEventIngestService, Functions.CustomEventIngestService>();
+        // F1 reversal (2026-08-21 functions-and-services plan follow-up): the generated host reports
+        // a public call back here, fire-and-forget, over the same anonymous-door shape.
+        services.AddScoped<IFunctionInvocationReportService, Functions.FunctionInvocationReportService>();
         services.AddScoped<IJobHandler, Functions.FunctionInvokeJobHandler>();
         services.AddHostedService<Functions.FunctionCronScheduler>();
         // F2 (2026-08-21 functions-and-services plan, "Queue-triggered functions"): the panel-side

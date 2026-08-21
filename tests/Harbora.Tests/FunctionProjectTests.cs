@@ -4,7 +4,6 @@ using Harbora.Infrastructure.Functions;
 using Xunit;
 
 namespace Harbora.Tests;
-
 /// <summary>
 /// What "code typed in the panel" turns into.
 ///
@@ -175,6 +174,54 @@ public class FunctionProjectTests
         var python = File(FunctionProject.Generate(FunctionRuntime.Python, [Fn("hello")]), "server.py");
         python.Should().Contain("if not fn['public']:");
         python.Should().Contain("self._send(401, {}, '')");
+    }
+
+    // ------------------------------------------------------- F1 reversal: the host reports back
+
+    [Theory]
+    [InlineData(FunctionRuntime.CSharp)]
+    [InlineData(FunctionRuntime.JavaScript)]
+    [InlineData(FunctionRuntime.Python)]
+    public void Every_runtime_reads_the_report_url_and_carries_the_secret_header_on_it(FunctionRuntime runtime)
+    {
+        var host = string.Concat(FunctionProject.Generate(runtime, [Fn("hello", isPublic: true)]).Select(f => f.Content));
+
+        host.Should().Contain(FunctionProject.ReportUrlEnvVar);
+        // The report is authenticated with the same header/secret the panel's own invoke door checks —
+        // never a second credential.
+        host.Should().Contain(FunctionProject.SecretHeader);
+    }
+
+    [Fact]
+    public void The_csharp_visitor_route_reports_but_the_panels_own_invoke_door_does_not()
+    {
+        var program = File(FunctionProject.Generate(FunctionRuntime.CSharp, [Fn("hello", isPublic: true)]), "Program.cs");
+
+        // Exactly one call site passes report: true (the visitor route); the invoke door passes false —
+        // a call the panel already made and will complete from its own response must never also be
+        // reported by the host, which would be a second, uncorrelated row for the same call.
+        program.Should().Contain("report: true");
+        program.Should().Contain("report: false");
+    }
+
+    [Fact]
+    public void The_javascript_visitor_route_reports_but_the_panels_own_invoke_door_does_not()
+    {
+        var server = File(FunctionProject.Generate(FunctionRuntime.JavaScript, [Fn("hello", isPublic: true)]), "server.mjs");
+
+        server.Should().Contain("res, true);");
+        server.Should().Contain("res, false);");
+    }
+
+    [Fact]
+    public void The_python_visitor_route_reports_but_the_panels_own_invoke_door_does_not()
+    {
+        var server = File(FunctionProject.Generate(FunctionRuntime.Python, [Fn("hello", isPublic: true)]), "server.py");
+
+        server.Should().Contain("report=True");
+        // The invoke door's own call site never passes report at all — it relies on the parameter's
+        // own False default, the same "nothing extra to say" the C#/JS call sites make explicit.
+        server.Should().Contain("def _run(self, fn, request, ctx, report=False):");
     }
 
     [Theory]
