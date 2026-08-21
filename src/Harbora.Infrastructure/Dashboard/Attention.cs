@@ -35,7 +35,15 @@ public enum ChannelKind
     /// Attention block, exactly like a broken <see cref="Alert"/> or <see cref="BackupDelivery"/>
     /// channel already does.
     /// </summary>
-    EventSubscription = 2
+    EventSubscription = 2,
+
+    /// <summary>
+    /// A <see cref="Harbora.Domain.Functions.FunctionTrigger.Queue"/> function's own panel-side
+    /// consumer (F2, 2026-08-21 functions-and-services plan) that could not stay connected to its
+    /// attached broker. Same extension, same reason: "a broker that is down is not silence — surface
+    /// it through the existing broken-channel path, the same way a failing event subscription does."
+    /// </summary>
+    QueueConsumer = 3
 }
 
 /// <summary>
@@ -177,8 +185,10 @@ public static class AttentionRules
     public const string ChannelAlertDetail = "Alert channel: {0}";
     public const string ChannelBackupDetail = "Backup delivery: {0}";
     public const string ChannelEventDetail = "Event subscription: {0}";
+    public const string ChannelQueueDetail = "Queue consumer: {0}";
     public const string AlertsAction = "Open alerts";
     public const string EventSubscriptionsAction = "Open event subscriptions";
+    public const string FunctionsAction = "Open functions";
     public const string FunctionFailedTitle = "{0} ({1}) keeps failing";
     public const string FunctionFailedDetail = "Its last two runs both failed.";
     public const string FunctionFailedAction = "Open the function";
@@ -204,7 +214,8 @@ public static class AttentionRules
         CertificateExpiredDetail, CertificateExpiringDetail, CertificateFailedDetail, CertificateAction,
         BackupFailedTitle, BackupFailedDetail, BackupsAction,
         ServiceFailedTitle, ServiceFailedDetail, ServiceFailedAction,
-        ChannelTitle, ChannelAlertDetail, ChannelBackupDetail, ChannelEventDetail, AlertsAction, EventSubscriptionsAction,
+        ChannelTitle, ChannelAlertDetail, ChannelBackupDetail, ChannelEventDetail, ChannelQueueDetail,
+        AlertsAction, EventSubscriptionsAction, FunctionsAction,
         FunctionFailedTitle, FunctionFailedDetail, FunctionFailedAction,
         DiskTitle, DiskDetail, MonitoringAction,
         NeverDeployedTitle, NeverDeployedDetail, NeverDeployedAction,
@@ -308,6 +319,7 @@ public static class AttentionRules
                 {
                     ChannelKind.BackupDelivery => ChannelBackupDetail,
                     ChannelKind.EventSubscription => ChannelEventDetail,
+                    ChannelKind.QueueConsumer => ChannelQueueDetail,
                     _ => ChannelAlertDetail
                 },
                 DetailArgs = [Summarise(error) ?? string.Empty],
@@ -315,12 +327,14 @@ public static class AttentionRules
                 {
                     ChannelKind.BackupDelivery => BackupsAction,
                     ChannelKind.EventSubscription => EventSubscriptionsAction,
+                    ChannelKind.QueueConsumer => FunctionsAction,
                     _ => AlertsAction
                 },
                 ActionUrl = kind switch
                 {
                     ChannelKind.BackupDelivery => "/backups",
                     ChannelKind.EventSubscription => "/notifications/webhooks",
+                    ChannelKind.QueueConsumer => "/functions",
                     _ => "/monitoring"
                 }
             });

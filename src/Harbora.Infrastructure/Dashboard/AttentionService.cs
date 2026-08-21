@@ -135,6 +135,25 @@ public sealed class AttentionService(
             .Take(3)
             .ToListAsync(ct);
 
+        // F2 (2026-08-21 functions-and-services plan, "Queue-triggered functions"): the same
+        // extension, for the same reason — a broker the panel's consumer cannot stay connected to is
+        // not silence, it surfaces here exactly like a broken event subscription does. IsEnabled
+        // mirrors every other channel here: a function somebody deliberately turned off is not
+        // "broken", and nagging about it would train people to ignore this block.
+        var brokenQueueConsumers = await db.FunctionDefinitions
+            .Where(f => f.WorkspaceId == workspaceId && f.Trigger == FunctionTrigger.Queue
+                        && f.IsEnabled && f.QueueLastError != null)
+            .Select(f => new { f.Name, f.AppId, f.QueueLastError })
+            .Take(3)
+            .ToListAsync(ct);
+        var brokenQueueAppIds = brokenQueueConsumers.Select(f => f.AppId).Distinct().ToList();
+        var brokenQueueAppNames = brokenQueueAppIds.Count == 0
+            ? []
+            : await db.Apps
+                .Where(a => brokenQueueAppIds.Contains(a.Id))
+                .Select(a => new { a.Id, a.Name })
+                .ToListAsync(ct);
+
         // Recorded by the certificate watcher's daily TLS handshake, not probed here.
         var hosts = await db.Domains
             .Where(d => d.SslEnabled && d.App!.WorkspaceId == workspaceId)
@@ -176,6 +195,9 @@ public sealed class AttentionService(
                     brokenAlerts.Select(a => (a.Name, ChannelKind.Alert, a.LastError!))
                         .Concat(brokenDeliveries.Select(d => (d.Name, ChannelKind.BackupDelivery, d.LastError!)))
                         .Concat(brokenEventSubscriptions.Select(s => (s.Name, ChannelKind.EventSubscription, s.LastError!)))
+                        .Concat(brokenQueueConsumers.Select(f => (
+                            Name: $"{f.Name} ({brokenQueueAppNames.FirstOrDefault(a => a.Id == f.AppId)?.Name ?? "?"})",
+                            ChannelKind.QueueConsumer, f.QueueLastError!)))
                         .ToList(),
                 CertificateProblems = certificates.Select(c => DescribeCertificate(c.Host, c.Status, c.ExpiresAt, c.LastError)).ToList(),
                 DiskUsedRatio = disk,

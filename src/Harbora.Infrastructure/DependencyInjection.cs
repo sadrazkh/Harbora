@@ -324,6 +324,12 @@ public static class DependencyInjection
         services.AddScoped<ICustomEventIngestService, Functions.CustomEventIngestService>();
         services.AddScoped<IJobHandler, Functions.FunctionInvokeJobHandler>();
         services.AddHostedService<Functions.FunctionCronScheduler>();
+        // F2 (2026-08-21 functions-and-services plan, "Queue-triggered functions"): the panel-side
+        // RabbitMQ bridge. Unproven on this dev machine — no Docker, no live broker — see
+        // RabbitMqBrokerConnectionFactory's own doc.
+        services.AddSingleton<Application.Abstractions.IQueueBrokerConnectionFactory,
+            Functions.RabbitMqBrokerConnectionFactory>();
+        services.AddHostedService<Functions.QueueFunctionConsumerHost>();
 
         // Tenancy quotas + node capacity (PaaS).
         services.AddScoped<IQuotaService, Tenancy.QuotaService>();

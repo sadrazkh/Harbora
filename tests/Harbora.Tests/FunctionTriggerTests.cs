@@ -213,6 +213,70 @@ public class FunctionTriggerTests
         row.Error.Should().Contain("not reachable");
     }
 
+    // -------------------------------------------------------- F2: InvokeNowAsync
+
+    [Fact]
+    public async Task A_direct_invoke_bypasses_the_job_queue_and_returns_the_completed_row()
+    {
+        // F2's queue consumer needs the verdict synchronously, on its own schedule, to decide
+        // ack/nack/dead-letter — it cannot wait on the durable job queue's own worker.
+        var world = await SeedAsync(trigger: FunctionTrigger.Queue);
+        var jobs = new RecordingJobQueue();
+        var invoker = new FunctionInvoker(
+            world.Db, new OkHttp(), new PlainProtector(), jobs, new FeatureGate(world.Db),
+            ScopeFactoryFor(new RecordingEventPublisher()), NullLogger<FunctionInvoker>.Instance);
+
+        var invocation = await invoker.InvokeNowAsync(world.Fn.Id, FunctionTrigger.Queue, null, "the message body", default);
+
+        invocation.Should().NotBeNull();
+        invocation!.Succeeded.Should().BeTrue();
+        invocation.CompletedAt.Should().NotBeNull();
+        jobs.Enqueued.Should().BeEmpty("this door never touches the durable job queue");
+    }
+
+    [Fact]
+    public async Task A_direct_invoke_hands_the_body_to_the_function_as_its_envelope()
+    {
+        var world = await SeedAsync(trigger: FunctionTrigger.Queue);
+        var jobs = new RecordingJobQueue();
+        var invoker = InvokerFor(world.Db, jobs);
+
+        await invoker.InvokeNowAsync(world.Fn.Id, FunctionTrigger.Queue, null, "hello queue", default);
+
+        var row = await world.Db.FunctionInvocations.IgnoreQueryFilters().SingleAsync();
+        row.EnvelopeJson.Should().Contain("\"trigger\":\"queue\"");
+        row.EnvelopeJson.Should().Contain("hello queue");
+    }
+
+    [Fact]
+    public async Task A_direct_invoke_of_a_disabled_function_returns_null_rather_than_calling_anything()
+    {
+        var world = await SeedAsync(trigger: FunctionTrigger.Queue, functionEnabled: false);
+        var jobs = new RecordingJobQueue();
+        var invoker = InvokerFor(world.Db, jobs);
+
+        var invocation = await invoker.InvokeNowAsync(world.Fn.Id, FunctionTrigger.Queue, null, "x", default);
+
+        invocation.Should().BeNull();
+        (await world.Db.FunctionInvocations.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_direct_invoke_that_fails_still_publishes_the_one_failure_event()
+    {
+        var world = await SeedAsync(trigger: FunctionTrigger.Queue);
+        world.App.FunctionInvokeSecret = null;
+        await world.Db.SaveChangesAsync();
+        var jobs = new RecordingJobQueue();
+        var events = new RecordingEventPublisher();
+        var invoker = InvokerFor(world.Db, jobs, events);
+
+        var invocation = await invoker.InvokeNowAsync(world.Fn.Id, FunctionTrigger.Queue, null, "x", default);
+
+        invocation!.Succeeded.Should().BeFalse();
+        events.Events.Should().ContainSingle().Which.Kind.Should().Be(EventKind.FunctionFailed);
+    }
+
     [Fact]
     public async Task A_completed_invocation_is_not_run_again()
     {
@@ -544,5 +608,9 @@ public class FunctionTriggerTests
             throw new InvalidOperationException("the queue is on fire");
 
         public Task ExecuteAsync(Guid invocationId, CancellationToken ct) => Task.CompletedTask;
+
+        public Task<FunctionInvocation?> InvokeNowAsync(
+            Guid functionId, FunctionTrigger trigger, FunctionEvent? evt, string? body, CancellationToken ct) =>
+            throw new InvalidOperationException("the queue is on fire");
     }
 }
