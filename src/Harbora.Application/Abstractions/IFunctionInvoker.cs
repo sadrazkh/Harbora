@@ -20,6 +20,25 @@ public interface IFunctionInvoker
 
     /// <summary>Executes a queued invocation. Idempotent: a completed row is left alone.</summary>
     Task ExecuteAsync(Guid invocationId, CancellationToken ct);
+
+    /// <summary>
+    /// Calls one function right now, through the same door as <see cref="QueueAsync"/> +
+    /// <see cref="ExecuteAsync"/> (same guard checks, same <c>FunctionInvocation</c> row, same 60s
+    /// timeout, same <c>EventKind.FunctionFailed</c> publish on failure) but without the durable job
+    /// queue in between, and returns the completed row rather than only its id.
+    ///
+    /// <para>
+    /// F2's queue-trigger consumer (2026-08-21 functions-and-services plan) is the only caller: it
+    /// must know pass/fail synchronously to decide whether to ack, nack-requeue, or dead-letter the
+    /// broker message, and the durable queue's own worker would answer that question on its own
+    /// schedule rather than the consumer's. Returns null under exactly the conditions
+    /// <see cref="QueueAsync"/> returns null for — nothing was called, so there is nothing to have a
+    /// verdict about.
+    /// </para>
+    /// </summary>
+    /// <param name="body">Handed to the function as <c>req.Body</c> — the queue message's payload.</param>
+    Task<FunctionInvocation?> InvokeNowAsync(
+        Guid functionId, FunctionTrigger trigger, FunctionEvent? evt, string? body, CancellationToken ct);
 }
 
 /// <summary>

@@ -210,6 +210,7 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Functions.FunctionInvocation> FunctionInvocations => Set<Harbora.Domain.Functions.FunctionInvocation>();
     public DbSet<Harbora.Domain.Functions.FunctionCodeRevision> FunctionCodeRevisions => Set<Harbora.Domain.Functions.FunctionCodeRevision>();
     public DbSet<Harbora.Domain.Functions.FunctionCustomEventKey> FunctionCustomEventKeys => Set<Harbora.Domain.Functions.FunctionCustomEventKey>();
+    public DbSet<Harbora.Domain.Functions.FunctionQueueDeadLetter> FunctionQueueDeadLetters => Set<Harbora.Domain.Functions.FunctionQueueDeadLetter>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -872,12 +873,31 @@ public class HarboraDbContext : DbContext
             // two customers both having a "webhook" function is the normal case.
             e.HasIndex(x => new { x.AppId, x.Slug }).IsUnique();
             e.HasIndex(x => x.NextRunAt);
+            // F2: what the queue consumer's reconciliation pass reads every tick — every enabled
+            // queue-triggered function, platform-wide, with no session. Narrow on Trigger first: this
+            // is a tiny slice of an otherwise Http/Cron/Event-heavy table.
+            e.HasIndex(x => new { x.Trigger, x.IsEnabled });
             e.Property(x => x.Name).HasMaxLength(120).IsRequired();
             e.Property(x => x.Slug).HasMaxLength(64).IsRequired();
             e.Property(x => x.Route).HasMaxLength(200);
             e.Property(x => x.CronExpression).HasMaxLength(120);
             e.Property(x => x.EventKey).HasMaxLength(64);
+            e.Property(x => x.QueueName).HasMaxLength(255);
+            e.Property(x => x.QueueLastError).HasMaxLength(1000);
             e.HasOne<App>().WithMany().HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        });
+
+        // F2 (2026-08-21 functions-and-services plan, "Queue-triggered functions"): a message the
+        // consumer could not get accepted twice in a row. See the entity's own doc for why this is a
+        // separate table from FunctionInvocation rather than a flag on it.
+        b.Entity<Harbora.Domain.Functions.FunctionQueueDeadLetter>(e =>
+        {
+            e.HasIndex(x => new { x.FunctionId, x.CreatedAt });
+            e.Property(x => x.QueueName).HasMaxLength(255).IsRequired();
+            e.Property(x => x.Reason).HasMaxLength(1000);
+            e.HasOne<Harbora.Domain.Functions.FunctionDefinition>().WithMany()
+                .HasForeignKey(x => x.FunctionId).OnDelete(DeleteBehavior.Cascade);
             e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         });
 

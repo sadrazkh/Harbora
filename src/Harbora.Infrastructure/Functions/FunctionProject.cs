@@ -152,7 +152,7 @@ public static class FunctionProject
         {
             public required string FunctionName { get; init; }
 
-            /// <summary>"http", "cron" or "event".</summary>
+            /// <summary>"http", "cron", "event" or "queue".</summary>
             public required string Trigger { get; init; }
 
             /// <summary>The app's environment variables — where secrets live, never the code.</summary>
@@ -732,6 +732,7 @@ public static class FunctionProject
     {
         FunctionTrigger.Http => "http",
         FunctionTrigger.Cron => "cron",
+        FunctionTrigger.Queue => "queue",
         _ => "event"
     };
 

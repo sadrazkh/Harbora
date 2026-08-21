@@ -59,6 +59,40 @@ public sealed class FunctionInvoker(
     public async Task<Guid?> QueueAsync(
         Guid functionId, FunctionTrigger trigger, FunctionEvent? evt, CancellationToken ct)
     {
+        var invocation = await CreateInvocationAsync(functionId, trigger, evt, body: null, ct);
+        if (invocation is null) return null;
+
+        // Exclusive on the function rather than on the invocation: two calls of one function must not
+        // overlap, or a handler that takes longer than its own schedule quietly runs twice at once.
+        await jobs.EnqueueExclusiveAsync(
+            JobKind.FunctionInvoke, invocation.Id, invocation.FunctionId, invocation.WorkspaceId, ct);
+        return invocation.Id;
+    }
+
+    public async Task<FunctionInvocation?> InvokeNowAsync(
+        Guid functionId, FunctionTrigger trigger, FunctionEvent? evt, string? body, CancellationToken ct)
+    {
+        var invocation = await CreateInvocationAsync(functionId, trigger, evt, body, ct);
+        if (invocation is null) return null;
+
+        // Deliberately not the durable job queue: F2's queue consumer needs the verdict synchronously
+        // to decide ack/nack/dead-letter, on its own schedule rather than the job worker's — see this
+        // method's own doc on IFunctionInvoker. Still the exact same execution this invocation would
+        // have gotten through the queue: same address resolution, same secret, same 60s timeout, same
+        // failure-event publish.
+        await ExecuteAsync(invocation.Id, ct);
+
+        return await db.FunctionInvocations.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(i => i.Id == invocation.Id, ct);
+    }
+
+    /// <summary>
+    /// The guard checks and row-creation both <see cref="QueueAsync"/> and <see cref="InvokeNowAsync"/>
+    /// need before they diverge on how the call actually gets made.
+    /// </summary>
+    private async Task<FunctionInvocation?> CreateInvocationAsync(
+        Guid functionId, FunctionTrigger trigger, FunctionEvent? evt, string? body, CancellationToken ct)
+    {
         var fn = await db.FunctionDefinitions.IgnoreQueryFilters()
             .FirstOrDefaultAsync(f => f.Id == functionId, ct);
         if (fn is null || !fn.IsEnabled) return null;
@@ -92,15 +126,11 @@ public sealed class FunctionInvoker(
             AppId = app.Id,
             WorkspaceId = app.WorkspaceId,
             Trigger = trigger,
-            EnvelopeJson = FunctionProject.InvokeEnvelope(TriggerWord(trigger), evt)
+            EnvelopeJson = FunctionProject.InvokeEnvelope(TriggerWord(trigger), evt, body)
         };
         db.FunctionInvocations.Add(invocation);
         await db.SaveChangesAsync(ct);
-
-        // Exclusive on the function rather than on the invocation: two calls of one function must not
-        // overlap, or a handler that takes longer than its own schedule quietly runs twice at once.
-        await jobs.EnqueueExclusiveAsync(JobKind.FunctionInvoke, invocation.Id, fn.Id, app.WorkspaceId, ct);
-        return invocation.Id;
+        return invocation;
     }
 
     public async Task ExecuteAsync(Guid invocationId, CancellationToken ct)
@@ -247,6 +277,7 @@ public sealed class FunctionInvoker(
     {
         FunctionTrigger.Http => "http",
         FunctionTrigger.Cron => "cron",
+        FunctionTrigger.Queue => "queue",
         _ => "event"
     };
 }

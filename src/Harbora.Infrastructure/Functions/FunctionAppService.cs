@@ -53,8 +53,17 @@ public sealed class FunctionAppService(HarboraDbContext db, ISecretProtector pro
     /// <paramref name="editingId"/> rather than by the caller filtering the list, so a rename cannot
     /// collide with itself.
     /// </param>
+    /// <param name="availableQueueBrokers">
+    /// The RabbitMQ services a <see cref="FunctionTrigger.Queue"/> function may point at — already
+    /// scoped to this function's own workspace by the caller (<c>FunctionsController</c> reads it
+    /// with the ordinary, filtered <c>db.ManagedServices</c> query). Null skips the membership check
+    /// (existing callers, and every test above this one, that do not care about it); passing the real
+    /// set is what turns "the tenant-filter trap" from a runtime risk into a compile-time-required
+    /// argument at the one call site that matters.
+    /// </param>
     public static FunctionValidation Validate(
-        FunctionDefinition candidate, IReadOnlyList<FunctionDefinition> existing, Guid? editingId)
+        FunctionDefinition candidate, IReadOnlyList<FunctionDefinition> existing, Guid? editingId,
+        IReadOnlyCollection<Guid>? availableQueueBrokers = null)
     {
         var others = existing.Where(f => f.Id != editingId).ToList();
 
@@ -101,6 +110,23 @@ public sealed class FunctionAppService(HarboraDbContext db, ISecretProtector pro
                     return FunctionValidation.Fail(nameof(candidate.EventKey),
                         "Choose an event this function should run on.",
                         "رویدادی را که این فانکشن باید با آن اجرا شود انتخاب کنید.");
+                break;
+
+            case FunctionTrigger.Queue:
+                if (candidate.QueueServiceId is null)
+                    return FunctionValidation.Fail(nameof(candidate.QueueServiceId),
+                        "Choose the RabbitMQ service this function should consume from.",
+                        "سرویس RabbitMQ که این فانکشن باید از آن مصرف کند را انتخاب کنید.");
+
+                if (availableQueueBrokers is not null && !availableQueueBrokers.Contains(candidate.QueueServiceId.Value))
+                    return FunctionValidation.Fail(nameof(candidate.QueueServiceId),
+                        "That service is not a RabbitMQ service in this workspace.",
+                        "آن سرویس یک سرویس RabbitMQ در این ورک‌اسپیس نیست.");
+
+                if (string.IsNullOrWhiteSpace(candidate.QueueName))
+                    return FunctionValidation.Fail(nameof(candidate.QueueName),
+                        "Name the queue this function should consume.",
+                        "نام صفی که این فانکشن باید مصرف کند را بنویسید.");
                 break;
         }
 
@@ -154,6 +180,19 @@ public sealed class FunctionAppService(HarboraDbContext db, ISecretProtector pro
         db.FunctionInvocations
             .Where(i => i.FunctionId == functionId)
             .OrderByDescending(i => i.StartedAt)
+            .Take(take)
+            .ToListAsync(ct);
+
+    /// <summary>
+    /// F2's dead letters for one function, newest first — messages the queue consumer could not get
+    /// this function to accept twice in a row. Not pruned here: unlike a revision or an ordinary
+    /// invocation row, a dead letter represents something nobody has dealt with yet, so it stays until
+    /// a person discards it.
+    /// </summary>
+    public Task<List<FunctionQueueDeadLetter>> RecentDeadLettersAsync(Guid functionId, int take, CancellationToken ct) =>
+        db.FunctionQueueDeadLetters
+            .Where(d => d.FunctionId == functionId)
+            .OrderByDescending(d => d.CreatedAt)
             .Take(take)
             .ToListAsync(ct);
 

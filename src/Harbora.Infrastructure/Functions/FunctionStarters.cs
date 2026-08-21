@@ -40,6 +40,21 @@ public static class FunctionStarters
             }
             """,
 
+        (FunctionRuntime.CSharp, FunctionTrigger.Queue) =>
+            """
+            public static class Function
+            {
+                public static Task<FnResponse> Run(FnRequest req, FnContext ctx)
+                {
+                    // req.Body is the queue message exactly as it arrived. Throwing (or an unhandled
+                    // exception anywhere in here) fails this delivery — the panel nacks it once for a
+                    // retry, then parks it as a dead letter on this function's own page.
+                    ctx.Log($"Queue message: {req.Body}");
+                    return Task.FromResult(FnResponse.Empty());
+                }
+            }
+            """,
+
         (FunctionRuntime.CSharp, _) =>
             """
             public static class Function
@@ -68,6 +83,16 @@ public static class FunctionStarters
             }
             """,
 
+        (FunctionRuntime.JavaScript, FunctionTrigger.Queue) =>
+            """
+            export default async function (req, ctx) {
+              // req.body is the queue message exactly as it arrived. Throwing fails this delivery —
+              // the panel nacks it once for a retry, then parks it as a dead letter on this
+              // function's own page.
+              ctx.log('queue message:', req.body);
+            }
+            """,
+
         (FunctionRuntime.JavaScript, _) =>
             """
             export default async function (req, ctx) {
@@ -90,6 +115,15 @@ public static class FunctionStarters
 
             def run(req, ctx):
                 ctx['log']('ran at', datetime.datetime.utcnow().isoformat())
+            """,
+
+        (FunctionRuntime.Python, FunctionTrigger.Queue) =>
+            """
+            def run(req, ctx):
+                # req['body'] is the queue message exactly as it arrived. Raising fails this
+                # delivery — the panel nacks it once for a retry, then parks it as a dead letter on
+                # this function's own page.
+                ctx['log']('queue message:', req['body'])
             """,
 
         _ =>

@@ -24,7 +24,16 @@ public enum FunctionTrigger
 {
     Http = 0,
     Cron = 1,
-    Event = 2
+    Event = 2,
+
+    /// <summary>
+    /// F2 (2026-08-21 functions-and-services plan, "Queue-triggered functions"). A panel-side
+    /// <c>BackgroundService</c> — not an amqp client baked into the generated host — consumes one
+    /// attached RabbitMQ queue and calls the function through the same signed door every other
+    /// trigger uses, so this still ends up at the same one HTTP invocation every other trigger does.
+    /// See <see cref="FunctionDefinition.QueueServiceId"/> and <see cref="FunctionDefinition.QueueName"/>.
+    /// </summary>
+    Queue = 3
 }
 
 /// <summary>
@@ -66,6 +75,33 @@ public class FunctionDefinition : BaseEntity
 
     /// <summary>A key from <see cref="FunctionEvents"/> for an <see cref="FunctionTrigger.Event"/> function.</summary>
     public string? EventKey { get; set; }
+
+    /// <summary>
+    /// The attached broker (a <c>ManagedService</c> of type RabbitMQ, in this function's own
+    /// workspace — enforced at save time and re-checked by the consumer itself, the same
+    /// belt-and-suspenders the tenant-filter trap this codebase keeps re-learning calls for) a
+    /// <see cref="FunctionTrigger.Queue"/> function consumes from. Null for any other trigger.
+    /// </summary>
+    public Guid? QueueServiceId { get; set; }
+
+    /// <summary>The queue name on <see cref="QueueServiceId"/> a <see cref="FunctionTrigger.Queue"/>
+    /// function consumes. Declared (durable, non-exclusive) by the consumer itself if it does not
+    /// already exist. Null for any other trigger.</summary>
+    public string? QueueName { get; set; }
+
+    /// <summary>
+    /// Why the panel's queue consumer most recently could not stay connected to
+    /// <see cref="QueueServiceId"/> — null while it is connected, or has never tried. Mirrors
+    /// <c>EventSubscription.LastError</c>: the field <c>AttentionService</c> reads to feed a broker
+    /// that has gone quiet into the dashboard's existing broken-channel path
+    /// (<c>ChannelKind.QueueConsumer</c>), the same way a failing event subscription already does. A
+    /// broker being down is not the same fact as a message failing once it is delivered — that is
+    /// <see cref="FunctionQueueDeadLetter"/> — this is "nothing is being delivered at all".
+    /// </summary>
+    public string? QueueLastError { get; set; }
+
+    /// <summary>When the consumer last tried to (re)connect — mirrors <c>EventSubscription.LastAttemptAt</c>.</summary>
+    public DateTimeOffset? QueueLastAttemptAt { get; set; }
 
     /// <summary>The source, as typed.</summary>
     public string Code { get; set; } = string.Empty;
@@ -161,4 +197,41 @@ public class FunctionCodeRevision : BaseEntity
 
     /// <summary>The function's code exactly as it stood the moment this revision was written.</summary>
     public string Code { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// One queue message F2's consumer could not get a function to accept twice in a row — delivered,
+/// the function failed; redelivered once (the broker's own <c>Redelivered</c> flag, not a counter
+/// this class keeps), it failed again. Parked here rather than dropped and acked away, because a
+/// queue consumer that drops a failed message and moves on is the defect class this codebase has
+/// spent weeks removing: the customer believes their message was processed, and it never was.
+///
+/// <para>
+/// Surfaced on the function's own page (F2's acceptance criterion), not folded into
+/// <see cref="FunctionInvocation"/>: an invocation row is one HTTP call the platform made and can
+/// point at a specific attempt; a dead letter is the broker message itself, which by definition
+/// caused two of those attempts (or, for the first attempt, none — see
+/// <see cref="Harbora.Infrastructure.Functions.QueueFunctionConsumerHost"/>'s handling of a function
+/// that stopped being callable between the two attempts) and needs to hold the payload a person
+/// would want back to replay it by hand.
+/// </para>
+/// </summary>
+public class FunctionQueueDeadLetter : BaseEntity
+{
+    public Guid FunctionId { get; set; }
+    public Guid AppId { get; set; }
+    public Guid WorkspaceId { get; set; }
+
+    /// <summary>The queue this arrived on, copied at park time — <see cref="FunctionDefinition.QueueName"/>
+    /// may since have changed.</summary>
+    public string QueueName { get; set; } = string.Empty;
+
+    /// <summary>The message body exactly as the broker delivered it, so a person can inspect it or
+    /// replay it by hand once the handler is fixed.</summary>
+    public string Body { get; set; } = string.Empty;
+
+    /// <summary>Why the second attempt also failed — the invocation's own <c>Error</c>, copied so this
+    /// row explains itself without a join back to a row the invocation-retention sweeper may have
+    /// already pruned.</summary>
+    public string Reason { get; set; } = string.Empty;
 }
