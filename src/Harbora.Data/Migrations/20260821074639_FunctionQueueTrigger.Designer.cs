@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260821074639_FunctionQueueTrigger")]
+    partial class FunctionQueueTrigger
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1552,96 +1555,6 @@ namespace Harbora.Data.Migrations
                     b.ToTable("DeploymentLogs");
                 });
 
-            modelBuilder.Entity("Harbora.Domain.Email.AppEmailProvider", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AppId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("AttachOrder")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("EmailProviderId")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("HasUnpublishedChanges")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EmailProviderId");
-
-                    b.HasIndex("AppId", "EmailProviderId")
-                        .IsUnique();
-
-                    b.ToTable("AppEmailProviders");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Email.EmailProvider", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("EncryptedPassword")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("FromAddress")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("FromName")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Host")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("LastTestMessage")
-                        .HasColumnType("text");
-
-                    b.Property<bool?>("LastTestSucceeded")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTimeOffset?>("LastTestedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("Port")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("UseSsl")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Username")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("EmailProviders");
-                });
-
             modelBuilder.Entity("Harbora.Domain.Features.FeatureGrant", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1708,36 +1621,6 @@ namespace Harbora.Data.Migrations
                     b.HasIndex("FunctionId", "CreatedAt");
 
                     b.ToTable("FunctionCodeRevisions");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Functions.FunctionCustomEventKey", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Key")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<int>("TimesSeen")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("WorkspaceId", "Key")
-                        .IsUnique();
-
-                    b.ToTable("FunctionCustomEventKeys");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Functions.FunctionDefinition", b =>
@@ -5883,25 +5766,6 @@ namespace Harbora.Data.Migrations
                     b.Navigation("Deployment");
                 });
 
-            modelBuilder.Entity("Harbora.Domain.Email.AppEmailProvider", b =>
-                {
-                    b.HasOne("Harbora.Domain.Apps.App", "App")
-                        .WithMany("EmailProviders")
-                        .HasForeignKey("AppId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Harbora.Domain.Email.EmailProvider", "EmailProvider")
-                        .WithMany("Apps")
-                        .HasForeignKey("EmailProviderId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("App");
-
-                    b.Navigation("EmailProvider");
-                });
-
             modelBuilder.Entity("Harbora.Domain.Functions.FunctionCodeRevision", b =>
                 {
                     b.HasOne("Harbora.Domain.Functions.FunctionDefinition", null)
@@ -6374,8 +6238,6 @@ namespace Harbora.Data.Migrations
 
                     b.Navigation("Domains");
 
-                    b.Navigation("EmailProviders");
-
                     b.Navigation("EnvironmentVariables");
 
                     b.Navigation("StorageBuckets");
@@ -6393,11 +6255,6 @@ namespace Harbora.Data.Migrations
             modelBuilder.Entity("Harbora.Domain.Deployments.Deployment", b =>
                 {
                     b.Navigation("Logs");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Email.EmailProvider", b =>
-                {
-                    b.Navigation("Apps");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Git.GitProvider", b =>
