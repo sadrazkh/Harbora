@@ -26,4 +26,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- So tests/Harbora.Tests can validate the seeded catalogue (DbSeeder.BuiltInTemplates) the
+         same way ReadyAppCatalogTests validates the other one, against the real data rather than a
+         copy that could drift from it. -->
+    <InternalsVisibleTo Include="Harbora.Tests" />
+  </ItemGroup>
+
 </Project>

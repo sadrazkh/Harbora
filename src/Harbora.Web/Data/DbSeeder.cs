@@ -273,8 +273,14 @@ public sealed class DbSeeder(HarboraDbContext db)
     /// <summary>
     /// Templates are data, not code — each carries a JSON manifest the deploy engine reads.
     /// Adding a template later means inserting a row, not editing C#.
+    ///
+    /// Internal rather than private so tests/Harbora.Tests can validate this list directly (see
+    /// InternalsVisibleTo in Harbora.Web.csproj) — the same thing ReadyAppCatalogTests already does
+    /// for the other, versioned catalogue. Without that, a test could only check a hand-copied
+    /// duplicate of a manifest string, which is exactly the kind of copy that drifts unnoticed from
+    /// what actually seeds.
     /// </summary>
-    private static IEnumerable<AppTemplate> BuiltInTemplates() =>
+    internal static IEnumerable<AppTemplate> BuiltInTemplates() =>
     [
         new()
         {
@@ -368,6 +374,20 @@ public sealed class DbSeeder(HarboraDbContext db)
             Description = "Deploy a Laravel repository with production mode and a generated application key.",
             DescriptionFa = "استقرار مخزن لاراول با حالت تولید و کلید برنامهٔ تولیدشده.",
             ManifestJson = """{"source":"git","port":80,"healthPath":"/","env":[{"key":"APP_ENV","default":"production"},{"key":"APP_KEY","secret":true}],"tags":["PHP","Laravel","Git"],"documentation":"https://laravel.com/docs/deployment"}"""
+        },
+        new()
+        {
+            // F7 (2026-08-21 functions-and-services plan): "kind":"worker" is what makes this
+            // honestly deployable — a long-polling bot answers no HTTP, and before "kind" existed
+            // every template-created app was silently Web, which would have given this a public
+            // domain and a health check waiting forever for a response the bot never sends.
+            // TELEGRAM_BOT_TOKEN is "secret" + "required": a credential only the person deploying
+            // has, asked for on the deploy form and encrypted at rest rather than invented.
+            Key = "telegram-bot", Name = "Telegram Bot (long-polling)", NameFa = "ربات تلگرام (long-polling)",
+            Category = "automation", IsBuiltIn = true,
+            Description = "A background worker that long-polls Telegram for updates — no domain, no public URL, no webhook to configure. Bring a Node.js repository; set your bot token and deploy.",
+            DescriptionFa = "یک Worker پس‌زمینه که آپدیت‌های تلگرام را به روش long-polling می‌گیرد — بدون دامنه، بدون آدرس عمومی، بدون نیاز به تنظیم webhook. مخزن Node.js خودتان را بدهید، توکن ربات را وارد کنید و مستقر کنید.",
+            ManifestJson = """{"source":"git","kind":"worker","env":[{"key":"TELEGRAM_BOT_TOKEN","secret":true,"required":true,"description":"از @BotFather در خودِ تلگرام بگیرید."}],"tags":["Telegram","Bot","Automation","Node.js"],"website":"https://core.telegram.org/bots/api","documentation":"/learn/10-telegram-bot"}"""
         },
         new()
         {

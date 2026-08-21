@@ -118,4 +118,44 @@ public class TemplateSetupTests
 
         calls.Should().Be(2);
     }
+
+    [Fact]
+    public void A_required_secret_is_left_for_a_person_rather_than_generated()
+    {
+        // KAVENEGAR_API_KEY, TELEGRAM_BOT_TOKEN: credentials Harbora did not issue and cannot
+        // invent. Before "required" existed, "secret" alone meant "auto-generate one" — which
+        // would have deployed a bot authenticating with a random string Telegram never issued.
+        var plan = Plan("""{"source":"git","env":[{"key":"KAVENEGAR_API_KEY","secret":true,"required":true}]}""");
+
+        var variable = plan.Variables.Should().ContainSingle().Subject;
+        variable.Value.Should().BeNull();
+        variable.Secret.Should().BeTrue();
+        variable.NeedsAValue.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_required_secret_with_a_default_still_keeps_the_default()
+    {
+        // "required" only changes what happens when there is nothing to fall back on; a template
+        // author who set a default meant it, same as any other variable.
+        var plan = Plan("""{"source":"git","env":[{"key":"TOKEN","default":"fixed","secret":true,"required":true}]}""");
+
+        plan.Variables.Should().ContainSingle().Which.Value.Should().Be("fixed");
+    }
+
+    [Fact]
+    public void No_kind_in_the_manifest_resolves_to_web_like_every_template_before_it()
+    {
+        var plan = Plan("""{"image":"nginx:alpine","port":80}""");
+
+        plan.Kind.Should().Be(Harbora.Domain.Common.ServiceKind.Web);
+    }
+
+    [Fact]
+    public void A_worker_kind_resolves_to_the_worker_service_kind()
+    {
+        var plan = Plan("""{"source":"git","kind":"worker","env":[{"key":"TELEGRAM_BOT_TOKEN","secret":true,"required":true}]}""");
+
+        plan.Kind.Should().Be(Harbora.Domain.Common.ServiceKind.Worker);
+    }
 }

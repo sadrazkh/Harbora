@@ -161,4 +161,52 @@ public class TemplateManifestTests
         Errors("").Should().NotBeEmpty();
         Errors("{}").Should().NotBeEmpty();
     }
+
+    [Fact]
+    public void No_kind_at_all_is_not_an_error_and_means_web_by_omission()
+    {
+        // Every template written before "kind" existed. Refusing a missing "kind" would break the
+        // entire built-in catalogue on the day this shipped.
+        var manifest = Parse("""{"image":"nginx:alpine"}""");
+
+        manifest.Kind.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_worker_kind_is_read()
+    {
+        // The shape a long-polling Telegram bot needs: no inbound HTTP, so no domain should be
+        // assigned to it — a decision TemplateSetup/TemplateDeploymentService make from this value.
+        var manifest = Parse("""{"source":"git","kind":"worker"}""");
+
+        manifest.Kind.Should().Be("worker");
+    }
+
+    [Fact]
+    public void An_unknown_kind_is_refused_by_name()
+    {
+        Errors("""{"image":"nginx","kind":"background-job"}""")
+            .Should().Contain(e => e.Contains("background-job"));
+    }
+
+    [Fact]
+    public void A_required_secret_is_read_as_both()
+    {
+        // The gap "required" closes: a secret with no default that only the person deploying can
+        // know (a Kavenegar API key, a Telegram bot token), which "secret" alone always resolved as
+        // "auto-generate one" — silently wrong for a credential Harbora did not issue.
+        var manifest = Parse("""{"source":"git","env":[{"key":"KAVENEGAR_API_KEY","secret":true,"required":true}]}""");
+
+        var variable = manifest.Variables.Should().ContainSingle().Subject;
+        variable.Secret.Should().BeTrue();
+        variable.Required.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Required_with_no_secret_flag_defaults_to_false_like_every_manifest_before_it()
+    {
+        var manifest = Parse("""{"image":"nginx","env":[{"key":"NODE_ENV","default":"production"}]}""");
+
+        manifest.Variables.Should().ContainSingle().Which.Required.Should().BeFalse();
+    }
 }

@@ -1,3 +1,5 @@
+using Harbora.Domain.Common;
+
 namespace Harbora.Infrastructure.Templates;
 
 /// <summary>A variable an app should be created with.</summary>
@@ -6,10 +8,16 @@ namespace Harbora.Infrastructure.Templates;
 public sealed record PreparedVariable(string Key, string? Value, bool Secret, bool NeedsAValue, string? Description);
 
 /// <summary>What creating an app from a template should produce, besides the app itself.</summary>
+/// <param name="Kind">
+/// What the created app should be. Read from the manifest's own "kind"; defaults to
+/// <see cref="ServiceKind.Web"/>, which is what every template written before "kind" existed
+/// already got by never setting <c>App.Kind</c> at all.
+/// </param>
 public sealed record TemplateSetupPlan(
     IReadOnlyList<PreparedVariable> Variables,
     IReadOnlyList<string> VolumeMounts,
-    IReadOnlyList<string> RequiresServices);
+    IReadOnlyList<string> RequiresServices,
+    ServiceKind Kind);
 
 /// <summary>
 /// Turns a template manifest into the configuration an app is created with.
@@ -31,6 +39,13 @@ public static class TemplateSetup
             if (!string.IsNullOrEmpty(variable.Default))
                 return new PreparedVariable(variable.Key, variable.Default, variable.Secret, false, variable.Description);
 
+            // Required and secret: a third-party credential — a Kavenegar API key, a Telegram bot
+            // token — that only the person deploying has. Asked for like a plain required variable,
+            // but still masked and encrypted like any other secret; the two were previously the same
+            // flag, which made asking for one impossible without also inventing the other.
+            if (variable.Required && variable.Secret)
+                return new PreparedVariable(variable.Key, null, true, true, variable.Description);
+
             return variable.Secret
                 ? new PreparedVariable(variable.Key, generateSecret(), true, false, variable.Description)
                 // A plain variable with no default is something only the person deploying knows —
@@ -41,8 +56,22 @@ public static class TemplateSetup
         return new TemplateSetupPlan(
             variables,
             manifest.Volumes.Select(v => v.MountPath).Distinct(StringComparer.Ordinal).ToList(),
-            manifest.Requires);
+            manifest.Requires,
+            ResolveKind(manifest.Kind));
     }
+
+    /// <summary>
+    /// The manifest's "kind" string turned into the real enum, defaulting to <see cref="ServiceKind.Web"/>
+    /// for anything unrecognised — <see cref="TemplateManifest.TryParse"/> already refuses a "kind" that
+    /// is not one of the three known words, so by the time this runs the only unrecognised value
+    /// possible is null, which means "web" on purpose.
+    /// </summary>
+    private static ServiceKind ResolveKind(string? kind) => kind?.Trim().ToLowerInvariant() switch
+    {
+        "worker" => ServiceKind.Worker,
+        "private" => ServiceKind.Private,
+        _ => ServiceKind.Web
+    };
 
     /// <summary>
     /// What to tell someone after the app is created. Silence about a variable they still have to

@@ -155,4 +155,4 @@ GitHub و Gitea با امضای HMAC تأیید می‌شوند و GitLab با �
 
 ---
 
-برگشت به [فهرست](README.md)
+قدم بعدی: [ربات تلگرام (long-polling)](10-telegram-bot.md)

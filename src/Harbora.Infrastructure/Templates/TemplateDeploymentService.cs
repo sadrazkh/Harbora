@@ -230,6 +230,13 @@ public sealed class TemplateDeploymentService(
         }
 
         var setup = TemplateSetup.Prepare(manifest, () => ServiceCredentials.Generate());
+
+        // Before AssignAsync below: AppAddress.Decide reads app.Kind to decide whether this app gets
+        // a domain at all. A worker — a queue consumer, a Telegram bot polling instead of listening —
+        // takes no inbound traffic, and every template before "kind" existed left this at its default
+        // (Web), which is exactly what they were.
+        app.Kind = setup.Kind;
+
         foreach (var variable in setup.Variables)
         {
             var raw = variable.Value;

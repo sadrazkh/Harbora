@@ -6,9 +6,17 @@ namespace Harbora.Infrastructure.Templates;
 /// <summary>One environment variable a template declares.</summary>
 /// <param name="Key">The variable name the application reads.</param>
 /// <param name="Default">Value to start with, if any.</param>
-/// <param name="Secret">Stored encrypted, and generated when no default is given.</param>
+/// <param name="Secret">Stored encrypted. Generated when no default is given, unless <see cref="Required"/>.</param>
 /// <param name="Description">Shown next to the field, for values a person must supply.</param>
-public sealed record ManifestVariable(string Key, string? Default, bool Secret, string? Description);
+/// <param name="Required">
+/// A secret with no default that only the person deploying can know — a third-party API key or a
+/// bot token, never something Harbora can invent. Without this, a secret with no default is always
+/// auto-generated (right for an internal value like an application key; silently wrong for a
+/// Kavenegar API key or a Telegram bot token, which would deploy an app authenticating with a
+/// random string against a service that never issued it). Ignored when <see cref="Secret"/> is
+/// false — a plain variable with no default already asks.
+/// </param>
+public sealed record ManifestVariable(string Key, string? Default, bool Secret, string? Description, bool Required = false);
 
 /// <summary>A directory whose contents must survive a redeploy.</summary>
 public sealed record ManifestVolume(string MountPath);
@@ -30,6 +38,15 @@ public sealed class TemplateManifest
     public string? Source { get; init; }
     public string? Service { get; init; }
     public int? Port { get; init; }
+
+    /// <summary>
+    /// What kind of deployable unit this template makes, in the same vocabulary as
+    /// <c>Harbora.Domain.Common.ServiceKind</c>: "web" (the default — serves HTTP, gets a domain),
+    /// "private" (reachable only inside the project's network) or "worker" (a long-running process
+    /// with no inbound traffic — a queue consumer, or a Telegram bot polling instead of listening).
+    /// Null means "web", matching every template written before this existed.
+    /// </summary>
+    public string? Kind { get; init; }
     public string? HealthPath { get; init; }
     public string? DocumentationUrl { get; init; }
     public string? WebsiteUrl { get; init; }
@@ -94,6 +111,11 @@ public sealed class TemplateManifest
         if (port is < 1 or > 65535)
             problems.Add($"\"port\" must be between 1 and 65535, but is {port}.");
 
+        var kind = Text(root, "kind");
+        if (kind is { Length: > 0 }
+            && kind.ToLowerInvariant() is not ("web" or "private" or "worker"))
+            problems.Add($"\"kind\" must be \"web\", \"private\", or \"worker\", not \"{kind}\".");
+
         var variables = ReadVariables(root, problems);
         var volumes = ReadVolumes(root, problems);
         var requires = ReadRequires(root);
@@ -103,7 +125,7 @@ public sealed class TemplateManifest
 
         manifest = new TemplateManifest
         {
-            Image = image, Source = source, Service = service, Port = port,
+            Image = image, Source = source, Service = service, Port = port, Kind = kind,
             HealthPath = Text(root, "healthPath"),
             DocumentationUrl = Text(root, "documentation"),
             WebsiteUrl = Text(root, "website"),
@@ -143,7 +165,8 @@ public sealed class TemplateManifest
             }
 
             result.Add(new ManifestVariable(
-                key!, Text(item, "default"), Flag(item, "secret"), Text(item, "description")));
+                key!, Text(item, "default"), Flag(item, "secret"), Text(item, "description"),
+                Required: Flag(item, "required")));
         }
 
         return result;

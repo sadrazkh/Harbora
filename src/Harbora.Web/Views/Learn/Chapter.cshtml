@@ -40,8 +40,12 @@
     .learn-chapter-content ul, .learn-chapter-content ol { margin: 0 0 1rem 1.5rem; }
     .learn-chapter-content li { margin: 0 0 .35rem; }
     .learn-chapter-content img { max-width: 100%; border-radius: .75rem; border: 1px solid rgb(var(--line, 226 232 240)); margin: 1rem 0; }
-    .learn-chapter-content code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .85em; }
-    .learn-chapter-content pre { overflow-x: auto; border-radius: .75rem; padding: .85rem 1rem; margin: 0 0 1rem; }
+    @* Technical tokens — bot tokens, API keys, URLs, code — stay monospace and LTR even inside an
+       RTL chapter. Markdig's DisableHtml() (LearningLibrary) means a chapter's own markdown cannot
+       carry a dir="ltr" attribute, so this is the one place it can be set, and it then applies to
+       every chapter's code spans and blocks alike, not only new ones. *@
+    .learn-chapter-content code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .85em; direction: ltr; unicode-bidi: isolate; }
+    .learn-chapter-content pre { overflow-x: auto; border-radius: .75rem; padding: .85rem 1rem; margin: 0 0 1rem; direction: ltr; unicode-bidi: isolate; text-align: left; }
     .learn-chapter-content pre code { font-size: .8em; }
     .learn-chapter-content blockquote { margin: 0 0 1rem; padding-inline-start: 1rem; border-inline-start: 3px solid currentColor; opacity: .85; }
     .learn-chapter-content table { width: 100%; border-collapse: collapse; margin: 0 0 1rem; }

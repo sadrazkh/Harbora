@@ -9,7 +9,12 @@
     var versionsOpen = Harbora.Infrastructure.Navigation.PanelSections.StartsOpen(
         await PanelModes.GetAsync(), !ViewData.ModelState.IsValid);
     ViewData["Title"] = isFa ? $"استقرار {Model.Item.Name}" : $"Deploy {Model.Item.Name}";
-    var requiredInputs = Model.Item.Manifest.Variables.Where(v => string.IsNullOrWhiteSpace(v.Default) && !v.Secret).ToList();
+    // A secret with no default is normally auto-generated (an application key nobody needs to type).
+    // "required" marks the other case — a third-party credential nobody but the person deploying
+    // has, like a Kavenegar API key or a Telegram bot token — so it belongs on this form too,
+    // rendered as a password field rather than the plain text the non-secret ones get.
+    var requiredInputs = Model.Item.Manifest.Variables
+        .Where(v => string.IsNullOrWhiteSpace(v.Default) && (!v.Secret || v.Required)).ToList();
 
     var selectedVersion = Model.Versions.FirstOrDefault(v => v.Id == Model.Input.VersionId)
                           ?? Model.Versions.FirstOrDefault();
@@ -164,7 +169,7 @@
                     <div class="space-y-3">
                         @foreach (var variable in requiredInputs)
                         {
-                            <div><label class="form-label" for="var-@variable.Key">@variable.Key</label><input id="var-@variable.Key" name="Input.Variables[@variable.Key]" value="@(Model.Input.Variables.GetValueOrDefault(variable.Key))" dir="ltr" class="form-control" required /><p class="mt-1 text-xs text-ink-faint">@variable.Description</p></div>
+                            <div><label class="form-label" for="var-@variable.Key">@variable.Key</label><input id="var-@variable.Key" name="Input.Variables[@variable.Key]" type="@(variable.Secret ? "password" : "text")" autocomplete="off" value="@(Model.Input.Variables.GetValueOrDefault(variable.Key))" dir="ltr" class="form-control" required /><p class="mt-1 text-xs text-ink-faint">@variable.Description</p></div>
                         }
                     </div>
                 </div>
