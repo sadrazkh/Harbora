@@ -231,8 +231,10 @@
   <data name="Alert channel: {0}"><value>کانال هشدار: {0}</value></data>
   <data name="Backup delivery: {0}"><value>تحویل بکاپ: {0}</value></data>
   <data name="Event subscription: {0}"><value>اشتراک رویداد: {0}</value></data>
+  <data name="Queue consumer: {0}"><value>مصرف‌کننده‌ی صف: {0}</value></data>
   <data name="Open alerts"><value>باز کردن هشدارها</value></data>
   <data name="Open event subscriptions"><value>باز کردن اشتراک‌های رویداد</value></data>
+  <data name="Open functions"><value>باز کردن فانکشن‌ها</value></data>
   <data name="{0} ({1}) keeps failing"><value>{0} ({1}) مدام شکست می‌خورد</value></data>
   <data name="Its last two runs both failed."><value>دو اجرای آخرش هر دو ناموفق بودند.</value></data>
   <data name="Open the function"><value>باز کردن فانکشن</value></data>
