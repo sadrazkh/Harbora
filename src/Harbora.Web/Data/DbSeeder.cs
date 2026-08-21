@@ -391,6 +391,25 @@ public sealed class DbSeeder(HarboraDbContext db)
         },
         new()
         {
+            // F8 (2026-08-21 functions-and-services plan): sends OTP/SMS through Kavenegar's own
+            // REST API — no SDK dependency, no platform-side SMS service, no credential storage
+            // beyond this one env var. KAVENEGAR_API_KEY is "secret" + "required" for the same
+            // reason the bot token above is: Harbora cannot invent a third party's credential.
+            // Receiving Kavenegar's delivery-status callbacks is covered in the guide via a public
+            // Harbora Function (F1) rather than a second template — Functions are not
+            // template-deployed, and a callback receiver is exactly what a function is for.
+            Key = "kavenegar-sms", Name = "Kavenegar SMS Starter", NameFa = "شروع با پیامک کاوه‌نگار",
+            Category = "automation", IsBuiltIn = true,
+            Description = "A minimal web app that sends OTP/SMS through Kavenegar's REST API — no SDK, one env var. Bring a Node.js repository; set your API key and deploy.",
+            DescriptionFa = "یک اپ وب مینیمال که با REST API کاوه‌نگار پیامک/OTP می‌فرستد — بدون SDK، فقط یک متغیر محیطی. مخزن Node.js خودتان را بدهید، کلید API را وارد کنید و مستقر کنید.",
+            // Port 3000, matching the plain "node" starter above rather than inventing a second
+            // convention: the guide's example listens on process.env.PORT with a 3000 fallback, and
+            // must agree with whatever port this manifest declares — a template's own health check
+            // is the first thing that fails if the two ever disagree.
+            ManifestJson = """{"source":"git","port":3000,"healthPath":"/","env":[{"key":"KAVENEGAR_API_KEY","secret":true,"required":true,"description":"از پنل Kavenegar، بخش وب‌سرویس."}],"tags":["Kavenegar","SMS","OTP","Node.js"],"website":"https://kavenegar.com/rest.html","documentation":"/learn/11-kavenegar-sms"}"""
+        },
+        new()
+        {
             Key = "postgres", Name = "PostgreSQL", NameFa = "PostgreSQL",
             Category = "database", IsBuiltIn = true,
             Description = "Managed PostgreSQL with generated credentials, private networking and persistent storage.",
