@@ -107,6 +107,20 @@ found.
 4. **Email is phase 1 of HARBORA-0038 exactly:** BYO SMTP providers per workspace, injected into
    apps as env vars; a Dev Inbox (catch-all viewer) for non-production; **no Harbora-run MTA** —
    that is HARBORA-0039, deferred. The backlog item's own acceptance criteria govern.
+
+   > **CORRECTED 2026-08-21, after F6 shipped.** This decision, and the market note above calling
+   > customer email "completely absent", were both wrong: **Harbora has run its own MTA since
+   > 2026-08-11.** `MailController` / `MailPlatformService` / `StalwartClient` / `MailServer` /
+   > `MailDomain` deploy `stalwartlabs/stalwart:v0.16`, host real mailboxes on customer domains, and
+   > bill hourly (commit `a7dd769c`, "Add managed custom-domain email service"). The audit's own
+   > "no mailbox hosting in core" recommendation was already overtaken by the code.
+   >
+   > F6 is still right and still shipped: BYO-SMTP relay for an *application* sending mail is a
+   > different product from hosting a customer's *mailboxes*, and they share no tables or routes.
+   > But HARBORA-0038/0039's phase split no longer describes reality, and the backlog and doc 10
+   > need reconciling against what exists. This is the twentieth instance in this programme of
+   > assuming a capability missing when it already existed — and the fourth inside a plan that
+   > opens by warning against exactly that.
 5. **DNS v1 is BYO Cloudflare token per workspace**, managing records for domains the workspace
    already uses, reusing the existing Cloudflare client shape. Running authoritative DNS
    (PowerDNS) is deferred and stated as such — it is an ops commitment, not a feature.
