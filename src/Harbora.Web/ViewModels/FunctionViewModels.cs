@@ -34,6 +34,18 @@ public sealed record FunctionAppFormViewModel(
     FunctionAppFormModel Form, IReadOnlyList<FunctionSizeOption> Sizes);
 
 /// <summary>One function on its app's page.</summary>
+/// <param name="IsPublic">
+/// Whether this <see cref="FunctionTrigger.Http"/> function answers a visitor directly — see
+/// <c>FunctionDefinition.IsPublic</c>. Meaningless (always false) for any other trigger, which never
+/// sits behind the visitor route this flag gates. Owner visibility follow-up (2026-08-21
+/// functions-and-services plan): F1 shipped this toggle but the function list never showed its state,
+/// which is most of why the owner could not find it.
+/// </param>
+/// <param name="FunctionUrl">
+/// The exact address a visitor would use to reach this function, copy-ready — the same computation
+/// <c>FunctionEditViewModel.FunctionUrl</c> already makes, so the list and the editor can never
+/// disagree. Null unless <paramref name="IsPublic"/> and the app has a host.
+/// </param>
 public sealed record FunctionRow(
     Guid Id, string Name, string Slug, FunctionTrigger Trigger, string Route,
     string? CronExpression, string? EventKey, bool IsEnabled, bool HasUnpublishedChanges,
@@ -45,7 +57,9 @@ public sealed record FunctionRow(
     /// or never tried. Mirrors <c>FunctionDefinition.QueueLastError</c>.</summary>
     string? QueueLastError = null,
     /// <summary>F2: how many dead letters are waiting on this function's own page.</summary>
-    int DeadLetterCount = 0);
+    int DeadLetterCount = 0,
+    bool IsPublic = false,
+    string? FunctionUrl = null);
 
 /// <summary>One RabbitMQ service a Queue-triggered function may consume from — this workspace's own,
 /// already filtered, so the editor's dropdown can never even offer another workspace's.</summary>

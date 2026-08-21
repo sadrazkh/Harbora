@@ -236,7 +236,14 @@ public sealed class FunctionsController(
                     ? $"{f.QueueName} @ {brokerNames.FirstOrDefault(b => b.Id == f.QueueServiceId)?.Name ?? "?"}"
                     : null,
                 QueueLastError: f.QueueLastError,
-                DeadLetterCount: deadLetterCounts.TryGetValue(f.Id, out var c) ? c : 0)).ToList()));
+                DeadLetterCount: deadLetterCounts.TryGetValue(f.Id, out var c) ? c : 0,
+                // Owner visibility follow-up (2026-08-21 functions-and-services plan): the same
+                // computation EditFunction makes for its own copy-ready URL, so the list and the editor
+                // can never show two different addresses for the same function.
+                IsPublic: f.IsPublic,
+                FunctionUrl: f.IsPublic && host is { Length: > 0 } && f.Trigger == FunctionTrigger.Http
+                    ? $"https://{host}/{FunctionProject.RouteFor(f)}"
+                    : null)).ToList()));
     }
 
     [HttpPost("{id:guid}/publish")]

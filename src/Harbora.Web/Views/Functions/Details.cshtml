@@ -80,6 +80,33 @@
                     {
                         case FunctionTrigger.Http:
                             <code class="text-xs">/@fn.Route</code>
+                            @* Owner visibility follow-up (2026-08-21 functions-and-services plan): F1
+                               shipped the Public/Protected toggle but this list never showed which one
+                               a function actually was — most of why the owner could not find it.
+                               data-fn-access is the language-independent hook, same idiom as
+                               data-fn-state two columns over. *@
+                            @if (fn.IsPublic)
+                            {
+                                <div class="mt-1 flex flex-wrap items-center gap-1.5" data-fn-access="public">
+                                    <span class="rounded-md bg-ok-soft px-1.5 py-0.5 text-[10px] font-medium text-ok">@(isFa ? "عمومی" : "Public")</span>
+                                    @if (fn.FunctionUrl is { } rowUrl)
+                                    {
+                                        <code class="truncate text-[11px] text-ink-faint">@rowUrl</code>
+                                        <button type="button" class="text-ink-faint hover:text-ink" data-copy-url="@rowUrl" title="@(isFa ? "کپی" : "Copy")">
+                                            <i data-lucide="copy" class="h-3 w-3"></i>
+                                        </button>
+                                    }
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="mt-1" data-fn-access="private">
+                                    <span class="rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-ink-faint">@(isFa ? "خصوصی" : "Private")</span>
+                                    <div class="mt-0.5 text-[11px] text-ink-faint">
+                                        @(isFa ? "فقط پنل می‌تواند این فانکشن را صدا بزند." : "Only the panel can call this function.")
+                                    </div>
+                                </div>
+                            }
                             break;
                         case FunctionTrigger.Cron:
                             <code class="text-xs">@fn.CronExpression</code>
@@ -145,3 +172,17 @@
         </tbody>
     </table>
 </div>
+
+@section Scripts {
+<script>
+    // One delegated listener rather than one per row: the table can hold any number of public
+    // functions, each with its own copy button, and this is the same "read the value straight off
+    // the button, nothing typed by hand that could drift" idiom EditFunction.cshtml already uses for
+    // the single URL on a function's own page.
+    document.addEventListener('click', function (e) {
+        var button = e.target.closest('[data-copy-url]');
+        if (!button) return;
+        navigator.clipboard?.writeText(button.dataset.copyUrl);
+    });
+</script>
+}
