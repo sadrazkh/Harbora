@@ -146,22 +146,57 @@
                     if (Model.FunctionUrl is { } functionUrl)
                     {
                         <div class="connection-string" data-function-url>
-                            <code id="functionUrl" dir="ltr">@functionUrl</code>
+                            <code id="functionUrl" dir="ltr" class="text-sm font-semibold">@functionUrl</code>
                             <button type="button" data-copy-function-url title="@(isFa ? "کپی" : "Copy")">
                                 <i data-lucide="copy" class="h-4 w-4"></i>
                             </button>
                         </div>
+                        @* The owner made this, made it public, published it, and still could not tell
+                           whether it worked — because the box that showed the address never said what it
+                           was for, and there was nothing to run to prove it. Both gaps close here: one
+                           sentence naming the ordinary uses (a webhook, a payment callback, a Telegram
+                           bot), and — once the address is actually live — a one-line curl a person can
+                           paste without composing anything by hand. *@
+                        <p class="text-xs text-ink-muted" data-function-url-usage>
+                            @(isFa
+                                ? "همین آدرس را به یک وب‌هوک، بازگشت پرداخت یا ربات تلگرام بدهید — هرکسی که آن را داشته باشد می‌تواند فانکشن شما را صدا بزند."
+                                : "Give this exact address to a webhook, a payment callback, or a Telegram bot — anyone who has it can call your function.")
+                        </p>
                         @* The address is real the moment it is copied, but it only answers once the image
                            behind it is the one on screen — exposure ships on publish like every other
                            function change. Saying so here is the same honesty the "Run now" panel already
-                           gives the published-code question. *@
+                           gives the published-code question. Same warn-soft chip as the "never-published" /
+                           "stale" notes beside Run now further down this page — one visual language for
+                           "this button/address will not do what it looks like it does yet", not a second one
+                           invented here. *@
                         @if (!Model.IsPublished || Model.HasUnpublishedChanges)
                         {
-                            <p class="text-xs text-warn" data-function-url-not-live>
+                            <p class="rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn" data-function-url-not-live>
                                 @(isFa
                                     ? "تا وقتی «انتشار» را نزنید، این آدرس پاسخی نمی‌دهد."
                                     : "This address answers nothing until you press Publish.")
                             </p>
+                        }
+                        else
+                        {
+                            @* Only shown once the deployed image is actually the one this page describes —
+                               a curl against an unpublished or stale address would fail for a reason that
+                               has nothing to do with the command, which is exactly the confusion this whole
+                               feature exists to remove. .cli-callout is the existing "here is a command,
+                               copy it" idiom (Apps/Create.cshtml's `harbora deploy <slug>`), reused rather
+                               than inventing a second box style for the same idea. *@
+                            <div class="cli-callout" data-function-url-curl>
+                                <i data-lucide="terminal-square" class="h-5 w-5"></i>
+                                <div>
+                                    <strong>@(isFa ? "همین حالا امتحانش کنید" : "Try it right now")</strong>
+                                    <code dir="ltr" data-copy-text>curl -X POST @functionUrl</code>
+                                    <small>
+                                        @(isFa
+                                            ? "این را در ترمینال کپی کنید تا پاسخ فانکشن‌تان را ببینید."
+                                            : "Copy this into a terminal and watch your function answer.")
+                                    </small>
+                                </div>
+                            </div>
                         }
                     }
                     else
@@ -455,6 +490,15 @@
             navigator.clipboard?.writeText(code.textContent.trim());
         });
     })();
+
+    // The ready-to-run curl line beside it — click-to-copy, the same idiom Apps/Details.cshtml and
+    // Templates/Deploy.cshtml already use for a single command nobody should have to retype by hand.
+    document.querySelectorAll('[data-copy-text]').forEach(function (el) {
+        el.style.cursor = 'copy';
+        el.addEventListener('click', function () {
+            navigator.clipboard?.writeText(el.textContent.trim());
+        });
+    });
 
     // Draft protection. Today's only total failure: no dirty tracking, no beforeunload guard, a
     // Cancel that discards silently, and — sharper than it looks — Run now navigates away too

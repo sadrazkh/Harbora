@@ -177,6 +177,71 @@ public class FunctionPublicUrlHttpTests(HarboraHttpFixture fixture)
             "the address is shown copy-ready before publish, but it must not be mistaken for already live");
     }
 
+    // ----------------------------------------------- what to do with it, and a one-line proof of life
+
+    [Fact]
+    public async Task A_public_functions_url_box_says_what_to_do_with_it()
+    {
+        var world = GivenFunctionApp("fn-pub-usage", isPublic: true, host: "fn-pub-usage.example.test");
+        Panel.GivenUser(fixture.WorkspaceId, "fn-pub-usage@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.171", "fn-pub-usage@example.com");
+
+        var document = await ParseAsync(
+            await (await client.GetAsync($"/functions/{world.AppId}/{world.FunctionId}")).Content.ReadAsStringAsync());
+
+        document.QuerySelector("[data-function-url-usage]").Should().NotBeNull(
+            "the box must say in one sentence what this address is for — a webhook, a payment callback, a Telegram bot — not just show it");
+    }
+
+    [Fact]
+    public async Task A_live_public_functions_editor_shows_a_ready_to_run_curl_command()
+    {
+        var world = GivenFunctionApp("fn-pub-curl", isPublic: true, host: "fn-pub-curl.example.test");
+        Panel.Seed(db => db.Apps.First(a => a.Id == world.AppId).ActiveDeploymentId = Guid.CreateVersion7());
+        Panel.GivenUser(fixture.WorkspaceId, "fn-pub-curl@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.172", "fn-pub-curl@example.com");
+
+        var document = await ParseAsync(
+            await (await client.GetAsync($"/functions/{world.AppId}/{world.FunctionId}")).Content.ReadAsStringAsync());
+
+        var curl = document.QuerySelector("[data-function-url-curl] code");
+        curl.Should().NotBeNull(
+            "somebody testing the address must be able to copy one line and see their function answer");
+        curl!.TextContent.Trim().Should().Be("curl -X POST https://fn-pub-curl.example.test/hello",
+            "the example must call the exact address the box shows, nothing composed separately");
+    }
+
+    [Fact]
+    public async Task A_public_but_unpublished_functions_editor_shows_no_curl_command()
+    {
+        // Never published at all (IsPublished false) — the world helper leaves ActiveDeploymentId
+        // null, so there is no running container the curl could possibly reach yet.
+        var world = GivenFunctionApp("fn-pub-nocurl", isPublic: true, host: "fn-pub-nocurl.example.test");
+        Panel.GivenUser(fixture.WorkspaceId, "fn-pub-nocurl@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.173", "fn-pub-nocurl@example.com");
+
+        var document = await ParseAsync(
+            await (await client.GetAsync($"/functions/{world.AppId}/{world.FunctionId}")).Content.ReadAsStringAsync());
+
+        document.QuerySelector("[data-function-url-curl]").Should().BeNull(
+            "a curl example that cannot possibly answer yet would repeat the owner's own mistake, one step earlier");
+    }
+
+    [Fact]
+    public async Task A_protected_functions_editor_has_no_usage_sentence_or_curl_example()
+    {
+        var world = GivenFunctionApp("fn-pub-hidden-extras", isPublic: false, host: "fn-pub-hidden-extras.example.test");
+        Panel.GivenUser(fixture.WorkspaceId, "fn-pub-hidden-extras@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.174", "fn-pub-hidden-extras@example.com");
+
+        var document = await ParseAsync(
+            await (await client.GetAsync($"/functions/{world.AppId}/{world.FunctionId}")).Content.ReadAsStringAsync());
+
+        document.QuerySelector("[data-function-url-usage]").Should().BeNull(
+            "there is nothing to give a webhook when nobody outside the panel can reach this function");
+        document.QuerySelector("[data-function-url-curl]").Should().BeNull();
+    }
+
     // ------------------------------------------------------ public-call history points at the logs
 
     [Fact]

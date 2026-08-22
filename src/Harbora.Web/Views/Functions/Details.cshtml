@@ -88,7 +88,12 @@
                             @if (fn.IsPublic)
                             {
                                 <div class="mt-1 flex flex-wrap items-center gap-1.5" data-fn-access="public">
-                                    <span class="rounded-md bg-ok-soft px-1.5 py-0.5 text-[10px] font-medium text-ok">@(isFa ? "عمومی" : "Public")</span>
+                                    @* An icon alongside the colour, not instead of it — the two badges must
+                                       still read apart from each other for someone who cannot rely on colour
+                                       alone. globe-2 / lock are both already imported in main.ts. *@
+                                    <span class="inline-flex items-center gap-1 rounded-md bg-ok-soft px-1.5 py-0.5 text-[10px] font-medium text-ok">
+                                        <i data-lucide="globe-2" class="h-3 w-3"></i>@(isFa ? "عمومی" : "Public")
+                                    </span>
                                     @if (fn.FunctionUrl is { } rowUrl)
                                     {
                                         <code class="truncate text-[11px] text-ink-faint">@rowUrl</code>
@@ -101,7 +106,9 @@
                             else
                             {
                                 <div class="mt-1" data-fn-access="private">
-                                    <span class="rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-ink-faint">@(isFa ? "خصوصی" : "Private")</span>
+                                    <span class="inline-flex items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-ink-faint">
+                                        <i data-lucide="lock" class="h-3 w-3"></i>@(isFa ? "خصوصی" : "Private")
+                                    </span>
                                     <div class="mt-0.5 text-[11px] text-ink-faint">
                                         @(isFa ? "فقط پنل می‌تواند این فانکشن را صدا بزند." : "Only the panel can call this function.")
                                     </div>
