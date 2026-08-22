@@ -22,9 +22,12 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import {
   bracketMatching, indentOnInput, indentUnit, syntaxHighlighting, HighlightStyle, StreamLanguage,
 } from '@codemirror/language';
-import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+import {
+  autocompletion, closeBrackets, closeBracketsKeymap, completeAnyWord,
+} from '@codemirror/autocomplete';
 import { search, searchKeymap, openSearchPanel } from '@codemirror/search';
 import { tags as t } from '@lezer/highlight';
+import { csharpContractCompletions, csharpWordCompletion, functionSnippets } from './functionEditorCompletions';
 
 const props = defineProps<{
   /** `FunctionRuntime`'s C# name — "CSharp" | "JavaScript" | "Python", never a number, so a
@@ -47,24 +50,53 @@ const view = shallowRef<EditorView | null>(null);
  * Only the grammar this page's runtime needs. A dynamic `import()` inside an already-lazy
  * component: Vite still emits one chunk per branch, so `@codemirror/lang-javascript` is never
  * fetched by a Python function app's editor, and vice versa.
+ *
+ * The completion wiring lives in the same branches, for the same reason: `javascriptLanguage`
+ * and `pythonLanguage` only exist once their package has actually loaded, so attaching completion
+ * data to them anywhere outside this function would force a static top-level import of both — the
+ * exact per-runtime chunk split this function exists to avoid. `autocompletion()` itself (the
+ * extension that actually shows the popup) is added once in `onMounted`, shared by all three.
  */
 async function loadLanguage(runtime: string): Promise<Extension> {
   switch (runtime) {
     case 'JavaScript': {
-      const { javascript } = await import('@codemirror/lang-javascript');
-      return javascript();
+      const { javascript, javascriptLanguage } = await import('@codemirror/lang-javascript');
+      return [
+        javascript(),
+        // `javascript()` above already registered local-variable and global keyword/snippet
+        // completion as language data — this only adds what it doesn't know about: this app's own
+        // handler shape, and a whole-buffer word source for identifiers neither one recognises.
+        javascriptLanguage.data.of({ autocomplete: completeAnyWord }),
+        javascriptLanguage.data.of({ autocomplete: functionSnippets(runtime, fa) }),
+      ];
     }
     case 'Python': {
-      const { python } = await import('@codemirror/lang-python');
-      return python();
+      const { python, pythonLanguage } = await import('@codemirror/lang-python');
+      return [
+        python(),
+        pythonLanguage.data.of({ autocomplete: completeAnyWord }),
+        pythonLanguage.data.of({ autocomplete: functionSnippets(runtime, fa) }),
+      ];
     }
     case 'CSharp':
     default: {
       // CodeMirror 6 has no first-class (Lezer) C# grammar; the legacy stream-mode C-like parser
       // is what the measurements this island was sized against actually used. Good highlighting,
-      // not Lezer-quality — and, of the three, the cheapest to load.
+      // not Lezer-quality — and, of the three, the cheapest to load. It is not silent on
+      // completion either, though: `csharp`'s own mode config carries a flat keyword/type/atom
+      // word list as language data (see `functionEditorCompletions.ts`'s module comment for how
+      // this was confirmed, not assumed), which `StreamLanguage.define` below surfaces on its own.
+      // `csharpContractCompletions()` adds only what that generic list cannot know — this app's
+      // own contract type names — never dressed up as scope-aware completion.
       const { csharp } = await import('@codemirror/legacy-modes/mode/clike');
-      return StreamLanguage.define(csharp);
+      const csharpLanguage = StreamLanguage.define(csharp);
+      return [
+        csharpLanguage,
+        // Not plain `completeAnyWord`: see `csharpWordCompletion`'s own comment for why the C#
+        // branch needs the one exclusion the other two runtimes don't.
+        csharpLanguage.data.of({ autocomplete: csharpWordCompletion }),
+        csharpLanguage.data.of({ autocomplete: [...csharpContractCompletions(), ...functionSnippets(runtime, fa)] }),
+      ];
     }
   }
 }
@@ -117,6 +149,48 @@ const editorTheme = EditorView.theme({
   },
   '.cm-searchMatch': { backgroundColor: 'rgb(var(--warn-soft))' },
   '.cm-searchMatch-selected': { backgroundColor: 'rgb(var(--warn) / 0.35)' },
+  // The autocomplete popup (`autocompletion()`), themed the same way the search panel above
+  // already is rather than left at CodeMirror's stock light-blue-on-white. `direction: ltr` is
+  // belt-and-braces: the popup mounts inside this component's own `dir="ltr"` host (see the
+  // template) so it already inherits that, but a CSS property survives even if some future change
+  // moves the tooltip's parent, where a DOM attribute would not.
+  '.cm-tooltip.cm-tooltip-autocomplete': {
+    direction: 'ltr',
+    backgroundColor: 'rgb(var(--surface-2))',
+    border: '1px solid rgb(var(--border-strong))',
+    borderRadius: '8px',
+    overflow: 'hidden',
+  },
+  '.cm-tooltip.cm-tooltip-autocomplete > ul': {
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  },
+  // `!important` here for the same reason it's already used on `.cm-selectionBackground` above:
+  // CodeMirror's own base theme sets this same selector (scoped `&light`/`&dark`) and normal
+  // specificity does not win against it.
+  '.cm-tooltip-autocomplete ul li[aria-selected]': {
+    backgroundColor: 'rgb(var(--brand) / 0.22) !important',
+    color: 'rgb(var(--text)) !important',
+  },
+  '.cm-completionIcon': { color: 'rgb(var(--text-faint))' },
+  // CodeMirror's own base theme has an icon glyph for every `type` it anticipates except the one
+  // this file adds (`snippet`, used by the function-shape completions in
+  // `functionEditorCompletions.ts`) — without this, those three rows would just show blank icon
+  // padding instead of nothing being wrong.
+  '.cm-completionIcon-snippet': { '&:after': { content: "'»'" } },
+  '.cm-completionLabel': { color: 'rgb(var(--text))' },
+  '.cm-completionDetail': { color: 'rgb(var(--text-faint))', fontStyle: 'normal' },
+  '.cm-completionMatchedText': {
+    color: 'rgb(var(--brand-text))',
+    textDecoration: 'none',
+    fontWeight: '600',
+  },
+  '.cm-tooltip.cm-completionInfo': {
+    direction: fa ? 'rtl' : 'ltr',
+    backgroundColor: 'rgb(var(--surface-2))',
+    color: 'rgb(var(--text))',
+    border: '1px solid rgb(var(--border-strong))',
+    borderRadius: '8px',
+  },
 });
 
 // Token colours, mapped onto the same semantic tokens the rest of the panel uses rather than a
@@ -184,6 +258,11 @@ onMounted(async () => {
       indentOnInput(),
       bracketMatching(),
       closeBrackets(),
+      // Word/context completion plus whatever the loaded language contributed above (real
+      // local-variable + keyword completion for JS/Python, a static keyword+snippet list for C# —
+      // see `loadLanguage`). One shared instance: the difference between runtimes is entirely in
+      // which `autocomplete` language-data sources `language` registered, not in this extension.
+      autocompletion(),
       search({ top: true }),
       syntaxHighlighting(highlightStyle, { fallback: true }),
       indentUnit.of('    '),
