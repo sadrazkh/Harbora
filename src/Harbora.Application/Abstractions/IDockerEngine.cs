@@ -29,6 +29,28 @@ public interface IDockerEngine
     Task<IReadOnlyList<int>> GetImagePortsAsync(string imageRef, CancellationToken ct);
 
     Task<string> RunContainerAsync(DockerRunRequest request, CancellationToken ct);
+
+    /// <summary>
+    /// <see cref="RunContainerAsync"/> split into its own "create" half — the container exists (Docker
+    /// would list it, in a created-not-running state) but its main process has not run. This is the
+    /// one gap C2 (2026-08-22 config-delivery plan) needs: a config-file override must be written
+    /// before the app's own process starts, or the app has already read whatever the image baked in.
+    ///
+    /// <para>
+    /// Defaults to <see cref="NotSupportedException"/> — the same idiom as <see cref="ExecAsync"/> and
+    /// <see cref="GetLogsSinceAsync"/>: an engine that cannot honestly split create from start must say
+    /// so, rather than silently starting the container anyway. Today only the local engine
+    /// (<c>DockerEngine</c>) overrides this; a remote node's caller checks <c>server.IsLocal</c> itself
+    /// and fails the deployment with an actionable message before ever reaching here.
+    /// </para>
+    /// </summary>
+    Task<string> CreateContainerAsync(DockerRunRequest request, CancellationToken ct) =>
+        throw new NotSupportedException($"{GetType().Name} does not support creating a container without starting it.");
+
+    /// <summary>Starts a container previously created with <see cref="CreateContainerAsync"/>.</summary>
+    Task StartContainerAsync(string containerId, CancellationToken ct) =>
+        throw new NotSupportedException($"{GetType().Name} does not support starting a previously created container.");
+
     Task StopContainerAsync(string containerId, CancellationToken ct);
     Task RemoveContainerAsync(string containerId, bool force, CancellationToken ct);
     Task RestartContainerAsync(string containerId, CancellationToken ct);

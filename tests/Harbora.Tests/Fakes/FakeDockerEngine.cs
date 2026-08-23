@@ -313,6 +313,48 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// <summary>Every run request, so tests can assert on ports, env, labels and volumes.</summary>
     public List<DockerRunRequest> RunRequests { get; } = [];
 
+    private readonly ConcurrentDictionary<string, DockerRunRequest> _created = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// C2 (2026-08-22 config-delivery plan): the create/start split <see cref="RunContainerAsync"/>
+    /// itself does not use, so every existing test asserting on <c>Calls</c>/<c>RunRequests</c> for
+    /// the ordinary path is unaffected. A created container is listed (as Docker itself would list
+    /// one that exists but has not started) in a "created" state distinct from
+    /// <see cref="StartedContainerState"/>, so the pipeline's own cleanup-by-name path can still find
+    /// and remove it if a config override fails between create and start.
+    /// </summary>
+    public Task<string> CreateContainerAsync(DockerRunRequest request, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        Record(nameof(CreateContainerAsync), request.ContainerName);
+        if (RunFailure is not null) throw RunFailure;
+
+        var id = $"container-{Interlocked.Increment(ref _idSeq):D4}-{request.ContainerName}";
+        _created[id] = request;
+        RunRequests.Add(request);
+        if (!DropStartedContainers)
+            _containers[id] = new ContainerInfo(
+                id, request.ContainerName, request.Image, "created", "Created",
+                request.Labels.ToDictionary(kv => kv.Key, kv => kv.Value));
+
+        return Task.FromResult(id);
+    }
+
+    public Task StartContainerAsync(string containerId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        Record(nameof(StartContainerAsync), NameOf(containerId));
+
+        if (_created.TryGetValue(containerId, out var request) && !DropStartedContainers)
+            _containers[containerId] = new ContainerInfo(
+                containerId, request.ContainerName, request.Image, StartedContainerState, StartedContainerStatus,
+                request.Labels.ToDictionary(kv => kv.Key, kv => kv.Value));
+
+        // Same reasoning as RunContainerAsync: after the container is actually up, not before.
+        DeadlineFiresOnceTheContainerIsUp?.Cancel();
+        return Task.CompletedTask;
+    }
+
     public Task StopContainerAsync(string containerId, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();

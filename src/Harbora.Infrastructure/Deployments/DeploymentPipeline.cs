@@ -39,6 +39,11 @@ public sealed class DeploymentPipeline(
     // gets, resolved the same way ObjectStorageAdmin/StorageController already do — the customer's
     // reachable address, not the panel's own private one.
     IOptions<Storage.ObjectStorageOptions> storageOptions,
+    // C2 (2026-08-22 config-delivery plan): resolves and applies an app's file-override rules onto
+    // the container this method creates, before it is ever started — see the call site below and
+    // IConfigOverrideResolver's own doc for why this happens between create and start rather than
+    // before or after either.
+    IConfigOverrideResolver configOverrides,
     ILogger<DeploymentPipeline> logger)
 {
     private readonly HarboraRuntimeOptions _opt = options.Value;
@@ -84,6 +89,10 @@ public sealed class DeploymentPipeline(
             // C1 (2026-08-22 config-delivery plan): the same shape again — an attached database's own
             // row, so BuildEnv can compute its connection-string entries the same way.
             .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
+            // C2 (same plan): this app's own file-override rules, applied to each replica's container
+            // below (CreateContainerWithOverridesAsync) — unlike the five Includes above, these are
+            // never merged into Env; they patch a value inside a file the container already has.
+            .Include(a => a.ConfigOverrideRules)
             .FirstAsync(a => a.Id == deployment.AppId, ct);
 
         // Resolve the container engine for this app's server (local or remote agent).
@@ -509,12 +518,19 @@ public sealed class DeploymentPipeline(
                     ? $"Starting replica {replicaIndex}/{replicaCount}: {replicaName} …"
                     : $"Starting container {replicaName} …");
 
-                var containerId = await docker.RunContainerAsync(new DockerRunRequest(
+                var runRequest = new DockerRunRequest(
                     imageTag, replicaName, network, env, replicaLabels,
                     app.Volumes.Select(v => (v.Name, v.MountPath, v.ReadOnly)).ToList(),
                     containerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath,
                     Command: null, PublishToHostPort: publishPort,
-                    NetworkAliases: replicaIndex == 1 && privateAddress.HasAlias ? [privateAddress.Alias!] : null), ct);
+                    NetworkAliases: replicaIndex == 1 && privateAddress.HasAlias ? [privateAddress.Alias!] : null);
+
+                // C2 (2026-08-22 config-delivery plan): every other deploy keeps the ordinary
+                // single-call path unchanged; only an app with at least one file-override rule pays
+                // for the create/start split ApplyConfigOverridesAsync needs.
+                var containerId = app.ConfigOverrideRules.Count == 0
+                    ? await docker.RunContainerAsync(runRequest, ct)
+                    : await CreateContainerWithOverridesAsync(docker, app, server, runRequest, ct);
 
                 if (replicaIndex == 1)
                 {
@@ -618,6 +634,9 @@ public sealed class DeploymentPipeline(
             await MarkEmailProvidersAppliedAsync(app, ct);
             // C1: the same guarantee again, for attached databases.
             await MarkManagedServicesAppliedAsync(app, ct);
+            // C2: the same guarantee once more — a rule is never baked into the image, so a rollback
+            // still applies whatever the panel currently says for every rule this app carries.
+            await MarkConfigOverrideRulesAppliedAsync(app, ct);
             await functionEvents.PublishAsync(
                 Domain.Functions.FunctionEvent.Create(
                     Domain.Functions.FunctionEvents.DeploymentSucceeded, app.WorkspaceId, app.Slug,
@@ -1522,6 +1541,49 @@ public sealed class DeploymentPipeline(
             .ToListAsync(ct);
 
         foreach (var a in attachments) a.HasUnpublishedChanges = false;
+    }
+
+    /// <summary>
+    /// C2 (2026-08-22 config-delivery plan): the rule-side mirror of
+    /// <see cref="MarkEmailProvidersAppliedAsync"/> — same reasoning, same idiom, for file-override
+    /// rules instead of an attached service.
+    /// </summary>
+    private async Task MarkConfigOverrideRulesAppliedAsync(App app, CancellationToken ct)
+    {
+        var rules = await db.ConfigOverrideRules
+            .Where(r => r.AppId == app.Id && r.HasUnpublishedChanges)
+            .ToListAsync(ct);
+
+        foreach (var r in rules) r.HasUnpublishedChanges = false;
+    }
+
+    /// <summary>
+    /// C2 (2026-08-22 config-delivery plan): the one place create is split from start. A container
+    /// is created but not yet running its main process, every rule this app carries is resolved and
+    /// applied to it via <see cref="IConfigOverrideResolver"/>, and only then is it started — so the
+    /// app's own process never observes the placeholder value the image baked in.
+    ///
+    /// <para>
+    /// A failing rule throws <see cref="ConfigOverrideException"/> here, which the caller's ordinary
+    /// exception handling (this method's own outer catch) turns into a failed deployment naming
+    /// every broken rule — the container this created is cleaned up by that same existing path
+    /// (<c>TryRemoveContainerByNameAsync</c> tries every replica name a failed deploy could have
+    /// used, whether or not it got as far as starting).
+    /// </para>
+    /// </summary>
+    private async Task<string> CreateContainerWithOverridesAsync(
+        IDockerEngine docker, App app, Domain.Servers.Server server, DockerRunRequest request, CancellationToken ct)
+    {
+        if (!server.IsLocal)
+            throw new InvalidOperationException(
+                $"This app has {app.ConfigOverrideRules.Count} config file override rule(s), but runs on " +
+                $"'{server.Name}', a remote node. Config file overrides are only supported for apps on this " +
+                "platform's local node today — remove the rule(s), or move the app to the local node, then redeploy.");
+
+        var containerId = await docker.CreateContainerAsync(request, ct);
+        await configOverrides.ApplyAllAsync(app, containerId, ct);
+        await docker.StartContainerAsync(containerId, ct);
+        return containerId;
     }
 
     /// <summary>

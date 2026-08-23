@@ -124,6 +124,14 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
 
     public async Task<string> RunContainerAsync(DockerRunRequest r, CancellationToken ct)
     {
+        var id = await CreateContainerAsync(r, ct);
+        await StartContainerAsync(id, ct);
+        logger.LogInformation("Started container {Name} ({Id})", r.ContainerName, id[..12]);
+        return id;
+    }
+
+    public async Task<string> CreateContainerAsync(DockerRunRequest r, CancellationToken ct)
+    {
         var hostConfig = new HostConfig
         {
             RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.UnlessStopped },
@@ -179,10 +187,11 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
             create.Cmd = r.Command.ToList();
 
         var response = await client.Containers.CreateContainerAsync(create, ct);
-        await client.Containers.StartContainerAsync(response.ID, new ContainerStartParameters(), ct);
-        logger.LogInformation("Started container {Name} ({Id})", r.ContainerName, response.ID[..12]);
         return response.ID;
     }
+
+    public Task StartContainerAsync(string containerId, CancellationToken ct) =>
+        client.Containers.StartContainerAsync(containerId, new ContainerStartParameters(), ct);
 
     public Task StopContainerAsync(string containerId, CancellationToken ct) =>
         client.Containers.StopContainerAsync(containerId, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);

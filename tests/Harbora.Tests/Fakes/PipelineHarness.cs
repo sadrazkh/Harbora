@@ -43,6 +43,15 @@ public sealed class PipelineHarness : IDisposable
     };
     public PassthroughProtector Protector { get; } = new();
 
+    /// <summary>C2 (2026-08-22 config-delivery plan): the in-memory container filesystem
+    /// <c>ConfigOverrideResolver</c> reads/writes through — seed a rule's target file with
+    /// <c>ConfigFiles.SeedFile(...)</c> before running a deployment.</summary>
+    public FakeContainerConfigFileWriter ConfigFiles { get; } = new();
+
+    /// <summary>The seam C1 fills in for real — seed a reference id with a connection string to
+    /// simulate an attached service resolving, or leave it unseeded to simulate one that no longer is.</summary>
+    public FakeAttachedServiceConnectionStringResolver ServiceResolver { get; } = new();
+
     public Workspace Workspace { get; }
     public Server Server { get; }
     public App App { get; }
@@ -322,6 +331,15 @@ public sealed class PipelineHarness : IDisposable
         Harbora.Infrastructure.Functions.NullFunctionEventBus.Instance,
         Events,
         Microsoft.Extensions.Options.Options.Create(StorageOptions),
+        // C2 (2026-08-22 config-delivery plan): the real resolver over fakes, the same shape as
+        // HostPortAllocator/NodeIngressRouter above — what is under test is ConfigOverrideResolver's
+        // own logic and DeploymentPipeline's own call site, not a stand-in for either.
+        new Harbora.Infrastructure.Configuration.ConfigOverrideResolver(
+            new Harbora.Infrastructure.Configuration.ConfigFileEditorFactory(),
+            ConfigFiles,
+            Protector,
+            ServiceResolver,
+            NullLogger<Harbora.Infrastructure.Configuration.ConfigOverrideResolver>.Instance),
         NullLogger<DeploymentPipeline>.Instance);
 
     /// <summary>Shared with the pipeline, so a test can assert on what it bound.</summary>
