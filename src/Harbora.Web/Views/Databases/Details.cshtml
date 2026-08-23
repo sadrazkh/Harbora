@@ -318,6 +318,12 @@ else if (moving)
                         <option value="@app.Id">@app.Name · @app.Environment</option>
                     }
                 </select>
+                @* C1 (2026-08-22 config-delivery plan): optional — an app attached to two databases
+                   needs unambiguous names, and this is how a customer picks one rather than accepting
+                   the auto-generated slug (AppManagedServiceAlias.Resolve falls back to it, and makes
+                   whatever is typed here unique per app if it collides with an existing attachment). *@
+                <input name="alias" placeholder="@(isFa ? "نام مستعار (اختیاری) — مثلاً ORDERS" : "Alias (optional) — e.g. ORDERS")"
+                       class="form-control text-sm" dir="ltr" />
                 <button class="btn-primary w-full justify-center">@T["Attach"]</button>
             </form>
         }

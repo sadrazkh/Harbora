@@ -657,11 +657,22 @@ public sealed partial class AppsController(
                 s.EnvironmentId))
             .ToListAsync(ct);
 
+        // C1 (2026-08-22 config-delivery plan): an explicit AppManagedService join also counts as
+        // attached (ServiceUsageService.Uses checks it too, but wiredTo above was built from the
+        // env-var heuristic alone before that join existed) — and where one exists, its own Alias is
+        // the real prefix this database writes under, not just AttachKeys' guess from the service's
+        // name.
+        var explicitLinks = app.ManagedServices
+            .Where(ms => ms.ManagedService is not null)
+            .ToDictionary(ms => ms.ManagedServiceId, ms => ms.Alias);
+
         ViewBag.Databases = siblings
             .Select(s => new AppDatabaseLinkViewModel(
                 s.Id, s.Name, s.Type, s.ContainerName,
-                wiredTo.Contains(s.ContainerName),
-                Harbora.Infrastructure.Services.AttachKeys.PrefixFor(s.Name)))
+                wiredTo.Contains(s.ContainerName) || explicitLinks.ContainsKey(s.Id),
+                explicitLinks.TryGetValue(s.Id, out var alias)
+                    ? $"{alias}_"
+                    : Harbora.Infrastructure.Services.AttachKeys.PrefixFor(s.Name)))
             .ToList();
 
         // Protection, read from the routes rather than kept twice: the routes are what Traefik
