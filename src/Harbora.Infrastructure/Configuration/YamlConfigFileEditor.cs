@@ -105,8 +105,11 @@ public sealed class YamlConfigFileEditor : IConfigFileEditor
 
             // Inside a mapping, alternating events are key/value. A key is always a plain scalar for
             // any config file this covers; consume it into PendingKey and move on without treating it
-            // as a value in its own right.
-            if (frames.Count > 0 && frames.Peek() is MappingFrame { ExpectingKey: true } mf)
+            // as a value in its own right. Excludes MappingEnd: an empty mapping, or one that just
+            // finished its last pair, is also "expecting a key" in this state machine, and its own
+            // end-of-container event must fall through to the ordinary MappingEnd handling below
+            // rather than being mistaken for a missing key.
+            if (frames.Count > 0 && frames.Peek() is MappingFrame { ExpectingKey: true } mf && evt is not MappingEnd)
             {
                 if (evt is Scalar keyScalar)
                 {

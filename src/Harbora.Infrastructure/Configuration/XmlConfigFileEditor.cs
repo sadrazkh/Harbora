@@ -57,7 +57,20 @@ public sealed class XmlConfigFileEditor : IConfigFileEditor
 
         if (node is null) return ConfigFileEditOutcome.KeyNotFound(paths);
 
-        node.SetValue(newValue);
+        // XPathNavigator.SetValue is not implemented by the LINQ-to-XML navigator for every node
+        // kind (it throws NotSupportedException for an attribute in practice) — UnderlyingObject is
+        // the documented escape hatch back to the live XAttribute/XElement/XText this navigator is
+        // actually positioned on, which XDocument.Save then serialises with everything else
+        // untouched.
+        switch (node.UnderlyingObject)
+        {
+            case XAttribute attr: attr.Value = newValue; break;
+            case XElement elem: elem.Value = newValue; break;
+            case XText text: text.Value = newValue; break;
+            default:
+                return ConfigFileEditOutcome.ParseFailure(new ConfigFileParseError(
+                    $"'{keyPath}' resolves to a node this editor does not know how to replace a value on.", null, null));
+        }
 
         using var writer = new StringWriter();
         doc.Save(writer, SaveOptions.DisableFormatting);
