@@ -59,6 +59,18 @@ public static class DependencyInjection
         // Per-server engine resolution (local in-process vs remote agent) for multi-server.
         services.AddScoped<IServerEngineFactory, Docker.ServerEngineFactory>();
 
+        // C2 (2026-08-22 config-delivery plan): docker-cp-shaped read/write of one file inside a
+        // container, local-engine only for now — see IContainerConfigFileWriter's own doc for why a
+        // remote node is out of scope today rather than half-supported.
+        services.AddScoped<Application.Abstractions.IContainerConfigFileWriter, Docker.DockerContainerConfigFileWriter>();
+        services.AddSingleton<Configuration.ConfigFileEditorFactory>();
+        services.AddScoped<Application.Abstractions.IConfigOverrideResolver, Configuration.ConfigOverrideResolver>();
+        // C1 (same plan) fills this in once its attach-a-database work lands; until then every
+        // AttachedServiceConnectionString-kind rule fails with an ordinary, actionable
+        // ServiceReferenceUnavailable reason rather than a thrown exception or a silent placeholder.
+        services.AddScoped<Application.Abstractions.IAttachedServiceConnectionStringResolver,
+            Configuration.NullAttachedServiceConnectionStringResolver>();
+
         // Source + proxy engines
         services.AddSingleton<IGitService, LibGit2GitService>();
         // The proxy engine renders one file for the whole install, so it reads the platform's routes

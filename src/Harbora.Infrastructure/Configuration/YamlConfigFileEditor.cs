@@ -86,7 +86,9 @@ public sealed class YamlConfigFileEditor : IConfigFileEditor
     }
 
     private static ConfigFileParseError ToParseError(YamlException ex) =>
-        new(ex.Message, ex.Start.Line > 0 ? ex.Start.Line : null, ex.Start.Column > 0 ? ex.Start.Column : null);
+        new(ex.Message,
+            ex.Start.Line > 0 ? (int)ex.Start.Line : null,
+            ex.Start.Column > 0 ? (int)ex.Start.Column : null);
 
     private static (List<string> Paths, (int Start, int End)? Match) Walk(string content, string[]? target)
     {
@@ -99,7 +101,7 @@ public sealed class YamlConfigFileEditor : IConfigFileEditor
         while (parser.MoveNext())
         {
             var evt = parser.Current;
-            if (evt is StreamStart or StreamEnd or DocumentStart or DocumentEnd) continue;
+            if (evt is null or StreamStart or StreamEnd or DocumentStart or DocumentEnd) continue;
 
             // Inside a mapping, alternating events are key/value. A key is always a plain scalar for
             // any config file this covers; consume it into PendingKey and move on without treating it
