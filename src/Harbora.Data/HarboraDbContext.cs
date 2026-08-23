@@ -188,6 +188,11 @@ public class HarboraDbContext : DbContext
 
     public DbSet<Harbora.Domain.Storage.StorageBucket> StorageBuckets => Set<Harbora.Domain.Storage.StorageBucket>();
     public DbSet<Harbora.Domain.Storage.AppStorageBucket> AppStorageBuckets => Set<Harbora.Domain.Storage.AppStorageBucket>();
+
+    /// <summary>File-override rules (C2, 2026-08-22 config-delivery plan) — per-app, never shared,
+    /// so unlike ConfigGroup/StorageBucket/EmailProvider there is no separate "the shared thing"
+    /// table to restrict deletion against.</summary>
+    public DbSet<Harbora.Domain.Configuration.ConfigOverrideRule> ConfigOverrideRules => Set<Harbora.Domain.Configuration.ConfigOverrideRule>();
     public DbSet<Harbora.Domain.Storage.StoragePlan> StoragePlans => Set<Harbora.Domain.Storage.StoragePlan>();
     public DbSet<Harbora.Domain.Storage.VolumeDownloadToken> VolumeDownloadTokens => Set<Harbora.Domain.Storage.VolumeDownloadToken>();
     public DbSet<Harbora.Domain.Tenancy.UsageRecord> UsageRecords => Set<Harbora.Domain.Tenancy.UsageRecord>();
@@ -814,6 +819,16 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => new { x.AppId, x.Alias }).IsUnique();
             e.HasOne(x => x.App).WithMany(a => a.ManagedServices).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.ManagedService).WithMany(s => s.Apps).HasForeignKey(x => x.ManagedServiceId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // --- file overrides (C2, 2026-08-22 config-delivery plan) ---
+        // Cascade on the app side, and no other side to restrict against: a rule is not a shared
+        // thing another app could also point at (unlike ConfigGroup/StorageBucket/EmailProvider),
+        // it only ever means something in the context of the one app it belongs to.
+        b.Entity<Harbora.Domain.Configuration.ConfigOverrideRule>(e =>
+        {
+            e.HasOne(x => x.App).WithMany(a => a.ConfigOverrideRules).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.AppId);
         });
 
         // --- customer DNS (F9, same plan) ---
