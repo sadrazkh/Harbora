@@ -87,6 +87,9 @@ public class HarboraDbContext : DbContext
     public DbSet<Route> Routes => Set<Route>();
     public DbSet<Certificate> Certificates => Set<Certificate>();
     public DbSet<ManagedService> ManagedServices => Set<ManagedService>();
+    /// <summary>An app's attachment to a managed database/cache (C1, 2026-08-22 config-delivery
+    /// plan) — see <see cref="Harbora.Domain.Services.AppManagedService"/>.</summary>
+    public DbSet<Harbora.Domain.Services.AppManagedService> AppManagedServices => Set<Harbora.Domain.Services.AppManagedService>();
     public DbSet<BackupDestination> BackupDestinations => Set<BackupDestination>();
     public DbSet<Backup> Backups => Set<Backup>();
     public DbSet<BackupDownloadToken> BackupDownloadTokens => Set<BackupDownloadToken>();
@@ -796,6 +799,21 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => new { x.AppId, x.StorageBucketId }).IsUnique();
             e.HasOne(x => x.App).WithMany(a => a.StorageBuckets).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.StorageBucket).WithMany(sb => sb.Apps).HasForeignKey(x => x.StorageBucketId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // --- database attach (C1, 2026-08-22 config-delivery plan) ---
+        // The AppStorageBucket shape exactly: Restrict, not Cascade, on the ManagedService side — a
+        // database with apps still attached must be refused by the named-list check in
+        // DatabasesController.Remove (the ProjectsController.Delete idiom) before this is ever
+        // reached. Unlike AppStorageBucket, Alias also carries a per-app uniqueness constraint,
+        // because two databases attached to the same app is the ordinary case (see
+        // AppManagedServiceAlias's own doc) where two buckets sharing a key is not.
+        b.Entity<Harbora.Domain.Services.AppManagedService>(e =>
+        {
+            e.HasIndex(x => new { x.AppId, x.ManagedServiceId }).IsUnique();
+            e.HasIndex(x => new { x.AppId, x.Alias }).IsUnique();
+            e.HasOne(x => x.App).WithMany(a => a.ManagedServices).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.ManagedService).WithMany(s => s.Apps).HasForeignKey(x => x.ManagedServiceId).OnDelete(DeleteBehavior.Restrict);
         });
 
         // --- customer DNS (F9, same plan) ---

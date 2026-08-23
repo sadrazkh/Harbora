@@ -15,7 +15,12 @@ public enum ConfigSource
 
     /// <summary>A <see cref="Harbora.Domain.Email.EmailProvider"/> attached to the app (F6,
     /// 2026-08-21 functions-and-services plan).</summary>
-    EmailProvider
+    EmailProvider,
+
+    /// <summary>A <see cref="Harbora.Domain.Services.ManagedService"/> attached to the app via
+    /// <see cref="Harbora.Domain.Services.AppManagedService"/> (C1, 2026-08-22 config-delivery
+    /// plan).</summary>
+    Database
 }
 
 /// <summary>
@@ -31,7 +36,8 @@ public readonly record struct EffectiveEnvironmentEntry(
     string Key, string Value, bool IsSecret, ConfigSource Source,
     Guid? SourceGroupId, string? SourceGroupName,
     Guid? SourceBucketId = null, string? SourceBucketName = null,
-    Guid? SourceEmailProviderId = null, string? SourceEmailProviderName = null);
+    Guid? SourceEmailProviderId = null, string? SourceEmailProviderName = null,
+    Guid? SourceDatabaseId = null, string? SourceDatabaseName = null);
 
 /// <summary>
 /// One group's contribution to a merge: its attachment order for the app in question, its identity
@@ -69,6 +75,30 @@ public readonly record struct EmailProviderEnvEntry(string Key, string Value, bo
 public readonly record struct AttachedEmailProviderEnv(
     int AttachOrder, Guid EmailProviderId, string EmailProviderName, IReadOnlyList<EmailProviderEnvEntry> Entries);
 
+/// <summary>One env var a database contributes — the database-side mirror of
+/// <see cref="BucketEnvEntry"/> (C1, 2026-08-22 config-delivery plan).</summary>
+public readonly record struct DatabaseEnvEntry(string Key, string Value, bool IsSecret);
+
+/// <summary>
+/// One database's contribution to a merge: its attachment order for the app in question, its
+/// identity (for provenance), and its current entries — the database-side mirror of
+/// <see cref="AttachedBucketEnv"/> (C1, 2026-08-22 config-delivery plan).
+///
+/// <para>
+/// Unlike a bucket, a database's entries are <b>not</b> all fixed names two attachments would
+/// collide on: <see cref="Entries"/> is expected to already contain both the "magic" names an
+/// unconfigured app would look for (<c>DATABASE_URL</c>, <c>PGHOST</c>, …) <i>and</i> that same set
+/// again under the attachment's own alias prefix (<c>{ALIAS}_DATABASE_URL</c>, …) — see
+/// <c>Harbora.Infrastructure.Services.ManagedServiceAttachEnv.EntriesFor</c>, which builds exactly
+/// that shape. So the "later AttachOrder wins on a shared key" rule below only ever actually decides
+/// the magic names between two databases of the same engine; the alias-prefixed names never collide
+/// because <see cref="Harbora.Domain.Services.AppManagedServiceAlias.Resolve"/> already made that
+/// impossible before the attachment was created.
+/// </para>
+/// </summary>
+public readonly record struct AttachedDatabaseEnv(
+    int AttachOrder, Guid DatabaseId, string DatabaseName, IReadOnlyList<DatabaseEnvEntry> Entries);
+
 /// <summary>
 /// The single place app-over-group-over-attachment precedence is decided: <b>the deploy pipeline's
 /// env assembly point</b> (<c>DeploymentPipeline.BuildEnv</c>) calls this to build what a container
@@ -91,13 +121,14 @@ public static class ConfigGroupMerge
         IEnumerable<EnvironmentVariable> ownVariables,
         IEnumerable<AttachedGroupEntries> attachedGroups,
         IEnumerable<AttachedBucketEnv>? attachedBuckets = null,
-        IEnumerable<AttachedEmailProviderEnv>? attachedEmailProviders = null)
+        IEnumerable<AttachedEmailProviderEnv>? attachedEmailProviders = null,
+        IEnumerable<AttachedDatabaseEnv>? attachedDatabases = null)
     {
         var byKey = new Dictionary<string, EffectiveEnvironmentEntry>(StringComparer.Ordinal);
 
-        // Lowest precedence first, so a later write in this loop is the one that survives: buckets and
-        // email providers in attachment order, then groups in attachment order, then the app's own
-        // rows last, unconditionally on top.
+        // Lowest precedence first, so a later write in this loop is the one that survives: buckets,
+        // email providers and databases in attachment order, then groups in attachment order, then
+        // the app's own rows last, unconditionally on top.
         foreach (var bucket in (attachedBuckets ?? []).OrderBy(b => b.AttachOrder))
             foreach (var entry in bucket.Entries)
                 byKey[entry.Key] = new EffectiveEnvironmentEntry(
@@ -109,6 +140,12 @@ public static class ConfigGroupMerge
                 byKey[entry.Key] = new EffectiveEnvironmentEntry(
                     entry.Key, entry.Value, entry.IsSecret, ConfigSource.EmailProvider,
                     null, null, null, null, provider.EmailProviderId, provider.EmailProviderName);
+
+        foreach (var database in (attachedDatabases ?? []).OrderBy(d => d.AttachOrder))
+            foreach (var entry in database.Entries)
+                byKey[entry.Key] = new EffectiveEnvironmentEntry(
+                    entry.Key, entry.Value, entry.IsSecret, ConfigSource.Database,
+                    null, null, null, null, null, null, database.DatabaseId, database.DatabaseName);
 
         foreach (var group in attachedGroups.OrderBy(g => g.AttachOrder))
             foreach (var entry in group.Entries)

@@ -189,9 +189,16 @@ public static class ServiceCatalog
                 Env = c => new() { ["MONGO_INITDB_ROOT_USERNAME"] = c.User, ["MONGO_INITDB_ROOT_PASSWORD"] = c.Password },
                 Conn = c => ($"mongodb://{c.User}:{c.Password}@{c.Host}:{c.Port}/{c.Database}?authSource=admin",
                              $"mongodb://{c.User}:{Mask(c.Password)}@{c.Host}:{c.Port}/{c.Database}?authSource=admin"),
+                // C1 (2026-08-22 config-delivery plan): discrete parts added alongside the URI that
+                // was already here — the same gap AttachConnectionStringTests documents Postgres and
+                // MySQL as having closed already (MONGO_HOST/PORT/USER/PASSWORD/DATABASE, mirroring
+                // PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE's naming), for whatever driver or script
+                // wants them instead of parsing a URI.
                 AttachEnv = c => new()
                 {
-                    ["MONGODB_URI"] = $"mongodb://{c.User}:{c.Password}@{c.Host}:{c.Port}/{c.Database}?authSource=admin"
+                    ["MONGODB_URI"] = $"mongodb://{c.User}:{c.Password}@{c.Host}:{c.Port}/{c.Database}?authSource=admin",
+                    ["MONGO_HOST"] = c.Host, ["MONGO_PORT"] = c.Port.ToString(),
+                    ["MONGO_USER"] = c.User, ["MONGO_PASSWORD"] = c.Password, ["MONGO_DATABASE"] = c.Database
                 }
             },
         };

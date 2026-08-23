@@ -222,4 +222,14 @@ public class App : BaseEntity
     /// it merges <see cref="StorageBuckets"/>.</summary>
     public ICollection<Harbora.Domain.Email.AppEmailProvider> EmailProviders { get; set; } =
         new List<Harbora.Domain.Email.AppEmailProvider>();
+
+    /// <summary>Managed databases/caches attached to this app (C1, 2026-08-22 config-delivery plan)
+    /// — see <see cref="Harbora.Domain.Services.AppManagedService"/> and
+    /// <see cref="ConfigGroupMerge"/>, which merges them into the effective environment the same way
+    /// it merges <see cref="StorageBuckets"/>. Distinct from, and additional to, the per-app
+    /// <see cref="EnvironmentVariable"/> copies <c>DatabasesController.Attach</c> has written since
+    /// 2026-08-16 — see <see cref="Harbora.Domain.Services.AppManagedService"/>'s own doc for how the
+    /// two coexist.</summary>
+    public ICollection<Harbora.Domain.Services.AppManagedService> ManagedServices { get; set; } =
+        new List<Harbora.Domain.Services.AppManagedService>();
 }

@@ -110,4 +110,8 @@ public class ManagedService : BaseEntity
     /// </para>
     /// </summary>
     public bool WasRunningAtSuspension { get; set; }
+
+    /// <summary>Apps attached to this service (C1, 2026-08-22 config-delivery plan) — see
+    /// <see cref="AppManagedService"/>.</summary>
+    public ICollection<AppManagedService> Apps { get; set; } = new List<AppManagedService>();
 }

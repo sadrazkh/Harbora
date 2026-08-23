@@ -81,6 +81,9 @@ public sealed class DeploymentPipeline(
             // F6 (same plan): the same shape again, one attachment kind later — an attached email
             // provider's own row, so BuildEnv can compute its SMTP_* entries the same way.
             .Include(a => a.EmailProviders).ThenInclude(ep => ep.EmailProvider)
+            // C1 (2026-08-22 config-delivery plan): the same shape again — an attached database's own
+            // row, so BuildEnv can compute its connection-string entries the same way.
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
             .FirstAsync(a => a.Id == deployment.AppId, ct);
 
         // Resolve the container engine for this app's server (local or remote agent).
@@ -613,6 +616,8 @@ public sealed class DeploymentPipeline(
             await MarkStorageBucketsAppliedAsync(app, ct);
             // F6: the same guarantee again, for email providers.
             await MarkEmailProvidersAppliedAsync(app, ct);
+            // C1: the same guarantee again, for attached databases.
+            await MarkManagedServicesAppliedAsync(app, ct);
             await functionEvents.PublishAsync(
                 Domain.Functions.FunctionEvent.Create(
                     Domain.Functions.FunctionEvents.DeploymentSucceeded, app.WorkspaceId, app.Slug,
@@ -1399,12 +1404,26 @@ public sealed class DeploymentPipeline(
                         ep.EmailProvider!, ep.EmailProvider!.EncryptedPassword)
                     .Select(e => new EmailProviderEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
 
+        // C1 (2026-08-22 config-delivery plan): the same shape as attachedBuckets/attachedEmailProviders
+        // above, one attachment kind later. ManagedServiceAttachEnv is the one place that decrypts a
+        // service's password and re-encrypts every composed value that embeds it, so what reaches the
+        // merge as an "IsSecret" entry is real ciphertext, decrypted exactly once below — see that
+        // type's own doc for why a database's connection string cannot pass ciphertext through
+        // unchanged the way a bucket's single secret field does.
+        var attachedDatabases = app.ManagedServices
+            .Where(ms => ms.ManagedService is not null)
+            .Select(ms => new AttachedDatabaseEnv(
+                ms.AttachOrder, ms.ManagedServiceId, ms.ManagedService!.Name,
+                Services.ManagedServiceAttachEnv.EntriesFor(ms.ManagedService!, ms.Alias, protector)
+                    .Select(e => new DatabaseEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
+
         var merged = ConfigGroupMerge.Merge(
             app.EnvironmentVariables,
             app.ConfigGroups.Select(cg => new AttachedGroupEntries(
                 cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])),
             attachedBuckets,
-            attachedEmailProviders);
+            attachedEmailProviders,
+            attachedDatabases);
 
         var env = merged.ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
@@ -1482,6 +1501,24 @@ public sealed class DeploymentPipeline(
     {
         var attachments = await db.AppEmailProviders
             .Where(ep => ep.AppId == app.Id && ep.HasUnpublishedChanges)
+            .ToListAsync(ct);
+
+        foreach (var a in attachments) a.HasUnpublishedChanges = false;
+    }
+
+    /// <summary>
+    /// C1 (2026-08-22 config-delivery plan): the database-attach mirror of
+    /// <see cref="MarkStorageBucketsAppliedAsync"/> — same reasoning, same idiom, one attachment kind
+    /// later. This is what turns a rotation's "every attached app now has a stale connection string"
+    /// into something visible rather than silently wrong: <c>ManagedServiceEngine.RotatePasswordAsync</c>
+    /// sets <c>HasUnpublishedChanges</c> true on every attachment of the service it just rotated, and
+    /// this clears it — for that one app — only once a deployment has actually assembled the
+    /// container's environment from the service's current credentials.
+    /// </summary>
+    private async Task MarkManagedServicesAppliedAsync(App app, CancellationToken ct)
+    {
+        var attachments = await db.AppManagedServices
+            .Where(ms => ms.AppId == app.Id && ms.HasUnpublishedChanges)
             .ToListAsync(ct);
 
         foreach (var a in attachments) a.HasUnpublishedChanges = false;
