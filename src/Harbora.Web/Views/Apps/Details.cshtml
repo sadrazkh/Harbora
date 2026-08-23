@@ -727,7 +727,8 @@
                     var own = e.Source == Harbora.Domain.Apps.ConfigSource.App;
                     var fromBucket = e.Source == Harbora.Domain.Apps.ConfigSource.Bucket;
                     var fromEmailProvider = e.Source == Harbora.Domain.Apps.ConfigSource.EmailProvider;
-                    var sourceAttr = own ? "app" : (fromBucket ? "bucket" : (fromEmailProvider ? "email-provider" : "group"));
+                    var fromDatabase = e.Source == Harbora.Domain.Apps.ConfigSource.Database;
+                    var sourceAttr = own ? "app" : (fromBucket ? "bucket" : (fromEmailProvider ? "email-provider" : (fromDatabase ? "database" : "group")));
                     <div class="flex items-center justify-between p-3 text-sm font-mono" data-env-row data-env-key="@e.Key" data-env-source="@sourceAttr">
                         <span class="text-ink">
                             @e.Key
@@ -746,6 +747,12 @@
                             {
                                 <span class="text-[10px] not-italic rounded bg-info-soft px-1 text-info font-sans" data-env-provenance="@e.SourceEmailProviderName">
                                     @(isFa ? $"از ارائه‌دهندهٔ ایمیل «{e.SourceEmailProviderName}»" : $"from email provider '{e.SourceEmailProviderName}'")
+                                </span>
+                            }
+                            else if (fromDatabase)
+                            {
+                                <span class="text-[10px] not-italic rounded bg-info-soft px-1 text-info font-sans" data-env-provenance="@e.SourceDatabaseName">
+                                    @(isFa ? $"از دیتابیس «{e.SourceDatabaseName}»" : $"from database '{e.SourceDatabaseName}'")
                                 </span>
                             }
                             else
@@ -771,6 +778,12 @@
                             else if (fromEmailProvider)
                             {
                                 <span class="text-xs text-ink-faint" title="@(isFa ? "برای مدیریت، به صفحهٔ ارائه‌دهنده‌های SMTP بروید" : "Manage this from the SMTP providers page")">
+                                    <i data-lucide="lock" class="h-3 w-3"></i>
+                                </span>
+                            }
+                            else if (fromDatabase)
+                            {
+                                <span class="text-xs text-ink-faint" title="@(isFa ? "برای مدیریت، به صفحهٔ دیتابیس بروید" : "Manage this from the database's page")">
                                     <i data-lucide="lock" class="h-3 w-3"></i>
                                 </span>
                             }

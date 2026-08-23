@@ -460,6 +460,18 @@ public sealed class ManagedServiceEngine(
         }
 
         svc.EncryptedPassword = protector.Protect(newPassword);
+
+        // C1 (2026-08-22 config-delivery plan): every AppManagedService attachment of this service
+        // now has a stale connection string in its running container — set true unconditionally,
+        // never compare-and-skip. The trap the config-delivery plan names explicitly: a rotation's
+        // whole point is that the wanted value is new, so any check that only flags a change when
+        // the "wanted" value differs from something already stored would misfire on exactly the
+        // service being rotated. Cleared only by DeploymentPipeline once a real deployment has
+        // assembled that app's container from the service's current credentials (mirrors
+        // AppStorageBucket's own HasUnpublishedChanges idiom exactly).
+        var attachments = await db.AppManagedServices.Where(a => a.ManagedServiceId == svc.Id).ToListAsync(ct);
+        foreach (var a in attachments) a.HasUnpublishedChanges = true;
+
         await db.SaveChangesAsync(ct);
 
         // Redis reads its password from its own command line, so it only takes effect on restart.

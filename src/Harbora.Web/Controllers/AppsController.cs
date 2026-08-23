@@ -539,6 +539,9 @@ public sealed partial class AppsController(
             .Include(a => a.StorageBuckets).ThenInclude(sb => sb.StorageBucket)
             // F6 (same plan): the same shape again, one attachment kind later still.
             .Include(a => a.EmailProviders).ThenInclude(ep => ep.EmailProvider)
+            // C1 (2026-08-22 config-delivery plan): the same shape again — also read by
+            // ServiceUsageService.ConnectionsFor below, for the "Databases" panel's Attached flag.
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
@@ -563,6 +566,17 @@ public sealed partial class AppsController(
                     .Select(e => new Harbora.Domain.Apps.EmailProviderEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
             .ToList();
 
+        // C1 (2026-08-22 config-delivery plan): the same shape as attachedBuckets/attachedEmailProviders
+        // above, one attachment kind later — see ManagedServiceAttachEnv's own doc for why (unlike a
+        // bucket's single secret field) it needs the protector to compose these entries at all.
+        var attachedDatabases = app.ManagedServices
+            .Where(ms => ms.ManagedService is not null)
+            .Select(ms => new Harbora.Domain.Apps.AttachedDatabaseEnv(
+                ms.AttachOrder, ms.ManagedServiceId, ms.ManagedService!.Name,
+                Harbora.Infrastructure.Services.ManagedServiceAttachEnv.EntriesFor(ms.ManagedService!, ms.Alias, protector)
+                    .Select(e => new Harbora.Domain.Apps.DatabaseEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
+            .ToList();
+
         // The effective environment, with provenance — the same ConfigGroupMerge the deploy pipeline
         // calls, so this page can never show a value the container would not actually receive.
         ViewBag.EffectiveEnv = Harbora.Domain.Apps.ConfigGroupMerge.Merge(
@@ -570,7 +584,8 @@ public sealed partial class AppsController(
             app.ConfigGroups.Select(cg => new Harbora.Domain.Apps.AttachedGroupEntries(
                 cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])),
             attachedBuckets,
-            attachedEmailProviders);
+            attachedEmailProviders,
+            attachedDatabases);
 
         ViewBag.AttachedStorageBuckets = app.StorageBuckets
             .OrderBy(sb => sb.AttachOrder)

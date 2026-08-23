@@ -23,6 +23,9 @@ public sealed class ServiceUsageService(HarboraDbContext db, ISecretProtector pr
 
         var apps = await db.Apps.AsNoTracking()
             .Include(a => a.EnvironmentVariables)
+            // C1 (2026-08-22 config-delivery plan): an explicit AppManagedService join is now also
+            // "using" a service — see Uses below.
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
             .Where(a => a.WorkspaceId == service.WorkspaceId)
             .ToListAsync(ct);
 
@@ -44,7 +47,14 @@ public sealed class ServiceUsageService(HarboraDbContext db, ISecretProtector pr
     }
 
     private bool Uses(App app, string containerName) =>
-        app.EnvironmentVariables.Any(v => ServiceUsage.Mentions(Reveal(v), containerName));
+        app.EnvironmentVariables.Any(v => ServiceUsage.Mentions(Reveal(v), containerName))
+        // C1 (2026-08-22 config-delivery plan): DatabasesController.Attach no longer writes any
+        // EnvironmentVariable row for a new attach — the connection string is computed live from
+        // this join (ConfigGroupMerge/DeploymentPipeline.BuildEnv) — so the heuristic above alone
+        // would report a freshly attached app as not using its database at all. A caller whose
+        // `app` was not loaded with ManagedServices sees an empty collection here, which degrades to
+        // exactly the old heuristic-only behaviour rather than throwing.
+        || app.ManagedServices.Any(ms => ms.ManagedService?.ContainerName == containerName);
 
     /// <summary>
     /// The value as the app will see it.

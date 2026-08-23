@@ -115,6 +115,8 @@ public sealed partial class DatabasesController(
         var appsQuery = db.Apps.AsNoTracking()
             .Include(a => a.Environment).ThenInclude(e => e!.Project)
             .Include(a => a.EnvironmentVariables)
+            // C1 (2026-08-22 config-delivery plan): ServiceUsageService.Uses also checks this join.
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
             .Where(a => a.WorkspaceId == WorkspaceId);
         if (visibleProjectIds is { } appProjects)
             appsQuery = appsQuery.Where(a => appProjects.Contains(a.Environment!.ProjectId));
@@ -206,6 +208,8 @@ public sealed partial class DatabasesController(
         var apps = await db.Apps.AsNoTracking()
             .Include(a => a.Environment).ThenInclude(e => e!.Project)
             .Include(a => a.EnvironmentVariables)
+            // C1 (2026-08-22 config-delivery plan): ServiceUsageService.Uses also checks this join.
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
             .Where(a => a.WorkspaceId == WorkspaceId).OrderBy(a => a.Name).ToListAsync(ct);
 
         var connections = usage.ConnectionsFor(apps, [service.ContainerName]);
@@ -565,6 +569,26 @@ public sealed partial class DatabasesController(
         var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
         if (svc is null) return NotFound();
 
+        // C1 (2026-08-22 config-delivery plan): the AppStorageBucket/StorageController.Delete idiom
+        // — a database with apps still explicitly attached is refused by name, before EF's own
+        // DeleteBehavior.Restrict on AppManagedService.ManagedServiceId would ever turn this into a
+        // raw constraint violation. Apps still wired the pre-2026-08-22 way (a materialized
+        // EnvironmentVariable copy, no join row) are not caught here — ConfirmRemove's advisory list
+        // still names those, but this hard refusal is authoritative only for what it can enforce at
+        // the database level.
+        var attachedTo = await db.AppManagedServices.AsNoTracking()
+            .Where(ms => ms.ManagedServiceId == id)
+            .Select(ms => ms.App!.Name)
+            .ToListAsync(ct);
+
+        if (attachedTo.Count > 0)
+        {
+            TempData["Error"] = IsFa
+                ? $"این دیتابیس هنوز به {NamedList(attachedTo)} متصل است. برای حذف، ابتدا آن را از همه‌ی اپ‌ها جدا کنید."
+                : $"This database is still attached to {NamedList(attachedTo)}. Detach it from every app first, then delete it.";
+            return RedirectToAction(nameof(ConfirmRemove), new { id, deleteData });
+        }
+
         // Typing the name is asked for only when the data goes with it — see ServiceRemovalPlan.
         if (!Harbora.Infrastructure.Services.ServiceRemovalPlan.IsConfirmed(deleteData, confirmName, svc.Name))
         {
@@ -752,15 +776,32 @@ public sealed partial class DatabasesController(
         return RedirectToAction(nameof(Details), new { id });
     }
 
+    /// <summary>
+    /// Attaches a database to an app at the back of its precedence order — the same
+    /// <c>AppStorageBucket</c> shape F5 gave buckets: current max <c>AttachOrder</c> + 1, never
+    /// reused, and starts <c>HasUnpublishedChanges</c> true because nothing here is live until the
+    /// app's own next deploy assembles its environment (C1, 2026-08-22 config-delivery plan).
+    ///
+    /// <para>
+    /// This is deliberately additive to, not a replacement for, the per-app <c>EnvironmentVariable</c>
+    /// copies this same action wrote before this plan (2026-08-16) — see
+    /// <see cref="Harbora.Domain.Services.AppManagedService"/>'s own doc for why the two do not
+    /// conflict. What changed here: an attach no longer materializes anything into
+    /// <c>EnvironmentVariable</c> — the connection string is computed live from this join every time
+    /// <c>ConfigGroupMerge</c> runs, which is what makes real provenance ("from database 'X'") and a
+    /// real <c>DeleteBehavior.Restrict</c> backstop possible. An app attached the old way keeps
+    /// working exactly as it did; <see cref="ManagedServiceEngine.RotatePasswordAsync"/> still rewrites
+    /// its stored copies in place, untouched by this change.
+    /// </para>
+    /// </summary>
     [HttpPost("{id:guid}/attach")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
-    public async Task<IActionResult> Attach(Guid id, Guid appId, string? returnUrl, CancellationToken ct)
+    public async Task<IActionResult> Attach(Guid id, Guid appId, string? returnUrl, string? alias, CancellationToken ct)
     {
         await Guard(id, ct);
         if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();
-        var app = await db.Apps.Include(a => a.EnvironmentVariables)
-            .FirstOrDefaultAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
         // An environment is a private network, so it is also the wiring boundary. Without this the
@@ -777,51 +818,32 @@ public sealed partial class DatabasesController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        var env = await engine.BuildAttachEnvAsync(id, ct);
+        if (await db.AppManagedServices.AnyAsync(x => x.AppId == appId && x.ManagedServiceId == id, ct))
+            return BackTo(returnUrl, IsFa ? "این دیتابیس از قبل به این اپ متصل است." : "This database is already attached.", error: true);
 
-        // What the application already holds, so a second database of the same engine cannot take
-        // the first one's names. Decrypted here because the decision is "does this value belong to
-        // me", and an unreadable one is treated as somebody else's.
-        var current = app.EnvironmentVariables.ToDictionary(
-            e => e.Key,
-            e => { try { return protector.Unprotect(e.Value); } catch { return (string?)null; } },
-            StringComparer.Ordinal);
+        var existingAliases = await db.AppManagedServices
+            .Where(x => x.AppId == appId).Select(x => x.Alias).ToListAsync(ct);
+        var resolvedAlias = Harbora.Domain.Services.AppManagedServiceAlias.Resolve(alias, service.Name, existingAliases);
 
-        var prefixedOnly = Harbora.Infrastructure.Services.AttachKeys.IsPrefixedOnly(env, current);
-        var final = Harbora.Infrastructure.Services.AttachKeys.For(env, current, service.Name);
+        var maxOrder = await db.AppManagedServices
+            .Where(x => x.AppId == appId).Select(x => (int?)x.AttachOrder).MaxAsync(ct) ?? 0;
 
-        foreach (var (key, value) in final)
+        db.AppManagedServices.Add(new Harbora.Domain.Services.AppManagedService
         {
-            var existing = app.EnvironmentVariables.FirstOrDefault(e => e.Key == key);
-            if (existing is null)
-                app.EnvironmentVariables.Add(new EnvironmentVariable { Key = key, Value = protector.Protect(value), IsSecret = true });
-            else { existing.Value = protector.Protect(value); existing.IsSecret = true; }
-        }
+            AppId = appId, ManagedServiceId = id, Alias = resolvedAlias,
+            AttachOrder = maxOrder + 1, HasUnpublishedChanges = true
+        });
         await db.SaveChangesAsync(ct);
+        await audit.LogAsync("database.attached", "service", $"{id}:{appId}", HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
 
-        // Said plainly when it matters. Somebody attaching a second database and then reading
-        // DATABASE_URL in their code would get the first one, and nothing on the screen would have
-        // suggested it.
-        var prefix = Harbora.Infrastructure.Services.AttachKeys.PrefixFor(service.Name);
-        TempData["Message"] = prefixedOnly
-            ? (IsFa
-                ? $"به {app.Name} وصل شد. چون این اپ از قبل دیتابیس دیگری با همین نام‌ها داشت، متغیرهای این یکی با پیشوند {prefix} نوشته شدند. برای اعمال، اپ را دوباره دیپلوی کنید."
-                : $"Attached to {app.Name}. This application already had another database under the usual names, so this one's variables are written with the {prefix} prefix. Redeploy the app to apply them.")
-            : (IsFa
-                ? $"به {app.Name} وصل شد. برای اعمال متغیرها اپ را دوباره دیپلوی کنید."
-                : $"Attached to {app.Name}. Redeploy the app to apply the new variables.");
-
-        // Back where the person was. Attaching from an application's page and landing on the
-        // database's is a jump that loses their place — and the app page is where they go next to
-        // attach the second one.
-        return string.IsNullOrWhiteSpace(returnUrl)
-            ? RedirectToAction(nameof(Details), new { id })
-            : LocalRedirect(returnUrl);
+        return BackTo(returnUrl, IsFa
+            ? $"«{service.Name}» به {app.Name} وصل شد و با نام {resolvedAlias}_* در دسترس است. متغیرهایش با استقرار بعدی این اپ اعمال می‌شوند."
+            : $"Attached '{service.Name}' to {app.Name}, reachable under {resolvedAlias}_*. Its variables apply on this app's next deploy.");
     }
 
     /// <summary>
-    /// Removes the variables an attach wrote. Only those keys, and only when they still hold this
-    /// database's values — a key somebody edited by hand is theirs, not ours to delete.
+    /// Removes the join row. The running container keeps the connection string until the app's own
+    /// next deploy — same as detaching a config group or a bucket.
     /// </summary>
     [HttpPost("{id:guid}/detach")]
     [ValidateAntiForgeryToken]
@@ -830,42 +852,40 @@ public sealed partial class DatabasesController(
     {
         await Guard(id, ct);
         if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();
-        var app = await db.Apps.Include(a => a.EnvironmentVariables)
-            .FirstOrDefaultAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
-        if (app is null) return NotFound();
 
-        var env = await engine.BuildAttachEnvAsync(id, ct);
-        var service = await db.ManagedServices.AsNoTracking().FirstOrDefaultAsync(s => s.Id == id, ct);
-        var prefix = Harbora.Infrastructure.Services.AttachKeys.PrefixFor(service?.Name ?? string.Empty);
+        var join = await db.AppManagedServices.FirstOrDefaultAsync(x => x.AppId == appId && x.ManagedServiceId == id, ct);
+        if (join is null)
+            return BackTo(returnUrl, IsFa ? "این اپ به این دیتابیس وصل نیست." : "This app is not attached to this database.", error: true);
 
-        var removed = 0;
-        foreach (var (key, value) in env)
-        {
-            // Both names this database may have written under. Missing the prefixed one would leave
-            // a detached database's connection string in the application forever.
-            foreach (var candidate in new[] { key, prefix + key })
-            {
-                var existing = app.EnvironmentVariables.FirstOrDefault(e => e.Key == candidate);
-                if (existing is null) continue;
-
-                // The value has to still be this database's. The comment above has always said so
-                // and the code did not check: removing by key alone means detaching one database
-                // strips the variables belonging to another that holds the same name — which is
-                // exactly the situation prefixed keys exist to create.
-                string? current;
-                try { current = protector.Unprotect(existing.Value); } catch { current = null; }
-                if (current != value) continue;
-
-                app.EnvironmentVariables.Remove(existing);
-                removed++;
-            }
-        }
-
+        db.AppManagedServices.Remove(join);
         await db.SaveChangesAsync(ct);
-        TempData["Message"] = removed == 0
-            ? "Nothing to remove — this app was not wired to this database."
-            : $"Removed {removed} variable(s) from {app.Name}. Redeploy the app to apply the change.";
-        return RedirectToAction(nameof(Details), new { id });
+        await audit.LogAsync("database.detached", "service", $"{id}:{appId}", HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+
+        return BackTo(returnUrl, IsFa
+            ? "دیتابیس جدا شد. تا استقرار بعدی، کانتینر در حال اجرا هنوز رشتهٔ اتصال آن را دارد."
+            : "Detached. Until the next deploy, the running container still has its connection string.");
+    }
+
+    private IActionResult BackTo(string? returnUrl, string? message, bool error = false)
+    {
+        TempData[error ? "Error" : "Message"] = message;
+        return string.IsNullOrWhiteSpace(returnUrl) ? RedirectToAction(nameof(Details)) : LocalRedirect(returnUrl);
+    }
+
+    /// <summary>
+    /// "2 apps: api, worker" — or past three, "5 apps: api, worker, cron and 2 more". The
+    /// <c>ProjectsController.Delete</c> refusal idiom, reused exactly as <c>StorageController</c>
+    /// already reused it for buckets.
+    /// </summary>
+    private string NamedList(IReadOnlyList<string> names)
+    {
+        const int shown = 3;
+        var listed = names.Count > shown
+            ? string.Join(IsFa ? "، " : ", ", names.Take(shown)) +
+              (IsFa ? $" و {names.Count - shown} مورد دیگر" : $" and {names.Count - shown} more")
+            : string.Join(IsFa ? "، " : ", ", names);
+
+        return IsFa ? $"{names.Count} اپ: {listed}" : $"{names.Count} app{(names.Count == 1 ? "" : "s")}: {listed}";
     }
 
     /// <summary>
