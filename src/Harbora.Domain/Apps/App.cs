@@ -232,4 +232,12 @@ public class App : BaseEntity
     /// two coexist.</summary>
     public ICollection<Harbora.Domain.Services.AppManagedService> ManagedServices { get; set; } =
         new List<Harbora.Domain.Services.AppManagedService>();
+
+    /// <summary>File-override rules for this app's own config file (C2, 2026-08-22 config-delivery
+    /// plan) — see <see cref="Harbora.Domain.Configuration.ConfigOverrideRule"/>. Unlike
+    /// <see cref="ConfigGroups"/>/<see cref="StorageBuckets"/>/<see cref="EmailProviders"/>, these are
+    /// not merged into the environment: each rule patches a value inside a file the container already
+    /// has, applied by <c>DeploymentPipeline</c> at deploy time.</summary>
+    public ICollection<Harbora.Domain.Configuration.ConfigOverrideRule> ConfigOverrideRules { get; set; } =
+        new List<Harbora.Domain.Configuration.ConfigOverrideRule>();
 }
