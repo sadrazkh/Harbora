@@ -102,18 +102,50 @@ that file** (`ConnectionStrings:Default`, `Redis:Host`), and a **value** — lit
 last one is what makes the two sub-projects worth building together: attach a database, point
 `ConnectionStrings:Default` at it, and never see the password.
 
-**Formats:** JSON first — it is what `appsettings.json` is and what the owner named. Decide whether
-to add more (YAML, `.env`, `.ini`) now or later and say why. **Do not silently mangle a format you
-do not fully parse**; refuse with a clear message instead.
+**Formats — CORRECTED 2026-08-22 by the owner, and this is binding:** JSON-first is not enough.
+*"Every framework or style of programming can have its own. ASP.NET has appsettings; another
+framework or approach may be something else. All of them have to be supported, because everyone
+uses them — not just me."*
+
+So v1 ships **JSON** (`appsettings.json`, `*.json`), **YAML** (`config/database.yml`, Rails/Spring
+`application.yml`), **.env** (Laravel, Django, Node), **INI/TOML** (`.ini`, `.conf`, `.toml` —
+Python, PHP), and **XML** (`web.config`/`app.config` — classic .NET, still widespread). Format is
+detected from the file's extension with an explicit override, since a config file is not always
+named conventionally.
+
+Key paths differ per format and the UI must speak each one's own idiom — `ConnectionStrings:Default`
+for .NET JSON, `production.adapter` for a Rails YAML, a bare `DATABASE_URL` for `.env`,
+`section.key` for INI, an XPath-ish path for XML. **Do not force one syntax onto all five.**
+
+**Structure and formatting must survive.** Round-trip through a real parser for that format, not a
+regex — comments, ordering and indentation that a developer will diff against Git should come back
+recognisable. **Never silently mangle a format you do not fully parse:** refuse with a clear message
+instead. If a format turns out to need a dependency the project does not have, say so and report the
+weight before adding it rather than hand-rolling a parser.
 
 **Applied at deploy time, inside the built image's container, before the app starts.** Work out
 where in `DeploymentPipeline` that belongs, and prefer whatever mechanism the platform already has
 for putting content into a container over inventing a new one. Two properties are not negotiable:
 
-1. **If an override cannot be applied, the deployment must fail loudly and say which rule and why** —
-   a missing file, an unparseable file, a key path that does not exist. An app that silently starts
-   with its placeholder password, connects to nothing, and reports "deployed" is precisely the defect
-   class this codebase has spent weeks removing.
+1. **If an override cannot be applied, the deployment must fail loudly, name the rule, and be easy
+   to debug and fix.** The owner was explicit: *"if an override could not be applied, the reason has
+   to be given, and it has to be easy to debug and put right."* So a failure is not merely loud, it
+   is **actionable**:
+   - Name the exact rule that failed — file path, key path, and which of the possible causes it was:
+     file not found at that path, file could not be parsed as its format, key path absent, value
+     reference pointing at a service no longer attached.
+   - **Show what was actually there**, so the operator can see why their path missed: the file's real
+     key paths when a key was not found, the parser's own error and line number when parsing failed,
+     and a directory listing when the file itself was missing. A message saying only "override
+     failed" would leave them guessing at exactly the moment they need facts.
+   - Make it fixable without a redeploy-and-pray loop: the panel's override editor should let the
+     operator **validate a rule against the deployed app before deploying** — read the file, resolve
+     the key path, show the current value and what it would become. That is the difference between
+     debugging in one minute and debugging in ten deploys.
+   - Never leak a secret value into a build log or an error message while doing any of this.
+
+   An app that silently starts with its placeholder password, connects to nothing, and reports
+   "deployed" is precisely the defect class this codebase has spent weeks removing.
 2. **A secret value must never be written into the image, only into the running container**, and
    never echoed back to the panel in plaintext. Masked in the UI like every other secret.
 
