@@ -404,7 +404,30 @@
   .size-picker-legend strong { @apply block text-xs font-semibold text-ink; }
   .size-picker-legend small { @apply mt-0.5 block text-[10px] leading-4 text-ink-faint; }
   .size-picker-note { @apply text-[10px] leading-4 text-ink-faint; }
-  .size-picker-servers { @apply grid gap-2 sm:grid-cols-2 xl:grid-cols-3; }
+  /* Container queries, not `sm:`/`xl:` viewport breakpoints.
+     This grid renders wherever the shared picker is embedded — a 22rem resize aside, an app's wide
+     details column, the full-width create-flow form — and the viewport says nothing about which one
+     that is. A 1920px-wide screen with the picker sitting inside a 352px aside still satisfies
+     `xl:grid-cols-3`, which is exactly how three price-and-spec cards ended up squeezed one word per
+     line into a box a third that width. `container-type: inline-size` makes the grid ask its OWN box
+     for room instead of the window's.
+     Tailwind 3.4 (this project's pinned version, package.json) has no container-query utilities in
+     core — that shipped in Tailwind v4. The opt-in `@tailwindcss/container-queries` plugin exists for
+     v3 but is not installed here (tailwind.config.js: `plugins: []`), so `@md:grid-cols-2` is not
+     available as a class. `@container` itself is plain CSS, needs no plugin, and every browser this
+     panel supports (Chromium 105+, Firefox 110+, Safari 16+) has shipped it for years — so this is
+     hand-written CSS beside the `@apply` rules around it, the same way the `@media` blocks elsewhere
+     in this file sit beside them. */
+  .size-picker-servers,
+  .size-tier-grid { @apply grid gap-2; container-type: inline-size; }
+  @container (min-width: 26rem) {
+    .size-picker-servers,
+    .size-tier-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @container (min-width: 42rem) {
+    .size-picker-servers,
+    .size-tier-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
   .size-server-card { @apply relative flex cursor-pointer flex-col rounded-xl border border-line bg-surface-2 p-3 pe-9 hover:border-accent/30; }
   .size-server-card:has(input:checked) { @apply border-accent bg-accent-soft/50 ring-1 ring-accent/15; }
   .size-server-head { @apply flex flex-wrap items-center gap-2; }
@@ -421,7 +444,6 @@
   .size-family-tab > span { @apply inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-2 px-3 py-1.5 text-[11px] text-ink-muted; }
   .size-family-tab > span > em { @apply not-italic text-[10px] text-ink-faint; }
   .size-family-tab:has(input:checked) > span { @apply border-accent bg-accent-soft/60 text-accent-text; }
-  .size-tier-grid { @apply grid gap-2 sm:grid-cols-2 xl:grid-cols-3; }
   .size-tier-card { @apply relative flex cursor-pointer flex-col rounded-xl border border-line bg-surface-2 p-3 pe-9 hover:border-accent/30; }
   .size-tier-card:has(input:checked) { @apply border-accent bg-accent-soft/50 ring-1 ring-accent/15; }
   .size-tier-name { @apply flex flex-wrap items-baseline gap-1.5 text-xs font-semibold text-ink; }
