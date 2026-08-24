@@ -50,6 +50,62 @@ public class SourcePackerTests : IDisposable
         Excluded(path).Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("Scripts/build/copy-fonts.mjs")]     // the DriveUnion regression: a source helper folder
+    [InlineData("src/vendor/CustomVendorCode.php")]
+    [InlineData("app/target/README.md")]
+    [InlineData("packages/api/dist/index.ts")]
+    [InlineData("web/.output/notes.txt")]
+    public void Build_output_names_are_ordinary_source_folders_anywhere_but_the_project_root(string path)
+    {
+        // "build", "vendor", "target", "dist" and ".output" are common build-output directory names
+        // for an unconfigured project — but they are equally common as ordinary source directory
+        // names anywhere deeper in a tree. Excluding them at every depth (as node_modules is)
+        // silently drops real source files; DriveUnion's own Scripts/build/copy-fonts.mjs is exactly
+        // that, and its absence broke `npm run prebuild` inside the image with no error surfaced.
+        Excluded(path).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("build/app.js")]
+    [InlineData("dist/bundle.js")]
+    [InlineData("target/release/app")]
+    [InlineData("vendor/autoload.php")]
+    [InlineData(".output/server/index.mjs")]
+    public void Build_output_names_are_still_excluded_at_the_project_root_with_no_ignore_file(string path)
+    {
+        // The backstop this set exists for: an unconfigured project whose build output lands directly
+        // under the folder being packed (npm's default ./build or ./dist, cargo's ./target, a PHP/Go
+        // ./vendor, Nuxt's ./.output) must still not be shipped even with no .dockerignore/.gitignore.
+        Excluded(path).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Packing_keeps_a_source_folder_that_happens_to_be_named_build()
+    {
+        // The exact regression this task exists to close: a build *helper script* living under a
+        // folder literally called "build", nested under an ordinary source directory. The old rule
+        // matched "build" at any depth and silently dropped this file, which broke `npm run prebuild`
+        // inside the image with no error anywhere in the deployment log.
+        Directory.CreateDirectory(Path.Combine(_root, "Scripts", "build"));
+        File.WriteAllText(Path.Combine(_root, "Scripts", "build", "copy-fonts.mjs"), "// copies fonts");
+        File.WriteAllText(Path.Combine(_root, "package.json"), "{}");
+
+        var packed = await SourcePacker.PackAsync(_root);
+        try
+        {
+            var dest = Path.Combine(_root, "..", "unpacked-" + Guid.NewGuid().ToString("N"));
+            await using (var stream = File.OpenRead(packed.ArchivePath))
+                await Harbora.Infrastructure.Deployments.SourceArchive.ExtractAsync(stream, dest, default);
+
+            File.Exists(Path.Combine(dest, "Scripts", "build", "copy-fonts.mjs")).Should().BeTrue(
+                "a source folder named 'build' is not the same thing as a project's build output");
+
+            Directory.Delete(dest, recursive: true);
+        }
+        finally { File.Delete(packed.ArchivePath); }
+    }
+
     [Fact]
     public void An_ignore_entry_excludes_the_directory_and_everything_under_it()
     {
