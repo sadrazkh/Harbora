@@ -7,6 +7,14 @@ using Microsoft.Extensions.Logging;
 namespace Harbora.Infrastructure.Docker;
 
 /// <summary>
+/// Thrown when the Docker daemon's build stream itself reports the build failed — a Dockerfile
+/// <c>RUN</c> step that returned non-zero, for example. The daemon answers 200 OK for this and lets
+/// the stream end normally, so nothing else in the Docker.DotNet call chain would otherwise raise it:
+/// see <see cref="DockerEngine.BuildImageFromTarAsync"/> for where this is actually detected.
+/// </summary>
+public sealed class DockerBuildException(string message) : Exception(message);
+
+/// <summary>
 /// Docker.DotNet-backed implementation of <see cref="IDockerEngine"/>. All arguments are
 /// passed through the typed API (never string-concatenated into a shell), so container names,
 /// env values and image refs cannot inject commands.
@@ -36,16 +44,62 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
             ForceRemove = true
         };
 
+        // The daemon reports a build failure as one more message inside this same stream — never as
+        // an HTTP error, and Docker.DotNet does not inspect the stream for one on its own (confirmed
+        // by decompiling StreamUtil.MonitorStreamForMessagesAsync: it deserializes and forwards every
+        // message, then simply returns when the stream ends). Without tracking this, a Dockerfile
+        // step that fails partway through — "Step 6/23 : RUN npm run build" with a non-zero exit —
+        // leaves BuildImageFromDockerfileAsync completing normally, so the caller believes imageTag
+        // was actually built. The failure then only surfaces two steps later, as a confusing
+        // "No such image" from whatever tries to run the image that was never produced.
+        string? lastStep = null;
+        JSONMessage? failure = null;
+
         var progress = new Progress<JSONMessage>(m =>
         {
             var line = m.Stream ?? m.Status ?? m.ErrorMessage;
-            if (!string.IsNullOrWhiteSpace(line)) log.Report(line.TrimEnd('\n'));
+            if (!string.IsNullOrWhiteSpace(line))
+            {
+                var trimmed = line.TrimEnd('\n');
+                log.Report(trimmed);
+                if (IsStepLine(trimmed)) lastStep = trimmed.Trim();
+            }
+            if (DescribesBuildFailure(m)) failure ??= m;
         });
 
         await client.Images.BuildImageFromDockerfileAsync(
             parameters, tarContext, authConfigs: null, headers: null, progress, ct);
 
+        if (failure is not null)
+            throw new DockerBuildException(BuildFailureMessage(imageTag, lastStep, failure));
+
         return imageTag;
+    }
+
+    /// <summary>Whether a build-progress line is Docker announcing which Dockerfile instruction is
+    /// now running — tracked so a failure can name the step it happened at, not just the image.</summary>
+    internal static bool IsStepLine(string line) =>
+        line.TrimStart().StartsWith("Step ", StringComparison.Ordinal);
+
+    /// <summary>Whether a build-progress message is the daemon reporting the build itself failed.
+    /// Docker.DotNet surfaces this two ways depending on daemon/API version — the free-text
+    /// <c>ErrorMessage</c> and the structured <c>Error.Message</c> — so both are checked; a daemon
+    /// that only ever fills in one of them must not be read as "the build succeeded".</summary>
+    internal static bool DescribesBuildFailure(JSONMessage message) =>
+        !string.IsNullOrWhiteSpace(message.ErrorMessage) ||
+        !string.IsNullOrWhiteSpace(message.Error?.Message);
+
+    /// <summary>
+    /// The message a caller actually needs: which image, which Dockerfile step (when one was seen
+    /// before the failure arrived), and the daemon's own words — not a downstream symptom like
+    /// "No such image" from whatever tries to run what was never built.
+    /// </summary>
+    internal static string BuildFailureMessage(string imageTag, string? lastStep, JSONMessage failure)
+    {
+        var detail = failure.Error?.Message ?? failure.ErrorMessage ?? "the daemon reported no detail";
+        return lastStep is null
+            ? $"Build of {imageTag} failed: {detail}"
+            : $"Build of {imageTag} failed at {lastStep}: {detail}";
     }
 
     public async Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct)
