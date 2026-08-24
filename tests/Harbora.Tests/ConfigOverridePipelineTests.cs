@@ -233,4 +233,27 @@ public class ConfigOverridePipelineTests
         result.ErrorMessage.Should().Contain("remote node");
         h.ConfigFiles.Writes.Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task A_rule_on_a_compose_app_fails_the_deployment_instead_of_being_silently_never_applied()
+    {
+        using var h = new PipelineHarness();
+        h.WithComposeFile("""
+            services:
+              web:
+                image: nginx:alpine
+                ports:
+                  - "8080:80"
+            """);
+        GivenRule(h, "/app/appsettings.json", "ConnectionStrings:Default", ConfigOverrideValueKind.Literal,
+            literalValue: "x");
+
+        var deployment = h.QueueDeployment(number: 1);
+        var result = await h.RunAsync(deployment);
+
+        result.Status.Should().Be(DeploymentStatus.Failed);
+        result.ErrorMessage.Should().Contain("Compose",
+            "a rule that cannot actually be applied to a compose stack must fail loudly, not be quietly ignored");
+        h.ConfigFiles.Writes.Should().BeEmpty();
+    }
 }

@@ -269,6 +269,18 @@ public sealed class DeploymentPipeline(
             if (app.SourceType == AppSourceType.DockerCompose)
                 composeStack = await LoadComposeAsync(app, deployment, stackBuildLog, Log, ct);
 
+            // C2 (2026-08-22 config-delivery plan): a Compose stack's per-service containers are
+            // started by StartComposeStackAsync below, which does not (yet) go through
+            // CreateContainerWithOverridesAsync — there is no single "the" container to patch, and no
+            // rule says which service it targets. Refusing loudly here is the alternative to the
+            // defect this whole sub-project exists to remove: a rule that looks attached but is
+            // silently never applied.
+            if (composeStack is not null && app.ConfigOverrideRules.Count > 0)
+                throw new InvalidOperationException(
+                    $"This app has {app.ConfigOverrideRules.Count} config file override rule(s), but it deploys as a " +
+                    "Docker Compose stack. Config file overrides are not supported for Compose apps yet — remove the " +
+                    "rule(s) before redeploying.");
+
             IReadOnlyCollection<string> keepContainers = [];
             string imageTag;
             // An image chosen at deploy time (`harbora deploy --image`) is released as-is: there is
