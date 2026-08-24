@@ -39,7 +39,7 @@ public sealed partial class AppsController
     [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> AddConfigOverride(
         Guid id, string filePath, string? formatOverride, string keyPath, string valueKind,
-        string? literalValue, string? secretValue, Guid? attachedServiceReferenceId, CancellationToken ct)
+        string? literalValue, string? secretValue, string? attachedServiceAlias, CancellationToken ct)
     {
         if (!await access.CanTouchAppAsync(id, Capabilities.AppsEnv, ct)) return NotFound();
 
@@ -87,13 +87,15 @@ public sealed partial class AppsController
                 break;
 
             case "service":
-                if (attachedServiceReferenceId is null)
+                if (string.IsNullOrWhiteSpace(attachedServiceAlias))
                 {
-                    TempData["Error"] = IsFa ? "یک سرویس متصل انتخاب کنید." : "Choose an attached service.";
+                    TempData["Error"] = IsFa
+                        ? "نام مستعار یک دیتابیس متصل را وارد کنید."
+                        : "Enter the alias of an attached database.";
                     return RedirectToAction(nameof(ConfigOverrides), new { id });
                 }
                 rule.ValueKind = Domain.Configuration.ConfigOverrideValueKind.AttachedServiceConnectionString;
-                rule.AttachedServiceReferenceId = attachedServiceReferenceId;
+                rule.AttachedServiceAlias = attachedServiceAlias.Trim();
                 break;
 
             default:

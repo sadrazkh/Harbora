@@ -55,12 +55,14 @@ public class ConfigOverrideRule : BaseEntity
 
     /// <summary>
     /// The attached service this rule points at, used only when <see cref="ValueKind"/> is
-    /// <see cref="ConfigOverrideValueKind.AttachedServiceConnectionString"/>. Deliberately an opaque
-    /// id rather than a typed foreign key to C1's attachment table: C2 does not depend on C1's
-    /// schema landing first — <c>IAttachedServiceConnectionStringResolver</c> is handed this id and
-    /// decides for itself whether it still means anything.
+    /// <see cref="ConfigOverrideValueKind.AttachedServiceConnectionString"/> — the same alias
+    /// <see cref="Harbora.Domain.Services.AppManagedService.Alias"/> gives the attachment (C1,
+    /// 2026-08-22 config-delivery plan), resolved case-insensitively by
+    /// <c>IAttachedServiceConnectionStringResolver</c>. A string rather than a typed foreign key on
+    /// purpose: an alias the operator already sees on the app's env page and Databases panel is what
+    /// they type here, not an id they would have to go find.
     /// </summary>
-    public Guid? AttachedServiceReferenceId { get; set; }
+    public string? AttachedServiceAlias { get; set; }
 
     /// <summary>
     /// Deterministic application order when several rules target the same file — lower first. Two

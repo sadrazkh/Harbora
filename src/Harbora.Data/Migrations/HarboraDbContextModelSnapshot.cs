@@ -1451,8 +1451,8 @@ namespace Harbora.Data.Migrations
                     b.Property<Guid>("AppId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid?>("AttachedServiceReferenceId")
-                        .HasColumnType("uuid");
+                    b.Property<string>("AttachedServiceAlias")
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");

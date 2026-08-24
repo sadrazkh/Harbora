@@ -4,24 +4,25 @@ namespace Harbora.Tests.Fakes;
 
 /// <summary>
 /// The test double for C1's seam (<see cref="IAttachedServiceConnectionStringResolver"/>) — proves
-/// C2's <c>AttachedServiceConnectionString</c> value kind end to end without C1's own attach-a-database
-/// work having landed. Seed a connection string for a reference id to simulate an attached service
-/// resolving; leave it unseeded to simulate one that no longer is.
+/// C2's <c>AttachedServiceConnectionString</c> value kind against a fake rather than C1's real
+/// <c>AttachedServiceConnectionResolver</c> (which needs a real <see cref="Harbora.Domain.Services.AppManagedService"/>
+/// row and a real service catalog entry to resolve anything). Seed a connection string for an
+/// app+alias pair to simulate an attached service resolving; leave it unseeded to simulate one that
+/// no longer is — the same null-means-nothing contract C1's own resolver keeps.
 /// </summary>
 public sealed class FakeAttachedServiceConnectionStringResolver : IAttachedServiceConnectionStringResolver
 {
-    private readonly Dictionary<Guid, string> _byReference = new();
+    private readonly Dictionary<(Guid AppId, string Alias), string> _byAppAndAlias = new();
 
-    public FakeAttachedServiceConnectionStringResolver Seed(Guid referenceId, string connectionString)
+    public FakeAttachedServiceConnectionStringResolver Seed(Guid appId, string alias, string connectionString)
     {
-        _byReference[referenceId] = connectionString;
+        _byAppAndAlias[(appId, alias.ToUpperInvariant())] = connectionString;
         return this;
     }
 
-    public Task<AttachedServiceConnectionStringResult> ResolveAsync(
-        Guid workspaceId, Guid appId, Guid attachedServiceReferenceId, CancellationToken ct) =>
-        Task.FromResult(_byReference.TryGetValue(attachedServiceReferenceId, out var cs)
+    public Task<AttachedServiceConnectionStringResult> ResolveAsync(Guid appId, string alias, CancellationToken ct) =>
+        Task.FromResult(_byAppAndAlias.TryGetValue((appId, alias.ToUpperInvariant()), out var cs)
             ? AttachedServiceConnectionStringResult.Ok(cs)
             : AttachedServiceConnectionStringResult.NotFound(
-                $"no attached service resolves reference {attachedServiceReferenceId} (simulated detach)."));
+                $"no attachment named '{alias}' resolves a connection string for this app (simulated detach)."));
 }

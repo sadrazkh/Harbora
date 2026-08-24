@@ -124,12 +124,12 @@ public sealed class ConfigOverrideResolver(
 
             case ConfigOverrideValueKind.AttachedServiceConnectionString:
             {
-                if (rule.AttachedServiceReferenceId is not { } refId)
+                if (string.IsNullOrWhiteSpace(rule.AttachedServiceAlias))
                     return (null, new ConfigOverrideFailure(rule.Id, rule.FilePath, rule.KeyPath,
                         ConfigOverrideFailureReason.ServiceReferenceUnavailable,
-                        "this rule points at an attached service, but no attachment is set."));
+                        "this rule points at an attached service, but no alias is set."));
 
-                var result = await serviceResolver.ResolveAsync(app.WorkspaceId, app.Id, refId, ct);
+                var result = await serviceResolver.ResolveAsync(app.Id, rule.AttachedServiceAlias, ct);
                 if (!result.Found)
                     return (null, new ConfigOverrideFailure(rule.Id, rule.FilePath, rule.KeyPath,
                         ConfigOverrideFailureReason.ServiceReferenceUnavailable,

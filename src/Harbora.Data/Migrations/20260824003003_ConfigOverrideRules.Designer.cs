@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    [Migration("20260823234446_ConfigOverrideRules")]
+    [Migration("20260824003003_ConfigOverrideRules")]
     partial class ConfigOverrideRules
     {
         /// <inheritdoc />
@@ -1454,8 +1454,8 @@ namespace Harbora.Data.Migrations
                     b.Property<Guid>("AppId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid?>("AttachedServiceReferenceId")
-                        .HasColumnType("uuid");
+                    b.Property<string>("AttachedServiceAlias")
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -4275,6 +4275,46 @@ namespace Harbora.Data.Migrations
                     b.ToTable("ServerInstanceOffers");
                 });
 
+            modelBuilder.Entity("Harbora.Domain.Services.AppManagedService", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Alias")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("AppId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("AttachOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("HasUnpublishedChanges")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("ManagedServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ManagedServiceId");
+
+                    b.HasIndex("AppId", "Alias")
+                        .IsUnique();
+
+                    b.HasIndex("AppId", "ManagedServiceId")
+                        .IsUnique();
+
+                    b.ToTable("AppManagedServices");
+                });
+
             modelBuilder.Entity("Harbora.Domain.Services.DatabaseAccessAudit", b =>
                 {
                     b.Property<Guid>("Id")
@@ -6207,6 +6247,25 @@ namespace Harbora.Data.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Harbora.Domain.Services.AppManagedService", b =>
+                {
+                    b.HasOne("Harbora.Domain.Apps.App", "App")
+                        .WithMany("ManagedServices")
+                        .HasForeignKey("AppId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Harbora.Domain.Services.ManagedService", "ManagedService")
+                        .WithMany("Apps")
+                        .HasForeignKey("ManagedServiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("App");
+
+                    b.Navigation("ManagedService");
+                });
+
             modelBuilder.Entity("Harbora.Domain.Services.DatabaseAccessGrant", b =>
                 {
                     b.HasOne("Harbora.Domain.Services.ManagedService", "ManagedService")
@@ -6447,6 +6506,8 @@ namespace Harbora.Data.Migrations
 
                     b.Navigation("EnvironmentVariables");
 
+                    b.Navigation("ManagedServices");
+
                     b.Navigation("StorageBuckets");
 
                     b.Navigation("Volumes");
@@ -6500,6 +6561,11 @@ namespace Harbora.Data.Migrations
             modelBuilder.Entity("Harbora.Domain.Projects.Project", b =>
                 {
                     b.Navigation("Environments");
+                });
+
+            modelBuilder.Entity("Harbora.Domain.Services.ManagedService", b =>
+                {
+                    b.Navigation("Apps");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Status.StatusPage", b =>

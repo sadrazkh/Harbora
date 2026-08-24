@@ -65,11 +65,10 @@ public static class DependencyInjection
         services.AddScoped<Application.Abstractions.IContainerConfigFileWriter, Docker.DockerContainerConfigFileWriter>();
         services.AddSingleton<Configuration.ConfigFileEditorFactory>();
         services.AddScoped<Application.Abstractions.IConfigOverrideResolver, Configuration.ConfigOverrideResolver>();
-        // C1 (same plan) fills this in once its attach-a-database work lands; until then every
-        // AttachedServiceConnectionString-kind rule fails with an ordinary, actionable
-        // ServiceReferenceUnavailable reason rather than a thrown exception or a silent placeholder.
+        // C1 (same plan): an attachment's alias resolved to its engine's own connection string.
+        services.AddScoped<Services.AttachedServiceConnectionResolver>();
         services.AddScoped<Application.Abstractions.IAttachedServiceConnectionStringResolver,
-            Configuration.NullAttachedServiceConnectionStringResolver>();
+            Configuration.AttachedServiceConnectionResolverAdapter>();
 
         // Source + proxy engines
         services.AddSingleton<IGitService, LibGit2GitService>();

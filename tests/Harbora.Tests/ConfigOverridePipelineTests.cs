@@ -21,7 +21,7 @@ public class ConfigOverridePipelineTests
 {
     private static ConfigOverrideRule GivenRule(
         PipelineHarness h, string filePath, string keyPath, ConfigOverrideValueKind kind,
-        string? literalValue = null, string? secretPlaintext = null, Guid? serviceReferenceId = null,
+        string? literalValue = null, string? secretPlaintext = null, string? serviceAlias = null,
         bool unpublished = true, int order = 0)
     {
         var rule = new ConfigOverrideRule
@@ -32,7 +32,7 @@ public class ConfigOverridePipelineTests
             ValueKind = kind,
             LiteralValue = literalValue,
             EncryptedSecretValue = secretPlaintext is null ? null : h.Protector.Protect(secretPlaintext),
-            AttachedServiceReferenceId = serviceReferenceId,
+            AttachedServiceAlias = serviceAlias,
             HasUnpublishedChanges = unpublished,
             Order = order
         };
@@ -82,14 +82,13 @@ public class ConfigOverridePipelineTests
     }
 
     [Fact]
-    public async Task An_attached_service_reference_resolves_through_the_seam_C1_will_fill_in()
+    public async Task An_attached_service_alias_resolves_through_the_seam_C1_fills_in()
     {
         using var h = new PipelineHarness();
         h.ConfigFiles.SeedFile("/app/appsettings.json", AppSettings);
-        var referenceId = Guid.NewGuid();
-        h.ServiceResolver.Seed(referenceId, "Host=managed-db;Password=rotated");
+        h.ServiceResolver.Seed(h.App.Id, "orders", "Host=managed-db;Password=rotated");
         GivenRule(h, "/app/appsettings.json", "ConnectionStrings:Default",
-            ConfigOverrideValueKind.AttachedServiceConnectionString, serviceReferenceId: referenceId);
+            ConfigOverrideValueKind.AttachedServiceConnectionString, serviceAlias: "orders");
 
         var deployment = h.QueueDeployment(number: 1);
         var result = await h.RunAsync(deployment);
@@ -99,19 +98,19 @@ public class ConfigOverridePipelineTests
     }
 
     [Fact]
-    public async Task An_unresolved_service_reference_fails_the_deployment_with_the_resolvers_own_reason()
+    public async Task An_unresolved_service_alias_fails_the_deployment_with_the_resolvers_own_reason()
     {
         using var h = new PipelineHarness();
         h.ConfigFiles.SeedFile("/app/appsettings.json", AppSettings);
         // Not seeded in ServiceResolver — simulates a database that was detached after the rule was made.
         GivenRule(h, "/app/appsettings.json", "ConnectionStrings:Default",
-            ConfigOverrideValueKind.AttachedServiceConnectionString, serviceReferenceId: Guid.NewGuid());
+            ConfigOverrideValueKind.AttachedServiceConnectionString, serviceAlias: "orders");
 
         var deployment = h.QueueDeployment(number: 1);
         var result = await h.RunAsync(deployment);
 
         result.Status.Should().Be(DeploymentStatus.Failed);
-        result.ErrorMessage.Should().Contain("no attached service resolves reference");
+        result.ErrorMessage.Should().Contain("no attachment named 'orders'");
         h.ConfigFiles.Writes.Should().BeEmpty("a failing rule must never write a partially-applied file");
     }
 

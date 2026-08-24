@@ -6,27 +6,27 @@ namespace Harbora.Application.Abstractions;
 /// app and give it a real connection string" work to land.
 ///
 /// <para>
-/// <b>This is the interface C1 fills in.</b> C2 ships a stub (<c>NullAttachedServiceConnectionStringResolver</c>,
-/// registered in <c>DependencyInjection.cs</c>) that always reports "not wired up yet" as an
-/// ordinary, actionable <see cref="Harbora.Domain.Configuration.ConfigOverrideFailureReason.ServiceReferenceUnavailable"/>
-/// failure — never a thrown exception, and never a silent placeholder. Once C1's attach-a-database
-/// work exposes an app's attached services and their composed connection strings, its own
-/// implementation replaces the stub in DI and every existing
-/// <c>AttachedServiceConnectionString</c>-kind rule starts resolving for real with no change to C2's
-/// own code.
+/// <b>C1 has landed and fills this in for real</b>: <c>AttachedServiceConnectionResolverAdapter</c>
+/// (registered in <c>DependencyInjection.cs</c>) wraps C1's own
+/// <c>Harbora.Infrastructure.Services.AttachedServiceConnectionResolver</c>, which looks up the
+/// <see cref="Harbora.Domain.Services.AppManagedService"/> row on an app carrying the requested
+/// alias and asks <c>ServiceCatalog</c> for its ready-to-use connection string — the same builder
+/// the database's own details screen uses. Every existing <c>AttachedServiceConnectionString</c>-kind
+/// rule resolves through this with no change to C2's own code.
 /// </para>
 /// </summary>
 public interface IAttachedServiceConnectionStringResolver
 {
     /// <summary>
-    /// The connection string an attached service would hand this app right now, or a named reason it
-    /// cannot: the attachment no longer exists, the service was detached, or its credentials are not
-    /// ready. Never throws for an ordinary "not attached any more" — a config override rule failing
-    /// this way must be exactly as debuggable as every other cause C2 names, and an exception bubbling
-    /// out of a resolver is the "override failed" wall of silence the owner explicitly ruled out.
+    /// The connection string <paramref name="appId"/>'s attachment named <paramref name="alias"/>
+    /// (case-insensitive — aliases are stored upper-cased, per
+    /// <see cref="Harbora.Domain.Services.AppManagedServiceAlias"/>) would hand this app right now,
+    /// or a named reason it cannot: no such attachment exists, or it was detached. Never throws for
+    /// an ordinary "not attached any more" — a config override rule failing this way must be exactly
+    /// as debuggable as every other cause C2 names, and an exception bubbling out of a resolver is
+    /// the "override failed" wall of silence the owner explicitly ruled out.
     /// </summary>
-    Task<AttachedServiceConnectionStringResult> ResolveAsync(
-        Guid workspaceId, Guid appId, Guid attachedServiceReferenceId, CancellationToken ct);
+    Task<AttachedServiceConnectionStringResult> ResolveAsync(Guid appId, string alias, CancellationToken ct);
 }
 
 /// <summary>

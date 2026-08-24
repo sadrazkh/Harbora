@@ -23,7 +23,7 @@ namespace Harbora.Data.Migrations
                     ValueKind = table.Column<int>(type: "integer", nullable: false),
                     LiteralValue = table.Column<string>(type: "text", nullable: true),
                     EncryptedSecretValue = table.Column<string>(type: "text", nullable: true),
-                    AttachedServiceReferenceId = table.Column<Guid>(type: "uuid", nullable: true),
+                    AttachedServiceAlias = table.Column<string>(type: "text", nullable: true),
                     Order = table.Column<int>(type: "integer", nullable: false),
                     HasUnpublishedChanges = table.Column<bool>(type: "boolean", nullable: false),
                     CreatedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),

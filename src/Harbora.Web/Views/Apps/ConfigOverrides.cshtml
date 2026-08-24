@@ -135,10 +135,10 @@
             </div>
             <p class="text-[11px] text-ink-faint">
                 @(isFa
-                    ? "برای «رشتهٔ اتصال سرویس متصل»، شناسهٔ سرویس متصل را در همان فیلد «مقدار» وارد کنید — این ویژگی به کار C1 (اتصال دیتابیس) وابسته است."
-                    : "For an attached-service connection string, put the attachment's id in the value field — this depends on C1's attach-a-database work.")
+                    ? "برای «رشتهٔ اتصال سرویس متصل»، همان نام مستعاری را وارد کنید که هنگام اتصال دیتابیس به این اپ تعیین کردید (پیش‌فرض: نام دیتابیس) — در صفحهٔ «دیتابیس‌ها»ی این اپ قابل مشاهده است."
+                    : "For an attached-service connection string, enter the same alias you gave the attachment when connecting a database to this app (defaults to the database's own name) — visible on this app's Databases panel.")
             </p>
-            <input name="attachedServiceReferenceId" placeholder="00000000-0000-0000-0000-000000000000" dir="ltr"
+            <input name="attachedServiceAlias" placeholder="@(isFa ? "نام مستعار، مثلاً orders" : "alias, e.g. orders")" dir="ltr"
                    class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-xs font-mono w-full" />
             <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-xs font-semibold w-fit">
                 + @(isFa ? "افزودن قانون" : "Add rule")
