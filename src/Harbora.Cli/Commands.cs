@@ -162,6 +162,106 @@ public sealed class AppsCommand : AsyncCommand
     }
 }
 
+/// <summary>
+/// The checks a deploy is going to need anyway, run before anything is uploaded — <c>harbora
+/// doctor</c>, and the same checks <c>harbora deploy</c> now runs on itself.
+///
+/// Built after DriveUnion's deploy failed twice for a reason the owner could not have diagnosed:
+/// 130 of 345 files were silently dropped from the upload, the build was reported healthy while
+/// failing inside the image, and the eventual error named the wrong thing. All three are fixed
+/// elsewhere; this is the preflight that would have caught the underlying cause — a file the build
+/// needs, sitting where the packer (or the project's own ignore file) treats it as build output —
+/// before a single byte went to the server.
+/// </summary>
+public sealed class DoctorCommand : AsyncCommand<DoctorCommand.Settings>
+{
+    public sealed class Settings : CommandSettings
+    {
+        [CommandOption("--path <PATH>"), Description("Project folder to check (default: current directory)")]
+        public string? Path { get; init; }
+
+        [CommandOption("--server <URL>"), Description("Check auth against this server instead of harbora.yml's")]
+        public string? Server { get; init; }
+
+        [CommandOption("--token <TOKEN>"), Description("Check this token instead of a stored login")]
+        public string? Token { get; init; }
+
+        [CommandOption("--account <EMAIL>"), Description("Which signed-in account to check, when several are")]
+        public string? Account { get; init; }
+    }
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    {
+        var dir = System.IO.Path.GetFullPath(settings.Path ?? Directory.GetCurrentDirectory());
+        var config = ProjectConfig.Load(dir);
+
+        var checks = await RunAsync(dir, config, settings.Server, settings.Token, settings.Account, ct);
+        Print(checks);
+
+        return checks.Any(c => c.Level == Doctor.Level.Fail) ? 1 : 0;
+    }
+
+    /// <summary>
+    /// The full report: manifest, build, upload, and — only here, not in <c>deploy</c>'s automatic
+    /// preflight, which already goes through its own login flow — whether the session for this
+    /// server is still good.
+    /// </summary>
+    public static async Task<List<Doctor.Check>> RunAsync(
+        string dir, ProjectConfig config, string? server, string? token, string? account, CancellationToken ct)
+    {
+        var checks = new List<Doctor.Check> { Doctor.CheckManifest(config, config.App) };
+
+        var (buildChecks, referenced) = Doctor.CheckBuild(dir, config);
+        checks.AddRange(buildChecks);
+
+        if (string.IsNullOrWhiteSpace(config.Image))
+            checks.AddRange(await Doctor.CheckUploadAsync(dir, config, referenced, ct));
+
+        var resolvedServer = server ?? config.Server;
+        ApiClient? api = null;
+        if (!string.IsNullOrWhiteSpace(resolvedServer) && !string.IsNullOrWhiteSpace(token))
+        {
+            api = new ApiClient(resolvedServer, token);
+        }
+        else
+        {
+            var stored = HarboraConfig.Load().Resolve(account);
+            if (stored is not null && (resolvedServer is null ||
+                string.Equals(stored.Server, resolvedServer, StringComparison.OrdinalIgnoreCase)))
+            {
+                api = new ApiClient(stored);
+                resolvedServer ??= stored.Server;
+            }
+        }
+        checks.Add(await Doctor.CheckAuthAsync(api, resolvedServer, ct));
+
+        return checks;
+    }
+
+    private static void Print(IReadOnlyList<Doctor.Check> checks)
+    {
+        foreach (var c in checks)
+        {
+            var (icon, color) = c.Level switch
+            {
+                Doctor.Level.Ok => ("✓", "green"),
+                Doctor.Level.Warn => ("!", "yellow"),
+                _ => ("✗", "red")
+            };
+            AnsiConsole.MarkupLine($"[{color}]{icon}[/] [bold]{Markup.Escape(c.Name)}[/] — {Markup.Escape(c.Detail)}");
+        }
+
+        var fails = checks.Count(c => c.Level == Doctor.Level.Fail);
+        var warns = checks.Count(c => c.Level == Doctor.Level.Warn);
+        if (fails > 0)
+            AnsiConsole.MarkupLine($"[red]{fails} problem(s) would stop this deploy.[/]");
+        else if (warns > 0)
+            AnsiConsole.MarkupLine($"[yellow]{warns} warning(s) — deploy would likely still work.[/]");
+        else
+            AnsiConsole.MarkupLine("[green]No configuration problems found.[/]");
+    }
+}
+
 public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
 {
     public sealed class Settings : CommandSettings
@@ -197,6 +297,9 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         [CommandOption("-i|--image <IMAGE>"), Description("Release an existing image, e.g. nginx:alpine (builds nothing)")]
         public string? Image { get; init; }
 
+        [CommandOption("--skip-doctor"), Description("Skip the harbora doctor preflight checks and deploy anyway")]
+        public bool SkipDoctor { get; init; }
+
         [CommandOption("-t|--tar <FILE>"), Description("Upload an archive you already built (.tar.gz)")]
         public string? Tar { get; init; }
 
@@ -217,6 +320,9 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
     {
         var dir = System.IO.Path.GetFullPath(settings.Path ?? Directory.GetCurrentDirectory());
         var config = ProjectConfig.Load(dir);
+
+        if (await PreflightAsync(dir, config, settings.SkipDoctor, ct) is { } preflightExit)
+            return preflightExit;
 
         // --server/--token make a deploy self-contained, so CI needs no interactive login step.
         ApiClient api;
@@ -309,6 +415,44 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         await VersionNotice.MaybeWarnAsync(api);
 
         return settings.Follow && !settings.NoFollow ? await StreamLogs(api, deploymentId, ct) : 0;
+    }
+
+    /// <summary>
+    /// Runs <see cref="Doctor"/>'s local, no-network checks before anything is uploaded, and turns a
+    /// Fail-level result into an early exit — this is the preflight the DriveUnion incident exists to
+    /// justify. Returns null to mean "continue with the deploy"; a non-null value is the exit code to
+    /// return immediately, without touching the network at all.
+    ///
+    /// Deliberately does not repeat <see cref="Doctor.CheckManifest"/> or
+    /// <see cref="Doctor.CheckAuthAsync"/> here: this method runs before the app name and the account
+    /// are resolved, and <c>deploy</c> already has its own, better error messages for both — a second,
+    /// earlier "No app specified" would only be confusing about which one is real.
+    /// </summary>
+    public static async Task<int?> PreflightAsync(string dir, ProjectConfig config, bool skip, CancellationToken ct)
+    {
+        if (skip)
+        {
+            AnsiConsole.MarkupLine("[grey]Skipped the harbora doctor preflight (--skip-doctor).[/]");
+            return null;
+        }
+
+        var (buildChecks, referenced) = Doctor.CheckBuild(dir, config);
+        var checks = new List<Doctor.Check>(buildChecks);
+        if (string.IsNullOrWhiteSpace(config.Image))
+            checks.AddRange(await Doctor.CheckUploadAsync(dir, config, referenced, ct));
+
+        foreach (var c in checks.Where(c => c.Level != Doctor.Level.Ok))
+            AnsiConsole.MarkupLine(
+                $"[{(c.Level == Doctor.Level.Fail ? "red" : "yellow")}]{(c.Level == Doctor.Level.Fail ? "✗" : "!")}[/] " +
+                $"[bold]{Markup.Escape(c.Name)}[/] — {Markup.Escape(c.Detail)}");
+
+        if (!checks.Any(c => c.Level == Doctor.Level.Fail)) return null;
+
+        AnsiConsole.MarkupLine(
+            "[red]harbora doctor found a problem that would break this deploy — stopping before anything is " +
+            "uploaded.[/] [grey]Run[/] harbora doctor [grey]for the full report, or pass[/] --skip-doctor " +
+            "[grey]to deploy anyway.[/]");
+        return 1;
     }
 
     // Every one of these takes the app rather than a slug. The name a user typed is for finding an

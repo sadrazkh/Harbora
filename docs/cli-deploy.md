@@ -77,6 +77,36 @@ says nothing at all if the panel is older than this endpoint or the version cann
 
 ## 4. Deploy
 
+### Preflight: `harbora doctor`
+
+`harbora deploy` runs this automatically, before uploading anything — so most people never type it
+by hand. Run it directly to see the full report, including things a mid-deploy preflight
+deliberately skips (see below):
+
+```bash
+harbora doctor
+```
+
+It checks, and says what it looked at either way:
+
+- **`harbora.yml`** — parses, names an app (or one was given on the command line), names a server.
+- **The build** — the context exists; the Dockerfile exists, or the project auto-detects (Node,
+  .NET, Go, PHP, Python, static); every `COPY` source in the Dockerfile exists under the context;
+  the build references `$PORT` (a container on the wrong port is the panel's own documented 502,
+  below).
+- **The upload** — packs the project exactly as `--push` would, reports what it would exclude and
+  why, and cross-references every `COPY` source and every `package.json` script against that list.
+  **This is the check that would have caught a real incident**: an app's `package.json` ran
+  `node Scripts/build/copy-fonts.mjs` — an ordinary source file — and the upload excluded it because
+  a folder in the path was named `build`, which broke the image build with no error anywhere in the
+  deploy log. See *"Keeping a source folder named `build`"* below.
+- **Auth** *(standalone `harbora doctor` only, not the automatic deploy preflight)* — a session
+  exists for the target server and `whoami` still accepts it.
+
+`harbora deploy` runs the manifest and build/upload checks (not auth — it already has its own login
+flow) and refuses to upload when one of them would break the build outright, before touching the
+network. Skip it with `--skip-doctor` if a check is wrong for your project.
+
 ```bash
 harbora deploy        # deploys, then streams the build log
 ```
@@ -213,10 +243,42 @@ branch: main                         # archive this branch instead of the folder
 ### What is never uploaded
 
 `.dockerignore` is honoured first (it is what the build actually reads), then `.gitignore`, then
-`ignore:` from this file. On top of that, these are always excluded:
+`ignore:` from this file. On top of that, two built-in rules apply everywhere, with no ignore file
+needed:
 
-`.git` · `node_modules` · `vendor` · `bin` · `obj` · `dist` · `build` · `.next` · `.venv` ·
-`__pycache__` · `.idea` · `.vs` · `.vscode` · **`.env`** · `.env.local`
+Matched at **any depth**, because nobody puts real source inside a directory with these names, no
+matter how deep it sits:
+
+`.git` · `.hg` · `.svn` · `node_modules` · `bower_components` · `bin` · `obj` · `.next` · `.nuxt` ·
+`.venv` · `venv` · `__pycache__` · `.pytest_cache` · `.idea` · `.vs` · `.vscode` · `.DS_Store` ·
+`Thumbs.db` · **`.env`** · `.env.local` · `.terraform` · `.gradle`
+
+Matched **only at the project root** — these are exactly the build-output names an unconfigured
+project uses by default (npm's `./build` or `./dist`, Cargo's `./target`, a PHP/Go `./vendor`,
+Nuxt's `./.output`), but every one of them is equally an ordinary *source* directory name anywhere
+deeper in a tree:
+
+`build` · `dist` · `target` · `vendor` · `.output`
+
+**Keeping a source folder that happens to be named `build`.** A real incident: an app's own source
+tree had `Scripts/build/copy-fonts.mjs` — an ordinary helper script, nested under a folder literally
+named `build` two levels down — and an older version of this packer matched `build` at any depth,
+silently dropping the file. `npm run prebuild` then failed *inside the image*, with nothing in the
+upload or the build log saying why. The rule above is the fix: `build`/`dist`/`target`/`vendor`/
+`.output` only count as build output at the project root now, so a nested folder with the same name
+is packed like any other source directory.
+
+That fix does not cover every path to the same mistake, though. **`ignore:` in `harbora.yml`, and
+any line in your own `.dockerignore`/`.gitignore`, still match at any depth** — that is what makes
+`ignore: [coverage]` drop `coverage/` wherever it appears, which is the whole point of that feature.
+If your `.gitignore` happens to carry a bare `build` or `dist` line (extremely common in JavaScript
+projects), a nested folder with that exact name is excluded again, the same way, just via a
+different rule. Two ways to avoid it:
+
+- Run `harbora doctor` (or just `harbora deploy`, which runs it for you) before the first deploy of
+  a new app — it reads `package.json`'s `scripts` and the Dockerfile's `COPY` sources and fails
+  loudly if either references a path the upload would drop.
+- Scope your own ignore entries to the root when that is what you mean: `/build` instead of `build`.
 
 `.env` is excluded on purpose: it usually holds local database URLs and API keys. Put production
 values in the app's **Environment Variables**.

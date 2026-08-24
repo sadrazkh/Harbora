@@ -21,6 +21,7 @@ app.Configure(config =>
     config.AddCommand<AccountsCommand>("accounts").WithDescription("List signed-in accounts, switch, or log out.");
     config.AddCommand<StatusCommand>("status").WithDescription("Check server/session status.");
     config.AddCommand<AppsCommand>("apps").WithDescription("List applications.");
+    config.AddCommand<DoctorCommand>("doctor").WithDescription("Check this project for problems before deploying.");
     config.AddCommand<DeployCommand>("deploy").WithDescription("Deploy an app and follow the logs.");
     config.AddCommand<LogsCommand>("logs").WithDescription("Stream logs for a deployment.");
     config.AddCommand<CancelCommand>("cancel").WithDescription("Stop a queued or running deployment.");

@@ -14,7 +14,7 @@
 | `Harbora.Data` | `HarboraDbContext` (63 tables), 46 Npgsql migrations, `DbSeeder`. PostgreSQL only — zero SQLite support. | Domain, Application |
 | `Harbora.Infrastructure` | ~230 files / 29k LOC. Deployment pipeline, job queue, Docker engines, Traefik proxy, managed services, backups (legacy), monitoring, notifications, nodes control plane, AI gateway, storage, tenancy. | Domain, Application, Data |
 | `Harbora.Web` | ASP.NET control plane: 34 UI controllers + 5 API controllers, 84 Razor views, 4 Vue islands, SignalR hub, localization (fa default / en), PWA. | Infrastructure |
-| `Harbora.Cli` | `harbora` deploy CLI: 10 files / ~830 LOC, Spectre.Console. 10 commands. | (standalone; talks to `/api/v1`) |
+| `Harbora.Cli` | `harbora` deploy CLI: 11 files / ~830 LOC, Spectre.Console. 11 commands. | (standalone; talks to `/api/v1`) |
 | `Harbora.Agent` | **Legacy** inbound HTTP agent (port 9700, bearer token). Minimal API over Docker. **Deprecated as of v0.2.0** (badge on the Servers page, notice in `docs/node-agent/merge-notes.md`, supported for at least two more minor versions); still no tests, which is why it is frozen. | Application, Infrastructure, Shared |
 | `Harbora.NodeAgent` | Node Agent v1: outbound-only systemd agent, mTLS, 24-verb dispatcher, durable outbox/ledger, self-update with rollback, ingress tunnel. | NodeAgent.Contracts |
 | `Harbora.NodeAgent.Contracts` | Versioned protocol v1: frames, verbs, specs. Mirrored by `contracts/node-agent/v1/node-agent.v1.schema.json` (draft 2020-12) and enforced by conformance tests. | — |

@@ -306,6 +306,9 @@ harbora update
 # In ANY project folder, scaffold the config in one command (slug = folder name):
 harbora init                                   # writes ./harbora.yml (uses the folder name; detects Dockerfile)
 
+# Check for problems a deploy would fail on — deploy also runs this automatically before uploading:
+harbora doctor                                 # manifest, Dockerfile/COPY sources, $PORT, what the upload excludes, auth
+
 harbora deploy                                 # deploys this project (reads ./harbora.yml) and follows live logs
 # …or without a config file:
 harbora deploy my-app --ref main
