@@ -135,4 +135,4 @@ curl -X POST https://YOUR-APP-DOMAIN/send-otp \
 
 ---
 
-برگشت به [فهرست](README.md)
+قدم بعدی: [آماده‌سازی اپ برای Deploy با CLI](12-cli-deploy.md)
