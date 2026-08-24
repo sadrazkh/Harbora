@@ -399,18 +399,15 @@
      deliberately NOT used: the reason has to be selectable text so somebody can quote it when they
      ask their provider about it. The disabled input is what actually refuses the choice. */
   .size-picker { @apply space-y-4; }
-  .size-picker-step { @apply rounded-xl border border-line bg-surface p-4; }
-  .size-picker-legend { @apply mb-3; }
-  .size-picker-legend strong { @apply block text-xs font-semibold text-ink; }
-  .size-picker-legend small { @apply mt-0.5 block text-[10px] leading-4 text-ink-faint; }
-  .size-picker-note { @apply text-[10px] leading-4 text-ink-faint; }
-  /* Container queries, not `sm:`/`xl:` viewport breakpoints.
-     This grid renders wherever the shared picker is embedded — a 22rem resize aside, an app's wide
-     details column, the full-width create-flow form — and the viewport says nothing about which one
-     that is. A 1920px-wide screen with the picker sitting inside a 352px aside still satisfies
-     `xl:grid-cols-3`, which is exactly how three price-and-spec cards ended up squeezed one word per
-     line into a box a third that width. `container-type: inline-size` makes the grid ask its OWN box
-     for room instead of the window's.
+  /* Container queries, not `sm:`/`xl:` viewport breakpoints, decide the grids below.
+     The picker renders wherever it is embedded — a 22rem resize aside, an app's wide details column,
+     the full-width create-flow form — and the viewport says nothing about which one that is. A
+     1920px-wide screen with the picker sitting inside a 352px aside still satisfied `xl:grid-cols-3`,
+     which is exactly how three price-and-spec cards ended up squeezed one word per line into a box a
+     third that width. `container-type: inline-size` goes on THIS element, the padded card the grids
+     sit inside, rather than on the grids themselves: a size query container is looked up starting at
+     an element's ancestors, never at the element being styled, so a grid cannot query its own box —
+     it has to query a parent's.
      Tailwind 3.4 (this project's pinned version, package.json) has no container-query utilities in
      core — that shipped in Tailwind v4. The opt-in `@tailwindcss/container-queries` plugin exists for
      v3 but is not installed here (tailwind.config.js: `plugins: []`), so `@md:grid-cols-2` is not
@@ -418,8 +415,13 @@
      panel supports (Chromium 105+, Firefox 110+, Safari 16+) has shipped it for years — so this is
      hand-written CSS beside the `@apply` rules around it, the same way the `@media` blocks elsewhere
      in this file sit beside them. */
+  .size-picker-step { @apply rounded-xl border border-line bg-surface p-4; container-type: inline-size; }
+  .size-picker-legend { @apply mb-3; }
+  .size-picker-legend strong { @apply block text-xs font-semibold text-ink; }
+  .size-picker-legend small { @apply mt-0.5 block text-[10px] leading-4 text-ink-faint; }
+  .size-picker-note { @apply text-[10px] leading-4 text-ink-faint; }
   .size-picker-servers,
-  .size-tier-grid { @apply grid gap-2; container-type: inline-size; }
+  .size-tier-grid { @apply grid gap-2; }
   @container (min-width: 26rem) {
     .size-picker-servers,
     .size-tier-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
