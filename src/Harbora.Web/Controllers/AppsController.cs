@@ -48,7 +48,11 @@ public sealed partial class AppsController(
     Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Storage.ObjectStorageOptions> storageOptions,
     AppAddressAssigner addresses,
     Harbora.Modules.Backup.Infrastructure.BackupSnapshotService backupSnapshots,
-    Harbora.Infrastructure.Monitoring.LifecycleHistory lifecycle) : Controller
+    Harbora.Infrastructure.Monitoring.LifecycleHistory lifecycle,
+    // C2 (2026-08-22 config-delivery plan): resolves a config-override rule's value and, for the
+    // pre-deploy validation action, reads the deployed app's own file through the same container
+    // seam DeploymentPipeline applies overrides through.
+    IConfigOverrideResolver configOverrides) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();

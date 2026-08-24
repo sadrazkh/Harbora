@@ -1,0 +1,148 @@
+@model ConfigOverridesPageViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var message = TempData["Message"] as string;
+    var error = TempData["Error"] as string;
+    var formats = new[] { "Json", "Yaml", "Env", "Ini", "Toml", "Xml" };
+}
+
+<nav class="breadcrumb mb-4" aria-label="breadcrumb">
+    <a href="/apps">@(isFa ? "برنامه‌ها" : "Applications")</a>
+    <i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i>
+    <a href="/apps/details/@Model.AppId">@Model.AppName</a>
+    <i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i>
+    <span>@(isFa ? "بازنویسی فایل پیکربندی" : "Config file overrides")</span>
+</nav>
+
+<partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+    isFa ? "بازنویسی فایل پیکربندی" : "Config file overrides",
+    isFa
+        ? "فایل پیکربندی خودِ اپ (مثل appsettings.json) در Git با مقدار جای‌گیرنده می‌ماند؛ هاربورا مقدار واقعی را در زمان استقرار داخل کانتینر جایگزین می‌کند — رمز هرگز به Git نمی‌رسد."
+        : "The app's own config file (appsettings.json, config/database.yml, ...) stays in Git with a placeholder; Harbora replaces the real value inside the container at deploy time — a secret never reaches Git."))" />
+
+@if (message is not null) { <div class="alert-success mb-4" data-config-override-message>@message</div> }
+@if (error is not null) { <div class="alert-danger mb-4" data-config-override-error>@error</div> }
+
+@if (Model.Validation is { } v)
+{
+    <div class="@(v.Ok ? "alert-success" : "alert-danger") mb-4" data-config-override-validation data-config-override-validation-rule="@v.RuleId" data-config-override-validation-ok="@(v.Ok ? "true" : "false")">
+        @if (v.Ok)
+        {
+            <p class="font-semibold">@(isFa ? "این قانون قابل اعمال است." : "This rule can be applied.")</p>
+            <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                <dt class="text-ink-faint">@(isFa ? "مقدار فعلی" : "Current value")</dt>
+                <dd><code dir="ltr">@(v.CurrentValue ?? "")</code></dd>
+                <dt class="text-ink-faint">@(isFa ? "مقدار بعد از اعمال" : "Would become")</dt>
+                <dd>
+                    @if (v.WouldBecomeIsSecret)
+                    {
+                        <code dir="ltr">••••••••</code>
+                        <span class="text-ink-faint">@(isFa ? "(رمز — نمایش داده نمی‌شود)" : "(secret — not shown)")</span>
+                    }
+                    else
+                    {
+                        <code dir="ltr">@(v.WouldBecomeValue ?? "")</code>
+                    }
+                </dd>
+            </dl>
+        }
+        else
+        {
+            <p class="font-semibold">@(isFa ? "این قانون در حال حاضر قابل اعمال نیست." : "This rule cannot be applied right now.")</p>
+            <p class="mt-1 text-xs" dir="ltr">@v.FailureDetail</p>
+        }
+    </div>
+}
+
+<section class="rounded-xl border border-line bg-surface p-5 mb-6" data-config-override-rules>
+    <h2 class="text-sm font-semibold mb-3">@(isFa ? "قانون‌ها" : "Rules")</h2>
+
+    @if (Model.Rules.Count == 0)
+    {
+        <partial name="Design/_EmptyState" model="@(new EmptyStateModel("file-cog",
+            isFa ? "هنوز قانونی تعریف نشده است." : "No override rules yet."))" />
+    }
+    else
+    {
+        <div class="space-y-2 mb-5">
+            @foreach (var r in Model.Rules)
+            {
+                <div class="rounded-lg bg-surface-2 px-3 py-3 text-sm" data-config-override-rule data-config-override-rule-id="@r.Id" data-config-override-rule-unpublished="@(r.HasUnpublishedChanges ? "true" : "false")">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div class="font-mono text-xs" dir="ltr">
+                            <span class="font-semibold">@r.FilePath</span>
+                            <span class="text-ink-faint"> :: @r.KeyPath</span>
+                            @if (r.FormatOverride is not null)
+                            {
+                                <span class="ms-1 rounded bg-surface px-1 text-[10px] text-ink-faint">@r.FormatOverride</span>
+                            }
+                        </div>
+                        <div class="flex items-center gap-2 text-xs">
+                            <span class="rounded bg-surface px-1.5 py-0.5">@r.ValueKindLabel</span>
+                            @if (r.HasUnpublishedChanges)
+                            {
+                                <span class="rounded bg-warn-soft px-1.5 py-0.5 text-warn" title="@(isFa ? "با استقرار بعدی اعمال می‌شود" : "Applies on next deploy")">
+                                    @(isFa ? "در انتظار استقرار" : "pending deploy")
+                                </span>
+                            }
+                        </div>
+                    </div>
+                    <div class="mt-1 text-xs text-ink-faint" dir="ltr">
+                        @(r.IsMasked ? "••••••••" : r.Value)
+                    </div>
+                    <div class="mt-2 flex items-center gap-3">
+                        <form asp-action="ValidateConfigOverride" asp-route-id="@Model.AppId" asp-route-ruleId="@r.Id" method="post">
+                            @Html.AntiForgeryToken()
+                            <button class="text-xs text-accent-text">@(isFa ? "اعتبارسنجی در برابر اپ مستقرشده" : "Validate against the deployed app")</button>
+                        </form>
+                        <form asp-action="DeleteConfigOverride" asp-route-id="@Model.AppId" asp-route-ruleId="@r.Id" method="post">
+                            @Html.AntiForgeryToken()
+                            <button class="text-xs text-danger" aria-label="@(isFa ? "حذف قانون" : "Delete rule")">✕ @(isFa ? "حذف" : "delete")</button>
+                        </form>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    <details>
+        <summary class="cursor-pointer text-sm text-accent-text">+ @(isFa ? "قانون تازه" : "New rule")</summary>
+        <form asp-action="AddConfigOverride" asp-route-id="@Model.AppId" method="post" class="mt-3 space-y-2" data-config-override-form>
+            @Html.AntiForgeryToken()
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <input name="filePath" placeholder="appsettings.json" dir="ltr"
+                       class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-xs font-mono" />
+                <select name="formatOverride" class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-xs">
+                    <option value="">@(isFa ? "قالب: تشخیص خودکار از پسوند" : "Format: auto-detect from extension")</option>
+                    @foreach (var f in formats)
+                    {
+                        <option value="@f">@f</option>
+                    }
+                </select>
+                <input name="keyPath" placeholder="ConnectionStrings:Default" dir="ltr"
+                       class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-xs font-mono" />
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 items-center">
+                <select name="valueKind" class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-xs" data-config-override-value-kind>
+                    <option value="literal">@(isFa ? "مقدار ثابت" : "Literal value")</option>
+                    <option value="secret">@(isFa ? "رمز" : "Secret")</option>
+                    <option value="service">@(isFa ? "رشتهٔ اتصال سرویس متصل" : "Attached service connection string")</option>
+                </select>
+                <input name="literalValue" placeholder="@(isFa ? "مقدار" : "value")" dir="ltr"
+                       class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-xs font-mono" />
+                <input name="secretValue" placeholder="@(isFa ? "مقدار رمز" : "secret value")" type="password" dir="ltr"
+                       class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-xs font-mono" />
+            </div>
+            <p class="text-[11px] text-ink-faint">
+                @(isFa
+                    ? "برای «رشتهٔ اتصال سرویس متصل»، شناسهٔ سرویس متصل را در همان فیلد «مقدار» وارد کنید — این ویژگی به کار C1 (اتصال دیتابیس) وابسته است."
+                    : "For an attached-service connection string, put the attachment's id in the value field — this depends on C1's attach-a-database work.")
+            </p>
+            <input name="attachedServiceReferenceId" placeholder="00000000-0000-0000-0000-000000000000" dir="ltr"
+                   class="rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-xs font-mono w-full" />
+            <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-3 py-1.5 text-xs font-semibold w-fit">
+                + @(isFa ? "افزودن قانون" : "Add rule")
+            </button>
+        </form>
+    </details>
+</section>

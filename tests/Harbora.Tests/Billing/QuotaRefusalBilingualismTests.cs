@@ -124,7 +124,8 @@ public class QuotaRefusalBilingualismTests
 
     /// <summary>Every method a fixture must supply but Start/Restart never reach; each throws if it is.</summary>
     private sealed class Unused :
-        IDeploymentEngine, IRollbackPlanner, IDomainInspector, IQuotaService, ISchedulerService, IProxyEngine
+        IDeploymentEngine, IRollbackPlanner, IDomainInspector, IQuotaService, ISchedulerService, IProxyEngine,
+        Harbora.Application.Abstractions.IConfigOverrideResolver
     {
         private static NotSupportedException NotNeeded() =>
             new("This dependency is not reached by Start/Restart and should not have been called.");
@@ -141,6 +142,10 @@ public class QuotaRefusalBilingualismTests
         public ProxyConfigPreview Preview(IReadOnlyList<Harbora.Domain.Networking.Route> routes) => throw NotNeeded();
         public ProxyValidationResult Validate(IReadOnlyList<Harbora.Domain.Networking.Route> routes) => throw NotNeeded();
         public Task<ProxyApplyResult> ApplyAllAsync(Guid? callerWorkspaceId, CancellationToken ct) => throw NotNeeded();
+        public Task ApplyAllAsync(Harbora.Domain.Apps.App app, string containerNameOrId, CancellationToken ct) => throw NotNeeded();
+        public Task<Harbora.Application.Abstractions.ConfigOverridePreview> PreviewAsync(
+            Harbora.Domain.Apps.App app, Harbora.Domain.Configuration.ConfigOverrideRule rule, string containerNameOrId, CancellationToken ct) =>
+            throw NotNeeded();
     }
 
     /// <summary>
@@ -250,7 +255,8 @@ public class QuotaRefusalBilingualismTests
                 new NoopJobQueue(), new UnusedBackupDependency(), currentUser, new SilentAudit(),
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<
                     Harbora.Modules.Backup.Infrastructure.BackupSnapshotService>.Instance),
-            lifecycle: new Harbora.Infrastructure.Monitoring.LifecycleHistory(db))
+            lifecycle: new Harbora.Infrastructure.Monitoring.LifecycleHistory(db),
+            configOverrides: new Unused())
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
