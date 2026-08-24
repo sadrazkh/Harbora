@@ -2,6 +2,15 @@ using System.Reflection;
 using Harbora.Cli;
 using Spectre.Console.Cli;
 
+// Windows consoles still default to a legacy code page, so every ✓ and ✗ this CLI prints arrives as
+// a replacement character — including the tick on a successful deploy and every line of `doctor`,
+// where the glyph IS the verdict. Set once, before anything writes: a status symbol nobody can read
+// is a report that does not report.
+//
+// Wrapped because a redirected or closed stream (a pipe, CI, `harbora apps > out.txt`) throws here,
+// and failing to start over an encoding preference would be worse than the mangled glyph it fixes.
+try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch (IOException) { }
+
 // An update renames the old binary aside rather than overwriting a running file; this is where the
 // leftover goes away.
 if (Environment.ProcessPath is { Length: > 0 } self) SelfUpdate.CleanUpPreviousBinary(self);
