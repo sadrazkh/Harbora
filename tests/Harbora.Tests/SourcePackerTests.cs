@@ -160,6 +160,14 @@ public class SourcePackerTests : IDisposable
         {
             packed.Files.Should().Be(2, "only package.json and src/index.js belong in the push");
 
+            // A customer who only sees "Unpacked 215 entries" has no way to find out that 130 files
+            // never arrived. The count of what was dropped, and why, must be discoverable from the
+            // same result the file count came from.
+            packed.Excluded.Should().HaveCount(2);
+            packed.Excluded.Select(e => e.Path).Should().BeEquivalentTo(
+                [".env", "node_modules/dep/big.js"]);
+            packed.Excluded.Should().OnlyContain(e => !string.IsNullOrWhiteSpace(e.Reason));
+
             // Round-trip through the server's own extractor: what was packed is what arrives.
             var dest = Path.Combine(_root, "..", "unpacked-" + Guid.NewGuid().ToString("N"));
             await using (var stream = File.OpenRead(packed.ArchivePath))
@@ -173,6 +181,37 @@ public class SourcePackerTests : IDisposable
             Directory.Delete(dest, recursive: true);
         }
         finally { File.Delete(packed.ArchivePath); }
+    }
+
+    [Fact]
+    public async Task Excluded_files_report_which_rule_dropped_them()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "coverage"));
+        File.WriteAllText(Path.Combine(_root, "coverage", "report.html"), "x");
+        File.WriteAllText(Path.Combine(_root, ".gitignore"), "coverage");
+        File.WriteAllText(Path.Combine(_root, "package.json"), "{}");
+
+        var packed = await SourcePacker.PackAsync(_root);
+        try
+        {
+            var entry = packed.Excluded.Should().ContainSingle().Which;
+            entry.Path.Should().Be("coverage/report.html");
+            entry.Reason.Should().Contain("coverage", "the reason should name the rule, not just say 'excluded'");
+        }
+        finally { File.Delete(packed.ArchivePath); }
+    }
+
+    [Fact]
+    public void DescribeExclusion_names_the_built_in_rule_that_matched()
+    {
+        SourcePacker.DescribeExclusion("node_modules/express/index.js", [])
+            .Should().NotBeNull().And.Subject.ToString()!.Should().Contain("node_modules");
+    }
+
+    [Fact]
+    public void DescribeExclusion_returns_null_for_a_file_that_is_not_excluded()
+    {
+        SourcePacker.DescribeExclusion("src/app/main.ts", []).Should().BeNull();
     }
 
     public void Dispose()

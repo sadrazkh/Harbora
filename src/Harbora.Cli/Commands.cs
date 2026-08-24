@@ -191,6 +191,9 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         [CommandOption("--path <PATH>"), Description("Folder to deploy (default: current directory)")]
         public string? Path { get; init; }
 
+        [CommandOption("--verbose"), Description("With --push, list every file the upload excluded and why")]
+        public bool Verbose { get; init; }
+
         [CommandOption("-i|--image <IMAGE>"), Description("Release an existing image, e.g. nginx:alpine (builds nothing)")]
         public string? Image { get; init; }
 
@@ -291,7 +294,7 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
                 DeployMode.Image        => await DeployImageAsync(api, app, plan.Value!),
                 DeployMode.PushTarball  => await UploadAsync(api, app, plan.Value!, deleteAfter: false),
                 DeployMode.PushGitBranch => await PushBranchAsync(api, app, dir, plan.Value!, config, ct),
-                DeployMode.PushFolder   => await PushFolderAsync(api, app, dir, config, ct),
+                DeployMode.PushFolder   => await PushFolderAsync(api, app, dir, config, settings.Verbose, ct),
                 _                       => await TriggerAsync(api, app, plan.Value)
             };
         }
@@ -327,14 +330,40 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
 
     /// <summary>Packs the folder and streams it to the server.</summary>
     private static async Task<string?> PushFolderAsync(
-        ApiClient api, RemoteApp app, string dir, ProjectConfig config, CancellationToken ct)
+        ApiClient api, RemoteApp app, string dir, ProjectConfig config, bool verbose, CancellationToken ct)
     {
         if (!Directory.Exists(dir)) throw new FileNotFoundException($"Folder not found: {dir}");
 
         var packed = await SourcePacker.PackAsync(dir, config, ct);
         AnsiConsole.MarkupLine(
             $"[grey]Packed[/] {packed.Files} files ({packed.Bytes / 1024.0 / 1024:0.#} MB) [grey]from[/] {dir}");
+        ReportExcluded(packed.Excluded, verbose);
         return await UploadAsync(api, app, packed.ArchivePath, deleteAfter: true);
+    }
+
+    /// <summary>
+    /// What went missing, and why — never just a smaller file count than the repo has. A push that
+    /// silently dropped 130 of a project's 345 files (a real DriveUnion incident: an ordinary source
+    /// folder happened to be named "build") gave no sign anything was wrong until the image failed to
+    /// build with no useful error. This is always printed, one line per distinct rule that matched, so
+    /// "why" is visible without asking; --verbose additionally names every file, for "which".
+    /// </summary>
+    private static void ReportExcluded(IReadOnlyList<SourcePacker.ExcludedEntry> excluded, bool verbose)
+    {
+        if (excluded.Count == 0) return;
+
+        var byReason = excluded
+            .GroupBy(e => e.Reason, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count())
+            .Select(g => $"{g.Count()} by {g.Key}");
+
+        AnsiConsole.MarkupLine(
+            $"[yellow]Excluded[/] {excluded.Count} file(s): {Markup.Escape(string.Join(", ", byReason))}" +
+            (verbose ? "" : " [grey](--verbose lists every file)[/]"));
+
+        if (!verbose) return;
+        foreach (var entry in excluded)
+            AnsiConsole.MarkupLine($"  [grey]-[/] {Markup.Escape(entry.Path)} [grey]— {Markup.Escape(entry.Reason)}[/]");
     }
 
     /// <summary>

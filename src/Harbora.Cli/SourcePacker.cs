@@ -51,7 +51,14 @@ public static class SourcePacker
         "build", "dist", "target", "vendor", ".output"
     ];
 
-    public sealed record Packed(string ArchivePath, int Files, long Bytes);
+    /// <summary>
+    /// A file the packer left out of the archive, and which rule did it — so a customer can find out
+    /// *what* went missing, not just how many. An upload that only ever said "Unpacked 215 entries"
+    /// left no way to discover that 130 of a project's 345 tracked files had been silently dropped.
+    /// </summary>
+    public sealed record ExcludedEntry(string Path, string Reason);
+
+    public sealed record Packed(string ArchivePath, int Files, long Bytes, IReadOnlyList<ExcludedEntry> Excluded);
 
     public static Task<Packed> PackAsync(string projectDir, CancellationToken ct = default) =>
         PackAsync(projectDir, new ProjectConfig(), ct);
@@ -66,6 +73,7 @@ public static class SourcePacker
         var archivePath = Path.Combine(Path.GetTempPath(), $"harbora-{Guid.NewGuid():N}.tar.gz");
         var files = 0;
         long bytes = 0;
+        var excluded = new List<ExcludedEntry>();
 
         await using (var output = File.Create(archivePath))
         await using (var gz = new GZipStream(output, CompressionLevel.Optimal))
@@ -90,7 +98,12 @@ public static class SourcePacker
                 ct.ThrowIfCancellationRequested();
 
                 var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-                if (IsExcluded(relative, ignore)) continue;
+                var reason = DescribeExclusion(relative, ignore);
+                if (reason is not null)
+                {
+                    excluded.Add(new ExcludedEntry(relative, reason));
+                    continue;
+                }
 
                 await tar.WriteEntryAsync(file, relative, ct);
                 files++;
@@ -98,7 +111,7 @@ public static class SourcePacker
             }
         }
 
-        return new Packed(archivePath, files, bytes);
+        return new Packed(archivePath, files, bytes, excluded);
     }
 
     /// <summary>
@@ -123,17 +136,26 @@ public static class SourcePacker
         return [];
     }
 
-    public static bool IsExcluded(string relativePath, IReadOnlyCollection<string> ignore)
+    public static bool IsExcluded(string relativePath, IReadOnlyCollection<string> ignore) =>
+        DescribeExclusion(relativePath, ignore) is not null;
+
+    /// <summary>
+    /// The same decision <see cref="IsExcluded"/> makes, but naming which rule matched instead of
+    /// just yes/no — a built-in name, a root-only built-in name, or the exact .dockerignore/.gitignore
+    /// pattern — so a dropped file can be explained rather than just counted.
+    /// </summary>
+    public static string? DescribeExclusion(string relativePath, IReadOnlyCollection<string> ignore)
     {
         var segments = relativePath.Split('/');
 
         // Built-ins match any path segment: "node_modules" anywhere in the tree, not just at the root.
-        if (segments.Any(s => AlwaysExclude.Contains(s, StringComparer.OrdinalIgnoreCase)))
-            return true;
+        var builtin = segments.FirstOrDefault(s => AlwaysExclude.Contains(s, StringComparer.OrdinalIgnoreCase));
+        if (builtin is not null)
+            return $"built-in rule '{builtin}'";
 
         // The ambiguous names only count at the root — see RootOnlyExclude's own comment for why.
         if (RootOnlyExclude.Contains(segments[0], StringComparer.OrdinalIgnoreCase))
-            return true;
+            return $"built-in rule '{segments[0]}' (project root)";
 
         foreach (var pattern in ignore)
         {
@@ -141,15 +163,15 @@ public static class SourcePacker
             {
                 if (segments.Any(s => FileSystemName.MatchesSimpleExpression(pattern, s)) ||
                     FileSystemName.MatchesSimpleExpression(pattern, relativePath))
-                    return true;
+                    return $"ignore pattern '{pattern}'";
             }
             else if (relativePath.Equals(pattern, StringComparison.OrdinalIgnoreCase) ||
                      relativePath.StartsWith(pattern + "/", StringComparison.OrdinalIgnoreCase) ||
                      segments.Contains(pattern, StringComparer.OrdinalIgnoreCase))
             {
-                return true;
+                return $"ignore pattern '{pattern}'";
             }
         }
-        return false;
+        return null;
     }
 }
