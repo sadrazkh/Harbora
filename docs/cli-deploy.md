@@ -66,14 +66,17 @@ harbora update            # replace this binary with the latest release
 harbora update --check    # just say whether one exists
 ```
 
-After a deploy the CLI compares itself with the panel and says so when it is behind:
+After `deploy`, `whoami`, `apps` or `status` talk to the panel, the CLI compares itself against it and
+says so when it is behind:
 
 ```
 ! This CLI is 0.1.0; the server expects 0.2.0. Run harbora update.
 ```
 
-The check is best-effort — it runs after the work has succeeded, gives up after three seconds, and
-says nothing at all if the panel is older than this endpoint or the version cannot be read.
+The check is best-effort — it runs after the work has already succeeded, gives up after three
+seconds, and says nothing at all if the panel is older than this endpoint or the version cannot be
+read. It deliberately does **not** run from `harbora cancel`: that command promises to be safe in a
+pipeline with no surprise network calls, which an extra request here would break.
 
 ## 4. Deploy
 

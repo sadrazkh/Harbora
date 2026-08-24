@@ -1,0 +1,52 @@
+name: Tag a release
+
+# Directory.Build.props' own comment already describes the release process: "Bump it here; tagging
+# v<this> publishes the CLI binaries." The gap this workflow closes is real and measured: the last
+# hand-typed tag was v0.4.0 (2026-08-10); 369 commits later — including the three fixes that made a
+# real deploy fail today (SourcePacker's exclusion bug, the silent Docker build-stream failure, the
+# wrong "No such image" error) — nobody had typed the second half of that sentence, so every one of
+# them sat on master, built and tested, invisible to anyone's `harbora update`.
+#
+# This automates only the "tagging" half. Bumping <Version> is still a deliberate, reviewed edit to
+# Directory.Build.props — a human decides what the next release is called. This workflow's only job
+# is to notice that a merged commit changed it and push the tag release-cli.yml already knows how to
+# build from, so remembering to `git tag` by hand is no longer the one manual step standing between a
+# shipped fix and a released one.
+on:
+  push:
+    branches: [master]
+    paths: ['Directory.Build.props']
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history so `git rev-parse <tag>` can tell an existing tag apart
+
+      - name: Read the version Directory.Build.props now carries
+        id: version
+        run: |
+          value="$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props)"
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
+      - name: Tag it, unless this version is already released
+        run: |
+          version="${{ steps.version.outputs.value }}"
+          tag="v$version"
+          # Directory.Build.props can change on master for reasons other than a version bump lasting
+          # into a release (a revert, a merge conflict resolution) — checking both spellings of a tag
+          # that might already exist is what keeps this idempotent rather than failing loudly on a
+          # rerun or a no-op diff.
+          if git rev-parse "$tag" >/dev/null 2>&1 || git rev-parse "$version" >/dev/null 2>&1; then
+            echo "$tag already exists — not tagging again."
+            exit 0
+          fi
+          git config user.name "harbora-release-bot"
+          git config user.email "actions@github.com"
+          git tag -a "$tag" -m "Release $tag"
+          git push origin "$tag"

@@ -5,10 +5,20 @@
 
     The panel reports this at GET /api/v1/version and the CLI compares its own against it, so
     "your CLI is older than this server" is only a meaningful sentence while both numbers come
-    from the same place. Bump it here; tagging v<this> publishes the CLI binaries.
+    from the same place. Bump it here; a push to master that changes this line is tagged
+    automatically (.github/workflows/tag-release.yml), and the tag publishes the CLI binaries
+    (.github/workflows/release-cli.yml) at that exact version — not whatever this file happened
+    to say when someone remembered to also run `git tag` by hand.
+
+    This was last bumped for v0.2.0 on 2026-08-10, the same day v0.3.0 and v0.4.0 were tagged
+    without a matching edit here — so every CLI and panel built from those tags, or from any of
+    the 369 commits since, silently reported itself as 0.2.0. That is not a cosmetic bug: it is
+    what made VersionNotice's own staleness check (Commands.cs) compare 0.2.0 against 0.2.0 and
+    conclude, wrongly, that nothing was behind. Bumped here to catch this branch's work up to
+    that reality.
   -->
   <PropertyGroup>
-    <Version>0.2.0</Version>
+    <Version>0.5.0</Version>
   </PropertyGroup>
 
 </Project>

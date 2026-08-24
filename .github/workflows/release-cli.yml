@@ -30,10 +30,31 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Directory.Build.props sets <Version> for every project, including this one — but nothing
+      # here ever overrode it with the tag that triggered the build, so every CLI this workflow has
+      # ever published silently carried whatever number happened to be sitting in that file (last
+      # touched for v0.2.0), regardless of which of v0.3.0/v0.4.0 the tag actually said. That number
+      # is also what GET /api/v1/version and `harbora update` compare against, so a mismatch here
+      # does not just look wrong in --version — it is the thing that silently neutered
+      # VersionNotice's own staleness check for anyone running a binary built this way. A
+      # workflow_dispatch run (no tag) keeps whatever Directory.Build.props already says, so a manual
+      # test build does not get a fabricated version.
+      - name: Derive the version this build should report
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            value="${GITHUB_REF_NAME#v}"
+          else
+            value="$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props)"
+          fi
+          echo "Building as $value"
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
       - name: Publish self-contained single-file
         run: >
           dotnet publish src/Harbora.Cli/Harbora.Cli.csproj -c Release -r ${{ matrix.rid }}
-          --self-contained true
+          --self-contained true -p:Version=${{ steps.version.outputs.value }}
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false
           -o out/${{ matrix.rid }}
 
@@ -71,8 +92,25 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      # Same derivation as the binaries job above — see its comment. `dotnet tool install -g
+      # Harbora.Cli` must resolve to a package whose own version is the tag, not whatever
+      # Directory.Build.props happened to say on this commit.
+      - name: Derive the version this build should report
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            value="${GITHUB_REF_NAME#v}"
+          else
+            value="$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props)"
+          fi
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
       - name: Pack the dotnet tool
-        run: dotnet pack src/Harbora.Cli/Harbora.Cli.csproj -c Release -o nupkg
+        run: >
+          dotnet pack src/Harbora.Cli/Harbora.Cli.csproj -c Release -o nupkg
+          -p:Version=${{ steps.version.outputs.value }}
       - name: Attach nupkg to release
         uses: softprops/action-gh-release@v2
         with:

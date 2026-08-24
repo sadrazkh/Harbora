@@ -134,8 +134,10 @@ public sealed class WhoAmICommand : AsyncCommand
 {
     protected override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
     {
-        var me = await Session.Require().GetAsync("whoami");
+        var api = Session.Require();
+        var me = await api.GetAsync("whoami");
         AnsiConsole.MarkupLine($"[bold]{Markup.Escape(me.GetProperty("email").GetString() ?? "")}[/]");
+        await VersionNotice.MaybeWarnAsync(api);
         return 0;
     }
 }
@@ -144,7 +146,8 @@ public sealed class AppsCommand : AsyncCommand
 {
     protected override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
     {
-        var apps = await Session.Require().GetAsync("apps");
+        var api = Session.Require();
+        var apps = await api.GetAsync("apps");
         var table = new Table().Border(TableBorder.Rounded);
         table.AddColumns("Name", "Slug", "Status", "Source");
         foreach (var a in apps.EnumerateArray())
@@ -158,6 +161,7 @@ public sealed class AppsCommand : AsyncCommand
                 a.GetProperty("source").GetString() ?? "");
         }
         AnsiConsole.Write(table);
+        await VersionNotice.MaybeWarnAsync(api);
         return 0;
     }
 }
@@ -673,8 +677,10 @@ public sealed class StatusCommand : AsyncCommand
     protected override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
     {
         AnsiConsole.MarkupLine($"[grey]CLI:[/] {SelfUpdate.CurrentVersion}");
-        var me = await Session.Require().GetAsync("whoami");
+        var api = Session.Require();
+        var me = await api.GetAsync("whoami");
         AnsiConsole.MarkupLine($"[green]● online[/]  user: [bold]{me.GetProperty("email").GetString()}[/]");
+        await VersionNotice.MaybeWarnAsync(api);
         return 0;
     }
 }
