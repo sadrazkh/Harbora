@@ -6,8 +6,10 @@ using Microsoft.EntityFrameworkCore;
 namespace Harbora.Infrastructure.Tenancy;
 
 /// <summary>
-/// Allocatable = reported host resources minus reserved headroom, with CPU scaled by the node's
-/// overcommit factor. Committed = sum of the CPU/memory limits of the apps placed on the node.
+/// Allocatable = reported host resources minus reserved headroom, then scaled by the node's overcommit
+/// factor — CPU and memory each have their own, because they are not the same risk (CPU contention
+/// queues work; memory overcommit invites the OOM killer). Committed = sum of the CPU/memory limits of
+/// the apps and managed services placed on the node.
 /// </summary>
 public sealed class NodeCapacityService(HarboraDbContext db) : INodeCapacityService
 {
@@ -52,8 +54,20 @@ public sealed class NodeCapacityService(HarboraDbContext db) : INodeCapacityServ
             committed.TryGetValue(s.Id, out var c);
             var svc = services.FirstOrDefault(x => x.ServerId == s.Id);
 
-            var allocMem = s.TotalMemoryBytes > 0 ? (long)(s.TotalMemoryBytes * (1 - s.ReservedMemoryRatio)) : 0;
-            var allocCpu = s.CpuCores > 0 ? s.CpuCores * Math.Max(1, s.CpuOvercommitFactor) : 0;
+            // Reserved-memory ratio and both overcommit factors are an administrator's call (per-server,
+            // set from the node's Capacity policy form) — this is the only place that reads them for
+            // placement, so every consumer (scheduler, size picker, node/server pages) agrees.
+            //
+            // A stored factor of zero or less is never a legitimate admin choice — the write side
+            // refuses it — so treating one as "not configured" and falling back to 1.0 (no overcommit)
+            // only protects against a row that predates that validation. It deliberately does NOT floor
+            // at 1.0 the way this used to: a factor between 0 and 1 is a real undercommit, not a mistake.
+            var reservedRatio = Math.Clamp(s.ReservedMemoryRatio, 0, 1);
+            var memFactor = s.MemoryOvercommitFactor > 0 ? s.MemoryOvercommitFactor : 1.0;
+            var cpuFactor = s.CpuOvercommitFactor > 0 ? s.CpuOvercommitFactor : 1.0;
+
+            var allocMem = s.TotalMemoryBytes > 0 ? (long)(s.TotalMemoryBytes * (1 - reservedRatio) * memFactor) : 0;
+            var allocCpu = s.CpuCores > 0 ? s.CpuCores * cpuFactor : 0;
             return new NodeCapacity(
                 s.Id, s.Name, s.Pool, s.Status == ServerStatus.Online,
                 allocMem,

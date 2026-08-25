@@ -37,6 +37,16 @@ public class Server : BaseEntity
     /// <summary>Allowed CPU overcommit factor (1.0 = no overcommit, 2.0 = 2x).</summary>
     public double CpuOvercommitFactor { get; set; } = 1.0;
 
+    /// <summary>
+    /// Allowed memory overcommit factor (1.0 = no overcommit beyond <see cref="ReservedMemoryRatio"/>'s
+    /// headroom, 2.0 = 2x). Defaults to 1.0 — no behaviour change for a server that predates this field
+    /// and no overcommit for a new one until an administrator opts in — because memory overcommit fails
+    /// by the OS OOM-killing a process, not by merely slowing it down the way CPU contention does. See
+    /// <see cref="ServerCapacityPolicy"/> for the bounds and the recommended (not applied) starting
+    /// points shown to the administrator.
+    /// </summary>
+    public double MemoryOvercommitFactor { get; set; } = 1.0;
+
     // Last reported capacity snapshot (updated by monitoring engine).
     public int CpuCores { get; set; }
     public long TotalMemoryBytes { get; set; }

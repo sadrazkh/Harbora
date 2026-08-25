@@ -3,6 +3,7 @@ using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Nodes;
+using Harbora.Domain.Servers;
 using Harbora.Infrastructure.Nodes;
 using Harbora.NodeAgent.Contracts;
 using Harbora.Web.ViewModels;
@@ -33,6 +34,7 @@ public sealed class NodesController(
     NodeServerLink serverLink,
     NodeIngressRegistry ingress,
     NodeIngressRouter ingressRouter,
+    Harbora.Application.Abstractions.INodeCapacityService capacity,
     IOptions<NodeAgentControlPlaneOptions> options,
     Harbora.Application.Abstractions.ICurrentUser currentUser,
     TimeProvider clock,
@@ -362,30 +364,158 @@ public sealed class NodesController(
 
         // Platform-wide counts, not workspace-scoped: a node may hold another workspace's app, and
         // an operator deciding whether to detach needs to know that it does.
-        var apps = await db.Apps.IgnoreQueryFilters().Where(a => a.ServerId == serverId)
-            .Select(a => new { a.MemoryLimitBytes, a.CpuLimit })
-            .ToListAsync(ct);
+        var appCount = await db.Apps.IgnoreQueryFilters().CountAsync(a => a.ServerId == serverId, ct);
+        var serviceCount = await db.ManagedServices.IgnoreQueryFilters().CountAsync(s => s.ServerId == serverId, ct);
 
-        var services = await db.ManagedServices.IgnoreQueryFilters().CountAsync(s => s.ServerId == serverId, ct);
+        // Allocatable/committed come from the one place that computes them (INodeCapacityService),
+        // not recomputed here: this page used to redo the same reserved-ratio/overcommit arithmetic
+        // inline, which is how a managed service's memory silently went missing from this view's
+        // "committed" figure while the scheduler already counted it correctly.
+        var reading = await capacity.GetAsync(serverId, ct);
 
         return new NodeSchedulingViewModel(
             server.Id,
             server.Hostname,
             server.Pool,
             server.Status,
-            apps.Count,
-            services,
-            server.TotalMemoryBytes > 0 ? (long)(server.TotalMemoryBytes * (1 - server.ReservedMemoryRatio)) : 0,
-            apps.Sum(a => a.MemoryLimitBytes),
-            server.CpuCores > 0 ? server.CpuCores * Math.Max(1, server.CpuOvercommitFactor) : 0,
-            apps.Sum(a => a.CpuLimit),
+            appCount,
+            serviceCount,
+            reading?.AllocatableMemoryBytes ?? 0,
+            reading?.CommittedMemoryBytes ?? 0,
+            reading?.AllocatableCpu ?? 0,
+            reading?.CommittedCpu ?? 0,
             _options.AutoRegisterAsServer,
             node.IngressMode,
             supported,
             ingress.IsConnected(node.NodeId),
             ingress.Bindings().Count(b => b.NodeId == node.NodeId),
-            ingressRouter.IngressHost);
+            ingressRouter.IngressHost,
+            server.TotalMemoryBytes,
+            server.CpuCores,
+            server.ReservedMemoryRatio,
+            server.CpuOvercommitFactor,
+            server.MemoryOvercommitFactor);
     }
+
+    /// <summary>
+    /// Set this node's commitment ratios — how much of its reported capacity the scheduler may hand
+    /// out versus what is physically there. The owner's own framing: an app rarely uses its ceiling,
+    /// so committing beyond the physical figure is a legitimate choice, but it is the administrator's
+    /// choice to make, per server, not a number baked into the code.
+    /// </summary>
+    /// <remarks>
+    /// The three fields bind as strings, not <c>double</c>. The panel's default request culture is
+    /// Persian (<c>Program.cs</c>, <c>RequestLocalizationOptions</c>), and ASP.NET Core's model
+    /// binder parses numeric types with the request's current culture — a fa-IR decimal separator
+    /// that is not ".". The form renders these values with <c>CultureInfo.InvariantCulture</c> and
+    /// <c>dir="ltr"</c> as the technical tokens they are (same convention as every monospace figure
+    /// elsewhere in this view), so the value that comes back must be parsed the same way, or a
+    /// fraction like "2.5" silently binds to 0 and a legitimate value is refused as out of range.
+    /// </remarks>
+    [HttpPost("{nodeId}/capacity-policy")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> CapacityPolicy(
+        string nodeId, string? reservedMemoryPercent, string? cpuOvercommitFactor, string? memoryOvercommitFactor, CancellationToken ct)
+    {
+        var node = await db.Nodes.IgnoreQueryFilters().FirstOrDefaultAsync(n => n.NodeId == nodeId, ct);
+        if (node is null)
+        {
+            TempData["Error"] = Fa() ? "نودی با این شناسه نیست." : "No such node.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        if (!TryParseInvariant(reservedMemoryPercent, out var reservedPercent) ||
+            !TryParseInvariant(cpuOvercommitFactor, out var cpuFactor) ||
+            !TryParseInvariant(memoryOvercommitFactor, out var memFactor))
+        {
+            TempData["Error"] = Fa()
+                ? "مقدار واردشده عدد معتبری نیست."
+                : "One of the values entered is not a valid number.";
+            return RedirectToAction(nameof(Detail), new { nodeId });
+        }
+
+        if (node.ServerId is not { } serverId)
+        {
+            TempData["Error"] = Fa()
+                ? "این نود هدف زمان‌بندی نیست، پس سیاست ظرفیت ندارد."
+                : "This node is not a scheduling target, so it has no capacity policy.";
+            return RedirectToAction(nameof(Detail), new { nodeId });
+        }
+
+        var reservedMemoryRatio = reservedPercent / 100.0;
+        var error = ValidateCapacityPolicy(reservedMemoryRatio, cpuFactor, memFactor);
+        if (error is not null)
+        {
+            TempData["Error"] = error;
+            return RedirectToAction(nameof(Detail), new { nodeId });
+        }
+
+        var server = await db.Servers.FirstOrDefaultAsync(s => s.Id == serverId, ct);
+        if (server is null)
+        {
+            TempData["Error"] = Fa() ? "سرور این نود دیگر وجود ندارد." : "This node's server no longer exists.";
+            return RedirectToAction(nameof(Detail), new { nodeId });
+        }
+
+        server.ReservedMemoryRatio = reservedMemoryRatio;
+        server.CpuOvercommitFactor = cpuFactor;
+        server.MemoryOvercommitFactor = memFactor;
+        await db.SaveChangesAsync(ct);
+
+        // Lowering a factor below what is already committed leaves the node oversubscribed on paper.
+        // That is not refused — the admin may be correcting for a factor that was too generous — but
+        // it is said plainly rather than hidden: nothing already placed is touched, and the scheduler
+        // simply stops offering this node new work until usage drops or the ratio is raised again.
+        var after = await capacity.GetAsync(serverId, ct);
+        var oversubscribed = after is not null &&
+            (after.CommittedMemoryBytes > after.AllocatableMemoryBytes || after.CommittedCpu > after.AllocatableCpu);
+
+        TempData["Message"] = !oversubscribed
+            ? (Fa() ? "سیاست ظرفیت این نود ذخیره شد." : "Capacity policy saved for this node.")
+            : (Fa()
+                ? $"ذخیره شد — اما این نود اکنون بیش از ظرفیت مجازش متعهد شده است " +
+                  $"({FormatGb(after!.CommittedMemoryBytes)}/{FormatGb(after.AllocatableMemoryBytes)} گیگابایت، " +
+                  $"{after.CommittedCpu:0.##}/{after.AllocatableCpu:0.##} هسته‌ی پردازنده). آنچه مستقر است همچنان اجرا می‌شود؛ " +
+                  "زمان‌بند تا کاهش مصرف یا افزایش دوباره‌ی نسبت، کار تازه‌ای به این نود نمی‌دهد."
+                : $"Saved — but this node is now committed beyond its allocatable capacity " +
+                  $"({FormatGb(after!.CommittedMemoryBytes)}/{FormatGb(after.AllocatableMemoryBytes)} GB, " +
+                  $"{after.CommittedCpu:0.##}/{after.AllocatableCpu:0.##} CPU cores). What is already placed keeps " +
+                  "running; the scheduler will not offer this node new work until usage drops or the ratio is raised again.");
+
+        return RedirectToAction(nameof(Detail), new { nodeId });
+    }
+
+    private static string? ValidateCapacityPolicy(double reservedMemoryRatio, double cpuFactor, double memFactor)
+    {
+        var fa = Fa();
+
+        if (!ServerCapacityPolicy.IsValidReservedMemoryRatio(reservedMemoryRatio))
+            return fa
+                ? $"سهم رزرو حافظه باید بین ۰٪ و {ServerCapacityPolicy.MaxReservedMemoryRatio * 100:0}٪ باشد."
+                : $"Reserved memory must be between 0% and {ServerCapacityPolicy.MaxReservedMemoryRatio * 100:0}%.";
+
+        if (!ServerCapacityPolicy.IsValidOvercommitFactor(cpuFactor, ServerCapacityPolicy.MaxCpuOvercommitFactor))
+            return fa
+                ? $"ضریب مازاد-تعهد CPU باید بین {ServerCapacityPolicy.MinOvercommitFactor:0.#}× و {ServerCapacityPolicy.MaxCpuOvercommitFactor:0.#}× باشد."
+                : $"The CPU overcommit factor must be between {ServerCapacityPolicy.MinOvercommitFactor:0.#}× and {ServerCapacityPolicy.MaxCpuOvercommitFactor:0.#}×.";
+
+        if (!ServerCapacityPolicy.IsValidOvercommitFactor(memFactor, ServerCapacityPolicy.MaxMemoryOvercommitFactor))
+            return fa
+                ? $"ضریب مازاد-تعهد حافظه باید بین {ServerCapacityPolicy.MinOvercommitFactor:0.#}× و {ServerCapacityPolicy.MaxMemoryOvercommitFactor:0.#}× باشد."
+                : $"The memory overcommit factor must be between {ServerCapacityPolicy.MinOvercommitFactor:0.#}× and {ServerCapacityPolicy.MaxMemoryOvercommitFactor:0.#}×.";
+
+        return null;
+    }
+
+    private static string FormatGb(long bytes) =>
+        (bytes / 1024.0 / 1024 / 1024).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>See the remarks on <see cref="CapacityPolicy"/> for why this is invariant, not
+    /// culture-sensitive, parsing.</summary>
+    private static bool TryParseInvariant(string? value, out double result) =>
+        double.TryParse(
+            value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture,
+            out result);
 
     private async Task<NodeListViewModel> BuildListAsync(CancellationToken ct)
     {

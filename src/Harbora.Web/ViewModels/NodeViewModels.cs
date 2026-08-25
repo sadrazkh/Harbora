@@ -181,7 +181,18 @@ public sealed record NodeSchedulingViewModel(
     bool IngressSupported = true,
     bool IngressConnected = false,
     int IngressBoundPorts = 0,
-    string IngressHost = "")
+    string IngressHost = "",
+    /// <summary>
+    /// The host's own reported hardware — never derived from a policy multiplier. Shown beside
+    /// <see cref="AllocatableMemoryBytes"/>/<see cref="AllocatableCpu"/> so the two cannot be
+    /// mistaken for each other: a number that looks like a measurement but is actually a policy
+    /// multiplier is exactly the kind of thing this page must never present as one.
+    /// </summary>
+    long PhysicalMemoryBytes = 0,
+    int PhysicalCpuCores = 0,
+    double ReservedMemoryRatio = 0,
+    double CpuOvercommitFactor = 1,
+    double MemoryOvercommitFactor = 1)
 {
     public bool Tunnelled => IngressMode == NodeIngressMode.Tunnel;
 

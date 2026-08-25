@@ -137,4 +137,116 @@ public class NodeCapacityTests
         node!.CommittedMemoryBytes.Should().Be(0);
         node.FreeMemoryBytes.Should().Be(1000 * MB);
     }
+
+    // --- the owner's ask: commitment ratios are the admin's call, per server ---
+
+    /// <summary>
+    /// CPU overcommit already worked this way (<see cref="Server.CpuOvercommitFactor"/> pre-dates
+    /// this feature); this proves memory now does too, with its own factor rather than sharing CPU's.
+    /// </summary>
+    [Fact]
+    public async Task A_memory_overcommit_factor_scales_allocatable_memory_the_same_way_cpus_does()
+    {
+        var server = Machine();
+        server.MemoryOvercommitFactor = 2;
+        await using var db = Db();
+        db.Servers.Add(server);
+        await db.SaveChangesAsync();
+
+        var node = await new NodeCapacityService(db).GetAsync(server.Id, CancellationToken.None);
+
+        node!.AllocatableMemoryBytes.Should().Be(2000 * MB, "1000 MB physical × 2.0 overcommit, no headroom reserved here");
+    }
+
+    /// <summary>
+    /// The owner's explicit ask: "a factor below 1 (undercommit) is legitimate." The old formula's
+    /// <c>Math.Max(1, factor)</c> floor made that impossible for CPU — this proves it no longer is,
+    /// for either resource.
+    /// </summary>
+    [Fact]
+    public async Task An_undercommit_factor_below_one_is_honoured_for_both_resources()
+    {
+        var server = Machine();
+        server.CpuOvercommitFactor = 0.5;
+        server.MemoryOvercommitFactor = 0.5;
+        await using var db = Db();
+        db.Servers.Add(server);
+        await db.SaveChangesAsync();
+
+        var node = await new NodeCapacityService(db).GetAsync(server.Id, CancellationToken.None);
+
+        node!.AllocatableCpu.Should().Be(2, "4 physical cores × 0.5 — deliberately committing less than the machine has");
+        node.AllocatableMemoryBytes.Should().Be(500 * MB);
+    }
+
+    /// <summary>
+    /// A stored zero must never collapse allocatable to zero: <see cref="NodeCapacity.CanFit"/> reads
+    /// a zero-or-less allocatable figure as "unmeasured — allow everything", so a factor of zero would
+    /// be read as the opposite of a refusal. The write side refuses zero outright
+    /// (<see cref="Harbora.Domain.Servers.ServerCapacityPolicy"/>); this is the defensive fallback for
+    /// a row that predates that validation.
+    /// </summary>
+    [Fact]
+    public async Task A_zero_or_negative_stored_factor_falls_back_to_no_overcommit_rather_than_zeroing_capacity()
+    {
+        var server = Machine();
+        server.CpuOvercommitFactor = 0;
+        server.MemoryOvercommitFactor = -1;
+        await using var db = Db();
+        db.Servers.Add(server);
+        await db.SaveChangesAsync();
+
+        var node = await new NodeCapacityService(db).GetAsync(server.Id, CancellationToken.None);
+
+        node!.AllocatableCpu.Should().Be(4, "falls back to 1.0× (the machine's own cores), not 0");
+        node.AllocatableMemoryBytes.Should().Be(1000 * MB);
+    }
+
+    // --- honest refusals (SchedulerService) ---
+
+    [Fact]
+    public async Task A_refused_placement_names_what_is_committed_and_what_is_allocatable()
+    {
+        var server = Machine();
+        server.CpuOvercommitFactor = 1;
+        await using var db = Db();
+        db.Servers.Add(server);
+        db.Apps.Add(new Harbora.Domain.Apps.App
+        {
+            WorkspaceId = Guid.NewGuid(), ServerId = server.Id, Name = "full", Slug = "full",
+            MemoryLimitBytes = 900 * MB
+        });
+        await db.SaveChangesAsync();
+
+        var placement = await new SchedulerService(new NodeCapacityService(db))
+            .CheckAsync(server.Id, 200 * MB, 0, CancellationToken.None);
+
+        placement.Ok.Should().BeFalse();
+        // Not a bare "no capacity": the actual committed/allocatable numbers, in GB, are present —
+        // 900 MB of the 1000 MB machine (no headroom reserved in this fixture).
+        placement.Reason.Should().Contain("0.9 GB").And.Contain("1.0 GB");
+        // ...and it is not silently reporting the physical machine as the reason — it names
+        // "allocatable" as a policy figure and points at where that policy is changed.
+        placement.Reason.Should().Contain("allocatable").And.Contain("Capacity policy");
+    }
+
+    [Fact]
+    public async Task PlaceAsync_reports_the_closest_miss_rather_than_a_bare_refusal()
+    {
+        var server = Machine();
+        await using var db = Db();
+        db.Servers.Add(server);
+        db.Apps.Add(new Harbora.Domain.Apps.App
+        {
+            WorkspaceId = Guid.NewGuid(), ServerId = server.Id, Name = "full", Slug = "full",
+            MemoryLimitBytes = 900 * MB
+        });
+        await db.SaveChangesAsync();
+
+        var placement = await new SchedulerService(new NodeCapacityService(db))
+            .PlaceAsync(200 * MB, 0, null, CancellationToken.None);
+
+        placement.Ok.Should().BeFalse();
+        placement.Reason.Should().Contain("Closest").And.Contain("allocatable");
+    }
 }

@@ -1,5 +1,7 @@
 @model Harbora.Web.ViewModels.NodeDetailViewModel
 @using Harbora.Domain.Nodes
+@using Harbora.Domain.Servers
+@using System.Globalization
 @{
     var node = Model.Node;
     var sched = Model.Scheduling;
@@ -10,6 +12,10 @@
 
     string Gb(long b) => b <= 0 ? "—" : $"{b / 1024.0 / 1024 / 1024:0.0} GB";
     string When(DateTimeOffset? at) => at?.LocalDateTime.ToString(Dates.Stamp) ?? (isFa ? "—" : "—");
+    string Factor(double f) => f.ToString("0.#", CultureInfo.InvariantCulture);
+    string SuggestCpu() => (isFa ? "پیشنهاد: " : "suggested ") + Factor(ServerCapacityPolicy.RecommendedCpuOvercommitFactor) + "×";
+    string SuggestMemory() => (isFa ? "پیشنهاد: " : "suggested ") + Factor(ServerCapacityPolicy.RecommendedMemoryOvercommitFactor)
+        + "× " + (isFa ? "(بدون مازاد)" : "(no overcommit)");
 
     string StatusText() =>
         node.Revoked ? (isFa ? "ابطال‌شده" : "Revoked")
@@ -317,29 +323,47 @@
                         </span>
                     </div>
 
-                    <div class="space-y-1.5">
+                    <div class="space-y-1.5" data-capacity-memory
+                         data-committed-memory-bytes="@sched.CommittedMemoryBytes"
+                         data-allocatable-memory-bytes="@sched.AllocatableMemoryBytes"
+                         data-physical-memory-bytes="@sched.PhysicalMemoryBytes"
+                         data-reserved-memory-ratio="@sched.ReservedMemoryRatio.ToString(CultureInfo.InvariantCulture)"
+                         data-memory-overcommit-factor="@sched.MemoryOvercommitFactor.ToString(CultureInfo.InvariantCulture)">
                         <div class="flex items-center justify-between text-xs">
                             <span class="text-ink-faint">@(isFa ? "حافظه‌ی تعهدشده" : "Committed memory")</span>
                             <span dir="ltr">@Gb(sched.CommittedMemoryBytes) / @Gb(sched.AllocatableMemoryBytes)</span>
                         </div>
                         <div class="h-1.5 rounded-full bg-surface-2 overflow-hidden">
                             <div class="h-full rounded-full @(sched.MemoryUsedRatio > 0.9 ? "bg-danger" : sched.MemoryUsedRatio > 0.75 ? "bg-warn" : "bg-accent")"
-                                 style="width: @((sched.MemoryUsedRatio * 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                 style="width: @((sched.MemoryUsedRatio * 100).ToString("0.#", CultureInfo.InvariantCulture))%"></div>
                         </div>
+                        @* The honesty requirement: "allocatable" is a policy figure, not hardware. Spelling
+                           out physical × reserved-headroom × overcommit next to it is the difference
+                           between a measurement and a multiplier that merely looks like one. *@
+                        <p class="text-[11px] text-ink-faint font-mono" dir="ltr">
+                            @Gb(sched.PhysicalMemoryBytes) physical × (1 − @((sched.ReservedMemoryRatio * 100).ToString("0.#", CultureInfo.InvariantCulture))% reserved) × @sched.MemoryOvercommitFactor.ToString("0.##", CultureInfo.InvariantCulture) overcommit = @Gb(sched.AllocatableMemoryBytes) allocatable
+                        </p>
                     </div>
 
-                    <div class="space-y-1.5">
+                    <div class="space-y-1.5" data-capacity-cpu
+                         data-committed-cpu="@sched.CommittedCpu.ToString(CultureInfo.InvariantCulture)"
+                         data-allocatable-cpu="@sched.AllocatableCpu.ToString(CultureInfo.InvariantCulture)"
+                         data-physical-cpu-cores="@sched.PhysicalCpuCores"
+                         data-cpu-overcommit-factor="@sched.CpuOvercommitFactor.ToString(CultureInfo.InvariantCulture)">
                         <div class="flex items-center justify-between text-xs">
                             <span class="text-ink-faint">@(isFa ? "CPU تعهدشده" : "Committed CPU")</span>
                             <span dir="ltr">
-                                @sched.CommittedCpu.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) /
-                                @sched.AllocatableCpu.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)
+                                @sched.CommittedCpu.ToString("0.##", CultureInfo.InvariantCulture) /
+                                @sched.AllocatableCpu.ToString("0.##", CultureInfo.InvariantCulture)
                             </span>
                         </div>
                         <div class="h-1.5 rounded-full bg-surface-2 overflow-hidden">
                             <div class="h-full rounded-full @(sched.CpuUsedRatio > 0.9 ? "bg-danger" : sched.CpuUsedRatio > 0.75 ? "bg-warn" : "bg-accent")"
-                                 style="width: @((sched.CpuUsedRatio * 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                 style="width: @((sched.CpuUsedRatio * 100).ToString("0.#", CultureInfo.InvariantCulture))%"></div>
                         </div>
+                        <p class="text-[11px] text-ink-faint font-mono" dir="ltr">
+                            @sched.PhysicalCpuCores physical × @sched.CpuOvercommitFactor.ToString("0.##", CultureInfo.InvariantCulture) overcommit = @sched.AllocatableCpu.ToString("0.##", CultureInfo.InvariantCulture) allocatable vCPU
+                        </p>
                     </div>
 
                     @if (!sched.AcceptsWork && !node.Revoked)
@@ -377,6 +401,87 @@
                 }
             </div>
         </section>
+
+        @if (sched.IsAttached && !node.Revoked)
+        {
+            @* The admin form the owner asked for: CPU commitment was already scalable
+               (CpuOvercommitFactor existed) but nothing anywhere let an operator change it, and
+               memory had no such knob at all. Per-server, not global — a shared box and a
+               premium-pool box do not deserve the same policy. *@
+            <section class="rounded-xl border border-line bg-surface shadow-panel" data-capacity-policy>
+                <header class="px-5 py-3.5 border-b border-line">
+                    <h2 class="text-[15px] font-semibold text-ink">@(isFa ? "سیاست ظرفیت" : "Capacity policy")</h2>
+                </header>
+                <div class="p-5 space-y-4 text-sm">
+                    <p class="text-xs text-ink-muted">
+                        @(isFa
+                            ? "یک برنامه معمولاً از سقفِ خود استفاده نمی‌کند، یعنی منابع عملاً مشترک است. این نسبت‌ها تعیین می‌کنند این نود چقدر بیش از منابع فیزیکی‌اش متعهد شود — تصمیم مدیر است، نه عددی ثابت در کد."
+                            : "An app rarely uses its ceiling — resources are effectively shared. These ratios decide how much this node may commit beyond its physical resources. That is an administrator's decision, not a number fixed in code.")
+                    </p>
+
+                    <form asp-controller="Nodes" asp-action="CapacityPolicy" asp-route-nodeId="@node.NodeId" method="post" class="space-y-4">
+                        @Html.AntiForgeryToken()
+
+                        <div>
+                            <div class="flex items-center justify-between text-xs text-ink-faint mb-1">
+                                <label for="reservedMemoryPercent-@node.NodeId">@(isFa ? "سهم رزرو حافظه‌ی میزبان" : "Host memory reserved")</label>
+                                <span>@(isFa ? "پیشنهاد: ۱۵٪" : "suggested 15%")</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <input id="reservedMemoryPercent-@node.NodeId" type="number" name="reservedMemoryPercent"
+                                       min="0" max="@((ServerCapacityPolicy.MaxReservedMemoryRatio * 100).ToString("0", CultureInfo.InvariantCulture))" step="1"
+                                       value="@((sched.ReservedMemoryRatio * 100).ToString("0.#", CultureInfo.InvariantCulture))"
+                                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm font-mono" dir="ltr" />
+                                <span class="text-ink-faint text-xs">%</span>
+                            </div>
+                            <p class="mt-1 text-[11px] text-ink-faint">
+                                @(isFa
+                                    ? "کنار گذاشته می‌شود برای خود میزبان و سربارش — این عدد مازاد-تعهد نیست، پیش از هر تعهدی از ظرفیت کم می‌شود."
+                                    : "Kept free for the host and its own overhead — not overcommit, just carved out before any commitment happens.")
+                            </p>
+                        </div>
+
+                        <div>
+                            <div class="flex items-center justify-between text-xs text-ink-faint mb-1">
+                                <label for="cpuOvercommitFactor-@node.NodeId">@(isFa ? "ضریب مازاد-تعهدِ CPU" : "CPU overcommit factor")</label>
+                                <span dir="ltr">@SuggestCpu()</span>
+                            </div>
+                            <input id="cpuOvercommitFactor-@node.NodeId" type="number" name="cpuOvercommitFactor"
+                                   min="@ServerCapacityPolicy.MinOvercommitFactor.ToString("0.0", CultureInfo.InvariantCulture)"
+                                   max="@ServerCapacityPolicy.MaxCpuOvercommitFactor.ToString("0.0", CultureInfo.InvariantCulture)" step="0.1"
+                                   value="@sched.CpuOvercommitFactor.ToString("0.##", CultureInfo.InvariantCulture)"
+                                   class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm font-mono" dir="ltr" />
+                            <p class="mt-1 text-[11px] text-ink-faint">
+                                @(isFa
+                                    ? "خطر کم‌تر: اگر همه‌ی برنامه‌ها هم‌زمان به سقفشان برسند، فقط کند می‌شوند."
+                                    : "Lower risk: if every app hit its ceiling at once, the worst case is slower — not killed.")
+                            </p>
+                        </div>
+
+                        <div>
+                            <div class="flex items-center justify-between text-xs text-ink-faint mb-1">
+                                <label for="memoryOvercommitFactor-@node.NodeId">@(isFa ? "ضریب مازاد-تعهدِ حافظه" : "Memory overcommit factor")</label>
+                                <span dir="ltr">@SuggestMemory()</span>
+                            </div>
+                            <input id="memoryOvercommitFactor-@node.NodeId" type="number" name="memoryOvercommitFactor"
+                                   min="@ServerCapacityPolicy.MinOvercommitFactor.ToString("0.0", CultureInfo.InvariantCulture)"
+                                   max="@ServerCapacityPolicy.MaxMemoryOvercommitFactor.ToString("0.0", CultureInfo.InvariantCulture)" step="0.1"
+                                   value="@sched.MemoryOvercommitFactor.ToString("0.##", CultureInfo.InvariantCulture)"
+                                   class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm font-mono" dir="ltr" />
+                            <p class="mt-1 text-[11px] text-warn">
+                                @(isFa
+                                    ? "خطر بیشتر: اگر مصرف واقعی از این ظرفیت فراتر رود، هسته‌ی لینوکس فرایندها را می‌کشد (OOM) — فقط کندشان نمی‌کند. به همین دلیل پیشنهاد این یکی با CPU یکسان نیست."
+                                    : "Higher risk: if real usage exceeds this, the Linux kernel kills processes to recover memory (OOM) — it does not just slow them down. That is why this suggestion is not the same dial as CPU's.")
+                            </p>
+                        </div>
+
+                        <button type="submit" class="w-full rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                            @(isFa ? "ذخیره‌ی سیاست ظرفیت" : "Save capacity policy")
+                        </button>
+                    </form>
+                </div>
+            </section>
+        }
 
         <section class="rounded-xl border border-line bg-surface shadow-panel">
             <header class="px-5 py-3.5 border-b border-line">
