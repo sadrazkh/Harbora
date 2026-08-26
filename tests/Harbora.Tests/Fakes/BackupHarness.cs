@@ -118,7 +118,8 @@ public sealed class BackupHarness : IDisposable
     /// still needs a real one rather than none at all.
     /// </param>
     public async Task<Harbora.Domain.Services.ManagedService> SeedDatabaseAsync(
-        Guid serverId, string name = "orders", Guid? environmentId = null)
+        Guid serverId, string name = "orders", Guid? environmentId = null,
+        ManagedServiceType type = ManagedServiceType.PostgreSql)
     {
         await EnsureWorkspaceAsync();
         var placedIn = environmentId ?? await SeedEnvironmentAsync();
@@ -130,10 +131,10 @@ public sealed class BackupHarness : IDisposable
             EnvironmentId = placedIn,
             ServerId = serverId,
             Name = name,
-            Type = ManagedServiceType.PostgreSql,
-            Version = "16-alpine",
+            Type = type,
+            Version = type == ManagedServiceType.PostgreSql ? "16-alpine" : "11",
             ContainerName = $"harbora-{name}",
-            InternalPort = 5432,
+            InternalPort = type == ManagedServiceType.PostgreSql ? 5432 : 3306,
             Username = "harbora",
             EncryptedPassword = "s3cret",
             DatabaseName = name,
@@ -143,6 +144,30 @@ public sealed class BackupHarness : IDisposable
         Db.ManagedServices.Add(service);
         await Db.SaveChangesAsync();
         return service;
+    }
+
+    /// <summary>
+    /// D2 (2026-08-25 shared-databases plan): a logical database inside <paramref name="service"/>,
+    /// with its own login — the row <c>LogicalDatabaseService.CreateAsync</c> would have written after
+    /// the engine confirmed it, seeded directly the way every other harness row here is.
+    /// </summary>
+    public async Task<Harbora.Domain.Services.ManagedServiceDatabase> SeedLogicalDatabaseAsync(
+        Harbora.Domain.Services.ManagedService service, string name, bool isDefault = false,
+        string? username = null)
+    {
+        var logical = new Harbora.Domain.Services.ManagedServiceDatabase
+        {
+            Id = Guid.NewGuid(),
+            WorkspaceId = service.WorkspaceId,
+            ManagedServiceId = service.Id,
+            Name = name,
+            Username = username ?? $"{name}_user",
+            EncryptedPassword = $"{name}-secret",
+            IsDefault = isDefault
+        };
+        Db.ManagedServiceDatabases.Add(logical);
+        await Db.SaveChangesAsync();
+        return logical;
     }
 
     /// <summary>
@@ -205,8 +230,11 @@ public sealed class BackupHarness : IDisposable
         return backup;
     }
 
-    /// <summary>A finished logical dump of a database, artifact and all — what verification reads.</summary>
-    public async Task<Backup> SeedCompletedDatabaseDumpAsync(Guid serviceId)
+    /// <summary>A finished logical dump of a database, artifact and all — what verification reads.
+    /// D2 (2026-08-25 shared-databases plan): <paramref name="managedServiceDatabaseId"/> names a
+    /// specific logical database on that instance; null (every call site before D2) keeps meaning the
+    /// instance's own admin/default database.</summary>
+    public async Task<Backup> SeedCompletedDatabaseDumpAsync(Guid serviceId, Guid? managedServiceDatabaseId = null)
     {
         var path = Path.Combine(_dir, $"database-{Guid.NewGuid():N}.sql.gz");
         await using (var file = File.Create(path))
@@ -218,6 +246,7 @@ public sealed class BackupHarness : IDisposable
             Id = Guid.NewGuid(), WorkspaceId = WorkspaceId, DestinationId = Destination.Id,
             Type = BackupType.Database, Status = BackupStatus.Completed,
             TargetRef = serviceId.ToString(), ArtifactPath = path,
+            ManagedServiceDatabaseId = managedServiceDatabaseId,
             Checksum = await Sha256Async(path), SizeBytes = new FileInfo(path).Length,
             FinishedAt = Clock.UtcNow
         };
