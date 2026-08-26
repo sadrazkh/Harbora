@@ -160,8 +160,8 @@ else if (moving)
                                 <tr data-logical-database="@logical.Id"
                                     data-logical-database-default="@logical.IsDefault.ToString().ToLowerInvariant()">
                                     <td>
-                                        <div class="table-primary" dir="ltr">@logical.Name</div>
-                                        <div class="table-secondary" dir="ltr">
+                                        <div class="table-primary font-mono" dir="ltr">@logical.Name</div>
+                                        <div class="table-secondary font-mono" dir="ltr">
                                             @logical.Username@(logical.IsDefault ? (isFa ? " · پیش‌فرض نمونه" : " · instance default") : "")
                                         </div>
                                     </td>

@@ -1151,7 +1151,7 @@
                                 @foreach (var logical in link.LogicalDatabases)
                                 {
                                     <div class="flex items-center justify-between gap-2 rounded-lg bg-surface px-2.5 py-1.5 text-xs" data-logical-database="@logical.Id">
-                                        <span dir="ltr" class="truncate text-ink">
+                                        <span dir="ltr" class="truncate font-mono text-ink">
                                             @logical.Name@(logical.IsDefault ? (isFa ? " (پیش‌فرض)" : " (default)") : "")
                                         </span>
                                         @if (logical.Attached)
