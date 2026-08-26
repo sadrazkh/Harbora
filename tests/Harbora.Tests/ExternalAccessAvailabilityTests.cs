@@ -124,6 +124,43 @@ public class ExternalAccessAvailabilityTests
             .Should().NotBeNull();
     }
 
+    /// <summary>
+    /// HARBORA-0059: an install that can open a port on its own machine still cannot open one for a
+    /// database that lives on a different machine. This used to be missing entirely, so the button
+    /// was offered and the only refusal ever arrived from <c>DockerTcpGateway.OpenAsync</c> — after a
+    /// login had already been created on that database and had to be undone again.
+    /// </summary>
+    [Fact]
+    public void A_database_on_another_server_is_refused_even_though_this_install_can_open_a_port_here()
+    {
+        var refusal = ExternalAccessAvailability.Refuse(
+            Fake(), Database(), canOpenLocally: true, serviceRunsElsewhere: true);
+
+        refusal.Should().NotBeNull("the gateway can only ever publish a port on this panel's own machine");
+        refusal!.Reason.Should().Contain("Shop DB");
+        refusal.ReasonFa.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public void A_database_on_this_machine_is_not_refused_for_placement()
+    {
+        ExternalAccessAvailability.Refuse(
+                Fake(), Database(), canOpenLocally: true, serviceRunsElsewhere: false)
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void Placement_is_moot_when_this_install_cannot_open_a_port_at_all()
+    {
+        // The node-agent branch above already refuses everything on this install; asserting
+        // "elsewhere" too would just be a second reason for the same outcome, and the message a
+        // person reads should still be the one about the missing agent, not about placement.
+        var refusal = ExternalAccessAvailability.Refuse(
+            Fake(), Database(), canOpenLocally: false, serviceRunsElsewhere: true);
+
+        refusal!.Reason.Should().Contain("node agent");
+    }
+
     [Theory]
     [InlineData(ManagedServiceType.Redis)]
     [InlineData(ManagedServiceType.MongoDb)]

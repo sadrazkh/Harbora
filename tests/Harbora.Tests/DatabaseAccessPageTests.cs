@@ -79,7 +79,8 @@ public class DatabaseAccessPageTests
     }
 
     private sealed record LocalFixture(
-        BrittleContext Db, DatabasesController Controller, ManagedService Database, FakeDockerEngine Docker);
+        BrittleContext Db, DatabasesController Controller, ManagedService Database, FakeDockerEngine Docker,
+        FakeServerEngineFactory Engines);
 
     /// <summary>
     /// The single-server install, reached through the controller rather than the service.
@@ -185,7 +186,7 @@ public class DatabaseAccessPageTests
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
 
-        return new LocalFixture(db, controller, database, docker);
+        return new LocalFixture(db, controller, database, docker, engines);
     }
 
     private static Fixture Build(ServiceStatus status = ServiceStatus.Running)
@@ -325,6 +326,27 @@ public class DatabaseAccessPageTests
 
         page.Unavailable.Should().NotBeNull();
         page.Unavailable!.Reason.Should().NotBeNullOrWhiteSpace();
+    }
+
+    /// <summary>
+    /// HARBORA-0059: on an install that CAN open a port on its own machine, the button still must
+    /// not be offered for a database that lives on a different one — the gateway can only ever
+    /// publish here, and offering it anyway means the only refusal arrives after a login has already
+    /// been created on that database and undone again.
+    /// </summary>
+    [Fact]
+    public async Task External_access_is_not_offered_for_a_database_placed_on_another_server()
+    {
+        var f = BuildLocal();
+        var elsewhere = Guid.NewGuid();
+        f.Engines.On(elsewhere, new FakeDockerEngine());
+        f.Database.ServerId = elsewhere;
+        await f.Db.SaveChangesAsync();
+
+        var page = PageOf(await f.Controller.Access(f.Database.Id, CancellationToken.None));
+
+        page.Unavailable.Should().NotBeNull();
+        page.Unavailable!.Reason.Should().Contain(f.Database.Name);
     }
 
     [Fact]
