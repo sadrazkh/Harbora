@@ -81,7 +81,7 @@ public class LogicalDatabasesHttpTests(HarboraHttpFixture fixture)
     {
         var svc = SeedDatabase("shared-instance");
         Panel.GivenUser(fixture.WorkspaceId, "logicaldb-create@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.260", "logicaldb-create@example.com");
+        var client = await Panel.SignedInAs("198.51.100.211", "logicaldb-create@example.com");
 
         var token = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
         var response = await client.PostFormAsync($"/databases/{svc.Id}/logical-databases", token, ("name", "reports"));
@@ -96,7 +96,7 @@ public class LogicalDatabasesHttpTests(HarboraHttpFixture fixture)
     {
         var svc = SeedDatabase("cache-instance", ManagedServiceType.Redis);
         Panel.GivenUser(fixture.WorkspaceId, "logicaldb-refuse@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.261", "logicaldb-refuse@example.com");
+        var client = await Panel.SignedInAs("198.51.100.212", "logicaldb-refuse@example.com");
 
         var token = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
         var response = await client.PostFormAsync($"/databases/{svc.Id}/logical-databases", token, ("name", "sessions"));
@@ -113,7 +113,7 @@ public class LogicalDatabasesHttpTests(HarboraHttpFixture fixture)
         var app = SeedApp("default-picker");
         var defaultId = LogicalDatabaseId(svc.Id, "with_default");
         Panel.GivenUser(fixture.WorkspaceId, "logicaldb-default@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.262", "logicaldb-default@example.com");
+        var client = await Panel.SignedInAs("198.51.100.213", "logicaldb-default@example.com");
 
         var token = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
         await client.PostFormAsync($"/databases/{svc.Id}/attach", token, ("appId", app.Id.ToString()));
@@ -129,7 +129,7 @@ public class LogicalDatabasesHttpTests(HarboraHttpFixture fixture)
         var svc = SeedDatabaseWithDefault("multi-logical");
         var app = SeedApp("two-logical-dbs");
         Panel.GivenUser(fixture.WorkspaceId, "logicaldb-two@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.263", "logicaldb-two@example.com");
+        var client = await Panel.SignedInAs("198.51.100.214", "logicaldb-two@example.com");
 
         var createToken = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
         await client.PostFormAsync($"/databases/{svc.Id}/logical-databases", createToken, ("name", "reports"));
@@ -157,7 +157,7 @@ public class LogicalDatabasesHttpTests(HarboraHttpFixture fixture)
         var app = SeedApp("no-double-attach-app");
         var defaultId = LogicalDatabaseId(svc.Id, "no_double_attach");
         Panel.GivenUser(fixture.WorkspaceId, "logicaldb-nodup@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.264", "logicaldb-nodup@example.com");
+        var client = await Panel.SignedInAs("198.51.100.215", "logicaldb-nodup@example.com");
 
         var token1 = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
         await client.PostFormAsync($"/databases/{svc.Id}/attach", token1,
@@ -177,7 +177,7 @@ public class LogicalDatabasesHttpTests(HarboraHttpFixture fixture)
     {
         var svc = SeedDatabaseWithDefault("typed-confirm");
         Panel.GivenUser(fixture.WorkspaceId, "logicaldb-typed@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.265", "logicaldb-typed@example.com");
+        var client = await Panel.SignedInAs("198.51.100.216", "logicaldb-typed@example.com");
 
         var createToken = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
         await client.PostFormAsync($"/databases/{svc.Id}/logical-databases", createToken, ("name", "scratch"));
@@ -201,7 +201,7 @@ public class LogicalDatabasesHttpTests(HarboraHttpFixture fixture)
         var svc = SeedDatabaseWithDefault("attached-logical");
         var app = SeedApp("logical-consumer");
         Panel.GivenUser(fixture.WorkspaceId, "logicaldb-attached@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.266", "logicaldb-attached@example.com");
+        var client = await Panel.SignedInAs("198.51.100.217", "logicaldb-attached@example.com");
 
         var createToken = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
         await client.PostFormAsync($"/databases/{svc.Id}/logical-databases", createToken, ("name", "reports"));
@@ -226,7 +226,7 @@ public class LogicalDatabasesHttpTests(HarboraHttpFixture fixture)
     {
         var svc = SeedDatabaseWithDefault("delete-me-host");
         Panel.GivenUser(fixture.WorkspaceId, "logicaldb-delete@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.267", "logicaldb-delete@example.com");
+        var client = await Panel.SignedInAs("198.51.100.218", "logicaldb-delete@example.com");
 
         var createToken = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
         await client.PostFormAsync($"/databases/{svc.Id}/logical-databases", createToken, ("name", "delete-me"));
@@ -246,7 +246,7 @@ public class LogicalDatabasesHttpTests(HarboraHttpFixture fixture)
         var svc = SeedDatabaseWithDefault("protected-default");
         var defaultId = LogicalDatabaseId(svc.Id, "protected_default");
         Panel.GivenUser(fixture.WorkspaceId, "logicaldb-protected@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.268", "logicaldb-protected@example.com");
+        var client = await Panel.SignedInAs("198.51.100.219", "logicaldb-protected@example.com");
 
         var removeToken = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
         var response = await client.PostFormAsync(

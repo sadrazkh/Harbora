@@ -188,7 +188,7 @@ public class AppManagedServicesHttpTests(HarboraHttpFixture fixture)
         var orders = SeedDatabase("orders-multi");
         var customers = SeedDatabase("customers-multi");
         Panel.GivenUser(fixture.WorkspaceId, "ams-multi@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.256", "ams-multi@example.com");
+        var client = await Panel.SignedInAs("198.51.100.210", "ams-multi@example.com");
 
         var t1 = await client.AntiforgeryTokenFrom($"/databases/{orders.Id}");
         await client.PostFormAsync($"/databases/{orders.Id}/attach", t1, ("appId", app.Id.ToString()));
