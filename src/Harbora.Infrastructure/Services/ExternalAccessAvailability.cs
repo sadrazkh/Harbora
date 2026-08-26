@@ -23,8 +23,19 @@ public static class ExternalAccessAvailability
     /// node agent is only needed for the multi-server case, and for a long time its absence blocked
     /// a feature that never needed it here.
     /// </param>
+    /// <param name="serviceRunsElsewhere">
+    /// True when this <paramref name="service"/>'s own server is not the machine this gateway
+    /// publishes on — resolved by the caller through <c>IServerEngineFactory</c>, the same reference
+    /// check <c>DockerTcpGateway.OpenAsync</c> makes before it will start a proxy. HARBORA-0059:
+    /// this used to be missing entirely, so the button offered external access for a database on any
+    /// server, and the refusal only ever arrived from the gateway after a login had already been
+    /// created — undone again, but not before the page implied the feature had worked. The gateway's
+    /// own check still stands; this is what keeps the button from being offered on a promise the
+    /// gateway was always going to break.
+    /// </param>
     public static AccessUnavailable? Refuse(
-        INodeAgentClient node, ManagedService? service, bool canOpenLocally = false)
+        INodeAgentClient node, ManagedService? service, bool canOpenLocally = false,
+        bool serviceRunsElsewhere = false)
     {
         if (service is not null && !DatabaseGrantSql.Supports(service.Type))
             return new AccessUnavailable(
@@ -40,6 +51,18 @@ public static class ExternalAccessAvailability
 
         if (service is null)
             return new AccessUnavailable("That database no longer exists.", "این دیتابیس دیگر وجود ندارد.");
+
+        // Checked once canOpenLocally has already cleared: on the node-agent path above, "elsewhere"
+        // is exactly what that branch already refuses. This is the gap that path leaves open — an
+        // install that CAN open a port on ITS OWN machine, asked about a database that is not on it.
+        if (canOpenLocally && serviceRunsElsewhere)
+            return new AccessUnavailable(
+                $"'{service.Name}' does not run on this panel's own machine. External access publishes " +
+                "a port here and forwards over a private network that only exists here, so nothing " +
+                "would be reachable. Reaching a database on another server is not built yet.",
+                $"'{service.Name}' روی همین ماشین پنل اجرا نمی‌شود. دسترسی خارجی یک پورت را همین‌جا باز " +
+                "می‌کند و از طریق شبکه‌ای خصوصی که فقط همین‌جا وجود دارد فوروارد می‌کند، پس چیزی قابل " +
+                "اتصال نخواهد بود. دسترسی به دیتابیسی روی سروری دیگر هنوز ساخته نشده.");
 
         // Opening a stopped database hands out a credential for something nothing can connect to,
         // and the grant's clock starts running immediately.

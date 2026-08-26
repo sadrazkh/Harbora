@@ -36,10 +36,23 @@ public sealed record AdminerResult(string? Url, string? User, string? Password, 
 /// <item>The database password is not pre-filled. Adminer's own form asks for it, and the operator
 /// takes it from the connection panel where every other secret is revealed on demand.</item>
 /// </list>
+///
+/// <para>
+/// HARBORA-0059: this used to take an <c>IDockerEngine</c> directly — always this panel's own daemon
+/// — so a database on another server got a session started here, on a network of that name which
+/// does not exist on this machine, and a route naming a container this panel's Docker has never
+/// heard of. Resolved through <see cref="IServerEngineFactory"/> now, the same seam
+/// <see cref="DockerTcpGateway"/> uses for the same reason. And the seam buys the same refusal that
+/// class already needed: Traefik reaches this container by name on this panel's own Docker networks,
+/// exactly the way it reaches every other route, so a database on another machine cannot be
+/// published this way at all yet — carrying the tool's traffic to another server needs a route
+/// Harbora does not have. Refused before anything starts, rather than left running somewhere nothing
+/// can reach it.
+/// </para>
 /// </summary>
 public sealed class AdminerService(
     HarboraDbContext db,
-    IDockerEngine docker,
+    IServerEngineFactory engines,
     IProxyEngine proxy,
     ManagedServiceEngine services,
     ISecretProtector protector,
@@ -58,6 +71,34 @@ public sealed class AdminerService(
         var rootDomain = options.Value.RootDomain;
         if (string.IsNullOrWhiteSpace(rootDomain))
             return new(null, null, null, "The platform has no base domain, so the tool cannot be published.");
+
+        // Resolved before anything is touched, and refused by name rather than attempted: a server
+        // this cannot reach at all (no agent endpoint, no enrolled node, a revoked one) must not read
+        // as "nothing happened" the way an unhandled exception would.
+        IDockerEngine docker;
+        try
+        {
+            docker = await engines.ResolveAsync(service.ServerId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not reach the server holding {Service} to open the admin tool.", service.Name);
+            return new(null, null, null,
+                $"The server holding '{service.Name}' could not be reached, so nothing was started. {ex.Message}");
+        }
+
+        // By reference against IServerEngineFactory.Local, the same contract DockerTcpGateway relies
+        // on: this panel's proxy addresses a route's target by container name on its own Docker
+        // networks, which only ever resolves to something on this machine. A database on another
+        // server would get a route naming a container nothing here has ever heard of — a 502 with no
+        // sign of why — so this is refused before a container is even started, not discovered after.
+        if (!ReferenceEquals(docker, engines.Local))
+            return new(null, null, null,
+                $"'{service.Name}' does not run on this panel's own machine. The admin tool is " +
+                "published through this panel's own proxy, which reaches a container by name on its " +
+                "own Docker networks — a container on another server is not one of them, so the route " +
+                "would point at nothing. Nothing was started. Reaching a database on another server " +
+                "needs a published route Harbora does not have yet for this tool.");
 
         var host = $"admin-{service.Id:N}"[..Math.Min(24, 6 + 32)] + "." + rootDomain;
         var container = AdminerSession.ContainerName(service.Id);
@@ -165,9 +206,17 @@ public sealed class AdminerService(
     /// <summary>
     /// Removes every session past its hour: the container first, then the route that pointed at it.
     /// Public so the sweep can be exercised directly rather than by waiting an hour and hoping.
+    ///
+    /// <para>
+    /// Reads <see cref="IServerEngineFactory.Local"/> alone, deliberately, not every server this
+    /// installation knows about: <see cref="OpenAsync"/> above now refuses to start a session
+    /// anywhere else, so this panel's own daemon is the only place one can ever be running. Sweeping
+    /// every server here would be scanning machines this feature can no longer put anything on.
+    /// </para>
     /// </summary>
     public async Task<int> SweepAsync(CancellationToken ct)
     {
+        var docker = engines.Local;
         var containers = await docker.ListContainersAsync("harbora.adminer", ct);
         var closed = 0;
 

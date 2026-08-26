@@ -44,7 +44,8 @@ public sealed partial class DatabasesController(
     Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling,
     IDeploymentEngine deploymentEngine,
     IBackupEngine backupEngine,
-    Harbora.Infrastructure.Backups.BackupDownloadTokens downloadTokens) : Controller
+    Harbora.Infrastructure.Backups.BackupDownloadTokens downloadTokens,
+    IServerEngineFactory engines) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 

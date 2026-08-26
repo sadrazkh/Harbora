@@ -44,7 +44,9 @@ public sealed partial class DatabasesController
 
         // Asked again here and not only when the page was drawn: the database may have stopped, or
         // the agent may have gone away, in the minutes since somebody opened the form.
-        if (ExternalAccessAvailability.Refuse(node, service, databaseAccess.CanOpenLocally) is { } unavailable)
+        if (ExternalAccessAvailability.Refuse(
+                node, service, databaseAccess.CanOpenLocally, await RunsElsewhereAsync(service, ct))
+            is { } unavailable)
             return View("Access", await BuildAccessPageAsync(id, ct, error: IsFa ? unavailable.ReasonFa : unavailable.Reason));
 
         var result = await databaseAccess.IssueAsync(
@@ -110,7 +112,8 @@ public sealed partial class DatabasesController
         if (grant is null) return NotFound();
 
         var service = await FindDatabaseAsync(id, ct);
-        if (ExternalAccessAvailability.Refuse(node, service, databaseAccess.CanOpenLocally) is { } unavailable)
+        var runsElsewhere = service is not null && await RunsElsewhereAsync(service, ct);
+        if (ExternalAccessAvailability.Refuse(node, service, databaseAccess.CanOpenLocally, runsElsewhere) is { } unavailable)
             return View("Access", await BuildAccessPageAsync(id, ct, error: IsFa ? unavailable.ReasonFa : unavailable.Reason));
 
         // Refuse() answers for a database that is not there, so past that line there is one. Said
@@ -220,6 +223,32 @@ public sealed partial class DatabasesController
         db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
 
     /// <summary>
+    /// Whether this database's own server is not the machine external access publishes on.
+    ///
+    /// <para>
+    /// HARBORA-0059: the availability check used to have no opinion on placement at all, so the
+    /// button was offered for a database on any server, and the only refusal came from
+    /// <c>DockerTcpGateway.OpenAsync</c> — after <c>DatabaseAccessService.IssueAsync</c> had already
+    /// created a login on that database and had to undo it again. Resolved the same way the gateway
+    /// itself decides it: by reference against <c>IServerEngineFactory.Local</c>, so the two can never
+    /// disagree about which machine is "this one".
+    /// </para>
+    /// </summary>
+    private async Task<bool> RunsElsewhereAsync(ManagedService service, CancellationToken ct)
+    {
+        try
+        {
+            return !ReferenceEquals(await engines.ResolveAsync(service.ServerId, ct), engines.Local);
+        }
+        catch
+        {
+            // Cannot be reached at all reads as "elsewhere" for this purpose too: nothing that
+            // cannot be resolved is going to answer as though it were this machine.
+            return true;
+        }
+    }
+
+    /// <summary>
     /// The grant, scoped to the database in the route as well as to the workspace.
     ///
     /// Both checks matter: without the first, a grant id from one database could be revoked or
@@ -242,7 +271,8 @@ public sealed partial class DatabasesController
         return new DatabaseAccessPageViewModel
         {
             Database = service,
-            Unavailable = ExternalAccessAvailability.Refuse(node, service, databaseAccess.CanOpenLocally),
+            Unavailable = ExternalAccessAvailability.Refuse(
+                node, service, databaseAccess.CanOpenLocally, await RunsElsewhereAsync(service, ct)),
 
             // Closed grants stay listed. "Who opened this database in March, and for how long" is a
             // question that gets asked, and a list that only shows what is open cannot answer it.

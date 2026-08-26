@@ -270,7 +270,8 @@ public class ManagedServiceEngineTenancyTests
             deploymentEngine: new NeverAskedDeploymentEngine(),
             // Sub-project 10's export/import actions are not exercised by these tenancy tests.
             backupEngine: null!,
-            downloadTokens: null!)
+            downloadTokens: null!,
+            engines: new FakeServerEngineFactory(docker))
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };

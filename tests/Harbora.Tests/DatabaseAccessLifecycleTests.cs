@@ -125,7 +125,7 @@ public class DatabaseAccessLifecycleTests
         var service = new DatabaseAccessService(
             db, node, clock, NullLogger<DatabaseAccessService>.Instance,
             new DockerTcpGateway(db, engines, NullLogger<DockerTcpGateway>.Instance),
-            new DatabaseGrantExecutor(docker, protector, NullLogger<DatabaseGrantExecutor>.Instance),
+            new DatabaseGrantExecutor(engines, protector, NullLogger<DatabaseGrantExecutor>.Instance),
             new ManagedServiceEngine(
                 db, engines, protector, new NoopJobQueue(),
                 // The real gate with billing off — the shipped default — rather than a fake that

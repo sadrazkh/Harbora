@@ -148,7 +148,7 @@ public class DatabaseAccessPageTests
         var access = new DatabaseAccessService(
             db, node, clock, NullLogger<DatabaseAccessService>.Instance,
             new DockerTcpGateway(db, engines, NullLogger<DockerTcpGateway>.Instance),
-            new DatabaseGrantExecutor(docker, protector, NullLogger<DatabaseGrantExecutor>.Instance),
+            new DatabaseGrantExecutor(engines, protector, NullLogger<DatabaseGrantExecutor>.Instance),
             new ManagedServiceEngine(
                 db, engines, protector, new NoopJobQueue(),
                 new Harbora.Infrastructure.Billing.BillingGate(
@@ -179,7 +179,8 @@ public class DatabaseAccessPageTests
             deploymentEngine: new NeverAskedDeploymentEngine(),
             // Sub-project 10's export/import actions are not exercised by these access-page tests.
             backupEngine: null!,
-            downloadTokens: null!)
+            downloadTokens: null!,
+            engines: engines)
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
@@ -255,7 +256,10 @@ public class DatabaseAccessPageTests
             deploymentEngine: new NeverAskedDeploymentEngine(),
             // Sub-project 10's export/import actions are not exercised by these access-page tests.
             backupEngine: null!,
-            downloadTokens: null!)
+            downloadTokens: null!,
+            // No local reach fixture: a database placed on any server is equally "elsewhere" for a
+            // bare local engine, which is what these tests are about in the first place.
+            engines: new FakeServerEngineFactory(new FakeDockerEngine()))
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };

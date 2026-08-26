@@ -1,5 +1,6 @@
 using Harbora.Application.Abstractions;
 using Harbora.Domain.Services;
+using Harbora.Infrastructure.Nodes;
 using Microsoft.Extensions.Logging;
 
 namespace Harbora.Infrastructure.Services;
@@ -12,9 +13,20 @@ namespace Harbora.Infrastructure.Services;
 /// Harbora supports, it reaches the database over the network the database is actually on, and it
 /// leaves nothing behind. The statements come from <see cref="DatabaseGrantSql"/>, which refuses to
 /// build anything out of a value it has not proved is safe.
+///
+/// <para>
+/// HARBORA-0059: this used to take an <c>IDockerEngine</c> directly, which is always the panel's own
+/// daemon — so every grant on a database placed on another server ran the client here instead, on a
+/// network of that name that does not exist on this machine. Unlike the external-access gateway or
+/// the admin tool, a grant needs nothing published back to the panel: the client and the database it
+/// talks to both live on whichever server holds the data, so there is no reason to insist on the
+/// local engine the way <see cref="DockerTcpGateway"/> does. It only has to run on the <b>right</b>
+/// one, resolved through <see cref="IServerEngineFactory"/> like every other cross-server reach on
+/// this platform.
+/// </para>
 /// </summary>
 public sealed class DatabaseGrantExecutor(
-    IDockerEngine docker,
+    IServerEngineFactory engines,
     ISecretProtector protector,
     ILogger<DatabaseGrantExecutor> logger)
 {
@@ -116,6 +128,23 @@ public sealed class DatabaseGrantExecutor(
             return (false, "This database's own credentials could not be read.", true);
         }
 
+        // Resolved per the database's own server rather than assumed to be this panel's daemon. A
+        // server this cannot reach at all — no agent endpoint, no enrolled node, a revoked one —
+        // throws before anything is attempted, so the refusal is as certain as the decrypt failure
+        // above: nothing here was ever risked.
+        IDockerEngine docker;
+        try
+        {
+            docker = await engines.ResolveAsync(service.ServerId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not reach the server holding {Service} to {What}.", service.Name, what);
+            return (false,
+                $"The server holding '{service.Name}' could not be reached, so nothing was attempted " +
+                $"to {what}. {ex.Message}", true);
+        }
+
         try
         {
             var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
@@ -128,6 +157,18 @@ public sealed class DatabaseGrantExecutor(
             // The client's own output is not returned to the caller: it can quote the statement,
             // and the statement contains the new password.
             return exit == 0 ? (true, null, true) : (false, $"The database refused to {what}.", true);
+        }
+        catch (NodeCapabilityException ex)
+        {
+            // Not a network hiccup: a v1 node's command allowlist has no verb for running a one-off
+            // container to completion, on purpose (see NodeWorkloadEngine's own class comment), so
+            // this is thrown locally before the node is ever contacted. That makes it exactly as
+            // certain as the decrypt failure above — nothing was risked — and it deserves a refusal
+            // that names the real constraint rather than the generic "lost contact" below, which
+            // would send an operator chasing a flaky connection that was never the problem.
+            logger.LogWarning(ex, "Could not {What} on {Service}: the node it runs on has no one-off verb.", what, service.Name);
+            return (false,
+                $"'{service.Name}' runs on a node that cannot {what}: {ex.Message}", true);
         }
         catch (Exception ex)
         {
