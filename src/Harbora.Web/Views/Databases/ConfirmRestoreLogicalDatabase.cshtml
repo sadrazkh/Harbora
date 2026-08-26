@@ -1,0 +1,122 @@
+@using Harbora.Domain.Backups
+@using Harbora.Domain.Services
+@using Harbora.Web.Infrastructure
+@{
+    var svc = (ManagedService)ViewBag.Service;
+    var database = (ManagedServiceDatabase)ViewBag.Database;
+    var backup = (Backup)ViewBag.Backup;
+    var attachedApps = (IReadOnlyList<string>)ViewBag.AttachedApps;
+    var otherDatabases = (IReadOnlyList<ManagedServiceDatabase>)ViewBag.OtherDatabases;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+    var msg = TempData["Message"] as string;
+    var when = (backup.FinishedAt ?? backup.StartedAt ?? backup.CreatedAt).LocalDateTime.ToString(Dates.Stamp);
+}
+<div class="max-w-2xl" data-database-id="@database.Id" data-backup-id="@backup.Id" data-restore-logical-database>
+    <a href="/databases/@svc.Id" class="text-accent-text text-sm">← @svc.Name</a>
+    <h1 class="text-2xl font-bold tracking-tight text-ink mt-1 mb-1">
+        @(isFa ? "بازیابی نسخهٔ پشتیبان" : "Restore a backup")
+    </h1>
+    <p class="text-sm text-ink-muted mb-4">
+        @(isFa ? $"نسخهٔ گرفته‌شده در " : "Taken ")<span dir="ltr">@when</span>
+        @(isFa ? $"از «{database.Name}»." : $"of \"{database.Name}\".")
+    </p>
+
+    @if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
+    @if (msg is not null){<div class="mb-4 rounded-lg bg-accent-soft border border-accent text-accent-text px-4 py-2 text-sm">@msg</div>}
+
+    <div class="rounded-xl border border-line bg-surface-2 p-4 mb-4">
+        <p class="text-sm text-ink-muted">
+            @(isFa
+                ? "پیش از هر بازیابی، از دیتابیس مقصد یک نسخهٔ ایمنی خودکار گرفته می‌شود؛ اگر بازیابی شکست بخورد، نام آن نسخه اعلام می‌شود."
+                : "A safety snapshot of the target database is taken automatically before every restore; if the restore fails, that snapshot's name is what you get back.")
+        </p>
+    </div>
+
+    @* ---- restore over this same database ---- *@
+    <div class="rounded-xl border border-danger bg-danger-soft p-4 mb-4">
+        <h2 class="text-sm font-semibold text-danger mb-2">
+            @(isFa ? $"جای‌گزین کردن «{database.Name}»" : $"Replace \"{database.Name}\"")
+        </h2>
+        @if (attachedApps.Count > 0)
+        {
+            <div class="text-sm text-danger mb-2" data-attached-apps>
+                @(isFa ? "این اپ‌ها به آن متصل‌اند و کار خواهند کرد اما با دادهٔ بازیابی‌شده:" : "These apps are attached and will run against the restored data:")
+                <ul class="list-disc ms-5">@foreach (var name in attachedApps){<li>@name</li>}</ul>
+            </div>
+        }
+        <form asp-controller="Databases" asp-action="RestoreDatabase" asp-route-id="@svc.Id"
+              asp-route-databaseId="@database.Id" asp-route-backupId="@backup.Id" method="post" class="space-y-2">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="mode" value="same" />
+            <label class="block text-xs text-ink-muted">
+                @(isFa ? "برای تأیید، نام را دقیقاً بنویسید:" : "To confirm, type the name exactly:")
+                <code class="text-ink" dir="ltr">@database.Name</code>
+            </label>
+            <input name="confirmName" autocomplete="off" dir="ltr"
+                   class="w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm" />
+            <button class="rounded-lg bg-danger-soft hover:bg-danger-soft text-danger px-4 py-2 text-sm font-semibold">
+                @(isFa ? "بازیابی روی همین دیتابیس" : "Restore over this database")
+            </button>
+        </form>
+    </div>
+
+    @* ---- restore into a different logical database — this instance or another one ---- *@
+    @if (otherDatabases.Count > 0)
+    {
+        <div class="rounded-xl border border-line bg-surface-2 p-4 mb-4">
+            <h2 class="text-sm font-semibold text-ink mb-2">
+                @(isFa ? "بازیابی در دیتابیس دیگری" : "Restore into a different database")
+            </h2>
+            <p class="text-xs text-ink-muted mb-2">
+                @(isFa
+                    ? "این دیتابیس می‌تواند روی همین نمونه یا نمونهٔ دیگری باشد — تا وقتی موتورشان سازگار است."
+                    : "This can be on this instance or a different one — as long as the two engines are compatible.")
+            </p>
+            <form asp-controller="Databases" asp-action="RestoreDatabase" asp-route-id="@svc.Id"
+                  asp-route-databaseId="@database.Id" asp-route-backupId="@backup.Id" method="post" class="space-y-2">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="mode" value="existing" />
+                <select name="targetDatabaseId" class="w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm" dir="ltr">
+                    @foreach (var other in otherDatabases)
+                    {
+                        <option value="@other.Id">@other.ManagedService!.Name / @other.Name (@other.ManagedService!.Type)</option>
+                    }
+                </select>
+                <label class="block text-xs text-ink-muted">
+                    @(isFa ? "این کار داده‌های فعلی آن را رونویسی می‌کند؛ برای تأیید نام آن دیتابیس را دقیقاً بنویسید." : "This overwrites that database's current contents; type its name exactly to confirm.")
+                </label>
+                <input name="confirmName" autocomplete="off" dir="ltr"
+                       class="w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm" />
+                <button class="btn-secondary w-full justify-center py-2 text-sm">
+                    @(isFa ? "بازیابی در دیتابیس انتخاب‌شده" : "Restore into the selected database")
+                </button>
+            </form>
+        </div>
+    }
+
+    @* ---- clone into a brand-new logical database ---- *@
+    <div class="rounded-xl border border-line bg-surface-2 p-4 mb-4">
+        <h2 class="text-sm font-semibold text-ink mb-2">
+            @(isFa ? "بازیابی در یک پایگاه‌دادهٔ تازه" : "Restore into a brand-new database")
+        </h2>
+        <p class="text-xs text-ink-muted mb-2">
+            @(isFa
+                ? "برای مثال، کلون کردن این نسخه به یک محیط staging بدون دست‌زدن به «" + database.Name + "»."
+                : $"For example, cloning this snapshot into a staging copy without touching \"{database.Name}\" itself.")
+        </p>
+        <form asp-controller="Databases" asp-action="RestoreDatabase" asp-route-id="@svc.Id"
+              asp-route-databaseId="@database.Id" asp-route-backupId="@backup.Id" method="post" class="space-y-2">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="mode" value="new" />
+            <input name="newDatabaseName" autocomplete="off" dir="ltr"
+                   placeholder="@(isFa ? "نام پایگاه‌دادهٔ تازه" : "New database name")"
+                   class="w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm" />
+            <button class="btn-secondary w-full justify-center py-2 text-sm">
+                @(isFa ? "ساخت و بازیابی" : "Create and restore")
+            </button>
+        </form>
+    </div>
+
+    <a href="/databases/@svc.Id" class="text-sm text-ink-muted">@(isFa ? "انصراف" : "Cancel")</a>
+</div>

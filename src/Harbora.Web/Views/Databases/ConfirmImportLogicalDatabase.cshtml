@@ -1,0 +1,65 @@
+@using Harbora.Domain.Services
+@{
+    var svc = (ManagedService)ViewBag.Service;
+    var database = (ManagedServiceDatabase)ViewBag.Database;
+    var attachedApps = (IReadOnlyList<string>)ViewBag.AttachedApps;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+}
+<div class="max-w-2xl" data-database-id="@database.Id" data-import-logical-database>
+    <a href="/databases/@svc.Id" class="text-accent-text text-sm">← @svc.Name</a>
+    <h1 class="text-2xl font-bold tracking-tight text-ink mt-1 mb-4">
+        @(isFa ? $"وارد کردن به «{database.Name}»" : $"Import into {database.Name}")
+    </h1>
+
+    @if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
+
+    <div class="rounded-xl border border-danger bg-danger-soft p-4 mb-4">
+        <p class="text-sm text-danger">
+            @(isFa
+                ? $"وارد کردن، تمام محتوای فعلی «{database.Name}» را رونویسی می‌کند. پیش از آن، یک نسخهٔ ایمنی خودکار از داده‌های فعلی گرفته می‌شود."
+                : $"Importing overwrites ALL of \"{database.Name}\"'s current contents. A safety snapshot of what it currently holds is taken automatically first.")
+        </p>
+    </div>
+
+    @if (attachedApps.Count > 0)
+    {
+        @* The requirement this exists to satisfy: the person restoring may not know who is attached. *@
+        <div class="rounded-xl border border-warn bg-warn-soft p-4 mb-4" data-attached-apps>
+            <div class="text-sm font-semibold text-warn mb-2">
+                @(isFa ? "این اپ‌ها به آن متصل‌اند و پس از وارد کردن، دادهٔ جدید را می‌بینند:" : "These apps are attached and will see the new data after import:")
+            </div>
+            <ul class="text-sm text-warn list-disc ms-5">
+                @foreach (var name in attachedApps){<li>@name</li>}
+            </ul>
+        </div>
+    }
+
+    <form asp-controller="Databases" asp-action="ImportDatabase" asp-route-id="@svc.Id"
+          asp-route-databaseId="@database.Id" method="post" enctype="multipart/form-data" class="space-y-4">
+        @Html.AntiForgeryToken()
+
+        <div>
+            <label class="block text-sm text-ink-muted mb-1">@(isFa ? "فایل پشتیبان" : "Backup file")</label>
+            <input type="file" name="file" class="form-control text-sm" required />
+        </div>
+
+        <div>
+            <label class="block text-sm text-ink-muted mb-1">
+                @(isFa ? "برای تأیید، نام را دقیقاً بنویسید:" : "To confirm, type the name exactly:")
+                <code class="text-ink" dir="ltr">@database.Name</code>
+            </label>
+            <input name="confirmName" autocomplete="off" dir="ltr"
+                   class="w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm" />
+        </div>
+
+        <div class="flex gap-2">
+            <button class="rounded-lg bg-danger-soft hover:bg-danger-soft text-danger px-4 py-2 text-sm font-semibold">
+                @(isFa ? "وارد کردن (رونویسی)" : "Import (overwrite)")
+            </button>
+            <a href="/databases/@svc.Id" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">
+                @(isFa ? "انصراف" : "Cancel")
+            </a>
+        </div>
+    </form>
+</div>

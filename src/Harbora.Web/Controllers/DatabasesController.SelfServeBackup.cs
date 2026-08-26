@@ -43,16 +43,30 @@ public sealed partial class DatabasesController
     /// </summary>
     private const long MaxImportBytes = 2L * 1024 * 1024 * 1024;
 
-    /// <summary>Queues a self-serve export of this database's current contents.</summary>
+    /// <summary>
+    /// Queues a self-serve export of this database's current contents.
+    ///
+    /// <para>
+    /// D2 (2026-08-25 shared-databases plan): <paramref name="databaseId"/> narrows the export to one
+    /// logical database inside this instance rather than its admin database — the same route, the
+    /// same queue, the same expiring-artifact machinery. Left out (every caller before D2), this is
+    /// byte-for-byte what it always was.
+    /// </para>
+    /// </summary>
     [HttpPost("{id:guid}/export")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.BackupsRun)]
-    public async Task<IActionResult> Export(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Export(Guid id, Guid? databaseId, CancellationToken ct)
     {
         if (!await access.CanTouchServiceAsync(id, Capabilities.BackupsRun, ct)) return NotFound();
         var svc = await db.ManagedServices.AsNoTracking()
             .FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
         if (svc is null) return NotFound();
+
+        if (databaseId is { } requestedDatabaseId
+            && !await db.ManagedServiceDatabases.AsNoTracking()
+                .AnyAsync(d => d.Id == requestedDatabaseId && d.ManagedServiceId == id, ct))
+            return NotFound();
 
         var destination = await DefaultDestinationAsync(ct);
         if (destination is null)
@@ -64,7 +78,7 @@ public sealed partial class DatabasesController
         }
 
         await backupEngine.QueueSelfServeExportAsync(
-            WorkspaceId, id.ToString(), destination.Id, DatabaseExportPlan.ArtifactLifetime, ct);
+            WorkspaceId, id.ToString(), destination.Id, DatabaseExportPlan.ArtifactLifetime, ct, databaseId);
 
         await audit.LogAsync("database.export_queued", "service", id.ToString(),
             HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
