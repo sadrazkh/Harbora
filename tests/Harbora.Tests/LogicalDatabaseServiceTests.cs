@@ -74,7 +74,10 @@ public class LogicalDatabaseServiceTests
         var engines = new FakeServerEngineFactory(docker);
         var clock = new Clock(Start);
 
-        var grants = new DatabaseGrantExecutor(docker, protector, NullLogger<DatabaseGrantExecutor>.Instance);
+        // The factory, not the engine: D4 (HARBORA-0059) moved this off the local Docker engine so a
+        // database placed on another server is reached through that server's own. `engines` wraps
+        // this same fake, so what is under test here is unchanged — only the seam it arrives through.
+        var grants = new DatabaseGrantExecutor(engines, protector, NullLogger<DatabaseGrantExecutor>.Instance);
         var engine = new ManagedServiceEngine(
             db, engines, protector, new NoopJobQueue(),
             new Harbora.Infrastructure.Billing.BillingGate(
