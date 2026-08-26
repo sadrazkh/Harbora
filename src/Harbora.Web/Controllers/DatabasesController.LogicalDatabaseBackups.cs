@@ -1,3 +1,4 @@
+using Harbora.Application.Abstractions;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Backups;
 using Harbora.Domain.Common;
@@ -72,6 +73,73 @@ public sealed partial class DatabasesController
         TempData["Message"] = IsFa
             ? $"پشتیبان‌گیری از «{logical.Name}» صف شد."
             : $"Backing up \"{logical.Name}\" was queued.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// A recurring backup of one logical database — the "on a schedule" half of the plan's own
+    /// requirement, sitting beside <see cref="BackupDatabase"/>'s "on demand" half. Reuses
+    /// <see cref="Harbora.Domain.Backups.BackupSchedule"/> and <c>BackupScheduler</c>'s existing tick
+    /// verbatim: the only new thing a row here carries is
+    /// <see cref="Harbora.Domain.Backups.BackupSchedule.ManagedServiceDatabaseId"/>, which
+    /// <c>BackupScheduler.RunDueSchedulesAsync</c> already threads through to
+    /// <see cref="IBackupEngine.QueueBackupAsync"/> for every schedule, not only whole-instance ones.
+    /// Same quota gates <c>BackupsController.CreateSchedule</c> already enforces for every other
+    /// schedule in the workspace — a database is not exempt from the count or retention limits an
+    /// app's own schedule already has to clear.
+    /// </summary>
+    [HttpPost("{id:guid}/logical-databases/{databaseId:guid}/schedule")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.BackupsManage)]
+    public async Task<IActionResult> ScheduleDatabaseBackup(
+        Guid id, Guid databaseId, int intervalHours, int retentionCount, CancellationToken ct)
+    {
+        if (!await access.CanTouchServiceAsync(id, Capabilities.BackupsManage, ct)) return NotFound();
+
+        var logical = await db.ManagedServiceDatabases.AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == databaseId && d.ManagedServiceId == id, ct);
+        if (logical is null) return NotFound();
+
+        var destination = await DefaultDestinationAsync(ct);
+        if (destination is null)
+        {
+            TempData["Error"] = IsFa
+                ? "هیچ مقصد پشتیبانی تنظیم نشده. ابتدا از صفحهٔ «پشتیبان‌ها» یک مقصد بسازید."
+                : "No backup destination is configured yet. Set one up on the Backups page first.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        retentionCount = Math.Max(1, retentionCount);
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(WorkspaceId, ct);
+        var quotaCheck = await quota.CanAddGovernedResourcesAsync(WorkspaceId,
+            new GovernanceQuotaDelta(BackupSchedules: 1), ct);
+        if (!quotaCheck.Allowed)
+        {
+            TempData["Error"] = quotaCheck.Reason;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+        var retentionCheck = await quota.CanUseBackupRetentionAsync(WorkspaceId, retentionCount, ct);
+        if (!retentionCheck.Allowed)
+        {
+            TempData["Error"] = (IsFa ? retentionCheck.ReasonFa : null) ?? retentionCheck.Reason;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        db.BackupSchedules.Add(new BackupSchedule
+        {
+            WorkspaceId = WorkspaceId, DestinationId = destination.Id, Type = BackupType.Database,
+            TargetRef = id.ToString(), ManagedServiceDatabaseId = databaseId,
+            IntervalHours = Math.Max(1, intervalHours), RetentionCount = retentionCount, IsEnabled = true
+        });
+        await db.SaveChangesAsync(ct);
+        await quotaReservation.CommitAsync(ct);
+
+        await audit.LogAsync("database.logical_database_schedule_created", "service", $"{id}:{databaseId}",
+            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+
+        TempData["Message"] = IsFa
+            ? $"زمان‌بندی پشتیبان‌گیری برای «{logical.Name}» هر {intervalHours} ساعت تنظیم شد."
+            : $"Scheduled a backup of \"{logical.Name}\" every {intervalHours} hour(s).";
         return RedirectToAction(nameof(Details), new { id });
     }
 

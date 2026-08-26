@@ -147,6 +147,27 @@ public class LogicalDatabaseBackupHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task Scheduling_a_recurring_backup_of_one_logical_database_persists_its_own_id()
+    {
+        var svc = SeedDatabase("schedule-svc");
+        var billing = SeedLogicalDatabase(svc, "billing_db");
+        SeedDestination();
+        Panel.GivenUser(fixture.WorkspaceId, "schedulelogicaldb@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.169", "schedulelogicaldb@example.com");
+        var token = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
+
+        var response = await client.PostFormAsync(
+            $"/databases/{svc.Id}/logical-databases/{billing.Id}/schedule", token,
+            ("intervalHours", "24"), ("retentionCount", "7"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        var schedule = Panel.Read(db => db.BackupSchedules.Single(s => s.TargetRef == svc.Id.ToString()));
+        schedule.ManagedServiceDatabaseId.Should().Be(billing.Id,
+            "the schedule must be scoped to this one logical database, not the whole instance");
+        schedule.IntervalHours.Should().Be(24);
+    }
+
+    [Fact]
     public async Task Self_serve_export_of_one_logical_database_carries_its_id_and_an_expiry()
     {
         var svc = SeedDatabase("export-scoped-svc");
