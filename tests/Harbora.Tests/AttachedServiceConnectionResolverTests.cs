@@ -49,6 +49,84 @@ public class AttachedServiceConnectionResolverTests
     }
 
     [Fact]
+    public async Task An_attachment_pointed_at_a_logical_database_resolves_to_that_databases_own_login()
+    {
+        // D1 (2026-08-25 shared-databases plan): the actual gap this closes. Two apps on the same
+        // instance used to be handed the same admin login and the same database no matter what —
+        // this proves an attachment that names a logical database gets THAT database's own name and
+        // login instead, not the instance's admin credentials.
+        using var db = NewDb();
+        var protector = new PassthroughProtector();
+        var appId = Guid.NewGuid();
+        var svc = new ManagedService
+        {
+            WorkspaceId = Guid.NewGuid(), EnvironmentId = Guid.NewGuid(), ServerId = Guid.NewGuid(),
+            Name = "shared-pg", Type = ManagedServiceType.PostgreSql, Version = "16-alpine",
+            ContainerName = "harbora-svc-shared-pg", InternalPort = 5432, Username = "harbora",
+            EncryptedPassword = protector.Protect("instance-admin-secret"),
+            DatabaseName = "harbora_admin", VolumeName = "harbora-svc-shared-pg-data", Status = ServiceStatus.Running
+        };
+        var logical = new ManagedServiceDatabase
+        {
+            ManagedServiceId = svc.Id, Name = "orders_app", Username = "orders_app_user",
+            EncryptedPassword = protector.Protect("orders-app-own-secret")
+        };
+        db.ManagedServices.Add(svc);
+        db.ManagedServiceDatabases.Add(logical);
+        db.AppManagedServices.Add(new AppManagedService
+        {
+            AppId = appId, ManagedServiceId = svc.Id, ManagedServiceDatabaseId = logical.Id,
+            Alias = "ORDERS", AttachOrder = 1
+        });
+        await db.SaveChangesAsync();
+
+        var resolver = new AttachedServiceConnectionResolver(db, protector);
+        var connectionString = await resolver.ResolveAsync(appId, "ORDERS", default);
+
+        connectionString.Should().Be("postgresql://orders_app_user:orders-app-own-secret@harbora-svc-shared-pg:5432/orders_app",
+            "the attachment must use the logical database's own login and name, never the instance's admin credentials");
+    }
+
+    [Fact]
+    public async Task Two_apps_on_two_different_logical_databases_of_one_instance_get_isolated_credentials()
+    {
+        using var db = NewDb();
+        var protector = new PassthroughProtector();
+        var appOne = Guid.NewGuid();
+        var appTwo = Guid.NewGuid();
+        var svc = new ManagedService
+        {
+            WorkspaceId = Guid.NewGuid(), EnvironmentId = Guid.NewGuid(), ServerId = Guid.NewGuid(),
+            Name = "shared-pg-2", Type = ManagedServiceType.PostgreSql, Version = "16-alpine",
+            ContainerName = "harbora-svc-shared-pg-2", InternalPort = 5432, Username = "harbora",
+            EncryptedPassword = protector.Protect("instance-admin-secret-2"),
+            DatabaseName = "harbora_admin_2", VolumeName = "harbora-svc-shared-pg-2-data", Status = ServiceStatus.Running
+        };
+        var ordersDb = new ManagedServiceDatabase
+        {
+            ManagedServiceId = svc.Id, Name = "orders", Username = "orders_user",
+            EncryptedPassword = protector.Protect("orders-secret")
+        };
+        var billingDb = new ManagedServiceDatabase
+        {
+            ManagedServiceId = svc.Id, Name = "billing", Username = "billing_user",
+            EncryptedPassword = protector.Protect("billing-secret")
+        };
+        db.ManagedServices.Add(svc);
+        db.ManagedServiceDatabases.AddRange(ordersDb, billingDb);
+        db.AppManagedServices.Add(new AppManagedService
+        { AppId = appOne, ManagedServiceId = svc.Id, ManagedServiceDatabaseId = ordersDb.Id, Alias = "DB", AttachOrder = 1 });
+        db.AppManagedServices.Add(new AppManagedService
+        { AppId = appTwo, ManagedServiceId = svc.Id, ManagedServiceDatabaseId = billingDb.Id, Alias = "DB", AttachOrder = 1 });
+        await db.SaveChangesAsync();
+
+        var resolver = new AttachedServiceConnectionResolver(db, protector);
+
+        (await resolver.ResolveAsync(appOne, "DB", default)).Should().Contain("orders_user").And.Contain("/orders");
+        (await resolver.ResolveAsync(appTwo, "DB", default)).Should().Contain("billing_user").And.Contain("/billing");
+    }
+
+    [Fact]
     public async Task Alias_lookup_is_case_insensitive()
     {
         using var db = NewDb();
