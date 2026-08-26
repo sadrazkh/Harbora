@@ -71,7 +71,17 @@ public sealed record AppDatabaseLinkViewModel(
     Harbora.Domain.Common.ManagedServiceType Type,
     string ContainerName,
     bool Attached,
-    string Prefix);
+    string Prefix,
+    IReadOnlyList<AppLogicalDatabaseLinkViewModel> LogicalDatabases);
+
+/// <summary>
+/// One logical database inside an <see cref="AppDatabaseLinkViewModel"/> instance, for the picker
+/// that appears once an instance holds more than its own default (D3, 2026-08-25 shared-databases
+/// plan) — the app-side half of "attach to a logical database, from either side". Omitted (the
+/// instance renders as the single row it always has) whenever it has one logical database or none
+/// at all, which is every instance that existed before D1 shipped.
+/// </summary>
+public sealed record AppLogicalDatabaseLinkViewModel(Guid Id, string Name, bool IsDefault, bool Attached);
 
 /// <summary>
 /// A database this application cannot attach to, because it lives on another private network.

@@ -977,8 +977,17 @@
            would try it on. *@
         @{
             var links = ViewBag.Databases as List<AppDatabaseLinkViewModel> ?? [];
-            var attached = links.Where(l => l.Attached).ToList();
-            var available = links.Where(l => !l.Attached).ToList();
+
+            // D3 (2026-08-25 shared-databases plan): an instance holding more than its own default
+            // logical database is rendered in its own section below, with a picker per database —
+            // the single Attached flag this attached/available split relies on cannot say WHICH of
+            // an instance's several databases an app is (or is not) attached to, and detaching
+            // without naming one is ambiguous the moment there is more than one to choose from. Every
+            // instance with one logical database or none — still the common case — is untouched.
+            var plain = links.Where(l => l.LogicalDatabases.Count <= 1).ToList();
+            var multi = links.Where(l => l.LogicalDatabases.Count > 1).ToList();
+            var attached = plain.Where(l => l.Attached).ToList();
+            var available = plain.Where(l => !l.Attached).ToList();
             var here = Context.Request.Path + Context.Request.QueryString;
         }
         <section class="rounded-xl border border-line bg-surface p-4">
@@ -1120,6 +1129,61 @@
                     @(isFa
                         ? "در این محیط دیتابیسی نیست. دیتابیس فقط داخل شبکهٔ خصوصی همان محیط وصل می‌شود."
                         : "There is no database in this environment. One can only attach inside its own private network.")
+                </p>
+            }
+
+            @* ---- instances holding more than one logical database ----
+               D3 (2026-08-25 shared-databases plan) — "attach to a logical database, from either
+               side": the database's own page has the mirror of this. Each logical database gets its
+               own row and its own attach/detach, naming databaseId explicitly, because the
+               instance-level Attached flag above cannot say which of several this app is on. *@
+            @if (multi.Count > 0)
+            {
+                <div class="mt-3 space-y-3" data-multi-database-instances>
+                    @foreach (var link in multi)
+                    {
+                        <div class="rounded-lg border border-line bg-surface-2 p-2.5" data-multi-database-instance="@link.Id">
+                            <div class="mb-2 flex items-center justify-between gap-2">
+                                <a href="/databases/@link.Id" class="truncate text-sm text-ink hover:text-accent-text" dir="ltr">@link.Name</a>
+                                <small class="text-[11px] text-ink-faint">@link.Type</small>
+                            </div>
+                            <div class="space-y-1.5">
+                                @foreach (var logical in link.LogicalDatabases)
+                                {
+                                    <div class="flex items-center justify-between gap-2 rounded-lg bg-surface px-2.5 py-1.5 text-xs" data-logical-database="@logical.Id">
+                                        <span dir="ltr" class="truncate text-ink">
+                                            @logical.Name@(logical.IsDefault ? (isFa ? " (پیش‌فرض)" : " (default)") : "")
+                                        </span>
+                                        @if (logical.Attached)
+                                        {
+                                            <form asp-controller="Databases" asp-action="Detach" asp-route-id="@link.Id" method="post">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="appId" value="@app.Id" />
+                                                <input type="hidden" name="databaseId" value="@logical.Id" />
+                                                <input type="hidden" name="returnUrl" value="@here" />
+                                                <button class="text-[11px] text-ink-faint hover:text-danger">@(isFa ? "جدا کن" : "Detach")</button>
+                                            </form>
+                                        }
+                                        else
+                                        {
+                                            <form asp-controller="Databases" asp-action="Attach" asp-route-id="@link.Id" method="post">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="appId" value="@app.Id" />
+                                                <input type="hidden" name="databaseId" value="@logical.Id" />
+                                                <input type="hidden" name="returnUrl" value="@here" />
+                                                <button class="text-[11px] text-accent-text hover:underline">@(isFa ? "اتصال" : "Attach")</button>
+                                            </form>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+                <p class="mt-1 text-[11px] text-ink-faint">
+                    @(isFa
+                        ? "بعد از اتصال یا جدا کردن، اپ را دوباره دیپلوی کنید تا متغیرها اعمال شوند."
+                        : "Redeploy the application after attaching or detaching to apply the variables.")
                 </p>
             }
 

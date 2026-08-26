@@ -667,17 +667,49 @@ public sealed partial class AppsController(
         // env-var heuristic alone before that join existed) — and where one exists, its own Alias is
         // the real prefix this database writes under, not just AttachKeys' guess from the service's
         // name.
-        var explicitLinks = app.ManagedServices
+        //
+        // A lookup, not a dictionary: D1 (2026-08-25 shared-databases plan) lets one app attach to
+        // two different logical databases on the same instance, which is two AppManagedService rows
+        // sharing one ManagedServiceId. A dictionary keyed on that threw "an item with the same key
+        // has already been added" the moment a customer actually used the capability D1 shipped —
+        // this page has 500'd on that ever since D1 landed with no UI to keep it from happening.
+        var explicitByService = app.ManagedServices
             .Where(ms => ms.ManagedService is not null)
-            .ToDictionary(ms => ms.ManagedServiceId, ms => ms.Alias);
+            .ToLookup(ms => ms.ManagedServiceId);
+
+        // D3 (2026-08-25 shared-databases plan): the logical databases inside each sibling instance,
+        // so an instance holding more than its own default can offer a per-database picker here too
+        // — the app-side half of "attach to a logical database, from either side". Instances with
+        // one logical database or none at all (still the common case) render exactly as before D1.
+        var siblingIds = siblings.Select(s => s.Id).ToList();
+        var siblingDatabases = await db.ManagedServiceDatabases.AsNoTracking()
+            .Where(d => siblingIds.Contains(d.ManagedServiceId))
+            .OrderByDescending(d => d.IsDefault).ThenBy(d => d.Name)
+            .ToListAsync(ct);
+        var databasesByService = siblingDatabases.ToLookup(d => d.ManagedServiceId);
 
         ViewBag.Databases = siblings
-            .Select(s => new AppDatabaseLinkViewModel(
-                s.Id, s.Name, s.Type, s.ContainerName,
-                wiredTo.Contains(s.ContainerName) || explicitLinks.ContainsKey(s.Id),
-                explicitLinks.TryGetValue(s.Id, out var alias)
-                    ? $"{alias}_"
-                    : Harbora.Infrastructure.Services.AttachKeys.PrefixFor(s.Name)))
+            .Select(s =>
+            {
+                var explicitLinks = explicitByService[s.Id].ToList();
+                var wired = wiredTo.Contains(s.ContainerName);
+                var firstAlias = explicitLinks.FirstOrDefault()?.Alias;
+
+                var logicalRows = databasesByService[s.Id]
+                    .Select(d => new AppLogicalDatabaseLinkViewModel(
+                        d.Id, d.Name, d.IsDefault,
+                        Attached: explicitLinks.Any(ms => ms.ManagedServiceDatabaseId == d.Id)
+                                  || (d.IsDefault && (wired || explicitLinks.Any(ms => ms.ManagedServiceDatabaseId == null)))))
+                    .ToList();
+
+                return new AppDatabaseLinkViewModel(
+                    s.Id, s.Name, s.Type, s.ContainerName,
+                    Attached: wired || explicitLinks.Count > 0,
+                    Prefix: firstAlias is not null
+                        ? $"{firstAlias}_"
+                        : Harbora.Infrastructure.Services.AttachKeys.PrefixFor(s.Name),
+                    LogicalDatabases: logicalRows);
+            })
             .ToList();
 
         // Protection, read from the routes rather than kept twice: the routes are what Traefik
