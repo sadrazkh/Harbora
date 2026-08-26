@@ -199,4 +199,59 @@ public class AppManagedServicesHttpTests(HarboraHttpFixture fixture)
         html.Should().Contain("ORDERS_MULTI_DATABASE_URL");
         html.Should().Contain("CUSTOMERS_MULTI_DATABASE_URL");
     }
+
+    /// <summary>
+    /// D3 (2026-08-25 shared-databases plan). Before this task, the app's own page built its
+    /// Databases panel with <c>app.ManagedServices.ToDictionary(ms =&gt; ms.ManagedServiceId, ...)</c>
+    /// — which throws "an item with the same key has already been added" the moment an app holds two
+    /// <c>AppManagedService</c> rows against one instance, exactly what attaching to two different
+    /// logical databases on the same instance produces. D1 shipped that capability on 2026-08-25 with
+    /// no UI to exercise it, so this page had been silently 500ing on it ever since.
+    /// </summary>
+    [Fact]
+    public async Task An_app_attached_to_two_logical_databases_on_one_instance_does_not_crash_its_own_page()
+    {
+        var protector = Panel.Resolve<ISecretProtector>();
+        var svc = new ManagedService
+        {
+            WorkspaceId = fixture.WorkspaceId, EnvironmentId = fixture.DefaultEnvironmentId,
+            ServerId = Guid.CreateVersion7(), Name = "two-logical-instance", Type = ManagedServiceType.PostgreSql,
+            Version = "16", Status = ServiceStatus.Running, ContainerName = "harbora-svc-two-logical-instance",
+            InternalPort = 5432, Username = "harbora", DatabaseName = "two_logical_instance",
+            VolumeName = "harbora-svc-two-logical-instance-data",
+            EncryptedPassword = protector.Protect("ams-http-password-02")
+        };
+        Panel.Seed(db =>
+        {
+            db.ManagedServices.Add(svc);
+            db.ManagedServiceDatabases.Add(Harbora.Domain.Services.ManagedServiceDatabase.DefaultFor(svc)!);
+        });
+        var app = SeedApp("two-logical-consumer");
+        Panel.GivenUser(fixture.WorkspaceId, "ams-two-logical@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("198.51.100.205", "ams-two-logical@example.com");
+
+        var createToken = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
+        await client.PostFormAsync($"/databases/{svc.Id}/logical-databases", createToken, ("name", "reports"));
+        var reportsId = Panel.Read(db => db.ManagedServiceDatabases
+            .Single(d => d.ManagedServiceId == svc.Id && d.Name == "reports").Id);
+        var defaultId = Panel.Read(db => db.ManagedServiceDatabases
+            .Single(d => d.ManagedServiceId == svc.Id && d.IsDefault).Id);
+
+        var attachToken1 = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
+        await client.PostFormAsync($"/databases/{svc.Id}/attach", attachToken1,
+            ("appId", app.Id.ToString()), ("databaseId", defaultId.ToString()));
+        var attachToken2 = await client.AntiforgeryTokenFrom($"/databases/{svc.Id}");
+        await client.PostFormAsync($"/databases/{svc.Id}/attach", attachToken2,
+            ("appId", app.Id.ToString()), ("databaseId", reportsId.ToString()), ("alias", "REPORTS"));
+
+        var response = await client.GetAsync($"/apps/details/{app.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "an app attached to two logical databases on one instance must not crash its own details page");
+
+        var html = await response.Content.ReadAsStringAsync();
+        html.Should().Contain("data-multi-database-instance",
+            "an instance holding more than its own default logical database gets its own per-database picker");
+        html.Should().Contain($"data-logical-database=\"{reportsId}\"");
+        html.Should().Contain($"data-logical-database=\"{defaultId}\"");
+    }
 }

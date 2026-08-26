@@ -274,4 +274,126 @@ public class LogicalDatabaseServiceTests
         docker.OneOffCommands[1].Should().Contain("DROP DATABASE");
         (await db.ManagedServiceDatabases.CountAsync()).Should().Be(0);
     }
+
+    // -------------------------------------------------------------------------------------------
+    // Renaming (D3, 2026-08-25 shared-databases plan)
+    // -------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Renaming_a_non_default_database_issues_one_alter_statement_and_updates_the_row()
+    {
+        var (db, service, docker, instance) = BuildLocal();
+        var (logical, _) = await service.CreateAsync(instance.Id, "orders", default);
+        docker.OneOffCommands.Clear();
+
+        var error = await service.RenameAsync(logical!.Id, "invoices", default);
+
+        error.Should().BeNull();
+        docker.OneOffCommands.Should().ContainSingle().Which.Should().Contain("ALTER DATABASE");
+        (await db.ManagedServiceDatabases.SingleAsync(d => d.Id == logical.Id)).Name.Should().Be("invoices");
+    }
+
+    [Fact]
+    public async Task Renaming_to_a_name_already_taken_on_the_instance_gets_the_next_free_one_instead()
+    {
+        var (db, service, docker, instance) = BuildLocal();
+        var (first, _) = await service.CreateAsync(instance.Id, "orders", default);
+        var (second, _) = await service.CreateAsync(instance.Id, "invoices", default);
+        docker.OneOffCommands.Clear();
+
+        var error = await service.RenameAsync(second!.Id, "orders", default);
+
+        error.Should().BeNull();
+        (await db.ManagedServiceDatabases.SingleAsync(d => d.Id == second.Id)).Name.Should().Be("orders_2",
+            "renaming into a name a neighbour already has must never silently collide with it");
+        (await db.ManagedServiceDatabases.SingleAsync(d => d.Id == first!.Id)).Name.Should().Be("orders");
+    }
+
+    [Fact]
+    public async Task The_instances_own_default_database_cannot_be_renamed()
+    {
+        var (db, service, docker, instance) = BuildLocal();
+        var logical = ManagedServiceDatabase.DefaultFor(instance)!;
+        db.ManagedServiceDatabases.Add(logical);
+        await db.SaveChangesAsync();
+
+        var error = await service.RenameAsync(logical.Id, "renamed", default);
+
+        error.Should().NotBeNullOrEmpty();
+        docker.OneOffCommands.Should().BeEmpty("the default database is refused before anything touches the engine");
+        (await db.ManagedServiceDatabases.SingleAsync()).Name.Should().Be(instance.DatabaseName);
+    }
+
+    [Theory]
+    [InlineData(ManagedServiceType.MySql)]
+    [InlineData(ManagedServiceType.MariaDb)]
+    public async Task Renaming_on_an_engine_with_no_lossless_rename_is_refused_by_name(ManagedServiceType type)
+    {
+        var (db, service, docker, instance) = BuildLocal(type);
+        var (logical, _) = await service.CreateAsync(instance.Id, "orders", default);
+        docker.OneOffCommands.Clear();
+
+        var error = await service.RenameAsync(logical!.Id, "invoices", default);
+
+        error.Should().Contain(type.ToString(), "the refusal must name which engine, not just say no");
+        docker.OneOffCommands.Should().BeEmpty("an engine with no lossless rename must never be asked to attempt one");
+        (await db.ManagedServiceDatabases.SingleAsync(d => d.Id == logical.Id)).Name.Should().Be("orders");
+    }
+
+    [Fact]
+    public async Task A_rename_the_engine_refuses_leaves_the_old_name_in_place()
+    {
+        var (db, service, docker, instance) = BuildLocal();
+        var (logical, _) = await service.CreateAsync(instance.Id, "orders", default);
+        docker.OneOffCommands.Clear();
+        docker.OneOffExitCode = 1;
+
+        var error = await service.RenameAsync(logical!.Id, "invoices", default);
+
+        error.Should().NotBeNullOrEmpty();
+        (await db.ManagedServiceDatabases.SingleAsync(d => d.Id == logical.Id)).Name.Should().Be("orders",
+            "a rename the engine refused must not be reflected in Harbora's own row");
+    }
+
+    [Fact]
+    public async Task Renaming_marks_every_app_attached_to_that_database_as_having_unpublished_changes()
+    {
+        var (db, service, docker, instance) = BuildLocal();
+        var (logical, _) = await service.CreateAsync(instance.Id, "orders", default);
+        docker.OneOffCommands.Clear();
+
+        var app = new App
+        {
+            WorkspaceId = instance.WorkspaceId, EnvironmentId = instance.EnvironmentId, ServerId = Guid.CreateVersion7(),
+            Name = "checkout-app", Slug = "checkout-app", SourceType = AppSourceType.PrebuiltImage,
+            PrebuiltImage = "ghcr.io/example/app:1.0"
+        };
+        db.Add(app);
+        var attachment = new AppManagedService
+        {
+            AppId = app.Id, ManagedServiceId = instance.Id, ManagedServiceDatabaseId = logical!.Id,
+            Alias = "ORDERS", HasUnpublishedChanges = false
+        };
+        db.Add(attachment);
+        await db.SaveChangesAsync();
+
+        var error = await service.RenameAsync(logical.Id, "invoices", default);
+
+        error.Should().BeNull();
+        (await db.AppManagedServices.SingleAsync(a => a.Id == attachment.Id)).HasUnpublishedChanges.Should().BeTrue(
+            "the running container's connection string names the old database, exactly like a password rotation");
+    }
+
+    [Fact]
+    public async Task Renaming_to_the_name_it_already_has_succeeds_without_touching_the_engine()
+    {
+        var (db, service, docker, instance) = BuildLocal();
+        var (logical, _) = await service.CreateAsync(instance.Id, "orders", default);
+        docker.OneOffCommands.Clear();
+
+        var error = await service.RenameAsync(logical!.Id, "orders", default);
+
+        error.Should().BeNull();
+        docker.OneOffCommands.Should().BeEmpty("nothing changed, so nothing needed telling the engine");
+    }
 }
