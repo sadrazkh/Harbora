@@ -15,8 +15,20 @@ public interface IMetricsCollector
 /// <summary>Runs, restores, downloads and prunes backups against a destination.</summary>
 public interface IBackupEngine
 {
-    /// <summary>Create the backup row and queue the work on the background worker; returns the backup id.</summary>
-    Task<Guid> QueueBackupAsync(Guid workspaceId, Domain.Common.BackupType type, string targetRef, Guid destinationId, bool scheduled, CancellationToken ct);
+    /// <summary>
+    /// Create the backup row and queue the work on the background worker; returns the backup id.
+    ///
+    /// <para>
+    /// <paramref name="managedServiceDatabaseId"/> is D2 (2026-08-25 shared-databases plan): which
+    /// logical database inside the <see cref="Domain.Common.BackupType.Database"/>/<see
+    /// cref="Domain.Common.BackupType.Service"/> instance named by <paramref name="targetRef"/> this
+    /// backup is OF. Null — every call site before D2, unchanged — means the instance's own
+    /// admin/default database, exactly as it always has.
+    /// </para>
+    /// </summary>
+    Task<Guid> QueueBackupAsync(
+        Guid workspaceId, Domain.Common.BackupType type, string targetRef, Guid destinationId, bool scheduled,
+        CancellationToken ct, Guid? managedServiceDatabaseId = null);
 
     /// <summary>
     /// The same queued dump as <see cref="QueueBackupAsync"/>, but stamped with an expiry — sub-project
@@ -26,10 +38,31 @@ public interface IBackupEngine
     /// <c>DatabaseExportPlan.ArtifactLifetime</c> for why this window is separate from (and longer
     /// than) a single minted download link's own lifetime.
     /// </summary>
-    Task<Guid> QueueSelfServeExportAsync(Guid workspaceId, string targetRef, Guid destinationId, TimeSpan artifactLifetime, CancellationToken ct);
+    Task<Guid> QueueSelfServeExportAsync(
+        Guid workspaceId, string targetRef, Guid destinationId, TimeSpan artifactLifetime, CancellationToken ct,
+        Guid? managedServiceDatabaseId = null);
 
-    /// <summary>Restore a completed backup. Destructive — callers must confirm first.</summary>
+    /// <summary>
+    /// Restore a completed backup into the same place it came from. Destructive — callers must
+    /// confirm first.
+    /// </summary>
     Task RestoreAsync(Guid backupId, CancellationToken ct);
+
+    /// <summary>
+    /// Restore a completed database backup into a chosen logical database — the one it came from, a
+    /// different one on the same or another instance, or one the caller just created (D2, 2026-08-25
+    /// shared-databases plan: "into the same database, or into a different one, including a new
+    /// one"). A safety snapshot of whatever is about to be overwritten is taken first, exactly as
+    /// <see cref="RestoreAsync"/> already does — never skipped, whichever target this names.
+    ///
+    /// <para>
+    /// Refuses by name, before anything is touched, when the target instance runs an engine the
+    /// backup's own engine cannot be loaded into (a PostgreSQL dump into MySQL, say) — see
+    /// <c>DatabaseEngineCompat</c>.
+    /// </para>
+    /// </summary>
+    Task RestoreIntoAsync(
+        Guid backupId, Guid targetManagedServiceId, Guid? targetManagedServiceDatabaseId, CancellationToken ct);
 
     /// <summary>
     /// Dry run: fetch the artifact and check it is intact and readable WITHOUT touching live data.
@@ -86,7 +119,11 @@ public interface IBackupEngine
         Guid destinationId,
         string fileName,
         Stream content,
-        CancellationToken ct);
+        CancellationToken ct,
+        // D2 (2026-08-25 shared-databases plan): which logical database the uploaded dump is meant
+        // for. Null — every call site before D2 — keeps meaning the instance's own admin database, so
+        // a later plain RestoreAsync(this backup's id) still lands exactly where it always did.
+        Guid? managedServiceDatabaseId = null);
 
     /// <summary>
     /// Write a small probe to a destination and delete it again. Null means it worked; anything else is

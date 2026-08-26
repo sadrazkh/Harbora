@@ -57,22 +57,27 @@ public sealed class BackupEngine(
     private readonly ArtifactRelayRegistry _relays = relays ?? new ArtifactRelayRegistry(TimeProvider.System);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
 
-    public Task<Guid> QueueBackupAsync(Guid workspaceId, BackupType type, string targetRef, Guid destinationId, bool scheduled, CancellationToken ct) =>
-        QueueCoreAsync(workspaceId, type, targetRef, destinationId, scheduled, expiresAt: null, ct);
+    public Task<Guid> QueueBackupAsync(
+        Guid workspaceId, BackupType type, string targetRef, Guid destinationId, bool scheduled,
+        CancellationToken ct, Guid? managedServiceDatabaseId = null) =>
+        QueueCoreAsync(workspaceId, type, targetRef, destinationId, scheduled, expiresAt: null, managedServiceDatabaseId, ct);
 
     /// <inheritdoc />
-    public Task<Guid> QueueSelfServeExportAsync(Guid workspaceId, string targetRef, Guid destinationId, TimeSpan artifactLifetime, CancellationToken ct) =>
-        QueueCoreAsync(workspaceId, BackupType.Database, targetRef, destinationId, scheduled: false, expiresAt: clock.UtcNow + artifactLifetime, ct);
+    public Task<Guid> QueueSelfServeExportAsync(
+        Guid workspaceId, string targetRef, Guid destinationId, TimeSpan artifactLifetime, CancellationToken ct,
+        Guid? managedServiceDatabaseId = null) =>
+        QueueCoreAsync(workspaceId, BackupType.Database, targetRef, destinationId, scheduled: false,
+            expiresAt: clock.UtcNow + artifactLifetime, managedServiceDatabaseId, ct);
 
     private async Task<Guid> QueueCoreAsync(
         Guid workspaceId, BackupType type, string targetRef, Guid destinationId, bool scheduled,
-        DateTimeOffset? expiresAt, CancellationToken ct)
+        DateTimeOffset? expiresAt, Guid? managedServiceDatabaseId, CancellationToken ct)
     {
         var backup = new Backup
         {
             WorkspaceId = workspaceId, Type = type, TargetRef = targetRef,
             DestinationId = destinationId, Status = BackupStatus.Pending, IsScheduled = scheduled,
-            ExpiresAt = expiresAt
+            ExpiresAt = expiresAt, ManagedServiceDatabaseId = managedServiceDatabaseId
         };
         db.Backups.Add(backup);
         await db.SaveChangesAsync(ct);
@@ -245,10 +250,17 @@ public sealed class BackupEngine(
         if (svc is null) throw new InvalidOperationException("That database no longer exists.");
 
         var definition = Services.ServiceCatalog.All[svc.Type];
-        var creds = new Services.ServiceCreds(
-            svc.ContainerName, definition.Port, svc.Username, RevealPassword(svc.EncryptedPassword), svc.DatabaseName);
+        // D2 (2026-08-25 shared-databases plan): a null ManagedServiceDatabaseId resolves to exactly
+        // the admin creds this always built by hand here, so a whole-instance backup is byte-for-byte
+        // what it always was. A specific logical database gets its OWN login and name instead —
+        // never the instance admin's — the same separation D1 gave attachments.
+        var (creds, dbLabel) = await ResolveDatabaseCredsAsync(svc, backup.ManagedServiceDatabaseId, ct);
 
-        var key = $"database-{svc.Name}-{stamp}";
+        // The label is folded into the artifact's name only for a non-default logical database, so a
+        // whole-instance/default-database backup keeps the exact filename it always had.
+        var key = backup.ManagedServiceDatabaseId is null
+            ? $"database-{svc.Name}-{stamp}"
+            : $"database-{svc.Name}-{Domain.Services.LogicalDatabaseName.Sanitize(dbLabel)}-{stamp}";
         var plan = DatabaseDumpPlan.For(svc.Type, creds, $"/backup/{key}");
         if (plan is null) return await BackupVolumeAsync(backup, stamp, ct);
 
@@ -362,11 +374,32 @@ public sealed class BackupEngine(
 
     // --- restore ---
 
-    public async Task RestoreAsync(Guid backupId, CancellationToken ct)
+    public Task RestoreAsync(Guid backupId, CancellationToken ct) => RestoreCoreAsync(backupId, target: null, ct);
+
+    /// <inheritdoc />
+    public Task RestoreIntoAsync(
+        Guid backupId, Guid targetManagedServiceId, Guid? targetManagedServiceDatabaseId, CancellationToken ct) =>
+        RestoreCoreAsync(backupId, new RestoreDestination(targetManagedServiceId, targetManagedServiceDatabaseId), ct);
+
+    /// <summary>
+    /// Where a database restore puts its data back, when that is not simply "wherever the backup
+    /// came from" (D2, 2026-08-25 shared-databases plan). <see cref="RestoreAsync"/> never builds one
+    /// of these — every call site before D2 stays on the implicit "same place" path, unchanged.
+    /// </summary>
+    private readonly record struct RestoreDestination(Guid ManagedServiceId, Guid? ManagedServiceDatabaseId);
+
+    private async Task RestoreCoreAsync(Guid backupId, RestoreDestination? target, CancellationToken ct)
     {
         var backup = await db.Backups.Include(b => b.Destination).FirstAsync(b => b.Id == backupId, ct);
         if (backup.Status != BackupStatus.Completed || backup.ArtifactPath is null)
             throw new InvalidOperationException("Only completed backups can be restored.");
+
+        // A redirected target only ever makes sense for a logical dump — a volume archive or a
+        // platform/app-config snapshot has no "restore into a different one" to offer, so a caller
+        // asking for one here is a bug, not a request this can honour silently.
+        if (target is not null && backup.Type is not (BackupType.Database or BackupType.Service))
+            throw new InvalidOperationException(
+                "Restoring into a different target is only supported for database backups.");
 
         var fetched = await storage.GetToLocalAsync(backup.Destination!, backup.ArtifactPath, ct);
 
@@ -401,7 +434,7 @@ public sealed class BackupEngine(
         if (backup.Type is BackupType.Database or BackupType.Service
             && !BackupArtifact.IsVolumeArchive(backup.ArtifactPath))
         {
-            await RestoreDatabaseAsync(backup, localPath, ct);
+            await RestoreDatabaseAsync(backup, localPath, target, ct);
             return;
         }
 
@@ -462,40 +495,82 @@ public sealed class BackupEngine(
     /// <summary>
     /// Puts a logical dump back through the database's own client, into the running database.
     ///
-    /// A safety dump is taken first. The volume path can undo a failed restore by swapping
-    /// directories back; a logical restore writes into a live database and has no such move, so the
-    /// only protection is having the previous contents on disk before it starts.
+    /// <para>
+    /// A safety dump of the TARGET is taken first, always — never the source, and never skipped. The
+    /// volume path can undo a failed restore by swapping directories back; a logical restore writes
+    /// into a live database and has no such move, so the only protection is having the target's own
+    /// previous contents on disk before anything overwrites them.
+    /// </para>
+    ///
+    /// <para>
+    /// D2 (2026-08-25 shared-databases plan): <paramref name="target"/> names where this actually
+    /// lands. Null — the only case that existed before D2 — means "the same place this backup came
+    /// from", resolved from <paramref name="backup"/> itself, so every call site that predates this
+    /// (an admin restore, a self-serve import) is byte-for-byte unaffected. A caller that DOES name a
+    /// target may point at a different logical database on the same instance, a different instance
+    /// entirely, or one just created for the purpose (<c>LogicalDatabaseService.CreateAsync</c>,
+    /// called by the controller before this ever runs) — which is what makes "restore this backup
+    /// into a brand-new database" possible without a second restore path: by the time this method
+    /// runs, "new" and "already existed" look identical to it.
+    /// </para>
     /// </summary>
-    private async Task RestoreDatabaseAsync(Backup backup, string localPath, CancellationToken ct)
+    private async Task RestoreDatabaseAsync(Backup backup, string localPath, RestoreDestination? target, CancellationToken ct)
     {
         var svc = await db.ManagedServices.AsNoTracking()
             .FirstOrDefaultAsync(s => s.Id == Guid.Parse(backup.TargetRef), ct);
         if (svc is null) throw new InvalidOperationException("That database no longer exists.");
 
-        var definition = Services.ServiceCatalog.All[svc.Type];
-        var creds = new Services.ServiceCreds(
-            svc.ContainerName, definition.Port, svc.Username, RevealPassword(svc.EncryptedPassword), svc.DatabaseName);
-        var image = $"{definition.ImageRepo}:{svc.Version}";
-        var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
+        Guid targetServiceId;
+        Guid? targetDatabaseId;
+        if (target is { } t) { targetServiceId = t.ManagedServiceId; targetDatabaseId = t.ManagedServiceDatabaseId; }
+        else { targetServiceId = svc.Id; targetDatabaseId = backup.ManagedServiceDatabaseId; }
+
+        var targetSvc = targetServiceId == svc.Id
+            ? svc
+            : await db.ManagedServices.AsNoTracking().FirstOrDefaultAsync(s => s.Id == targetServiceId, ct)
+              ?? throw new InvalidOperationException("The database to restore into no longer exists.");
+
+        // Tenancy boundary, checked before anything else: a backup is never restored into a
+        // ManagedService owned by a different workspace, however this method was reached.
+        if (targetSvc.WorkspaceId != backup.WorkspaceId)
+            throw new InvalidOperationException("The database to restore into belongs to a different workspace.");
+
+        // Refused by name before ANY docker call — no safety dump either — the moment the two engines
+        // cannot share a dump format. "Never a success for a restore that did not happen" starts here:
+        // a mismatched engine must fail loudly, not attempt psql against a MySQL dump and call that a
+        // completed restore.
+        if (!DatabaseEngineCompat.AreCompatible(svc.Type, targetSvc.Type))
+            throw new InvalidOperationException(DatabaseEngineCompat.Refusal(svc.Type, targetSvc.Type));
+
+        // Whose login and which name this actually loads into — the target's own restricted logical
+        // database, or the target instance's admin database when none is named. Throws by name if a
+        // named target database has since been removed, rather than silently falling back to admin.
+        var (creds, targetLabel) = await ResolveDatabaseCredsAsync(targetSvc, targetDatabaseId, ct);
+
+        var definition = Services.ServiceCatalog.All[targetSvc.Type];
+        var image = $"{definition.ImageRepo}:{targetSvc.Version}";
+        var wsSlug = await db.Workspaces.Where(w => w.Id == targetSvc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
 
         // Same network the dump above reaches this database on — the environment's own once it has
         // one. Both the safety dump below and the restore itself share this value.
-        var environmentNetwork = await Networking.EnvironmentNetworkResolver.ForAsync(db, svc.EnvironmentId, ct);
+        var environmentNetwork = await Networking.EnvironmentNetworkResolver.ForAsync(db, targetSvc.EnvironmentId, ct);
         var network = Networking.NetworkPlan.Primary(environmentNetwork, _runtime.WorkspaceNetwork(wsSlug));
 
         // Before the safety dump, so a host that cannot take one also cannot start the restore that
         // dump exists to protect.
         var docker = RequireCapableHost(
-            await HostForServiceAsync(svc, ct), "have a dump loaded back into it");
+            await HostForServiceAsync(targetSvc, ct), "have a dump loaded back into it");
 
         var stamp = clock.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
-        var safetyKey = $"pre-restore-{svc.Name}-{stamp}";
-        var safety = DatabaseDumpPlan.For(svc.Type, creds, $"/backup/{safetyKey}");
+        var safetyKey = targetDatabaseId is null
+            ? $"pre-restore-{targetSvc.Name}-{stamp}"
+            : $"pre-restore-{targetSvc.Name}-{Domain.Services.LogicalDatabaseName.Sanitize(targetLabel)}-{stamp}";
+        var safety = DatabaseDumpPlan.For(targetSvc.Type, creds, $"/backup/{safetyKey}");
         Backup? safetyBackup = null;
         if (safety is not null)
         {
             safetyKey += safety.FileExtension;
-            safety = DatabaseDumpPlan.For(svc.Type, creds, $"/backup/{safetyKey}")!;
+            safety = DatabaseDumpPlan.For(targetSvc.Type, creds, $"/backup/{safetyKey}")!;
             var safetyExit = await docker.RunOneOffAsync(new DockerOneOffRequest(
                 image, safety.Command, [(_opt.StagingVolume, "/backup", false)],
                 Env: safety.Env, NetworkMode: network), null, ct);
@@ -504,15 +579,17 @@ public sealed class BackupEngine(
                 throw new InvalidOperationException(
                     "The database could not be exported before restoring, so the restore was not " +
                     "started — there would have been nothing to go back to.");
-            logger.LogInformation("Pre-restore dump of {Name} written to {Key}.", svc.Name, safetyKey);
+            logger.LogInformation("Pre-restore dump of {Name} written to {Key}.", targetSvc.Name, safetyKey);
 
             // Recorded as a normal, completed Backup — not left as a bare file in staging — so a
             // failed restore below can point at something the customer can actually act on: verify
             // it, download it, or restore it, through the same page and the same buttons every other
             // backup already has. The snapshot must exist before the restore that follows touches
             // anything, which is exactly the ordering this line is on: it only runs after the safety
-            // dump above has already exited 0.
-            safetyBackup = await PersistSafetyDumpAsync(backup, safetyKey, ct);
+            // dump above has already exited 0. Recorded against the TARGET, not the source backup's
+            // own TargetRef — it is a snapshot of what the target held, which is what a failed restore
+            // needs to recover.
+            safetyBackup = await PersistSafetyDumpAsync(backup, safetyKey, targetSvc.Id, targetDatabaseId, ct);
         }
 
         // The artifact has to be where the helper can see it: the staging volume, by name.
@@ -521,8 +598,8 @@ public sealed class BackupEngine(
         if (!string.Equals(Path.GetFullPath(localPath), Path.GetFullPath(stagedCopy), StringComparison.OrdinalIgnoreCase))
             File.Copy(localPath, stagedCopy, overwrite: true);
 
-        var plan = DatabaseDumpPlan.RestoreFor(svc.Type, creds, $"/backup/{fileName}")
-                   ?? throw new InvalidOperationException($"{svc.Type} has no restore command.");
+        var plan = DatabaseDumpPlan.RestoreFor(targetSvc.Type, creds, $"/backup/{fileName}")
+                   ?? throw new InvalidOperationException($"{targetSvc.Type} has no restore command.");
 
         var output = new System.Text.StringBuilder();
         var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
@@ -550,8 +627,19 @@ public sealed class BackupEngine(
     /// through the exact machinery every other backup already uses, and pruned by the same
     /// <see cref="EnforceRetentionAsync"/> pass once newer backups push it out of the keep window.
     /// </para>
+    ///
+    /// <para>
+    /// D2 (2026-08-25 shared-databases plan): recorded against <paramref name="targetServiceId"/>/
+    /// <paramref name="targetDatabaseId"/> — what the safety dump is actually OF — rather than
+    /// <paramref name="original"/>'s own <c>TargetRef</c>, which names where the restore came FROM
+    /// and, for a redirected restore, is a different instance (or a different logical database)
+    /// entirely. Only the workspace and destination are still taken from <paramref name="original"/>:
+    /// a redirected restore is refused across workspaces before this ever runs, so both are already
+    /// guaranteed to be the same as the target's.
+    /// </para>
     /// </summary>
-    private async Task<Backup?> PersistSafetyDumpAsync(Backup original, string safetyKey, CancellationToken ct)
+    private async Task<Backup?> PersistSafetyDumpAsync(
+        Backup original, string safetyKey, Guid targetServiceId, Guid? targetDatabaseId, CancellationToken ct)
     {
         var stagedPath = Path.Combine(_opt.StagingDir, safetyKey);
         if (!File.Exists(stagedPath))
@@ -574,7 +662,8 @@ public sealed class BackupEngine(
             WorkspaceId = original.WorkspaceId,
             DestinationId = original.DestinationId,
             Type = BackupType.Database,
-            TargetRef = original.TargetRef,
+            TargetRef = targetServiceId.ToString(),
+            ManagedServiceDatabaseId = targetDatabaseId,
             Status = BackupStatus.Completed,
             ArtifactPath = artifactRef,
             SizeBytes = size,
@@ -675,10 +764,17 @@ public sealed class BackupEngine(
 
         var schedules = await db.BackupSchedules.AsNoTracking().ToListAsync(ct);
 
-        foreach (var group in completed.GroupBy(b => new { b.WorkspaceId, b.Type, b.TargetRef }))
+        // D2 (2026-08-25 shared-databases plan): ManagedServiceDatabaseId joins the grouping key. A
+        // whole-instance backup (null) and a backup of one of that instance's logical databases share
+        // the same Type and TargetRef — the instance's own ManagedService id — so without this, taking
+        // a nightly backup of one logical database would prune the OTHER logical databases' backups on
+        // the very same instance down to whatever this one target's retention count allows, deleting
+        // history for data this run never touched.
+        foreach (var group in completed.GroupBy(b => new { b.WorkspaceId, b.Type, b.TargetRef, b.ManagedServiceDatabaseId }))
         {
             var keep = schedules.FirstOrDefault(s =>
-                s.WorkspaceId == group.Key.WorkspaceId && s.Type == group.Key.Type && s.TargetRef == group.Key.TargetRef)
+                s.WorkspaceId == group.Key.WorkspaceId && s.Type == group.Key.Type && s.TargetRef == group.Key.TargetRef
+                && s.ManagedServiceDatabaseId == group.Key.ManagedServiceDatabaseId)
                 ?.RetentionCount ?? _opt.DefaultRetentionCount;
 
             foreach (var stale in group.Skip(keep))
@@ -716,7 +812,7 @@ public sealed class BackupEngine(
     /// <inheritdoc />
     public async Task<Guid> ImportAsync(
         Guid workspaceId, BackupType type, string targetRef, Guid destinationId,
-        string fileName, Stream content, CancellationToken ct)
+        string fileName, Stream content, CancellationToken ct, Guid? managedServiceDatabaseId = null)
     {
         var destination = await db.BackupDestinations
             .FirstOrDefaultAsync(d => d.Id == destinationId && d.WorkspaceId == workspaceId, ct)
@@ -759,6 +855,10 @@ public sealed class BackupEngine(
                 DestinationId = destinationId,
                 Type = type,
                 TargetRef = targetRef,
+                // D2 (2026-08-25 shared-databases plan): which logical database an imported dump is
+                // meant for, so a plain RestoreAsync(this backup's id) later lands in the same place
+                // — never the instance's admin database by accident just because this went unset.
+                ManagedServiceDatabaseId = managedServiceDatabaseId,
                 // Completed because the artifact is stored and downloadable, which is all this status
                 // has ever claimed. Whether it would RESTORE is a different question, and the field
                 // below leaves it open rather than answering it by having accepted the upload.
@@ -917,6 +1017,44 @@ public sealed class BackupEngine(
     }
 
     private byte[] ArchiveKey() => protector.DeriveKey("backup-archive");
+
+    /// <summary>
+    /// The one place a database backup or restore decides whose login and which name it actually
+    /// dumps or loads (D2, 2026-08-25 shared-databases plan) — the counterpart, inside this engine, of
+    /// what <c>AttachedDatabaseCreds.Resolve</c> already is for an attachment's own connection string.
+    /// Not reused directly: that helper swallows a decrypt failure into an empty password (fine for
+    /// composing an env var nobody will use if it is wrong), where a backup or restore needs
+    /// <see cref="RevealPassword"/>'s loud failure instead — a dump attempted with a silently-empty
+    /// password produces an authentication error nobody could trace back to a key problem.
+    ///
+    /// <para>
+    /// Null resolves to the instance's own admin login and database — exactly the fields this method
+    /// replaces reading directly, so a whole-instance backup or restore is unaffected byte-for-byte.
+    /// A specific id resolves to that logical database's own restricted login, which is what makes a
+    /// dump of one logical database never touch its neighbours' data or credentials.
+    /// </para>
+    /// </summary>
+    private async Task<(Services.ServiceCreds Creds, string DatabaseName)> ResolveDatabaseCredsAsync(
+        Domain.Services.ManagedService svc, Guid? logicalDatabaseId, CancellationToken ct)
+    {
+        var port = Services.ServiceCatalog.All[svc.Type].Port;
+
+        if (logicalDatabaseId is { } id)
+        {
+            var logical = await db.ManagedServiceDatabases.AsNoTracking()
+                .FirstOrDefaultAsync(d => d.Id == id && d.ManagedServiceId == svc.Id, ct)
+                ?? throw new InvalidOperationException(
+                    "That logical database no longer exists on this instance.");
+
+            return (new Services.ServiceCreds(
+                svc.ContainerName, port, logical.Username, RevealPassword(logical.EncryptedPassword), logical.Name),
+                logical.Name);
+        }
+
+        return (new Services.ServiceCreds(
+            svc.ContainerName, port, svc.Username, RevealPassword(svc.EncryptedPassword), svc.DatabaseName),
+            svc.DatabaseName);
+    }
 
     public async Task<BackupVerification> VerifyAsync(Guid backupId, CancellationToken ct)
     {

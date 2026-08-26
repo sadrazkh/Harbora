@@ -39,6 +39,16 @@ public class BackupSchedule : BaseEntity
     public BackupType Type { get; set; }
     public string TargetRef { get; set; } = string.Empty;
 
+    /// <summary>
+    /// D2 (2026-08-25 shared-databases plan): which logical database inside the instance named by
+    /// <see cref="TargetRef"/> this schedule backs up. Null keeps meaning exactly what it always
+    /// has — the instance's own admin/default database — so every schedule created before this
+    /// column existed keeps running unchanged. A loose reference, like <see cref="TargetRef"/>
+    /// itself: no foreign key, because a schedule for a database that has since been deleted should
+    /// still be visible (and pausable) rather than disappear with it.
+    /// </summary>
+    public Guid? ManagedServiceDatabaseId { get; set; }
+
     public int IntervalHours { get; set; } = 24;
     /// <summary>Keep at most this many successful backups per target; older ones are pruned.</summary>
     public int RetentionCount { get; set; } = 7;
@@ -60,6 +70,22 @@ public class Backup : BaseEntity
 
     /// <summary>Loose reference to the backed-up resource (app id, service id, "platform").</summary>
     public string TargetRef { get; set; } = string.Empty;
+
+    /// <summary>
+    /// D2 (2026-08-25 shared-databases plan): which logical database inside the instance named by
+    /// <see cref="TargetRef"/> this is a backup OF. Null means exactly what every backup taken before
+    /// this column existed already meant — the instance's own admin/default database — which is what
+    /// makes this addition backward compatible without a data migration: nothing sets it, so nothing
+    /// changes for a single-database instance or a whole-instance restore.
+    ///
+    /// <para>
+    /// A loose reference, like <see cref="TargetRef"/> itself — no foreign key, so a backup survives
+    /// the logical database it was taken from being deleted, the same way a backup already survives
+    /// its <see cref="Harbora.Domain.Services.ManagedService"/> being deleted (<see cref="TargetRef"/>
+    /// carries no FK either).
+    /// </para>
+    /// </summary>
+    public Guid? ManagedServiceDatabaseId { get; set; }
 
     public string? ArtifactPath { get; set; }
     public long SizeBytes { get; set; }

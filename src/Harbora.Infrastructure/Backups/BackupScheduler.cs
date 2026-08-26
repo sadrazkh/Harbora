@@ -43,7 +43,9 @@ public sealed class BackupScheduler(IServiceScopeFactory scopeFactory, ILogger<B
 
         foreach (var schedule in due)
         {
-            await engine.QueueBackupAsync(schedule.WorkspaceId, schedule.Type, schedule.TargetRef, schedule.DestinationId, scheduled: true, ct);
+            await engine.QueueBackupAsync(
+                schedule.WorkspaceId, schedule.Type, schedule.TargetRef, schedule.DestinationId, scheduled: true, ct,
+                schedule.ManagedServiceDatabaseId);
             schedule.LastRunAt = now;
             schedule.NextRunAt = now.AddHours(Math.Max(1, schedule.IntervalHours));
             logger.LogInformation("Queued scheduled {Type} backup for {Target}.", schedule.Type, schedule.TargetRef);
