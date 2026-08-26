@@ -151,6 +151,8 @@ public sealed partial class DatabasesController(
                 .Where(s => s.TargetRef == service.Id.ToString() && s.IsEnabled)
                 .OrderBy(s => s.NextRunAt).FirstOrDefaultAsync(ct);
 
+            var logicalSupported = Harbora.Infrastructure.Services.DatabaseGrantSql.Supports(service.Type);
+
             overview = new DatabaseOverviewViewModel
             {
                 Id = selectedRow.Id, Name = selectedRow.Name, Type = selectedRow.Type,
@@ -171,7 +173,12 @@ public sealed partial class DatabasesController(
                     a.EnvironmentId == service.EnvironmentId)).ToList(),
                 Backups = selectedBackups,
                 NextBackupAt = schedule?.NextRunAt,
-                BackupIntervalHours = schedule?.IntervalHours
+                BackupIntervalHours = schedule?.IntervalHours,
+                LogicalDatabases = logicalSupported ? await BuildLogicalDatabaseRowsAsync(service, ct) : [],
+                LogicalDatabasesSupported = logicalSupported,
+                LogicalDatabasesUnsupportedReason = logicalSupported
+                    ? null : Harbora.Infrastructure.Services.DatabaseGrantSql.UnsupportedReason(service.Type),
+                CanManageLogicalDatabasesLocally = logicalDatabases.CanCreateLocally
             };
         }
 
@@ -235,6 +242,8 @@ public sealed partial class DatabasesController(
 
         var row = Row(service, metrics, connections);
 
+        var logicalSupported = Harbora.Infrastructure.Services.DatabaseGrantSql.Supports(service.Type);
+
         return new DatabaseOverviewViewModel
         {
             Id = row.Id, Name = row.Name, Type = row.Type, Version = row.Version, Status = row.Status,
@@ -261,8 +270,71 @@ public sealed partial class DatabasesController(
             MemoryLimitBytes = service.MemoryLimitBytes,
             DiskLimitBytes = service.DiskLimitBytes,
             CpuLimit = service.CpuLimit,
-            TlsEnabled = service.TlsEnabled
+            TlsEnabled = service.TlsEnabled,
+            LogicalDatabases = logicalSupported ? await BuildLogicalDatabaseRowsAsync(service, ct) : [],
+            LogicalDatabasesSupported = logicalSupported,
+            LogicalDatabasesUnsupportedReason = logicalSupported
+                ? null : Harbora.Infrastructure.Services.DatabaseGrantSql.UnsupportedReason(service.Type),
+            CanManageLogicalDatabasesLocally = logicalDatabases.CanCreateLocally
         };
+    }
+
+    /// <summary>
+    /// The logical databases inside this instance, and what to legitimately show for each (D3,
+    /// 2026-08-25 shared-databases plan) — the panel D1 shipped the machinery for but no UI, per its
+    /// own report. Called only when <see cref="Harbora.Infrastructure.Services.DatabaseGrantSql.Supports"/>
+    /// already said this engine has a logical-database story at all.
+    /// </summary>
+    private async Task<IReadOnlyList<LogicalDatabaseRowViewModel>> BuildLogicalDatabaseRowsAsync(
+        ManagedService service, CancellationToken ct)
+    {
+        var databases = await db.ManagedServiceDatabases.AsNoTracking()
+            .Where(d => d.ManagedServiceId == service.Id)
+            .OrderByDescending(d => d.IsDefault).ThenBy(d => d.Name)
+            .ToListAsync(ct);
+        if (databases.Count == 0) return [];
+
+        var databaseIds = databases.Select(d => d.Id).ToHashSet();
+        var hasDefault = databases.Any(d => d.IsDefault);
+
+        // Explicit joins only — the same authoritative-but-not-exhaustive scope
+        // ConfirmRemoveDatabase/LogicalDatabaseService.DeleteAsync already use for "who is attached":
+        // an app still wired the pre-2026-08-22 way (a materialized EnvironmentVariable copy, no join
+        // row at all) is not caught here either. A null ManagedServiceDatabaseId on this instance can
+        // only mean the default — every other engine's fallback resolves there (DatabasesController.Attach).
+        var attachments = await db.AppManagedServices.AsNoTracking()
+            .Where(a => a.ManagedServiceId == service.Id
+                        && (a.ManagedServiceDatabaseId == null || databaseIds.Contains(a.ManagedServiceDatabaseId.Value)))
+            .Select(a => new { a.ManagedServiceDatabaseId, AppName = a.App!.Name })
+            .ToListAsync(ct);
+
+        // D2 (in flight alongside this task) has not shipped per-logical-database backups yet. Every
+        // backup this instance ever took, before D1 existed, was definitionally a backup of the one
+        // database it had — so the instance-wide history already answers "when was this last backed
+        // up" for the default row alone. Anything created after D1 has no backup path of its own yet.
+        var latestBackup = hasDefault
+            ? await db.Backups.AsNoTracking()
+                .Where(b => b.TargetRef == service.Id.ToString()
+                            && (b.Type == BackupType.Database || b.Type == BackupType.Service))
+                .OrderByDescending(b => b.CreatedAt)
+                .FirstOrDefaultAsync(ct)
+            : null;
+
+        return databases.Select(d =>
+        {
+            var attachedApps = attachments
+                .Where(a => a.ManagedServiceDatabaseId == d.Id || (d.IsDefault && a.ManagedServiceDatabaseId == null))
+                .Select(a => a.AppName).Order().ToList();
+
+            return new LogicalDatabaseRowViewModel(
+                d.Id, d.Name, d.IsDefault, d.Username, attachedApps,
+                SizeBytes: null,
+                BackupTrackingAvailable: d.IsDefault,
+                LastBackupAt: d.IsDefault ? (latestBackup?.FinishedAt ?? latestBackup?.CreatedAt) : null,
+                LastBackupStatus: d.IsDefault ? latestBackup?.Status : null,
+                CanRename: !d.IsDefault && Harbora.Infrastructure.Services.DatabaseGrantSql.SupportsRename(service.Type),
+                CanDelete: !d.IsDefault);
+        }).ToList();
     }
 
 
@@ -1004,6 +1076,35 @@ public sealed partial class DatabasesController(
         await audit.LogAsync("database.logical_database_removed", "service", $"{id}:{databaseId}",
             HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
         TempData["Message"] = IsFa ? $"«{logical.Name}» حذف شد." : $"{logical.Name} was deleted.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// Renames a logical database in place (D3, 2026-08-25 shared-databases plan) — offered only
+    /// where <see cref="Harbora.Infrastructure.Services.DatabaseGrantSql.SupportsRename"/> says the
+    /// engine can do it losslessly (PostgreSQL) and never for the instance's own default database.
+    /// Not gated on a typed-name confirmation the way removal is: nothing here is destroyed, only
+    /// renamed, and every app attached is marked stale exactly as a password rotation already is.
+    /// </summary>
+    [HttpPost("{id:guid}/logical-databases/{databaseId:guid}/rename")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> RenameDatabase(Guid id, Guid databaseId, string? name, CancellationToken ct)
+    {
+        await Guard(id, ct);
+
+        var error = await logicalDatabases.RenameAsync(databaseId, name, ct);
+        if (error is not null)
+        {
+            TempData["Error"] = error;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await audit.LogAsync("database.logical_database_renamed", "service", $"{id}:{databaseId}",
+            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+        TempData["Message"] = IsFa
+            ? "پایگاه‌داده تغییر نام داد. تا استقرار بعدی، اپ‌های متصل هنوز نام قبلی را دارند."
+            : "The database was renamed. Attached apps still have the old name until they redeploy.";
         return RedirectToAction(nameof(Details), new { id });
     }
 

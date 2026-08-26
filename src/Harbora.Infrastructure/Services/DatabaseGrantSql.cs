@@ -212,6 +212,50 @@ public static class DatabaseGrantSql
     }
 
     /// <summary>
+    /// Whether this engine can rename an existing database in place, losslessly and atomically (D3,
+    /// 2026-08-25 shared-databases plan). PostgreSQL's <c>ALTER DATABASE … RENAME TO</c> is exactly
+    /// that — one statement, and every grant PostgreSQL already holds on the database is tracked by
+    /// OID, not by name, so it survives untouched.
+    ///
+    /// <para>
+    /// MySQL and MariaDB have no equivalent: the <c>RENAME DATABASE</c> statement MySQL shipped
+    /// briefly was removed in 5.1.23 because it silently dropped triggers, stored routines and
+    /// per-object privileges bound to the old schema name — data loss dressed up as a rename. The
+    /// only safe substitute (dump, recreate under the new name, restore, drop the old one) is a full
+    /// backup/restore cycle wearing a rename's name, not the same operation, so it is refused by name
+    /// here rather than offered as something it is not.
+    /// </para>
+    /// </summary>
+    public static bool SupportsRename(ManagedServiceType type) => type == ManagedServiceType.PostgreSql;
+
+    /// <summary>Why this engine cannot rename a database in place, for a message somebody can act on.</summary>
+    public static string UnsupportedRenameReason(ManagedServiceType type) =>
+        $"Renaming a database in place is not available for {type}. PostgreSQL can rename one " +
+        "atomically; MySQL and MariaDB have no lossless equivalent, so this is refused rather than " +
+        "offered as something it is not.";
+
+    /// <summary>
+    /// Renames a database that already exists (D3, 2026-08-25 shared-databases plan) — connects to
+    /// <paramref name="adminDatabase"/> rather than <paramref name="oldName"/> for the same reason
+    /// <see cref="CreateDatabase"/> does: PostgreSQL refuses to rename the database the connection
+    /// is actually using.
+    /// </summary>
+    public static GrantCommand? Rename(
+        ManagedServiceType type, string host, int port, string adminUser, string adminDatabase,
+        string oldName, string newName)
+    {
+        if (!SupportsRename(type)) return null;
+        if (!IsSafe(oldName) || !IsSafe(newName) || !IsSafe(adminUser) || !IsSafe(adminDatabase)) return null;
+
+        return new GrantCommand("postgres:16-alpine",
+        [
+            "psql", "-v", "ON_ERROR_STOP=1",
+            "-h", host, "-p", port.ToString(), "-U", adminUser, "-d", adminDatabase,
+            "-c", $"ALTER DATABASE \"{oldName}\" RENAME TO \"{newName}\";"
+        ]);
+    }
+
+    /// <summary>
     /// Removes the login. Written so running it twice is success: the sweeper and somebody pressing
     /// revoke can race, and both must end with the login gone.
     /// </summary>

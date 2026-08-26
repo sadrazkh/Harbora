@@ -1,6 +1,48 @@
 namespace Harbora.Web.ViewModels;
 
 /// <summary>
+/// One logical database inside an instance, for the Overview tab's "logical databases" panel (D3,
+/// 2026-08-25 shared-databases plan) — the management surface D1 shipped the machinery for but no
+/// panel UI, per that task's own report.
+/// </summary>
+/// <param name="SizeBytes">
+/// Per-database size, or null — always null today. Only the whole instance's disk usage is measured
+/// (<c>DatabaseRowViewModel.StorageBytes</c>, one figure for every logical database on it combined);
+/// no engine here has a per-database query this platform has built yet. Shown as "not measured",
+/// never as a fabricated zero — the honesty requirement this panel exists to satisfy.
+/// </param>
+/// <param name="BackupTrackingAvailable">
+/// Whether a backup can even be attributed to this one database yet. True only for the instance's
+/// own default database: every backup an instance took before D1 existed was, definitionally, a
+/// backup of the one database it had — so the instance-wide backup history already answers this
+/// question for that row. A logical database created after D1 has no backup path of its own yet
+/// (D2's remit, in flight alongside this one); rather than show "never backed up" beside one nobody
+/// could have backed up individually, the panel says tracking is not available for it yet.
+/// </param>
+/// <param name="CanRename">
+/// Whether this engine can rename a database without data loss — see
+/// <c>DatabaseGrantSql.SupportsRename</c>. False for the default database regardless of engine (see
+/// <c>LogicalDatabaseService.RenameAsync</c>), and false for MySQL/MariaDB, which have no lossless
+/// rename to offer.
+/// </param>
+/// <param name="CanDelete">
+/// Whether this row's own delete control applies here — the default database never can be
+/// (<c>LogicalDatabaseService.DeleteAsync</c>); removing it means removing the whole instance.
+/// </param>
+public sealed record LogicalDatabaseRowViewModel(
+    Guid Id,
+    string Name,
+    bool IsDefault,
+    string Username,
+    IReadOnlyList<string> AttachedApps,
+    long? SizeBytes,
+    bool BackupTrackingAvailable,
+    DateTimeOffset? LastBackupAt,
+    Harbora.Domain.Common.BackupStatus? LastBackupStatus,
+    bool CanRename,
+    bool CanDelete);
+
+/// <summary>
 /// What the database shell's header and tab strip need, on every tab. Mirrors <see cref="AppTabViewModel"/>.
 ///
 /// <para>
@@ -80,6 +122,31 @@ public sealed class DatabaseOverviewViewModel : DatabaseTabViewModel
 
     /// <summary>Whether connections to it are encrypted, as recorded at the last provision.</summary>
     public bool TlsEnabled { get; init; }
+
+    /// <summary>
+    /// D3 (2026-08-25 shared-databases plan): the logical databases inside this instance. Empty both
+    /// when the engine genuinely has none created yet AND when the engine has no logical-database
+    /// story at all — <see cref="LogicalDatabasesSupported"/> is what tells those two apart, and the
+    /// view must not render an empty table for the second case: an unsupported engine and an empty
+    /// list must not look identical.
+    /// </summary>
+    public IReadOnlyList<LogicalDatabaseRowViewModel> LogicalDatabases { get; init; } = [];
+
+    /// <summary>Whether this engine has any logical-database story at all — PostgreSQL, MySQL and
+    /// MariaDB do; Redis, MongoDB, RabbitMQ and NATS do not (<c>DatabaseGrantSql.Supports</c>).</summary>
+    public bool LogicalDatabasesSupported { get; init; }
+
+    /// <summary>Why this engine has none, when <see cref="LogicalDatabasesSupported"/> is false —
+    /// shown in place of the table rather than beside an empty one.</summary>
+    public string? LogicalDatabasesUnsupportedReason { get; init; }
+
+    /// <summary>
+    /// Whether this installation can actually reach the engine to create, rename or delete a logical
+    /// database right now — <c>LogicalDatabaseService.CanCreateLocally</c>. False on a remote node
+    /// D4 has not reached yet (HARBORA-0059), so the create form is not offered where it would only
+    /// ever fail.
+    /// </summary>
+    public bool CanManageLogicalDatabasesLocally { get; init; }
 }
 
 /// <summary>

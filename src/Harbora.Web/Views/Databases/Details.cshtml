@@ -112,6 +112,140 @@ else if (moving)
         </dl>
         <partial name="Design/_PanelEnd" />
 
+        @{
+            // D3 (2026-08-25 shared-databases plan): "a database per app, no separate instance for
+            // each" only means anything once this is visible — D1 shipped the logical database as a
+            // real row weeks before this panel existed to show it, per that task's own report.
+            var logicalPanel = new PanelModel(isFa ? "پایگاه‌های‌دادهٔ منطقی" : "Logical databases");
+        }
+        <partial name="Design/_PanelStart" model="logicalPanel" />
+
+        @if (!Model.LogicalDatabasesSupported)
+        {
+            @* A refused engine says why, in place of the table — an empty list and an engine that
+               cannot have logical databases at all must never look identical. *@
+            <p class="text-xs leading-5 text-ink-faint" data-logical-databases-unsupported="@db.Type">
+                @Model.LogicalDatabasesUnsupportedReason
+            </p>
+        }
+        else
+        {
+            <p class="mb-3 text-xs leading-5 text-ink-faint">
+                @(isFa
+                    ? "چند پایگاه‌دادهٔ مستقل داخل همین یک نمونه — هرکدام برای یک اپ، بدون نیاز به نمونهٔ جداگانه."
+                    : "Several independent databases inside this one instance — one per app, without standing up a separate instance for each.")
+            </p>
+
+            @if (Model.LogicalDatabases.Count == 0)
+            {
+                <partial name="Design/_EmptyState" model="@(new EmptyStateModel("database",
+                    isFa ? "هنوز پایگاه‌دادهٔ منطقی ساخته نشده." : "No logical database has been created yet."))" />
+            }
+            else
+            {
+                <div class="overflow-x-auto" data-logical-databases-table>
+                    <table class="resource-table min-w-[720px]">
+                        <thead>
+                            <tr>
+                                <th>@(isFa ? "نام" : "Name")</th>
+                                <th>@(isFa ? "اپ‌های متصل" : "Attached apps")</th>
+                                <th>@(isFa ? "آخرین پشتیبان" : "Last backup")</th>
+                                <th>@(isFa ? "حجم" : "Size")</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var logical in Model.LogicalDatabases)
+                            {
+                                <tr data-logical-database="@logical.Id"
+                                    data-logical-database-default="@logical.IsDefault.ToString().ToLowerInvariant()">
+                                    <td>
+                                        <div class="table-primary" dir="ltr">@logical.Name</div>
+                                        <div class="table-secondary" dir="ltr">
+                                            @logical.Username@(logical.IsDefault ? (isFa ? " · پیش‌فرض نمونه" : " · instance default") : "")
+                                        </div>
+                                    </td>
+                                    <td data-logical-database-apps="@logical.AttachedApps.Count">
+                                        @(logical.AttachedApps.Count == 0 ? "—" : string.Join(", ", logical.AttachedApps))
+                                    </td>
+                                    <td data-logical-database-backup-state="@(!logical.BackupTrackingAvailable ? "not-measured" : logical.LastBackupAt is null ? "empty" : "has-data")">
+                                        @if (!logical.BackupTrackingAvailable)
+                                        {
+                                            <span class="text-ink-faint">@(isFa ? "هنوز پیگیری نمی‌شود" : "not tracked yet")</span>
+                                        }
+                                        else if (logical.LastBackupAt is { } lastBackupAt)
+                                        {
+                                            <span dir="ltr">@lastBackupAt.LocalDateTime.ToString(Dates.Stamp)</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-ink-faint">@(isFa ? "هنوز گرفته نشده" : "none yet")</span>
+                                        }
+                                    </td>
+                                    <td data-logical-database-size-state="not-measured">
+                                        @* Only the whole instance's disk is measured (the "Measure storage" button
+                                           above, one figure for every logical database on it combined) — never a
+                                           fabricated zero for the one figure this platform cannot attribute per
+                                           database yet. *@
+                                        <span class="text-ink-faint">@(isFa ? "اندازه‌گیری نشده" : "not measured")</span>
+                                    </td>
+                                    <td class="text-end whitespace-nowrap">
+                                        @if (Model.CanManage && logical.CanRename)
+                                        {
+                                            <form asp-action="RenameDatabase" asp-route-id="@db.Id" asp-route-databaseId="@logical.Id"
+                                                  method="post" class="inline-flex items-center gap-1" data-rename-database-form>
+                                                @Html.AntiForgeryToken()
+                                                <input name="name" dir="ltr" autocomplete="off"
+                                                       placeholder="@(isFa ? "نام جدید" : "new name")"
+                                                       class="w-28 rounded-lg bg-canvas border border-line px-2 py-1 text-xs" />
+                                                <button class="btn-ghost px-2 py-1 text-xs">@(isFa ? "تغییر نام" : "Rename")</button>
+                                            </form>
+                                        }
+                                        else if (Model.CanManage && !logical.IsDefault)
+                                        {
+                                            <span class="text-[11px] text-ink-faint"
+                                                  title="@Harbora.Infrastructure.Services.DatabaseGrantSql.UnsupportedRenameReason(db.Type)">
+                                                @(isFa ? "تغییر نام موجود نیست" : "Rename unavailable")
+                                            </span>
+                                        }
+                                        @if (Model.CanManage && logical.CanDelete)
+                                        {
+                                            <a href="/databases/@db.Id/logical-databases/@logical.Id/remove"
+                                               class="btn-ghost ms-1 px-2 py-1 text-xs text-danger">@(isFa ? "حذف" : "Delete")</a>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            @if (Model.CanManage)
+            {
+                if (Model.CanManageLogicalDatabasesLocally)
+                {
+                    <form asp-action="CreateDatabase" asp-route-id="@db.Id" method="post"
+                          class="mt-3 flex gap-2" data-create-logical-database-form>
+                        @Html.AntiForgeryToken()
+                        <input name="name" dir="ltr" autocomplete="off"
+                               placeholder="@(isFa ? "نام پایگاه‌داده (اختیاری)" : "database name (optional)")"
+                               class="flex-1 rounded-lg bg-canvas border border-line px-3 py-2 text-sm" />
+                        <button class="btn-secondary px-4 py-2 text-sm">@(isFa ? "ساخت" : "Create")</button>
+                    </form>
+                }
+                else
+                {
+                    <p class="mt-3 text-[11px] leading-4 text-warn" data-logical-databases-unreachable>
+                        @(isFa
+                            ? "این نصب هنوز نمی‌تواند به موتور این نمونه برسد، پس ساخت پایگاه‌دادهٔ جدید اینجا در دسترس نیست."
+                            : "This installation cannot reach that instance's own engine yet, so creating a new database here is not available.")
+                    </p>
+                }
+            }
+        }
+        <partial name="Design/_PanelEnd" />
+
         @{ var backupPanel = new PanelModel(T["Backups"].Value, isFa ? "همه" : "View all", "/backups"); }
         <partial name="Design/_PanelStart" model="backupPanel" />
 
@@ -318,6 +452,20 @@ else if (moving)
                         <option value="@app.Id">@app.Name · @app.Environment</option>
                     }
                 </select>
+                @if (Model.LogicalDatabases.Count > 1)
+                {
+                    @* D3 (2026-08-25 shared-databases plan): "attach to a logical database, from
+                       either side" — this is the database-page half. Omitted entirely once an
+                       instance has only its own default (the overwhelming common case, and every
+                       instance created before D1), so a plain attach behaves exactly as it always
+                       did: the controller falls back to the default when no databaseId is posted. *@
+                    <select name="databaseId" class="form-control text-sm" dir="ltr" data-attach-database-picker>
+                        @foreach (var logical in Model.LogicalDatabases)
+                        {
+                            <option value="@logical.Id">@logical.Name@(logical.IsDefault ? (isFa ? " (پیش‌فرض)" : " (default)") : "")</option>
+                        }
+                    </select>
+                }
                 @* C1 (2026-08-22 config-delivery plan): optional — an app attached to two databases
                    needs unambiguous names, and this is how a customer picks one rather than accepting
                    the auto-generated slug (AppManagedServiceAlias.Resolve falls back to it, and makes

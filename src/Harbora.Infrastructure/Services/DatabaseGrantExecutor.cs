@@ -124,6 +124,27 @@ public sealed class DatabaseGrantExecutor(
         return await DropDatabaseOnlyAsync(service, networkName, database, ct);
     }
 
+    /// <summary>
+    /// Renames a logical database in place (D3, 2026-08-25 shared-databases plan) — refused by name
+    /// for an engine <see cref="DatabaseGrantSql.SupportsRename"/> says cannot do this losslessly,
+    /// exactly like every other operation here.
+    /// </summary>
+    public async Task<(bool Ok, string? Error)> RenameDatabaseAsync(
+        ManagedService service, string networkName, string oldName, string newName, CancellationToken ct)
+    {
+        if (!DatabaseGrantSql.SupportsRename(service.Type))
+            return (false, DatabaseGrantSql.UnsupportedRenameReason(service.Type));
+
+        var command = DatabaseGrantSql.Rename(
+            service.Type, service.ContainerName, service.InternalPort,
+            service.Username, service.DatabaseName, oldName, newName);
+
+        if (command is null) return (false, "That database's name cannot be used in a statement.");
+
+        var run = await RunAsync(service, networkName, command, "rename the database", ct);
+        return (run.Ok, run.Error);
+    }
+
     /// <summary>The database statement alone, shared by a successful <see cref="DropDatabaseAsync"/>
     /// and the rollback <see cref="CreateDatabaseAsync"/> runs when the login side failed.</summary>
     private async Task<(bool Ok, string? Error)> DropDatabaseOnlyAsync(

@@ -151,6 +151,76 @@ public sealed class LogicalDatabaseService(
         return null;
     }
 
+    /// <summary>
+    /// Renames a logical database in place (D3, 2026-08-25 shared-databases plan). Refused — never
+    /// attempted — for the instance's own default database, for the same reason
+    /// <see cref="DeleteAsync"/> refuses to remove it on its own: every one-off container this
+    /// instance still runs against itself (provisioning, testing the connection, creating another
+    /// logical database) connects as <see cref="ManagedService.DatabaseName"/>, so renaming that one
+    /// row out from under it would leave every one of those operations reaching for a name the engine
+    /// no longer has.
+    ///
+    /// <para>
+    /// Returns null on success, or the sentence to show — the same shape <see cref="DeleteAsync"/>
+    /// already uses. A no-op rename (the resolved name is unchanged) succeeds without touching the
+    /// engine at all, the same way saving a form with nothing edited should.
+    /// </para>
+    /// </summary>
+    public async Task<string?> RenameAsync(Guid databaseId, string? requestedName, CancellationToken ct)
+    {
+        var logical = await db.ManagedServiceDatabases
+            .Include(d => d.ManagedService)
+            .FirstOrDefaultAsync(d => d.Id == databaseId, ct);
+        if (logical is null) return "That database no longer exists.";
+
+        if (logical.IsDefault)
+            return "This is the instance's own default database and cannot be renamed on its own — " +
+                   "every operation this instance still runs against itself depends on that name staying put.";
+
+        var service = logical.ManagedService;
+        if (service is null) return "That database instance no longer exists.";
+
+        if (!DatabaseGrantSql.SupportsRename(service.Type))
+            return DatabaseGrantSql.UnsupportedRenameReason(service.Type);
+
+        if (!CanCreateLocally)
+            return "This installation cannot reach that database instance's own engine.";
+
+        var existingNames = await db.ManagedServiceDatabases
+            .Where(d => d.ManagedServiceId == service.Id && d.Id != databaseId)
+            .Select(d => d.Name)
+            .ToListAsync(ct);
+
+        var newName = LogicalDatabaseName.Resolve(requestedName, existingNames);
+        var oldName = logical.Name;
+        if (string.Equals(newName, oldName, StringComparison.Ordinal)) return null;
+
+        var network = await services!.NetworkForAsync(service, ct);
+        var renamed = await grants!.RenameDatabaseAsync(service, network, oldName, newName, ct);
+        if (!renamed.Ok)
+        {
+            logger.LogWarning(
+                "{Engine} refused to rename logical database {Name} to {NewName} on {Service}: {Error}",
+                service.Type, oldName, newName, service.Name, renamed.Error);
+            return renamed.Error ?? $"{service.Type} refused to rename the database.";
+        }
+
+        logical.Name = newName;
+
+        // C1's idiom, exactly as ManagedServiceEngine.RotatePasswordAsync applies it: every app
+        // attached to this logical database now has a stale connection string in its running
+        // container — the database name it was given no longer resolves — so each is marked
+        // unconditionally, not compared-and-skipped, and cleared only by that app's own next deploy.
+        var attachments = await db.AppManagedServices
+            .Where(a => a.ManagedServiceDatabaseId == databaseId).ToListAsync(ct);
+        foreach (var a in attachments) a.HasUnpublishedChanges = true;
+
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation("Renamed logical database {OldName} to {NewName} on {Service}.", oldName, newName, service.Name);
+        return null;
+    }
+
     /// <summary>"2 apps: api, worker" — the same idiom <c>DatabasesController.NamedList</c> already
     /// uses for a whole instance, one level down.</summary>
     private static string NamedList(IReadOnlyList<string> names)
