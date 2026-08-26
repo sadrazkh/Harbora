@@ -269,6 +269,9 @@ public static class DependencyInjection
         services.AddScoped<Services.DockerTcpGateway>();
         services.AddScoped<Services.DatabaseGrantExecutor>();
         services.AddScoped<Services.DatabaseAccessService>();
+        // D1 (2026-08-25 shared-databases plan): logical databases inside one instance, built on the
+        // same grant executor rather than a second creation route.
+        services.AddScoped<Services.LogicalDatabaseService>();
         services.AddHostedService<Services.DatabaseAccessSweeper>();
         services.AddHostedService<Storage.BucketMeasurementSweeper>();
         services.AddScoped<Maintenance.DiskCleanupService>();

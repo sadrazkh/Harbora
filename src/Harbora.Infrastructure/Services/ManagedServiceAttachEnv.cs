@@ -37,14 +37,25 @@ namespace Harbora.Infrastructure.Services;
 /// </summary>
 public static class ManagedServiceAttachEnv
 {
+    /// <param name="ms">
+    /// The attachment itself, not just the service it points at (D1, 2026-08-25 shared-databases
+    /// plan) — its own <see cref="AppManagedService.ManagedService"/> and
+    /// <see cref="AppManagedService.Database"/> navigations must already be loaded. Composing env for
+    /// one attachment needs both: which login to use (<see cref="AttachedDatabaseCreds"/> picks the
+    /// logical database's own login when <see cref="AppManagedService.Database"/> is set, the
+    /// instance's admin login otherwise) and, unchanged from before, <see cref="AppManagedService.Alias"/>.
+    /// </param>
     public static IReadOnlyList<(string Key, string Value, bool IsSecret)> EntriesFor(
-        ManagedService svc, string alias, ISecretProtector protector)
+        AppManagedService ms, ISecretProtector protector)
     {
-        var plainPassword = SafeUnprotect(svc.EncryptedPassword, protector);
+        var svc = ms.ManagedService ?? throw new ArgumentException(
+            "The attachment's ManagedService must be loaded before composing its env.", nameof(ms));
+
+        var creds = AttachedDatabaseCreds.Resolve(svc, ms.Database, protector);
+        var plainPassword = creds.Password;
         var definition = ServiceCatalog.All[svc.Type];
-        var creds = new ServiceCreds(svc.ContainerName, definition.Port, svc.Username, plainPassword, svc.DatabaseName);
         var wanted = definition.AttachEnv(creds);
-        var prefix = AttachKeys.PrefixFor(alias);
+        var prefix = AttachKeys.PrefixFor(ms.Alias);
 
         var result = new List<(string Key, string Value, bool IsSecret)>(wanted.Count * 2);
         foreach (var (key, value) in wanted)
@@ -61,11 +72,5 @@ public static class ManagedServiceAttachEnv
         }
 
         return result;
-    }
-
-    private static string SafeUnprotect(string value, ISecretProtector protector)
-    {
-        if (string.IsNullOrEmpty(value)) return string.Empty;
-        try { return protector.Unprotect(value); } catch { return string.Empty; }
     }
 }

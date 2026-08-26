@@ -546,6 +546,7 @@ public sealed partial class AppsController(
             // C1 (2026-08-22 config-delivery plan): the same shape again — also read by
             // ServiceUsageService.ConnectionsFor below, for the "Databases" panel's Attached flag.
             .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.Database)
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
@@ -577,7 +578,7 @@ public sealed partial class AppsController(
             .Where(ms => ms.ManagedService is not null)
             .Select(ms => new Harbora.Domain.Apps.AttachedDatabaseEnv(
                 ms.AttachOrder, ms.ManagedServiceId, ms.ManagedService!.Name,
-                Harbora.Infrastructure.Services.ManagedServiceAttachEnv.EntriesFor(ms.ManagedService!, ms.Alias, protector)
+                Harbora.Infrastructure.Services.ManagedServiceAttachEnv.EntriesFor(ms, protector)
                     .Select(e => new Harbora.Domain.Apps.DatabaseEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
             .ToList();
 

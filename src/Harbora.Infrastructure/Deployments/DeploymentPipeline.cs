@@ -89,6 +89,10 @@ public sealed class DeploymentPipeline(
             // C1 (2026-08-22 config-delivery plan): the same shape again — an attached database's own
             // row, so BuildEnv can compute its connection-string entries the same way.
             .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
+            // D1 (2026-08-25 shared-databases plan): the logical database this attachment actually
+            // points at, when it points at one — AttachedDatabaseCreds needs it loaded to pick the
+            // right login.
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.Database)
             // C2 (same plan): this app's own file-override rules, applied to each replica's container
             // below (CreateContainerWithOverridesAsync) — unlike the five Includes above, these are
             // never merged into Env; they patch a value inside a file the container already has.
@@ -1445,7 +1449,7 @@ public sealed class DeploymentPipeline(
             .Where(ms => ms.ManagedService is not null)
             .Select(ms => new AttachedDatabaseEnv(
                 ms.AttachOrder, ms.ManagedServiceId, ms.ManagedService!.Name,
-                Services.ManagedServiceAttachEnv.EntriesFor(ms.ManagedService!, ms.Alias, protector)
+                Services.ManagedServiceAttachEnv.EntriesFor(ms, protector)
                     .Select(e => new DatabaseEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
 
         var merged = ConfigGroupMerge.Merge(

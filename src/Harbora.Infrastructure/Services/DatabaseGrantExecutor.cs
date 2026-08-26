@@ -49,6 +49,97 @@ public sealed class DatabaseGrantExecutor(
     }
 
     /// <summary>
+    /// Creates a new logical database on the instance (D1, 2026-08-25 shared-databases plan) and a
+    /// login scoped to it — the same two-step shape <see cref="CreateAsync"/> already performs on a
+    /// database that exists, extended rather than duplicated: <c>DatabaseGrantSql.CreateDatabase</c>
+    /// runs first, then this reuses <see cref="DatabaseGrantSql.Create"/> exactly as it already runs
+    /// for an external-access grant, just pointed at the new database instead of
+    /// <see cref="ManagedService.DatabaseName"/>.
+    ///
+    /// <para>
+    /// If the login cannot be created, the database it was meant to own is dropped again rather than
+    /// left behind empty and unreachable — a database Harbora made and nobody can connect to is the
+    /// same defect class as a row Harbora has and the engine does not, just facing the other way.
+    /// </para>
+    /// </summary>
+    public async Task<(bool Ok, string? Error)> CreateDatabaseAsync(
+        ManagedService service, string networkName, string database, string username, string password,
+        CancellationToken ct)
+    {
+        if (!DatabaseGrantSql.Supports(service.Type))
+            return (false, DatabaseGrantSql.UnsupportedReason(service.Type));
+
+        var createDatabase = DatabaseGrantSql.CreateDatabase(
+            service.Type, service.ContainerName, service.InternalPort,
+            service.Username, service.DatabaseName, database);
+
+        if (createDatabase is null) return (false, "That database's name cannot be used to create it.");
+
+        var madeDatabase = await RunAsync(service, networkName, createDatabase, "create the database", ct);
+        if (!madeDatabase.Ok) return (madeDatabase.Ok, madeDatabase.Error);
+
+        var grant = DatabaseGrantSql.Create(
+            service.Type, service.ContainerName, service.InternalPort,
+            service.Username, database, username, password);
+
+        if (grant is null)
+        {
+            await DropDatabaseOnlyAsync(service, networkName, database, ct);
+            return (false, "That login's details cannot be used to make a login.");
+        }
+
+        var madeLogin = await RunAsync(service, networkName, grant, "create the login", ct);
+        if (!madeLogin.Ok)
+        {
+            await DropDatabaseOnlyAsync(service, networkName, database, ct);
+            return (madeLogin.Ok, madeLogin.Error);
+        }
+
+        return (true, null);
+    }
+
+    /// <summary>
+    /// Removes a logical database and the login that owns it (D1, 2026-08-25 shared-databases plan).
+    ///
+    /// The login goes first, while the database it owns objects in still exists — reusing
+    /// <see cref="DatabaseGrantSql.Drop"/> exactly as an external-access grant's revoke already does,
+    /// just pointed at the logical database rather than <see cref="ManagedService.DatabaseName"/> —
+    /// and only once that has succeeded is the database itself dropped. Reversing the order would ask
+    /// PostgreSQL to reassign objects out of a database that no longer exists.
+    /// </summary>
+    public async Task<(bool Ok, string? Error)> DropDatabaseAsync(
+        ManagedService service, string networkName, string database, string username, CancellationToken ct)
+    {
+        if (!DatabaseGrantSql.Supports(service.Type)) return (true, null);
+
+        var dropLogin = DatabaseGrantSql.Drop(
+            service.Type, service.ContainerName, service.InternalPort, service.Username, database, username);
+
+        if (dropLogin is not null)
+        {
+            var loginResult = await RunAsync(service, networkName, dropLogin, "remove the database's login", ct);
+            if (!loginResult.Ok) return (loginResult.Ok, loginResult.Error);
+        }
+
+        return await DropDatabaseOnlyAsync(service, networkName, database, ct);
+    }
+
+    /// <summary>The database statement alone, shared by a successful <see cref="DropDatabaseAsync"/>
+    /// and the rollback <see cref="CreateDatabaseAsync"/> runs when the login side failed.</summary>
+    private async Task<(bool Ok, string? Error)> DropDatabaseOnlyAsync(
+        ManagedService service, string networkName, string database, CancellationToken ct)
+    {
+        var command = DatabaseGrantSql.DropDatabase(
+            service.Type, service.ContainerName, service.InternalPort,
+            service.Username, service.DatabaseName, database);
+
+        if (command is null) return (false, "That database's name cannot be used in a statement.");
+
+        var run = await RunAsync(service, networkName, command, "remove the database", ct);
+        return (run.Ok, run.Error);
+    }
+
+    /// <summary>
     /// Replaces the password on a login that is already there.
     ///
     /// <para>

@@ -31,6 +31,20 @@ public class AppManagedService : BaseEntity
     public ManagedService? ManagedService { get; set; }
 
     /// <summary>
+    /// The logical database inside <see cref="ManagedService"/> this attachment actually points at
+    /// (D1, 2026-08-25 shared-databases plan), or null for an attachment this platform never
+    /// re-pointed: one made before logical databases existed, or one whose engine cannot open a
+    /// second database at all (Redis, RabbitMQ, NATS — see <c>DatabaseGrantSql.Supports</c>). Null
+    /// resolves to the instance's own admin database exactly as every attachment did before this
+    /// shipped (<c>AttachedServiceConnectionResolver</c>, <c>ManagedServiceAttachEnv</c>) — the
+    /// fallback a migration backfills away for every engine that has a logical database at all, but
+    /// which a test seeding a <see cref="ManagedService"/> directly (bypassing
+    /// <c>DatabasesController.Create</c>) still exercises, deliberately.
+    /// </summary>
+    public Guid? ManagedServiceDatabaseId { get; set; }
+    public ManagedServiceDatabase? Database { get; set; }
+
+    /// <summary>
     /// The customer-facing name for this one attachment — defaults to the service's own slug, but is
     /// never allowed to collide with another attachment already on this app
     /// (<see cref="AppManagedServiceAlias.Resolve"/>). This is the prefix an app's second (or third)

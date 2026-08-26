@@ -90,6 +90,9 @@ public class HarboraDbContext : DbContext
     /// <summary>An app's attachment to a managed database/cache (C1, 2026-08-22 config-delivery
     /// plan) — see <see cref="Harbora.Domain.Services.AppManagedService"/>.</summary>
     public DbSet<Harbora.Domain.Services.AppManagedService> AppManagedServices => Set<Harbora.Domain.Services.AppManagedService>();
+    /// <summary>A logical database inside a <see cref="ManagedService"/> instance (D1, 2026-08-25
+    /// shared-databases plan) — see <see cref="Harbora.Domain.Services.ManagedServiceDatabase"/>.</summary>
+    public DbSet<Harbora.Domain.Services.ManagedServiceDatabase> ManagedServiceDatabases => Set<Harbora.Domain.Services.ManagedServiceDatabase>();
     public DbSet<BackupDestination> BackupDestinations => Set<BackupDestination>();
     public DbSet<Backup> Backups => Set<Backup>();
     public DbSet<BackupDownloadToken> BackupDownloadTokens => Set<BackupDownloadToken>();
@@ -813,12 +816,44 @@ public class HarboraDbContext : DbContext
         // reached. Unlike AppStorageBucket, Alias also carries a per-app uniqueness constraint,
         // because two databases attached to the same app is the ordinary case (see
         // AppManagedServiceAlias's own doc) where two buckets sharing a key is not.
+        //
+        // D1 (2026-08-25 shared-databases plan): the uniqueness that used to sit on
+        // (AppId, ManagedServiceId) alone now splits into two partial indexes, one per side of
+        // ManagedServiceDatabaseId being null. An attachment with a logical database (every engine
+        // that has one, from here on) is unique on (AppId, ManagedServiceDatabaseId) — which is what
+        // lets one app attach to two different logical databases on the very same instance, the
+        // capability this plan exists to add. An attachment with none (Redis/RabbitMQ/NATS, and any
+        // Postgres/MySQL/MariaDB row a migration has not reached) keeps the old guarantee verbatim on
+        // (AppId, ManagedServiceId): the same instance still cannot be attached to the same app twice.
+        // Postgres already treats every NULL in a unique index as distinct from every other, so
+        // without the filters a plain unique index on (AppId, ManagedServiceDatabaseId) would let the
+        // no-logical-database case collide silently — the exact hole these two indexes together close.
         b.Entity<Harbora.Domain.Services.AppManagedService>(e =>
         {
-            e.HasIndex(x => new { x.AppId, x.ManagedServiceId }).IsUnique();
+            e.HasIndex(x => new { x.AppId, x.ManagedServiceDatabaseId }).IsUnique()
+                .HasFilter("\"ManagedServiceDatabaseId\" IS NOT NULL");
+            e.HasIndex(x => new { x.AppId, x.ManagedServiceId }).IsUnique()
+                .HasFilter("\"ManagedServiceDatabaseId\" IS NULL");
             e.HasIndex(x => new { x.AppId, x.Alias }).IsUnique();
             e.HasOne(x => x.App).WithMany(a => a.ManagedServices).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.ManagedService).WithMany(s => s.Apps).HasForeignKey(x => x.ManagedServiceId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Database).WithMany(d => d.Apps).HasForeignKey(x => x.ManagedServiceDatabaseId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // --- logical databases (D1, 2026-08-25 shared-databases plan) ---
+        // Cascade on the ManagedService side, unlike AppManagedService's Restrict above: a logical
+        // database only ever means something inside the instance that owns it, and ManagedServiceEngine
+        // .RemoveAsync only reaches a service with none of its logical databases still attached to an
+        // app (DatabasesController.Remove's named-list refusal already guarantees that before this is
+        // ever reached) — so removing the instance is safe to take every logical database with it, the
+        // way ConfigOverrideRule's Cascade on App already does for a row that only means something
+        // inside its own parent.
+        b.Entity<Harbora.Domain.Services.ManagedServiceDatabase>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            e.HasIndex(x => new { x.ManagedServiceId, x.Name }).IsUnique();
+            e.HasOne(x => x.ManagedService).WithMany(s => s.Databases).HasForeignKey(x => x.ManagedServiceId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // --- file overrides (C2, 2026-08-22 config-delivery plan) ---

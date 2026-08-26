@@ -35,13 +35,24 @@ public class AppManagedServiceSecretDecryptionTests
         DatabaseName = "orders", VolumeName = "harbora-svc-orders-data", Status = ServiceStatus.Running
     };
 
+    /// <summary>
+    /// D1 (2026-08-25 shared-databases plan): <c>EntriesFor</c> now reads the attachment, not the
+    /// bare service — this is the attachment, with no logical database (<c>Database</c> stays null),
+    /// which is what falls back to the instance's own admin login exactly as every attachment did
+    /// before D1 shipped.
+    /// </summary>
+    private static AppManagedService GivenAttachment(ManagedService svc, string alias) => new()
+    {
+        AppId = Guid.NewGuid(), ManagedServiceId = svc.Id, ManagedService = svc, Alias = alias
+    };
+
     [Fact]
     public void Every_entry_that_embeds_the_password_comes_back_as_real_ciphertext_decryptable_exactly_once()
     {
         var protector = RealProtector();
         var svc = GivenService(protector, "correct-horse-battery-staple");
 
-        var entries = ManagedServiceAttachEnv.EntriesFor(svc, "ORDERS", protector);
+        var entries = ManagedServiceAttachEnv.EntriesFor(GivenAttachment(svc, "ORDERS"), protector);
 
         var secretEntries = entries.Where(e => e.IsSecret).ToList();
         secretEntries.Should().NotBeEmpty("DATABASE_URL and friends embed the password and must be flagged secret");
@@ -64,7 +75,7 @@ public class AppManagedServiceSecretDecryptionTests
         var protector = RealProtector();
         var svc = GivenService(protector, "correct-horse-battery-staple");
 
-        var entries = ManagedServiceAttachEnv.EntriesFor(svc, "ORDERS", protector);
+        var entries = ManagedServiceAttachEnv.EntriesFor(GivenAttachment(svc, "ORDERS"), protector);
         var dsn = entries.Single(e => e.Key == "DATABASE_DSN");
 
         protector.Unprotect(dsn.Value).Should().Be(
@@ -77,7 +88,7 @@ public class AppManagedServiceSecretDecryptionTests
         var protector = RealProtector();
         var svc = GivenService(protector, "correct-horse-battery-staple");
 
-        var entries = ManagedServiceAttachEnv.EntriesFor(svc, "ORDERS", protector);
+        var entries = ManagedServiceAttachEnv.EntriesFor(GivenAttachment(svc, "ORDERS"), protector);
         var host = entries.Single(e => e.Key == "PGHOST");
 
         host.IsSecret.Should().BeFalse();

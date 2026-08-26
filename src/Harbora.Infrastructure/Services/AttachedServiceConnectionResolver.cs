@@ -36,6 +36,7 @@ public sealed class AttachedServiceConnectionResolver(HarboraDbContext db, ISecr
 
         var link = await db.AppManagedServices.AsNoTracking()
             .Include(x => x.ManagedService)
+            .Include(x => x.Database)
             .FirstOrDefaultAsync(x => x.AppId == appId
                 && x.ManagedService != null
                 && x.Alias.ToUpper() == alias.ToUpper(), ct);
@@ -43,14 +44,7 @@ public sealed class AttachedServiceConnectionResolver(HarboraDbContext db, ISecr
         if (link?.ManagedService is not { } svc) return null;
 
         var definition = ServiceCatalog.All[svc.Type];
-        var plainPassword = SafeUnprotect(svc.EncryptedPassword);
-        var creds = new ServiceCreds(svc.ContainerName, definition.Port, svc.Username, plainPassword, svc.DatabaseName);
+        var creds = AttachedDatabaseCreds.Resolve(svc, link.Database, protector);
         return definition.Conn(creds).Full;
-    }
-
-    private string SafeUnprotect(string value)
-    {
-        if (string.IsNullOrEmpty(value)) return string.Empty;
-        try { return protector.Unprotect(value); } catch { return string.Empty; }
     }
 }

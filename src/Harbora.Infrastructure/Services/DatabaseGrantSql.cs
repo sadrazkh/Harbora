@@ -80,6 +80,75 @@ public static class DatabaseGrantSql
     }
 
     /// <summary>
+    /// Creates a new logical database inside the instance (D1, 2026-08-25 shared-databases plan) —
+    /// the statement that <c>DatabaseGrantExecutor.CreateDatabaseAsync</c> runs before it hands the
+    /// new database to <see cref="Create"/> the way every other database on the instance already
+    /// gets its login.
+    ///
+    /// <para>
+    /// PostgreSQL refuses <c>CREATE DATABASE</c> on the connection that would run inside the database
+    /// being created — it does not exist yet — so this connects to <paramref name="adminDatabase"/>,
+    /// the instance's own default database, instead. MySQL/MariaDB have no such restriction: any
+    /// connection can create any database, which is why their branch needs no separate anchor.
+    /// </para>
+    /// </summary>
+    public static GrantCommand? CreateDatabase(
+        ManagedServiceType type, string host, int port, string adminUser, string adminDatabase, string database)
+    {
+        if (!Supports(type)) return null;
+        if (!IsSafe(database) || !IsSafe(adminUser)) return null;
+        if (type == ManagedServiceType.PostgreSql && !IsSafe(adminDatabase)) return null;
+
+        return type switch
+        {
+            ManagedServiceType.PostgreSql => new GrantCommand("postgres:16-alpine",
+            [
+                "psql", "-v", "ON_ERROR_STOP=1",
+                "-h", host, "-p", port.ToString(), "-U", adminUser, "-d", adminDatabase,
+                "-c", $"CREATE DATABASE \"{database}\";"
+            ]),
+
+            _ => new GrantCommand("mariadb:11",
+            [
+                "mariadb", "-h", host, "-P", port.ToString(), "-u", adminUser,
+                "-e", $"CREATE DATABASE IF NOT EXISTS `{database}`;"
+            ])
+        };
+    }
+
+    /// <summary>
+    /// Removes a logical database entirely — the counterpart of <see cref="CreateDatabase"/>, run
+    /// only after <see cref="Drop"/> has already removed the login that owned objects inside it (see
+    /// <c>DatabaseGrantExecutor.DropDatabaseAsync</c> for why the order cannot be reversed: an object
+    /// cannot be reassigned out of a database that no longer exists).
+    ///
+    /// <c>IF EXISTS</c> on both branches, matching <see cref="Drop"/>: a database already gone must
+    /// not fail a removal that has already achieved what it was for.
+    /// </summary>
+    public static GrantCommand? DropDatabase(
+        ManagedServiceType type, string host, int port, string adminUser, string adminDatabase, string database)
+    {
+        if (!Supports(type)) return null;
+        if (!IsSafe(database) || !IsSafe(adminUser)) return null;
+        if (type == ManagedServiceType.PostgreSql && !IsSafe(adminDatabase)) return null;
+
+        return type switch
+        {
+            ManagedServiceType.PostgreSql => new GrantCommand("postgres:16-alpine",
+            [
+                "psql", "-h", host, "-p", port.ToString(), "-U", adminUser, "-d", adminDatabase,
+                "-c", $"DROP DATABASE IF EXISTS \"{database}\";"
+            ]),
+
+            _ => new GrantCommand("mariadb:11",
+            [
+                "mariadb", "-h", host, "-P", port.ToString(), "-u", adminUser,
+                "-e", $"DROP DATABASE IF EXISTS `{database}`;"
+            ])
+        };
+    }
+
+    /// <summary>
     /// Changes the password on a login that already exists, leaving its privileges alone.
     ///
     /// The opposite of <see cref="Drop"/> on repetition: <c>ON_ERROR_STOP</c> is set and neither
