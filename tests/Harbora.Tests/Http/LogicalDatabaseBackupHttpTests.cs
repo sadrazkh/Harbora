@@ -365,6 +365,34 @@ public class LogicalDatabaseBackupHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task Restoring_into_a_new_database_on_an_incompatible_engine_refuses_before_creating_it()
+    {
+        var pg = SeedDatabase("restore-new-pg-source", ManagedServiceType.PostgreSql);
+        var pgDb = SeedLogicalDatabase(pg, "pg_db");
+        var backup = SeedCompletedBackup(pg, pgDb.Id);
+
+        var mysql = SeedDatabase("restore-new-mysql-target", ManagedServiceType.MySql);
+        var mysqlDb = SeedLogicalDatabase(mysql, "mysql_db");
+
+        Panel.GivenUser(fixture.WorkspaceId, "restorenewmismatch@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.181", "restorenewmismatch@example.com");
+        // Browsing the MYSQL instance's own restore page, but naming the Postgres backup — reachable
+        // by URL even though nothing in the ordinary flow points a person at this combination.
+        var token = await client.AntiforgeryTokenFrom($"/databases/{mysql.Id}/logical-databases/{mysqlDb.Id}/restore/{backup.Id}");
+        var before = Panel.Docker.OneOffCommands.Count;
+
+        var response = await client.PostFormAsync(
+            $"/databases/{mysql.Id}/logical-databases/{mysqlDb.Id}/restore/{backup.Id}", token,
+            ("mode", "new"), ("newDatabaseName", "orphan-clone"));
+
+        var html = await (await client.GetAsync(response.RedirectPath()!)).Content.ReadAsStringAsync();
+        ErrorBannerText(html).Should().Contain("PostgreSql").And.Contain("MySql");
+        Panel.Docker.OneOffCommands.Should().HaveCount(before, "refused before any docker call");
+        Panel.Read(db => db.ManagedServiceDatabases.Any(d => d.ManagedServiceId == mysql.Id && d.Name == "orphan_clone"))
+            .Should().BeFalse("the mismatch must be caught before the new database is even created — no orphan left behind");
+    }
+
+    [Fact]
     public async Task Restoring_a_postgres_backup_into_a_mysql_instance_refuses_by_name()
     {
         var pg = SeedDatabase("restore-engine-pg", ManagedServiceType.PostgreSql);

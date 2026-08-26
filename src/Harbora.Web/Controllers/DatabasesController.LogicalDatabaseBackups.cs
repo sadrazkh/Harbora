@@ -327,13 +327,25 @@ public sealed partial class DatabasesController
         var service = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
         if (service is null) return NotFound();
 
-        var backupExists = await db.Backups.AsNoTracking().AnyAsync(b =>
+        var backup = await db.Backups.AsNoTracking().FirstOrDefaultAsync(b =>
             b.Id == backupId && b.WorkspaceId == WorkspaceId && b.Type == BackupType.Database
             && b.Status == BackupStatus.Completed, ct);
-        if (!backupExists) return NotFound();
+        if (backup is null) return NotFound();
 
         if (string.Equals(mode, "new", StringComparison.OrdinalIgnoreCase))
         {
+            // Checked before CreateAsync runs, not after: engine compatibility is re-checked inside
+            // RestoreIntoAsync regardless, but only after the new database already exists — refusing
+            // here first means a doomed restore never leaves an empty, orphaned database behind.
+            var sourceEngine = await db.ManagedServices.AsNoTracking()
+                .Where(s => s.Id == Guid.Parse(backup.TargetRef)).Select(s => (ManagedServiceType?)s.Type)
+                .FirstOrDefaultAsync(ct);
+            if (sourceEngine is { } engine && !Harbora.Infrastructure.Backups.DatabaseEngineCompat.AreCompatible(engine, service.Type))
+            {
+                TempData["Error"] = Harbora.Infrastructure.Backups.DatabaseEngineCompat.Refusal(engine, service.Type);
+                return RedirectToAction(nameof(ConfirmRestore), new { id, databaseId, backupId });
+            }
+
             var (created, error) = await logicalDatabases.CreateAsync(id, newDatabaseName, ct);
             if (error is not null)
             {
