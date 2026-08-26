@@ -46,6 +46,14 @@ public class TransactionalEmailOutboxHttpTests(HarboraHttpFixture fixture)
         }));
 
         var client = Panel.CreateClient();
+        // /account/forgot carries [EnableRateLimiting("auth")], a 10-per-minute-per-IP fixed window.
+        // Without a distinct address here, TestServer's own default RemoteIpAddress is whatever it
+        // is out of the box — shared with every other anonymous client in this same run, including
+        // this file's own second test — and the two together can tip a shared bucket into a 429 that
+        // has nothing to do with what this test is proving. HarboraWebFactory's own doc gives the
+        // identical reason SignedInAs takes an address for exactly this: "giving each test its own
+        // address is what separate clients are."
+        client.DefaultRequestHeaders.Add(HarboraWebFactory.RemoteIpHeader, "203.0.113.220");
         var token = await client.AntiforgeryTokenFrom("/account/forgot");
         var response = await client.PostFormAsync("/account/forgot", token, ("email", email));
 
@@ -76,6 +84,8 @@ public class TransactionalEmailOutboxHttpTests(HarboraHttpFixture fixture)
         var email = $"no-such-account-{Guid.NewGuid():N}@example.com";
 
         var client = Panel.CreateClient();
+        // A distinct address from the sibling test above, for the same reason.
+        client.DefaultRequestHeaders.Add(HarboraWebFactory.RemoteIpHeader, "203.0.113.221");
         var token = await client.AntiforgeryTokenFrom("/account/forgot");
         var response = await client.PostFormAsync("/account/forgot", token, ("email", email));
 
