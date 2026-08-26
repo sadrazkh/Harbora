@@ -261,6 +261,7 @@ public class ManagedServiceEngineTenancyTests
             access: new Harbora.Infrastructure.Security.ProjectAccessService(db, currentUser),
             databaseAccess: new DatabaseAccessService(
                 db, node, clock, NullLogger<DatabaseAccessService>.Instance),
+            logicalDatabases: null!,
             adminer: null!,
             audit: new SilentAudit(),
             node: node,

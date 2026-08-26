@@ -195,6 +195,13 @@ public sealed class EnvironmentCloner(
             // measured size or an image it is not running.
 
             db.ManagedServices.Add(copy);
+
+            // D1 (2026-08-25 shared-databases plan): the copy's own admin database, materialised as
+            // its first logical database — with the fresh password just generated above, never the
+            // original's.
+            if (ManagedServiceDatabase.DefaultFor(copy) is { } defaultDatabase)
+                db.ManagedServiceDatabases.Add(defaultDatabase);
+
             created.Add((copy, spec.Name));
         }
 

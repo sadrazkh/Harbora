@@ -59,4 +59,38 @@ public class ManagedServiceDatabase : BaseEntity
 
     /// <summary>Apps attached to this specific logical database.</summary>
     public ICollection<AppManagedService> Apps { get; set; } = new List<AppManagedService>();
+
+    /// <summary>
+    /// The default row a freshly created <see cref="ManagedService"/> gets alongside itself, for every
+    /// engine that has a database name at all — every one of this platform's three creation paths
+    /// (<c>DatabasesController.Create</c>, <c>EnvironmentCloner.CloneAsync</c>,
+    /// <c>TemplateDeploymentService</c>) calls this once, right after adding the service itself, so a
+    /// database created from here on always has somewhere for its first attachment to point.
+    ///
+    /// <para>
+    /// The password is copied as ciphertext, not re-encrypted — <paramref name="service"/>'s own
+    /// <see cref="ManagedService.EncryptedPassword"/> is already protected, and re-protecting it would
+    /// need the plaintext this method deliberately never sees.
+    /// </para>
+    ///
+    /// <para>
+    /// Null for an engine with no database name at all (Redis, RabbitMQ, NATS —
+    /// <c>ServiceDefinition.HasDatabaseName</c> is false), because there is no name to materialise and
+    /// no logical-database story these engines support (<c>DatabaseGrantSql.Supports</c>).
+    /// </para>
+    /// </summary>
+    public static ManagedServiceDatabase? DefaultFor(ManagedService service)
+    {
+        if (string.IsNullOrEmpty(service.DatabaseName)) return null;
+
+        return new ManagedServiceDatabase
+        {
+            WorkspaceId = service.WorkspaceId,
+            ManagedServiceId = service.Id,
+            Name = service.DatabaseName,
+            Username = service.Username,
+            EncryptedPassword = service.EncryptedPassword,
+            IsDefault = true
+        };
+    }
 }

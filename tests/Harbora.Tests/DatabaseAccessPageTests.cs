@@ -170,6 +170,7 @@ public class DatabaseAccessPageTests
             new ServiceUsageService(db, protector),
             new Harbora.Infrastructure.Security.ProjectAccessService(db, currentUser),
             access,
+            logicalDatabases: null!,
             adminer: null!,
             audit: new SilentAudit(),
             node,
@@ -247,6 +248,7 @@ public class DatabaseAccessPageTests
             new DatabaseAccessService(db, node, new Clock(), NullLogger<DatabaseAccessService>.Instance),
             // The admin tool is not exercised by these tests; it is here because the controller
             // takes it. Its own rules are covered by AdminerSessionTests.
+            logicalDatabases: null!,
             adminer: null!,
             audit: new SilentAudit(),
             node,

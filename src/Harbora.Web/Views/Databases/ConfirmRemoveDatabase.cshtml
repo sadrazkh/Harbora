@@ -1,0 +1,59 @@
+@{
+    var svc = (Harbora.Domain.Services.ManagedService)ViewBag.Service;
+    var database = (Harbora.Domain.Services.ManagedServiceDatabase)ViewBag.Database;
+    var attachedApps = (IReadOnlyList<string>)ViewBag.AttachedApps;
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var err = TempData["Error"] as string;
+}
+<div class="max-w-2xl" data-database-id="@database.Id">
+    <a href="/databases/@svc.Id" class="text-accent-text text-sm">← @svc.Name</a>
+    <h1 class="text-2xl font-bold tracking-tight text-ink mt-1 mb-4">
+        @(isFa ? "حذف پایگاه‌دادهٔ منطقی" : "Remove logical database")
+    </h1>
+
+    @if (err is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@err</div>}
+
+    <div class="rounded-xl border border-danger bg-danger-soft p-4 mb-4">
+        <p class="text-sm text-danger">
+            @(isFa
+                ? $"«{database.Name}» و همهٔ داده‌های آن برای همیشه حذف می‌شوند. این کار برگشت‌پذیر نیست."
+                : $"\"{database.Name}\" and all of its data will be permanently deleted. This cannot be undone.")
+        </p>
+    </div>
+
+    @if (attachedApps.Count > 0)
+    {
+        @* The requirement this exists to satisfy: the person deleting may not know who is attached. *@
+        <div class="rounded-xl border border-warn bg-warn-soft p-4 mb-4" data-attached-apps>
+            <div class="text-sm font-semibold text-warn mb-2">
+                @(isFa ? "این اپ‌ها به آن متصل‌اند و کار نخواهند کرد:" : "These apps are attached and will stop working:")
+            </div>
+            <ul class="text-sm text-warn list-disc ms-5">
+                @foreach (var name in attachedApps){<li>@name</li>}
+            </ul>
+        </div>
+    }
+
+    <form asp-controller="Databases" asp-action="RemoveDatabase" asp-route-id="@svc.Id"
+          asp-route-databaseId="@database.Id" method="post" class="space-y-4">
+        @Html.AntiForgeryToken()
+
+        <div>
+            <label class="block text-sm text-ink-muted mb-1">
+                @(isFa ? "برای تأیید، نام را دقیقاً بنویسید:" : "To confirm, type the name exactly:")
+                <code class="text-ink" dir="ltr">@database.Name</code>
+            </label>
+            <input name="confirmName" autocomplete="off" dir="ltr"
+                   class="w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm" />
+        </div>
+
+        <div class="flex gap-2">
+            <button class="rounded-lg bg-danger-soft hover:bg-danger-soft text-danger px-4 py-2 text-sm font-semibold">
+                @(isFa ? "حذف کن" : "Remove")
+            </button>
+            <a href="/databases/@svc.Id" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">
+                @(isFa ? "انصراف" : "Cancel")
+            </a>
+        </div>
+    </form>
+</div>

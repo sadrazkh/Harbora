@@ -319,6 +319,7 @@ public class QuotaRefusalBilingualismTests
             access: new Harbora.Infrastructure.Security.ProjectAccessService(db, currentUser),
             databaseAccess: new Harbora.Infrastructure.Services.DatabaseAccessService(
                 db, node, clock, NullLogger<Harbora.Infrastructure.Services.DatabaseAccessService>.Instance),
+            logicalDatabases: null!,
             adminer: null!,
             audit: new SilentAudit(),
             node: node,

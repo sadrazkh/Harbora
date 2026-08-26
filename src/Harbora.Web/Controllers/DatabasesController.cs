@@ -37,6 +37,7 @@ public sealed partial class DatabasesController(
     Harbora.Infrastructure.Services.ServiceUsageService usage,
     Harbora.Infrastructure.Security.ProjectAccessService access,
     Harbora.Infrastructure.Services.DatabaseAccessService databaseAccess,
+    Harbora.Infrastructure.Services.LogicalDatabaseService logicalDatabases,
     Harbora.Infrastructure.Services.AdminerService adminer,
     IAuditLogger audit,
     INodeAgentClient node,
@@ -395,6 +396,12 @@ public sealed partial class DatabasesController(
         }
 
         db.ManagedServices.Add(service);
+
+        // D1 (2026-08-25 shared-databases plan): the instance's own admin database, materialised as
+        // its first logical database so the very first attachment already has one to point at.
+        if (Harbora.Domain.Services.ManagedServiceDatabase.DefaultFor(service) is { } defaultDatabase)
+            db.ManagedServiceDatabases.Add(defaultDatabase);
+
         try
         {
             await creationBilling.SaveAsync(WorkspaceId,
@@ -798,7 +805,8 @@ public sealed partial class DatabasesController(
     [HttpPost("{id:guid}/attach")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
-    public async Task<IActionResult> Attach(Guid id, Guid appId, string? returnUrl, string? alias, CancellationToken ct)
+    public async Task<IActionResult> Attach(
+        Guid id, Guid appId, string? returnUrl, string? alias, Guid? databaseId, CancellationToken ct)
     {
         await Guard(id, ct);
         if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();
@@ -819,7 +827,39 @@ public sealed partial class DatabasesController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        if (await db.AppManagedServices.AnyAsync(x => x.AppId == appId && x.ManagedServiceId == id, ct))
+        // D1 (2026-08-25 shared-databases plan): which logical database this attachment actually
+        // points at. A caller that names one gets exactly that database (refused if it does not
+        // belong to this instance); a caller that does not — every attach form this platform shipped
+        // before D3 builds a picker — gets the instance's own default database when it has one, which
+        // is what makes an attachment made today behave exactly as it always did. An instance with no
+        // logical database at all (Redis/RabbitMQ/NATS, or a Postgres/MySQL/MariaDB row a migration
+        // has not reached) resolves to null, the same fallback every such attachment has always used.
+        Guid? resolvedDatabaseId;
+        if (databaseId is { } requestedDatabaseId)
+        {
+            var requested = await db.ManagedServiceDatabases.AsNoTracking()
+                .FirstOrDefaultAsync(d => d.Id == requestedDatabaseId && d.ManagedServiceId == id, ct);
+            if (requested is null) return NotFound();
+            resolvedDatabaseId = requested.Id;
+        }
+        else
+        {
+            resolvedDatabaseId = await db.ManagedServiceDatabases.AsNoTracking()
+                .Where(d => d.ManagedServiceId == id && d.IsDefault)
+                .Select(d => (Guid?)d.Id)
+                .FirstOrDefaultAsync(ct);
+        }
+
+        // The refusal this always gave — the same database attached to the same app twice — restated
+        // per logical database rather than per instance, so two different logical databases on the
+        // same instance may both be attached to one app (see the two partial indexes on
+        // AppManagedService in HarboraDbContext for the constraint this mirrors at the schema level).
+        var alreadyAttached = resolvedDatabaseId is { } attachedDatabaseId
+            ? await db.AppManagedServices.AnyAsync(x => x.AppId == appId && x.ManagedServiceDatabaseId == attachedDatabaseId, ct)
+            : await db.AppManagedServices.AnyAsync(
+                x => x.AppId == appId && x.ManagedServiceId == id && x.ManagedServiceDatabaseId == null, ct);
+
+        if (alreadyAttached)
             return BackTo(returnUrl, IsFa ? "این دیتابیس از قبل به این اپ متصل است." : "This database is already attached.", error: true);
 
         var existingAliases = await db.AppManagedServices
@@ -831,7 +871,7 @@ public sealed partial class DatabasesController(
 
         db.AppManagedServices.Add(new Harbora.Domain.Services.AppManagedService
         {
-            AppId = appId, ManagedServiceId = id, Alias = resolvedAlias,
+            AppId = appId, ManagedServiceId = id, ManagedServiceDatabaseId = resolvedDatabaseId, Alias = resolvedAlias,
             AttachOrder = maxOrder + 1, HasUnpublishedChanges = true
         });
         await db.SaveChangesAsync(ct);
@@ -849,12 +889,19 @@ public sealed partial class DatabasesController(
     [HttpPost("{id:guid}/detach")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.DatabasesManage)]
-    public async Task<IActionResult> Detach(Guid id, Guid appId, string? returnUrl, CancellationToken ct)
+    public async Task<IActionResult> Detach(Guid id, Guid appId, string? returnUrl, Guid? databaseId, CancellationToken ct)
     {
         await Guard(id, ct);
         if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();
 
-        var join = await db.AppManagedServices.FirstOrDefaultAsync(x => x.AppId == appId && x.ManagedServiceId == id, ct);
+        // D1 (2026-08-25 shared-databases plan): naming which logical database disambiguates an app
+        // attached to two of them on the same instance. Every caller before D3 builds a picker still
+        // omits it and gets the pre-D1 behaviour verbatim — the one attachment this app has on this
+        // instance, whichever logical database it happens to point at.
+        var query = db.AppManagedServices.Where(x => x.AppId == appId && x.ManagedServiceId == id);
+        if (databaseId is { } requestedDatabaseId) query = query.Where(x => x.ManagedServiceDatabaseId == requestedDatabaseId);
+
+        var join = await query.FirstOrDefaultAsync(ct);
         if (join is null)
             return BackTo(returnUrl, IsFa ? "این اپ به این دیتابیس وصل نیست." : "This app is not attached to this database.", error: true);
 
@@ -865,6 +912,99 @@ public sealed partial class DatabasesController(
         return BackTo(returnUrl, IsFa
             ? "دیتابیس جدا شد. تا استقرار بعدی، کانتینر در حال اجرا هنوز رشتهٔ اتصال آن را دارد."
             : "Detached. Until the next deploy, the running container still has its connection string.");
+    }
+
+    /// <summary>
+    /// Creates a new logical database inside this instance (D1, 2026-08-25 shared-databases plan) —
+    /// a real operation against the running engine, not a row Harbora invents on its own. A refusal
+    /// names which engine declined and why (unsupported engine, unreachable instance, or the engine's
+    /// own error), and leaves nothing behind: <see cref="Harbora.Infrastructure.Services.LogicalDatabaseService.CreateAsync"/>
+    /// only ever writes the row once the engine has confirmed the database exists.
+    /// </summary>
+    [HttpPost("{id:guid}/logical-databases")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> CreateDatabase(Guid id, string? name, CancellationToken ct)
+    {
+        await Guard(id, ct);
+
+        var (created, error) = await logicalDatabases.CreateAsync(id, name, ct);
+        if (error is not null)
+        {
+            TempData["Error"] = error;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await audit.LogAsync("database.logical_database_created", "service", $"{id}:{created!.Id}",
+            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+        TempData["Message"] = IsFa ? $"پایگاه‌داده «{created.Name}» ساخته شد." : $"Created database \"{created.Name}\".";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// What removing this logical database will do — which apps stop working. The same
+    /// <c>ConfirmRemove</c>/<c>ServiceRemovalPlan</c> idiom this controller already uses for a whole
+    /// instance, one level down, except a logical database's deletion is always destructive to its
+    /// own data — unlike an instance, there is no "keep the container's volume" option below it — so
+    /// the typed-name confirmation is never optional here the way <c>ConfirmRemove</c>'s checkbox
+    /// makes it.
+    /// </summary>
+    [HttpGet("{id:guid}/logical-databases/{databaseId:guid}/remove")]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> ConfirmRemoveDatabase(Guid id, Guid databaseId, CancellationToken ct)
+    {
+        if (!await access.CanTouchServiceAsync(id, Capabilities.DatabasesManage, ct)) return NotFound();
+
+        var service = await db.ManagedServices.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
+        if (service is null) return NotFound();
+
+        var logical = await db.ManagedServiceDatabases.AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == databaseId && d.ManagedServiceId == id, ct);
+        if (logical is null) return NotFound();
+
+        var attachedTo = await db.AppManagedServices.AsNoTracking()
+            .Where(a => a.ManagedServiceDatabaseId == databaseId)
+            .Select(a => a.App!.Name)
+            .ToListAsync(ct);
+
+        ViewBag.Service = service;
+        ViewBag.Database = logical;
+        ViewBag.AttachedApps = attachedTo;
+        ViewData["Title"] = $"Remove {logical.Name}";
+        return View();
+    }
+
+    [HttpPost("{id:guid}/logical-databases/{databaseId:guid}/remove")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> RemoveDatabase(Guid id, Guid databaseId, string? confirmName, CancellationToken ct)
+    {
+        await Guard(id, ct);
+
+        var logical = await db.ManagedServiceDatabases.AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == databaseId && d.ManagedServiceId == id, ct);
+        if (logical is null) return NotFound();
+
+        if (!Harbora.Infrastructure.Services.ServiceRemovalPlan.IsConfirmed(true, confirmName, logical.Name))
+        {
+            TempData["Error"] = IsFa
+                ? $"برای حذف، نام را دقیقاً بنویسید: {logical.Name}"
+                : $"To delete this database, type its name exactly: {logical.Name}";
+            return RedirectToAction(nameof(ConfirmRemoveDatabase), new { id, databaseId });
+        }
+
+        var error = await logicalDatabases.DeleteAsync(databaseId, ct);
+        if (error is not null)
+        {
+            TempData["Error"] = error;
+            return RedirectToAction(nameof(ConfirmRemoveDatabase), new { id, databaseId });
+        }
+
+        await audit.LogAsync("database.logical_database_removed", "service", $"{id}:{databaseId}",
+            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+        TempData["Message"] = IsFa ? $"«{logical.Name}» حذف شد." : $"{logical.Name} was deleted.";
+        return RedirectToAction(nameof(Details), new { id });
     }
 
     private IActionResult BackTo(string? returnUrl, string? message, bool error = false)

@@ -167,6 +167,12 @@ public sealed class TemplateDeploymentService(
             foreach (var pair in TemplateReferences.For(alias, credentials)) references[pair.Key] = pair.Value;
 
             db.ManagedServices.Add(service);
+
+            // D1 (2026-08-25 shared-databases plan): the instance's own admin database, materialised
+            // as its first logical database.
+            if (ManagedServiceDatabase.DefaultFor(service) is { } defaultDatabase)
+                db.ManagedServiceDatabases.Add(defaultDatabase);
+
             createdServices.Add(service);
         }
 
