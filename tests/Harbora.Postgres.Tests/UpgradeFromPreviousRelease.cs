@@ -1,5 +1,6 @@
 using Harbora.Modules.Backup.Contracts;
 using Harbora.Domain.Jobs;
+using Harbora.Domain.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Postgres.Tests;
@@ -106,6 +107,39 @@ internal static class UpgradeFromPreviousRelease
         await SeedBackupSnapshotsAsync(seed);
         await SeedRestoreJobsAsync(seed);
         await SeedTenancyPricingAsync(seed);
+        await SeedLogicalDatabaseMigrationAsync(seed);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // LogicalDatabases (D1, 2026-08-25 shared-databases plan) — a ManagedService and its
+    // attachment exactly as they existed before this shipped, at a schema where
+    // ManagedServiceDatabases does not exist yet and AppManagedServices.ManagedServiceDatabaseId
+    // has not been added. What the migration must do to these rows is the whole point of D1's
+    // own safety requirement: materialise the instance's admin database as its first logical
+    // database, re-point the attachment at it, and change nothing an already-attached app reads.
+    // ---------------------------------------------------------------------------------------
+
+    private static async Task SeedLogicalDatabaseMigrationAsync(SchemaSeed seed)
+    {
+        await seed.InsertAsync("Apps",
+            ("Id", Seeded.LegacyAttachedApp), ("WorkspaceId", Seeded.WorkspaceOne),
+            ("Name", "legacy-app"), ("Slug", "legacy-app"), ("ServerId", Seeded.Server));
+
+        // Type 0 is ManagedServiceType.PostgreSql, Status 1 is ServiceStatus.Running — frozen wire
+        // values, spelled as literals for the same reason the deployment-queue seed above does.
+        await seed.InsertAsync("ManagedServices",
+            ("Id", Seeded.LegacyDatabaseInstance), ("WorkspaceId", Seeded.WorkspaceOne),
+            ("ServerId", Seeded.Server), ("Name", "legacy-db"), ("Type", 0), ("Version", "16-alpine"),
+            ("Status", 1), ("ContainerName", "harbora-svc-legacy"), ("InternalPort", 5432),
+            ("Username", "harbora"), ("EncryptedPassword", "legacy-encrypted-admin-password"),
+            ("DatabaseName", "legacy_db"), ("VolumeName", "harbora-svc-legacy-data"));
+
+        // No ManagedServiceDatabaseId here — the column this migration adds does not exist at this
+        // schema, and the whole point is that the migration's own backfill is what sets it.
+        await seed.InsertAsync("AppManagedServices",
+            ("Id", Seeded.LegacyAttachment), ("AppId", Seeded.LegacyAttachedApp),
+            ("ManagedServiceId", Seeded.LegacyDatabaseInstance), ("Alias", "LEGACY_DB"),
+            ("AttachOrder", 1), ("HasUnpublishedChanges", false));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -431,6 +465,10 @@ internal static class UpgradeFromPreviousRelease
 
         public static readonly Guid PlanCarriedAcross = new("70000000-0000-0000-0000-000000000001");
         public static readonly Guid SizeCarriedAcross = new("70000000-0000-0000-0000-000000000002");
+
+        public static readonly Guid LegacyAttachedApp = new("80000000-0000-0000-0000-000000000001");
+        public static readonly Guid LegacyDatabaseInstance = new("80000000-0000-0000-0000-000000000002");
+        public static readonly Guid LegacyAttachment = new("80000000-0000-0000-0000-000000000003");
     }
 }
 
@@ -441,6 +479,25 @@ internal static class UpgradedReads
     {
         await using var db = PostgresLane.Open(connectionString);
         return await db.Jobs.AsNoTracking().SingleAsync(j => j.Id == id);
+    }
+
+    public static async Task<ManagedService> ManagedServiceAsync(string connectionString, Guid id)
+    {
+        await using var db = PostgresLane.Open(connectionString);
+        return await db.ManagedServices.AsNoTracking().SingleAsync(s => s.Id == id);
+    }
+
+    public static async Task<ManagedServiceDatabase> LogicalDatabaseForAsync(string connectionString, Guid managedServiceId)
+    {
+        await using var db = PostgresLane.Open(connectionString);
+        return await db.ManagedServiceDatabases.AsNoTracking().SingleAsync(d => d.ManagedServiceId == managedServiceId);
+    }
+
+    public static async Task<AppManagedService> AttachmentAsync(string connectionString, Guid id)
+    {
+        await using var db = PostgresLane.Open(connectionString);
+        return await db.AppManagedServices.AsNoTracking()
+            .Include(a => a.Database).SingleAsync(a => a.Id == id);
     }
 
     public static async Task<Modules.Backup.Domain.BackupSnapshot> SnapshotAsync(string connectionString, Guid id)
