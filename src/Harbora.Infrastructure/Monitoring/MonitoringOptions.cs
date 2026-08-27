@@ -117,4 +117,23 @@ public sealed class MonitoringOptions
     /// </para>
     /// </summary>
     public long DeployMinFreeDiskBytes { get; set; } = 1L * 1024 * 1024 * 1024;
+
+    /// <summary>
+    /// C1 (2026-08-27 "warn before the refusal"): the fraction of a plan's cap — apps, services,
+    /// memory, CPU or disk — a workspace must reach before <c>MetricsCollector.EvaluateQuotaWarningsAsync</c>
+    /// calls it close enough to warn about. The same number for every one of those caps, the same way
+    /// <see cref="DiskWarnRatio"/> is one number for the one thing it watches: a customer picking 80%
+    /// should get 80% on every resource, not a different line per one this platform happened to ship
+    /// first.
+    /// </summary>
+    public double QuotaWarnRatio { get; set; } = 0.8;
+
+    /// <summary>
+    /// How long between quota-warning notifications for the same workspace, so a workspace sitting
+    /// above the line nags once per interval rather than once per collector tick — the same reasoning
+    /// as <see cref="DiskAlertIntervalHours"/>, at the workspace's own grain instead of a server's.
+    /// </summary>
+    public double QuotaAlertIntervalHours { get; set; } = 1;
+
+    internal TimeSpan QuotaAlertInterval => TimeSpan.FromHours(Math.Max(0, QuotaAlertIntervalHours));
 }

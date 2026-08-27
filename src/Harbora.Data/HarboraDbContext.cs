@@ -1376,6 +1376,11 @@ public class HarboraDbContext : DbContext
         b.Entity<Harbora.Modules.Sync.Domain.SyncConflict>()
             .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Alert>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        // C1 (2026-08-27 "warn before the refusal"): a real column default, the same reasoning as
+        // User.TimeZoneId above — an installation with Alert rows that predate this column should get
+        // the same "on" every other event flag already ships with, not the CLR false the ALTER TABLE
+        // would otherwise backfill.
+        b.Entity<Alert>().Property(x => x.OnQuotaWarning).HasDefaultValue(true);
         b.Entity<AlertIncident>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         // P6 (2026-08-20 platform-options plan): unlike NotificationDelivery, every EventSubscription
         // and EventDelivery row always belongs to exactly one workspace (no platform-level rows), so

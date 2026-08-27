@@ -20,6 +20,14 @@ public class Alert : BaseEntity
     public bool OnDiskWarning { get; set; } = true;
     public bool OnBackupFailed { get; set; } = true;
 
+    /// <summary>
+    /// C1 (2026-08-27 "warn before the refusal"): fires when the workspace is close to one of its
+    /// plan's committed-capacity caps — apps, services, memory, CPU or disk. Same shape as
+    /// <see cref="OnDiskWarning"/> deliberately: the condition is workspace-wide, not one app's own
+    /// metric, so it does not fit the <see cref="AppId"/>+<see cref="Metric"/> threshold shape below.
+    /// </summary>
+    public bool OnQuotaWarning { get; set; } = true;
+
     public bool IsEnabled { get; set; } = true;
 
     // ---- Per-application threshold (optional) ----

@@ -3,7 +3,9 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Monitoring;
+using Harbora.Infrastructure.Billing;
 using Harbora.Infrastructure.Monitoring;
+using Harbora.Infrastructure.Tenancy;
 using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -45,9 +47,10 @@ public class ContainerLifecycleCollectionTests
         db.Servers.Add(server);
         db.SaveChanges();
 
+        var quota = new QuotaService(db, Options.Create(new BillingOptions()));
         var collector = new MetricsCollector(
             db, factory, notifications, new RecordingEventPublisher(), new IncidentService(db), dedup, clock, rollups,
-            Options.Create(new MonitoringOptions()), NullLogger<MetricsCollector>.Instance);
+            Options.Create(new MonitoringOptions()), quota, NullLogger<MetricsCollector>.Instance);
 
         return new Harness(collector, db, engine, clock, server);
     }

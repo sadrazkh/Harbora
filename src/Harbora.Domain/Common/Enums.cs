@@ -286,7 +286,24 @@ public enum AlertEvent
     /// quietly muting that is the same trap <c>NotificationEventClass</c>'s own doc warns about.
     /// </para>
     /// </summary>
-    PlatformAnnouncement = 9
+    PlatformAnnouncement = 9,
+
+    /// <summary>
+    /// A workspace is approaching one or more of its plan's committed-capacity caps (apps, services,
+    /// memory, CPU or disk) — C1, 2026-08-27 "warn before the refusal". Appended, for the same reason
+    /// as the members above it.
+    ///
+    /// <para>
+    /// Carries its own per-rule opt-in flag, <c>Alert.OnQuotaWarning</c>, the same shape as
+    /// <see cref="DiskWarning"/> rather than <see cref="ThresholdBreached"/>'s <c>AppId</c>+<c>Metric</c>
+    /// shape: the condition this watches is workspace-wide capacity against a plan, not one
+    /// application's own container metrics, so there is no single app for a rule to name. See
+    /// <c>MetricsCollector.EvaluateQuotaWarningsAsync</c> for where it is computed — from
+    /// <c>IQuotaService.GetUsageAsync</c>, the exact figures a refusal itself would use, never a second
+    /// computation.
+    /// </para>
+    /// </summary>
+    QuotaWarning = 10
 }
 
 /// <summary>

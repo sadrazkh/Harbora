@@ -250,6 +250,7 @@ public sealed class NotificationService(
         AlertEvent.SslExpiring => a.OnSslExpiring,
         AlertEvent.DiskWarning => a.OnDiskWarning,
         AlertEvent.BackupFailed => a.OnBackupFailed,
+        AlertEvent.QuotaWarning => a.OnQuotaWarning,
         AlertEvent.LowBalance => true,
         AlertEvent.ServiceProvisionFailed => true,
         AlertEvent.Test => true,

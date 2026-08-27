@@ -104,6 +104,18 @@ public class NotificationTemplateCatalogTests
     }
 
     [Fact]
+    public void Quota_warning_carries_the_percent_in_the_subject_and_the_resource_list_in_the_body()
+    {
+        var rendered = Catalog.Render(NotificationEventData.Create(AlertEvent.QuotaWarning,
+            ("Summary", "Apps at 92% (46/50), Memory at 81% (6.5 GB/8 GB)"),
+            ("SummaryFa", "اپلیکیشن در 92٪ (46/50)، حافظه در 81٪ (6.5 GB/8 GB)"),
+            ("Percent", "92")), "en");
+
+        rendered.Subject.Should().Contain("92%");
+        rendered.TextBody.Should().Contain("Apps at 92%").And.Contain("Memory at 81%");
+    }
+
+    [Fact]
     public void Backup_failed_degrades_gracefully_when_the_module_bridge_has_no_target_ref()
     {
         // BackupNotificationService (the backup module's bridge) leaves TargetRef blank and puts

@@ -35,6 +35,7 @@ public sealed class AlertsController(
         string? webhookUrl, string? telegramToken, string? telegramChatId,
         string? smtpHost, int smtpPort, string? smtpUser, string? smtpPassword, string? emailFrom, string? emailTo,
         bool onDeployFailed, bool onAppCrashed, bool onSslExpiring, bool onDiskWarning, bool onBackupFailed,
+        bool onQuotaWarning,
         Guid? appId, AlertMetric? metric, double? thresholdPercent, int? sustainedMinutes,
         CancellationToken ct)
     {
@@ -64,6 +65,7 @@ public sealed class AlertsController(
             OnSslExpiring = onSslExpiring,
             OnDiskWarning = onDiskWarning,
             OnBackupFailed = onBackupFailed,
+            OnQuotaWarning = onQuotaWarning,
 
             AppId = hasThreshold ? appId : null,
             Metric = hasThreshold ? metric : null,
@@ -97,6 +99,7 @@ public sealed class AlertsController(
         string? webhookUrl, string? telegramToken, string? telegramChatId,
         string? smtpHost, int smtpPort, string? smtpUser, string? smtpPassword, string? emailFrom, string? emailTo,
         bool onDeployFailed, bool onAppCrashed, bool onSslExpiring, bool onDiskWarning, bool onBackupFailed,
+        bool onQuotaWarning,
         Guid? appId, AlertMetric? metric, double? thresholdPercent, int? sustainedMinutes,
         CancellationToken ct)
     {
@@ -131,6 +134,7 @@ public sealed class AlertsController(
         alert.OnSslExpiring = onSslExpiring;
         alert.OnDiskWarning = onDiskWarning;
         alert.OnBackupFailed = onBackupFailed;
+        alert.OnQuotaWarning = onQuotaWarning;
 
         var hasThreshold = appId is not null && metric is not null && thresholdPercent is > 0;
         alert.AppId = hasThreshold ? appId : null;

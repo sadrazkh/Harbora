@@ -136,6 +136,15 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
             $"راه‌اندازی ناموفق: {d.Get("ServiceName")}",
             $"راه‌اندازی سرویس «{d.Get("ServiceName")}» با شکست مواجه شد.\n\n{d.Get("Reason")}"),
 
+        // Like PlatformAnnouncement below, both languages are precomposed at the raise site
+        // (MetricsCollector.EvaluateQuotaWarningsAsync) rather than assembled here from one shared
+        // figure: this is a list of resource names and byte/count details, not a single number a
+        // sentence can be built around in either language, so SummaryFa is a real Persian sentence
+        // fragment, not a transliteration of Summary.
+        AlertEvent.QuotaWarning => (
+            $"فضای کاری نزدیک به سقف پلن: {d.Get("Percent")}٪",
+            $"این فضای کاری به سقف پلن خود نزدیک شده است: {d.Get("SummaryFa")}."),
+
         // Not composed from a machine fact like every template above it — the operator's own words,
         // written in Announcement.TitleFa/BodyFa and handed over verbatim. AnnouncementNotifier is the
         // one raise site for this event, and it always sets both language pairs, so there is no
@@ -179,6 +188,10 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
         AlertEvent.ServiceProvisionFailed => (
             $"Provisioning failed: {d.Get("ServiceName")}",
             $"Provisioning of service \"{d.Get("ServiceName")}\" failed.\n\n{d.Get("Reason")}"),
+
+        AlertEvent.QuotaWarning => (
+            $"Workspace nearing its plan limit: {d.Get("Percent")}%",
+            $"This workspace is close to its plan's cap on {d.Get("Summary")}."),
 
         AlertEvent.PlatformAnnouncement => (d.Get("Title"), d.Get("Body")),
 

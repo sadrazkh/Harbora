@@ -32,6 +32,11 @@ public static class NotificationEventClass
         // for itself, closer to "tell me if this crosses a line I picked" than "something is broken".
         AlertEvent.ThresholdBreached => false,
 
+        // Same reasoning as ThresholdBreached, and for the same reason: a workspace nearing its own
+        // plan cap is "tell me if this crosses a line I picked" (the OnQuotaWarning checkbox), not
+        // "something is broken" — the class this switch's default is written to protect.
+        AlertEvent.QuotaWarning => false,
+
         _ => true
     };
 }

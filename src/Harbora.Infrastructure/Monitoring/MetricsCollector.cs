@@ -23,6 +23,7 @@ public sealed class MetricsCollector(
     ISystemClock clock,
     MetricsRollupService rollups,
     IOptions<MonitoringOptions> options,
+    IQuotaService quota,
     ILogger<MetricsCollector> logger) : IMetricsCollector
 {
     private readonly MonitoringOptions _options = options.Value;
@@ -46,6 +47,12 @@ public sealed class MetricsCollector(
         // window it needs is well inside retention.
         try { await EvaluateThresholdsAsync(now, ct); }
         catch (Exception ex) { logger.LogWarning(ex, "Evaluating per-application thresholds failed."); }
+
+        // C1 (2026-08-27 "warn before the refusal"): does not read the samples just written at all —
+        // it reads IQuotaService's own committed-capacity snapshot — but lives on this same tick
+        // because that is where every other "is a workspace approaching a line" check already runs.
+        try { await EvaluateQuotaWarningsAsync(now, ct); }
+        catch (Exception ex) { logger.LogWarning(ex, "Evaluating quota warnings failed."); }
 
         // The bounded backstop for every incident kind, not only the ones this collector opens: a
         // deploy or backup failure nobody acknowledges has no other way to close, and this pass is
@@ -226,6 +233,67 @@ public sealed class MetricsCollector(
             // Through this rule specifically. Broadcasting a threshold to every channel in the
             // workspace would tell people who never asked about this app.
             await notifications.NotifyRuleAsync(rule.Id, evt, ThresholdRule.Severity, ct);
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// C1 (2026-08-27 "warn before the refusal"): tells a workspace it is close to a plan cap before
+    /// an action is refused for hitting it. <see cref="QuotaWarningRule.Breaches"/> is where the
+    /// figures come from — <see cref="IQuotaService.GetUsageAsync"/>, the same computation a refusal
+    /// itself reads, never a second one — and everything below it is the same
+    /// open/resolve-plus-repeat-throttle shape every other condition in this class already uses.
+    ///
+    /// One incident per workspace, not per resource (<c>AlertEvent.QuotaWarning</c>, no subject ref):
+    /// a workspace close to two caps at once is one fact — "you are close to your plan" — and a
+    /// customer acknowledging or reading it should see every cap currently close, not chase a
+    /// separate row per resource the way <see cref="AlertEvent.ThresholdBreached"/>'s per-app rules do.
+    /// </summary>
+    private async Task EvaluateQuotaWarningsAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        var workspaceIds = await db.Alerts.IgnoreQueryFilters()
+            .Where(a => a.IsEnabled && a.OnQuotaWarning)
+            .Select(a => a.WorkspaceId).Distinct().ToListAsync(ct);
+        if (workspaceIds.Count == 0) return;
+
+        foreach (var workspaceId in workspaceIds)
+        {
+            var usage = await quota.GetUsageAsync(workspaceId, ct);
+            var breaches = QuotaWarningRule.Breaches(usage, _options.QuotaWarnRatio);
+
+            if (breaches.Count == 0)
+            {
+                // Cleared, or this workspace never had a cap to be close to at all (no plan, or every
+                // watched cap unlimited) — a no-op in the ordinary case where nothing was ever open.
+                await incidents.ResolveAsync(workspaceId, AlertEvent.QuotaWarning, null, now, ct);
+                continue;
+            }
+
+            var subject = $"Workspace nearing its plan limit: {breaches.Max(b => b.Percent)}%";
+            var body = "Close to its plan's cap on " +
+                       string.Join(", ", breaches.Select(b => $"{b.ResourceEn} ({b.Percent}%, {b.Detail})")) + ".";
+            await incidents.OpenAsync(workspaceId, AlertEvent.QuotaWarning, null,
+                AlertSeverity.Warning, subject, body, now, ct);
+
+            // Once per interval per workspace — the same reasoning as MaybeDiskAlert below, at the
+            // workspace's own grain instead of a server's: a workspace sitting above the line does not
+            // need the same fact every collector tick.
+            var interval = _options.QuotaAlertInterval;
+            if (interval > TimeSpan.Zero)
+            {
+                var key = $"quota:{workspaceId}:{AlertDedupWindow.Bucket(now, interval)}";
+                if (!await dedup.ShouldFireAsync(key, now, ct)) continue;
+            }
+
+            var evt = NotificationEventData.Create(AlertEvent.QuotaWarning,
+                ("Summary", string.Join(", ", breaches.Select(b => $"{b.ResourceEn} at {b.Percent}% ({b.Detail})"))),
+                ("SummaryFa", string.Join("، ", breaches.Select(b => $"{b.ResourceFa} در {b.Percent}٪ ({b.Detail})"))),
+                ("Percent", breaches.Max(b => b.Percent).ToString("0")));
+            // Every alert in this workspace with OnQuotaWarning set, the same fan-out DiskWarning uses
+            // at its own (server) grain — this condition genuinely has no single app or rule to be
+            // "through", unlike NotifyRuleAsync's per-app-threshold callers above.
+            await notifications.NotifyAsync(workspaceId, evt, AlertSeverity.Warning, ct);
         }
 
         await db.SaveChangesAsync(ct);
