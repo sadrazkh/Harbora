@@ -63,6 +63,27 @@ public sealed record WorkspaceSupportSessionRow(
 public sealed record WorkspaceSupportActRow(
     DateTimeOffset At, string Action, string? TargetType, string? TargetId);
 
+/// <summary>
+/// The workspace-scoped half of HARBORA-0056: what a workspace operator sees in the audit log, as
+/// opposed to the platform-wide reader at <c>AuditController</c>.
+/// </summary>
+public sealed class WorkspaceAuditLogViewModel
+{
+    public Guid WorkspaceId { get; init; }
+    public IReadOnlyList<WorkspaceAuditLogRow> Entries { get; init; } = [];
+    public int Page { get; init; } = 1;
+    public int PageSize { get; init; } = 50;
+    public int TotalCount { get; init; }
+
+    public int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalCount / (double)PageSize));
+    public bool HasPrevious => Page > 1;
+    public bool HasNext => Page < TotalPages;
+}
+
+public sealed record WorkspaceAuditLogRow(
+    Guid Id, DateTimeOffset At, string ActorEmail, string Action,
+    string? TargetType, string? TargetId, string? IpAddress);
+
 public sealed class AcceptWorkspaceInvitationViewModel
 {
     public string Token { get; init; } = string.Empty;

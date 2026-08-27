@@ -135,4 +135,43 @@ public class AuditLoggerTests
 
         db.AuditLogs.Single().Action.Should().Be("support.refused");
     }
+
+    /// <summary>
+    /// HARBORA-0056: an explicit workspace is written exactly as given — this is the caller's decision
+    /// to make, not the sink's to compute.
+    /// </summary>
+    [Fact]
+    public async Task An_explicit_workspace_is_written_on_the_row()
+    {
+        using var db = NewDb();
+        var workspaceId = Guid.NewGuid();
+        var log = new AuditLogger(db, new StubUser { UserId = Guid.NewGuid(), Email = "owner@shop.test" },
+            new Clock(), NoSupportSession.Instance, NullLogger<AuditLogger>.Instance);
+
+        await log.LogAsync("app.deploy", "app", "app-123", workspaceId: workspaceId);
+
+        db.AuditLogs.Single().WorkspaceId.Should().Be(workspaceId);
+    }
+
+    /// <summary>
+    /// The heart of HARBORA-0056's design: the sink must never fill this in from
+    /// <see cref="ICurrentUser.WorkspaceId"/> on the caller's behalf. A request can easily carry a
+    /// workspace in its ambient session while recording something that has nothing to do with it — a
+    /// platform administrator changing a platform-wide setting, for instance — and defaulting here
+    /// would silently mislabel that row as belonging to whichever workspace the caller happened to be
+    /// signed into.
+    /// </summary>
+    [Fact]
+    public async Task Omitting_the_workspace_leaves_the_row_workspace_less_even_though_the_caller_has_one()
+    {
+        using var db = NewDb();
+        var log = new AuditLogger(db,
+            new StubUser { UserId = Guid.NewGuid(), Email = "admin@harbora.local", WorkspaceId = Guid.NewGuid() },
+            new Clock(), NoSupportSession.Instance, NullLogger<AuditLogger>.Instance);
+
+        await log.LogAsync("platform.name", "setting", "Harbora");
+
+        db.AuditLogs.Single().WorkspaceId.Should().BeNull(
+            "a platform-level action must not be attributed to the caller's own ambient workspace");
+    }
 }

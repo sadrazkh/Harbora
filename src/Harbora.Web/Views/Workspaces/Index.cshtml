@@ -16,9 +16,17 @@
 @* Where a customer goes to check whether anybody from the platform has been inside this workspace.
    Beside the members list on purpose: it answers the same question — who can reach this — about the
    one set of people who never appear on that list. *@
-<p class="mb-4 text-sm">
+<p class="mb-1 text-sm">
     <a class="text-accent-text" href="/workspaces/support-access">
         @(isFa ? "دسترسی پشتیبانی به این فضای کاری" : "Support access to this workspace")
+    </a>
+</p>
+
+@* HARBORA-0056: this workspace's own slice of the audit trail — separate from support access above,
+   which only ever shows a support session's own acts. *@
+<p class="mb-4 text-sm">
+    <a class="text-accent-text" href="/workspaces/audit-log">
+        @(isFa ? "لاگ رویدادهای این فضای کاری" : "Audit log for this workspace")
     </a>
 </p>
 

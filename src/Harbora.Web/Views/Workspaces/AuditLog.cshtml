@@ -1,0 +1,93 @@
+@model WorkspaceAuditLogViewModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    string Query(int page) => $"/workspaces/audit-log?page={page}";
+}
+<div class="space-y-5" data-workspace-audit-log="@Model.WorkspaceId">
+    <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+        isFa ? "لاگ رویدادها" : "Audit log",
+        isFa
+            ? "کارهای ثبت‌شده در این فضای کاری، از جدیدترین."
+            : "Recorded actions in this workspace, newest first."))" />
+
+    @* HARBORA-0056: platform-level actions (a platform setting, a node enrollment, a sign-in before
+       any workspace is chosen) have no workspace to belong to and are excluded from this list by
+       design -- said here so the list is never mistaken for a complete history. A platform
+       administrator's whole-platform view is a separate page (/audit), not this one. *@
+    <p class="text-xs text-ink-faint" data-platform-events-excluded="true">
+        @(isFa
+            ? "این فهرست فقط کارهای مربوط به این فضای کاری را نشان می‌دهد. رویدادهای سطح پلتفرم — مثل تنظیمات پلتفرم یا افزودن یک سرور — به هیچ فضای کاری‌ای تعلق ندارند و اینجا نمایش داده نمی‌شوند."
+            : "This list shows only actions tied to this workspace. Platform-level events — a platform setting, a server being enrolled — belong to no workspace and are not shown here.")
+    </p>
+
+    @if (Model.Entries.Count == 0)
+    {
+        <div class="rounded-xl border border-line bg-surface">
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel(
+                "shield-check",
+                isFa
+                    ? "هنوز کاری برای این فضای کاری ثبت نشده است."
+                    : "No actions have been recorded for this workspace yet."))" />
+        </div>
+    }
+    else
+    {
+        <section class="rounded-xl border border-line bg-surface overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="text-xs uppercase tracking-wide text-ink-faint border-b border-line">
+                    <tr>
+                        <th class="text-start px-4 py-2">@(isFa ? "زمان" : "When")</th>
+                        <th class="text-start px-4 py-2">@(isFa ? "عامل" : "Actor")</th>
+                        <th class="text-start px-4 py-2">@(isFa ? "عملیات" : "Action")</th>
+                        <th class="text-start px-4 py-2">@(isFa ? "هدف" : "Target")</th>
+                        <th class="text-start px-4 py-2">@(isFa ? "آی‌پی" : "IP")</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-line">
+                    @foreach (var e in Model.Entries)
+                    {
+                        <tr data-audit-row="@e.Id">
+                            <td class="px-4 py-2 whitespace-nowrap text-ink-muted font-mono text-xs" dir="ltr">
+                                @e.At.ToLocalTime().ToString(Dates.Precise)
+                            </td>
+                            <td class="px-4 py-2 font-mono text-xs" dir="ltr">@e.ActorEmail</td>
+                            <td class="px-4 py-2"><code class="text-xs">@e.Action</code></td>
+                            <td class="px-4 py-2 text-ink-muted text-xs font-mono" dir="ltr">
+                                @if (e.TargetType is not null)
+                                {
+                                    @e.TargetType<text> </text>@(e.TargetId?[..Math.Min(8, e.TargetId.Length)])
+                                }
+                                else { <text>—</text> }
+                            </td>
+                            <td class="px-4 py-2 text-ink-faint font-mono text-xs" dir="ltr">@(e.IpAddress ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+
+        if (Model.TotalPages > 1)
+        {
+            <div class="flex items-center justify-between text-sm">
+                <span class="text-ink-faint">
+                    @(isFa ? "صفحه" : "Page") @Model.Page / @Model.TotalPages ·
+                    @Model.TotalCount @(isFa ? "مورد" : "entries")
+                </span>
+                <div class="flex gap-2">
+                    @if (Model.HasPrevious)
+                    {
+                        <a href="@Query(Model.Page - 1)" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1">
+                            @(isFa ? "قبلی" : "Previous")
+                        </a>
+                    }
+                    @if (Model.HasNext)
+                    {
+                        <a href="@Query(Model.Page + 1)" class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1">
+                            @(isFa ? "بعدی" : "Next")
+                        </a>
+                    }
+                </div>
+            </div>
+        }
+    }
+</div>
