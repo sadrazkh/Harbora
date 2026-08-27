@@ -1779,7 +1779,7 @@ public sealed partial class AppsController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        await audit.LogAsync("app.ratelimit.on", "app", id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("app.ratelimit.on", "app", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = IsFa
             ? $"محدودیت نرخ فعال شد: حداکثر {rateLimitAverage} درخواست در دقیقه (انفجار {rateLimitBurst})."
             : $"Rate limiting turned on: up to {rateLimitAverage} requests/minute (burst {rateLimitBurst}).";
@@ -1802,7 +1802,7 @@ public sealed partial class AppsController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        await audit.LogAsync("app.ratelimit.off", "app", id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("app.ratelimit.off", "app", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = IsFa ? "محدودیت نرخ خاموش شد." : "Rate limiting turned off.";
         return RedirectToAction(nameof(Details), new { id });
     }
