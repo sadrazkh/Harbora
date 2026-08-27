@@ -60,7 +60,7 @@ public sealed class CloudflareController(
 
         if (result.Success)
             await audit.LogAsync("platform.cloudflare_enabled", "setting", zone,
-                HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+                HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: null, ct: ct);
 
         return RedirectToAction(nameof(Index));
     }

@@ -121,7 +121,7 @@ public sealed partial class WorkspacesController(
             return Back(IsFa ? "نام ورک‌اسپیس لازم است و حداکثر ۱۲۸ نویسه دارد." : "Enter a workspace name of at most 128 characters.", true);
         var workspace = await accounts.CreateTeamWorkspaceAsync(UserId, name.Trim(), ct);
         await SwitchSessionAsync(workspace.Id, WorkspaceRole.Admin, ct);
-        await audit.LogAsync("workspace.created", "workspace", workspace.Id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("workspace.created", "workspace", workspace.Id.ToString(), ClientIp, workspaceId: workspace.Id, ct: ct);
         return RedirectToAction(nameof(Index));
     }
 
@@ -137,7 +137,7 @@ public sealed partial class WorkspacesController(
             .Select(m => (WorkspaceRole?)m.Role).FirstOrDefaultAsync(ct);
         if (role is null) return Forbid();
         await SwitchSessionAsync(workspaceId, role.Value, ct);
-        await audit.LogAsync("workspace.switched", "workspace", workspaceId.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("workspace.switched", "workspace", workspaceId.ToString(), ClientIp, workspaceId: workspaceId, ct: ct);
         return LocalRedirect(Url.IsLocalUrl(returnUrl) ? returnUrl! : "/");
     }
 
@@ -174,7 +174,7 @@ public sealed partial class WorkspacesController(
             }
             else
                 TempData["Message"] = IsFa ? "دعوت ساخته شد؛ چون SMTP تنظیم نیست لینک را کپی کنید." : "Invitation created. SMTP is not configured, so copy the link.";
-            await audit.LogAsync("workspace.member_invited", "workspace", WorkspaceId.ToString(), ClientIp, ct: ct);
+            await audit.LogAsync("workspace.member_invited", "workspace", WorkspaceId.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -222,7 +222,7 @@ public sealed partial class WorkspacesController(
                 .Where(m => m.WorkspaceId == workspace.Id && m.UserId == UserId)
                 .Select(m => m.Role).SingleAsync(ct);
             await SwitchSessionAsync(workspace.Id, role, ct);
-            await audit.LogAsync("workspace.invitation_accepted", "workspace", workspace.Id.ToString(), ClientIp, ct: ct);
+            await audit.LogAsync("workspace.invitation_accepted", "workspace", workspace.Id.ToString(), ClientIp, workspaceId: workspace.Id, ct: ct);
             return Redirect("/workspaces");
         }
         catch (InvalidOperationException ex)
@@ -248,7 +248,7 @@ public sealed partial class WorkspacesController(
         member.Role = role;
         if (role == WorkspaceRole.Admin) member.ScopedToProjects = false;
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("workspace.member_role_changed", "user", userId.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("workspace.member_role_changed", "user", userId.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         return Back(IsFa ? "نقش عضو تغییر کرد." : "Member role updated.");
     }
 
@@ -264,7 +264,7 @@ public sealed partial class WorkspacesController(
             .Where(g => g.WorkspaceId == WorkspaceId && g.UserId == userId).ExecuteDeleteAsync(ct);
         await db.WorkspaceMembers.IgnoreQueryFilters()
             .Where(m => m.WorkspaceId == WorkspaceId && m.UserId == userId).ExecuteDeleteAsync(ct);
-        await audit.LogAsync("workspace.member_removed", "user", userId.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("workspace.member_removed", "user", userId.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         return Back(IsFa ? "عضو حذف شد." : "Member removed.");
     }
 
@@ -282,7 +282,7 @@ public sealed partial class WorkspacesController(
         member.ScopedToProjects = scoped;
         await db.SaveChangesAsync(ct);
         await audit.LogAsync("workspace.member_scope_changed", "user", userId.ToString(), ClientIp,
-            metadataJson: $"{{\"scoped\":{scoped.ToString().ToLowerInvariant()}}}", ct: ct);
+            metadataJson: $"{{\"scoped\":{scoped.ToString().ToLowerInvariant()}}}", workspaceId: WorkspaceId, ct: ct);
         return Back(scoped
             ? (IsFa ? "عضو فقط به پروژه‌های مجاز دسترسی دارد." : "The member is now limited to granted projects.")
             : (IsFa ? "محدودیت پروژه برداشته شد." : "Project scoping was removed."));
@@ -323,7 +323,7 @@ public sealed partial class WorkspacesController(
             });
         else existing.Role = role;
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("workspace.project_grant_saved", "user", userId.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("workspace.project_grant_saved", "user", userId.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         return Back(IsFa ? "مجوز پروژه ذخیره شد." : "Project grant saved.");
     }
 
@@ -335,7 +335,7 @@ public sealed partial class WorkspacesController(
         var removed = await db.ProjectGrants.IgnoreQueryFilters()
             .Where(g => g.Id == grantId && g.WorkspaceId == WorkspaceId).ExecuteDeleteAsync(ct);
         if (removed == 0) return NotFound();
-        await audit.LogAsync("workspace.project_grant_removed", "project_grant", grantId.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("workspace.project_grant_removed", "project_grant", grantId.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         return Back(IsFa ? "مجوز پروژه حذف شد." : "Project grant removed.");
     }
 
@@ -360,7 +360,7 @@ public sealed partial class WorkspacesController(
         target.ScopedToProjects = false;
         await db.SaveChangesAsync(ct);
         await audit.LogAsync("workspace.ownership_transferred", "workspace", WorkspaceId.ToString(), ClientIp,
-            metadataJson: $"{{\"newOwnerUserId\":\"{userId}\"}}", ct: ct);
+            metadataJson: $"{{\"newOwnerUserId\":\"{userId}\"}}", workspaceId: WorkspaceId, ct: ct);
         return Back(IsFa ? "مالکیت فضای کاری منتقل شد." : "Workspace ownership transferred.");
     }
 
@@ -390,7 +390,7 @@ public sealed partial class WorkspacesController(
             return Redirect("/account/login");
         }
         await SwitchSessionAsync(next.WorkspaceId, next.Role, ct);
-        await audit.LogAsync("workspace.member_left", "workspace", leavingWorkspaceId.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("workspace.member_left", "workspace", leavingWorkspaceId.ToString(), ClientIp, workspaceId: leavingWorkspaceId, ct: ct);
         return Redirect("/workspaces");
     }
 
@@ -413,7 +413,8 @@ public sealed partial class WorkspacesController(
         workspace.ArchivedByUserId ??= UserId;
         await db.SaveChangesAsync(ct);
         await audit.LogAsync("workspace.archived", "workspace", workspace.Id.ToString(), ClientIp,
-            metadataJson: System.Text.Json.JsonSerializer.Serialize(new { outcome.Failures }), ct: ct);
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new { outcome.Failures }),
+            workspaceId: workspace.Id, ct: ct);
 
         if (WorkspaceId == workspace.Id)
         {
@@ -452,7 +453,7 @@ public sealed partial class WorkspacesController(
             return Back(string.Join(" ", outcome.Failures.DefaultIfEmpty("Recovery did not finish; the workspace remains archived.")), true);
         }
 
-        await audit.LogAsync("workspace.recovered", "workspace", workspace.Id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("workspace.recovered", "workspace", workspace.Id.ToString(), ClientIp, workspaceId: workspace.Id, ct: ct);
         return Back(IsFa ? "فضای کاری بازیابی شد." : "Workspace recovered.");
     }
 
@@ -472,7 +473,7 @@ public sealed partial class WorkspacesController(
         workspace.DeletedByUserId = UserId;
         await db.SaveChangesAsync(ct);
         await audit.LogAsync("workspace.deleted", "workspace", workspace.Id.ToString(), ClientIp,
-            metadataJson: "{\"mode\":\"safe-tombstone\"}", ct: ct);
+            metadataJson: "{\"mode\":\"safe-tombstone\"}", workspaceId: workspace.Id, ct: ct);
         await db.WorkspaceInvitations.IgnoreQueryFilters().Where(i => i.WorkspaceId == id)
             .ExecuteUpdateAsync(s => s.SetProperty(i => i.IsRevoked, true), ct);
         // Keep memberships and grants as immutable ownership/access evidence. DeletedAt is the

@@ -99,7 +99,7 @@ public sealed class AiAdminController(
         provider.IsEnabled = isEnabled;
 
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("ai.provider_saved", "ai_provider", provider.Name, ClientIp, ct: ct);
+        await audit.LogAsync("ai.provider_saved", "ai_provider", provider.Name, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = $"{provider.Name} saved.";
         return RedirectToAction(nameof(Index));
@@ -137,7 +137,7 @@ public sealed class AiAdminController(
 
         // The label, never the token — an audit trail holding provider secrets is a second copy of
         // the thing hardest to rotate.
-        await audit.LogAsync("ai.credential_added", "ai_provider", $"{provider.Name}/{label}", ClientIp, ct: ct);
+        await audit.LogAsync("ai.credential_added", "ai_provider", $"{provider.Name}/{label}", ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = "Token added. It cannot be shown again.";
         return RedirectToAction(nameof(Index));
@@ -166,7 +166,7 @@ public sealed class AiAdminController(
         credential.RateLimitedUntil = null;
 
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("ai.credential_rotated", "ai_credential", credential.Label, ClientIp, ct: ct);
+        await audit.LogAsync("ai.credential_rotated", "ai_credential", credential.Label, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = $"{credential.Label} was replaced.";
         return RedirectToAction(nameof(Index));
@@ -184,7 +184,7 @@ public sealed class AiAdminController(
 
         await audit.LogAsync(
             credential.IsEnabled ? "ai.credential_enabled" : "ai.credential_disabled",
-            "ai_credential", credential.Label, ClientIp, ct: ct);
+            "ai_credential", credential.Label, ClientIp, workspaceId: null, ct: ct);
 
         return RedirectToAction(nameof(Index));
     }
@@ -233,7 +233,7 @@ public sealed class AiAdminController(
         model.IsManuallyManaged = true;
 
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("ai.model_saved", "ai_model", model.Alias, ClientIp, ct: ct);
+        await audit.LogAsync("ai.model_saved", "ai_model", model.Alias, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = $"{model.Alias} saved.";
         return RedirectToAction(nameof(Index));
@@ -276,7 +276,7 @@ public sealed class AiAdminController(
         plan.IsEnabled = isEnabled;
 
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("ai.plan_saved", "ai_plan", plan.Name, ClientIp, ct: ct);
+        await audit.LogAsync("ai.plan_saved", "ai_plan", plan.Name, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = $"{plan.Name} saved.";
         return RedirectToAction(nameof(Index));
@@ -302,7 +302,7 @@ public sealed class AiAdminController(
             db.AiPlanModels.Add(new AiPlanModel { AiPlanId = plan.Id, AiModelId = modelId });
 
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("ai.plan_models_set", "ai_plan", plan.Name, ClientIp, ct: ct);
+        await audit.LogAsync("ai.plan_models_set", "ai_plan", plan.Name, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = $"{plan.Name} now includes {wanted.Count} model(s).";
         return RedirectToAction(nameof(Index));

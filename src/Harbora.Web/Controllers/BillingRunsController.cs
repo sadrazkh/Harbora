@@ -70,7 +70,8 @@ public sealed class BillingRunsController(
                 ? "This billing run is already queued or running."
                 : "Billing run queued for retry.";
             await audit.LogAsync("billing.run.retry", "billing_run", id.ToString(), ClientIp,
-                metadataJson: JsonSerializer.Serialize(new { result.Queued, result.AlreadyQueued }), ct: ct);
+                metadataJson: JsonSerializer.Serialize(new { result.Queued, result.AlreadyQueued }),
+                workspaceId: null, ct: ct);
         }
         catch (InvalidOperationException ex)
         {

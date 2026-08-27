@@ -54,7 +54,10 @@ public sealed class MonitoringController(
                 refused = result.Failed,
                 freedBytes = result.FreedBytes,
                 servers = result.Servers
-            }), ct: ct);
+            }),
+            // Cleans up the shared node's own leftover images across every workspace's apps at once
+            // — not one workspace's act.
+            workspaceId: null, ct: ct);
 
         var removed = result.OrphanRemoved + result.RetentionRemoved;
         var freed = result.FreedBytes is { } f

@@ -96,7 +96,7 @@ public sealed class AppDataController(
         var content = await files.ReadAsync(app!.ServerId, volume.Name, normalised, ct);
         if (content is null) return NotFound();
 
-        await audit.LogAsync("app.data_read", "app", $"{app.Name}:{volume.Name}/{normalised}", ClientIp, ct: ct);
+        await audit.LogAsync("app.data_read", "app", $"{app.Name}:{volume.Name}/{normalised}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         // Always as an attachment, and always as bytes. Serving a file out of a customer's volume
         // inline would let them host script on the panel's own origin, which is the session every
@@ -125,7 +125,8 @@ public sealed class AppDataController(
         var link = $"{Request.Scheme}://{Request.Host}/dl/{mint.Token}";
 
         await audit.LogAsync(
-            "app.data_link_minted", "app", $"{app.Name}:{volume.Name}/{normalised}", ClientIp, ct: ct);
+            "app.data_link_minted", "app", $"{app.Name}:{volume.Name}/{normalised}", ClientIp,
+            workspaceId: WorkspaceId, ct: ct);
 
         // A Unix timestamp, not a formatted date string: TempData's own serializer round-trips a
         // date-shaped string back as a boxed DateTime rather than a string, which silently breaks an
@@ -176,7 +177,7 @@ public sealed class AppDataController(
         await file.CopyToAsync(buffer, ct);
 
         var outcome = await files.WriteAsync(app!.ServerId, volume.Name, target, buffer.ToArray(), ct);
-        await audit.LogAsync("app.data_write", "app", $"{app.Name}:{volume.Name}/{target}", ClientIp, ct: ct);
+        await audit.LogAsync("app.data_write", "app", $"{app.Name}:{volume.Name}/{target}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return Back(id, volumeId, normalised,
             outcome.Ok ? (IsFa ? $"«{name}» بارگذاری شد." : $"{name} was uploaded.") : outcome.Reason,
@@ -203,7 +204,7 @@ public sealed class AppDataController(
             app!.ServerId, volume.Name, normalised,
             System.Text.Encoding.UTF8.GetBytes(content ?? string.Empty), ct);
 
-        await audit.LogAsync("app.data_write", "app", $"{app.Name}:{volume.Name}/{normalised}", ClientIp, ct: ct);
+        await audit.LogAsync("app.data_write", "app", $"{app.Name}:{volume.Name}/{normalised}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return Back(id, volumeId, VolumePath.ParentOf(normalised) ?? string.Empty,
             outcome.Ok
@@ -228,7 +229,7 @@ public sealed class AppDataController(
                 IsFa ? "این والیوم فقط‌خواندنی است." : "This volume is mounted read-only.", error: true);
 
         var outcome = await files.DeleteAsync(app!.ServerId, volume.Name, normalised, ct);
-        await audit.LogAsync("app.data_delete", "app", $"{app.Name}:{volume.Name}/{normalised}", ClientIp, ct: ct);
+        await audit.LogAsync("app.data_delete", "app", $"{app.Name}:{volume.Name}/{normalised}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return Back(id, volumeId, VolumePath.ParentOf(normalised) ?? string.Empty,
             outcome.Ok
@@ -254,7 +255,7 @@ public sealed class AppDataController(
 
         var target = normalised.Length == 0 ? folder : $"{normalised}/{folder}";
         var outcome = await files.MakeDirectoryAsync(app!.ServerId, volume.Name, target, ct);
-        await audit.LogAsync("app.data_write", "app", $"{app.Name}:{volume.Name}/{target}", ClientIp, ct: ct);
+        await audit.LogAsync("app.data_write", "app", $"{app.Name}:{volume.Name}/{target}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return Back(id, volumeId, normalised,
             outcome.Ok ? (IsFa ? "پوشه ساخته شد." : "Folder created.") : outcome.Reason,

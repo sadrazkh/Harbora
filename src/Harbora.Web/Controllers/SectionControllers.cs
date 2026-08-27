@@ -529,7 +529,7 @@ public sealed class SettingsController(
         await accountSessions.RevokeAllAsync(me.Id, CurrentSessionId(), ct);
 
         await audit.LogAsync("user.totp_enabled", "user", me.Id.ToString(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: null, ct: ct);
 
         // The one and only render of the codes; only hashes exist from here on.
         TempData["RecoveryCodes"] = string.Join("\n", recovery);
@@ -571,7 +571,7 @@ public sealed class SettingsController(
         await accountSessions.RevokeAllAsync(me.Id, CurrentSessionId(), ct);
 
         await audit.LogAsync("user.totp_disabled", "user", me.Id.ToString(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? "ورود دومرحله‌ای خاموش شد." : "Two-factor is off.";
         return RedirectToAction(nameof(Index));

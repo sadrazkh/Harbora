@@ -225,7 +225,7 @@ public sealed class PlansController(
                 runningRatePerHourMinor = offer.RunningRatePerHourMinor,
                 stoppedRatePerHourMinor = offer.StoppedRatePerHourMinor,
                 isOffered = offer.IsOffered
-            }), ct: ct);
+            }), workspaceId: null, ct: ct);
 
         // Says what withdrawing does not do, because that is the half an operator will assume wrongly.
         TempData["Message"] = offered
@@ -381,7 +381,7 @@ public sealed class PlansController(
                 baseRatePerHourMinor = plan.BaseRatePerHourMinor,
                 diskGbHourMinor = plan.DiskGbHourMinor,
                 allowsOverage = plan.AllowsOverage
-            }), ct: ct);
+            }), workspaceId: null, ct: ct);
 
     /// <summary>The same, for a resource tier. Keyed by the tier's key, which is what apps store.</summary>
     private Task LogSizeRatesAsync(InstanceSize size, CancellationToken ct) =>
@@ -390,7 +390,7 @@ public sealed class PlansController(
             {
                 runningRatePerHourMinor = size.RunningRatePerHourMinor,
                 stoppedRatePerHourMinor = size.StoppedRatePerHourMinor
-            }), ct: ct);
+            }), workspaceId: null, ct: ct);
 
     /// <summary>
     /// Corrects a storage tier.

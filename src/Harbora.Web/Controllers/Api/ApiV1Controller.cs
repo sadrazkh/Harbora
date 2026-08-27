@@ -114,7 +114,7 @@ public sealed class ApiV1Controller(
         if (!ok || user is null)
         {
             await audit.LogAsync("user.login_failed", "user", user?.Id.ToString(), ip,
-                actorEmailOverride: email, userIdOverride: user?.Id);
+                actorEmailOverride: email, userIdOverride: user?.Id, workspaceId: null);
             // Deliberately the same wording as the panel: which half was wrong is not the caller's
             // business, and saying so turns this into an account-enumeration endpoint.
             return Unauthorized(new { error = "Invalid email or password." });
@@ -131,7 +131,7 @@ public sealed class ApiV1Controller(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("token.issued", "token", issued.Prefix, ip,
-            actorEmailOverride: user.Email, userIdOverride: user.Id);
+            actorEmailOverride: user.Email, userIdOverride: user.Id, workspaceId: null);
 
         return Ok(new { token = issued.PlaintextToken, email = user.Email, name = label });
     }

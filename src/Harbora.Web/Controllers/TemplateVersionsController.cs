@@ -87,7 +87,7 @@ public sealed class TemplateVersionsController(
             templateId, plan, digest, basedOn, template.ManifestJson));
         await db.SaveChangesAsync(ct);
         await audit.LogAsync("template.version_added", "template_version",
-            $"{template.Key}={plan.Tag}", ClientIp, ct: ct);
+            $"{template.Key}={plan.Tag}", ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa
             ? $"نسخهٔ {plan.Tag} اضافه و منتشر شد و از حالا در فهرست انتخاب نسخه دیده می‌شود."
@@ -123,7 +123,7 @@ public sealed class TemplateVersionsController(
 
         db.AppTemplateVersions.Remove(version);
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("template.version_removed", "template_version", version.Version, ClientIp, ct: ct);
+        await audit.LogAsync("template.version_removed", "template_version", version.Version, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? $"نسخهٔ {version.Version} حذف شد." : $"{version.Version} was deleted.";
         return RedirectToAction(nameof(Index));
@@ -190,7 +190,7 @@ public sealed class TemplateVersionsController(
 
         version.Publication = VersionPublication.Published;
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("template.version_published", "template_version", version.Version, ClientIp, ct: ct);
+        await audit.LogAsync("template.version_published", "template_version", version.Version, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? $"نسخهٔ {version.Version} منتشر شد." : $"{version.Version} was published.";
         return RedirectToAction(nameof(Index));
@@ -205,7 +205,7 @@ public sealed class TemplateVersionsController(
 
         version.Publication = VersionPublication.Draft;
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("template.version_withdrawn", "template_version", version.Version, ClientIp, ct: ct);
+        await audit.LogAsync("template.version_withdrawn", "template_version", version.Version, ClientIp, workspaceId: null, ct: ct);
 
         // Deliberately says what withdrawing does not do. Apps already running this version keep
         // running it; the change is only about what is offered next.
@@ -238,7 +238,7 @@ public sealed class TemplateVersionsController(
         version.Lifecycle = lifecycle;
         await db.SaveChangesAsync(ct);
         await audit.LogAsync("template.version_lifecycle", "template_version",
-            $"{version.Version}={lifecycle}", ClientIp, ct: ct);
+            $"{version.Version}={lifecycle}", ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? "وضعیت نسخه به‌روز شد." : "The version's lifecycle was updated.";
         return RedirectToAction(nameof(Index));
@@ -269,7 +269,7 @@ public sealed class TemplateVersionsController(
 
         var stored = ServiceVersions.Format(ServiceVersions.Parse(versions));
         await WriteAsync(SettingKeys.ServiceVersions(type), stored, ct);
-        await audit.LogAsync("service.versions", "setting", $"{type}={stored}", ClientIp, ct: ct);
+        await audit.LogAsync("service.versions", "setting", $"{type}={stored}", ClientIp, workspaceId: null, ct: ct);
 
         var shipped = engine.Catalog.FirstOrDefault(c => c.Type == type)?.Versions ?? [];
         TempData["Message"] = stored.Length == 0
@@ -309,7 +309,7 @@ public sealed class TemplateVersionsController(
 
         setting.Value = enabled ? "true" : "false";
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("template.discovery_setting", "setting", setting.Value, ClientIp, ct: ct);
+        await audit.LogAsync("template.discovery_setting", "setting", setting.Value, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = enabled
             ? (IsFa ? "بررسی رجیستری روشن شد." : "Registry checks are on.")

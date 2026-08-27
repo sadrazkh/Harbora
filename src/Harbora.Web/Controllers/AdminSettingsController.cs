@@ -51,7 +51,7 @@ public sealed class AdminSettingsController(
         // The order the form posts is the order they appear. A set with no order would put the
         // operator back where they started, with the alphabet deciding.
         await WriteAsync(SettingKeys.FeaturedTemplates, FeaturedTemplates.Format(keys ?? []), ct);
-        await audit.LogAsync("platform.featured_templates", "setting", null, ClientIp, ct: ct);
+        await audit.LogAsync("platform.featured_templates", "setting", null, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? "اپ‌های منتخب ذخیره شد." : "Featured applications saved.";
         return RedirectToAction(nameof(Index));
@@ -82,7 +82,7 @@ public sealed class AdminSettingsController(
         await WriteAsync(SettingKeys.OverviewDefault,
             Harbora.Infrastructure.Navigation.RailVisibility.Format(
                 Harbora.Infrastructure.Navigation.RailVisibility.ParseSetting(overviewDefault)), ct);
-        await audit.LogAsync("platform.panel_defaults", "setting", $"{mode}/{culture}", ClientIp, ct: ct);
+        await audit.LogAsync("platform.panel_defaults", "setting", $"{mode}/{culture}", ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? "پیش‌فرض‌های پنل ذخیره شد." : "Panel defaults saved.";
         return RedirectToAction(nameof(Index));
@@ -101,7 +101,7 @@ public sealed class AdminSettingsController(
 
         await WriteAsync(SettingKeys.DefaultInstanceSize, size, ct);
         await WriteAsync(SettingKeys.PreviewsDefault, previewsDefault ? "true" : "false", ct);
-        await audit.LogAsync("platform.resource_defaults", "setting", size, ClientIp, ct: ct);
+        await audit.LogAsync("platform.resource_defaults", "setting", size, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? "پیش‌فرض‌های منابع ذخیره شد." : "Resource defaults saved.";
         return RedirectToAction(nameof(Index));
@@ -112,7 +112,7 @@ public sealed class AdminSettingsController(
     public async Task<IActionResult> SavePlatform(string? platformName, CancellationToken ct)
     {
         await WriteAsync(SettingKeys.PlatformName, (platformName ?? string.Empty).Trim(), ct);
-        await audit.LogAsync("platform.name", "setting", platformName, ClientIp, ct: ct);
+        await audit.LogAsync("platform.name", "setting", platformName, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? "نام پلتفرم ذخیره شد." : "Platform name saved.";
         return RedirectToAction(nameof(Index));
@@ -135,7 +135,7 @@ public sealed class AdminSettingsController(
         if (!string.IsNullOrWhiteSpace(password))
             await WriteAsync(SettingKeys.SmtpPassword, protector.Protect(password), ct);
 
-        await audit.LogAsync("platform.smtp", "setting", (host ?? "").Trim(), ClientIp, ct: ct);
+        await audit.LogAsync("platform.smtp", "setting", (host ?? "").Trim(), ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? "تنظیمات SMTP ذخیره شد." : "SMTP settings saved.";
         return RedirectToAction(nameof(Index));
@@ -162,7 +162,7 @@ public sealed class AdminSettingsController(
 
         await externalLogins.SaveAsync(key, enabled, clientId, clientSecret, authority, displayName, ct);
         externalLoginSchemes.Forget();
-        await audit.LogAsync("platform.sso_provider", "setting", $"{key}/{(enabled ? "on" : "off")}", ClientIp, ct: ct);
+        await audit.LogAsync("platform.sso_provider", "setting", $"{key}/{(enabled ? "on" : "off")}", ClientIp, workspaceId: null, ct: ct);
 
         // Named, and honest about the difference between the switch and the effect: a provider
         // switched on with no client id shows no button, and a page that said "enabled" would be
@@ -181,7 +181,7 @@ public sealed class AdminSettingsController(
     public async Task<IActionResult> SaveUpdateCheck(bool updateCheck, CancellationToken ct)
     {
         await WriteAsync(SettingKeys.UpdateCheckEnabled, updateCheck ? "true" : "false", ct);
-        await audit.LogAsync("platform.update_check", "setting", updateCheck ? "on" : "off", ClientIp, ct: ct);
+        await audit.LogAsync("platform.update_check", "setting", updateCheck ? "on" : "off", ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = updateCheck
             ? (IsFa ? "بررسی روزانهٔ به‌روزرسانی روشن شد." : "The daily update check is on.")

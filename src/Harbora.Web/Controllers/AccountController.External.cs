@@ -170,7 +170,7 @@ public sealed partial class AccountController
                 return ExternalRefusal(IsFa ? "این حساب غیرفعال است." : "That account is not active.");
 
             await audit.LogAsync("user.external_login", "user", existing.UserId.ToString(), ClientIp,
-                actorEmailOverride: existing.User.Email, userIdOverride: existing.UserId, ct: ct);
+                actorEmailOverride: existing.User.Email, userIdOverride: existing.UserId, workspaceId: null, ct: ct);
 
             return await ContinueSignInAsync(existing.User, returnUrl);
         }
@@ -273,12 +273,12 @@ public sealed partial class AccountController
             await SendVerificationAsync(user, ct);
             TempData["VerificationEmail"] = user.Email;
             await audit.LogAsync("user.registered_pending_verification", "user", user.Id.ToString(), ClientIp,
-                actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
+                actorEmailOverride: user.Email, userIdOverride: user.Id, workspaceId: null, ct: ct);
             return Redirect("/account/verify-pending");
         }
 
         await audit.LogAsync("user.registered", "user", user.Id.ToString(), ClientIp,
-            actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
+            actorEmailOverride: user.Email, userIdOverride: user.Id, workspaceId: null, ct: ct);
         return await ContinueSignInAsync(user, returnUrl);
     }
 
@@ -338,7 +338,7 @@ public sealed partial class AccountController
         if (!hasher.Verify(password ?? "", user.PasswordHash))
         {
             await audit.LogAsync("user.external_link_password_failed", "user", user.Id.ToString(), ClientIp,
-                actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
+                actorEmailOverride: user.Email, userIdOverride: user.Id, workspaceId: null, ct: ct);
 
             var model = await ConfirmModelAsync(pending, user, ct);
             ModelState.AddModelError(string.Empty, IsFa ? "رمز نادرست است." : "That password is not right.");
@@ -413,7 +413,7 @@ public sealed partial class AccountController
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("user.external_login_linked", "user", user.Id.ToString(), ClientIp,
-            actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
+            actorEmailOverride: user.Email, userIdOverride: user.Id, workspaceId: null, ct: ct);
     }
 
     // ---- linking and unlinking from account settings --------------------------------------------
@@ -457,7 +457,7 @@ public sealed partial class AccountController
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("user.external_login_linked", "user", userId.ToString(), ClientIp,
-            userIdOverride: userId, ct: ct);
+            userIdOverride: userId, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? "وصل شد." : "Connected.";
         return Redirect("/settings");
@@ -500,7 +500,7 @@ public sealed partial class AccountController
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("user.external_login_unlinked", "user", userId.ToString(), ClientIp,
-            userIdOverride: userId, ct: ct);
+            userIdOverride: userId, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? "جدا شد." : "Disconnected.";
         return Redirect("/settings");

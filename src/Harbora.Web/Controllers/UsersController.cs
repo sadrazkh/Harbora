@@ -124,7 +124,7 @@ public sealed class UsersController(
         await db.SaveChangesAsync(ct);
         await quotaReservation.CommitAsync(ct);
 
-        await audit.LogAsync("user.created", "user", email, ClientIp, ct: ct);
+        await audit.LogAsync("user.created", "user", email, ClientIp, workspaceId: null, ct: ct);
         return Back($"Created {email}.");
     }
 
@@ -200,7 +200,7 @@ public sealed class UsersController(
         await quotaReservation.CommitAsync(ct);
         await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, delivery.WorkspaceId, ct);
 
-        await audit.LogAsync("user.invited", "user", email, ClientIp, ct: ct);
+        await audit.LogAsync("user.invited", "user", email, ClientIp, workspaceId: null, ct: ct);
         return Back(IsFa ? $"دعوت‌نامه به {email} صف شد." : $"An invitation to {email} has been queued.");
     }
 
@@ -220,7 +220,7 @@ public sealed class UsersController(
 
         await audit.LogAsync("user.role_changed", "user", user.Email, ClientIp,
             metadataJson: System.Text.Json.JsonSerializer.Serialize(
-                new { from = previous.ToString(), to = role.ToString() }), ct: ct);
+                new { from = previous.ToString(), to = role.ToString() }), workspaceId: null, ct: ct);
 
         return Back($"{user.Email} is now {role}.");
     }
@@ -245,7 +245,7 @@ public sealed class UsersController(
         else
             await sessions.RevokeAllAsync(user.Id, exceptSessionId: null, ct);
 
-        await audit.LogAsync(active ? "user.reactivated" : "user.suspended", "user", user.Email, ClientIp, ct: ct);
+        await audit.LogAsync(active ? "user.reactivated" : "user.suspended", "user", user.Email, ClientIp, workspaceId: null, ct: ct);
         return Back(active ? $"{user.Email} can sign in again." : $"{user.Email} is suspended.");
     }
 
@@ -264,7 +264,7 @@ public sealed class UsersController(
         {
             user.EmailVerifiedAt = clock.UtcNow;
             await db.SaveChangesAsync(ct);
-            await audit.LogAsync("user.email_verified_by_admin", "user", user.Email, ClientIp, ct: ct);
+            await audit.LogAsync("user.email_verified_by_admin", "user", user.Email, ClientIp, workspaceId: null, ct: ct);
         }
 
         return Back(IsFa ? $"ایمیل {user.Email} تأیید شد." : $"{user.Email} is verified.");
@@ -288,7 +288,7 @@ public sealed class UsersController(
         user.RecoveryCodesHash = null;
         await sessions.RevokeAllAsync(user.Id, exceptSessionId: null, ct);
 
-        await audit.LogAsync("user.totp_reset_by_admin", "user", user.Email, ClientIp, ct: ct);
+        await audit.LogAsync("user.totp_reset_by_admin", "user", user.Email, ClientIp, workspaceId: null, ct: ct);
         return Back(IsFa ? $"ورود دومرحله‌ای {user.Email} برداشته شد." : $"Two-factor was removed from {user.Email}.");
     }
 
@@ -310,7 +310,7 @@ public sealed class UsersController(
         await sessions.RevokeAllAsync(user.Id, exceptSessionId: null, ct);
 
         // The password itself is never logged, only that it was replaced and by whom.
-        await audit.LogAsync("user.password_reset", "user", user.Email, ClientIp, ct: ct);
+        await audit.LogAsync("user.password_reset", "user", user.Email, ClientIp, workspaceId: null, ct: ct);
         return Back($"The password for {user.Email} was replaced.");
     }
 

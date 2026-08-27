@@ -132,7 +132,11 @@ public sealed class VouchersController(
                     created.Voucher.Currency,
                     created.Voucher.ExpiresAt,
                     created.Voucher.CodeHint
-                }), ct: ct);
+                }),
+                // A voucher is minted platform-wide, redeemable by whichever workspace enters the
+                // code first — it belongs to no workspace until then. Redemption (BillingController)
+                // stamps the redeeming workspace on its own row.
+                workspaceId: null, ct: ct);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -149,7 +153,7 @@ public sealed class VouchersController(
         try
         {
             await vouchers.DisableAsync(id, ct);
-            await audit.LogAsync("billing.voucher.disable", "voucher", id.ToString(), ClientIp, ct: ct);
+            await audit.LogAsync("billing.voucher.disable", "voucher", id.ToString(), ClientIp, workspaceId: null, ct: ct);
             TempData["Message"] = "Voucher disabled.";
         }
         catch (InvalidOperationException ex)

@@ -115,7 +115,7 @@ public sealed partial class AccountController(
             await SendVerificationAsync(user, ct);
             TempData["VerificationEmail"] = user.Email;
             await audit.LogAsync("user.registered_pending_verification", "user", user.Id.ToString(), ClientIp,
-                actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
+                actorEmailOverride: user.Email, userIdOverride: user.Id, workspaceId: null, ct: ct);
             return Redirect("/account/verify-pending");
         }
 
@@ -141,7 +141,7 @@ public sealed partial class AccountController(
             .Select(m => m.Role).SingleAsync(ct);
         await SignInAsync(user, destination.Id, membershipRole);
         await audit.LogAsync("user.registered", "user", user.Id.ToString(), ClientIp,
-            actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
+            actorEmailOverride: user.Email, userIdOverride: user.Id, workspaceId: null, ct: ct);
         return Redirect("/");
     }
 
@@ -194,7 +194,7 @@ public sealed partial class AccountController(
             await jobs.EnqueueAsync(Harbora.Domain.Jobs.JobKind.NotificationDelivery, delivery.Id, delivery.WorkspaceId, ct);
 
             await audit.LogAsync("user.password_reset_requested", "user", user.Id.ToString(), ClientIp,
-                actorEmailOverride: user.Email, userIdOverride: user.Id, ct: ct);
+                actorEmailOverride: user.Email, userIdOverride: user.Id, workspaceId: null, ct: ct);
         }
 
         ViewBag.Sent = true;
@@ -240,7 +240,7 @@ public sealed partial class AccountController(
         await sessions.RevokeAllAsync(row.UserId, exceptSessionId: null, ct);
 
         await audit.LogAsync("user.password_reset_completed", "user", row.UserId.ToString(), ClientIp,
-            actorEmailOverride: row.User.Email, userIdOverride: row.UserId, ct: ct);
+            actorEmailOverride: row.User.Email, userIdOverride: row.UserId, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? "رمز تازه ذخیره شد. وارد شوید." : "Your new password is saved. Sign in.";
         return Redirect("/account/login");
@@ -260,7 +260,7 @@ public sealed partial class AccountController(
         if (!ok || user is null)
         {
             await audit.LogAsync("user.login_failed", "user", user?.Id.ToString(), ClientIp,
-                actorEmailOverride: email, userIdOverride: user?.Id);
+                actorEmailOverride: email, userIdOverride: user?.Id, workspaceId: null);
             ModelState.AddModelError(string.Empty,
                 IsFa ? "ایمیل یا رمز نادرست است." : "Invalid email or password.");
             return View(model);
@@ -314,7 +314,7 @@ public sealed partial class AccountController(
         await SpendPendingLinkAsync(user, HttpContext.RequestAborted);
 
         await audit.LogAsync("user.login", "user", user.Id.ToString(), ClientIp,
-            actorEmailOverride: user.Email, userIdOverride: user.Id);
+            actorEmailOverride: user.Email, userIdOverride: user.Id, workspaceId: null);
         return LocalRedirect(returnUrl ?? "/");
     }
 
@@ -347,7 +347,7 @@ public sealed partial class AccountController(
         row.User.EmailVerifiedAt = clock.UtcNow;
         await db.SaveChangesAsync(ct);
         await audit.LogAsync("user.email_verified", "user", row.UserId.ToString(), ClientIp,
-            actorEmailOverride: row.User.Email, userIdOverride: row.UserId, ct: ct);
+            actorEmailOverride: row.User.Email, userIdOverride: row.UserId, workspaceId: null, ct: ct);
         TempData["Message"] = IsFa ? "ایمیل تأیید شد؛ حالا وارد شوید." : "Email verified. You can sign in now.";
         return Redirect("/account/login");
     }
@@ -446,7 +446,7 @@ public sealed partial class AccountController(
         if (!ok)
         {
             await audit.LogAsync("user.totp_challenge_failed", "user", user.Id.ToString(), ClientIp,
-                actorEmailOverride: user.Email, userIdOverride: user.Id);
+                actorEmailOverride: user.Email, userIdOverride: user.Id, workspaceId: null);
             ModelState.AddModelError(string.Empty, IsFa ? "کد درست نیست." : "That code is not right.");
             return View(model);
         }

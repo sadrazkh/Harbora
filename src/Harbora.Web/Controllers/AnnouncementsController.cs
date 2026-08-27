@@ -95,7 +95,7 @@ public sealed class AnnouncementsController(
         if (announcement.Severity == AlertSeverity.Warning)
             await notifier.NotifyAsync(announcement, ct);
 
-        await audit.LogAsync("announcement.created", "announcement", announcement.Id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("announcement.created", "announcement", announcement.Id.ToString(), ClientIp, workspaceId: null, ct: ct);
         return Back("Announcement posted.");
     }
 
@@ -147,7 +147,7 @@ public sealed class AnnouncementsController(
         announcement.EndsAt = ends;
         await db.SaveChangesAsync(ct);
 
-        await audit.LogAsync("announcement.edited", "announcement", announcement.Id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("announcement.edited", "announcement", announcement.Id.ToString(), ClientIp, workspaceId: null, ct: ct);
         return Back("Announcement updated.");
     }
 
@@ -162,7 +162,7 @@ public sealed class AnnouncementsController(
         db.Announcements.Remove(announcement);
         await db.SaveChangesAsync(ct);
 
-        await audit.LogAsync("announcement.deleted", "announcement", id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("announcement.deleted", "announcement", id.ToString(), ClientIp, workspaceId: null, ct: ct);
         return Back("Announcement removed.");
     }
 
