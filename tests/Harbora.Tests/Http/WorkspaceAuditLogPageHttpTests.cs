@@ -65,7 +65,7 @@ public class WorkspaceAuditLogPageHttpTests(HarboraHttpFixture fixture)
     public async Task A_workspace_with_no_audit_history_says_so_rather_than_showing_a_blank_table()
     {
         var (_, _) = GivenCustomer("aud-tenant-0", "aud-customer0@example.com");
-        var client = await Panel.SignedInAs("203.0.113.150", "aud-customer0@example.com");
+        var client = await Panel.SignedInAs("203.0.113.140", "aud-customer0@example.com");
 
         var page = await client.GetAsync("/workspaces/audit-log");
 
@@ -83,7 +83,7 @@ public class WorkspaceAuditLogPageHttpTests(HarboraHttpFixture fixture)
         GivenAuditRow(workspaceId, "app.deploy", "aud-customer1@example.com");
         var rowId = RowId(Panel, workspaceId, "app.deploy");
 
-        var client = await Panel.SignedInAs("203.0.113.151", "aud-customer1@example.com");
+        var client = await Panel.SignedInAs("203.0.113.141", "aud-customer1@example.com");
         var page = await client.GetAsync("/workspaces/audit-log");
 
         page.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -102,7 +102,7 @@ public class WorkspaceAuditLogPageHttpTests(HarboraHttpFixture fixture)
         var myRowId = RowId(Panel, mine, "app.deploy");
 
         // Finds its own: the first direction, without which the second proves nothing.
-        var theirClient = await Panel.SignedInAs("203.0.113.152", "aud-customer2a@example.com");
+        var theirClient = await Panel.SignedInAs("203.0.113.142", "aud-customer2a@example.com");
         (await ListedRowsAsync(await theirClient.GetAsync("/workspaces/audit-log")))
             .Should().Contain(theirRowId.ToString());
 
@@ -110,7 +110,7 @@ public class WorkspaceAuditLogPageHttpTests(HarboraHttpFixture fixture)
         // of its own (HarboraDbContext's remark explains why), so unlike an App-backed page there is
         // no second layer that could be quietly doing this instead — the controller's own
         // WorkspaceId == comparison is the entire guard, and this is what pins it.
-        var myClient = await Panel.SignedInAs("203.0.113.153", "aud-customer2b@example.com");
+        var myClient = await Panel.SignedInAs("203.0.113.143", "aud-customer2b@example.com");
         var myPage = await myClient.GetAsync("/workspaces/audit-log");
 
         myPage.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -130,7 +130,7 @@ public class WorkspaceAuditLogPageHttpTests(HarboraHttpFixture fixture)
         // same to this query: both are WorkspaceId == null. One row stands in for both.
         GivenAuditRow(null, "platform.name", "admin@harbora.local");
 
-        var client = await Panel.SignedInAs("203.0.113.154", "aud-customer3@example.com");
+        var client = await Panel.SignedInAs("203.0.113.144", "aud-customer3@example.com");
         var page = await client.GetAsync("/workspaces/audit-log");
 
         page.StatusCode.Should().Be(HttpStatusCode.OK);
