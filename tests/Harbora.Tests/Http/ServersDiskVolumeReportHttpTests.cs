@@ -78,6 +78,16 @@ public class ServersDiskVolumeReportHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task The_servers_page_links_to_the_disk_volume_report()
+    {
+        var client = await OwnerClientAsync("disk-report-owner3@example.com", "203.0.113.173");
+
+        var html = await (await client.GetAsync("/servers")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("/servers/disk-volume-report", "the report must be reachable, not just routable");
+    }
+
+    [Fact]
     public async Task A_viewer_may_not_read_the_disk_volume_report()
     {
         Panel.GivenUser(fixture.WorkspaceId, "disk-report-viewer@example.com", SystemRole.Viewer);
