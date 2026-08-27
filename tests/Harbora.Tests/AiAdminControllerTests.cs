@@ -34,7 +34,7 @@ public class AiAdminControllerTests
         public Task LogAsync(
             string action, string? targetType = null, string? targetId = null, string? ipAddress = null,
             string? actorEmailOverride = null, Guid? userIdOverride = null, string? metadataJson = null,
-            CancellationToken ct = default)
+            Guid? workspaceId = null, CancellationToken ct = default)
         {
             Entries.Add((action, targetId));
             return Task.CompletedTask;

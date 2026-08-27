@@ -59,7 +59,7 @@ public class DeploymentQueueAndCancelTests
 
         public Task LogAsync(string action, string? targetType = null, string? targetId = null,
             string? ipAddress = null, string? actorEmailOverride = null, Guid? userIdOverride = null,
-            string? metadataJson = null, CancellationToken ct = default)
+            string? metadataJson = null, Guid? workspaceId = null, CancellationToken ct = default)
         {
             Actions.Add(action);
             return Task.CompletedTask;

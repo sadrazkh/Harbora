@@ -94,9 +94,20 @@ public interface ISecretRedactor
 }
 
 /// <summary>
-/// Append-only audit trail for security-relevant actions (doc 10 §2.13). The actor/workspace
-/// default to the current user; callers pass the request IP (the abstraction stays free of any
-/// web dependency). Best-effort — an audit failure must never break the action being audited.
+/// Append-only audit trail for security-relevant actions (doc 10 §2.13). The actor defaults to the
+/// current user; callers pass the request IP (the abstraction stays free of any web dependency).
+/// Best-effort — an audit failure must never break the action being audited.
+///
+/// <para>
+/// <paramref name="LogAsync.workspaceId"/> is the opposite of a default: this sink never fills it in
+/// from <c>ICurrentUser.WorkspaceId</c> on the caller's behalf (HARBORA-0056). Doing that centrally
+/// would be convenient exactly once and wrong every time a caller runs with a workspace ambient in
+/// the request but is recording a platform-level act — a node enrolled, a platform setting changed,
+/// a sign-in before any workspace was chosen — which would silently mislabel the row as belonging to
+/// whichever workspace the caller happened to be in. Every call site decides for itself, explicitly:
+/// the resource's own workspace when the action plainly has one, or <c>null</c>, named as such, when
+/// it plainly does not.
+/// </para>
 /// </summary>
 public interface IAuditLogger
 {
@@ -108,5 +119,6 @@ public interface IAuditLogger
         string? actorEmailOverride = null,
         Guid? userIdOverride = null,
         string? metadataJson = null,
+        Guid? workspaceId = null,
         CancellationToken ct = default);
 }

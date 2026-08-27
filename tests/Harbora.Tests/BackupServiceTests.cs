@@ -371,7 +371,8 @@ public sealed class BackupServiceTests : IDisposable
     {
         public Task LogAsync(string action, string? targetType = null, string? targetId = null,
             string? ipAddress = null, string? actorEmailOverride = null, Guid? userIdOverride = null,
-            string? metadataJson = null, CancellationToken ct = default) => Task.CompletedTask;
+            string? metadataJson = null, Guid? workspaceId = null, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class StubCredentialReader(string password) : IRepositoryCredentialReader

@@ -46,6 +46,7 @@ public sealed class AuditLogger(
         string? actorEmailOverride = null,
         Guid? userIdOverride = null,
         string? metadataJson = null,
+        Guid? workspaceId = null,
         CancellationToken ct = default)
     {
         try
@@ -63,6 +64,10 @@ public sealed class AuditLogger(
                 MetadataJson = metadataJson,
                 SupportSessionId = support.SessionId,
                 SupportAdminUserId = support.AdminUserId,
+                // Exactly what the caller passed — never ICurrentUser.WorkspaceId as a fallback. See
+                // IAuditLogger.LogAsync's own remark: this sink has no way to tell "the caller forgot"
+                // from "this action genuinely has no workspace", so it does not guess either way.
+                WorkspaceId = workspaceId,
                 CreatedAt = clock.UtcNow
             });
             await db.SaveChangesAsync(ct);

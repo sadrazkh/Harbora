@@ -48,7 +48,8 @@ public class MonitoringControllerBackupStalenessTests
     {
         public Task LogAsync(string action, string? targetType = null, string? targetId = null,
             string? ipAddress = null, string? actorEmailOverride = null, Guid? userIdOverride = null,
-            string? metadataJson = null, CancellationToken ct = default) => Task.CompletedTask;
+            string? metadataJson = null, Guid? workspaceId = null, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private static MonitoringController NewController(HarboraDbContext db, MonitoringOptions? options)

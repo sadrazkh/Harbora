@@ -1008,6 +1008,16 @@ public class HarboraDbContext : DbContext
             // per session; without this it is a table scan of every audit row the platform ever
             // wrote, on a page a worried customer opens.
             e.HasIndex(x => x.SupportSessionId);
+
+            // HARBORA-0056: deliberately NOT workspace-filtered, the same reasoning Job's and
+            // NotificationDelivery's own remarks give — WorkspaceId is null for most rows (every
+            // platform-level action, and every row written before this column existed), so an "own
+            // it or nothing" filter would pass all of those to whichever workspace happened to be
+            // ambient instead of to nobody. AuditController (platform-wide) and the workspace-scoped
+            // WorkspacesController.AuditLog both filter explicitly instead.
+            //
+            // The workspace-scoped reader's own read: one workspace's rows, newest first.
+            e.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
         });
 
         b.Entity<Harbora.Domain.Billing.Wallet>(e =>
