@@ -68,6 +68,9 @@ public class ProjectDeletionServiceTests
         public Task<MaintenanceToggleResult> SetMaintenanceModeAsync(
             Guid appId, bool enabled, string? messageEn, string? messageFa, CancellationToken ct) =>
             throw new NotSupportedException();
+        public Task<RateLimitToggleResult> SetRateLimitAsync(
+            Guid appId, bool enabled, int average, int burst, CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeServiceEngine(HarboraDbContext db, HashSet<Guid> refuses) : IManagedServiceEngine

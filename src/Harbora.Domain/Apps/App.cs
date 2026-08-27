@@ -200,6 +200,34 @@ public class App : BaseEntity
     /// <summary>When maintenance mode was last turned on; null while off.</summary>
     public DateTimeOffset? MaintenanceSince { get; set; }
 
+    // --- Per-app rate limiting (C3, 2026-08-27 what's-left plan) ---
+    //
+    // The declarative half, exactly the role MaintenanceMode plays just above: what the customer
+    // asked for, shown on the app's own page and read by DeploymentPipeline.WireProxyAsync so a route
+    // created for a brand-new domain on an already-limited app starts protected rather than starting
+    // open until somebody happens to re-save it. The rendered half — what Traefik actually enforces —
+    // lives on every Route this app owns (see Route's own remarks) and is set directly by
+    // AppOperationsService.SetRateLimitAsync, never derived from these at render time, for the same
+    // reason maintenance mode is not: TraefikProxyEngine renders Route rows without a join back to
+    // App, and a setting that only takes effect through a join nobody performs is a setting that does
+    // not take effect.
+
+    /// <summary>Whether this app's own routes carry a request-rate limit. Written only after
+    /// <c>IProxyEngine.ApplyAllAsync</c> is known to have accepted it — see
+    /// <see cref="MaintenanceMode"/>'s own doc for why "on" must never be claimed ahead of the proxy
+    /// actually enforcing it.</summary>
+    public bool RateLimitEnabled { get; set; }
+
+    /// <summary>Requests allowed per minute from one client before Traefik starts answering 429 —
+    /// see <see cref="Harbora.Domain.Apps.AppRateLimitPolicy"/> for the bounds and the recommended
+    /// starting point, and for why the averaging period itself is fixed rather than a customer's
+    /// choice.</summary>
+    public int RateLimitAverage { get; set; } = AppRateLimitPolicy.RecommendedAverage;
+
+    /// <summary>Extra requests allowed to arrive at once above the steady per-minute rate before the
+    /// 429s start — see <see cref="Harbora.Domain.Apps.AppRateLimitPolicy"/>.</summary>
+    public int RateLimitBurst { get; set; } = AppRateLimitPolicy.RecommendedBurst;
+
     public ICollection<EnvironmentVariable> EnvironmentVariables { get; set; } = new List<EnvironmentVariable>();
     public ICollection<Volume> Volumes { get; set; } = new List<Volume>();
     public ICollection<DomainName> Domains { get; set; } = new List<DomainName>();

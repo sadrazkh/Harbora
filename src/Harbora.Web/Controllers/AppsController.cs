@@ -1758,6 +1758,55 @@ public sealed partial class AppsController(
         return RedirectToAction(nameof(Details), new { id });
     }
 
+    /// <summary>
+    /// Turns per-app rate limiting on (or reconfigures it while already on) — every route this app
+    /// owns starts answering 429 past the configured rate, through
+    /// <see cref="IAppOperationsService.SetRateLimitAsync"/>. Same honesty rule as maintenance mode
+    /// just above: a refused apply never reaches <c>App.RateLimitEnabled</c>, so the error banner is
+    /// the only trace, never a flag reading "on" over a router nobody updated.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
+    public async Task<IActionResult> SetRateLimit(Guid id, int rateLimitAverage, int rateLimitBurst, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+
+        var result = await ops.SetRateLimitAsync(id, true, rateLimitAverage, rateLimitBurst, ct);
+        if (!result.Success)
+        {
+            TempData["Error"] = result.Error;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await audit.LogAsync("app.ratelimit.on", "app", id.ToString(), ClientIp, ct: ct);
+        TempData["Message"] = IsFa
+            ? $"محدودیت نرخ فعال شد: حداکثر {rateLimitAverage} درخواست در دقیقه (انفجار {rateLimitBurst})."
+            : $"Rate limiting turned on: up to {rateLimitAverage} requests/minute (burst {rateLimitBurst}).";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>Turns per-app rate limiting off: the app's routes go back to unlimited. The last
+    /// configured average/burst are kept so turning it back on starts from where it left off.</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
+    public async Task<IActionResult> DisableRateLimit(Guid id, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+
+        var result = await ops.SetRateLimitAsync(id, false, 0, 0, ct);
+        if (!result.Success)
+        {
+            TempData["Error"] = result.Error;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await audit.LogAsync("app.ratelimit.off", "app", id.ToString(), ClientIp, ct: ct);
+        TempData["Message"] = IsFa ? "محدودیت نرخ خاموش شد." : "Rate limiting turned off.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
     [HttpPost]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.AppsDelete)]

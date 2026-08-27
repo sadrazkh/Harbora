@@ -85,4 +85,28 @@ public class Route : BaseEntity
     public int? SavedTargetPort { get; set; }
     public string? SavedExtraUpstreamsJson { get; set; }
     public string? SavedLoadBalancerHealthCheckPath { get; set; }
+
+    // --- Per-app rate limiting (C3, 2026-08-27 what's-left plan) ---
+    //
+    // The rendered half of App's own RateLimitEnabled/Average/Burst — TraefikProxyEngine reads these
+    // three fields directly, the same way it already reads IpAllowlist/BasicAuthEnabled/
+    // CustomHeadersJson, rather than joining back to App at render time. That is also what makes a
+    // redeploy safe by construction: DeploymentPipeline.WireProxyAsync's default (non-maintenance)
+    // path never assigns these three fields on an EXISTING route, exactly as it never touches
+    // IpAllowlist today, so a redeploy leaves whatever was here untouched. It DOES copy the app's
+    // current values onto a BRAND NEW route (a domain just added to an already-limited app), so that
+    // route does not start unprotected while its siblings are not.
+
+    /// <summary>Whether Traefik enforces a request-rate limit on this route. Set only by
+    /// <c>AppOperationsService.SetRateLimitAsync</c> (every route the app owns, together) or by
+    /// <c>DeploymentPipeline.WireProxyAsync</c> seeding a newly created route from the app's current
+    /// setting.</summary>
+    public bool RateLimitEnabled { get; set; }
+
+    /// <summary>Requests allowed per minute — see <see cref="Harbora.Domain.Apps.AppRateLimitPolicy"/>.</summary>
+    public int RateLimitAverage { get; set; } = Harbora.Domain.Apps.AppRateLimitPolicy.RecommendedAverage;
+
+    /// <summary>Extra requests allowed to arrive at once — see
+    /// <see cref="Harbora.Domain.Apps.AppRateLimitPolicy"/>.</summary>
+    public int RateLimitBurst { get; set; } = Harbora.Domain.Apps.AppRateLimitPolicy.RecommendedBurst;
 }

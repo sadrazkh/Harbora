@@ -566,6 +566,87 @@
             }
         </section>
 
+        @* ---- Per-app rate limiting (C3, 2026-08-27 what's-left plan) ----
+           Applies to every route this app owns, the same "whole app, not one domain" shape Access
+           protection just above already uses — and the same honesty rule Maintenance mode below
+           does: a refused apply never reaches App.RateLimitEnabled, so what this section shows is
+           never ahead of what Traefik is actually enforcing. Offered even before the app has a
+           domain (like Maintenance mode) — a route created later, or by a public function URL,
+           inherits whatever is configured here the moment it exists. *@
+        <section class="rounded-xl border border-line bg-surface" data-ratelimit-section data-ratelimit-enabled="@(app.RateLimitEnabled ? "true" : "false")">
+            <div class="px-4 py-3 border-b border-line font-semibold flex items-center gap-2">
+                @(isFa ? "محدودیت نرخ درخواست" : "Rate limiting")
+                @if (app.RateLimitEnabled)
+                {
+                    <partial name="Design\_StatusPill" model="@(new StatusPillModel(isFa ? "روشن" : "On", "warn"))" />
+                }
+            </div>
+            <div class="p-4 space-y-3">
+                @if (app.RateLimitEnabled)
+                {
+                    <p class="text-sm text-ink-muted" data-ratelimit-summary
+                       data-ratelimit-average="@app.RateLimitAverage" data-ratelimit-burst="@app.RateLimitBurst">
+                        @(isFa
+                            ? $"بازدیدکننده‌ای که در یک دقیقه بیش از {app.RateLimitAverage} درخواست بفرستد، از آن پس پاسخ ۴۲۹ (درخواست بیش از حد) می‌گیرد؛ انفجار آنی تا {app.RateLimitBurst} درخواست اضافه هنوز مجاز است."
+                            : $"A client sending more than {app.RateLimitAverage} requests a minute to this app's routes starts getting HTTP 429 (Too Many Requests) past that; an instant burst of up to {app.RateLimitBurst} extra requests is still let through.")
+                    </p>
+                    <form asp-controller="Apps" asp-action="SetRateLimit" asp-route-id="@app.Id" method="post" class="grid grid-cols-2 gap-2">
+                        @Html.AntiForgeryToken()
+                        <div>
+                            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "درخواست در دقیقه" : "Requests per minute")</label>
+                            <input type="number" name="rateLimitAverage" data-ratelimit-average-input dir="ltr"
+                                   min="@Harbora.Domain.Apps.AppRateLimitPolicy.MinAverage" max="@Harbora.Domain.Apps.AppRateLimitPolicy.MaxAverage"
+                                   value="@app.RateLimitAverage"
+                                   class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "انفجار آنی" : "Burst allowance")</label>
+                            <input type="number" name="rateLimitBurst" data-ratelimit-burst-input dir="ltr"
+                                   min="@Harbora.Domain.Apps.AppRateLimitPolicy.MinBurst" max="@Harbora.Domain.Apps.AppRateLimitPolicy.MaxBurst"
+                                   value="@app.RateLimitBurst"
+                                   class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
+                        </div>
+                        <button class="col-span-2 rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm font-semibold">@(isFa ? "به‌روزرسانی" : "Update")</button>
+                    </form>
+                    <form asp-controller="Apps" asp-action="DisableRateLimit" asp-route-id="@app.Id" method="post"
+                          onsubmit="return confirm('@(isFa ? "محدودیت نرخ خاموش شود؟ درخواست‌ها دیگر محدود نخواهند شد." : "Turn rate limiting off? Requests to this app will no longer be limited.")')">
+                        @Html.AntiForgeryToken()
+                        <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@(isFa ? "خاموش کردن محدودیت نرخ" : "Turn off rate limiting")</button>
+                    </form>
+                }
+                else
+                {
+                    <p class="text-sm text-ink-muted">@(isFa
+                        ? "هنوز محدودیتی اعمال نشده؛ سیل درخواست به مسیرهای عمومی این اپ (از جمله هر آدرس عمومی تابع) کند نمی‌شود."
+                        : "No limit is applied yet; a flood against this app's public routes — including any public function URL — is not slowed down.")</p>
+                    <form asp-controller="Apps" asp-action="SetRateLimit" asp-route-id="@app.Id" method="post" class="space-y-2"
+                          onsubmit="return confirm('@(isFa ? "محدودیت نرخ روشن شود؟ درخواست‌های بیش‌ازحد پاسخ ۴۲۹ خواهند گرفت." : "Turn rate limiting on? Requests past the limit will get a 429 response.")')">
+                        @Html.AntiForgeryToken()
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "درخواست در دقیقه" : "Requests per minute")</label>
+                                <input type="number" name="rateLimitAverage" data-ratelimit-average-input dir="ltr"
+                                       min="@Harbora.Domain.Apps.AppRateLimitPolicy.MinAverage" max="@Harbora.Domain.Apps.AppRateLimitPolicy.MaxAverage"
+                                       value="@app.RateLimitAverage"
+                                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
+                            </div>
+                            <div>
+                                <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "انفجار آنی" : "Burst allowance")</label>
+                                <input type="number" name="rateLimitBurst" data-ratelimit-burst-input dir="ltr"
+                                       min="@Harbora.Domain.Apps.AppRateLimitPolicy.MinBurst" max="@Harbora.Domain.Apps.AppRateLimitPolicy.MaxBurst"
+                                       value="@app.RateLimitBurst"
+                                       class="w-full rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
+                            </div>
+                        </div>
+                        <p class="text-[11px] text-ink-faint">@(isFa
+                            ? $"پیشنهاد: {Harbora.Domain.Apps.AppRateLimitPolicy.RecommendedAverage} در دقیقه، انفجار {Harbora.Domain.Apps.AppRateLimitPolicy.RecommendedBurst} — برای بیشتر APIها و webhookها کافی است."
+                            : $"Suggested: {Harbora.Domain.Apps.AppRateLimitPolicy.RecommendedAverage}/minute, burst {Harbora.Domain.Apps.AppRateLimitPolicy.RecommendedBurst} — enough for most APIs and webhooks; change it if this app's traffic is unusual.")</p>
+                        <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm font-semibold">@(isFa ? "روشن کردن محدودیت نرخ" : "Turn on rate limiting")</button>
+                    </form>
+                }
+            </div>
+        </section>
+
         @* ---- Maintenance mode (P5, 2026-08-20 platform-options plan) ----
            The containers keep running; only what the proxy routes visitors to changes. Stopping the
            app is a separate, existing action — this section never touches it. *@

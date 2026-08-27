@@ -97,6 +97,9 @@ internal sealed class FakeAppOperations(BillingContext own) : IAppOperationsServ
     public Task<MaintenanceToggleResult> SetMaintenanceModeAsync(
         Guid appId, bool enabled, string? messageEn, string? messageFa, CancellationToken ct) =>
         throw new NotSupportedException();
+    public Task<RateLimitToggleResult> SetRateLimitAsync(
+        Guid appId, bool enabled, int average, int burst, CancellationToken ct) =>
+        throw new NotSupportedException();
 }
 
 /// <summary>

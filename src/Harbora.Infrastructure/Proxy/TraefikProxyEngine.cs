@@ -390,6 +390,19 @@ public sealed class TraefikProxyEngine(
             foreach (var entry in allowed)
                 sb.AppendLine($"          - \"{entry}\"");
         }
+        // C3 (2026-08-27 what's-left plan): per-app rate limiting. average/burst are the customer's
+        // own numbers (requests per minute, and how many of those may arrive at once); the period
+        // itself is fixed rather than surfaced — see AppRateLimitPolicy's own remarks for why. Clamped
+        // to at least 1 rather than skipped on a stray zero/negative row: a route that reads
+        // "protected" in the database must never render as unlimited.
+        if (r.RateLimitEnabled)
+        {
+            sb.AppendLine($"    {name}-ratelimit:");
+            sb.AppendLine("      rateLimit:");
+            sb.AppendLine($"        average: {Math.Max(1, r.RateLimitAverage)}");
+            sb.AppendLine($"        burst: {Math.Max(1, r.RateLimitBurst)}");
+            sb.AppendLine($"        period: \"{Domain.Apps.AppRateLimitPolicy.PeriodSeconds}s\"");
+        }
     }
 
     private List<string> MiddlewareNames(Route r)
@@ -404,6 +417,7 @@ public sealed class TraefikProxyEngine(
         if (r.BasicAuthEnabled && !string.IsNullOrWhiteSpace(r.BasicAuthUsersEncrypted)) list.Add($"{name}-auth");
         // Same rule as the renderer, so the router never names a middleware that was not written.
         if (AccessList.Parse(r.IpAllowlist, out _).Count > 0) list.Add($"{name}-ips");
+        if (r.RateLimitEnabled) list.Add($"{name}-ratelimit");
         return list;
     }
 

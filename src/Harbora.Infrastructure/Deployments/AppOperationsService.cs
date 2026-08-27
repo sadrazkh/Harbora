@@ -225,6 +225,92 @@ public sealed class AppOperationsService(
     private static string? NullIfBlank(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    /// <inheritdoc/>
+    public async Task<RateLimitToggleResult> SetRateLimitAsync(
+        Guid appId, bool enabled, int average, int burst, CancellationToken ct)
+    {
+        // Validated before anything is touched — the same "refuse before the DB" shape the route
+        // designer's own save gate uses, so a bad number never reaches a route row, let alone a
+        // deployment's render.
+        if (enabled)
+        {
+            if (!Domain.Apps.AppRateLimitPolicy.IsValidAverage(average))
+                return RateLimitToggleResult.Failed(
+                    $"Requests per minute must be between {Domain.Apps.AppRateLimitPolicy.MinAverage} " +
+                    $"and {Domain.Apps.AppRateLimitPolicy.MaxAverage}.");
+            if (!Domain.Apps.AppRateLimitPolicy.IsValidBurst(burst))
+                return RateLimitToggleResult.Failed(
+                    $"Burst allowance must be between {Domain.Apps.AppRateLimitPolicy.MinBurst} " +
+                    $"and {Domain.Apps.AppRateLimitPolicy.MaxBurst}.");
+        }
+
+        // Unfiltered for the same reason SetMaintenanceModeAsync's own read is: ownership is the
+        // caller's to check, and every request-bound entry point (AppsController) already asks
+        // CanTouchAppAsync before this runs.
+        var app = await db.Apps.IgnoreQueryFilters().FirstOrDefaultAsync(a => a.Id == appId, ct);
+        if (app is null)
+            return RateLimitToggleResult.Failed("No such app.");
+
+        var routes = await db.Routes.IgnoreQueryFilters().Where(r => r.AppId == appId).ToListAsync(ct);
+
+        // Captured before anything is mutated, so a failed apply can put every row back to exactly
+        // what it said on the way in — DeploymentPipeline.WireProxyAsync's own RouteRevert shape,
+        // kept until the apply below is known to have worked rather than only until this method
+        // returns.
+        var undo = routes.Select(r => (r.RateLimitEnabled, r.RateLimitAverage, r.RateLimitBurst)).ToList();
+
+        foreach (var r in routes)
+        {
+            r.RateLimitEnabled = enabled;
+            // Only overwritten while turning it on (or reconfiguring while already on). Turning it
+            // off must leave the last-configured numbers in place rather than stamping in whatever the
+            // disable request happened to carry (typically zeros) — so switching it back on later
+            // starts from what was there, not from scratch.
+            if (enabled)
+            {
+                r.RateLimitAverage = average;
+                r.RateLimitBurst = burst;
+            }
+        }
+        await db.SaveChangesAsync(ct);
+
+        var result = await proxy.ApplyAllAsync(app.WorkspaceId, ct);
+        if (!result.Success)
+        {
+            // Put every row back exactly as `undo` captured it, then re-publish from the reverted
+            // rows — the same reasoning SetMaintenanceModeAsync's own failure path gives: a refused
+            // apply may already have changed the live file, and between our save and this failure any
+            // other caller's apply could have published what we just wrote.
+            for (var i = 0; i < routes.Count; i++)
+            {
+                routes[i].RateLimitEnabled = undo[i].RateLimitEnabled;
+                routes[i].RateLimitAverage = undo[i].RateLimitAverage;
+                routes[i].RateLimitBurst = undo[i].RateLimitBurst;
+            }
+            await db.SaveChangesAsync(ct);
+
+            try { await proxy.ApplyAllAsync(app.WorkspaceId, CancellationToken.None); }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Could not re-apply the proxy config after a failed rate-limit toggle.");
+            }
+
+            return RateLimitToggleResult.Failed(ProxyDiagnosis.ExplainApplyFailure(result));
+        }
+
+        // Only now — after the proxy is known to have accepted the new routing — does the
+        // customer-visible flag change. See App.RateLimitEnabled's own doc for why.
+        app.RateLimitEnabled = enabled;
+        if (enabled)
+        {
+            app.RateLimitAverage = average;
+            app.RateLimitBurst = burst;
+        }
+        await db.SaveChangesAsync(ct);
+
+        return RateLimitToggleResult.Ok;
+    }
+
     public async Task DeleteAsync(Guid appId, bool removeVolumes, CancellationToken ct)
     {
         // Deleting is also driven by the preview sweeper and by branch-deleted webhooks, neither of

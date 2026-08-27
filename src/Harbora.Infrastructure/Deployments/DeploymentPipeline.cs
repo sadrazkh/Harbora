@@ -1976,6 +1976,15 @@ public sealed class DeploymentPipeline(
             if (route is null)
             {
                 route = new Route { WorkspaceId = app.WorkspaceId, AppId = app.Id, Host = domain.Host };
+                // C3 (2026-08-27 what's-left plan): a brand-new domain on an app that already carries
+                // a rate limit must not start unprotected — every OTHER route this app owns already
+                // enforces one. Seeded once, here, rather than read from App at render time: see
+                // Route's own remarks on RateLimitEnabled for why TraefikProxyEngine never joins back
+                // to App. An existing route is never touched here, so a redeploy cannot drop what
+                // AppOperationsService.SetRateLimitAsync already wrote onto it.
+                route.RateLimitEnabled = app.RateLimitEnabled;
+                route.RateLimitAverage = app.RateLimitAverage;
+                route.RateLimitBurst = app.RateLimitBurst;
                 db.Routes.Add(route);
             }
             // Only the first sight of a row is what that row said. Two domains resolving to one
