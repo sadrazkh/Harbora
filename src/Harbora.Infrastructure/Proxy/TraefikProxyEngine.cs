@@ -402,6 +402,17 @@ public sealed class TraefikProxyEngine(
             sb.AppendLine($"        average: {Math.Max(1, r.RateLimitAverage)}");
             sb.AppendLine($"        burst: {Math.Max(1, r.RateLimitBurst)}");
             sb.AppendLine($"        period: \"{Domain.Apps.AppRateLimitPolicy.PeriodSeconds}s\"");
+            // Same reasoning as the ipAllowList block above, and the same bug it would otherwise be:
+            // in Cloudflare mode every request reaches Traefik from Cloudflare's own edge address, so
+            // without trusting the forwarded header at the same depth, every visitor collapses into
+            // one shared bucket — the limit would trip on the app's total traffic, not on any one
+            // flooding client, which is the opposite of what this feature is for.
+            if (ActiveForwardedClientIpDepth > 0)
+            {
+                sb.AppendLine("        sourceCriterion:");
+                sb.AppendLine("          ipStrategy:");
+                sb.AppendLine($"            depth: {ActiveForwardedClientIpDepth}");
+            }
         }
     }
 

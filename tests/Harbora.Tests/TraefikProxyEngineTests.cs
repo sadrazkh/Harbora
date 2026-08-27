@@ -154,6 +154,95 @@ public class TraefikProxyEngineTests
         }
     }
 
+    // ---- per-app rate limiting (C3, 2026-08-27 what's-left plan) ----
+
+    [Fact]
+    public void A_rate_limited_route_renders_the_middleware_with_its_own_numbers()
+    {
+        var route = HostRoute();
+        route.RateLimitEnabled = true;
+        route.RateLimitAverage = 300;
+        route.RateLimitBurst = 150;
+
+        var content = Engine().Preview([route]).Content;
+
+        content.Should().Contain("rateLimit:");
+        content.Should().Contain("average: 300");
+        content.Should().Contain("burst: 150");
+        content.Should().Contain("period: \"60s\"", "the averaging window is fixed, not a customer choice");
+    }
+
+    [Fact]
+    public void The_rate_limit_middleware_is_referenced_by_the_router_that_needs_it()
+    {
+        var route = HostRoute();
+        route.RateLimitEnabled = true;
+
+        var content = Engine().Preview([route]).Content;
+
+        var routerName = "r-" + route.Id.ToString("N")[..12];
+        content.Should().Contain($"{routerName}-ratelimit:",
+            "the middleware block itself must exist under this route's own name");
+        content.Should().MatchRegex($@"middlewares: \[[^\]]*{routerName}-ratelimit[^\]]*\]",
+            "a middleware nobody's router references never runs");
+    }
+
+    [Fact]
+    public void A_route_with_rate_limiting_off_renders_no_middleware_at_all()
+    {
+        var route = HostRoute();
+        route.RateLimitEnabled = false;
+        route.RateLimitAverage = 300;
+        route.RateLimitBurst = 150;
+
+        var content = Engine().Preview([route]).Content;
+
+        content.Should().NotContain("rateLimit:");
+        content.Should().NotContain("-ratelimit:");
+    }
+
+    [Fact]
+    public void Cloudflare_mode_partitions_the_rate_limit_by_the_forwarded_visitor_not_the_edge_ip()
+    {
+        // The same bug the ipAllowList test just above exists to rule out, one middleware over: in
+        // Cloudflare mode every request reaches Traefik from Cloudflare's own address, so without
+        // trusting the forwarded header, every visitor would share one bucket and the limit would
+        // trip on the app's total traffic rather than on any one flooding client.
+        var route = HostRoute();
+        route.RateLimitEnabled = true;
+
+        var content = Engine(new TraefikOptions { ForwardedClientIpDepth = 1 }).Preview([route]).Content;
+
+        content.Should().Contain("sourceCriterion:").And.Contain("ipStrategy:").And.Contain("depth: 1");
+    }
+
+    [Fact]
+    public void Direct_mode_does_not_add_a_source_criterion_to_the_rate_limit()
+    {
+        var route = HostRoute();
+        route.RateLimitEnabled = true;
+
+        var content = Engine().Preview([route]).Content;
+
+        content.Should().NotContain("sourceCriterion:");
+    }
+
+    [Fact]
+    public void A_zero_or_negative_stored_number_still_renders_as_a_real_limit_not_unlimited()
+    {
+        // Defensive: nothing in this codebase should ever write a non-positive average/burst onto an
+        // enabled row (AppOperationsService validates first), but a route that reads "enabled" in the
+        // database must never render as a middleware Traefik would treat as no limit at all.
+        var route = HostRoute();
+        route.RateLimitEnabled = true;
+        route.RateLimitAverage = 0;
+        route.RateLimitBurst = -5;
+
+        var content = Engine().Preview([route]).Content;
+
+        content.Should().Contain("average: 1").And.Contain("burst: 1");
+    }
+
     [Fact]
     public void Validate_passes_for_a_well_formed_route()
     {
