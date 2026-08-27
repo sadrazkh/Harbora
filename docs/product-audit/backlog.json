@@ -1050,7 +1050,7 @@
   {
     "id": "HARBORA-0033",
     "status": "partial",
-    "statusEvidence": "Volume.cs:16-26 has a Protected flag that blocks delete (doc-commented HARBORA-0033); AppsController.cs:942-1004 RemoveVolume(deleteData) + Views/Apps/Volumes.cshtml:38-116 offer a keep/delete choice with tailored confirmation text. But VolumeOrphanReport.cs:26-35 self-documents that IDockerEngine still has no volume-listing method, so its 'section three' (real unowned Docker volumes on disk) always prints 'not checked' rather than an actual enumeration -- tests/Harbora.Tests/VolumeOrphanReportTests.cs:165-166 pins that honesty. The orphan-report acceptance criterion is not met; the other two are.",
+    "statusEvidence": "A6 (2026-08-27, commit 3069afb): IDockerEngine.ListVolumesAsync (IDockerEngine.cs) is the enumeration that did not exist anywhere -- implemented for real via Docker.DotNet in DockerEngine.cs (used both in-process and inside Harbora.Agent), proxied over the older inbound agent by RemoteDockerEngine.cs against a new GET /agent/volumes. DiskVolumeOrphanReport.cs walks every registered server through IServerEngineFactory, lists its disk, and diffs against Volume rows scoped to MountPath.HarboraVolumePrefix, reached at GET /servers/disk-volume-report (ServersController.cs, Capabilities.ServersManage). Every server is named as Reached, Refused or Unreachable -- never folded into a silent total; DiskVolumeOrphanReportTests.cs and ServersDiskVolumeReportHttpTests.cs pin that. The risk below was real: NodeWorkloadEngine.ListVolumesAsync throws NodeCapabilityException by name (no ListVolumes verb in the v1 node contract, Harbora.NodeAgent.Contracts/NodeCommands.cs) rather than reporting unsupported silently, so a v1 node's disk still cannot be checked -- that is the remaining half. The Protected-flag and keep/delete acceptance criteria were already met (see the pre-2026-08-27 evidence below) and are unchanged by this commit.",
     "title": "Volume safety: Protected flag, orphan report, deleteData in UI",
     "category": "storage",
     "type": "feature-gap",
@@ -1075,7 +1075,7 @@
       "Orphan enumeration test"
     ],
     "risks": [
-      "ListVolumes is an additive engine method - v1 nodes need a verb or report unsupported"
+      "ListVolumes is an additive engine method - a v1 node has no such verb and refuses by name (NodeCapabilityException) rather than reporting unsupported silently; that node's disk cannot be checked for orphans until the node agent contract grows one"
     ],
     "evidence": [
       "Apps/Details.cshtml:256",
