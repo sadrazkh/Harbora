@@ -128,6 +128,7 @@
                                   <option value="MemoryPercent" selected="@(a.Metric == AlertMetric.MemoryPercent)">@(isFa ? "حافظه" : "Memory")</option>
                                   <option value="CpuPercent" selected="@(a.Metric == AlertMetric.CpuPercent)">CPU</option>
                                   <option value="RestartRate" selected="@(a.Metric == AlertMetric.RestartRate)">@(isFa ? "نرخ ری‌استارت" : "Restart rate")</option>
+                                  <option value="DiskPercent" selected="@(a.Metric == AlertMetric.DiskPercent)">@(isFa ? "دیسک (والیوم)" : "Disk (volumes)")</option>
                               </select>
                               <input name="thresholdPercent" type="number" min="1" max="1000" step="1" value="@Pct(a.ThresholdPercent)" placeholder="@(isFa ? "٪ آستانه / تعداد" : "% threshold / count")"
                                      class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
@@ -203,6 +204,7 @@
                         <option value="MemoryPercent">@(isFa ? "حافظه" : "Memory")</option>
                         <option value="CpuPercent">CPU</option>
                         <option value="RestartRate">@(isFa ? "نرخ ری‌استارت" : "Restart rate")</option>
+                        <option value="DiskPercent">@(isFa ? "دیسک (والیوم)" : "Disk (volumes)")</option>
                     </select>
                     <input name="thresholdPercent" type="number" min="1" max="1000" step="1" placeholder="@(isFa ? "٪ آستانه / تعداد" : "% threshold / count")"
                            class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
@@ -211,8 +213,8 @@
                 </div>
                 <p class="mt-2 text-xs text-ink-faint">
                     @(isFa
-                        ? "برای CPU/حافظه: درصد از سهم خودِ اپ که باید در تمام بازه بالای خط بماند — یک نمونهٔ گذرا هشدار نمی‌دهد. برای نرخ ری‌استارت: تعداد دفعات ری‌استارت در بازهٔ زمانی (دقیقه) به‌جای درصد."
-                        : "For CPU/memory: percentage of the app's own allocation, held for the whole window — a passing spike says nothing. For restart rate: a plain restart count within the window (in minutes), not a percentage.")
+                        ? "برای CPU/حافظه: درصد از سهم خودِ اپ که باید در تمام بازه بالای خط بماند — یک نمونهٔ گذرا هشدار نمی‌دهد. برای نرخ ری‌استارت: تعداد دفعات ری‌استارت در بازهٔ زمانی (دقیقه) به‌جای درصد. برای دیسک: درصد از سقفی که برای والیوم‌های این اپ تنظیم شده — دقیقه‌ها اینجا اثری ندارند، چون اندازهٔ والیوم دوره‌ای اندازه‌گیری می‌شود نه لحظه‌به‌لحظه."
+                        : "For CPU/memory: percentage of the app's own allocation, held for the whole window — a passing spike says nothing. For restart rate: a plain restart count within the window (in minutes), not a percentage. For disk: percentage of the size limit set on this app's own volumes — minutes are ignored, since a volume's size is measured periodically, not sample by sample.")
                 </p>
             </details>
 

@@ -48,6 +48,12 @@ public sealed class MetricsCollector(
         try { await EvaluateThresholdsAsync(now, ct); }
         catch (Exception ex) { logger.LogWarning(ex, "Evaluating per-application thresholds failed."); }
 
+        // C2 (2026-08-27 "the outage nobody sees coming"): reads Volume.StorageBytes, a periodic
+        // measurement, not the mem.used/cpu.percent samples this tick just wrote — but lives here for
+        // the same reason as its sibling above: this is where "is a per-app line crossed" already runs.
+        try { await EvaluateDiskThresholdsAsync(now, ct); }
+        catch (Exception ex) { logger.LogWarning(ex, "Evaluating per-application disk thresholds failed."); }
+
         // C1 (2026-08-27 "warn before the refusal"): does not read the samples just written at all —
         // it reads IQuotaService's own committed-capacity snapshot — but lives on this same tick
         // because that is where every other "is a workspace approaching a line" check already runs.
@@ -95,11 +101,18 @@ public sealed class MetricsCollector(
     /// Percentages come from <see cref="AllocationReading"/>, the same rule the app page uses, so a
     /// figure the panel calls "unmeasured" can never become an alert. An app with no limit has no
     /// percentage to be over, and is skipped rather than treated as 0%.
+    ///
+    /// <see cref="AlertMetric.DiskPercent"/> is deliberately excluded from this query and evaluated by
+    /// <see cref="EvaluateDiskThresholdsAsync"/> instead: every rule reaching the loop below is
+    /// required to have a running container (the line just past the app lookup skips one that does
+    /// not), which is right for a live <c>cpu.percent</c>/<c>mem.used</c> sample but wrong for a
+    /// volume, whose bytes sit on disk whether or not the app is between deployments right now.
     /// </summary>
     private async Task EvaluateThresholdsAsync(DateTimeOffset now, CancellationToken ct)
     {
         var rules = await db.Alerts.IgnoreQueryFilters()
-            .Where(a => a.IsEnabled && a.AppId != null && a.Metric != null && a.ThresholdPercent > 0)
+            .Where(a => a.IsEnabled && a.AppId != null && a.Metric != null
+                        && a.Metric != AlertMetric.DiskPercent && a.ThresholdPercent > 0)
             .ToListAsync(ct);
 
         if (rules.Count == 0) return;
@@ -232,6 +245,81 @@ public sealed class MetricsCollector(
 
             // Through this rule specifically. Broadcasting a threshold to every channel in the
             // workspace would tell people who never asked about this app.
+            await notifications.NotifyRuleAsync(rule.Id, evt, ThresholdRule.Severity, ct);
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// C2 (2026-08-27 "the outage nobody sees coming"): "tell me when this app's own volumes hold
+    /// above 90% of the size limit set on them" — <see cref="AlertMetric.DiskPercent"/>, split out of
+    /// <see cref="EvaluateThresholdsAsync"/> because the figure comes from <c>Volume.StorageBytes</c>
+    /// (a periodic measurement written by <c>StorageMeasurer</c>) rather than a live per-tick sample,
+    /// so there is no sample window for <see cref="ThresholdRule.Breached"/> to hold a line across —
+    /// the latest measurement decides the tick, the same way a restart count decides its own tick
+    /// rather than being sustained across one. <see cref="Alert.SustainedMinutes"/> plays no part here.
+    ///
+    /// Only volumes with <see cref="Domain.Apps.Volume.SizeLimitBytes"/> set count towards either half
+    /// of the reading: an uncapped volume has no ceiling for its bytes to be a share of, the same rule
+    /// <see cref="AllocationReading"/> already applies to CPU/memory. A capped volume nothing has
+    /// measured yet makes the whole reading "not measured" rather than a false 0% — silence, not a
+    /// clean bill of health, the same principle <see cref="ThresholdRule"/>'s own doc states for a gap
+    /// in a live sample.
+    /// </summary>
+    private async Task EvaluateDiskThresholdsAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        var rules = await db.Alerts.IgnoreQueryFilters()
+            .Where(a => a.IsEnabled && a.AppId != null && a.Metric == AlertMetric.DiskPercent && a.ThresholdPercent > 0)
+            .ToListAsync(ct);
+        if (rules.Count == 0) return;
+
+        var appIds = rules.Select(r => r.AppId!.Value).Distinct().ToList();
+        var appNames = await db.Apps.IgnoreQueryFilters()
+            .Where(a => appIds.Contains(a.Id))
+            .Select(a => new { a.Id, a.Name })
+            .ToDictionaryAsync(a => a.Id, a => a.Name, ct);
+        var volumesByApp = await db.Volumes.AsNoTracking()
+            .Where(v => appIds.Contains(v.AppId) && v.SizeLimitBytes > 0)
+            .Select(v => new { v.AppId, v.SizeLimitBytes, v.StorageBytes })
+            .ToListAsync(ct);
+
+        foreach (var rule in rules)
+        {
+            if (!appNames.TryGetValue(rule.AppId!.Value, out var appName)) continue;
+
+            var volumes = volumesByApp.Where(v => v.AppId == rule.AppId!.Value).ToList();
+            var allocation = volumes.Sum(v => v.SizeLimitBytes!.Value);
+            // No capped volume at all: there is no ceiling for anything to be a percentage of, the
+            // same as an app with no CPU/memory limit above.
+            if (allocation <= 0) continue;
+            // A capped volume nothing has measured yet is a gap, not a zero — skip this tick entirely
+            // rather than under-report how full the app's disk really is.
+            if (volumes.Any(v => v.StorageBytes is null)) continue;
+
+            var used = volumes.Sum(v => v.StorageBytes!.Value);
+            var reading = AllocationReading.Of(used, allocation);
+            var breached = reading.Kind == AllocationKind.Known && reading.Percent >= rule.ThresholdPercent!.Value;
+
+            var subject = $"{appName}: disk above {rule.ThresholdPercent:0}%";
+            var body = $"{appName}'s volumes have held above {rule.ThresholdPercent:0}% of their configured size limit.";
+            var evt = NotificationEventData.Create(AlertEvent.ThresholdBreached,
+                ("AppName", appName), ("Metric", nameof(AlertMetric.DiskPercent)),
+                ("Threshold", rule.ThresholdPercent!.Value.ToString("0")), ("SustainedMinutes", rule.SustainedMinutes.ToString()));
+
+            if (!breached)
+            {
+                if (rule.ThresholdFiredAt is not null) rule.ThresholdFiredAt = null;
+                await incidents.ResolveAsync(rule.WorkspaceId, AlertEvent.ThresholdBreached, rule.Id.ToString(), now, ct);
+                continue;
+            }
+
+            await incidents.OpenAsync(rule.WorkspaceId, AlertEvent.ThresholdBreached, rule.Id.ToString(),
+                ThresholdRule.Severity, subject, body, now, ct);
+
+            if (!ThresholdRule.MayRepeat(rule.ThresholdFiredAt, now, _options.ThresholdRepeatAfter)) continue;
+
+            rule.ThresholdFiredAt = now;
             await notifications.NotifyRuleAsync(rule.Id, evt, ThresholdRule.Severity, ct);
         }
 

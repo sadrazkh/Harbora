@@ -324,7 +324,22 @@ public enum AlertMetric
     /// in the last M minutes" rather than "held above N% for the whole of M minutes". See
     /// <c>MetricsCollector.EvaluateThresholdsAsync</c> for where that split actually happens.
     /// </summary>
-    RestartRate = 2
+    RestartRate = 2,
+
+    /// <summary>
+    /// C2 (2026-08-27 "the outage nobody sees coming"): how full an app's own volumes are against
+    /// their configured <c>Volume.SizeLimitBytes</c>. Appended, and a second odd one out for a
+    /// different reason than <see cref="RestartRate"/>: <c>Volume.StorageBytes</c> is a periodic
+    /// measurement (<c>StorageMeasurer</c>), not a live per-tick sample the way <c>cpu.percent</c>/
+    /// <c>mem.used</c> are, so there is no time series for it to hold above a line across — see
+    /// <c>MetricsCollector.EvaluateDiskThresholdsAsync</c>, a separate pass from
+    /// <see cref="CpuPercent"/>/<see cref="MemoryPercent"/>'s own sample-window evaluation, where
+    /// <c>Alert.SustainedMinutes</c> plays no part and the latest measurement decides the tick.
+    /// Deliberately not the same figure as an <c>Alert.OnDiskWarning</c> rule: that one watches a
+    /// server's own free space; this one watches one app's volumes against a cap the workspace itself
+    /// set, and a server with acres of free disk can still host a volume that is completely full.
+    /// </summary>
+    DiskPercent = 3
 }
 
 /// <summary>

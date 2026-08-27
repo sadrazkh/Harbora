@@ -104,6 +104,19 @@ public class NotificationTemplateCatalogTests
     }
 
     [Fact]
+    public void Threshold_breached_for_disk_names_the_volumes_own_limit_not_a_sustained_window()
+    {
+        var disk = Catalog.Render(NotificationEventData.Create(AlertEvent.ThresholdBreached,
+            ("AppName", "api"), ("Metric", "DiskPercent"), ("Threshold", "90"), ("SustainedMinutes", "5")), "en");
+
+        disk.Subject.Should().Contain("disk").And.Contain("90%");
+        // Unlike CPU/memory's "held above X% for N minute(s)", disk has no sample window to be held
+        // across — EvaluateDiskThresholdsAsync's own doc says why — so the sentence must not claim one.
+        disk.TextBody.Should().NotContain("minute",
+            "Volume.StorageBytes is a periodic measurement, not a live sample — there is no window it was held across");
+    }
+
+    [Fact]
     public void Quota_warning_carries_the_percent_in_the_subject_and_the_resource_list_in_the_body()
     {
         var rendered = Catalog.Render(NotificationEventData.Create(AlertEvent.QuotaWarning,

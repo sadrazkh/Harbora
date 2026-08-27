@@ -298,6 +298,17 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
                    $"configured {threshold}.");
         }
 
+        // C2 (2026-08-27 "the outage nobody sees coming"): a separate sentence, not a third unit word
+        // in the "held for N minutes" phrasing below — Volume.StorageBytes is a periodic measurement,
+        // not a live sample, so there is no window it was actually held across (SustainedMinutes plays
+        // no part in EvaluateDiskThresholdsAsync) and saying there was one would be inventing a fact.
+        if (d.Get("Metric") == "DiskPercent")
+            return isFa
+                ? ($"{app}: دیسک بالای {threshold}٪",
+                   $"والیوم‌های برنامه «{app}» بالای {threshold}٪ از سقف تنظیم‌شده برای اندازه‌شان بوده‌اند.")
+                : ($"{app}: disk above {threshold}%",
+                   $"{app}'s volumes have held above {threshold}% of their configured size limit.");
+
         var unitFa = d.Get("Metric") == "CpuPercent" ? "CPU" : "حافظه";
         var unitEn = d.Get("Metric") == "CpuPercent" ? "CPU" : "memory";
         return isFa

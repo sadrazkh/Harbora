@@ -29,6 +29,12 @@ public static class MonitoringLabels
         AlertMetric.RestartRate => isFa
             ? $"روی «{appName}» · بیش از {Pct(a.ThresholdPercent)} بار ری‌استارت در {a.SustainedMinutes} دقیقه"
             : $"watches {appName} · more than {Pct(a.ThresholdPercent)} restart(s) in {a.SustainedMinutes}m",
+        // C2 (2026-08-27 "the outage nobody sees coming"): no "for Nm" — Volume.StorageBytes is a
+        // periodic measurement, not a live sample, so SustainedMinutes plays no part in this metric
+        // the way it does for CPU/memory below (EvaluateDiskThresholdsAsync's own doc says why).
+        AlertMetric.DiskPercent => isFa
+            ? $"روی «{appName}» · دیسک ≥ {Pct(a.ThresholdPercent)}٪ از سقف والیوم"
+            : $"watches {appName} · disk ≥ {Pct(a.ThresholdPercent)}% of volume limit",
         _ => isFa
             ? $"روی «{appName}» · {(a.Metric == AlertMetric.CpuPercent ? "CPU" : "حافظه")} ≥ {Pct(a.ThresholdPercent)}٪ به مدت {a.SustainedMinutes} دقیقه"
             : $"watches {appName} · {a.Metric} ≥ {Pct(a.ThresholdPercent)}% for {a.SustainedMinutes}m"
