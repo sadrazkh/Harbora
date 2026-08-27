@@ -157,6 +157,14 @@ public sealed class RemoteDockerEngine(
     public Task EnsureVolumeAsync(string name, CancellationToken ct) => PostJson("agent/volumes/ensure", new { name }, ct);
     public Task RemoveVolumeAsync(string name, CancellationToken ct) => PostJson("agent/volumes/remove", new { name }, ct);
 
+    /// <summary>
+    /// The agent hosts the exact same <c>DockerEngine</c> this panel would use locally, so this is a
+    /// plain proxy to its own <see cref="IDockerEngine.ListVolumesAsync"/> — no shape to translate,
+    /// unlike a v1 node's <c>NodeWorkloadEngine</c>, whose contract never offered this verb at all.
+    /// </summary>
+    public async Task<IReadOnlyList<VolumeInfo>> ListVolumesAsync(CancellationToken ct) =>
+        await Client().GetFromJsonAsync<List<VolumeInfo>>("agent/volumes", ct) ?? [];
+
     public async Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct)
     {
         var res = await Client().PostAsJsonAsync("agent/oneoff", request, Json, ct);

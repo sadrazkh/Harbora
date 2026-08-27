@@ -275,6 +275,10 @@ public static class DependencyInjection
         services.AddHostedService<Services.DatabaseAccessSweeper>();
         services.AddHostedService<Storage.BucketMeasurementSweeper>();
         services.AddScoped<Maintenance.DiskCleanupService>();
+        // HARBORA-0033's disk-side half — needs the same per-server engine factory DiskCleanupService
+        // does, so it is registered the same way (scoped, not static) rather than beside
+        // VolumeOrphanReport, which is a pure database query AdminCommands can run with no DI at all.
+        services.AddScoped<Storage.DiskVolumeOrphanReport>();
         services.AddScoped<Notifications.PlatformMailer>();
         services.AddHostedService<Maintenance.UpdateCheckService>();
         // Bounds the seven tables that had no retention at all — build logs first among them. A

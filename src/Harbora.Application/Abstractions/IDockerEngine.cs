@@ -108,6 +108,23 @@ public interface IDockerEngine
     Task RemoveVolumeAsync(string name, CancellationToken ct);
 
     /// <summary>
+    /// Every volume that actually exists on this node's disk — not the ones the database has a row
+    /// for, the ones the daemon itself would list with <c>docker volume ls</c>.
+    ///
+    /// <para>
+    /// HARBORA-0033's other half. <see cref="EnsureVolumeAsync"/> and <see cref="RemoveVolumeAsync"/>
+    /// only ever name a volume the caller already knows about; nothing before this let the platform
+    /// ask a server "what is actually there" and compare the answer against what the database
+    /// believes. No default implementation is offered — the same reason <see cref="ExecAsync"/> and
+    /// <see cref="RunOneOffAsync"/> have none: an engine that cannot honestly enumerate a node's disk
+    /// must say so itself, in its own words, rather than silently inherit a generic refusal or — worse
+    /// — a silent empty list that would read as "this machine has nothing to report" instead of "this
+    /// machine was never asked".
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<VolumeInfo>> ListVolumesAsync(CancellationToken ct);
+
+    /// <summary>
     /// Runs a short-lived container to completion (used by the backup engine to tar/untar
     /// volumes) and returns its exit code. The container is removed afterwards.
     /// </summary>
@@ -224,6 +241,16 @@ public record ContainerLifecycle(int? RestartCount, DateTimeOffset? StartedAt);
 public record TimedLogLine(DateTimeOffset Timestamp, string Text);
 
 public record ImageInfo(string Id, string Tag, DateTimeOffset CreatedAt, long SizeBytes);
+
+/// <summary>
+/// One volume as the daemon itself names it — <see cref="Name"/> is the exact docker volume name, the
+/// same string <see cref="Domain.Apps.Volume.Name"/> stores when the platform made it. Nothing else
+/// this report needs (mountpoint, driver, labels) is carried here on purpose: the one comparison this
+/// exists for is "is this name in the database", and a wider shape would just be fields nobody reads.
+/// <paramref name="CreatedAt"/> is null when the engine cannot honestly report it, not a stand-in for
+/// "just now" — the same rule every other unmeasured figure in this interface follows.
+/// </summary>
+public record VolumeInfo(string Name, DateTimeOffset? CreatedAt);
 public record ContainerStats(double CpuPercent, long MemoryUsedBytes, long MemoryLimitBytes, long NetRxBytes, long NetTxBytes);
 /// <param name="Architecture">
 /// What the host runs — <c>amd64</c>, <c>arm64</c>. Optional and last, so an agent that does not

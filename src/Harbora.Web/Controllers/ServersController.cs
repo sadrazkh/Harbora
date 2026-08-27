@@ -3,6 +3,7 @@ using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Servers;
+using Harbora.Infrastructure.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -20,6 +21,7 @@ public sealed class ServersController(
     IServerEngineFactory engineFactory,
     INodeCapacityService capacity,
     ISecretProtector protector,
+    DiskVolumeOrphanReport diskVolumeReport,
     Harbora.Application.Abstractions.ISystemClock clock) : Controller
 {
     // Reading is gated too, not just managing. The sidebar has always hidden this from a member
@@ -85,6 +87,22 @@ public sealed class ServersController(
         }
         await db.SaveChangesAsync(ct);
         return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// HARBORA-0033's disk-side half: volumes actually on a server's disk with no database row at
+    /// all. Read-only, and gated the same as the rest of this controller — this is the same list of
+    /// hostnames, core counts and Docker versions that reading the server list itself is gated on.
+    /// Plain text on purpose, matching <c>VolumeOrphanReport</c>'s own CLI rendering rather than a
+    /// dedicated page: both reports exist to be read once by an operator chasing missing disk space,
+    /// not to be a dashboard someone leaves open.
+    /// </summary>
+    [HttpGet("disk-volume-report")]
+    [Authorize(Policy = Capabilities.ServersManage)]
+    public async Task<IActionResult> DiskVolumeReport(CancellationToken ct)
+    {
+        var report = await diskVolumeReport.BuildAsync(ct);
+        return Content(DiskVolumeOrphanReport.Render(report), "text/plain");
     }
 
     [HttpPost("{id:guid}/remove")]

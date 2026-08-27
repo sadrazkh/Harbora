@@ -8,13 +8,20 @@ using Xunit;
 namespace Harbora.Tests;
 
 /// <summary>
-/// <see cref="RemoteDockerEngine.RunOneOffAsync"/> talks to a real node agent over HTTP, which
-/// this machine cannot run — see docs/node-agent for why. What these tests cover instead is the
-/// panel-side contract against a stubbed <c>/agent/oneoff</c> response: that a returned "output"
-/// field is replayed into the caller's log, and that an agent old enough to have never learned
-/// about that field (only "exitCode") does not throw and simply produces no output, exactly as it
-/// does today. A real agent round trip — the agent actually collecting a container's output and
-/// putting it on the wire — is not exercised here.
+/// <see cref="RemoteDockerEngine"/> talks to a real node agent over HTTP, which this machine cannot
+/// run — see docs/node-agent for why. What these tests cover instead is the panel-side contract
+/// against a stubbed agent response, for two of its endpoints:
+///
+/// <list type="bullet">
+/// <item><c>RunOneOffAsync</c> against <c>/agent/oneoff</c>: a returned "output" field is replayed
+/// into the caller's log, and an agent old enough to have never learned about that field (only
+/// "exitCode") does not throw and simply produces no output, exactly as it does today.</item>
+/// <item><c>ListVolumesAsync</c> against <c>/agent/volumes</c> (HARBORA-0033's disk-side half): the
+/// agent's JSON deserialises into the same <see cref="VolumeInfo"/> shape the local engine reports.</item>
+/// </list>
+///
+/// A real agent round trip — the agent actually talking to its own Docker daemon — is not exercised
+/// here in either case.
 /// </summary>
 public class RemoteDockerEngineTests
 {
@@ -82,6 +89,34 @@ public class RemoteDockerEngineTests
         await engine.RunOneOffAsync(Request(), new InlineLog(lines.Add), default);
 
         lines.Should().Equal("kept line", marker);
+    }
+
+    // ---- ListVolumesAsync (HARBORA-0033's disk-side half) ----
+
+    [Fact]
+    public async Task Volumes_the_agent_reports_are_deserialised_with_their_name_and_creation_time()
+    {
+        var handler = new StubHandler(
+            """[{"name":"harbora-vol-blog-data","createdAt":"2026-01-15T10:00:00+00:00"},{"name":"harbora-vol-gone-app-data","createdAt":null}]""");
+        var engine = new RemoteDockerEngine(new Factory(handler), "http://node.example.com", "token");
+
+        var volumes = await engine.ListVolumesAsync(default);
+
+        volumes.Should().HaveCount(2);
+        volumes.Should().ContainSingle(v => v.Name == "harbora-vol-blog-data" &&
+            v.CreatedAt == DateTimeOffset.Parse("2026-01-15T10:00:00+00:00"));
+        volumes.Should().ContainSingle(v => v.Name == "harbora-vol-gone-app-data" && v.CreatedAt == null);
+    }
+
+    [Fact]
+    public async Task An_agent_reporting_no_volumes_at_all_answers_an_empty_list_rather_than_null()
+    {
+        var handler = new StubHandler("[]");
+        var engine = new RemoteDockerEngine(new Factory(handler), "http://node.example.com", "token");
+
+        var volumes = await engine.ListVolumesAsync(default);
+
+        volumes.Should().BeEmpty();
     }
 
     private sealed class InlineLog(Action<string> handler) : IProgress<string>

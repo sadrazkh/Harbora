@@ -475,6 +475,10 @@ public sealed class FakeDockerEngine : IDockerEngine
     {
         ct.ThrowIfCancellationRequested();
         Record(nameof(EnsureVolumeAsync), name);
+        // Tracked here too, not just recorded: ListVolumesAsync answers from this dictionary, and a
+        // test proving a volume the platform itself provisioned is NOT an orphan needs it to actually
+        // be "on disk" as far as this fake is concerned, not merely logged as a call that happened.
+        _volumes[name] = new VolumeInfo(name, DateTimeOffset.UtcNow);
         return Task.CompletedTask;
     }
 
@@ -489,7 +493,33 @@ public sealed class FakeDockerEngine : IDockerEngine
         Record(nameof(RemoveVolumeAsync), name);
         if (UnremovableVolumes.Contains(name))
             throw new InvalidOperationException($"volume {name} could not be removed");
+        _volumes.TryRemove(name, out _);
         return Task.CompletedTask;
+    }
+
+    private readonly ConcurrentDictionary<string, VolumeInfo> _volumes = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Puts a volume "on disk" as if it were left there by something outside the platform's own
+    /// EnsureVolumeAsync calls — an unmount, an app delete that kept its data, or a volume nobody in
+    /// Harbora ever asked for. This is the shape HARBORA-0033's disk-side orphan report exists to find.
+    /// </summary>
+    public FakeDockerEngine SeedVolume(string name, DateTimeOffset? createdAt = null)
+    {
+        _volumes[name] = new VolumeInfo(name, createdAt);
+        return this;
+    }
+
+    /// <summary>When set, <see cref="ListVolumesAsync"/> throws this instead of answering — simulating
+    /// a v1 node's <c>NodeCapabilityException</c> refusal or a plain connectivity failure, without a
+    /// test having to construct a real <c>NodeWorkloadEngine</c> just to get one.</summary>
+    public Exception? ListVolumesThrows { get; set; }
+
+    public Task<IReadOnlyList<VolumeInfo>> ListVolumesAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (ListVolumesThrows is not null) throw ListVolumesThrows;
+        return Task.FromResult<IReadOnlyList<VolumeInfo>>(_volumes.Values.ToList());
     }
 
     public async Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct)

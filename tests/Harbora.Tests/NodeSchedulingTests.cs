@@ -449,6 +449,7 @@ public sealed class NodeSchedulingTests : IDisposable
         public Task ConnectNetworkAsync(string container, string network, CancellationToken ct) => Task.CompletedTask;
         public Task EnsureVolumeAsync(string name, CancellationToken ct) => Task.CompletedTask;
         public Task RemoveVolumeAsync(string name, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<VolumeInfo>> ListVolumesAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<VolumeInfo>>([]);
         public Task<int> RunOneOffAsync(DockerOneOffRequest r, IProgress<string>? l, CancellationToken ct) => Task.FromResult(0);
         /// <summary>A fake offers no shell — a test that reaches here meant something else.</summary>
         public Task<IContainerExec> ExecAsync(

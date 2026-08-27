@@ -36,6 +36,19 @@ public static class MountPath
     public const int MaxLength = 255;
 
     /// <summary>
+    /// Every docker volume this feature ever names starts with this. <see cref="DiskVolumeOrphanReport"/>
+    /// relies on it being exclusive to app volumes: a managed service's data volume is named
+    /// <c>harbora-svc-{slug}-data</c> (<c>DatabasesController</c>) or <c>{container}-data</c>
+    /// (<c>TemplateDeploymentService</c>), and a compose stack's volumes are
+    /// <c>harbora-{app.Slug}-{composeVolume}</c> (<c>DeploymentPipeline.VolumeNameFor</c>) — neither
+    /// shape collides with this one. That is what keeps a disk scan for "volumes with no
+    /// <see cref="Domain.Apps.Volume"/> row" from ever flagging a live database's or a compose
+    /// service's volume: those were never candidates for a <see cref="Domain.Apps.Volume"/> row in the
+    /// first place, so this prefix is the boundary of what that report is even allowed to consider.
+    /// </summary>
+    public const string HarboraVolumePrefix = "harbora-vol-";
+
+    /// <summary>
     /// Directories the container needs to be the image's own.
     ///
     /// Deliberately a short list of the ones that break a container outright. It is not a security
@@ -109,6 +122,6 @@ public static class MountPath
         while (tail.Contains("--")) tail = tail.Replace("--", "-");
         if (tail.Length == 0) tail = "root";
 
-        return $"harbora-vol-{appSlug}-{tail}";
+        return $"{HarboraVolumePrefix}{appSlug}-{tail}";
     }
 }

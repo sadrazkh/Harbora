@@ -15,7 +15,16 @@
         _ => "bg-slate-500/15 text-ink"
     };
 }
-<h1 class="text-2xl font-bold tracking-tight text-ink mb-6">@(isFa ? "سرورها" : "Servers")</h1>
+<div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "سرورها" : "Servers")</h1>
+    @* HARBORA-0033's disk-side half: volumes on a server's disk with no database row at all.
+       Plain-text, like VolumeOrphanReport's own CLI output — a report read once while chasing
+       missing disk space, not a page anyone leaves open. *@
+    <a href="/servers/disk-volume-report" target="_blank" rel="noopener"
+       class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-ink-muted">
+        @(isFa ? "گزارش والیوم‌های یتیم روی دیسک" : "Disk volume orphan report")
+    </a>
+</div>
 
 @*
     The deprecation is met here, at the moment somebody decides to use it, rather than only in a

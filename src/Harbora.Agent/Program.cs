@@ -116,6 +116,9 @@ app.MapPost("/agent/networks/ensure", (NameBody b, IDockerEngine e, Cancellation
 app.MapPost("/agent/networks/connect", (ConnectBody b, IDockerEngine e, CancellationToken ct) => e.ConnectNetworkAsync(b.Container, b.Network, ct));
 app.MapPost("/agent/volumes/ensure", (NameBody b, IDockerEngine e, CancellationToken ct) => e.EnsureVolumeAsync(b.Name, ct));
 app.MapPost("/agent/volumes/remove", (NameBody b, IDockerEngine e, CancellationToken ct) => e.RemoveVolumeAsync(b.Name, ct));
+// HARBORA-0033's disk-side orphan report: every volume actually on this node, for the panel to diff
+// against what the database has a row for. See RemoteDockerEngine.ListVolumesAsync for the panel side.
+app.MapGet("/agent/volumes", (IDockerEngine e, CancellationToken ct) => e.ListVolumesAsync(ct));
 
 app.MapPost("/agent/oneoff", async (DockerOneOffRequest req, IDockerEngine e, CancellationToken ct) =>
 {

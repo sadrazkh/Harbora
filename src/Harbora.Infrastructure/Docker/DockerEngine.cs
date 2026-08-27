@@ -427,6 +427,32 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         catch (DockerApiException ex) { logger.LogWarning("Volume {Name} not removed: {Msg}", name, ex.Message); }
     }
 
+    /// <summary>
+    /// Every volume the daemon itself lists — real Docker.DotNet call, the same one
+    /// <see cref="EnsureVolumeAsync"/> already makes to check whether a volume exists. This runs both
+    /// in-process on the local node and inside <c>Harbora.Agent</c> on an older remote one, since both
+    /// host this exact class against their own daemon.
+    /// </summary>
+    public async Task<IReadOnlyList<VolumeInfo>> ListVolumesAsync(CancellationToken ct)
+    {
+        var response = await client.Volumes.ListAsync(ct);
+        return response.Volumes
+            .Select(v => new VolumeInfo(v.Name, ParseVolumeCreatedAt(v.CreatedAt)))
+            .ToList();
+    }
+
+    /// <summary>
+    /// The daemon reports a volume's creation moment as an RFC3339 string, not a parsed value — the
+    /// same reason <see cref="ParseTimestamp"/> exists a few methods up. Unparsable or absent stays
+    /// null rather than becoming "now", which would tell an operator a leftover volume is fresh when
+    /// it might be a year old.
+    /// </summary>
+    private static DateTimeOffset? ParseVolumeCreatedAt(string? createdAt) =>
+        !string.IsNullOrWhiteSpace(createdAt) &&
+        DateTimeOffset.TryParse(createdAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : null;
+
     public async Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct)
     {
         await PullImageAsync(request.Image, new Progress<string>(l => log?.Report(l)), ct);

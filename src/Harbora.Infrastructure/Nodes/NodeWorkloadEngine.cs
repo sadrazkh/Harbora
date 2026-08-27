@@ -450,6 +450,24 @@ public sealed class NodeWorkloadEngine(
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Not offered. HARBORA-0033's disk-side orphan report needs to ask a node "what volumes actually
+    /// exist on you", and the v1 contract has no verb for that — <c>CreateVolume</c>,
+    /// <c>SnapshotVolume</c> and <c>RestoreVolume</c> each name a volume the panel already knows about;
+    /// none of them enumerates what else is sitting on the disk. Refused by name, the same as
+    /// <see cref="RunOneOffAsync"/> and <see cref="ExecAsync"/> — a silent empty list here would read
+    /// as "this node has nothing orphaned" when the true answer is "this node was never asked", which
+    /// is exactly the defect class a v1-node refusal exists to prevent.
+    /// </summary>
+    public Task<IReadOnlyList<VolumeInfo>> ListVolumesAsync(CancellationToken ct) =>
+        throw new NodeCapabilityException(
+            nodeId,
+            "list its volumes",
+            "A v1 node has no verb for enumerating every volume on its disk — only CreateVolume, " +
+            "SnapshotVolume and RestoreVolume exist, and each names a volume the panel already knows " +
+            "about. Finding a volume nobody has a database row for needs a new ListVolumes verb added " +
+            "to the node agent contract; until then this node's disk cannot be checked for orphans.");
+
     /// <summary>Snapshots a node volume and uploads it through a one-use panel relay.</summary>
     public async Task<TransferSnapshotResult> SnapshotToPanelAsync(
         string volumeName,
