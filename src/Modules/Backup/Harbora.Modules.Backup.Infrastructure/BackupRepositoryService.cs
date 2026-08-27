@@ -115,7 +115,8 @@ public sealed class BackupRepositoryService(
                 Type = repository.Type.ToString(),
                 Engine = repository.Engine.ToString(),
                 result.AlreadyExisted
-            }), ct: ct);
+            }),
+            workspaceId: repository.WorkspaceId, ct: ct);
 
         logger.LogInformation("Repository {RepositoryId} ready ({Engine}, existing={Existing}).",
             repository.Id, repository.Engine, result.AlreadyExisted);
@@ -195,7 +196,7 @@ public sealed class BackupRepositoryService(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("backup.repository.delete", "BackupRepository", repositoryId.ToString(),
-            userIdOverride: currentUser.UserId, ct: ct);
+            userIdOverride: currentUser.UserId, workspaceId: repository.WorkspaceId, ct: ct);
 
         return new RepositoryOutcome(true, repositoryId);
     }

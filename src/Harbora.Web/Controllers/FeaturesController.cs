@@ -160,6 +160,9 @@ public sealed class FeaturesController(
         await audit.LogAsync("features.set", scope.ToString(), targetId.ToString(),
             metadataJson: System.Text.Json.JsonSerializer.Serialize(
                 new { featureKey, state = state.ToString(), note }),
+            // A Workspace-scoped grant's target IS the workspace; a Plan-scoped grant applies to
+            // every workspace on that plan at once and has no single workspace of its own.
+            workspaceId: scope == FeatureScope.Workspace ? targetId : null,
             ct: ct);
 
         TempData["Message"] = IsFa ? "ذخیره شد." : "Saved.";

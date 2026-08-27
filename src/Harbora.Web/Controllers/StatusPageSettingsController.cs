@@ -146,7 +146,7 @@ public sealed class StatusPageSettingsController(
             }
         }
 
-        await audit.LogAsync("statuspage.enabled", "StatusPage", page.Id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("statuspage.enabled", "StatusPage", page.Id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         return RedirectToAction(nameof(Index));
     }
 
@@ -166,7 +166,7 @@ public sealed class StatusPageSettingsController(
         if (publicHost is not null)
             await domains.RemovePlatformRouteAsync(WorkspaceId, publicHost, ct);
 
-        await audit.LogAsync("statuspage.disabled", "StatusPage", page.Id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("statuspage.disabled", "StatusPage", page.Id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         return RedirectToAction(nameof(Index));
     }
 
@@ -238,7 +238,7 @@ public sealed class StatusPageSettingsController(
             return RedirectToAction(nameof(Index));
         }
 
-        await audit.LogAsync("statuspage.domain.attached", "StatusPage", page.Id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("statuspage.domain.attached", "StatusPage", page.Id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = IsFa
             ? "دامنه وصل شد. تا زمانی که DNS به این سرور اشاره کند، ممکن است چند دقیقه طول بکشد."
             : "Domain attached. It may take a few minutes until DNS points here.";
@@ -254,7 +254,7 @@ public sealed class StatusPageSettingsController(
         if (page is null) return RedirectToAction(nameof(Index));
 
         await domains.RemoveCustomDomainAsync(WorkspaceId, page.Id, ct);
-        await audit.LogAsync("statuspage.domain.removed", "StatusPage", page.Id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("statuspage.domain.removed", "StatusPage", page.Id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = IsFa ? "دامنه حذف شد." : "Domain removed.";
         return RedirectToAction(nameof(Index));
     }

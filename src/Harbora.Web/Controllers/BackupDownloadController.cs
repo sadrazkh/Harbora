@@ -41,7 +41,8 @@ public sealed class BackupDownloadController(
         if (!System.IO.File.Exists(localPath)) return NotFound();
 
         await audit.LogAsync("database.export_downloaded", "backup", redemption.BackupId.ToString(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            workspaceId: redemption.Backup.WorkspaceId, ct: ct);
 
         // Always as an attachment, and always as bytes — the same reason VolumeDownloadController never
         // serves a redeemed file inline: this response carries no session to protect, but it does share

@@ -171,7 +171,8 @@ public sealed class NodeCommandService(
             metadataJson: JsonSerializer.Serialize(new
             {
                 envelope.CommandId, idempotencyKey, reason,
-            }, NodeContract.Json), ct: ct);
+            }, NodeContract.Json),
+            workspaceId: currentUser.WorkspaceId, ct: ct);
 
         CommandResult result;
         try
@@ -221,7 +222,8 @@ public sealed class NodeCommandService(
             new CommandCancel { CommandId = commandId, Reason = reason }, commandId, ct);
 
         await audit.LogAsync("node.command.cancel", "node", nodeId,
-            metadataJson: JsonSerializer.Serialize(new { commandId, reason }), ct: ct);
+            metadataJson: JsonSerializer.Serialize(new { commandId, reason }),
+            workspaceId: currentUser.WorkspaceId, ct: ct);
 
         return true;
     }

@@ -42,7 +42,8 @@ public sealed class VolumeDownloadController(
 
         await audit.LogAsync(
             "app.data_link_redeemed", "volume", $"{redemption.VolumeName}/{redemption.Path}",
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            workspaceId: redemption.WorkspaceId, ct: ct);
 
         // Always as an attachment, and always as bytes — the same reason AppDataController.Download
         // never serves a volume's contents inline: this response carries no session to protect, but

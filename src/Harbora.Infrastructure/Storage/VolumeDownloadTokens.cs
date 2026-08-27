@@ -18,7 +18,8 @@ public sealed record VolumeDownloadMint(string Token, DateTimeOffset ExpiresAt);
 /// What a redemption found — enough to stream the file through <see cref="VolumeFileService"/> — or
 /// nothing at all.
 /// </summary>
-public sealed record VolumeDownloadRedemption(bool Ok, Guid ServerId, string VolumeName, string Path)
+public sealed record VolumeDownloadRedemption(
+    bool Ok, Guid ServerId, string VolumeName, string Path, Guid WorkspaceId = default)
 {
     public static readonly VolumeDownloadRedemption Refused = new(false, default, string.Empty, string.Empty);
 }
@@ -96,7 +97,7 @@ public sealed class VolumeDownloadTokens(HarboraDbContext db, ISystemClock clock
         record.UsedAt = now;
         await db.SaveChangesAsync(ct);
 
-        return new VolumeDownloadRedemption(true, app.ServerId, volume.Name, record.Path);
+        return new VolumeDownloadRedemption(true, app.ServerId, volume.Name, record.Path, app.WorkspaceId);
     }
 
     /// <summary>

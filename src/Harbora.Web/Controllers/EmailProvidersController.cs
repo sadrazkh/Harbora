@@ -107,7 +107,7 @@ public sealed class EmailProvidersController(
             UseSsl = useSsl
         });
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("email_provider.created", "email_provider", name, ClientIp, ct: ct);
+        await audit.LogAsync("email_provider.created", "email_provider", name, ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return Back(IsFa ? $"ارائه‌دهنده «{name}» ساخته شد." : $"Email provider '{name}' was created.");
     }
@@ -148,7 +148,7 @@ public sealed class EmailProvidersController(
         foreach (var a in attachments) a.HasUnpublishedChanges = true;
 
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("email_provider.updated", "email_provider", id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("email_provider.updated", "email_provider", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return Back(IsFa
             ? $"ارائه‌دهنده «{provider.Name}» به‌روزرسانی شد. اپ‌های متصل با استقرار بعدی آن را دریافت می‌کنند."
@@ -178,7 +178,7 @@ public sealed class EmailProvidersController(
 
         db.EmailProviders.Remove(provider);
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("email_provider.deleted", "email_provider", provider.Name, ClientIp, ct: ct);
+        await audit.LogAsync("email_provider.deleted", "email_provider", provider.Name, ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return Back(IsFa ? "ارائه‌دهنده حذف شد." : "The email provider was deleted.");
     }
@@ -212,7 +212,7 @@ public sealed class EmailProvidersController(
             AppId = appId, EmailProviderId = id, AttachOrder = maxOrder + 1, HasUnpublishedChanges = true
         });
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("email_provider.attached", "email_provider", $"{id}:{appId}", ClientIp, ct: ct);
+        await audit.LogAsync("email_provider.attached", "email_provider", $"{id}:{appId}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return BackTo(returnUrl, IsFa
             ? $"ارائه‌دهنده «{provider.Name}» متصل شد. متغیرهایش با استقرار بعدی این اپ اعمال می‌شوند."
@@ -236,7 +236,7 @@ public sealed class EmailProvidersController(
 
         db.AppEmailProviders.Remove(join);
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("email_provider.detached", "email_provider", $"{id}:{appId}", ClientIp, ct: ct);
+        await audit.LogAsync("email_provider.detached", "email_provider", $"{id}:{appId}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return BackTo(returnUrl, IsFa
             ? "ارائه‌دهنده جدا شد. تا استقرار بعدی، کانتینر در حال اجرا هنوز متغیرهای آن را دارد."

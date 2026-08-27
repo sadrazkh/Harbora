@@ -64,7 +64,7 @@ public sealed class StorageController(
         var bytes = await objects.ReadAsync(id, key, ct);
         if (bytes is null) return NotFound();
 
-        await audit.LogAsync("storage.object_read", "bucket", $"{id}:{key}", ClientIp, ct: ct);
+        await audit.LogAsync("storage.object_read", "bucket", $"{id}:{key}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         // application/octet-stream on purpose: an object is whatever a customer uploaded, and
         // serving it as its claimed type from the panel's own origin is a stored-XSS delivery.
@@ -94,7 +94,7 @@ public sealed class StorageController(
 
         var outcome = await objects.WriteAsync(id, key, buffer.ToArray(), ct);
         if (outcome.Ok)
-            await audit.LogAsync("storage.object_write", "bucket", $"{id}:{key}", ClientIp, ct: ct);
+            await audit.LogAsync("storage.object_write", "bucket", $"{id}:{key}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         TempData[outcome.Ok ? "Message" : "Error"] = outcome.Ok
             ? (IsFa ? $"«{key}» بارگذاری شد." : $"{key} was uploaded.")
@@ -112,7 +112,7 @@ public sealed class StorageController(
 
         var outcome = await objects.DeleteAsync(id, key, ct);
         if (outcome.Ok)
-            await audit.LogAsync("storage.object_delete", "bucket", $"{id}:{key}", ClientIp, ct: ct);
+            await audit.LogAsync("storage.object_delete", "bucket", $"{id}:{key}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         TempData[outcome.Ok ? "Message" : "Error"] = outcome.Ok
             ? (IsFa ? "حذف شد." : "Deleted.")
@@ -234,7 +234,7 @@ public sealed class StorageController(
             Status = BucketStatus.Ready
         });
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("storage.bucket_created", "bucket", name, ClientIp, ct: ct);
+        await audit.LogAsync("storage.bucket_created", "bucket", name, ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return Back(IsFa ? $"باکت «{name}» ساخته شد." : $"Bucket {name} was created.");
     }
@@ -304,7 +304,7 @@ public sealed class StorageController(
 
         db.StorageBuckets.Remove(bucket);
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("storage.bucket_deleted", "bucket", bucket.Name, ClientIp, ct: ct);
+        await audit.LogAsync("storage.bucket_deleted", "bucket", bucket.Name, ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return Back(IsFa ? "باکت حذف شد." : "The bucket was deleted.");
     }
@@ -340,7 +340,7 @@ public sealed class StorageController(
             AppId = appId, StorageBucketId = id, AttachOrder = maxOrder + 1, HasUnpublishedChanges = true
         });
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("storage.bucket_attached", "bucket", $"{id}:{appId}", ClientIp, ct: ct);
+        await audit.LogAsync("storage.bucket_attached", "bucket", $"{id}:{appId}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return BackTo(returnUrl, IsFa
             ? $"باکت «{bucket.Name}» متصل شد. متغیرهایش با استقرار بعدی این اپ اعمال می‌شوند."
@@ -364,7 +364,7 @@ public sealed class StorageController(
 
         db.AppStorageBuckets.Remove(join);
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("storage.bucket_detached", "bucket", $"{id}:{appId}", ClientIp, ct: ct);
+        await audit.LogAsync("storage.bucket_detached", "bucket", $"{id}:{appId}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return BackTo(returnUrl, IsFa
             ? "باکت جدا شد. تا استقرار بعدی، کانتینر در حال اجرا هنوز متغیرهای آن را دارد."

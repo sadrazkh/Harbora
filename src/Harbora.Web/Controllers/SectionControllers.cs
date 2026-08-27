@@ -190,7 +190,7 @@ public sealed class TemplatesController(
             await audit.LogAsync("template.deploy", "template", id.ToString(),
                 HttpContext.Connection.RemoteIpAddress?.ToString(),
                 metadataJson: $"{{\"projectId\":\"{result.ProjectId}\",\"dependencies\":{result.DependencyCount}}}",
-                ct: ct);
+                workspaceId: WorkspaceId, ct: ct);
 
             TempData["Message"] = IsFa
                 ? $"پروژه ساخته شد؛ {result.DependencyCount} سرویس وابسته پیش از برنامه در صف قرار گرفت."

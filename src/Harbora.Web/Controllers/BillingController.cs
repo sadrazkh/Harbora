@@ -160,6 +160,7 @@ public sealed class BillingController(
         var resumed = await suspension.ResumeAsync(workspace.Id, ct);
         await audit.LogAsync("billing.budget_updated", "workspace", workspace.Id.ToString(),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
+            workspaceId: workspace.Id,
             metadataJson: System.Text.Json.JsonSerializer.Serialize(new
             {
                 workspace.MonthlyBudgetMinor,
@@ -195,6 +196,7 @@ public sealed class BillingController(
 
             await audit.LogAsync("billing.voucher.redeem", "voucher", result.VoucherId.ToString(),
                 HttpContext.Connection.RemoteIpAddress?.ToString(),
+                workspaceId: WorkspaceId,
                 metadataJson: System.Text.Json.JsonSerializer.Serialize(new
                 {
                     workspaceId = WorkspaceId,

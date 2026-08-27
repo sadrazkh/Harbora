@@ -78,7 +78,7 @@ public sealed partial class DomainsController
         var result = await customerDns.SaveTokenAsync(WorkspaceId, token, ct);
         TempData[result.Success ? "Message" : "Error"] = result.Message;
         if (result.Success)
-            await audit.LogAsync("domains.dns_token_saved", "workspace", WorkspaceId.ToString(), ClientIp, ct: ct);
+            await audit.LogAsync("domains.dns_token_saved", "workspace", WorkspaceId.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         return RedirectToAction(nameof(Dns));
     }
 
@@ -90,7 +90,7 @@ public sealed partial class DomainsController
         var result = await customerDns.RemoveTokenAsync(WorkspaceId, ct);
         TempData[result.Success ? "Message" : "Error"] = result.Message;
         if (result.Success)
-            await audit.LogAsync("domains.dns_token_removed", "workspace", WorkspaceId.ToString(), ClientIp, ct: ct);
+            await audit.LogAsync("domains.dns_token_removed", "workspace", WorkspaceId.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         return RedirectToAction(nameof(Dns));
     }
 
@@ -103,7 +103,7 @@ public sealed partial class DomainsController
         var result = await customerDns.CreateRecordAsync(WorkspaceId, zone, type, name, content, ttl, priority, ct);
         TempData[result.Success ? "Message" : "Error"] = result.Message;
         if (result.Success)
-            await audit.LogAsync("domains.dns_record_created", "zone", zone, ClientIp, ct: ct);
+            await audit.LogAsync("domains.dns_record_created", "zone", zone, ClientIp, workspaceId: WorkspaceId, ct: ct);
         return RedirectToAction(nameof(Dns), new { zone });
     }
 
@@ -115,7 +115,7 @@ public sealed partial class DomainsController
         var result = await customerDns.DeleteRecordAsync(WorkspaceId, zone, recordId, ct);
         TempData[result.Success ? "Message" : "Error"] = result.Message;
         if (result.Success)
-            await audit.LogAsync("domains.dns_record_deleted", "zone", $"{zone}:{recordId}", ClientIp, ct: ct);
+            await audit.LogAsync("domains.dns_record_deleted", "zone", $"{zone}:{recordId}", ClientIp, workspaceId: WorkspaceId, ct: ct);
         return RedirectToAction(nameof(Dns), new { zone });
     }
 

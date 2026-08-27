@@ -246,7 +246,8 @@ public sealed class RestoreService(
                 job.OverwritesLiveTarget,
                 Strategy = job.ConflictStrategy.ToString(),
                 EntryCount = request.Entries?.Count ?? 0
-            }), ct: ct);
+            }),
+            workspaceId: job.WorkspaceId, ct: ct);
 
         await jobs.EnqueueAsync(JobKind.BackupRestore, job.Id, job.WorkspaceId, ct);
         return new RestoreOutcome(true, job.Id);
@@ -403,7 +404,8 @@ public sealed class RestoreService(
                     job.RestoredFilesCount,
                     job.RestoredBytes,
                     Warnings = result.Warnings?.Count ?? 0
-                }), ct: ct);
+                }),
+                workspaceId: job.WorkspaceId, ct: ct);
 
             await notifications.SendAsync(new BackupNotification(
                 job.WorkspaceId,
@@ -643,7 +645,7 @@ public sealed class RestoreService(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("backup.restore.failed", "RestoreJob", job.Id.ToString(),
-            userIdOverride: job.RequestedByUserId, ct: ct);
+            userIdOverride: job.RequestedByUserId, workspaceId: job.WorkspaceId, ct: ct);
 
         // The alert carries the same sentence as the row. Someone woken by a critical notification
         // at 03:00 is the last person who should have to open the panel to find out whether there

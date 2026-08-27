@@ -88,7 +88,7 @@ public sealed class TerminalController(
         using var socket = await HttpContext.WebSockets.AcceptWebSocketAsync();
 
         var startedAt = clock.UtcNow;
-        await audit.LogAsync("app.terminal_opened", "app", app.Id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("app.terminal_opened", "app", app.Id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         IContainerExec? exec = null;
         try
@@ -115,6 +115,7 @@ public sealed class TerminalController(
 
             var seconds = (int)(clock.UtcNow - startedAt).TotalSeconds;
             await audit.LogAsync("app.terminal_closed", "app", app.Id.ToString(), ClientIp,
+                workspaceId: WorkspaceId,
                 metadataJson: System.Text.Json.JsonSerializer.Serialize(new { seconds }),
                 ct: CancellationToken.None);
         }

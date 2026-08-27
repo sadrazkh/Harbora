@@ -407,7 +407,7 @@ public sealed class BackupSnapshotService(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("backup.snapshot.delete", "BackupSnapshot", snapshotId.ToString(),
-            userIdOverride: currentUser.UserId, ct: ct);
+            userIdOverride: currentUser.UserId, workspaceId: snapshot.WorkspaceId, ct: ct);
 
         return new SnapshotOutcome(true, snapshotId);
     }

@@ -32,6 +32,7 @@ public sealed class SupportController(
     HarboraDbContext db,
     ISupportSession support,
     IAuditLogger audit,
+    ICurrentUser currentUser,
     Harbora.Infrastructure.Identity.SupportSessionService supportSessions,
     Harbora.Infrastructure.Security.AccountSessionService accountSessions) : Controller
 {
@@ -47,8 +48,11 @@ public sealed class SupportController(
         if (support.SessionId is not { } sessionId) return Redirect("/");
 
         // Audited before the cookie is swapped, so the closing row is stamped with the session it
-        // closes — the same one query that returns everything else this session did.
-        await audit.LogAsync("session.ended", "support_session", sessionId.ToString(), ClientIp, ct: ct);
+        // closes — the same one query that returns everything else this session did. currentUser
+        // still reads as the customer at this instant, so its WorkspaceId names the workspace the
+        // session ran against.
+        await audit.LogAsync("session.ended", "support_session", sessionId.ToString(), ClientIp,
+            workspaceId: currentUser.WorkspaceId, ct: ct);
         await supportSessions.EndAsync(sessionId, ct);
 
         var adminUserId = support.AdminUserId;

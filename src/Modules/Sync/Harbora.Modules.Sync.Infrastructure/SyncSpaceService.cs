@@ -71,7 +71,7 @@ public sealed class SyncSpaceService(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("sync.space.create", "SyncSpace", space.Id.ToString(),
-            userIdOverride: currentUser.UserId, ct: ct);
+            userIdOverride: currentUser.UserId, workspaceId: workspaceId, ct: ct);
 
         return new SyncOutcome(true, space.Id);
     }
@@ -110,7 +110,7 @@ public sealed class SyncSpaceService(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("sync.device.register", "SyncDevice", device.Id.ToString(),
-            userIdOverride: currentUser.UserId, ct: ct);
+            userIdOverride: currentUser.UserId, workspaceId: workspaceId, ct: ct);
 
         return new SyncOutcome(true, device.Id);
     }
@@ -163,7 +163,8 @@ public sealed class SyncSpaceService(
 
         await audit.LogAsync("sync.pair", "SyncSpace", spaceId.ToString(),
             userIdOverride: currentUser.UserId,
-            metadataJson: $"{{\"device\":\"{device.Id}\",\"mode\":\"{mode}\"}}", ct: ct);
+            metadataJson: $"{{\"device\":\"{device.Id}\",\"mode\":\"{mode}\"}}",
+            workspaceId: space.WorkspaceId, ct: ct);
 
         return new SyncOutcome(true, member.Id);
     }
@@ -192,7 +193,7 @@ public sealed class SyncSpaceService(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("sync.unpair", "SyncSpace", spaceId.ToString(),
-            userIdOverride: currentUser.UserId, ct: ct);
+            userIdOverride: currentUser.UserId, workspaceId: member.WorkspaceId, ct: ct);
 
         return new SyncOutcome(true, spaceId);
     }
@@ -318,7 +319,7 @@ public sealed class SyncSpaceService(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("sync.conflict.resolve", "SyncConflict", conflictId.ToString(),
-            userIdOverride: currentUser.UserId, ct: ct);
+            userIdOverride: currentUser.UserId, workspaceId: space?.WorkspaceId, ct: ct);
 
         return new SyncOutcome(true, conflictId);
     }

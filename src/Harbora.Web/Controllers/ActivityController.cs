@@ -111,7 +111,7 @@ public sealed class ActivityController(
 
         if (cancelled)
         {
-            await audit.LogAsync("job.cancelled", "job", id.ToString(), ClientIp, ct: ct);
+            await audit.LogAsync("job.cancelled", "job", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
             TempData["Message"] = IsFa ? "درخواست لغو ثبت شد." : "Cancellation requested.";
         }
         else

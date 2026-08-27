@@ -176,7 +176,7 @@ public sealed class DeploymentsController(
 
         if (settled == DeploymentStatus.Cancelled)
         {
-            await audit.LogAsync("deployment.cancelled", "deployment", id.ToString(), ClientIp, ct: ct);
+            await audit.LogAsync("deployment.cancelled", "deployment", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
             TempData["Message"] = isFa
                 ? $"استقرار #{row.Number} لغو شد."
                 : $"Deployment #{row.Number} was cancelled.";
@@ -261,6 +261,7 @@ public sealed class DeploymentsController(
         }
 
         await audit.LogAsync("deployment.retried", "deployment", newId.ToString(), ClientIp,
+            workspaceId: WorkspaceId,
             metadataJson: $"{{\"retryOf\":\"{id}\"}}", ct: ct);
 
         TempData["Message"] = isFa
@@ -334,7 +335,7 @@ public sealed class DeploymentsController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        await audit.LogAsync("app.promote", "app", target.Id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("app.promote", "app", target.Id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = $"Promoting {source.Value.Plan.ImageTag} to {target.Name}.";
         return RedirectToAction(nameof(Details), new { id = deploymentId });
     }
@@ -424,7 +425,7 @@ public sealed class DeploymentsController(
 
         // Audited because it is the moment data left this server, and how much of it was removed
         // first is exactly what somebody would want to reconstruct later.
-        await audit.LogAsync("assistant.asked", "deployment", id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("assistant.asked", "deployment", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return Json(new { ok = answer.Ok, text = answer.Text });
     }

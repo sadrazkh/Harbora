@@ -246,6 +246,7 @@ public sealed class ProjectsController(
 
         await audit.LogAsync("environment.cloned", "environment", outcome.EnvironmentId!.Value.ToString(),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
+            workspaceId: WorkspaceId,
             metadataJson: System.Text.Json.JsonSerializer.Serialize(new
             {
                 from = environmentId,
@@ -334,6 +335,7 @@ public sealed class ProjectsController(
 
         await audit.LogAsync("project.deleted", "project", id.ToString(),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
+            workspaceId: WorkspaceId,
             metadataJson: System.Text.Json.JsonSerializer.Serialize(new
             {
                 apps = plan.Value.Apps.Count,

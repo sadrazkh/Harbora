@@ -68,7 +68,7 @@ public sealed partial class DatabasesController
             WorkspaceId, BackupType.Database, id.ToString(), destination.Id, scheduled: false, ct, databaseId);
 
         await audit.LogAsync("database.logical_database_backup_queued", "service", $"{id}:{databaseId}",
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         TempData["Message"] = IsFa
             ? $"پشتیبان‌گیری از «{logical.Name}» صف شد."
@@ -135,7 +135,7 @@ public sealed partial class DatabasesController
         await quotaReservation.CommitAsync(ct);
 
         await audit.LogAsync("database.logical_database_schedule_created", "service", $"{id}:{databaseId}",
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         TempData["Message"] = IsFa
             ? $"زمان‌بندی پشتیبان‌گیری برای «{logical.Name}» هر {intervalHours} ساعت تنظیم شد."
@@ -242,14 +242,15 @@ public sealed partial class DatabasesController
             // did not happen. The safety snapshot (if the dump got that far) is named inside ex.Message.
             await audit.LogAsync("database.logical_database_import_failed", "service", $"{id}:{databaseId}",
                 HttpContext.Connection.RemoteIpAddress?.ToString(),
-                metadataJson: System.Text.Json.JsonSerializer.Serialize(new { reason = ex.Message }), ct: ct);
+                metadataJson: System.Text.Json.JsonSerializer.Serialize(new { reason = ex.Message }),
+                workspaceId: WorkspaceId, ct: ct);
             TempData["Error"] = ex.Message;
             return RedirectToAction(nameof(ConfirmImport), new { id, databaseId });
         }
 
         var safety = await LatestSafetySnapshotAsync(id.ToString(), ct);
         await audit.LogAsync("database.logical_database_import_completed", "service", $"{id}:{databaseId}",
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         TempData["Message"] = safety is null
             ? (IsFa ? $"وارد کردن به «{logical.Name}» با موفقیت انجام شد." : $"The import into \"{logical.Name}\" completed.")
@@ -364,7 +365,7 @@ public sealed partial class DatabasesController
             }
 
             await audit.LogAsync("database.logical_database_restore_completed", "service", $"{id}:{created.Id}",
-                HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+                HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
             TempData["Message"] = IsFa
                 ? $"بازیابی در پایگاه‌دادهٔ تازهٔ «{created.Name}» انجام شد."
                 : $"Restored into the new database \"{created.Name}\".";
@@ -407,13 +408,14 @@ public sealed partial class DatabasesController
             // dump, or a failed restore (naming its own safety backup) — the engine's own words.
             await audit.LogAsync("database.logical_database_restore_failed", "service", $"{target.ManagedServiceId}:{target.Id}",
                 HttpContext.Connection.RemoteIpAddress?.ToString(),
-                metadataJson: System.Text.Json.JsonSerializer.Serialize(new { reason = ex.Message }), ct: ct);
+                metadataJson: System.Text.Json.JsonSerializer.Serialize(new { reason = ex.Message }),
+                workspaceId: WorkspaceId, ct: ct);
             TempData["Error"] = ex.Message;
             return RedirectToAction(nameof(ConfirmRestore), new { id, databaseId, backupId });
         }
 
         await audit.LogAsync("database.logical_database_restore_completed", "service", $"{target.ManagedServiceId}:{target.Id}",
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         var safety = await LatestSafetySnapshotAsync(target.ManagedServiceId.ToString(), ct);
         TempData["Message"] = safety is null

@@ -98,7 +98,7 @@ public sealed class AiController(
         });
 
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("ai.key_created", "ai_key", issued.Prefix, ClientIp, ct: ct);
+        await audit.LogAsync("ai.key_created", "ai_key", issued.Prefix, ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         TempData["NewAiKey"] = issued.Secret;
         return RedirectToAction(nameof(Index));
@@ -120,7 +120,7 @@ public sealed class AiController(
         key.RevokedAt = clock.UtcNow;
         await db.SaveChangesAsync(ct);
 
-        await audit.LogAsync("ai.key_revoked", "ai_key", key.Prefix, ClientIp, ct: ct);
+        await audit.LogAsync("ai.key_revoked", "ai_key", key.Prefix, ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         TempData["Message"] = $"{key.Label} was revoked. Requests using it will now be refused.";
         return RedirectToAction(nameof(Index));

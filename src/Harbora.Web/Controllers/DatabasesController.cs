@@ -74,7 +74,7 @@ public sealed partial class DatabasesController(
         }
 
         await audit.LogAsync("service.admin_tool_opened", "service", id.ToString(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         // Shown once, on the next render, like every other generated credential in this panel.
         TempData["AdminToolUrl"] = result.Url;
@@ -947,7 +947,7 @@ public sealed partial class DatabasesController(
             AttachOrder = maxOrder + 1, HasUnpublishedChanges = true
         });
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("database.attached", "service", $"{id}:{appId}", HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+        await audit.LogAsync("database.attached", "service", $"{id}:{appId}", HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         return BackTo(returnUrl, IsFa
             ? $"«{service.Name}» به {app.Name} وصل شد و با نام {resolvedAlias}_* در دسترس است. متغیرهایش با استقرار بعدی این اپ اعمال می‌شوند."
@@ -979,7 +979,7 @@ public sealed partial class DatabasesController(
 
         db.AppManagedServices.Remove(join);
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("database.detached", "service", $"{id}:{appId}", HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+        await audit.LogAsync("database.detached", "service", $"{id}:{appId}", HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         return BackTo(returnUrl, IsFa
             ? "دیتابیس جدا شد. تا استقرار بعدی، کانتینر در حال اجرا هنوز رشتهٔ اتصال آن را دارد."
@@ -1008,7 +1008,7 @@ public sealed partial class DatabasesController(
         }
 
         await audit.LogAsync("database.logical_database_created", "service", $"{id}:{created!.Id}",
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = IsFa ? $"پایگاه‌داده «{created.Name}» ساخته شد." : $"Created database \"{created.Name}\".";
         return RedirectToAction(nameof(Details), new { id });
     }
@@ -1074,7 +1074,7 @@ public sealed partial class DatabasesController(
         }
 
         await audit.LogAsync("database.logical_database_removed", "service", $"{id}:{databaseId}",
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = IsFa ? $"«{logical.Name}» حذف شد." : $"{logical.Name} was deleted.";
         return RedirectToAction(nameof(Details), new { id });
     }
@@ -1101,7 +1101,7 @@ public sealed partial class DatabasesController(
         }
 
         await audit.LogAsync("database.logical_database_renamed", "service", $"{id}:{databaseId}",
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = IsFa
             ? "پایگاه‌داده تغییر نام داد. تا استقرار بعدی، اپ‌های متصل هنوز نام قبلی را دارند."
             : "The database was renamed. Attached apps still have the old name until they redeploy.";

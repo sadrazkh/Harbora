@@ -98,8 +98,11 @@ public sealed class NodeEnrollmentService(
 
         await db.SaveChangesAsync(ct);
 
+        // Platform infrastructure, not a workspace's own act: the token authorises enrolling a
+        // server into the platform before any workspace's workloads run on it.
         await audit.LogAsync("node.enrollment_token_created", "node-token", prefix,
-            metadataJson: JsonSerializer.Serialize(new { expiresAt, scopes = granted }, NodeContract.Json), ct: ct);
+            metadataJson: JsonSerializer.Serialize(new { expiresAt, scopes = granted }, NodeContract.Json),
+            workspaceId: null, ct: ct);
 
         log.LogInformation("Minted node enrollment token {Prefix}…, valid until {ExpiresAt:u}.", prefix, expiresAt);
 
@@ -120,7 +123,8 @@ public sealed class NodeEnrollmentService(
             // One audit line either way, and the same wording for "no such token" and "wrong token",
             // so this cannot be used to probe which prefixes exist.
             await audit.LogAsync("node.enroll_failed", "node", null, sourceIp,
-                metadataJson: JsonSerializer.Serialize(new { reason = "invalid token" }), ct: ct);
+                metadataJson: JsonSerializer.Serialize(new { reason = "invalid token" }),
+                workspaceId: null, ct: ct);
 
             return NodeEnrollmentResult<EnrollmentResponse>.Fail(
                 NodeErrorCode.EnrollmentTokenInvalid, "That enrollment token is not valid.");
@@ -204,6 +208,7 @@ public sealed class NodeEnrollmentService(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("node.enrolled", "node", node.NodeId, sourceIp,
+            workspaceId: null,
             metadataJson: JsonSerializer.Serialize(new
             {
                 node.Name, node.Architecture, node.AgentVersion,
@@ -253,7 +258,8 @@ public sealed class NodeEnrollmentService(
         if (node.IsRevoked)
         {
             await audit.LogAsync("node.renew_refused", "node", node.NodeId, sourceIp,
-                metadataJson: JsonSerializer.Serialize(new { reason = "revoked" }), ct: ct);
+                metadataJson: JsonSerializer.Serialize(new { reason = "revoked" }),
+                workspaceId: null, ct: ct);
 
             return NodeEnrollmentResult<CredentialRenewalResponse>.Fail(
                 NodeErrorCode.CredentialRevoked,
@@ -288,7 +294,8 @@ public sealed class NodeEnrollmentService(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("node.credential_renewed", "node", node.NodeId, sourceIp,
-            metadataJson: JsonSerializer.Serialize(new { generation = node.CertificateGeneration, signed.NotAfter }, NodeContract.Json), ct: ct);
+            metadataJson: JsonSerializer.Serialize(new { generation = node.CertificateGeneration, signed.NotAfter }, NodeContract.Json),
+            workspaceId: null, ct: ct);
 
         log.LogInformation(
             "Renewed the credential for node {NodeId} (generation {Generation}), valid until {NotAfter:u}.",
@@ -328,7 +335,7 @@ public sealed class NodeEnrollmentService(
         await db.SaveChangesAsync(ct);
 
         await audit.LogAsync("node.revoked", "node", nodeId, sourceIp,
-            metadataJson: JsonSerializer.Serialize(new { reason }), ct: ct);
+            metadataJson: JsonSerializer.Serialize(new { reason }), workspaceId: null, ct: ct);
 
         log.LogWarning("Node {NodeId} revoked{Reason}.", nodeId, reason is null ? "" : $": {reason}");
         return true;
@@ -364,7 +371,8 @@ public sealed class NodeEnrollmentService(
         NodeEnrollmentToken token, NodeErrorCode code, string message, string? sourceIp, CancellationToken ct)
     {
         await audit.LogAsync("node.enroll_failed", "node-token", token.Prefix, sourceIp,
-            metadataJson: JsonSerializer.Serialize(new { code = code.ToString(), message }), ct: ct);
+            metadataJson: JsonSerializer.Serialize(new { code = code.ToString(), message }),
+            workspaceId: null, ct: ct);
 
         log.LogWarning("Enrollment refused for token {Prefix}…: {Code} — {Message}", token.Prefix, code, message);
 

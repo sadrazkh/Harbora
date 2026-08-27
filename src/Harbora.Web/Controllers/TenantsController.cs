@@ -288,6 +288,7 @@ public sealed partial class TenantsController(
             // happened and nothing about which decision it was or what it collided with — and that is
             // exactly what somebody reading this audit log months later would need.
             await audit.LogAsync("billing.credit.refused", "workspace", id.ToString(), ClientIp,
+                workspaceId: id,
                 metadataJson: System.Text.Json.JsonSerializer.Serialize(new
                 {
                     creditId, amountMinor, note = note.Trim(), reason = ex.Message
@@ -314,6 +315,7 @@ public sealed partial class TenantsController(
         // only recorded the winning submission would show one line where two people pressed the
         // button, and "who tried" is half of what an audit of money is for.
         await audit.LogAsync("billing.credit", "workspace", id.ToString(), ClientIp,
+            workspaceId: id,
             metadataJson:
             $"{{\"creditId\":\"{creditId}\",\"amountMinor\":{amountMinor},\"applied\":" +
             $"{result.Applied.ToString().ToLowerInvariant()}}}", ct: ct);
@@ -418,6 +420,7 @@ public sealed partial class TenantsController(
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DbUpdateException)
         {
             await audit.LogAsync("billing.adjustment.refused", "workspace", id.ToString(), ClientIp,
+                workspaceId: id,
                 metadataJson: System.Text.Json.JsonSerializer.Serialize(new
                 {
                     adjustmentId, amountMinor, reason = ex.Message
@@ -426,6 +429,7 @@ public sealed partial class TenantsController(
         }
 
         await audit.LogAsync("billing.adjustment", "workspace", id.ToString(), ClientIp,
+            workspaceId: id,
             metadataJson: System.Text.Json.JsonSerializer.Serialize(new
             {
                 adjustmentId, amountMinor, result.Applied, result.BalanceMinor

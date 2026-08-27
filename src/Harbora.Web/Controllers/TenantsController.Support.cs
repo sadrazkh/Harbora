@@ -92,6 +92,7 @@ public sealed partial class TenantsController
         HttpContext.User = principal;
 
         await audit.LogAsync("session.started", "workspace", id.ToString(), ClientIp,
+            workspaceId: id,
             metadataJson: System.Text.Json.JsonSerializer.Serialize(new
             {
                 adminEmail,

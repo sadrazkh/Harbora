@@ -46,6 +46,9 @@ public sealed class RefuseUnderSupportSessionAttribute(SupportRestrictedAct act)
         if (support.SessionId is not { } sessionId) return;
 
         var audit = services.GetRequiredService<IAuditLogger>();
+        // Refused mid-impersonation, so the browser is still signed in as the customer at this
+        // moment — currentUser.WorkspaceId names the workspace the refused act would have touched.
+        var currentUser = services.GetRequiredService<ICurrentUser>();
         await audit.LogAsync(
             SupportRestrictions.RefusedAction,
             "support_session", sessionId.ToString(),
@@ -55,6 +58,7 @@ public sealed class RefuseUnderSupportSessionAttribute(SupportRestrictedAct act)
                 act = Act.ToString(),
                 path = context.HttpContext.Request.Path.Value
             }),
+            workspaceId: currentUser.WorkspaceId,
             ct: context.HttpContext.RequestAborted);
 
         var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";

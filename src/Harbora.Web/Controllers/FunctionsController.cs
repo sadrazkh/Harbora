@@ -197,7 +197,7 @@ public sealed class FunctionsController(
         }
 
         await reservation.CommitAsync(ct);
-        await audit.LogAsync("functions.app.create", "App", app.Id.ToString(), ct: ct);
+        await audit.LogAsync("functions.app.create", "App", app.Id.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         return RedirectToAction(nameof(Details), new { id = app.Id });
     }
@@ -261,7 +261,7 @@ public sealed class FunctionsController(
         try
         {
             var deploymentId = await functions.PublishAsync(app.Id, currentUser.UserId ?? Guid.Empty, ct);
-            await audit.LogAsync("functions.publish", "App", app.Id.ToString(), ct: ct);
+            await audit.LogAsync("functions.publish", "App", app.Id.ToString(), workspaceId: WorkspaceId, ct: ct);
             return RedirectToAction("Details", "Deployments", new { id = deploymentId });
         }
         catch (Exception ex) when (ex is InvalidOperationException or QuotaRefusedException)
@@ -378,7 +378,7 @@ public sealed class FunctionsController(
         // an edit to existing code, so a brand-new function's very first version is restorable too.
         await functions.RecordRevisionAsync(candidate, ct);
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("functions.save", "App", app.Id.ToString(), ct: ct);
+        await audit.LogAsync("functions.save", "App", app.Id.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         TempData["Message"] = IsFa
             ? "ذخیره شد. برای اجرا شدن، «انتشار» را بزنید."
@@ -462,7 +462,7 @@ public sealed class FunctionsController(
         db.FunctionDefinitions.Remove(fn);
         await functions.MarkDirtyAsync(id, ct);
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("functions.delete", "App", id.ToString(), ct: ct);
+        await audit.LogAsync("functions.delete", "App", id.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         TempData["Message"] = IsFa
             ? "حذف شد. تا زمانی که منتشر نکنید، هنوز روی سرور اجرا می‌شود."
@@ -499,7 +499,7 @@ public sealed class FunctionsController(
         await functions.MarkDirtyAsync(id, ct);
         await functions.RecordRevisionAsync(fn, ct);
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("functions.restore_revision", "App", id.ToString(), ct: ct);
+        await audit.LogAsync("functions.restore_revision", "App", id.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         TempData["Message"] = IsFa
             ? "نسخه‌ی قبلی بازگردانده شد. برای اجرا شدن، «انتشار» را بزنید."
@@ -526,7 +526,7 @@ public sealed class FunctionsController(
 
         db.FunctionQueueDeadLetters.Remove(deadLetter);
         await db.SaveChangesAsync(ct);
-        await audit.LogAsync("functions.deadletter.discard", "App", id.ToString(), ct: ct);
+        await audit.LogAsync("functions.deadletter.discard", "App", id.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         return RedirectToAction(nameof(EditFunction), new { id, functionId });
     }
@@ -568,7 +568,7 @@ public sealed class FunctionsController(
         var queued = await invoker.QueueAsync(fn.Id, fn.Trigger == FunctionTrigger.Http
             ? FunctionTrigger.Http : fn.Trigger, evt: null, ct);
 
-        await audit.LogAsync("functions.run", "App", id.ToString(), ct: ct);
+        await audit.LogAsync("functions.run", "App", id.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         TempData[queued is null ? "Error" : "Message"] = queued is null
             ? (IsFa

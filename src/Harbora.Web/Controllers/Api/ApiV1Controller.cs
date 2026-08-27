@@ -253,7 +253,7 @@ public sealed class ApiV1Controller(
             return Conflict(new { error = Ended(deployment.Number, settled) });
 
         await audit.LogAsync("deployment.cancelled", "deployment", id.ToString(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         return Ok(new { deploymentId = id, status = settled.ToString() });
     }

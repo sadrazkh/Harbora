@@ -81,7 +81,7 @@ public sealed partial class DatabasesController
             WorkspaceId, id.ToString(), destination.Id, DatabaseExportPlan.ArtifactLifetime, ct, databaseId);
 
         await audit.LogAsync("database.export_queued", "service", id.ToString(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         TempData["Message"] = IsFa
             ? "خروجی گرفتن از دیتابیس صف شد. وقتی تمام شد، لینک دانلود از همین صفحه قابل ساختن است."
@@ -113,7 +113,7 @@ public sealed partial class DatabasesController
         var link = $"{Request.Scheme}://{Request.Host}/backups/download/{mint.Token}";
 
         await audit.LogAsync("database.export_link_minted", "service", id.ToString(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         TempData["ExportDownloadLink"] = link;
         TempData["ExportDownloadLinkExpiresAtUnix"] = checked((int)mint.ExpiresAt.ToUnixTimeSeconds());
@@ -195,14 +195,15 @@ public sealed partial class DatabasesController
             // BackupEngine.RestoreDatabaseAsync — so "Import failed" is never the whole sentence.
             await audit.LogAsync("database.import_failed", "service", id.ToString(),
                 HttpContext.Connection.RemoteIpAddress?.ToString(),
-                metadataJson: System.Text.Json.JsonSerializer.Serialize(new { reason = ex.Message }), ct: ct);
+                metadataJson: System.Text.Json.JsonSerializer.Serialize(new { reason = ex.Message }),
+                workspaceId: WorkspaceId, ct: ct);
             TempData["Error"] = ex.Message;
             return RedirectToAction(nameof(Details), new { id });
         }
 
         var safety = await LatestSafetySnapshotAsync(id.ToString(), ct);
         await audit.LogAsync("database.import_completed", "service", id.ToString(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(), ct: ct);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
 
         TempData["Message"] = safety is null
             ? (IsFa ? "وارد کردن با موفقیت انجام شد." : "The import completed.")

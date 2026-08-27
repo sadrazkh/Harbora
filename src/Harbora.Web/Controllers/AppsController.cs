@@ -999,7 +999,7 @@ public sealed partial class AppsController(
         var applied = await proxy.ApplyAllAsync(app.WorkspaceId, ct);
 
         await audit.LogAsync("app.protection_changed", "app",
-            $"{app.Name}: auth={basicAuthEnabled}, ips={allowed.Count}", ClientIp, ct: ct);
+            $"{app.Name}: auth={basicAuthEnabled}, ips={allowed.Count}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         // The proxy's own verdict, not an assumption. A rolled-back apply means the rows changed
         // and the traffic did not — the one outcome nobody must be told is "saved".
@@ -1065,7 +1065,7 @@ public sealed partial class AppsController(
         });
         await db.SaveChangesAsync(ct);
         await quotaReservation.CommitAsync(ct);
-        await audit.LogAsync("app.volume_added", "app", $"{app.Name}:{normalised}", ClientIp, ct: ct);
+        await audit.LogAsync("app.volume_added", "app", $"{app.Name}:{normalised}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         // Says what it does not do. The volume is a row until the next deployment creates the
         // container that mounts it, and a person who uploads a file before then would be writing
@@ -1126,7 +1126,7 @@ public sealed partial class AppsController(
 
         await audit.LogAsync(
             dataActuallyDeleted ? "app.volume_deleted" : "app.volume_detached", "app",
-            $"{app.Name}:{path}", ClientIp, ct: ct);
+            $"{app.Name}:{path}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         if (dataActuallyDeleted)
         {
@@ -1174,7 +1174,7 @@ public sealed partial class AppsController(
 
         await audit.LogAsync(
             protect ? "app.volume_protected" : "app.volume_unprotected", "app",
-            $"{app.Name}:{volume.MountPath}", ClientIp, ct: ct);
+            $"{app.Name}:{volume.MountPath}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         TempData["Message"] = protect
             ? (IsFa ? $"«{volume.MountPath}» محافظت شد. تا خاموش نشود، داده‌اش حذف نمی‌شود." : $"{volume.MountPath} is now protected. Its data cannot be deleted until this is turned off.")
@@ -1244,7 +1244,7 @@ public sealed partial class AppsController(
         app.DiskLimitBytes = size?.DiskBytes ?? 0;
         await db.SaveChangesAsync(ct);
 
-        await audit.LogAsync("app.resized", "app", $"{app.Name}={size?.Key ?? "unlimited"}", ClientIp, ct: ct);
+        await audit.LogAsync("app.resized", "app", $"{app.Name}={size?.Key ?? "unlimited"}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         var fa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
         TempData["Message"] = fa
@@ -1306,7 +1306,7 @@ public sealed partial class AppsController(
         app.DesiredReplicas = replicas;
         await db.SaveChangesAsync(ct);
 
-        await audit.LogAsync("app.replicas-set", "app", $"{app.Name}={replicas}", ClientIp, ct: ct);
+        await audit.LogAsync("app.replicas-set", "app", $"{app.Name}={replicas}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         TempData["Message"] = IsFa
             ? $"تعداد تکرار روی {replicas} تنظیم شد. با استقرار بعدی اعمال می‌شود."
@@ -1369,7 +1369,7 @@ public sealed partial class AppsController(
         app.TemplateVersionId = version.Id;
         await db.SaveChangesAsync(ct);
 
-        await audit.LogAsync("app.version_updated", "app", $"{app.Name}={version.Version}", ClientIp, ct: ct);
+        await audit.LogAsync("app.version_updated", "app", $"{app.Name}={version.Version}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         Guid deploymentId;
         try
@@ -1457,7 +1457,7 @@ public sealed partial class AppsController(
         app.TemplateVersionId = null;
         await db.SaveChangesAsync(ct);
 
-        await audit.LogAsync("app.tag_updated", "app", $"{app.Name}={repository}:{tag}", ClientIp, ct: ct);
+        await audit.LogAsync("app.tag_updated", "app", $"{app.Name}={repository}:{tag}", ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         Guid deploymentId;
         try
@@ -1560,7 +1560,7 @@ public sealed partial class AppsController(
             TempData["Error"] = ex.Message;
             return RedirectToAction(nameof(Details), new { id });
         }
-        await audit.LogAsync("app.deploy", "app", id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("app.deploy", "app", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
 
         return RedirectToAction("Details", "Deployments", new { id = deploymentId });
     }
@@ -1614,7 +1614,7 @@ public sealed partial class AppsController(
             return RedirectToAction(nameof(Deployments), new { id });
         }
         await audit.LogAsync("app.rollback", "app", id.ToString(), ClientIp,
-            metadataJson: $"{{\"toDeploymentId\":\"{deploymentId}\"}}", ct: ct);
+            metadataJson: $"{{\"toDeploymentId\":\"{deploymentId}\"}}", workspaceId: WorkspaceId, ct: ct);
         return RedirectToAction("Details", "Deployments", new { id = newId });
     }
 
@@ -1649,7 +1649,7 @@ public sealed partial class AppsController(
         }
 
         await jobs.EnqueueAsync(JobKind.CronRun, app.Id, app.WorkspaceId, ct);
-        await audit.LogAsync("app.cron.run", "app", id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("app.cron.run", "app", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = "Started. The run will appear below when it finishes.";
         return RedirectToAction(nameof(Details), new { id });
     }
@@ -1731,7 +1731,7 @@ public sealed partial class AppsController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        await audit.LogAsync("app.maintenance.on", "app", id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("app.maintenance.on", "app", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = IsFa
             ? "حالت تعمیر روشن شد؛ بازدیدکنندگان صفحه تعمیر را می‌بینند."
             : "Maintenance mode turned on; visitors now see the maintenance page.";
@@ -1753,7 +1753,7 @@ public sealed partial class AppsController(
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        await audit.LogAsync("app.maintenance.off", "app", id.ToString(), ClientIp, ct: ct);
+        await audit.LogAsync("app.maintenance.off", "app", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = IsFa ? "حالت تعمیر خاموش شد." : "Maintenance mode turned off.";
         return RedirectToAction(nameof(Details), new { id });
     }
@@ -1828,7 +1828,8 @@ public sealed partial class AppsController(
         }
 
         await audit.LogAsync("app.delete", "app", id.ToString(), ClientIp,
-            metadataJson: $"{{\"removeVolumes\":{removeVolumes.ToString().ToLowerInvariant()}}}", ct: ct);
+            metadataJson: $"{{\"removeVolumes\":{removeVolumes.ToString().ToLowerInvariant()}}}",
+            workspaceId: WorkspaceId, ct: ct);
         TempData["Message"] = removeVolumes
             ? (IsFa ? "اپ و داده‌های والیوم‌هایش حذف شدند." : "The app and its volume data were deleted.")
             : (IsFa ? "اپ حذف شد. داده‌های والیوم‌هایش روی سرور ماندند." : "App deleted. Its volume data is still on the server.");
