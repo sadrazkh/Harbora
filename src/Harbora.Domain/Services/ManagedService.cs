@@ -94,18 +94,38 @@ public class ManagedService : BaseEntity
     public long RedisMaxMemoryBytes { get; set; }
 
     /// <summary>
-    /// Whether this instance's own definition — today, only <see cref="RedisEvictionPolicy"/> and
-    /// <see cref="RedisMaxMemoryBytes"/> — has been recorded but not yet baked into the running
-    /// container's own launch command. The <see cref="Apps.AppConfigGroup.HasUnpublishedChanges"/>
-    /// idiom, reused rather than reinvented: Redis takes both settings live through <c>CONFIG SET</c>,
-    /// which is what makes the change reach the running instance the moment it is saved — but neither
-    /// setting is written to a config file, so a plain restart (as opposed to a rebuild) starts the
-    /// same container with the launch arguments it already had, silently reverting a live change that
-    /// was never also baked in. This stays true even immediately after a successful live apply, and
-    /// only clears once <c>ManagedServiceEngine.ProvisionAsync</c> recreates the container from the
-    /// current row — the same moment that makes every other queued instance setting durable.
+    /// Whether this instance's own definition — <see cref="RedisEvictionPolicy"/>/
+    /// <see cref="RedisMaxMemoryBytes"/>, and since 1.7 <see cref="PgVectorEnabled"/> too — has been
+    /// recorded but not yet baked into the running container's own launch command or image. The
+    /// <see cref="Apps.AppConfigGroup.HasUnpublishedChanges"/> idiom, reused rather than reinvented:
+    /// Redis takes both its settings live through <c>CONFIG SET</c>, which is what makes that change
+    /// reach the running instance the moment it is saved — but neither setting is written to a config
+    /// file, so a plain restart (as opposed to a rebuild) starts the same container with the launch
+    /// arguments it already had, silently reverting a live change that was never also baked in.
+    /// <see cref="PgVectorEnabled"/> has no live-apply story at all — it changes which <em>image</em>
+    /// the container runs, which only ever happens on a rebuild — so for it this flag is the only
+    /// place "requested" and "actually running" can be told apart. This stays true even immediately
+    /// after a successful live apply, and only clears once <c>ManagedServiceEngine.ProvisionAsync</c>
+    /// recreates the container from the current row — the same moment that makes every other queued
+    /// instance setting durable.
     /// </summary>
     public bool HasUnpublishedChanges { get; set; }
+
+    /// <summary>
+    /// Whether this PostgreSQL instance should run an image that carries the pgvector extension's
+    /// files (1.7, pgvector-as-option plan). Meaningless for every other engine — pgvector is a
+    /// PostgreSQL extension (<see cref="Harbora.Infrastructure.Services.DatabaseGrantSql.SupportsVectorExtension"/>).
+    ///
+    /// <para>
+    /// Requested state, not observed state, exactly like <see cref="RedisEvictionPolicy"/>: the stock
+    /// <c>postgres</c> image this platform otherwise runs carries no pgvector files at all, so turning
+    /// this on only changes what the <em>next</em> rebuild pulls
+    /// (<see cref="Harbora.Infrastructure.Services.PgVectorImage.For"/>) — see <see cref="HasUnpublishedChanges"/>.
+    /// A logical database's own <c>CREATE EXTENSION</c> never consults this flag; it is answered by
+    /// the engine directly, so the two can never quietly disagree.
+    /// </para>
+    /// </summary>
+    public bool PgVectorEnabled { get; set; }
 
     public string VolumeName { get; set; } = string.Empty;
 

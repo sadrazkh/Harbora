@@ -29,6 +29,14 @@ namespace Harbora.Web.ViewModels;
 /// Whether this row's own delete control applies here — the default database never can be
 /// (<c>LogicalDatabaseService.DeleteAsync</c>); removing it means removing the whole instance.
 /// </param>
+/// <param name="HasVectorExtension">
+/// 1.7 (pgvector-as-option plan): whether pgvector is installed inside this specific database, as
+/// last confirmed by the engine — <c>ManagedServiceDatabase.HasVectorExtension</c> verbatim. Null is
+/// "not measured", not "no"; the view must tell the two apart the same way it already does for
+/// <see cref="SizeBytes"/>.
+/// </param>
+/// <param name="VectorExtensionCheckedAt">When <see cref="HasVectorExtension"/> was last confirmed,
+/// or null if never.</param>
 public sealed record LogicalDatabaseRowViewModel(
     Guid Id,
     string Name,
@@ -40,7 +48,9 @@ public sealed record LogicalDatabaseRowViewModel(
     DateTimeOffset? LastBackupAt,
     Harbora.Domain.Common.BackupStatus? LastBackupStatus,
     bool CanRename,
-    bool CanDelete);
+    bool CanDelete,
+    bool? HasVectorExtension,
+    DateTimeOffset? VectorExtensionCheckedAt);
 
 /// <summary>
 /// What the database shell's header and tab strip need, on every tab. Mirrors <see cref="AppTabViewModel"/>.
@@ -165,6 +175,20 @@ public sealed class DatabaseOverviewViewModel : DatabaseTabViewModel
     /// ever fail.
     /// </summary>
     public bool CanManageLogicalDatabasesLocally { get; init; }
+
+    /// <summary>
+    /// 1.7 (pgvector-as-option plan): whether this PostgreSQL instance is set to run a pgvector-
+    /// capable image. Always false for every other engine — <c>ManagedService.PgVectorEnabled</c>
+    /// verbatim.
+    /// </summary>
+    public bool PgVectorEnabled { get; init; }
+
+    /// <summary>
+    /// Whether turning pgvector on (or off) here has reached the running container's own image yet —
+    /// <c>ManagedService.HasUnpublishedChanges</c>, read for this section the same way
+    /// <see cref="RedisMemoryPolicyUnpublished"/> already reads the very same field for Redis.
+    /// </summary>
+    public bool PgVectorUnpublished { get; init; }
 }
 
 /// <summary>

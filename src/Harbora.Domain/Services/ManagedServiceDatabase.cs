@@ -61,6 +61,24 @@ public class ManagedServiceDatabase : BaseEntity
     public ICollection<AppManagedService> Apps { get; set; } = new List<AppManagedService>();
 
     /// <summary>
+    /// Whether the pgvector extension is installed inside this specific logical database, as last
+    /// confirmed by the engine itself (1.7, pgvector-as-option plan) — never a flag Harbora sets on
+    /// its own belief. Null means never checked, the same "not measured" state
+    /// <see cref="ManagedService.StorageBytes"/>/<see cref="ManagedService.StorageMeasuredAt"/>
+    /// already uses this platform's idiom for; false means the engine was asked and either said no or
+    /// refused the request outright. Meaningless for an instance whose engine
+    /// <see cref="Harbora.Infrastructure.Services.DatabaseGrantSql.SupportsVectorExtension"/> does not
+    /// name, and — because the extension lives inside the container's image, not inside any one
+    /// database — may go stale if the instance is later rebuilt without pgvector support; only a
+    /// fresh <c>LogicalDatabaseService.EnableVectorExtensionAsync</c> call re-confirms it.
+    /// </summary>
+    public bool? HasVectorExtension { get; set; }
+
+    /// <summary>When <see cref="HasVectorExtension"/> was last confirmed against the engine, or null
+    /// if never. A figure with no timestamp beside it is trusted for longer than it should be.</summary>
+    public DateTimeOffset? VectorExtensionCheckedAt { get; set; }
+
+    /// <summary>
     /// The default row a freshly created <see cref="ManagedService"/> gets alongside itself, for every
     /// engine that has a database name at all — every one of this platform's three creation paths
     /// (<c>DatabasesController.Create</c>, <c>EnvironmentCloner.CloneAsync</c>,

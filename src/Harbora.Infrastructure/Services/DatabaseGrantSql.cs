@@ -288,6 +288,50 @@ public static class DatabaseGrantSql
         };
     }
 
+    /// <summary>Engines with a pgvector story at all (1.7, pgvector-as-option plan). PostgreSQL only
+    /// — pgvector is a PostgreSQL extension; MySQL and MariaDB have nothing resembling it.</summary>
+    public static bool SupportsVectorExtension(ManagedServiceType type) => type == ManagedServiceType.PostgreSql;
+
+    /// <summary>Why this engine cannot have the vector extension, for a message somebody can act on.</summary>
+    public static string VectorExtensionUnsupportedReason(ManagedServiceType type) =>
+        $"pgvector is a PostgreSQL extension. {type} has no vector-extension story.";
+
+    /// <summary>
+    /// Installs pgvector inside one logical database (1.7, pgvector-as-option plan). <c>IF NOT
+    /// EXISTS</c> so pressing the button twice, or reaching a database that already has it, is a
+    /// success rather than an error — the same idempotence <see cref="CreateDatabase"/>'s MariaDB
+    /// branch already relies on for the same reason.
+    ///
+    /// <para>
+    /// Deliberately makes no attempt to know in advance whether the instance's own running image
+    /// actually carries the extension's files: <c>CREATE EXTENSION</c> either succeeds or fails with
+    /// Postgres's own reason (most commonly, against the plain <c>postgres</c> image: no
+    /// <c>vector.control</c> to load), and reporting that reason back to the caller is more honest
+    /// than a capability flag Harbora keeps beside it — a flag and the engine it describes can drift;
+    /// this statement's own exit code cannot.
+    /// </para>
+    ///
+    /// <para>
+    /// Connects as the instance's own admin login, exactly like <see cref="CreateDatabase"/> — a
+    /// freshly created per-database login has not necessarily been granted anything beyond its own
+    /// tables (see <see cref="Create"/>), while the admin login this instance was provisioned with
+    /// always has the rights <c>CREATE EXTENSION</c> needs.
+    /// </para>
+    /// </summary>
+    public static GrantCommand? CreateVectorExtension(
+        ManagedServiceType type, string host, int port, string adminUser, string database)
+    {
+        if (!SupportsVectorExtension(type)) return null;
+        if (!IsSafe(database) || !IsSafe(adminUser)) return null;
+
+        return new GrantCommand("postgres:16-alpine",
+        [
+            "psql", "-v", "ON_ERROR_STOP=1",
+            "-h", host, "-p", port.ToString(), "-U", adminUser, "-d", database,
+            "-c", "CREATE EXTENSION IF NOT EXISTS vector;"
+        ]);
+    }
+
     /// <summary>Environment for the client container — the admin password never goes in argv.</summary>
     public static IReadOnlyDictionary<string, string> Environment(
         ManagedServiceType type, string adminPassword) =>

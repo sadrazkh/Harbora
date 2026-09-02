@@ -278,7 +278,9 @@ public sealed partial class DatabasesController(
             LogicalDatabasesSupported = logicalSupported,
             LogicalDatabasesUnsupportedReason = logicalSupported
                 ? null : Harbora.Infrastructure.Services.DatabaseGrantSql.UnsupportedReason(service.Type),
-            CanManageLogicalDatabasesLocally = logicalDatabases.CanCreateLocally
+            CanManageLogicalDatabasesLocally = logicalDatabases.CanCreateLocally,
+            PgVectorEnabled = service.PgVectorEnabled,
+            PgVectorUnpublished = service.HasUnpublishedChanges
         };
     }
 
@@ -336,7 +338,9 @@ public sealed partial class DatabasesController(
                 LastBackupAt: d.IsDefault ? (latestBackup?.FinishedAt ?? latestBackup?.CreatedAt) : null,
                 LastBackupStatus: d.IsDefault ? latestBackup?.Status : null,
                 CanRename: !d.IsDefault && Harbora.Infrastructure.Services.DatabaseGrantSql.SupportsRename(service.Type),
-                CanDelete: !d.IsDefault);
+                CanDelete: !d.IsDefault,
+                HasVectorExtension: d.HasVectorExtension,
+                VectorExtensionCheckedAt: d.VectorExtensionCheckedAt);
         }).ToList();
     }
 
@@ -672,6 +676,50 @@ public sealed partial class DatabasesController(
         {
             TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
         }
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// Turns pgvector support on or off for this PostgreSQL instance (1.7, pgvector-as-option plan).
+    ///
+    /// <para>
+    /// The stock <c>postgres</c> image carries none of the extension's files, and swapping images is
+    /// only ever safe on a full container recreate — so, exactly like a resize or a Redis memory
+    /// policy, this only ever <em>stores</em> the request and marks
+    /// <see cref="Harbora.Domain.Services.ManagedService.HasUnpublishedChanges"/>; <see cref="Reprovision"/>
+    /// is what actually rebuilds the container onto <see cref="Harbora.Infrastructure.Services.PgVectorImage"/>'s
+    /// tag. An existing running instance is therefore never silently left behind and never told a
+    /// half-truth about being ready: it is told plainly that a rebuild is what makes this real, the
+    /// same "applies on next deploy" idiom this page already uses for a resize.
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/pgvector")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> PgVector(Guid id, bool enable, CancellationToken ct)
+    {
+        await Guard(id, ct);
+        var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
+        if (svc is null) return NotFound();
+
+        if (svc.Type != ManagedServiceType.PostgreSql)
+        {
+            TempData["Error"] = Harbora.Infrastructure.Services.DatabaseGrantSql.VectorExtensionUnsupportedReason(svc.Type);
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        svc.PgVectorEnabled = enable;
+        svc.HasUnpublishedChanges = true;
+        await db.SaveChangesAsync(ct);
+
+        TempData["Message"] = enable
+            ? (IsFa
+                ? "ذخیره شد. با بازسازی کانتینر، ایمیجِ دارای pgvector اجرا می‌شود."
+                : "Saved. Rebuild the container to run the pgvector-capable image.")
+            : (IsFa
+                ? "ذخیره شد. با بازسازی بعدی، ایمیج معمولی PostgreSQL دوباره اجرا می‌شود."
+                : "Saved. The next rebuild will run the plain PostgreSQL image again.");
 
         return RedirectToAction(nameof(Details), new { id });
     }
@@ -1181,6 +1229,35 @@ public sealed partial class DatabasesController(
         TempData["Message"] = IsFa
             ? "پایگاه‌داده تغییر نام داد. تا استقرار بعدی، اپ‌های متصل هنوز نام قبلی را دارند."
             : "The database was renamed. Attached apps still have the old name until they redeploy.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// Installs pgvector inside one logical database (1.7, pgvector-as-option plan). A real
+    /// <c>CREATE EXTENSION</c> against the running engine, not a checkbox Harbora believes on its own
+    /// — a refusal names which engine declined and why, exactly as <see cref="CreateDatabase"/>
+    /// already does for the operation one level up. Idempotent: pressing this on a database that
+    /// already has pgvector is a success, not an error.
+    /// </summary>
+    [HttpPost("{id:guid}/logical-databases/{databaseId:guid}/pgvector")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> EnableVectorExtension(Guid id, Guid databaseId, CancellationToken ct)
+    {
+        await Guard(id, ct);
+
+        var (present, error) = await logicalDatabases.EnableVectorExtensionAsync(databaseId, ct);
+        if (present != true)
+        {
+            TempData["Error"] = error ?? (IsFa ? "pgvector تأیید نشد." : "pgvector could not be confirmed on this database.");
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        await audit.LogAsync("database.pgvector_enabled", "service", $"{id}:{databaseId}",
+            HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
+        TempData["Message"] = IsFa
+            ? "pgvector روی این پایگاه‌داده فعال شد."
+            : "pgvector is enabled on this database.";
         return RedirectToAction(nameof(Details), new { id });
     }
 

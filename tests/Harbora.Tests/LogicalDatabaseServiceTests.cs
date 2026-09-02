@@ -85,7 +85,7 @@ public class LogicalDatabaseServiceTests
             Options.Create(new HarboraRuntimeOptions()), clock, NullLogger<ManagedServiceEngine>.Instance);
 
         var service = new LogicalDatabaseService(
-            db, protector, NullLogger<LogicalDatabaseService>.Instance, grants, engine);
+            db, protector, NullLogger<LogicalDatabaseService>.Instance, clock, grants, engine);
 
         return new Stack(db, service, docker, instance);
     }
@@ -107,7 +107,7 @@ public class LogicalDatabaseServiceTests
         db.SaveChanges();
 
         var service = new LogicalDatabaseService(
-            db, new PassthroughProtector(), NullLogger<LogicalDatabaseService>.Instance);
+            db, new PassthroughProtector(), NullLogger<LogicalDatabaseService>.Instance, new Clock(Start));
 
         return (db, service, instance);
     }
@@ -395,5 +395,125 @@ public class LogicalDatabaseServiceTests
 
         error.Should().BeNull();
         docker.OneOffCommands.Should().BeEmpty("nothing changed, so nothing needed telling the engine");
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // pgvector (1.7, pgvector-as-option plan)
+    // -------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Enabling_pgvector_issues_a_create_extension_statement_and_records_the_engines_answer()
+    {
+        var (db, service, docker, instance) = BuildLocal();
+        var (logical, _) = await service.CreateAsync(instance.Id, "orders", default);
+        docker.OneOffCommands.Clear();
+
+        var (present, error) = await service.EnableVectorExtensionAsync(logical!.Id, default);
+
+        present.Should().BeTrue();
+        error.Should().BeNull();
+        docker.OneOffCommands.Should().ContainSingle().Which.Should().Contain("CREATE EXTENSION",
+            "the CREATE EXTENSION must actually reach the engine, not just flip a flag Harbora invented");
+
+        var stored = await db.ManagedServiceDatabases.SingleAsync(d => d.Id == logical.Id);
+        stored.HasVectorExtension.Should().BeTrue();
+        stored.VectorExtensionCheckedAt.Should().Be(Start, "read from the engine's own answer, not left unset");
+    }
+
+    [Fact]
+    public async Task A_refusal_from_the_engine_is_surfaced_in_its_own_words_and_recorded_as_absent()
+    {
+        var (db, service, docker, instance) = BuildLocal();
+        var (logical, _) = await service.CreateAsync(instance.Id, "orders", default);
+        docker.OneOffCommands.Clear();
+        docker.OneOffExitCode = 1;
+        docker.OneOffOutput.Add("ERROR:  could not open extension control file \"vector.control\": No such file or directory");
+
+        var (present, error) = await service.EnableVectorExtensionAsync(logical!.Id, default);
+
+        present.Should().BeFalse();
+        error.Should().NotBeNullOrWhiteSpace("a toggle that reports success while the engine refused is this codebase's defining defect class");
+
+        var stored = await db.ManagedServiceDatabases.SingleAsync(d => d.Id == logical.Id);
+        stored.HasVectorExtension.Should().BeFalse("the engine was asked and said no — this is a known negative, not 'never checked'");
+        stored.VectorExtensionCheckedAt.Should().Be(Start);
+    }
+
+    [Theory]
+    [InlineData(ManagedServiceType.MySql)]
+    [InlineData(ManagedServiceType.MariaDb)]
+    [InlineData(ManagedServiceType.Redis)]
+    [InlineData(ManagedServiceType.MongoDb)]
+    [InlineData(ManagedServiceType.RabbitMq)]
+    [InlineData(ManagedServiceType.Nats)]
+    public async Task A_non_postgresql_engine_is_refused_by_name_and_nothing_reaches_it(ManagedServiceType type)
+    {
+        var (db, service, docker, instance) = BuildLocal(type);
+        var logical = ManagedServiceDatabase.DefaultFor(instance)!;
+        db.ManagedServiceDatabases.Add(logical);
+        await db.SaveChangesAsync();
+
+        var (present, error) = await service.EnableVectorExtensionAsync(logical.Id, default);
+
+        present.Should().BeNull();
+        error.Should().Contain(type.ToString(), "the refusal must name which engine, not just say no");
+        docker.OneOffCommands.Should().BeEmpty("an unsupported engine must never be asked to do anything");
+
+        var stored = await db.ManagedServiceDatabases.SingleAsync(d => d.Id == logical.Id);
+        stored.HasVectorExtension.Should().BeNull("refused before the engine was ever asked, so nothing was learned");
+    }
+
+    [Fact]
+    public async Task An_installation_with_no_local_reach_refuses_rather_than_pretending_to_enable_it()
+    {
+        var (db, service, instance) = BuildUnreachable();
+        var logical = ManagedServiceDatabase.DefaultFor(instance)!;
+        db.ManagedServiceDatabases.Add(logical);
+        await db.SaveChangesAsync();
+
+        var (present, error) = await service.EnableVectorExtensionAsync(logical.Id, default);
+
+        present.Should().BeNull();
+        error.Should().NotBeNullOrWhiteSpace();
+
+        var stored = await db.ManagedServiceDatabases.SingleAsync(d => d.Id == logical.Id);
+        stored.HasVectorExtension.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Losing_contact_with_the_engine_does_not_overwrite_what_was_last_known()
+    {
+        var (db, service, docker, instance) = BuildLocal();
+        var (logical, _) = await service.CreateAsync(instance.Id, "orders", default);
+        docker.OneOffCommands.Clear();
+        // A prior successful check, so this proves the lost-contact run does not clobber it.
+        logical!.HasVectorExtension = true;
+        logical.VectorExtensionCheckedAt = Start;
+        await db.SaveChangesAsync();
+        docker.OneOffThrows = new InvalidOperationException("connection reset");
+
+        var (present, error) = await service.EnableVectorExtensionAsync(logical.Id, default);
+
+        present.Should().BeNull("nothing was risked, so nothing is known — not the same as 'no'");
+        error.Should().NotBeNullOrWhiteSpace();
+
+        var stored = await db.ManagedServiceDatabases.SingleAsync(d => d.Id == logical.Id);
+        stored.HasVectorExtension.Should().BeTrue(
+            "a run that lost contact must not tell a customer their extension vanished when it may still be sitting there");
+    }
+
+    [Fact]
+    public async Task Enabling_pgvector_twice_is_idempotent()
+    {
+        var (db, service, docker, instance) = BuildLocal();
+        var (logical, _) = await service.CreateAsync(instance.Id, "orders", default);
+        docker.OneOffCommands.Clear();
+
+        var first = await service.EnableVectorExtensionAsync(logical!.Id, default);
+        var second = await service.EnableVectorExtensionAsync(logical.Id, default);
+
+        first.Present.Should().BeTrue();
+        second.Present.Should().BeTrue("pressing this on a database that already has pgvector is success, not an error");
+        docker.OneOffCommands.Should().HaveCount(2);
     }
 }

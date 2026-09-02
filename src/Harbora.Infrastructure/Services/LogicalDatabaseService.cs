@@ -30,6 +30,7 @@ public sealed class LogicalDatabaseService(
     HarboraDbContext db,
     ISecretProtector protector,
     ILogger<LogicalDatabaseService> logger,
+    Harbora.Application.Abstractions.ISystemClock clock,
     DatabaseGrantExecutor? grants = null,
     ManagedServiceEngine? services = null)
 {
@@ -219,6 +220,69 @@ public sealed class LogicalDatabaseService(
 
         logger.LogInformation("Renamed logical database {OldName} to {NewName} on {Service}.", oldName, newName, service.Name);
         return null;
+    }
+
+    /// <summary>
+    /// Installs pgvector inside a logical database (1.7, pgvector-as-option plan). The extension is
+    /// per logical database, not per instance, so this lives beside <see cref="CreateAsync"/> rather
+    /// than on <see cref="ManagedServiceEngine"/>, which only ever speaks for the instance as a whole
+    /// — the same reasoning that already keeps every other per-database operation here rather than
+    /// there.
+    ///
+    /// <para>
+    /// Deliberately does not pre-judge whether the instance's own running image carries the
+    /// extension's files: <c>DatabaseGrantExecutor.CreateVectorExtensionAsync</c> either succeeds or
+    /// fails with Postgres's own reason, and that answer — never a capability guess Harbora keeps
+    /// beside it — is what gets written back. Written only when the engine actually gave a verdict
+    /// (<c>Answered</c>): a run that lost contact proves nothing either way, and recording false on it
+    /// would tell a customer their extension vanished when it may still be sitting there untouched —
+    /// the same rule <see cref="Harbora.Infrastructure.Services.ManagedServiceEngine.RotatePasswordAsync"/>
+    /// applies to a rotated password it never got an answer about.
+    /// </para>
+    /// </summary>
+    public async Task<(bool? Present, string? Error)> EnableVectorExtensionAsync(Guid databaseId, CancellationToken ct)
+    {
+        var logical = await db.ManagedServiceDatabases
+            .Include(d => d.ManagedService)
+            .FirstOrDefaultAsync(d => d.Id == databaseId, ct);
+        if (logical is null) return (null, "That database no longer exists.");
+
+        var service = logical.ManagedService;
+        if (service is null) return (null, "That database instance no longer exists.");
+
+        if (!DatabaseGrantSql.SupportsVectorExtension(service.Type))
+            return (null, DatabaseGrantSql.VectorExtensionUnsupportedReason(service.Type));
+
+        if (!CanCreateLocally)
+            return (null,
+                "This installation cannot reach that database instance's own engine, so pgvector " +
+                "cannot be enabled here yet.");
+
+        var network = await services!.NetworkForAsync(service, ct);
+        var (ok, error, answered) = await grants!.CreateVectorExtensionAsync(service, network, logical.Name, ct);
+
+        // Present mirrors exactly what was (or would have been) written below — null whenever the
+        // run was never answered, so a caller can never read "false" out of a run that actually
+        // proved nothing.
+        bool? present = answered ? ok : null;
+
+        if (answered)
+        {
+            logical.HasVectorExtension = ok;
+            logical.VectorExtensionCheckedAt = clock.UtcNow;
+            await db.SaveChangesAsync(ct);
+        }
+
+        if (!ok)
+        {
+            logger.LogWarning(
+                "{Engine} refused to enable pgvector on {Name} ({Service}): {Error}",
+                service.Type, logical.Name, service.Name, error);
+            return (present, error ?? $"{service.Type} refused to enable the vector extension.");
+        }
+
+        logger.LogInformation("Enabled pgvector on {Name} ({Service}).", logical.Name, service.Name);
+        return (present, null);
     }
 
     /// <summary>"2 apps: api, worker" — the same idiom <c>DatabasesController.NamedList</c> already

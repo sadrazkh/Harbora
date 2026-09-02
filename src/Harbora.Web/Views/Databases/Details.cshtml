@@ -151,6 +151,10 @@ else if (moving)
                                 <th>@(isFa ? "اپ‌های متصل" : "Attached apps")</th>
                                 <th>@(isFa ? "آخرین پشتیبان" : "Last backup")</th>
                                 <th>@(isFa ? "حجم" : "Size")</th>
+                                @if (db.Type == ManagedServiceType.PostgreSql)
+                                {
+                                    <th>pgvector</th>
+                                }
                                 <th></th>
                             </tr>
                         </thead>
@@ -189,6 +193,33 @@ else if (moving)
                                            database yet. *@
                                         <span class="text-ink-faint">@(isFa ? "اندازه‌گیری نشده" : "not measured")</span>
                                     </td>
+                                    @if (db.Type == ManagedServiceType.PostgreSql)
+                                    {
+                                        @* 1.7 (pgvector-as-option plan): read from the row's own last-confirmed
+                                           check, never inferred — null is "not checked", not "no". *@
+                                        <td data-logical-database-pgvector-state="@(logical.HasVectorExtension is null ? "not-measured" : logical.HasVectorExtension.Value ? "has-data" : "empty")">
+                                            @if (logical.HasVectorExtension is null)
+                                            {
+                                                <span class="text-ink-faint">@(isFa ? "بررسی نشده" : "not checked")</span>
+                                            }
+                                            else if (logical.HasVectorExtension.Value)
+                                            {
+                                                <span class="resource-status is-ok"><i></i>@(isFa ? "نصب شده" : "Installed")</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="text-ink-faint">@(isFa ? "نصب نشده" : "Not installed")</span>
+                                            }
+                                            @if (Model.CanManage && logical.HasVectorExtension != true)
+                                            {
+                                                <form asp-action="EnableVectorExtension" asp-route-id="@db.Id" asp-route-databaseId="@logical.Id"
+                                                      method="post" class="mt-1" data-enable-pgvector-form>
+                                                    @Html.AntiForgeryToken()
+                                                    <button class="btn-ghost px-2 py-0.5 text-[11px]">@(isFa ? "فعال‌سازی" : "Enable")</button>
+                                                </form>
+                                            }
+                                        </td>
+                                    }
                                     <td class="text-end whitespace-nowrap">
                                         @if (Model.CanManage && logical.CanRename)
                                         {
@@ -527,6 +558,63 @@ else if (moving)
                     </div>
                     <button class="btn-secondary w-full justify-center py-2 text-sm">@(isFa ? "ذخیره سیاست حذف" : "Save eviction policy")</button>
                 </form>
+            }
+
+            <partial name="Design/_PanelEnd" />
+        }
+
+        @if (db.Type == ManagedServiceType.PostgreSql)
+        {
+            @* 1.7 (pgvector-as-option plan): the stock postgres image carries none of pgvector's
+               files, so this only ever stores a request and marks the instance as needing a rebuild
+               — exactly the same "applies on next rebuild" idiom the Redis panel above already uses,
+               because swapping a running container's image is never something a setting alone does. *@
+            var pgVectorPanel = new PanelModel(isFa ? "پشتیبانی pgvector" : "pgvector support");
+            <partial name="Design/_PanelStart" model="pgVectorPanel" />
+
+            <p class="mb-3 text-xs leading-5 text-ink-faint">
+                @(isFa
+                    ? "pgvector افزونه‌ای در PostgreSQL برای ذخیره و جست‌وجوی بردارهای امبدینگ است — بدون مدیریت ایندکس یا API شباهت، فقط خودِ افزونه."
+                    : "pgvector is a PostgreSQL extension for storing and querying embedding vectors — no index management or similarity API here, just the extension itself.")
+            </p>
+
+            <dl class="mb-3 space-y-1 text-xs" data-pgvector-instance-state="@(Model.PgVectorEnabled ? "on" : "off")">
+                <div class="flex justify-between gap-2">
+                    <dt class="text-ink-faint">@(isFa ? "وضعیت درخواستی" : "Requested state")</dt>
+                    <dd class="text-ink">@(Model.PgVectorEnabled ? (isFa ? "روشن" : "On") : (isFa ? "خاموش" : "Off"))</dd>
+                </div>
+                <div class="flex justify-between gap-2">
+                    <dt class="text-ink-faint">@(isFa ? "ایمیج در حال اجرا" : "Running image")</dt>
+                    <dd class="text-ink font-mono" dir="ltr">@(Model.RunningImage ?? "—")</dd>
+                </div>
+            </dl>
+
+            @if (Model.PgVectorEnabled && Model.PgVectorUnpublished)
+            {
+                <p class="mb-3 text-[11px] leading-4 text-warn" data-pgvector-unpublished>
+                    @(isFa
+                        ? "روشن شد، ولی هنوز روی کانتینر در حال اجرا اعمال نشده — برای اجرای ایمیجِ دارای pgvector، کانتینر را بازسازی کنید."
+                        : "Turned on, but not yet applied to the running container — rebuild it to run the pgvector-capable image.")
+                </p>
+            }
+
+            @if (Model.CanManage)
+            {
+                <form asp-action="PgVector" asp-route-id="@db.Id" method="post" data-pgvector-form>
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="enable" value="@(!Model.PgVectorEnabled).ToString().ToLowerInvariant()" />
+                    <button class="btn-secondary w-full justify-center py-2 text-sm"
+                            data-pgvector-toggle="@(Model.PgVectorEnabled ? "off" : "on")">
+                        @(Model.PgVectorEnabled
+                            ? (isFa ? "خاموش کردن pgvector" : "Turn pgvector support off")
+                            : (isFa ? "روشن کردن pgvector" : "Turn pgvector support on"))
+                    </button>
+                </form>
+                <p class="mt-2 text-[11px] leading-4 text-ink-faint">
+                    @(isFa
+                        ? "فقط اینجا ذخیره می‌شود؛ برای اجرای واقعیِ ایمیج جدید، کانتینر را بازسازی کنید."
+                        : "Only saved here; rebuild the container to actually run the new image.")
+                </p>
             }
 
             <partial name="Design/_PanelEnd" />

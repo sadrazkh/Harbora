@@ -92,7 +92,14 @@ public sealed class ManagedServiceEngine(
             await db.SaveChangesAsync(ct);
 
             var creds = CredsFor(svc);
-            var image = $"{def.ImageRepo}:{svc.Version}";
+
+            // 1.7 (pgvector-as-option plan): the only place that decides which image a PostgreSQL
+            // instance actually runs. A logical database's own CREATE EXTENSION never guesses at this
+            // — it asks the engine and reports what it said — so this is the single seam where
+            // "requested" (PgVectorEnabled) becomes "what RunningImage will read after this attempt".
+            var image = svc.Type == ManagedServiceType.PostgreSql && svc.PgVectorEnabled
+                ? PgVectorImage.For(svc.Version)
+                : $"{def.ImageRepo}:{svc.Version}";
 
             // On its environment's own network, so a staging service cannot reach a production
             // database by name — the workspace network is only the fallback for a service placed
