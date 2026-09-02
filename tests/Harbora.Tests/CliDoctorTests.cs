@@ -88,6 +88,69 @@ public class CliDoctorTests : IDisposable
         Single(checks, "Build context").Level.Should().Be(Doctor.Level.Fail);
     }
 
+    // ---- build: root directory containment (1.2, 2026-09 market-gaps round two) ----------------
+
+    [Fact]
+    public void A_context_that_traverses_outside_the_project_is_refused_by_name()
+    {
+        var config = new ProjectConfig { Context = "../elsewhere" };
+
+        var (checks, _) = Doctor.CheckBuild(_root, config);
+
+        var check = Single(checks, "Build context");
+        check.Level.Should().Be(Doctor.Level.Fail);
+        check.Detail.Should().Contain("../elsewhere").And.Contain("..",
+            "the refusal has to name what specifically was wrong, the way AppRootDirectory.Explain does");
+    }
+
+    [Fact]
+    public void An_absolute_context_is_refused_by_name_not_reported_as_merely_missing()
+    {
+        // A directory that happens to exist on the machine running `harbora doctor` (unlike a plain
+        // relative typo) must still be refused for being absolute — the whole point is that it never
+        // named anything inside this project to begin with.
+        Directory.CreateDirectory(Path.Combine(_root, "sibling"));
+        var absolute = Path.Combine(_root, "sibling");
+        var config = new ProjectConfig { Context = absolute };
+
+        var (checks, _) = Doctor.CheckBuild(_root, config);
+
+        var check = Single(checks, "Build context");
+        check.Level.Should().Be(Doctor.Level.Fail);
+        check.Detail.Should().Contain("absolute path");
+    }
+
+    [Fact]
+    public void A_root_directory_named_after_a_packer_exclude_rule_is_refused_before_the_build_even_runs()
+    {
+        // Exactly the shape this task calls out: SourcePacker only excludes build/dist/target/vendor/
+        // .output at the project root, but a root directory IS the project root as far as the packer
+        // is concerned — every file under it would still be dropped, silently, the same way the
+        // DriveUnion incident happened one layer up.
+        Write("build/Dockerfile", "FROM scratch\n");
+        var config = new ProjectConfig { Context = "build" };
+
+        var (checks, _) = Doctor.CheckBuild(_root, config);
+
+        var check = Single(checks, "Build context");
+        check.Level.Should().Be(Doctor.Level.Fail);
+        check.Detail.Should().Contain("build").And.Contain("excludes",
+            "the check must name the rule, not just say the build failed");
+    }
+
+    [Fact]
+    public void A_root_directory_named_build_two_levels_down_is_unaffected()
+    {
+        // The 2026-08-30 fix root-anchored the ambiguous names; a root directory that is NOT itself
+        // one of them, even if a folder further down happens to be, must not be refused here.
+        Write("services/api/Dockerfile", "FROM scratch\n");
+        var config = new ProjectConfig { Context = "services/api" };
+
+        var (checks, _) = Doctor.CheckBuild(_root, config);
+
+        Single(checks, "Build context").Level.Should().Be(Doctor.Level.Ok);
+    }
+
     [Fact]
     public void No_dockerfile_and_no_recognised_stack_fails_with_the_servers_own_error_message()
     {
