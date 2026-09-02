@@ -22,7 +22,14 @@ public record DeploymentRequest(
     /// <summary>Set when the source was pushed from a developer's machine rather than pulled from Git.</summary>
     string? SourceArchivePath = null,
     /// <summary>Release this exact image instead of building anything (`harbora deploy --image`).</summary>
-    string? ImageOverride = null);
+    string? ImageOverride = null,
+    /// <summary>
+    /// Skip the build cache entirely: no previous image is named as a cache source and the engine's
+    /// own layer cache is bypassed too. Stamped onto the queued <c>Deployment</c> row as-is (the
+    /// pipeline runs on a background worker with only the row's id, not this request) and read back
+    /// from there. Ignored for a rollback, which never rebuilds.
+    /// </summary>
+    bool ForceRebuild = false);
 
 /// <summary>Publishes live log lines + status changes to subscribers (SignalR hub, CLI stream).</summary>
 public interface IDeploymentLogStream

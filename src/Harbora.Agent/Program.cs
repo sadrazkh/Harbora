@@ -104,12 +104,14 @@ app.MapGet("/agent/images/exists", async (string image, IDockerEngine e, Cancell
 app.MapPost("/agent/images/remove", (ImageBody b, IDockerEngine e, CancellationToken ct) =>
     e.RemoveImageAsync(b.Image, ct));
 
-app.MapPost("/agent/build", async (string tag, string dockerfile, HttpContext ctx, DockerEngine e, CancellationToken ct) =>
+app.MapPost("/agent/build", async (string tag, string dockerfile, bool noCache, HttpContext ctx, DockerEngine e, CancellationToken ct) =>
 {
     var buildArgs = ParseBuildArgs(ctx.Request.Headers["X-Build-Args"].ToString());
+    // 1.1 (round-two "build cache between deploys"): the panel side of RemoteDockerEngine.BuildImageAsync.
+    var cacheFrom = ParseCacheFrom(ctx.Request.Headers["X-Cache-From"].ToString());
     ctx.Response.ContentType = "text/plain";
     await using var writer = new StreamWriter(ctx.Response.Body);
-    await e.BuildImageFromTarAsync(ctx.Request.Body, dockerfile, tag, buildArgs, new WriterProgress(writer), ct);
+    await e.BuildImageFromTarAsync(ctx.Request.Body, dockerfile, tag, buildArgs, new WriterProgress(writer), ct, cacheFrom, noCache);
 });
 
 app.MapPost("/agent/networks/ensure", (NameBody b, IDockerEngine e, CancellationToken ct) => e.EnsureNetworkAsync(b.Name, ct));
@@ -136,6 +138,11 @@ static IReadOnlyDictionary<string, string> ParseBuildArgs(string header) =>
     string.IsNullOrWhiteSpace(header)
         ? new Dictionary<string, string>()
         : System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(header) ?? new();
+
+static IReadOnlyList<string>? ParseCacheFrom(string header) =>
+    string.IsNullOrWhiteSpace(header)
+        ? null
+        : System.Text.Json.JsonSerializer.Deserialize<List<string>>(header);
 
 // Load a CA certificate from a PEM string or a file path.
 static X509Certificate2? LoadCa(string? pemOrPath)

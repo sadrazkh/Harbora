@@ -253,6 +253,39 @@ public static class DeploymentPlanning
     /// calling it in that case), so nothing is ever pruned and every deployment that still carries an
     /// image tag is an instant rollback.
     /// </param>
+    // ---- build cache (round-two 1.1) ----
+
+    /// <summary>
+    /// Which of this app's own build images (see <see cref="BuildImagePrefix"/>) a NEW build may name
+    /// as its cache source: the most recent Succeeded deployment's own image tag, or null when there
+    /// is none.
+    ///
+    /// <para>
+    /// Narrower than what <see cref="ImagesToPrune"/> protects from deletion, deliberately.
+    /// Retention keeps several rollback targets; a cache source only ever wants the single newest
+    /// one — the build most likely to share unchanged dependency-install layers with what is about to
+    /// be built. A Compose stack's own recorded tag (<c>…:compose-N</c>, see
+    /// <c>DeploymentPipeline.StartComposeStackAsync</c>) and a template/prebuilt app's plain registry
+    /// tag (e.g. <c>nginx:1.27</c>) both fail the <paramref name="imagePrefix"/>/<paramref name="slug"/>
+    /// check below and are silently skipped — this build path never produced either of them, so
+    /// neither can share a layer with what it is about to build.
+    /// </para>
+    /// </summary>
+    /// <param name="deployments">This app's deployment history, any order.</param>
+    /// <param name="excludeDeploymentId">The deployment about to build — never its own candidate.</param>
+    public static string? PreviousBuildImage(
+        IEnumerable<Deployment> deployments, Guid excludeDeploymentId, string imagePrefix, string slug)
+    {
+        var prefix = BuildImagePrefix(imagePrefix, slug);
+        return deployments
+            .Where(d => d.Id != excludeDeploymentId)
+            .Where(d => d.Status == DeploymentStatus.Succeeded)
+            .Where(d => !string.IsNullOrWhiteSpace(d.ImageTag) && d.ImageTag!.StartsWith(prefix, StringComparison.Ordinal))
+            .OrderByDescending(d => d.Number)
+            .Select(d => d.ImageTag)
+            .FirstOrDefault();
+    }
+
     public static IReadOnlySet<Guid> RollbackEligibleDeploymentIds(
         IEnumerable<Deployment> deployments, Guid? activeDeploymentId, int keep)
     {

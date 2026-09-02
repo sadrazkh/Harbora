@@ -271,7 +271,7 @@ public sealed class PipelineHarness : IDisposable
     }
 
     /// <summary>Queues a deployment row the pipeline can pick up (bypassing the engine).</summary>
-    public Deployment QueueDeployment(int number = 2, Guid? rollbackTo = null)
+    public Deployment QueueDeployment(int number = 2, Guid? rollbackTo = null, bool forceRebuild = false)
     {
         var deployment = new Deployment
         {
@@ -279,6 +279,7 @@ public sealed class PipelineHarness : IDisposable
             Status = DeploymentStatus.Queued,
             Trigger = rollbackTo is null ? DeploymentTrigger.Manual : DeploymentTrigger.Rollback,
             RolledBackFromId = rollbackTo,
+            ForceRebuild = forceRebuild,
             CreatedAt = Clock.UtcNow
         };
         Db.Deployments.Add(deployment);

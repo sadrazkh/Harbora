@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260902102357_DeploymentForceRebuild")]
+    partial class DeploymentForceRebuild
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -4510,9 +4513,6 @@ namespace Harbora.Data.Migrations
                     b.Property<string>("ErrorMessage")
                         .HasColumnType("text");
 
-                    b.Property<bool>("HasUnpublishedChanges")
-                        .HasColumnType("boolean");
-
                     b.Property<string>("InstanceSizeKey")
                         .HasColumnType("text");
 
@@ -4525,12 +4525,6 @@ namespace Harbora.Data.Migrations
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<string>("RedisEvictionPolicy")
-                        .HasColumnType("text");
-
-                    b.Property<long>("RedisMaxMemoryBytes")
-                        .HasColumnType("bigint");
 
                     b.Property<string>("RunningImage")
                         .HasColumnType("text");

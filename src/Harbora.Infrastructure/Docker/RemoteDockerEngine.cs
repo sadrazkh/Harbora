@@ -47,7 +47,13 @@ public sealed class RemoteDockerEngine(
 
         var client = Client();
         client.DefaultRequestHeaders.Add("X-Build-Args", JsonSerializer.Serialize(request.BuildArgs));
-        var url = $"agent/build?tag={Uri.EscapeDataString(request.ImageTag)}&dockerfile={Uri.EscapeDataString(request.Dockerfile)}";
+        // Cache-from names images already on THIS node (DockerBuildRequest.CacheFrom's own doc: never
+        // a registry reference), so it travels the same way build args do — a header, not the query
+        // string, since a tag can carry characters query encoding would mangle either way.
+        if (request.CacheFrom is { Count: > 0 } cacheFrom)
+            client.DefaultRequestHeaders.Add("X-Cache-From", JsonSerializer.Serialize(cacheFrom));
+        var url = $"agent/build?tag={Uri.EscapeDataString(request.ImageTag)}&dockerfile={Uri.EscapeDataString(request.Dockerfile)}" +
+                  (request.NoCache ? "&noCache=true" : "");
         using var res = await client.PostAsync(url, content, ct);
         res.EnsureSuccessStatusCode();
         await StreamLines(res, log, ct);

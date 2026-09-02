@@ -113,4 +113,42 @@ public class DockerEngineBuildFailureTests
         message.Should().Contain("dockerfile parse error on line 1");
         message.Should().NotContain("Step");
     }
+
+    // ---- BuildParameters (round-two 1.1: build cache between deploys) ----
+    //
+    // What this engine actually asks Docker.DotNet for — the seam DeploymentPipeline's own
+    // BuildCache decision reaches once it crosses into the real (non-fake) engine. Same reasoning as
+    // the tests above: a real DockerEngine needs a daemon this suite does not have, but
+    // ImageBuildParameters is a plain settable POCO, so this is reachable with none.
+
+    [Fact]
+    public void A_named_cache_source_reaches_the_classic_builders_CacheFrom_parameter()
+    {
+        var parameters = DockerEngine.BuildParameters(
+            "Dockerfile", "harbora/blog:build-2", new Dictionary<string, string>(),
+            cacheFrom: ["harbora/blog:build-1"], noCache: false);
+
+        parameters.CacheFrom.Should().Equal("harbora/blog:build-1");
+        parameters.NoCache.Should().BeFalse();
+    }
+
+    [Fact]
+    public void No_cache_source_leaves_CacheFrom_null_rather_than_an_empty_list()
+    {
+        var parameters = DockerEngine.BuildParameters(
+            "Dockerfile", "harbora/blog:build-1", new Dictionary<string, string>(),
+            cacheFrom: null, noCache: false);
+
+        parameters.CacheFrom.Should().BeNull();
+    }
+
+    [Fact]
+    public void Forcing_a_rebuild_sets_NoCache_regardless_of_any_cache_source()
+    {
+        var parameters = DockerEngine.BuildParameters(
+            "Dockerfile", "harbora/blog:build-2", new Dictionary<string, string>(),
+            cacheFrom: null, noCache: true);
+
+        parameters.NoCache.Should().BeTrue();
+    }
 }

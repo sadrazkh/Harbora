@@ -1545,7 +1545,7 @@ public sealed partial class AppsController(
     [HttpPost]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.AppsDeploy)]
-    public async Task<IActionResult> Deploy(Guid id, string? gitRef, CancellationToken ct)
+    public async Task<IActionResult> Deploy(Guid id, string? gitRef, bool forceRebuild, CancellationToken ct)
     {
         // The capability this action is authorised with, asked again against this particular
         // project: a member scoped away from production must not be able to deploy it.
@@ -1566,7 +1566,8 @@ public sealed partial class AppsController(
         try
         {
             deploymentId = await deployEngine.QueueDeploymentAsync(
-                new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, gitRef ?? app.GitRef), ct);
+                new DeploymentRequest(app.Id, DeploymentTrigger.Manual, currentUser.UserId ?? Guid.Empty, gitRef ?? app.GitRef,
+                    ForceRebuild: forceRebuild), ct);
         }
         catch (InvalidOperationException ex)
         {

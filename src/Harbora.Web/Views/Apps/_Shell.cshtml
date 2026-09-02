@@ -30,7 +30,19 @@
         </p>
     </div>
     <div class="flex flex-wrap gap-2">
-        <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post">@Html.AntiForgeryToken()<button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Deploy"]</button></form>
+        <form asp-controller="Apps" asp-action="Deploy" asp-route-id="@Model.Id" method="post" class="flex items-center gap-1.5">
+            @Html.AntiForgeryToken()
+            <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Deploy"]</button>
+            @* 1.1 (round-two "build cache between deploys"): PrebuiltImage/Template just pull an
+               image — nothing here is ever built, so there is no cache to skip and the control would
+               be a lie for those two source types. Every other source type builds. *@
+            @if (Model.SourceType is not (Harbora.Domain.Common.AppSourceType.PrebuiltImage or Harbora.Domain.Common.AppSourceType.Template))
+            {
+                <label class="flex items-center gap-1 text-xs text-ink-muted" title="@(isFa ? "کش ساخت را نادیده بگیر و همه چیز را از نو بساز" : "Ignore the build cache and rebuild every layer from scratch")">
+                    <input type="checkbox" name="forceRebuild" value="true" /> @(isFa ? "بدون کش" : "no cache")
+                </label>
+            }
+        </form>
         @if (Model.Kind == ServiceKind.Cron)
         {
             @* Without this a nightly job cannot be checked until tomorrow. It takes the same path the

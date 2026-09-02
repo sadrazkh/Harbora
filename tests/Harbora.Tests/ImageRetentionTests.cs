@@ -251,4 +251,81 @@ public class ImageRetentionTests
 
         eligible.Should().BeEquivalentTo(history.Select(d => d.Id), "retention is off — nothing is ever pruned");
     }
+
+    // ---- PreviousBuildImage (round-two 1.1: build cache between deploys) ----
+
+    private static string? Candidate(IEnumerable<Deployment> history, Guid exclude) =>
+        DeploymentPlanning.PreviousBuildImage(history, exclude, "harbora", "blog");
+
+    [Fact]
+    public void No_history_means_no_cache_candidate()
+    {
+        var building = Dep(2, image: null, DeploymentStatus.Building);
+
+        Candidate([building], building.Id).Should().BeNull();
+    }
+
+    [Fact]
+    public void The_most_recent_successful_build_is_the_candidate()
+    {
+        var history = new[]
+        {
+            Dep(1, "harbora/blog:build-1"), Dep(2, "harbora/blog:build-2"), Dep(3, "harbora/blog:build-3")
+        };
+
+        Candidate(history, exclude: Guid.NewGuid()).Should().Be("harbora/blog:build-3");
+    }
+
+    [Fact]
+    public void The_deployment_about_to_build_is_never_its_own_candidate()
+    {
+        var previous = Dep(1, "harbora/blog:build-1");
+        var building = Dep(2, image: null, DeploymentStatus.Building);
+
+        Candidate([previous, building], exclude: building.Id).Should().Be("harbora/blog:build-1");
+    }
+
+    [Fact]
+    public void A_failed_deployment_is_never_a_cache_candidate()
+    {
+        var history = new[] { Dep(1, "harbora/blog:build-1"), Dep(2, "harbora/blog:build-2", DeploymentStatus.Failed) };
+
+        Candidate(history, exclude: Guid.NewGuid()).Should().Be("harbora/blog:build-1",
+            "a failed build never produced a usable image, whatever tag it recorded");
+    }
+
+    [Fact]
+    public void A_compose_stacks_recorded_tag_is_never_a_cache_candidate()
+    {
+        // DeploymentPipeline records "harbora/blog:compose-N" for a stack's history line, but no
+        // single image was ever built under that tag — each service builds its own separately.
+        var history = new[] { Dep(1, "harbora/blog:build-1"), Dep(2, "harbora/blog:compose-2") };
+
+        Candidate(history, exclude: Guid.NewGuid()).Should().Be("harbora/blog:build-1",
+            "the compose tag was never actually built under that name, so caching from it would name nothing real");
+    }
+
+    [Fact]
+    public void A_prebuilt_or_template_images_registry_tag_is_never_a_cache_candidate()
+    {
+        // A PrebuiltImage/Template-image app's ImageTag is whatever the user pulled (e.g. nginx:1.27)
+        // — never one of this app's own build images, and never something to cache another app's
+        // — or this app's own — future build FROM.
+        var history = new[] { Dep(1, "harbora/blog:build-1"), Dep(2, "nginx:1.27") };
+
+        Candidate(history, exclude: Guid.NewGuid()).Should().Be("harbora/blog:build-1",
+            "a plain registry pull is not one of this app's own build images");
+    }
+
+    [Fact]
+    public void Another_apps_image_is_never_a_cache_candidate()
+    {
+        // PreviousBuildImage itself only ever sees the rows its caller (BuildCache) already scoped to
+        // AppId == app.Id — proved here at the tag-shape level too, the same belt-and-braces
+        // ImagesToPrune already applies for retention (Images_of_other_apps_are_never_touched, above):
+        // a stranger's tag fails the prefix check even if it somehow ended up in the input list.
+        var history = new[] { Dep(1, "harbora/shop:build-9") };
+
+        Candidate(history, exclude: Guid.NewGuid()).Should().BeNull();
+    }
 }

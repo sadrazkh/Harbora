@@ -24,25 +24,23 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
     public async Task<string> BuildImageAsync(DockerBuildRequest request, IProgress<string> log, CancellationToken ct)
     {
         await using var tarball = DockerTar.Create(request.ContextPath);
-        return await BuildImageFromTarAsync(tarball, request.Dockerfile, request.ImageTag, request.BuildArgs, log, ct);
+        return await BuildImageFromTarAsync(
+            tarball, request.Dockerfile, request.ImageTag, request.BuildArgs, log, ct,
+            request.CacheFrom, request.NoCache);
     }
 
     /// <summary>
     /// Build from an already-packed context tar. Used by the agent, which receives the tar over
-    /// HTTP rather than a local path.
+    /// HTTP rather than a local path. <paramref name="cacheFrom"/>/<paramref name="noCache"/> default
+    /// to "nothing to reuse" for source compatibility with the agent's own call site, which forwards
+    /// what its own HTTP request carried (see RemoteDockerEngine's build call for the panel side).
     /// </summary>
     public async Task<string> BuildImageFromTarAsync(
         Stream tarContext, string dockerfile, string imageTag,
-        IReadOnlyDictionary<string, string> buildArgs, IProgress<string> log, CancellationToken ct)
+        IReadOnlyDictionary<string, string> buildArgs, IProgress<string> log, CancellationToken ct,
+        IReadOnlyList<string>? cacheFrom = null, bool noCache = false)
     {
-        var parameters = new ImageBuildParameters
-        {
-            Dockerfile = dockerfile,
-            Tags = [imageTag],
-            BuildArgs = buildArgs.ToDictionary(kv => kv.Key, kv => kv.Value),
-            Remove = true,
-            ForceRemove = true
-        };
+        var parameters = BuildParameters(dockerfile, imageTag, buildArgs, cacheFrom, noCache);
 
         // The daemon reports a build failure as one more message inside this same stream — never as
         // an HTTP error, and Docker.DotNet does not inspect the stream for one on its own (confirmed
@@ -75,6 +73,38 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
 
         return imageTag;
     }
+
+    /// <summary>
+    /// Builds the Docker.DotNet parameters for one build — pulled out as its own pure static, the
+    /// same reason <see cref="IsStepLine"/> and <see cref="DescribesBuildFailure"/> are: constructing
+    /// a real <see cref="DockerEngine"/> needs a daemon this suite does not have, but
+    /// <see cref="ImageBuildParameters"/> is a plain settable POCO, so what this engine ASKS the
+    /// daemon for is reachable and testable with no daemon involved.
+    ///
+    /// <para>
+    /// <see cref="ImageBuildParameters.CacheFrom"/> is the classic (non-BuildKit) builder's
+    /// <c>--cache-from</c> — the one this platform actually uses, not BuildKit's inline-cache
+    /// build-arg. <see cref="Docker.DotNet.IImageOperations.BuildImageFromDockerfileAsync"/> posts to
+    /// the daemon's classic <c>/build</c> HTTP endpoint, which understands <c>cachefrom</c> as a
+    /// query parameter directly; BuildKit's inline cache instead needs a session attached to the
+    /// request and a <c>BUILDKIT_INLINE_CACHE=1</c> build arg baked into the image at push time — a
+    /// different transport Docker.DotNet's build call does not speak. <c>--cache-from</c> against an
+    /// image already resolved on this same node (never a registry pull) is the whole of what
+    /// <see cref="BuildCache"/> needs, so the classic builder's simpler mechanism is enough.
+    /// </para>
+    /// </summary>
+    internal static ImageBuildParameters BuildParameters(
+        string dockerfile, string imageTag, IReadOnlyDictionary<string, string> buildArgs,
+        IReadOnlyList<string>? cacheFrom, bool noCache) => new()
+    {
+        Dockerfile = dockerfile,
+        Tags = [imageTag],
+        BuildArgs = buildArgs.ToDictionary(kv => kv.Key, kv => kv.Value),
+        Remove = true,
+        ForceRemove = true,
+        CacheFrom = cacheFrom?.ToList(),
+        NoCache = noCache
+    };
 
     /// <summary>Whether a build-progress line is Docker announcing which Dockerfile instruction is
     /// now running — tracked so a failure can name the step it happened at, not just the image.</summary>

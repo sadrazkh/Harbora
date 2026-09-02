@@ -1083,8 +1083,16 @@ public sealed class DeploymentPipeline(
                 // P6: every service in the stack gets the app's own build-time variables, the same
                 // as the single-container path — this used to be an empty dictionary regardless of
                 // what the app declared.
+                //
+                // 1.1: no CacheFrom here — BuildCache picks a candidate off the APP's own history,
+                // and a Compose stack has several services, each with its own separate image and its
+                // own separate history that nothing today records per-service. Naming the app-level
+                // candidate for every service would be naming a stranger's layers as often as not.
+                // ForceRebuild still applies, though: "no cache" from the deploy UI means no cache
+                // anywhere this deployment builds, not just on the single-container path.
                 image = await docker.BuildImageAsync(
-                    new DockerBuildRequest(service.Build, dockerfile, image, BuildArgsFor(app)),
+                    new DockerBuildRequest(service.Build, dockerfile, image, BuildArgsFor(app),
+                        CacheFrom: null, NoCache: deployment.ForceRebuild),
                     buildLog, ct);
             }
             else
@@ -1387,9 +1395,19 @@ public sealed class DeploymentPipeline(
             }
         }
 
+        // 1.1 (round-two market gaps, "build cache between deploys"): the previous successful build
+        // of THIS app, named as a cache source when one is still verifiably on this node — see
+        // BuildCache's own doc for the two guarantees (never another app's image, never a tag that
+        // might not actually be there) and why a build cache failure can only ever fall back to a
+        // cold build, never fail the deploy outright.
+        var cachePlan = await BuildCache.ResolveAsync(db, docker, app, deployment, _opt.ImagePrefix, ct);
+        await log(LogStream.System, $"Build cache: {cachePlan.Reason}");
+
         await log(LogStream.System, $"Building image {imageTag} …");
         return await docker.BuildImageAsync(
-            new DockerBuildRequest(contextPath, dockerfile, imageTag, BuildArgsFor(app)), buildLog, ct);
+            new DockerBuildRequest(contextPath, dockerfile, imageTag, BuildArgsFor(app),
+                cachePlan.CacheFrom, NoCache: deployment.ForceRebuild),
+            buildLog, ct);
     }
 
     /// <summary>

@@ -45,6 +45,14 @@ public class Deployment : BaseEntity
     /// <summary>When this is a rollback, the deployment whose image we re-released.</summary>
     public Guid? RolledBackFromId { get; set; }
 
+    /// <summary>
+    /// Cold build requested from the deploy UI: no previous image is named as a build-cache source,
+    /// and the engine's own layer cache is bypassed too (<c>DockerBuildRequest.NoCache</c>).
+    /// Meaningless for a rollback, which never rebuilds (ADR-006) — the pipeline never reads it on
+    /// that path.
+    /// </summary>
+    public bool ForceRebuild { get; set; }
+
     public Guid TriggeredByUserId { get; set; }
 
     public DateTimeOffset? StartedAt { get; set; }

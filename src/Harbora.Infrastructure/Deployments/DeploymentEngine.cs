@@ -134,6 +134,7 @@ public sealed class DeploymentEngine(
             TriggeredByUserId = request.TriggeredByUserId,
             RolledBackFromId = request.RollbackToDeploymentId,
             SourceArchivePath = request.SourceArchivePath,
+            ForceRebuild = request.ForceRebuild,
             // An explicit image is recorded up front so the pipeline releases exactly it.
             ImageTag = request.ImageOverride,
             CreatedAt = clock.UtcNow

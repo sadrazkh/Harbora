@@ -179,7 +179,32 @@ public record DockerBuildRequest(
     string ContextPath,
     string Dockerfile,
     string ImageTag,
-    IReadOnlyDictionary<string, string> BuildArgs);
+    IReadOnlyDictionary<string, string> BuildArgs,
+    /// <summary>
+    /// Images already on the node whose layers this build may reuse — the classic builder's
+    /// <c>--cache-from</c>. Null or empty is a cold build, and is what every caller that has nothing
+    /// to reuse passes: an unchanged <c>npm ci</c> / <c>dotnet restore</c> / <c>pip install</c> layer
+    /// can only be reused if a previous build of the SAME app is still on this node to reuse it from.
+    ///
+    /// <para>
+    /// Never a registry reference and never another app's tag. The daemon resolves these against
+    /// images it already has, so naming something that is not there wastes the parameter rather than
+    /// pulling anything — and naming a stranger's image would be a cross-tenant read of layer
+    /// contents. <see cref="Harbora.Infrastructure.Deployments.BuildCache"/> is the only thing in the
+    /// platform that decides this value; see its own doc for the two guarantees it holds.
+    /// </para>
+    /// </summary>
+    IReadOnlyList<string>? CacheFrom = null,
+    /// <summary>
+    /// The classic builder's <c>--no-cache</c>: bypass the daemon's own layer cache as well as
+    /// <see cref="CacheFrom"/>, so every instruction actually re-runs. <see cref="CacheFrom"/> alone
+    /// is not enough to guarantee a genuinely cold build — the daemon may still have unrelated local
+    /// layers from an earlier build of this exact Dockerfile that a plain build would happily reuse
+    /// even with no cache source named. Set from the deploy UI's "no cache" control for the failures
+    /// only a truly fresh build can prove: a base image that changed underneath a stale local layer,
+    /// a flaky dependency a cached <c>RUN</c> keeps hiding. False on every ordinary deploy.
+    /// </summary>
+    bool NoCache = false);
 
 public record DockerRunRequest(
     string Image,
