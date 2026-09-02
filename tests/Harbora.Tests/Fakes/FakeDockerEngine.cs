@@ -241,15 +241,40 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// <summary>Every build request, so a test can assert on build args as well as the image tag.</summary>
     public List<DockerBuildRequest> BuildRequests { get; } = [];
 
-    public async Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct)
+    /// <summary>
+    /// 1.3 (2026-09 market-gaps round two): every credential a pull actually carried, keyed by the
+    /// image reference it was resolved for — null when the pull carried none. A test proving "the
+    /// right credential for a matching registry, none for a non-matching one" reads this rather than
+    /// re-deriving what should have been resolved, the same reason <see cref="RunRequests"/> exists
+    /// instead of a test reconstructing a <c>DockerRunRequest</c> by hand.
+    /// </summary>
+    public ConcurrentDictionary<string, RegistryPullCredential?> PullCredentials { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Raw registry error text to hand <see cref="RegistryPullDiagnostics.Classify"/> for a given
+    /// image, simulating what a real registry answered — a test proving the three distinguishable pull
+    /// failures configures this rather than throwing a canned exception, so it is proving the same
+    /// classification path production actually runs.
+    /// </summary>
+    public ConcurrentDictionary<string, string> PullRawFailures { get; } = new(StringComparer.Ordinal);
+
+    public async Task PullImageAsync(
+        string image, IProgress<string> log, CancellationToken ct, RegistryPullCredential? credential = null)
     {
         ct.ThrowIfCancellationRequested();
         Record(nameof(PullImageAsync), image);
+        PullCredentials[image] = credential;
 
         if (PullNeverFinishes)
         {
             DeadlineFiresWhenTheWorkBegins?.Cancel();
             await Task.Delay(Timeout.Infinite, ct);
+        }
+
+        if (PullRawFailures.TryGetValue(image, out var rawFailure))
+        {
+            var host = credential?.Registry ?? Harbora.Infrastructure.Nodes.ImageDigestResolver.Parse(image).Registry;
+            throw RegistryPullDiagnostics.Classify(host, credential is not null, rawFailure);
         }
 
         SeedImage(image);

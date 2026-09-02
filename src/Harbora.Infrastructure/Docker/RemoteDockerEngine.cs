@@ -60,9 +60,19 @@ public sealed class RemoteDockerEngine(
         return request.ImageTag;
     }
 
-    public async Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct)
+    /// <summary>
+    /// Prefixes one line in the plain-text pull stream this and <c>Harbora.Agent</c>'s
+    /// <c>/agent/images/pull</c> endpoint share, so a registry-auth failure the agent's own
+    /// <see cref="DockerEngine"/> already classified crosses the wire as the classification, not as a
+    /// re-guessed one: the line is <c>{Marker}{Kind}|{Message}</c>, and everything before it in the
+    /// stream is ordinary pull progress already reported to the caller's log.
+    /// </summary>
+    public const string PullErrorMarker = "HARBORA-PULL-ERROR:";
+
+    public async Task PullImageAsync(
+        string image, IProgress<string> log, CancellationToken ct, RegistryPullCredential? credential = null)
     {
-        using var res = await Client().PostAsJsonAsync("agent/images/pull", new { image }, ct);
+        using var res = await Client().PostAsJsonAsync("agent/images/pull", new { image, credential }, ct);
         res.EnsureSuccessStatusCode();
         await StreamLines(res, log, ct);
     }
@@ -227,6 +237,20 @@ public sealed class RemoteDockerEngine(
         using var reader = new StreamReader(stream);
         string? line;
         while ((line = await reader.ReadLineAsync(ct)) is not null)
+        {
+            // The agent's own pull already classified this failure (DockerEngine.PullImageAsync); this
+            // reconstructs that exact classification rather than re-guessing from the line's text, which
+            // could read differently than the raw registry message the classifier was built against.
+            if (line.StartsWith(PullErrorMarker, StringComparison.Ordinal))
+            {
+                var rest = line[PullErrorMarker.Length..];
+                var bar = rest.IndexOf('|');
+                var kind = bar > 0 && Enum.TryParse<RegistryPullFailureKind>(rest[..bar], out var parsed)
+                    ? parsed : RegistryPullFailureKind.Indeterminate;
+                var message = bar > 0 ? rest[(bar + 1)..] : rest;
+                throw new RegistryPullException(kind, message);
+            }
             sink.Report(line);
+        }
     }
 }

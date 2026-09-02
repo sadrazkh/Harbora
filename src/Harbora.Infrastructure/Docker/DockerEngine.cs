@@ -132,17 +132,44 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
             : $"Build of {imageTag} failed at {lastStep}: {detail}";
     }
 
-    public async Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct)
+    public async Task PullImageAsync(
+        string image, IProgress<string> log, CancellationToken ct, RegistryPullCredential? credential = null)
     {
         var (repo, tag) = SplitImage(image);
+
+        // Mirrors BuildImageFromTarAsync's own failure tracking: the daemon reports a pull failure as
+        // one more message inside this same stream, answering 200 OK the whole way through, so
+        // nothing here throws on its own unless this is watched for.
+        string? lastError = null;
         var progress = new Progress<JSONMessage>(m =>
         {
             var line = m.Status ?? m.ProgressMessage ?? m.ErrorMessage;
             if (!string.IsNullOrWhiteSpace(line)) log.Report(line);
+            if (DescribesBuildFailure(m)) lastError = m.Error?.Message ?? m.ErrorMessage;
         });
-        await client.Images.CreateImageAsync(
-            new ImagesCreateParameters { FromImage = repo, Tag = tag }, authConfig: null, progress, ct);
+
+        var authConfig = credential is null
+            ? null
+            : new AuthConfig { Username = credential.Username, Password = credential.Secret, ServerAddress = credential.Registry };
+
+        try
+        {
+            await client.Images.CreateImageAsync(
+                new ImagesCreateParameters { FromImage = repo, Tag = tag }, authConfig, progress, ct);
+        }
+        catch (DockerApiException apiEx)
+        {
+            throw RegistryPullDiagnostics.Classify(HostOf(image), credential is not null, apiEx.Message);
+        }
+
+        if (lastError is not null)
+            throw RegistryPullDiagnostics.Classify(HostOf(image), credential is not null, lastError);
     }
+
+    /// <summary>The registry host a pull failure should be named by — the same normalized shape
+    /// <see cref="Harbora.Infrastructure.Nodes.ImageDigestResolver.Parse"/> produces, so a message here
+    /// names the exact host a stored <c>RegistryCredential</c> would be matched against.</summary>
+    private static string HostOf(string image) => Harbora.Infrastructure.Nodes.ImageDigestResolver.Parse(image).Registry;
 
     public async Task<IReadOnlyList<ImageInfo>> ListImagesAsync(string? tagPrefix, CancellationToken ct)
     {

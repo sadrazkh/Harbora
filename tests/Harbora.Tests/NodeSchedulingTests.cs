@@ -430,7 +430,7 @@ public sealed class NodeSchedulingTests : IDisposable
     private sealed class StubEngine : IDockerEngine
     {
         public Task<string> BuildImageAsync(DockerBuildRequest r, IProgress<string> l, CancellationToken ct) => throw new NotSupportedException();
-        public Task PullImageAsync(string image, IProgress<string> l, CancellationToken ct) => Task.CompletedTask;
+        public Task PullImageAsync(string image, IProgress<string> l, CancellationToken ct, RegistryPullCredential? credential = null) => Task.CompletedTask;
         public Task<IReadOnlyList<ImageInfo>> ListImagesAsync(string? p, CancellationToken ct) => Task.FromResult<IReadOnlyList<ImageInfo>>([]);
         public Task<bool> ImageExistsAsync(string imageRef, CancellationToken ct) => Task.FromResult(false);
         public Task RemoveImageAsync(string imageRef, CancellationToken ct) => Task.CompletedTask;

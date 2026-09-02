@@ -293,7 +293,8 @@ public sealed class DeploymentPipeline(
             {
                 imageTag = deployment.ImageTag!;
                 await Log(LogStream.System, $"Releasing image {imageTag} (nothing to build).");
-                await docker.PullImageAsync(imageTag, new Progress<string>(l => _ = LogFromEngine(LogStream.Build, l)), ct);
+                var releaseCredential = await ResolveRegistryCredentialAsync(app.WorkspaceId, imageTag, ct);
+                await docker.PullImageAsync(imageTag, new Progress<string>(l => _ = LogFromEngine(LogStream.Build, l)), ct, releaseCredential);
             }
             else if (deployment.RolledBackFromId is { } rollbackTargetId)
             {
@@ -890,6 +891,28 @@ public sealed class DeploymentPipeline(
         }
     }
 
+    /// <summary>
+    /// 1.3 (2026-09 market-gaps round two): the workspace's stored credential for the registry an
+    /// image reference names, or null when none is configured — the ordinary case for a public image
+    /// and the only outcome before this sub-project existed. Matching is by registry host alone
+    /// (<c>ImageDigestResolver.Parse</c>'s own normalization, which is what
+    /// <c>RegistryCredential.RegistryHost</c> is stored normalized to match), and a unique index on
+    /// (workspace, host) is what makes this a lookup rather than a choice — see
+    /// <see cref="Harbora.Domain.Registries.RegistryCredential"/>'s own doc for why there is never a
+    /// second candidate to pick between.
+    /// </summary>
+    private async Task<RegistryPullCredential?> ResolveRegistryCredentialAsync(
+        Guid workspaceId, string image, CancellationToken ct)
+    {
+        var host = Nodes.ImageDigestResolver.Parse(image).Registry;
+        var credential = await db.RegistryCredentials.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.WorkspaceId == workspaceId && c.RegistryHost == host, ct);
+
+        return credential is null
+            ? null
+            : new RegistryPullCredential(host, credential.Username, protector.Unprotect(credential.EncryptedSecret));
+    }
+
     private async Task<string> AcquireImageAsync(
         IDockerEngine docker, App app, Deployment deployment, string imageTag,
         IProgress<string> buildLog, Func<LogStream, string, Task> log, CancellationToken ct)
@@ -906,7 +929,8 @@ public sealed class DeploymentPipeline(
                 if (string.IsNullOrWhiteSpace(app.PrebuiltImage))
                     throw new InvalidOperationException("No image configured.");
                 await log(LogStream.System, $"Pulling image {app.PrebuiltImage} …");
-                await docker.PullImageAsync(app.PrebuiltImage, buildLog, ct);
+                var prebuiltCredential = await ResolveRegistryCredentialAsync(app.WorkspaceId, app.PrebuiltImage, ct);
+                await docker.PullImageAsync(app.PrebuiltImage, buildLog, ct, prebuiltCredential);
                 return app.PrebuiltImage;
 
             case AppSourceType.GitRepository:
@@ -931,7 +955,8 @@ public sealed class DeploymentPipeline(
                 {
                     case TemplateResolver.TemplateKind.Image:
                         await log(LogStream.System, $"Template '{template.Name}': pulling image {spec.Image} …");
-                        await docker.PullImageAsync(spec.Image!, buildLog, ct);
+                        var templateCredential = await ResolveRegistryCredentialAsync(app.WorkspaceId, spec.Image!, ct);
+                        await docker.PullImageAsync(spec.Image!, buildLog, ct, templateCredential);
                         return spec.Image!;
 
                     case TemplateResolver.TemplateKind.Git:
@@ -1099,7 +1124,8 @@ public sealed class DeploymentPipeline(
             {
                 image = service.Image!;
                 await log(LogStream.System, $"Pulling {image} for '{service.Name}' …");
-                await docker.PullImageAsync(image, buildLog, ct);
+                var serviceCredential = await ResolveRegistryCredentialAsync(app.WorkspaceId, image, ct);
+                await docker.PullImageAsync(image, buildLog, ct, serviceCredential);
             }
 
             foreach (var (volume, _) in service.Volumes)

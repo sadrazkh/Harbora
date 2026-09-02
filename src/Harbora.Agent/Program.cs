@@ -89,7 +89,17 @@ app.MapPost("/agent/images/pull", async (ImageBody body, HttpContext ctx, IDocke
 {
     ctx.Response.ContentType = "text/plain";
     await using var writer = new StreamWriter(ctx.Response.Body);
-    await e.PullImageAsync(body.Image, new WriterProgress(writer), ct);
+    try
+    {
+        await e.PullImageAsync(body.Image, new WriterProgress(writer), ct, body.Credential);
+    }
+    catch (RegistryPullException ex)
+    {
+        // Carries the classification across the wire rather than the message alone — see
+        // RemoteDockerEngine.PullErrorMarker for why the caller reconstructs the exact kind instead
+        // of re-classifying this line's text.
+        await writer.WriteLineAsync($"{RemoteDockerEngine.PullErrorMarker}{ex.Kind}|{ex.Message}");
+    }
 });
 
 app.MapGet("/agent/images", (string? prefix, IDockerEngine e, CancellationToken ct) =>
@@ -174,7 +184,7 @@ namespace Harbora.Agent
         }
     }
 
-    public sealed record ImageBody(string Image);
+    public sealed record ImageBody(string Image, RegistryPullCredential? Credential = null);
     public sealed record NameBody(string Name);
     public sealed record ConnectBody(string Container, string Network);
 }

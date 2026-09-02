@@ -8,7 +8,18 @@
 public interface IDockerEngine
 {
     Task<string> BuildImageAsync(DockerBuildRequest request, IProgress<string> log, CancellationToken ct);
-    Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct);
+
+    /// <summary>
+    /// Pulls an image, optionally authenticating to its registry first.
+    /// </summary>
+    /// <param name="credential">
+    /// 1.3 (2026-09 market-gaps round two): the workspace's stored credential for the image's own
+    /// registry host, or null when none is configured (which is the ordinary case for a public
+    /// image). Resolved by the caller — <c>DeploymentPipeline</c> — by matching the image's registry
+    /// host against <c>RegistryCredential.RegistryHost</c>; this seam only ever carries the one
+    /// credential that already won that match, never a set to choose between.
+    /// </param>
+    Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct, RegistryPullCredential? credential = null);
 
     /// <summary>Tagged images present on this node, optionally filtered to those whose tag starts with a prefix.</summary>
     Task<IReadOnlyList<ImageInfo>> ListImagesAsync(string? tagPrefix, CancellationToken ct);
@@ -285,3 +296,118 @@ public record ContainerStats(double CpuPercent, long MemoryUsedBytes, long Memor
 public record HostInfo(
     int CpuCores, long TotalMemoryBytes, long TotalDiskBytes, long FreeDiskBytes,
     string DockerVersion, int ContainersRunning, string? Architecture = null);
+
+/// <summary>
+/// One registry's own username/secret, decrypted for exactly one pull and handed to whichever engine
+/// is about to make it (1.3, 2026-09 market-gaps round two). Never persisted, logged or redacted
+/// through this type — it lives only as long as the call that carries it, the same lifetime rule
+/// every other decrypted secret in this codebase follows (e.g. <c>AttachedDatabaseCreds</c>).
+/// </summary>
+/// <param name="Registry">
+/// The registry host this credential is for, in the same normalized shape
+/// <c>ImageDigestResolver.Parse</c> produces (e.g. <c>ghcr.io</c>, <c>docker.io</c>) — carried here
+/// purely so a failure message can name the registry without a second lookup.
+/// </param>
+public sealed record RegistryPullCredential(string Registry, string Username, string Secret);
+
+/// <summary>
+/// Why a registry pull failed, distinguished as far as the registry's own answer allows — the honest
+/// alternative to reporting every failed pull as "image not found", which sends a customer looking for
+/// a typo in a perfectly correct image name when the real cause is a missing or wrong credential.
+/// </summary>
+public enum RegistryPullFailureKind
+{
+    /// <summary>Credentials were supplied and the registry refused them.</summary>
+    CredentialsRejected,
+
+    /// <summary>The registry demanded authentication and no credential is configured for it.</summary>
+    CredentialsMissing,
+
+    /// <summary>The registry's answer says the image or tag itself does not exist.</summary>
+    ImageNotFound,
+
+    /// <summary>
+    /// The registry's own answer does not distinguish a missing/incorrect credential from a
+    /// nonexistent image — several registries deliberately blend the two (Docker Hub's own daemon
+    /// message is "repository does not exist or may require 'docker login'") so an anonymous caller
+    /// cannot use the difference to discover a private repository exists. Guessing which one it is
+    /// would be inventing a fact the registry never gave up; saying so plainly is the honest answer.
+    /// </summary>
+    Indeterminate
+}
+
+/// <summary>Thrown when a registry pull fails, carrying <see cref="RegistryPullFailureKind"/> so a
+/// caller (or a test) can tell the three-plus-one outcomes apart without parsing <see cref="Exception.Message"/>.</summary>
+public sealed class RegistryPullException(RegistryPullFailureKind kind, string message) : Exception(message)
+{
+    public RegistryPullFailureKind Kind { get; } = kind;
+}
+
+/// <summary>
+/// Turns a registry's raw error text into one of <see cref="RegistryPullFailureKind"/>'s named
+/// outcomes, in words an operator can act on rather than a downstream "image not found".
+///
+/// <para>
+/// Deliberately conservative: it only calls a failure "rejected credentials" or "image not found" when
+/// the registry's own words say so unambiguously and don't also carry the other kind's language. Any
+/// text it cannot confidently place — including no text at all, which happens when the daemon fails
+/// before a registry ever answers — becomes <see cref="RegistryPullFailureKind.Indeterminate"/>. A
+/// classifier that guesses under uncertainty is exactly the "0 printed where the truth is not measured"
+/// defect this platform exists to remove, just spelled a different way.
+/// </para>
+/// </summary>
+public static class RegistryPullDiagnostics
+{
+    private static readonly string[] AuthWords =
+        ["unauthorized", "authentication required", "401", "403", "incorrect username or password", "denied:"];
+
+    private static readonly string[] MissingWords =
+        ["manifest unknown", "not found", "404", "no such image", "does not exist"];
+
+    /// <summary>Phrases registries use that deliberately blend "no credential"/"wrong credential" with
+    /// "does not exist" — Docker Hub's own daemon message is the canonical example.</summary>
+    private static readonly string[] BlendedWords =
+        ["may require", "pull access denied"];
+
+    public static RegistryPullException Classify(string registryHost, bool credentialSupplied, string? rawMessage)
+    {
+        var text = (rawMessage ?? string.Empty).Trim();
+        var lower = text.ToLowerInvariant();
+
+        var mentionsAuth = AuthWords.Any(w => lower.Contains(w, StringComparison.Ordinal));
+        var mentionsMissing = MissingWords.Any(w => lower.Contains(w, StringComparison.Ordinal));
+        var blended = BlendedWords.Any(w => lower.Contains(w, StringComparison.Ordinal)) || (mentionsAuth && mentionsMissing);
+
+        if (text.Length == 0)
+            return new RegistryPullException(RegistryPullFailureKind.Indeterminate,
+                $"{registryHost} refused to pull this image and gave no detail Harbora could read. " +
+                (credentialSupplied
+                    ? $"Credentials are configured for {registryHost} — check them, and confirm the image name and tag exist."
+                    : $"No credentials are configured for {registryHost} — add some if this image is private, and confirm the image name and tag."));
+
+        if (blended)
+            return new RegistryPullException(RegistryPullFailureKind.Indeterminate,
+                $"{registryHost} answered in a way that does not distinguish a missing/incorrect credential " +
+                "from an image that does not exist (some registries deliberately blend the two so an " +
+                "unauthenticated caller cannot use the difference to discover a private repository). " +
+                (credentialSupplied
+                    ? $"Credentials are configured for {registryHost} — double-check them."
+                    : $"No credentials are configured for {registryHost} — add some if this image is private.") +
+                $" Also confirm the image name and tag. The registry said: {text}");
+
+        if (mentionsAuth)
+            return credentialSupplied
+                ? new RegistryPullException(RegistryPullFailureKind.CredentialsRejected,
+                    $"{registryHost} rejected the credentials configured for it. Check the username and secret and save them again.")
+                : new RegistryPullException(RegistryPullFailureKind.CredentialsMissing,
+                    $"{registryHost} demanded authentication and no credentials are configured for it in this workspace. " +
+                    "Add credentials for this registry and redeploy.");
+
+        if (mentionsMissing)
+            return new RegistryPullException(RegistryPullFailureKind.ImageNotFound,
+                $"{registryHost} says this image does not exist — check the image name and tag.");
+
+        return new RegistryPullException(RegistryPullFailureKind.Indeterminate,
+            $"{registryHost} refused to pull this image and Harbora could not classify why from its answer: {text}");
+    }
+}

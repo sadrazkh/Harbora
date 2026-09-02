@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using Docker.DotNet;
+using Harbora.Application.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Harbora.Infrastructure.Nodes;
@@ -39,7 +40,12 @@ public sealed class ImageDigestResolver(
     /// The reference a node should be told to pull: <c>repository@sha256:…</c>.
     /// Throws when neither the panel nor the registry can say what the tag currently points at.
     /// </summary>
-    public async Task<string> ResolveAsync(string imageReference, CancellationToken ct)
+    /// <param name="credential">
+    /// 1.3 (2026-09 market-gaps round two): the workspace's credential for this image's registry, or
+    /// null for the ordinary public-image case. Used only against <see cref="FromRegistryAsync"/> —
+    /// a local Docker inspect never needs one.
+    /// </param>
+    public async Task<string> ResolveAsync(string imageReference, CancellationToken ct, RegistryPullCredential? credential = null)
     {
         // Already pinned. Re-resolving would be a chance to change the answer.
         if (imageReference.Contains("@sha256:", StringComparison.Ordinal)) return imageReference;
@@ -52,7 +58,7 @@ public sealed class ImageDigestResolver(
             return $"{Qualified(registry, repository)}@{local}";
         }
 
-        var remote = await FromRegistryAsync(registry, repository, tag, ct);
+        var remote = await FromRegistryAsync(registry, repository, tag, credential, ct);
 
         log.LogInformation("Resolved {Image} to {Digest} from {Registry}.", imageReference, remote, registry);
         return $"{Qualified(registry, repository)}@{remote}";
@@ -87,7 +93,14 @@ public sealed class ImageDigestResolver(
     /// The digest the registry currently serves for a tag, read from the <c>Docker-Content-Digest</c>
     /// header of a HEAD against the manifest.
     /// </summary>
-    private async Task<string> FromRegistryAsync(string registry, string repository, string tag, CancellationToken ct)
+    /// <param name="credential">
+    /// 1.3 (2026-09 market-gaps round two): offered at the bearer token endpoint (the flow Docker Hub,
+    /// GHCR and Quay all use) or directly as Basic auth on the manifest request (the flow a
+    /// self-hosted registry with no separate token endpoint uses) — whichever challenge the registry
+    /// actually issues. Null reproduces the previous anonymous-only behaviour exactly.
+    /// </param>
+    private async Task<string> FromRegistryAsync(
+        string registry, string repository, string tag, RegistryPullCredential? credential, CancellationToken ct)
     {
         var client = httpFactory.CreateClient();
         client.Timeout = TimeSpan.FromSeconds(30);
@@ -104,20 +117,33 @@ public sealed class ImageDigestResolver(
         {
             response.Dispose();
 
-            var token = await FetchTokenAsync(client, challenge, ct)
-                ?? throw new UnresolvableImageException(
-                    $"The registry at {host} demanded authentication for {repository} and did not offer a token endpoint. " +
-                    "A private registry needs credentials the panel does not have yet.");
+            if (string.Equals(challenge.Scheme, "Basic", StringComparison.OrdinalIgnoreCase))
+            {
+                // No separate token endpoint — the credential goes straight on the manifest request.
+                if (credential is null)
+                    throw RegistryPullDiagnostics.Classify(registry, credentialSupplied: false,
+                        $"{host} demanded Basic authentication for {repository}");
 
-            response = await SendAsync(client, url, token, ct);
+                response = await SendAsync(client, url, token: null, ct, credential);
+            }
+            else
+            {
+                var token = await FetchTokenAsync(client, challenge, credential, ct);
+                if (token is null)
+                    throw RegistryPullDiagnostics.Classify(registry, credential is not null,
+                        credential is null
+                            ? $"{host} demanded authentication for {repository} and no credentials are configured for this registry"
+                            : $"{host} demanded authentication for {repository} and did not accept the configured credentials at its token endpoint (unauthorized)");
+
+                response = await SendAsync(client, url, token, ct);
+            }
         }
 
         using (response)
         {
             if (!response.IsSuccessStatusCode)
-                throw new UnresolvableImageException(
-                    $"The registry at {host} answered {(int)response.StatusCode} for {repository}:{tag}. " +
-                    "A node cannot deploy an image whose digest the panel could not resolve.");
+                throw RegistryPullDiagnostics.Classify(registry, credential is not null,
+                    $"{host} answered {(int)response.StatusCode} for {repository}:{tag}");
 
             var digest = response.Headers.TryGetValues("Docker-Content-Digest", out var values)
                 ? values.FirstOrDefault()
@@ -132,7 +158,7 @@ public sealed class ImageDigestResolver(
     }
 
     private static async Task<HttpResponseMessage> SendAsync(
-        HttpClient client, string url, string? token, CancellationToken ct)
+        HttpClient client, string url, string? token, CancellationToken ct, RegistryPullCredential? basic = null)
     {
         // HEAD rather than GET: the digest is a header, and the manifest body can be megabytes for
         // a multi-architecture index nobody here is going to read.
@@ -143,13 +169,21 @@ public sealed class ImageDigestResolver(
 
         if (token is not null)
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        else if (basic is not null)
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic",
+                Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{basic.Username}:{basic.Secret}")));
 
         return await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
     }
 
-    /// <summary>Follow a bearer challenge to the registry's token endpoint, anonymously.</summary>
+    /// <summary>
+    /// Follow a bearer challenge to the registry's token endpoint — with the stored credential as
+    /// Basic auth on the token request when one is configured, anonymously otherwise. This is the
+    /// standard OCI distribution flow: the token endpoint, not the registry itself, is what actually
+    /// checks a username/password and issues a scoped bearer token back.
+    /// </summary>
     private async Task<string?> FetchTokenAsync(
-        HttpClient client, AuthenticationHeaderValue challenge, CancellationToken ct)
+        HttpClient client, AuthenticationHeaderValue challenge, RegistryPullCredential? credential, CancellationToken ct)
     {
         if (!string.Equals(challenge.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase)) return null;
 
@@ -165,7 +199,12 @@ public sealed class ImageDigestResolver(
 
         try
         {
-            using var response = await client.GetAsync(url, ct);
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (credential is not null)
+                request.Headers.Authorization = new AuthenticationHeaderValue("Basic",
+                    Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{credential.Username}:{credential.Secret}")));
+
+            using var response = await client.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode) return null;
 
             using var document = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));

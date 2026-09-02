@@ -91,14 +91,23 @@ public sealed class NodeWorkloadEngine(
 
     // --- images ---
 
-    public async Task PullImageAsync(string image, IProgress<string> log, CancellationToken ct)
+    public async Task PullImageAsync(
+        string image, IProgress<string> log, CancellationToken ct, RegistryPullCredential? credential = null)
     {
         // The node pulls as part of DeployWorkload; there is no standalone pull verb, and there does
         // not need to be. What this call is really for is resolving the tag while the pipeline is
         // still in its build phase, so a bad reference fails before anything is torn down.
+        //
+        // 1.3 (2026-09 market-gaps round two): a matched credential authenticates this resolution
+        // against the registry, so a private image on a v1 node fails here — by registry name — rather
+        // than with ImageDigestResolver's older, credential-blind "the panel does not have credentials
+        // yet" message. The node's own subsequent pull-by-digest inside DeployWorkload is unchanged;
+        // extending that binary protocol to carry a credential too is out of this task's scope (see
+        // the 1.3 report), so a v1 node still cannot complete a private pull today, but the failure
+        // that stops it here is now honest about which registry and why.
         log.Report($"Resolving {image} to a digest for node {nodeId} …");
 
-        var pinned = await digests.ResolveAsync(image, ct);
+        var pinned = await digests.ResolveAsync(image, ct, credential);
         _pinned[image] = pinned;
 
         log.Report($"{image} is {pinned.Split('@')[^1]}");

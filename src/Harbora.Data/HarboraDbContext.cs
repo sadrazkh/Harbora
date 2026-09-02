@@ -206,6 +206,12 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Email.EmailProvider> EmailProviders => Set<Harbora.Domain.Email.EmailProvider>();
     public DbSet<Harbora.Domain.Email.AppEmailProvider> AppEmailProviders => Set<Harbora.Domain.Email.AppEmailProvider>();
 
+    /// <summary>Per-workspace private-registry pull credentials (1.3, 2026-09 market-gaps round two)
+    /// — matched to an app's image by registry host, not attached app-by-app like
+    /// <see cref="AppEmailProviders"/>, since a credential is a fact about the registry, not any one
+    /// app.</summary>
+    public DbSet<Harbora.Domain.Registries.RegistryCredential> RegistryCredentials => Set<Harbora.Domain.Registries.RegistryCredential>();
+
     public DbSet<Harbora.Domain.Billing.Wallet> Wallets => Set<Harbora.Domain.Billing.Wallet>();
     public DbSet<Harbora.Domain.Billing.BillingLedgerEntry> BillingLedger => Set<Harbora.Domain.Billing.BillingLedgerEntry>();
     public DbSet<Harbora.Domain.Billing.BillingRun> BillingRuns => Set<Harbora.Domain.Billing.BillingRun>();
@@ -895,6 +901,21 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => new { x.AppId, x.EmailProviderId }).IsUnique();
             e.HasOne(x => x.App).WithMany(a => a.EmailProviders).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.EmailProvider).WithMany(p => p.Apps).HasForeignKey(x => x.EmailProviderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // --- private-registry pull credentials (1.3, 2026-09 market-gaps round two) ---
+        b.Entity<Harbora.Domain.Registries.RegistryCredential>(e =>
+        {
+            // A workspace's own credential, visible only through it — the same reason EmailProvider
+            // and StorageBucket are filtered above.
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+
+            // At most one credential per registry host per workspace. This is the whole of what makes
+            // matching a pulled image to a credential deterministic — RegistryCredentialsController
+            // refuses to create a second one for a host that already has one, so there is never a
+            // "which one wins" question for DeploymentPipeline.ResolveRegistryCredentialAsync to
+            // answer at pull time, only "is there one or not".
+            e.HasIndex(x => new { x.WorkspaceId, x.RegistryHost }).IsUnique();
         });
 
         // Deliberately NOT workspace-filtered, unlike StorageBucket just above. The route that

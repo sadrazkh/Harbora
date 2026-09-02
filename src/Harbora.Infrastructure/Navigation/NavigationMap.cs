@@ -88,6 +88,10 @@ public static class NavigationMap
             // mailboxes on its own server. Sits beside storage: both are workspace-level backing
             // credentials an app attaches to, not a single app's own setting.
             new("email-providers", "EmailProviders", "Index", "send"),
+            // 1.3 (2026-09 market-gaps round two): per-workspace pull credentials for a private
+            // container registry. Sits beside email-providers/storage for the same reason: a
+            // workspace-level backing credential apps use, not a single app's own setting.
+            new("registry-credentials", "RegistryCredentials", "Index", "key-round"),
             // Sub-project 9 (2026-08-20 platform-options plan): workspace-level env-var groups an app
             // attaches to — shared config, so it sits beside the other data-shaped destinations rather
             // than under Deploy where a single app's own settings live.
