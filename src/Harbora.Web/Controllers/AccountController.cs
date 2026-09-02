@@ -29,6 +29,7 @@ public sealed partial class AccountController(
     WorkspaceAccountService workspaceAccounts,
     AccountSessionService sessions,
     ExternalLoginSettingsService externalLogins,
+    SingleSignOnRequirementService ssoRequirement,
     IJobQueue jobs) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -273,6 +274,22 @@ public sealed partial class AccountController(
             return Redirect("/account/verify-pending");
         }
 
+        // A workspace's "single sign-on only" setting refuses this exact door, by name — never the
+        // generic "invalid credentials" a wrong password gets. Checked here, after the password and
+        // the email-verification gate and before any session is minted, so a correct password for a
+        // held account never reaches two-factor or a signed-in cookie. See
+        // SingleSignOnRequirementService for who is exempt and why a sign-in with no workspace scope
+        // still has to ask "any workspace", not just one.
+        if (await SsoRefusalAsync(user, HttpContext.RequestAborted) is { } refusal)
+        {
+            await audit.LogAsync("user.login_refused_sso_required", "user", user.Id.ToString(), ClientIp,
+                actorEmailOverride: user.Email, userIdOverride: user.Id, workspaceId: null);
+            ViewBag.SsoRequiredWorkspaceSlug = refusal.WorkspaceSlug;
+            ViewBag.SsoRequiredProviders = refusal.ProviderKeys;
+            ModelState.AddModelError(string.Empty, refusal.Message);
+            return View(model);
+        }
+
         // The password alone is not the door when two-factor is on. Nothing is signed in here: the
         // half-way state is a five-minute sealed note naming the user, and the code page is the
         // only thing that can spend it. A half-authenticated cookie in the real scheme would be a
@@ -286,6 +303,43 @@ public sealed partial class AccountController(
         }
 
         return await CompleteSignInAsync(user, model.ReturnUrl, model);
+    }
+
+    /// <summary>What the login page needs to name a single-sign-on refusal, both for the sentence and
+    /// for the <c>data-</c> attributes the panel's own tests assert on instead — this panel renders
+    /// Persian by default.</summary>
+    private sealed record SsoLoginRefusal(string WorkspaceSlug, string ProviderKeys, string Message);
+
+    /// <summary>
+    /// Null when nothing holds this password sign-in. Otherwise names every workspace that does
+    /// (<see cref="SingleSignOnRequirementService.WorkspacesHoldingAsync"/> already excludes the
+    /// installation owner and each workspace's own owner) and the providers currently offered, so the
+    /// refusal tells the person which button to click instead of leaving them to guess.
+    /// </summary>
+    private async Task<SsoLoginRefusal?> SsoRefusalAsync(User user, CancellationToken ct)
+    {
+        var holding = await ssoRequirement.WorkspacesHoldingAsync(user, ct);
+        if (holding.Count == 0) return null;
+
+        var workspaceNames = string.Join(IsFa ? "، " : ", ", holding.Select(w => w.Name));
+
+        var config = await externalLogins.GetAsync(ct);
+        var oidcName = config.For(ExternalLoginProviders.Oidc).DisplayName;
+        var offered = config.Offered.ToList();
+        var providerNames = offered
+            .Select(p => ExternalLoginProviders.DisplayName(p.Provider, oidcName, IsFa))
+            .ToList();
+
+        var message = providerNames.Count == 0
+            ? (IsFa
+                ? $"فضای کاری «{workspaceNames}» ورود با رمز را نمی‌پذیرد و هنوز هیچ سرویس ورود یکپارچه‌ای روی این پلتفرم تنظیم نشده است. با مدیر فضای کاری تماس بگیرید."
+                : $"\"{workspaceNames}\" requires single sign-on, and no sign-in provider is configured on this platform yet. Contact your workspace administrator.")
+            : (IsFa
+                ? $"فضای کاری «{workspaceNames}» فقط با ورود یکپارچه پذیرفته می‌شود؛ با {string.Join(" یا ", providerNames)} وارد شوید."
+                : $"\"{workspaceNames}\" requires single sign-on. Sign in with {string.Join(" or ", providerNames)} instead.");
+
+        return new SsoLoginRefusal(
+            holding[0].Slug, string.Join(",", offered.Select(p => p.Provider)), message);
     }
 
     private async Task<IActionResult> CompleteSignInAsync(

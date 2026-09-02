@@ -27,6 +27,8 @@ public sealed partial class WorkspacesController(
     Harbora.Infrastructure.Billing.BillingSuspension suspension,
     ISecretProtector protector,
     Harbora.Infrastructure.Identity.SupportSessionService supportSessions,
+    Harbora.Infrastructure.Security.ExternalLoginSettingsService externalLogins,
+    Harbora.Infrastructure.Security.SingleSignOnRequirementService ssoRequirement,
     IJobQueue jobs) : Controller
 {
     private Guid UserId => currentUser.UserId ?? Guid.Empty;
@@ -80,12 +82,23 @@ public sealed partial class WorkspacesController(
         var projectNames = projects.ToDictionary(p => p.Id, p => p.Name);
         var environmentNames = projects.SelectMany(p => p.Environments).ToDictionary(e => e.Id, e => e.Name);
 
+        // Only the owner of a non-personal workspace can turn this on (see SetRequiresSingleSignOn),
+        // so this is the only audience that needs to know who it would refuse before saving.
+        var isOwnerOfSharedWorkspace = current.Workspace.OwnerUserId == UserId && !current.Workspace.IsPersonal;
+        var ssoProviderConfigured = isOwnerOfSharedWorkspace && (await externalLogins.GetAsync(ct)).Any;
+        var unlinkedMembers = isOwnerOfSharedWorkspace
+            ? await ssoRequirement.UnlinkedMembersAsync(WorkspaceId, ct)
+            : [];
+
         return View(new WorkspaceHubViewModel
         {
             CurrentWorkspaceId = WorkspaceId,
             CurrentWorkspaceName = current.Workspace.Name,
             CurrentIsPersonal = current.Workspace.IsPersonal,
             CanManageCurrent = canManage,
+            RequiresSingleSignOn = current.Workspace.RequiresSingleSignOn,
+            SsoProviderConfigured = ssoProviderConfigured,
+            UnlinkedMembers = unlinkedMembers,
             Workspaces = memberships.Select(m =>
             {
                 var wallet = wallets.GetValueOrDefault(m.WorkspaceId);
@@ -362,6 +375,45 @@ public sealed partial class WorkspacesController(
         await audit.LogAsync("workspace.ownership_transferred", "workspace", WorkspaceId.ToString(), ClientIp,
             metadataJson: $"{{\"newOwnerUserId\":\"{userId}\"}}", workspaceId: WorkspaceId, ct: ct);
         return Back(IsFa ? "مالکیت فضای کاری منتقل شد." : "Workspace ownership transferred.");
+    }
+
+    /// <summary>
+    /// Turns "members sign in through single sign-on only" on or off for this workspace.
+    ///
+    /// <para>
+    /// Owner-only, like <see cref="TransferOwnership"/> above and for a related reason: an admin who
+    /// is not the owner is not exempt from this setting (only <c>Workspace.OwnerUserId</c> and the
+    /// installation owner are — see <see cref="SingleSignOnRequirementService"/>), so letting an
+    /// ordinary admin flip it on would let them lock themselves, and every other admin, out by
+    /// accident. Refused by name — never silently a no-op — when no provider is configured, since
+    /// turning this on with nothing to sign in with would refuse every held member's password with
+    /// no door to replace it.
+    /// </para>
+    /// </summary>
+    [HttpPost("sso")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SetRequiresSingleSignOn(bool required, CancellationToken ct)
+    {
+        var workspace = await db.Workspaces.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(w => w.Id == WorkspaceId, ct);
+        if (workspace is null) return NotFound();
+        if (workspace.IsPersonal)
+            return Back(IsFa ? "این تنظیم برای فضای شخصی وجود ندارد." : "This setting is not offered for a personal workspace.", true);
+        if (workspace.OwnerUserId != UserId) return Forbid();
+
+        if (required && !(await externalLogins.GetAsync(ct)).Any)
+            return Back(IsFa
+                ? "پیش از الزامی‌کردن ورود یکپارچه، دست‌کم یک سرویس را در تنظیمات پلتفرم پیکربندی کنید."
+                : "Configure at least one single sign-on provider in platform settings before requiring it.", true);
+
+        workspace.RequiresSingleSignOn = required;
+        await db.SaveChangesAsync(ct);
+        await audit.LogAsync("workspace.requires_sso_changed", "workspace", workspace.Id.ToString(), ClientIp,
+            metadataJson: $"{{\"required\":{required.ToString().ToLowerInvariant()}}}", workspaceId: workspace.Id, ct: ct);
+
+        return Back(required
+            ? (IsFa ? "ورود یکپارچه برای این فضای کاری الزامی شد." : "Single sign-on is now required for this workspace.")
+            : (IsFa ? "الزام ورود یکپارچه برداشته شد." : "Single sign-on is no longer required for this workspace."));
     }
 
     [HttpPost("leave")]

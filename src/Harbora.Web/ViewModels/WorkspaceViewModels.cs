@@ -31,6 +31,24 @@ public sealed class WorkspaceHubViewModel
     public IReadOnlyList<WorkspaceInvitationRow> Invitations { get; init; } = [];
     public IReadOnlyList<WorkspaceProjectOption> Projects { get; init; } = [];
     public IReadOnlyList<WorkspaceProjectGrantRow> Grants { get; init; } = [];
+
+    /// <summary>Whether a password sign-in is currently refused for this workspace's non-exempt members.</summary>
+    public bool RequiresSingleSignOn { get; init; }
+
+    /// <summary>
+    /// Whether at least one single-sign-on provider is configured on this platform. Populated only
+    /// for the workspace owner viewing a non-personal workspace — the only audience who can turn
+    /// <see cref="RequiresSingleSignOn"/> on — and false for everyone else, which is also the
+    /// correct refusal reason to show if they somehow reach the toggle.
+    /// </summary>
+    public bool SsoProviderConfigured { get; init; }
+
+    /// <summary>
+    /// Members of this workspace with no external identity linked yet, named before the owner saves
+    /// the setting rather than discovered one refused sign-in at a time. Populated for the same
+    /// audience as <see cref="SsoProviderConfigured"/>.
+    /// </summary>
+    public IReadOnlyList<Harbora.Infrastructure.Security.SsoUnlinkedMember> UnlinkedMembers { get; init; } = [];
 }
 
 /// <summary>

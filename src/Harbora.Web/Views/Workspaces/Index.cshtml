@@ -246,6 +246,68 @@
                     <button class="btn-secondary w-full">@(isFa ? "انتقال مالکیت" : "Transfer ownership")</button>
                 </form>
                 <partial name="Design/_PanelEnd" />
+
+                @* Owner-only: an admin who is not the owner is never exempt from this setting, so
+                   letting them flip it on could lock themselves and every other admin out at once —
+                   see WorkspacesController.SetRequiresSingleSignOn. *@
+                <partial name="Design/_PanelStart" model="@(new PanelModel(isFa ? "الزام ورود یکپارچه" : "Require single sign-on"))" />
+                <div class="space-y-3 text-sm" data-sso-required="@Model.RequiresSingleSignOn.ToString().ToLowerInvariant()">
+                    <p class="text-ink-muted">
+                        @(isFa
+                            ? "وقتی روشن باشد، اعضای این فضای کاری فقط با سرویس ورود یکپارچه وارد می‌شوند؛ ورود با رمز برای آن‌ها رد می‌شود."
+                            : "When on, members of this workspace sign in only through single sign-on; a password sign-in is refused for them.")
+                    </p>
+                    <p class="rounded-lg border border-line bg-surface-2 p-2 text-xs text-ink-faint" data-sso-owner-exempt="true">
+                        @(isFa
+                            ? "شما به‌عنوان مالک این فضای کاری همیشه از این الزام معاف هستید — در غیر این صورت، یک سرویس ازکارافتاده می‌توانست همه را برای همیشه بیرون از پنل نگه دارد، بدون کسی که بتواند این تنظیم را دوباره خاموش کند."
+                            : "As this workspace's owner, you are always exempt from this requirement — otherwise a provider that stops working could lock everyone out permanently, with nobody left able to switch it back off.")
+                    </p>
+
+                    @if (!Model.SsoProviderConfigured)
+                    {
+                        <p class="rounded-lg border border-warn/30 bg-warn-soft p-2 text-xs text-warn" data-sso-no-provider="true">
+                            @(isFa
+                                ? "هنوز هیچ سرویس ورود یکپارچه‌ای در تنظیمات پلتفرم پیکربندی نشده است؛ پیش از الزامی‌کردن، یکی را تنظیم کنید."
+                                : "No single sign-on provider is configured in platform settings yet. Configure one before requiring it.")
+                        </p>
+                    }
+
+                    @if (!Model.RequiresSingleSignOn && Model.UnlinkedMembers.Count > 0)
+                    {
+                        <div class="rounded-lg border border-warn/30 bg-warn-soft p-3 text-xs" data-sso-unlinked-count="@Model.UnlinkedMembers.Count">
+                            <strong class="block text-warn">
+                                @(isFa
+                                    ? "این اعضا هنوز هیچ سرویسی وصل نکرده‌اند:"
+                                    : "These members have not connected a provider yet:")
+                            </strong>
+                            <ul class="mt-1 space-y-0.5">
+                                @foreach (var unlinked in Model.UnlinkedMembers)
+                                {
+                                    <li data-sso-unlinked-member="@unlinked.Email">@unlinked.DisplayName — <span dir="ltr">@unlinked.Email</span></li>
+                                }
+                            </ul>
+                            <p class="mt-1 text-ink-faint">
+                                @(isFa
+                                    ? "آن‌ها همچنان می‌توانند وارد شوند: دکمهٔ سرویس ورود یکپارچه یک‌بار رمز فعلی‌شان را می‌پرسد و همان ورود، حساب را برای دفعات بعد وصل می‌کند."
+                                    : "They can still sign in: the provider button offers to confirm their current password once, and that same sign-in connects the account for next time.")
+                            </p>
+                        </div>
+                    }
+
+                    <form asp-action="SetRequiresSingleSignOn" method="post"
+                          onsubmit="return confirm('@(Model.RequiresSingleSignOn
+                              ? (isFa ? "الزام ورود یکپارچه برداشته شود؟" : "Turn off the single sign-on requirement?")
+                              : (isFa ? "ورود یکپارچه برای همهٔ اعضا (به‌جز شما) الزامی شود؟" : "Require single sign-on for every member except you?"))');">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="required" value="@((!Model.RequiresSingleSignOn).ToString().ToLowerInvariant())" />
+                        <button class="btn-secondary w-full" data-sso-toggle="@((!Model.RequiresSingleSignOn).ToString().ToLowerInvariant())">
+                            @(Model.RequiresSingleSignOn
+                                ? (isFa ? "غیرفعال‌کردن الزام" : "Turn off requirement")
+                                : (isFa ? "الزامی‌کردن ورود یکپارچه" : "Require single sign-on"))
+                        </button>
+                    </form>
+                </div>
+                <partial name="Design/_PanelEnd" />
             }
         }
 

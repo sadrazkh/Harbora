@@ -16,6 +16,13 @@
             : "That sign-in did not complete. Try again.")
     </div>
 }
+@* A password refusal from a workspace's "single sign-on only" setting is worded in whichever
+   language the panel renders, so tests assert on these attributes rather than the sentence. *@
+@if (ViewBag.SsoRequiredWorkspaceSlug is string ssoRequiredSlug)
+{
+    <div data-sso-login-refused="true" data-sso-required-workspace="@ssoRequiredSlug"
+         data-sso-required-providers="@ViewBag.SsoRequiredProviders" hidden></div>
+}
 
 <form asp-controller="Account" asp-action="Login" method="post">
     @Html.AntiForgeryToken()
