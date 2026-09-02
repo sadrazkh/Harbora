@@ -247,6 +247,14 @@ public sealed partial class AppsController(
         if (model.SourceType == AppSourceType.PrebuiltImage && string.IsNullOrWhiteSpace(model.PrebuiltImage))
             ModelState.AddModelError(nameof(model.PrebuiltImage), "An image reference is required.");
 
+        // Refused by name at the point it is typed — a "../other" or an absolute path is not a
+        // sub-directory of anything that got uploaded or cloned, and the build stage would either
+        // resolve outside the source tree or never find the folder at all.
+        var rootDirectoryRejection = Harbora.Shared.AppRootDirectory.Validate(model.RootDirectory);
+        if (rootDirectoryRejection != Harbora.Shared.PathRejection.None)
+            ModelState.AddModelError(nameof(model.RootDirectory),
+                Harbora.Shared.AppRootDirectory.Explain(model.RootDirectory, rootDirectoryRejection));
+
         // Checked here so an unreadable schedule is a form error rather than a job that silently
         // never runs and is only noticed weeks later.
         if (model.Kind == ServiceKind.Cron
@@ -331,6 +339,12 @@ public sealed partial class AppsController(
             ComposeFilePath = model.SourceType == AppSourceType.DockerCompose
                 ? (string.IsNullOrWhiteSpace(model.ComposeFilePath) ? null : model.ComposeFilePath.Trim())
                 : null,
+            // Normalised, not stored raw: forward slashes, no leading "./", no surrounding slashes,
+            // "." for the repository root — the one shape every downstream reader (DeploymentPipeline,
+            // harbora doctor, the backup metadata snapshot) can trust without re-parsing.
+            BuildContextPath = Harbora.Shared.AppRootDirectory.IsRepositoryRoot(model.RootDirectory)
+                ? Harbora.Shared.AppRootDirectory.RepositoryRoot
+                : Harbora.Shared.AppRootDirectory.Normalise(model.RootDirectory),
             PrebuiltImage = model.PrebuiltImage,
             GitRef = model.GitRef,
             TemplateId = model.TemplateId,

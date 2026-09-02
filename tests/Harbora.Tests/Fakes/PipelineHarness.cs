@@ -180,6 +180,36 @@ public sealed class PipelineHarness : IDisposable
     }
 
     /// <summary>
+    /// The fake checkout's own root — what <c>sourceRoot</c> is for every build stage in this harness
+    /// (Git, upload, static). A test asserting on the build context a root directory resolves to needs
+    /// this to compute the expected absolute path independently of the pipeline it is testing.
+    /// </summary>
+    public string WorkDir => _workDir;
+
+    /// <summary>
+    /// Sets 1.2's root directory — the sub-path within the checkout the build runs from
+    /// (<c>App.BuildContextPath</c>, validated and resolved by <c>Harbora.Shared.AppRootDirectory</c>).
+    /// </summary>
+    public PipelineHarness WithRootDirectory(string? path)
+    {
+        App.BuildContextPath = path;
+        Db.SaveChanges();
+        return this;
+    }
+
+    /// <summary>
+    /// Writes a Dockerfile into a sub-directory of the fake checkout, so a root-directory build has
+    /// something to find once <see cref="DeploymentPipeline"/> resolves the context to that sub-path.
+    /// </summary>
+    public PipelineHarness WithDockerfileAt(string subDir)
+    {
+        var dir = Path.Combine(_workDir, subDir.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "Dockerfile"), "FROM scratch\n");
+        return this;
+    }
+
+    /// <summary>
     /// Switches the app to a Compose source and writes the given file into the fake checkout, so
     /// <c>StartComposeStackAsync</c> — not the single-container path — is what a test exercises.
     /// </summary>

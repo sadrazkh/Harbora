@@ -1347,8 +1347,13 @@ public sealed class DeploymentPipeline(
         IDockerEngine docker, App app, Deployment deployment, string imageTag, string sourceRoot,
         IProgress<string> buildLog, Func<LogStream, string, Task> log, bool forceStatic, CancellationToken ct)
     {
-        var contextPath = Path.Combine(sourceRoot, app.BuildContextPath?.TrimStart('.', '/', '\\') ?? "");
-        if (!Directory.Exists(contextPath)) contextPath = sourceRoot;
+        // AppRootDirectory.TryResolve, not a bare TrimStart + "fall back to the source root if it's
+        // missing": TrimStart('.', '/', '\\') turned "../other" into "other" and quietly built a
+        // different directory than the one that was asked for, and the fallback turned a typo'd root
+        // directory into a build that silently ran from the repository root and reported success —
+        // this codebase's defining defect class. Both are now refused by name instead.
+        if (!Harbora.Shared.AppRootDirectory.TryResolve(sourceRoot, app.BuildContextPath, out var contextPath, out var rootError))
+            throw new InvalidOperationException(rootError);
 
         string dockerfile;
         if (forceStatic)

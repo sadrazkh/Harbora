@@ -90,12 +90,42 @@ public static class Doctor
         }
 
         var contextRel = string.IsNullOrWhiteSpace(config.Context) ? "." : config.Context!;
+
+        // Refused by name before anything is resolved against the local disk: a "../other" or an
+        // absolute path is not a sub-directory of the project this manifest belongs to, whatever
+        // happens to sit at that path on the machine running `harbora doctor`. Same rule the panel's
+        // own root-directory field enforces (Harbora.Shared.AppRootDirectory) — one containment check,
+        // not two that could drift apart.
+        var rootRejection = Harbora.Shared.AppRootDirectory.Validate(contextRel);
+        if (rootRejection != Harbora.Shared.PathRejection.None)
+        {
+            checks.Add(new("Build context", Level.Fail,
+                Harbora.Shared.AppRootDirectory.Explain(contextRel, rootRejection)));
+            return (checks, referenced);
+        }
+
         var contextDir = Path.GetFullPath(Path.Combine(projectDir, contextRel));
 
         if (!Directory.Exists(contextDir))
         {
             checks.Add(new("Build context", Level.Fail,
                 $"context '{contextRel}' does not exist under {projectDir} — nothing can be built from it."));
+            return (checks, referenced);
+        }
+
+        // The context exists on disk, but that is not the same question as "would it exist in the
+        // upload" — SourcePacker treats a handful of names (build, dist, target, vendor, .output) as
+        // build output whenever they sit at the project root, exactly the DriveUnion incident this
+        // preflight exists to catch one layer up. A root directory named after one of them would be
+        // packed as zero files and silently build from nothing (or fall through to the wrong context).
+        var topSegment = contextRel.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries) is { Length: > 0 } segs
+            ? segs[0] : "";
+        if (topSegment.Length > 0 && SourcePacker.RootOnlyExclude.Contains(topSegment, StringComparer.OrdinalIgnoreCase))
+        {
+            checks.Add(new("Build context", Level.Fail,
+                $"root directory '{contextRel}' shares its name with a rule the uploader always excludes at " +
+                $"the project root ('{topSegment}') — none of its files would reach the server. Rename the " +
+                "folder, or move the app's source out of it."));
             return (checks, referenced);
         }
         checks.Add(new("Build context", Level.Ok, $"context '{contextRel}' resolves to {contextDir}."));

@@ -94,6 +94,13 @@ public sealed class CreateAppViewModel
     public string? GitToken { get; set; }
     public string? DockerfilePath { get; set; } = "Dockerfile";
     public string? ComposeFilePath { get; set; }
+
+    /// <summary>
+    /// The sub-path within the repository or upload that the build runs from — a monorepo holding
+    /// <c>api/</c>, <c>web/</c> and <c>worker/</c> deploys as three apps by giving each a different
+    /// one. Blank means the repository root. Validated with <see cref="Harbora.Shared.AppRootDirectory"/>.
+    /// </summary>
+    public string? RootDirectory { get; set; }
     public string? PrebuiltImage { get; set; }
     public int ContainerPort { get; set; } = 80;
     public string? Domain { get; set; }
