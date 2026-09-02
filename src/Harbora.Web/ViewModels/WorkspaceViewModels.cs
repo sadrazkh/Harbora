@@ -75,9 +75,19 @@ public sealed class WorkspaceAuditLogViewModel
     public int PageSize { get; init; } = 50;
     public int TotalCount { get; init; }
 
+    /// <summary>The export's row cap, shown so the page can warn before the click rather than after.</summary>
+    public int ExportMaxRows { get; init; }
+
     public int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalCount / (double)PageSize));
     public bool HasPrevious => Page > 1;
     public bool HasNext => Page < TotalPages;
+
+    /// <summary>
+    /// Whether exporting today would truncate. Compared against <see cref="TotalCount"/> — the whole
+    /// workspace's row count, not this page's — because a workspace can be past the export bound while
+    /// the reader is looking at page one.
+    /// </summary>
+    public bool ExportWouldTruncate => TotalCount > ExportMaxRows;
 }
 
 public sealed record WorkspaceAuditLogRow(

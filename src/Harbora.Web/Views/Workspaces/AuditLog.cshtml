@@ -10,6 +10,32 @@
             ? "کارهای ثبت‌شده در این فضای کاری، از جدیدترین."
             : "Recorded actions in this workspace, newest first."))" />
 
+    <div class="flex flex-wrap items-center justify-between gap-3">
+        @* Same scope, same rules as the table below -- see WorkspacesController.AuditLog's
+           WorkspaceAuditLogQuery, which both the page and these two links read from. *@
+        <div class="flex gap-2 text-xs" data-audit-export-links="true">
+            <a href="/workspaces/audit-log/export.csv" data-audit-export="csv"
+               class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1">
+                @(isFa ? "خروجی CSV" : "Export CSV")
+            </a>
+            <a href="/workspaces/audit-log/export.json" data-audit-export="json"
+               class="rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1">
+                @(isFa ? "خروجی JSON" : "Export JSON")
+            </a>
+        </div>
+    </div>
+
+    @if (Model.ExportWouldTruncate)
+    {
+        @* Said before the click, not just inside the downloaded file: a reader who never opens the
+           export should still learn it would not have been complete. *@
+        <p class="text-xs text-warning-text" data-export-truncation-notice="@Model.ExportMaxRows">
+            @(isFa
+                ? $"این فضای کاری {Model.TotalCount:N0} رویداد دارد؛ خروجی به {Model.ExportMaxRows:N0} موردِ جدیدتر محدود می‌شود و همین محدودیت در خودِ فایل نیز نوشته می‌شود."
+                : $"This workspace has {Model.TotalCount:N0} recorded events. Export is capped at the most recent {Model.ExportMaxRows:N0}; the file itself says so.")
+        </p>
+    }
+
     @* HARBORA-0056: platform-level actions (a platform setting, a node enrollment, a sign-in before
        any workspace is chosen) have no workspace to belong to and are excluded from this list by
        design -- said here so the list is never mistaken for a complete history. A platform

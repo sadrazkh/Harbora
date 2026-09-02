@@ -1,3 +1,6 @@
+using System.Globalization;
+using Harbora.Domain.Auditing;
+using Harbora.Web.Infrastructure;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -41,6 +44,26 @@ public sealed partial class WorkspacesController
 {
     private const int AuditLogPageSize = 50;
 
+    /// <summary>
+    /// Same hard cap the platform-wide export uses (<see cref="AuditController.MaxExportRows"/>): one
+    /// bound, so a workspace with an unusually long history cannot be exported into an unbounded
+    /// in-memory list any more than the whole-platform trail can.
+    /// </summary>
+    private const int AuditLogExportMaxRows = AuditController.MaxExportRows;
+
+    /// <summary>
+    /// The workspace's own slice of the audit trail, scoped and ordered exactly as the page shows it.
+    ///
+    /// Shared by <see cref="AuditLog"/> and both export actions below so the export can never drift
+    /// from what the page displays: today that is only the workspace filter (this page carries no
+    /// actor/action/date filter of its own — <c>WorkspaceViewModels.WorkspaceAuditLogViewModel</c> has
+    /// no such fields, and neither this controller nor any script under <c>wwwroot</c> narrows the
+    /// query further). If a filter is ever added to the page, adding it here is the only change an
+    /// export needs to keep matching it.
+    /// </summary>
+    private IQueryable<AuditLog> WorkspaceAuditLogQuery() =>
+        db.AuditLogs.IgnoreQueryFilters().AsNoTracking().Where(a => a.WorkspaceId == WorkspaceId);
+
     [HttpGet("audit-log")]
     public async Task<IActionResult> AuditLog([FromQuery] int page, CancellationToken ct)
     {
@@ -49,8 +72,7 @@ public sealed partial class WorkspacesController
         if (WorkspaceId == Guid.Empty) return Challenge();
         page = Math.Max(1, page);
 
-        var query = db.AuditLogs.IgnoreQueryFilters().AsNoTracking()
-            .Where(a => a.WorkspaceId == WorkspaceId);
+        var query = WorkspaceAuditLogQuery();
 
         var total = await query.CountAsync(ct);
         var entries = await query
@@ -66,7 +88,51 @@ public sealed partial class WorkspacesController
             Entries = entries,
             Page = page,
             PageSize = AuditLogPageSize,
-            TotalCount = total
+            TotalCount = total,
+            ExportMaxRows = AuditLogExportMaxRows
         });
     }
+
+    /// <summary>
+    /// CSV export of exactly the rows <see cref="AuditLog"/> would list, not just the page on screen:
+    /// same capability check (none beyond an active workspace session — the page has none either),
+    /// same <see cref="WorkspaceAuditLogQuery"/>, but unpaginated up to <see cref="AuditLogExportMaxRows"/>
+    /// rather than the 50-row page window. A truncated file says so inside itself
+    /// (<see cref="AuditExportWriter"/>) rather than silently ending short of what it claims.
+    /// </summary>
+    [HttpGet("audit-log/export.csv")]
+    public async Task<IActionResult> AuditLogExportCsv(CancellationToken ct)
+    {
+        if (WorkspaceId == Guid.Empty) return Challenge();
+
+        var (entries, total) = await LoadExportRowsAsync(ct);
+        var bytes = AuditExportWriter.Csv(entries, total, AuditLogExportMaxRows);
+        return File(bytes, "text/csv", ExportFileName("csv"));
+    }
+
+    /// <summary>JSON twin of <see cref="AuditLogExportCsv"/> — same rows, same bound, same truncation flag.</summary>
+    [HttpGet("audit-log/export.json")]
+    public async Task<IActionResult> AuditLogExportJson(CancellationToken ct)
+    {
+        if (WorkspaceId == Guid.Empty) return Challenge();
+
+        var (entries, total) = await LoadExportRowsAsync(ct);
+        var bytes = AuditExportWriter.Json(entries, total, AuditLogExportMaxRows);
+        return File(bytes, "application/json", ExportFileName("json"));
+    }
+
+    private async Task<(List<AuditLog> Entries, int Total)> LoadExportRowsAsync(CancellationToken ct)
+    {
+        var query = WorkspaceAuditLogQuery();
+        var total = await query.CountAsync(ct);
+        var entries = await query
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(AuditLogExportMaxRows)
+            .ToListAsync(ct);
+        return (entries, total);
+    }
+
+    // Invariant calendar and culture: this is a download filename, not something to localise.
+    private static string ExportFileName(string extension) =>
+        $"harbora-workspace-audit-{DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}.{extension}";
 }
