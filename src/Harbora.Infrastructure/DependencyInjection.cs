@@ -213,6 +213,10 @@ public static class DependencyInjection
         services.AddScoped<Projects.ProjectDeletionService>();
         services.AddScoped<Security.WorkspaceAccountService>();
         services.AddScoped<Security.AccountSessionService>();
+        // Which workspaces refuse a password sign-in, and which of a workspace's members have not
+        // linked a provider yet — read at sign-in (no workspace scope) and from the panel that turns
+        // the setting on.
+        services.AddScoped<Security.SingleSignOnRequirementService>();
         // Opens, checks and closes the periods a platform administrator spends inside a customer's
         // account. Scoped: LiveAsync runs on every request under one and writes the expiry back.
         services.AddScoped<Identity.SupportSessionService>();
