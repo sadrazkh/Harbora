@@ -693,6 +693,14 @@ public sealed partial class DatabasesController(
     /// half-truth about being ready: it is told plainly that a rebuild is what makes this real, the
     /// same "applies on next deploy" idiom this page already uses for a resize.
     /// </para>
+    ///
+    /// <para>
+    /// Turning it back off is refused by name — never silently accepted — while any logical database
+    /// on this instance still has the extension installed: rebuilding onto the plain image afterward
+    /// does not drop anything, but it does break every query touching a <c>vector</c> column until
+    /// pgvector is turned on again, and that should never surface later as an opaque engine error the
+    /// operator has to trace back to a setting flipped weeks earlier.
+    /// </para>
     /// </summary>
     [HttpPost("{id:guid}/pgvector")]
     [ValidateAntiForgeryToken]
@@ -707,6 +715,25 @@ public sealed partial class DatabasesController(
         {
             TempData["Error"] = Harbora.Infrastructure.Services.DatabaseGrantSql.VectorExtensionUnsupportedReason(svc.Type);
             return RedirectToAction(nameof(Details), new { id });
+        }
+
+        // Turning this off is not itself destructive — nothing here drops anything — but rebuilding
+        // onto the plain image afterward silently breaks every query touching a `vector` column on a
+        // database that still has the extension installed. Refused by name rather than letting that
+        // surface later as an opaque "type vector does not exist" the operator has to trace back here.
+        if (!enable)
+        {
+            var stillInstalled = await db.ManagedServiceDatabases.AsNoTracking()
+                .Where(d => d.ManagedServiceId == id && d.HasVectorExtension == true)
+                .Select(d => d.Name)
+                .ToListAsync(ct);
+            if (stillInstalled.Count > 0)
+            {
+                TempData["Error"] = IsFa
+                    ? $"pgvector هنوز روی {string.Join("، ", stillInstalled)} فعال است — خاموش کردن و بازسازی، کوئری‌های بردار را در آنجا می‌شکند."
+                    : $"pgvector is still installed on {string.Join(", ", stillInstalled)} — turning this off and rebuilding will break vector queries there.";
+                return RedirectToAction(nameof(Details), new { id });
+            }
         }
 
         svc.PgVectorEnabled = enable;
