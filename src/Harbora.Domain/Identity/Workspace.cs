@@ -19,6 +19,25 @@ public class Workspace : BaseEntity
     /// </summary>
     public bool IsPersonal { get; set; }
 
+    /// <summary>
+    /// Members of this workspace sign in through an external provider only; the password form
+    /// refuses them by name.
+    ///
+    /// <para>
+    /// The owner of this workspace is never held to it. A provider that stops answering — a rotated
+    /// secret, an expired certificate, an issuer that moved — would otherwise leave nobody able to
+    /// reach the panel and turn the setting back off, and there is no administrator-side "sign in as
+    /// somebody else" here to undo that with. The exemption is the whole reason this column can be
+    /// turned on at all, so the panel that offers it says so on the same screen.
+    /// </para>
+    ///
+    /// <para>
+    /// Read at sign-in, which has no workspace scope at all: every query that asks this question
+    /// goes through <c>WorkspaceMembers.IgnoreQueryFilters()</c> plus an explicit <c>UserId ==</c>.
+    /// </para>
+    /// </summary>
+    public bool RequiresSingleSignOn { get; set; }
+
     /// <summary>Soft lifecycle stop. Archived workspaces can be recovered by their owner.</summary>
     public DateTimeOffset? ArchivedAt { get; set; }
     public Guid? ArchivedByUserId { get; set; }
