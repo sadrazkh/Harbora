@@ -200,6 +200,87 @@ public class PgVectorProvisionTests
     }
 }
 
+/// <summary>
+/// The instance-level toggle's off-switch guard: turning pgvector off is not itself destructive
+/// (nothing here drops anything), but rebuilding onto the plain image afterward silently breaks
+/// every query touching a <c>vector</c> column on a database that still has the extension installed
+/// — so it is refused by name rather than accepted quietly. Neither test reaches the engine: the
+/// toggle only reads/writes rows, so a bare <see cref="HarboraDbContext"/> is enough.
+/// </summary>
+public class PgVectorInstanceToggleTests
+{
+    private static HarboraDbContext NewDb() => new BrittleContext(new DbContextOptionsBuilder<HarboraDbContext>()
+        .UseInMemoryDatabase("pgvector-toggle-" + Guid.NewGuid()).Options);
+
+    private static LogicalDatabaseService Service(HarboraDbContext db) =>
+        new(db, new PassthroughProtector(), NullLogger<LogicalDatabaseService>.Instance, new FixedClock());
+
+    private static ManagedService SeedInstance(HarboraDbContext db)
+    {
+        var instance = new ManagedService
+        {
+            Id = Guid.CreateVersion7(),
+            WorkspaceId = Guid.CreateVersion7(),
+            ServerId = Guid.Empty,
+            Name = "shop-db",
+            Type = ManagedServiceType.PostgreSql,
+            ContainerName = "harbora-svc-shop",
+            DatabaseName = "shop",
+            Username = "harbora",
+            InternalPort = 5432,
+            PgVectorEnabled = true,
+            HasUnpublishedChanges = false
+        };
+        db.Add(instance);
+        db.SaveChanges();
+        return instance;
+    }
+
+    [Fact]
+    public async Task Turning_it_off_while_a_database_still_has_the_extension_is_refused_and_names_it()
+    {
+        var db = NewDb();
+        var instance = SeedInstance(db);
+        db.Add(new ManagedServiceDatabase
+        {
+            WorkspaceId = instance.WorkspaceId, ManagedServiceId = instance.Id,
+            Name = "orders", Username = "orders_user", HasVectorExtension = true
+        });
+        await db.SaveChangesAsync();
+
+        var error = await Service(db).SetPgVectorEnabledAsync(instance.Id, false, default);
+
+        error.Should().NotBeNullOrWhiteSpace(
+            "a toggle that silently accepts this leaves a database whose vector queries are about to break with no warning");
+        error.Should().Contain("orders", "the refusal must name which database, not just say it is in use");
+
+        var stored = await db.ManagedServices.AsNoTracking().SingleAsync(s => s.Id == instance.Id);
+        stored.PgVectorEnabled.Should().BeTrue("a refused request must change nothing");
+        stored.HasUnpublishedChanges.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Turning_it_off_when_no_database_has_the_extension_installed_succeeds()
+    {
+        var db = NewDb();
+        var instance = SeedInstance(db);
+        db.Add(new ManagedServiceDatabase
+        {
+            WorkspaceId = instance.WorkspaceId, ManagedServiceId = instance.Id,
+            Name = "orders", Username = "orders_user", HasVectorExtension = false
+        });
+        await db.SaveChangesAsync();
+
+        var error = await Service(db).SetPgVectorEnabledAsync(instance.Id, false, default);
+
+        error.Should().BeNull();
+
+        var stored = await db.ManagedServices.AsNoTracking().SingleAsync(s => s.Id == instance.Id);
+        stored.PgVectorEnabled.Should().BeFalse();
+        stored.HasUnpublishedChanges.Should().BeTrue("saved, but only a rebuild makes the plain image real");
+    }
+}
+
 /// <summary>The real <see cref="ManagedServiceEngine"/> over a fake daemon, seeding PostgreSQL rows —
 /// mirrors <c>RedisEngineHarness</c> for the engine this feature is actually about.</summary>
 internal sealed class PgEngineHarness : IDisposable

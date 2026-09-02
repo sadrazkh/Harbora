@@ -708,37 +708,19 @@ public sealed partial class DatabasesController(
     public async Task<IActionResult> PgVector(Guid id, bool enable, CancellationToken ct)
     {
         await Guard(id, ct);
-        var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
-        if (svc is null) return NotFound();
+        var exists = await db.ManagedServices.AsNoTracking().AnyAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
+        if (!exists) return NotFound();
 
-        if (svc.Type != ManagedServiceType.PostgreSql)
+        // LogicalDatabaseService.SetPgVectorEnabledAsync owns both the refusal (still installed
+        // somewhere, or a non-PostgreSQL instance) and the write — kept there rather than duplicated
+        // here so it is provable without an HTTP round-trip, the same reasoning every other
+        // logical-database operation on this page already follows.
+        var error = await logicalDatabases.SetPgVectorEnabledAsync(id, enable, ct);
+        if (error is not null)
         {
-            TempData["Error"] = Harbora.Infrastructure.Services.DatabaseGrantSql.VectorExtensionUnsupportedReason(svc.Type);
+            TempData["Error"] = error;
             return RedirectToAction(nameof(Details), new { id });
         }
-
-        // Turning this off is not itself destructive — nothing here drops anything — but rebuilding
-        // onto the plain image afterward silently breaks every query touching a `vector` column on a
-        // database that still has the extension installed. Refused by name rather than letting that
-        // surface later as an opaque "type vector does not exist" the operator has to trace back here.
-        if (!enable)
-        {
-            var stillInstalled = await db.ManagedServiceDatabases.AsNoTracking()
-                .Where(d => d.ManagedServiceId == id && d.HasVectorExtension == true)
-                .Select(d => d.Name)
-                .ToListAsync(ct);
-            if (stillInstalled.Count > 0)
-            {
-                TempData["Error"] = IsFa
-                    ? $"pgvector هنوز روی {string.Join("، ", stillInstalled)} فعال است — خاموش کردن و بازسازی، کوئری‌های بردار را در آنجا می‌شکند."
-                    : $"pgvector is still installed on {string.Join(", ", stillInstalled)} — turning this off and rebuilding will break vector queries there.";
-                return RedirectToAction(nameof(Details), new { id });
-            }
-        }
-
-        svc.PgVectorEnabled = enable;
-        svc.HasUnpublishedChanges = true;
-        await db.SaveChangesAsync(ct);
 
         TempData["Message"] = enable
             ? (IsFa

@@ -285,6 +285,47 @@ public sealed class LogicalDatabaseService(
         return (present, null);
     }
 
+    /// <summary>
+    /// Turns pgvector support on or off for a PostgreSQL instance (1.7, pgvector-as-option plan) —
+    /// the instance-level counterpart of <see cref="EnableVectorExtensionAsync"/>. Touches nothing on
+    /// the engine: it only stores the request and marks <see cref="ManagedService.HasUnpublishedChanges"/>,
+    /// exactly the "applies on next rebuild" idiom every other instance-level setting on this row
+    /// already uses — <see cref="ManagedServiceEngine.ProvisionAsync"/> is what actually swaps the
+    /// image, via <see cref="PgVectorImage"/>.
+    ///
+    /// <para>
+    /// Turning it off is refused by name — never silently accepted — while any logical database on
+    /// this instance still has the extension installed. Nothing here is destructive on its own, but
+    /// rebuilding onto the plain image afterward is: every query touching a <c>vector</c> column on
+    /// that database breaks until pgvector is turned back on, and that must never surface later as an
+    /// opaque engine error the operator has to trace back to a setting flipped weeks earlier.
+    /// </para>
+    /// </summary>
+    public async Task<string?> SetPgVectorEnabledAsync(Guid serviceId, bool enable, CancellationToken ct)
+    {
+        var service = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == serviceId, ct);
+        if (service is null) return "That database instance no longer exists.";
+
+        if (!DatabaseGrantSql.SupportsVectorExtension(service.Type))
+            return DatabaseGrantSql.VectorExtensionUnsupportedReason(service.Type);
+
+        if (!enable)
+        {
+            var stillInstalled = await db.ManagedServiceDatabases.AsNoTracking()
+                .Where(d => d.ManagedServiceId == serviceId && d.HasVectorExtension == true)
+                .Select(d => d.Name)
+                .ToListAsync(ct);
+            if (stillInstalled.Count > 0)
+                return $"pgvector is still installed on {string.Join(", ", stillInstalled)} — " +
+                       "turning this off and rebuilding will break vector queries there.";
+        }
+
+        service.PgVectorEnabled = enable;
+        service.HasUnpublishedChanges = true;
+        await db.SaveChangesAsync(ct);
+        return null;
+    }
+
     /// <summary>"2 apps: api, worker" — the same idiom <c>DatabasesController.NamedList</c> already
     /// uses for a whole instance, one level down.</summary>
     private static string NamedList(IReadOnlyList<string> names)
