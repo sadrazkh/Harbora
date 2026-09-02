@@ -48,6 +48,23 @@ public interface IManagedServiceEngine
     /// Values contain the real credentials (the caller marks them secret + encrypts).
     /// </summary>
     Task<IReadOnlyDictionary<string, string>> BuildAttachEnvAsync(Guid serviceId, CancellationToken ct);
+
+    /// <summary>
+    /// Sets a Redis instance's <c>maxmemory</c>/<c>maxmemory-policy</c>. Stored unconditionally so a
+    /// later rebuild bakes it into the container's own command line, and applied live through
+    /// <c>CONFIG SET</c> immediately when the instance is running — see
+    /// <see cref="RedisMemoryPolicyOutcome"/> for why those are two different facts the caller must
+    /// be told apart.
+    /// </summary>
+    /// <param name="policy">A key from <c>RedisMemoryPolicy.Choices</c>, or null.</param>
+    /// <param name="maxMemoryBytes">Zero for no cap.</param>
+    /// <remarks>
+    /// Throws <c>RedisMemoryPolicyRefusedException</c> (<c>Harbora.Infrastructure.Services</c>) when
+    /// the pair is not one Harbora will apply — see <c>RedisMemoryPolicy.WhyRefused</c>. Not a
+    /// <c>cref</c>: this project does not reference Infrastructure, which is where that type lives.
+    /// </remarks>
+    Task<RedisMemoryPolicyOutcome> UpdateRedisMemoryPolicyAsync(
+        Guid serviceId, string? policy, long maxMemoryBytes, CancellationToken ct);
 }
 
 public sealed record ServiceCatalogEntry(
@@ -70,3 +87,22 @@ public sealed record ServiceConnectionInfo(
     string? Database,
     string ConnectionString,
     string ConnectionStringMasked);
+
+/// <summary>
+/// What happened when a Redis instance's memory policy was saved.
+/// </summary>
+/// <param name="WasRunning">
+/// Whether the container was running at the moment of the save. False means there was nothing to
+/// reach live — the setting is stored and will be baked into the container's own command line the
+/// next time it is provisioned.
+/// </param>
+/// <param name="AppliedLive">
+/// True when <c>CONFIG SET</c> reached the running instance and it accepted the new value. Meaningless
+/// when <see cref="WasRunning"/> is false.
+/// </param>
+/// <param name="LiveApplyError">
+/// What the running instance said when it refused the live change, or null when nothing was
+/// attempted or it succeeded. Named rather than swallowed — "the setting was saved" is not the same
+/// claim as "the setting is in effect", and a refusal here is exactly the gap between the two.
+/// </param>
+public sealed record RedisMemoryPolicyOutcome(bool WasRunning, bool AppliedLive, string? LiveApplyError);

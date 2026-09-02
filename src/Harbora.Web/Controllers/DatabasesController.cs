@@ -271,6 +271,9 @@ public sealed partial class DatabasesController(
             DiskLimitBytes = service.DiskLimitBytes,
             CpuLimit = service.CpuLimit,
             TlsEnabled = service.TlsEnabled,
+            RedisEvictionPolicy = service.RedisEvictionPolicy,
+            RedisMaxMemoryBytes = service.RedisMaxMemoryBytes,
+            RedisMemoryPolicyUnpublished = service.HasUnpublishedChanges,
             LogicalDatabases = logicalSupported ? await BuildLogicalDatabaseRowsAsync(service, ct) : [],
             LogicalDatabasesSupported = logicalSupported,
             LogicalDatabasesUnsupportedReason = logicalSupported
@@ -467,6 +470,26 @@ public sealed partial class DatabasesController(
             service.CpuLimit = size.CpuCores;
         }
 
+        // 1.6 (redis-eviction): chosen at creation rather than left to arrive at whatever Redis
+        // defaults to unasked — see RedisMemoryPolicy's own doc for why that default is wrong for
+        // half of all users either way. Refused by name rather than clamped, the same rule the
+        // Details-page change uses, so creation and the later change agree on what is allowed.
+        if (model.Type == ManagedServiceType.Redis)
+        {
+            var redisMaxMemoryBytes = model.RedisMaxMemoryMb is > 0 ? (long)model.RedisMaxMemoryMb * 1024 * 1024 : 0L;
+            if (Harbora.Infrastructure.Services.RedisMemoryPolicy.WhyRefused(
+                    model.RedisEvictionPolicy, redisMaxMemoryBytes, service.MemoryLimitBytes, isFa: IsFa) is { } redisRefusal)
+            {
+                ModelState.AddModelError(nameof(model.RedisEvictionPolicy), redisRefusal);
+                await PopulateCreateAsync(ct);
+                return View(model);
+            }
+
+            service.RedisEvictionPolicy = string.IsNullOrWhiteSpace(model.RedisEvictionPolicy)
+                ? null : model.RedisEvictionPolicy.Trim();
+            service.RedisMaxMemoryBytes = redisMaxMemoryBytes;
+        }
+
         db.ManagedServices.Add(service);
 
         // D1 (2026-08-25 shared-databases plan): the instance's own admin database, materialised as
@@ -596,6 +619,59 @@ public sealed partial class DatabasesController(
         TempData["Message"] = IsFa
             ? $"اندازه روی «{size?.Name ?? "بدون سقف"}» تنظیم شد. برای اعمال، کانتینر را بازسازی کنید."
             : $"Size set to {size?.Name ?? "no limit"}. Rebuild the container to apply it.";
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// Sets a Redis instance's memory eviction policy — see
+    /// <see cref="Harbora.Infrastructure.Services.RedisMemoryPolicy"/> for why a cache and a queue
+    /// need opposite answers to the same setting.
+    ///
+    /// <para>
+    /// Applied live immediately when the instance is running — Redis takes both settings through
+    /// <c>CONFIG SET</c> — and always saved so the next rebuild bakes the choice into the container's
+    /// own command line. The three outcomes are told apart honestly rather than folded into one
+    /// "saved" banner: a live apply does not survive a plain restart until that rebuild happens, and a
+    /// stopped instance or a refusal from the engine are different facts from either.
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/redis-memory")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.DatabasesManage)]
+    public async Task<IActionResult> RedisMemory(Guid id, string? evictionPolicy, int maxMemoryMb, CancellationToken ct)
+    {
+        await Guard(id, ct);
+
+        var maxMemoryBytes = maxMemoryMb <= 0 ? 0L : (long)maxMemoryMb * 1024 * 1024;
+
+        try
+        {
+            var outcome = await engine.UpdateRedisMemoryPolicyAsync(id, evictionPolicy, maxMemoryBytes, ct);
+
+            if (!outcome.WasRunning)
+            {
+                TempData["Message"] = IsFa
+                    ? "ذخیره شد. با بازسازی بعدی کانتینر اعمال می‌شود."
+                    : "Saved. It applies the next time the container is rebuilt.";
+            }
+            else if (outcome.AppliedLive)
+            {
+                TempData["Message"] = IsFa
+                    ? "همین الان روی نمونهٔ در حال اجرا اعمال شد. برای ماندگاری پس از هر راه‌اندازی مجدد، کانتینر را بازسازی کنید."
+                    : "Applied to the running instance right now. Rebuild the container so it survives a restart.";
+            }
+            else
+            {
+                TempData["Error"] = IsFa
+                    ? $"ذخیره شد، ولی نمونهٔ در حال اجرا آن را نپذیرفت: {outcome.LiveApplyError} تا بازسازی بعدی اعمال نمی‌شود."
+                    : $"Saved, but the running instance refused it: {outcome.LiveApplyError} It will not take effect until the next rebuild.";
+            }
+        }
+        catch (Harbora.Infrastructure.Services.RedisMemoryPolicyRefusedException ex)
+        {
+            TempData["Error"] = (IsFa ? ex.ReasonFa : null) ?? ex.Message;
+        }
 
         return RedirectToAction(nameof(Details), new { id });
     }

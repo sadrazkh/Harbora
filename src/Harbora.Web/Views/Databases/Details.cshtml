@@ -435,6 +435,103 @@ else if (moving)
         </p>
         <partial name="Design/_PanelEnd" />
 
+        @if (db.Type == ManagedServiceType.Redis)
+        {
+            @* 1.6 (redis-eviction): one setting whose right default is the opposite for a cache and
+               for a queue, so it is offered as a choice with the consequence spelled out — never as a
+               raw list of Redis's own constants. *@
+            var evictionPanel = new PanelModel(isFa ? "سیاست حذف حافظه" : "Memory eviction policy");
+            var ceiling = Model.MemoryLimitBytes > 0
+                ? Harbora.Infrastructure.Services.RedisMemoryPolicy.Ceiling(Model.MemoryLimitBytes)
+                : null;
+            <partial name="Design/_PanelStart" model="evictionPanel" />
+
+            <p class="mb-3 text-xs leading-5 text-ink-faint">
+                @(isFa
+                    ? "وقتی Redis پر شود، یا نوشتن را رد می‌کند یا کلیدها را حذف می‌کند. انتخاب درست بستگی دارد به این‌که این نمونه یک cache است یا یک صف/ذخیره‌گاه اصلی."
+                    : "When Redis fills up it either refuses writes or deletes keys. The right choice depends on whether this instance is a cache or a queue/primary store.")
+            </p>
+
+            @if (Model.RedisEvictionPolicy is { } currentKey
+                 && Harbora.Infrastructure.Services.RedisMemoryPolicy.Find(currentKey) is { } current)
+            {
+                <dl class="mb-3 space-y-1 text-xs" data-redis-current-policy="@current.Key">
+                    <div class="flex justify-between gap-2">
+                        <dt class="text-ink-faint">@(isFa ? "سیاست فعلی" : "Current policy")</dt>
+                        <dd class="text-ink">@(isFa ? current.LabelFa : current.Label)</dd>
+                    </div>
+                    <div class="flex justify-between gap-2">
+                        <dt class="text-ink-faint">@(isFa ? "سقف حافظه" : "Memory cap")</dt>
+                        <dd class="text-ink" dir="ltr">
+                            @(Model.RedisMaxMemoryBytes > 0
+                                ? Harbora.Infrastructure.Tenancy.ByteSize.Format(Model.RedisMaxMemoryBytes)
+                                : (isFa ? "بدون سقف" : "no cap"))
+                        </dd>
+                    </div>
+                </dl>
+                @if (Model.RedisMemoryPolicyUnpublished)
+                {
+                    <p class="mb-3 text-[11px] leading-4 text-warn" data-redis-policy-unpublished>
+                        @(isFa
+                            ? "این تنظیم روی نمونهٔ در حال اجرا اعمال شده، اما هنوز در دستور راه‌اندازی خودِ کانتینر ذخیره نشده — یک راه‌اندازی مجدد سادهٔ کانتینر آن را از بین می‌برد. برای ماندگاری، کانتینر را بازسازی کنید."
+                            : "This reached the running instance, but is not yet baked into the container's own launch command — a plain restart would silently drop it. Rebuild the container to make it durable.")
+                    </p>
+                }
+            }
+            else
+            {
+                <p class="mb-3 text-[11px] leading-4 text-ink-faint" data-redis-no-policy>
+                    @(isFa
+                        ? "هیچ سیاستی انتخاب نشده — Redis طبق پیش‌فرض خودش «هرگز حذف نکن» عمل می‌کند."
+                        : "No policy has been chosen — Redis behaves as \"never evict\" by its own default.")
+                </p>
+            }
+
+            @if (Model.CanManage)
+            {
+                <form asp-action="RedisMemory" asp-route-id="@db.Id" method="post" class="space-y-3" data-redis-memory-form>
+                    @Html.AntiForgeryToken()
+                    <div class="space-y-2">
+                        @foreach (var choice in Harbora.Infrastructure.Services.RedisMemoryPolicy.Choices)
+                        {
+                            var inputId = $"redis-policy-{choice.Key}";
+                            <label for="@inputId" class="flex items-start gap-2 rounded-lg border border-line p-2.5 text-xs cursor-pointer">
+                                <input type="radio" id="@inputId" name="evictionPolicy" value="@choice.Key"
+                                       class="mt-0.5" data-redis-policy-option="@choice.Key"
+                                       checked="@(Model.RedisEvictionPolicy == choice.Key)" />
+                                <span>
+                                    <span class="block font-medium text-ink">@(isFa ? choice.LabelFa : choice.Label)</span>
+                                    <span class="block text-ink-faint">@(isFa ? choice.ConsequenceFa : choice.Consequence)</span>
+                                    <span class="mt-0.5 block text-ink-faint">
+                                        @(isFa ? "مناسب برای: " : "Suited to: ")@(isFa ? choice.SuitedToFa : choice.SuitedTo)
+                                    </span>
+                                </span>
+                            </label>
+                        }
+                    </div>
+                    <div>
+                        <label class="form-label" for="redis-max-memory-mb">
+                            @(isFa ? "سقف حافظه — مگابایت (۰ یعنی بدون سقف)" : "Memory cap — megabytes (0 for no cap)")
+                        </label>
+                        <input id="redis-max-memory-mb" name="maxMemoryMb" type="number" min="0" dir="ltr"
+                               value="@(Model.RedisMaxMemoryBytes > 0 ? Model.RedisMaxMemoryBytes / 1024 / 1024 : 0)"
+                               class="form-control text-sm" />
+                        @if (ceiling is { } maxCeiling)
+                        {
+                            <p class="mt-1 text-[11px] leading-4 text-ink-faint">
+                                @(isFa
+                                    ? $"بیشترین مقدار مجاز برای این نمونه {Harbora.Infrastructure.Tenancy.ByteSize.Format(maxCeiling)} است."
+                                    : $"The most this instance can be given is {Harbora.Infrastructure.Tenancy.ByteSize.Format(maxCeiling)}.")
+                            </p>
+                        }
+                    </div>
+                    <button class="btn-secondary w-full justify-center py-2 text-sm">@(isFa ? "ذخیره سیاست حذف" : "Save eviction policy")</button>
+                </form>
+            }
+
+            <partial name="Design/_PanelEnd" />
+        }
+
         @{ var attachPanel = new PanelModel(T["Attach to app"].Value); }
         <partial name="Design/_PanelStart" model="attachPanel" />
 

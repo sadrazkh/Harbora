@@ -158,6 +158,16 @@ public sealed class CreateServiceViewModel
     /// so a fleet of nodes filled with applications while every database piled onto the panel.
     /// </summary>
     public Guid? ServerId { get; set; }
+
+    /// <summary>
+    /// A Redis instance's <c>maxmemory-policy</c>, chosen at creation rather than left to reach
+    /// whatever Redis defaults to unasked. Ignored for every other engine.
+    /// </summary>
+    public string? RedisEvictionPolicy { get; set; }
+
+    /// <summary>The paired <c>maxmemory</c>, in megabytes; 0 or null is no cap. Ignored for every
+    /// other engine.</summary>
+    public int? RedisMaxMemoryMb { get; set; }
 }
 
 public sealed class DashboardViewModel

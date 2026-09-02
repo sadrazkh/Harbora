@@ -124,6 +124,24 @@ public sealed class DatabaseOverviewViewModel : DatabaseTabViewModel
     public bool TlsEnabled { get; init; }
 
     /// <summary>
+    /// Redis's <c>maxmemory-policy</c>, when <see cref="Database"/> is a Redis instance — see
+    /// <c>RedisMemoryPolicy</c>. Null both for every non-Redis engine and for a Redis instance nobody
+    /// has ever set one on.
+    /// </summary>
+    public string? RedisEvictionPolicy { get; init; }
+
+    /// <summary>Redis's <c>maxmemory</c>, in bytes. Zero is Redis's own "no cap".</summary>
+    public long RedisMaxMemoryBytes { get; init; }
+
+    /// <summary>
+    /// Whether the memory policy shown above has actually reached the running container's own launch
+    /// command yet, or only its live, restart-fragile <c>CONFIG SET</c> state — see
+    /// <c>Harbora.Domain.Services.ManagedService.HasUnpublishedChanges</c>'s own doc for why the two
+    /// are different facts.
+    /// </summary>
+    public bool RedisMemoryPolicyUnpublished { get; init; }
+
+    /// <summary>
     /// D3 (2026-08-25 shared-databases plan): the logical databases inside this instance. Empty both
     /// when the engine genuinely has none created yet AND when the engine has no logical-database
     /// story at all — <see cref="LogicalDatabasesSupported"/> is what tells those two apart, and the

@@ -77,6 +77,36 @@ public class ManagedService : BaseEntity
     public double CpuLimit { get; set; }
     public string DatabaseName { get; set; } = string.Empty;
 
+    /// <summary>
+    /// A Redis instance's <c>maxmemory-policy</c> — one of <see cref="Harbora.Infrastructure.Services.RedisMemoryPolicy.Choices"/>,
+    /// or null for an instance that predates this and has never had one chosen. Null is distinct
+    /// from <see cref="Harbora.Infrastructure.Services.RedisMemoryPolicy.NoEviction"/>: both produce
+    /// the same behaviour today (Redis's own compiled default), but only the latter was a deliberate
+    /// choice, and collapsing them into one value would make an untouched instance indistinguishable
+    /// from one somebody chose "never evict" for. Meaningless for every other engine.
+    /// </summary>
+    public string? RedisEvictionPolicy { get; set; }
+
+    /// <summary>
+    /// A Redis instance's <c>maxmemory</c>, in bytes. Zero is Redis's own "no cap" — the state every
+    /// instance is in until this is set. Meaningless for every other engine.
+    /// </summary>
+    public long RedisMaxMemoryBytes { get; set; }
+
+    /// <summary>
+    /// Whether this instance's own definition — today, only <see cref="RedisEvictionPolicy"/> and
+    /// <see cref="RedisMaxMemoryBytes"/> — has been recorded but not yet baked into the running
+    /// container's own launch command. The <see cref="Apps.AppConfigGroup.HasUnpublishedChanges"/>
+    /// idiom, reused rather than reinvented: Redis takes both settings live through <c>CONFIG SET</c>,
+    /// which is what makes the change reach the running instance the moment it is saved — but neither
+    /// setting is written to a config file, so a plain restart (as opposed to a rebuild) starts the
+    /// same container with the launch arguments it already had, silently reverting a live change that
+    /// was never also baked in. This stays true even immediately after a successful live apply, and
+    /// only clears once <c>ManagedServiceEngine.ProvisionAsync</c> recreates the container from the
+    /// current row — the same moment that makes every other queued instance setting durable.
+    /// </summary>
+    public bool HasUnpublishedChanges { get; set; }
+
     public string VolumeName { get; set; } = string.Empty;
 
     /// <summary>

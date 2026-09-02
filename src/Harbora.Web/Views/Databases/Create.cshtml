@@ -73,6 +73,39 @@
             })
         </section>
 
+        @* 1.6 (redis-eviction): shown only for Redis (toggled in sync() below) — every other engine
+           has nothing this section would mean anything for. Changeable later from the database's own
+           page too; offered here so a cache does not spend even a moment running as an unrequested
+           queue before someone finds the setting. *@
+        <section class="create-section" data-redis-only hidden>
+            <div class="section-heading">
+                <div>
+                    <h2>@(isFa ? "سیاست حذف حافظه Redis" : "Redis memory eviction policy")</h2>
+                    <p>
+                        @(isFa
+                            ? "وقتی Redis پر شود، یا نوشتن را رد می‌کند یا کلیدها را حذف می‌کند. بعداً هم از صفحهٔ خودِ دیتابیس قابل تغییر است."
+                            : "When Redis fills up it either refuses writes or deletes keys. Changeable later from the database's own page too.")
+                    </p>
+                </div>
+            </div>
+            <div class="space-y-2">
+                @foreach (var choice in Harbora.Infrastructure.Services.RedisMemoryPolicy.Choices)
+                {
+                    <label class="flex items-start gap-2 rounded-lg border border-line p-2.5 text-xs cursor-pointer">
+                        <input type="radio" asp-for="RedisEvictionPolicy" value="@choice.Key" class="mt-0.5" data-redis-policy-option="@choice.Key" />
+                        <span>
+                            <span class="block font-medium text-ink">@(isFa ? choice.LabelFa : choice.Label)</span>
+                            <span class="block text-ink-faint">@(isFa ? choice.ConsequenceFa : choice.Consequence)</span>
+                        </span>
+                    </label>
+                }
+            </div>
+            <label class="form-field mt-3">
+                <span>@(isFa ? "سقف حافظه — مگابایت (اختیاری)" : "Memory cap — megabytes (optional)")</span>
+                <input asp-for="RedisMaxMemoryMb" type="number" min="0" dir="ltr" class="form-control" />
+            </label>
+        </section>
+
         <section class="create-section">
             <div class="section-heading"><div><h2><span>3</span>@(isFa ? "چیزی که ساخته می‌شود" : "What Harbora creates")</h2></div></div>
             <div class="provision-grid">
@@ -122,6 +155,8 @@
             logo.textContent = source?.textContent || 'DB';
             logo.dataset.templateKey = source?.dataset.templateKey || 'database';
         }
+        const redisOnly = document.querySelector('[data-redis-only]');
+        if (redisOnly) redisOnly.hidden = radio.value !== 'Redis';
     }
     document.querySelectorAll('[data-type-radio]').forEach(radio => radio.addEventListener('change', sync));
     versionSelect?.addEventListener('change', () => {

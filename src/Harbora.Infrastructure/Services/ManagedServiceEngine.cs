@@ -111,6 +111,18 @@ public sealed class ManagedServiceEngine(
             var volumes = new List<(string, string, bool)> { (svc.VolumeName, def.DataMountPath, false) };
             var command = def.Command(creds);
 
+            // Redis's eviction policy is a fact about this instance, not about the Redis service
+            // type — the same reasoning DatabaseTls's server arguments follow below, assembled at
+            // the provisioning site rather than inside the catalogue entry. Appended only when
+            // something was actually chosen, so a database that predates this feature (or one nobody
+            // has touched) gets exactly the command line it always has — RedisMemoryPolicy.CommandArguments
+            // returns empty in that case, and this branch is a no-op.
+            if (svc.Type == ManagedServiceType.Redis)
+            {
+                var memoryArgs = RedisMemoryPolicy.CommandArguments(svc.RedisEvictionPolicy, svc.RedisMaxMemoryBytes);
+                if (memoryArgs.Count > 0) command = [.. command ?? [], .. memoryArgs];
+            }
+
             // MariaDB and MySQL make their own certificate at first start; anything else starts
             // unencrypted unless the block below succeeds.
             svc.TlsEnabled = DatabaseTls.EncryptedByDefault(svc.Type);
@@ -175,6 +187,10 @@ public sealed class ManagedServiceEngine(
             // attempt, so THIS success is the earlier failure's own condition clearing, not a
             // different fact about a different attempt.
             svc.ErrorMessage = null;
+            // The container was just (re)built from this row's own settings, so whatever was
+            // queued — the Redis memory policy today — is no longer merely intended, it is what is
+            // actually running. The same moment that makes InstanceSizeKey/TLS durable already.
+            svc.HasUnpublishedChanges = false;
             await db.SaveChangesAsync(ct);
             if (incidents is not null)
             {
@@ -520,6 +536,70 @@ public sealed class ManagedServiceEngine(
 
         logger.LogInformation("Rotated the password for {Name}; {Count} service(s) updated.", svc.Name, updated.Count);
         return updated;
+    }
+
+    /// <summary>
+    /// Sets a Redis instance's <c>maxmemory</c>/<c>maxmemory-policy</c> — see <see cref="RedisMemoryPolicy"/>
+    /// for why a cache and a queue need opposite answers to the same setting.
+    ///
+    /// <para>
+    /// Stored first, unconditionally: a rebuild after this point bakes the new value into the
+    /// container's own command line (<see cref="ProvisionAsync"/> reads it back out), which is what
+    /// makes this durable rather than a one-off <c>CONFIG SET</c> that a restart quietly undoes. Then,
+    /// if the instance is running, applied live the same way <see cref="RotatePasswordAsync"/> and
+    /// <see cref="TestConnectionAsync"/> already reach a running database — a one-off container of the
+    /// service's own image, on its environment's network, running <c>redis-cli</c>. A stopped instance
+    /// has nothing to reach; that is not a failure, only a fact the caller has to be told rather than
+    /// asked to infer from a status field it may not have read.
+    /// </para>
+    /// </summary>
+    public async Task<RedisMemoryPolicyOutcome> UpdateRedisMemoryPolicyAsync(
+        Guid serviceId, string? policy, long maxMemoryBytes, CancellationToken ct)
+    {
+        var svc = await db.ManagedServices.FirstAsync(s => s.Id == serviceId, ct);
+
+        if (svc.Type != ManagedServiceType.Redis)
+            throw new InvalidOperationException("Only a Redis instance has a memory eviction policy to set.");
+
+        if (RedisMemoryPolicy.WhyRefused(policy, maxMemoryBytes, svc.MemoryLimitBytes, isFa: false) is { } reason)
+            throw new RedisMemoryPolicyRefusedException(
+                reason, RedisMemoryPolicy.WhyRefused(policy, maxMemoryBytes, svc.MemoryLimitBytes, isFa: true));
+
+        svc.RedisEvictionPolicy = string.IsNullOrWhiteSpace(policy) ? null : policy.Trim();
+        svc.RedisMaxMemoryBytes = maxMemoryBytes;
+        // Stays true even once the live apply below succeeds — see the field's own doc for why a
+        // live CONFIG SET alone does not survive a plain restart.
+        svc.HasUnpublishedChanges = true;
+        await db.SaveChangesAsync(ct);
+
+        if (svc.Status != ServiceStatus.Running)
+            return new RedisMemoryPolicyOutcome(WasRunning: false, AppliedLive: false, LiveApplyError: null);
+
+        var plan = RedisMemoryPolicy.LiveApply(CredsFor(svc), svc.RedisEvictionPolicy, svc.RedisMaxMemoryBytes);
+        if (plan is null)
+            // Nothing chosen (both null/zero) — the state every instance is already in, so there is
+            // nothing to send and nothing to fail.
+            return new RedisMemoryPolicyOutcome(WasRunning: true, AppliedLive: true, LiveApplyError: null);
+
+        var definition = ServiceCatalog.All[svc.Type];
+        var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
+        var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
+        var environmentNetwork = await ResolveEnvironmentNetworkAsync(svc, ct);
+        var network = Networking.NetworkPlan.Primary(environmentNetwork, _opt.WorkspaceNetwork(wsSlug));
+
+        var output = new System.Text.StringBuilder();
+        var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
+            $"{definition.ImageRepo}:{svc.Version}", plan.Command, [], Env: plan.Env, NetworkMode: network),
+            new Deployments.InlineProgress<string>(line => { lock (output) output.AppendLine(line); }), ct);
+
+        if (exit == 0)
+            return new RedisMemoryPolicyOutcome(WasRunning: true, AppliedLive: true, LiveApplyError: null);
+
+        var cleaned = Deployments.LogText.Clean(output.ToString()).Trim();
+        logger.LogWarning("Could not apply the Redis memory policy live for {Svc} (exit {Exit}): {Output}",
+            svc.Name, exit, cleaned);
+        return new RedisMemoryPolicyOutcome(WasRunning: true, AppliedLive: false,
+            LiveApplyError: string.IsNullOrWhiteSpace(cleaned) ? $"redis-cli exited {exit}." : cleaned);
     }
 
     public async Task<ServiceConnectionInfo> GetConnectionInfoAsync(Guid serviceId, CancellationToken ct)
