@@ -317,6 +317,10 @@ public static class DependencyInjection
         // for every runway it shows — registered after it for that reason, though DI order does not
         // itself matter here.
         services.AddScoped<Billing.RevenueReport>();
+        // Sub-project 1.9 (2026-09-03 market-gaps round two) — the signup trial credit. Depends on
+        // VoucherService for the one and only way it moves money; registered after it for the same
+        // non-mattering reason.
+        services.AddScoped<Billing.SignupTrialCreditService>();
         // Sub-project 4 (2026-08-20 platform-options plan): fans a Warning-severity Announcement out
         // to every workspace's own N3 in-app rows via INotificationService.NotifyInAppOnlyAsync.
         services.AddScoped<Platform.AnnouncementNotifier>();

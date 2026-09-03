@@ -110,6 +110,66 @@ public class RevenueReportTests
         thisMonth.TotalCreditsMinor.Should().Be(70_000);
     }
 
+    [Fact]
+    public async Task A_signup_trial_credit_is_counted_apart_from_a_support_voucher_and_never_as_revenue()
+    {
+        // Sub-project 1.9's own requirement, proven here: the trial credit must appear as what it is
+        // — distinguishable from a purchase (a charge) and from a support-issued voucher — and must
+        // never inflate ChargedTotalMinor, the only figure this report treats as income.
+        await using var db = WalletHarness.SystemContext();
+        var tenant = WalletHarness.SeedWorkspace(db);
+        var owner = Guid.CreateVersion7();
+
+        // A real charge this same month, so ChargedTotalMinor has something genuine to stay at.
+        db.BillingLedger.Add(WalletHarness.Line(tenant, WalletHarness.Hour, -1_000));
+
+        // A support-issued voucher, redeemed — IsTrialCredit left at its default, false.
+        var supportVoucherId = Guid.CreateVersion7();
+        db.BillingLedger.Add(new BillingLedgerEntry
+        {
+            Id = supportVoucherId, WorkspaceId = tenant, BillingHour = WalletHarness.Hour,
+            Kind = LedgerKind.Credit, AmountMinor = 20_000, ResourceName = string.Empty,
+        });
+        db.BillingVouchers.Add(new BillingVoucher
+        {
+            Id = supportVoucherId, CodeHash = "hash-support", CodeHint = "9911",
+            AmountMinor = 20_000, Currency = "IRR", Note = "campaign",
+            CreatedByUserId = WalletHarness.Admin, RedeemedWorkspaceId = tenant, RedeemedAt = WalletHarness.Now
+        });
+
+        // The platform's own automatic signup credit — the same shape SignupTrialCreditService
+        // writes: a voucher flagged IsTrialCredit, CreatedByUserId is the beneficiary's own owner
+        // (never an administrator), redeemed into the ledger under its own id.
+        var trialVoucherId = Guid.CreateVersion7();
+        db.BillingLedger.Add(new BillingLedgerEntry
+        {
+            Id = trialVoucherId, WorkspaceId = tenant, BillingHour = WalletHarness.Hour,
+            Kind = LedgerKind.Credit, AmountMinor = 5_000, ResourceName = string.Empty,
+        });
+        db.BillingVouchers.Add(new BillingVoucher
+        {
+            Id = trialVoucherId, CodeHash = "hash-trial", CodeHint = "1122",
+            AmountMinor = 5_000, Currency = "IRR", Note = "Signup trial credit",
+            CreatedByUserId = owner, IsTrialCredit = true,
+            RedeemedWorkspaceId = tenant, RedeemedByUserId = owner, RedeemedAt = WalletHarness.Now
+        });
+        await db.SaveChangesAsync();
+
+        var report = await Report(db).BuildAsync();
+
+        var thisMonth = report.MonthlyRevenue[^1];
+        thisMonth.TrialCreditCount.Should().Be(1);
+        thisMonth.TrialCreditsMinor.Should().Be(5_000);
+        // Not folded into either of the other two buckets.
+        thisMonth.VoucherCreditCount.Should().Be(1, "the trial credit must not double as a support voucher");
+        thisMonth.VoucherCreditsMinor.Should().Be(20_000);
+        thisMonth.AdminCreditCount.Should().Be(0);
+        thisMonth.AdminCreditsMinor.Should().Be(0);
+        // The one figure this report ever treats as income is untouched by any of the three credits.
+        thisMonth.ChargedTotalMinor.Should().Be(1_000, "a trial credit is not a charge and must never count as revenue");
+        thisMonth.TotalCreditsMinor.Should().Be(25_000);
+    }
+
     // --- Q2 & Q3: top workspaces by 30-day burn, each with balance, runway and suspension ---
 
     [Fact]

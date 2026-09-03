@@ -64,8 +64,14 @@ public sealed class RevenueReport(
         // Minted once and reused for every month below, rather than re-read six times: an install
         // running this report is not expected to carry more vouchers than fit comfortably in memory,
         // the same bet EnvironmentPlacementReport already makes about the tables it reads whole.
-        var voucherIds = (await db.BillingVouchers.AsNoTracking()
-            .Select(v => v.Id).ToListAsync(ct)).ToHashSet();
+        //
+        // Two sets, not one: every trial-credit id is also a voucher id, so a credit line's id is
+        // checked against trialVoucherIds FIRST — a trial credit must never be counted twice, once
+        // under its own name and again as an ordinary support voucher. See MonthRowAsync.
+        var voucherRows = await db.BillingVouchers.AsNoTracking()
+            .Select(v => new { v.Id, v.IsTrialCredit }).ToListAsync(ct);
+        var voucherIds = voucherRows.Select(v => v.Id).ToHashSet();
+        var trialVoucherIds = voucherRows.Where(v => v.IsTrialCredit).Select(v => v.Id).ToHashSet();
 
         // ---- Q1 & Q4: charged total and credits issued, per calendar month, the last six ----
         //
@@ -75,7 +81,7 @@ public sealed class RevenueReport(
         {
             var from = thisMonthStart.AddMonths(-i);
             var to = from.AddMonths(1);
-            monthlyRevenue.Add(await MonthRowAsync(from, to, voucherIds, ct));
+            monthlyRevenue.Add(await MonthRowAsync(from, to, voucherIds, trialVoucherIds, ct));
         }
 
         // ---- Q2 & Q3: the top workspaces by 30-day burn, each with balance, runway and suspension ----
@@ -137,14 +143,17 @@ public sealed class RevenueReport(
     }
 
     /// <summary>
-    /// One calendar month's charges and credits, credits split by whether the ledger line's id
-    /// belongs to a voucher — the same idempotency key <see cref="VoucherService"/> mints the credit
-    /// under (see its own doc comment: "a voucher is the idempotency key for its one credit line").
-    /// Nothing on <see cref="Harbora.Domain.Billing.BillingLedgerEntry"/> itself says "this came from
-    /// a voucher" any louder than that, so the id is the only honest way to tell the two apart.
+    /// One calendar month's charges and credits, credits split three ways by whether the ledger
+    /// line's id belongs to a voucher, and if so, whether that voucher is the platform's own trial
+    /// credit — the same idempotency key <see cref="VoucherService"/> mints the credit under (see its
+    /// own doc comment: "a voucher is the idempotency key for its one credit line"). Nothing on
+    /// <see cref="Harbora.Domain.Billing.BillingLedgerEntry"/> itself says "this came from a voucher"
+    /// or "this voucher was a trial credit" any louder than that, so the id is the only honest way to
+    /// tell the three apart — never the free-text note, which an operator can type anything into.
     /// </summary>
     private async Task<MonthlyRevenueRow> MonthRowAsync(
-        DateTimeOffset from, DateTimeOffset to, HashSet<Guid> voucherIds, CancellationToken ct)
+        DateTimeOffset from, DateTimeOffset to,
+        HashSet<Guid> voucherIds, HashSet<Guid> trialVoucherIds, CancellationToken ct)
     {
         var charges = await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
             .Where(l => l.BillingHour >= from && l.BillingHour < to
@@ -159,17 +168,27 @@ public sealed class RevenueReport(
             .Select(l => new { l.Id, l.AmountMinor })
             .ToListAsync(ct);
 
-        var voucherCredits = credits.Where(c => voucherIds.Contains(c.Id)).ToList();
+        // Trial credits checked first and excluded from the other two buckets: every trial-credit id
+        // is also a voucher id, so testing "is this a voucher" before "is this a trial credit" would
+        // fold the platform's own automatic grant into "support voucher" — the exact conflation this
+        // three-way split exists to refuse.
+        var trialCredits = credits.Where(c => trialVoucherIds.Contains(c.Id)).ToList();
+        var voucherCredits = credits.Where(c => voucherIds.Contains(c.Id) && !trialVoucherIds.Contains(c.Id)).ToList();
         var adminCredits = credits.Where(c => !voucherIds.Contains(c.Id)).ToList();
 
         return new MonthlyRevenueRow(
             Label(from),
             charges.Count > 0,
             // Charges are stored negative — see BillingLedgerEntry.AmountMinor — flipped once, here,
-            // to the positive figure a revenue total actually is.
+            // to the positive figure a revenue total actually is. Trial credits are never part of
+            // this figure: they are a credit line, and the only thing this report ever counts as
+            // income is a Charge or PlanMinimumTopUp line, so a trial credit is excluded from revenue
+            // by the same rule that already excludes every other kind of credit — this split only
+            // makes WHICH kind of credit visible, not whether it counts as income.
             -charges.Sum(x => x),
             adminCredits.Count, adminCredits.Sum(c => c.AmountMinor),
-            voucherCredits.Count, voucherCredits.Sum(c => c.AmountMinor));
+            voucherCredits.Count, voucherCredits.Sum(c => c.AmountMinor),
+            trialCredits.Count, trialCredits.Sum(c => c.AmountMinor));
     }
 
     /// <summary>The <c>yyyy-MM</c> label a month is grouped and shown under — invariant, like the bill's own.</summary>
@@ -202,7 +221,17 @@ public sealed class RevenueReport(
 /// from <see cref="AdminCreditsMinor"/> being zero, which a large negative-then-positive wash could
 /// also produce in principle.
 /// </param>
-/// <param name="VoucherCreditCount">How many credit lines this month were a voucher redemption.</param>
+/// <param name="VoucherCreditCount">
+/// How many credit lines this month were a support-issued voucher redemption — never counting the
+/// platform's own trial credit, which is <see cref="TrialCreditCount"/> instead.
+/// </param>
+/// <param name="TrialCreditCount">
+/// How many credit lines this month were the platform's own automatic signup credit (sub-project
+/// 1.9) — a voucher redemption structurally, by <see cref="Harbora.Domain.Billing.BillingVoucher.IsTrialCredit"/>,
+/// but not a purchase and not a support voucher, and never folded into either of the other two
+/// counts. Excluded from revenue for the same reason every credit is: <see cref="ChargedTotalMinor"/>
+/// only ever sums <c>Charge</c>/<c>PlanMinimumTopUp</c> lines.
+/// </param>
 public sealed record MonthlyRevenueRow(
     string Month,
     bool HasChargeRows,
@@ -210,10 +239,12 @@ public sealed record MonthlyRevenueRow(
     int AdminCreditCount,
     long AdminCreditsMinor,
     int VoucherCreditCount,
-    long VoucherCreditsMinor)
+    long VoucherCreditsMinor,
+    int TrialCreditCount,
+    long TrialCreditsMinor)
 {
-    public long TotalCreditsMinor => AdminCreditsMinor + VoucherCreditsMinor;
-    public bool HasAnyCredits => AdminCreditCount > 0 || VoucherCreditCount > 0;
+    public long TotalCreditsMinor => AdminCreditsMinor + VoucherCreditsMinor + TrialCreditsMinor;
+    public bool HasAnyCredits => AdminCreditCount > 0 || VoucherCreditCount > 0 || TrialCreditCount > 0;
 }
 
 /// <summary>

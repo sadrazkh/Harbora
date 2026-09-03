@@ -37,6 +37,7 @@
                 <th class="p-3 text-end">@(isFa ? "کل دریافتی" : "Charged total")</th>
                 <th class="p-3 text-end">@(isFa ? "اعتبار توسط مدیر" : "Admin credits")</th>
                 <th class="p-3 text-end">@(isFa ? "اعتبار ووچر" : "Voucher credits")</th>
+                <th class="p-3 text-end">@(isFa ? "اعتبار خوش‌آمدگویی" : "Trial credits")</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-line">
@@ -46,7 +47,8 @@
                     data-revenue-has-charges="@row.HasChargeRows.ToString().ToLowerInvariant()"
                     data-revenue-charged-minor="@row.ChargedTotalMinor"
                     data-revenue-admin-credits-minor="@row.AdminCreditsMinor"
-                    data-revenue-voucher-credits-minor="@row.VoucherCreditsMinor">
+                    data-revenue-voucher-credits-minor="@row.VoucherCreditsMinor"
+                    data-revenue-trial-credits-minor="@row.TrialCreditsMinor">
                     <td class="p-3 font-mono text-xs text-ink" dir="ltr">@row.Month</td>
                     <td class="p-3 text-end">
                         @if (row.HasChargeRows)
@@ -72,6 +74,19 @@
                         @if (row.VoucherCreditCount > 0)
                         {
                             <span class="text-ink-muted" dir="ltr">@MinorUnits.Format(row.VoucherCreditsMinor)</span>
+                        }
+                        else
+                        {
+                            <span class="text-ink-faint text-xs">@(isFa ? "هیچ" : "none")</span>
+                        }
+                    </td>
+                    <td class="p-3 text-end">
+                        @* Not a purchase and not a support voucher — kept in its own column rather
+                           than folded into either, the same reason it is kept out of the charged
+                           total: it is not income. *@
+                        @if (row.TrialCreditCount > 0)
+                        {
+                            <span class="text-ink-muted" dir="ltr">@MinorUnits.Format(row.TrialCreditsMinor)</span>
                         }
                         else
                         {

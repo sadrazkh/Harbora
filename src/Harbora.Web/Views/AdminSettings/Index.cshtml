@@ -172,6 +172,54 @@
         </form>
         <partial name="Design/_PanelEnd" />
 
+        @{ var signupCreditPanel = new PanelModel(isFa ? "اعتبار خوش‌آمدگویی هنگام ثبت‌نام" : "Trial credit on signup"); }
+        <partial name="Design/_PanelStart" model="signupCreditPanel" />
+
+        <p class="mb-4 text-sm leading-6 text-ink-muted">
+            @(isFa
+                ? "هر ورک‌اسپیس جدید، دقیقاً یک‌بار، این مبلغ را به‌صورت یک ووچر عادی دریافت می‌کند — بدون کارت، بدون درگاه پرداخت. صفر یعنی خاموش؛ تا وقتی این عدد را تغییر ندهید هیچ‌چیز عوض نمی‌شود."
+                : "Every new workspace receives this amount exactly once, through an ordinary voucher — no card, no payment gateway. Zero means off; nothing changes until this is set.")
+        </p>
+
+        <form asp-action="SaveSignupCredit" method="post" class="space-y-3"
+              data-signup-credit-amount-minor="@Model.SignupCreditAmountMinor"
+              data-signup-credit-issued-total-minor="@Model.SignupCreditIssuedTotalMinor"
+              data-signup-credit-issued-count="@Model.SignupCreditIssuedCount">
+            @Html.AntiForgeryToken()
+            <div>
+                <label class="form-label" for="signup-credit-amount">@(isFa ? "مبلغ" : "Amount")</label>
+                <input id="signup-credit-amount" name="amount" class="form-control" dir="ltr"
+                       value="@Harbora.Web.Infrastructure.MinorUnits.Box(Model.SignupCreditAmountMinor)"
+                       placeholder="0" />
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa
+                        ? "همان واحد پول این نصب. صفر برای خاموش‌کردن."
+                        : "In this install's currency. Zero turns it off.")
+                </p>
+            </div>
+
+            <div class="rounded-lg border border-line bg-surface-2 p-3 text-sm" dir="ltr">
+                @if (Model.SignupCreditIssuedCount > 0)
+                {
+                    <span class="text-ink">@Harbora.Web.Infrastructure.MinorUnits.Format(Model.SignupCreditIssuedTotalMinor)</span>
+                    <span class="text-ink-faint">
+                        @(isFa
+                            ? $"— در مجموع، به {Model.SignupCreditIssuedCount} ورک‌اسپیس"
+                            : $"issued so far, to {Model.SignupCreditIssuedCount} workspace" + (Model.SignupCreditIssuedCount == 1 ? "" : "s"))
+                    </span>
+                }
+                else
+                {
+                    <span class="text-ink-faint">
+                        @(isFa ? "هنوز به هیچ ورک‌اسپیسی اعطا نشده است." : "Nothing has been issued yet.")
+                    </span>
+                }
+            </div>
+
+            <button class="btn-primary">@(isFa ? "ذخیره" : "Save")</button>
+        </form>
+        <partial name="Design/_PanelEnd" />
+
         @{ var smtpPanel = new PanelModel(isFa ? "ایمیل خروجی (SMTP)" : "Outgoing email (SMTP)"); }
         <partial name="Design/_PanelStart" model="smtpPanel" />
 

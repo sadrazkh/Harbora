@@ -99,4 +99,12 @@ public static class SettingKeys
     public const string DrLastDrillAt = "dr.last_drill_at";
     public const string DrLastDrillVerdict = "dr.last_drill_verdict";
     public const string DrLastDrillDetail = "dr.last_drill_detail";
+
+    /// <summary>
+    /// Sub-project 1.9 (2026-09-03) — the signup trial credit. Minor units, invariant digits; empty
+    /// or unparsable means zero, the same "operator has said nothing" rule every other numeric
+    /// setting here follows. Zero is the shipped default — nothing is granted until an operator
+    /// turns this on. See <see cref="Harbora.Infrastructure.Billing.SignupTrialCreditService"/>.
+    /// </summary>
+    public const string SignupTrialCreditMinor = "billing.signup_trial_credit_minor";
 }

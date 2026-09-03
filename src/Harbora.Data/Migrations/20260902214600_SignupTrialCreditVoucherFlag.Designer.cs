@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260902214600_SignupTrialCreditVoucherFlag")]
+    partial class SignupTrialCreditVoucherFlag
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -4537,9 +4540,6 @@ namespace Harbora.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<bool>("PgVectorEnabled")
-                        .HasColumnType("boolean");
-
                     b.Property<string>("RedisEvictionPolicy")
                         .HasColumnType("text");
 
@@ -4610,9 +4610,6 @@ namespace Harbora.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<bool?>("HasVectorExtension")
-                        .HasColumnType("boolean");
-
                     b.Property<bool>("IsDefault")
                         .HasColumnType("boolean");
 
@@ -4629,9 +4626,6 @@ namespace Harbora.Data.Migrations
                     b.Property<string>("Username")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<DateTimeOffset?>("VectorExtensionCheckedAt")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("WorkspaceId")
                         .HasColumnType("uuid");

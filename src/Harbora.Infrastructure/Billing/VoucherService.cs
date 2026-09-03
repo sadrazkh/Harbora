@@ -29,13 +29,21 @@ public sealed class VoucherService(
 {
     private const string Alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
+    /// <param name="isTrialCredit">
+    /// True only for <see cref="SignupTrialCreditService"/>'s own automatic grant — never set by a
+    /// human administrator's own voucher screen. See <see cref="BillingVoucher.IsTrialCredit"/> for
+    /// what it changes downstream (the platform revenue report) and why it lives on the row rather
+    /// than being inferred from <paramref name="note"/> or <paramref name="createdByUserId"/>.
+    /// Trailing and defaulted so every existing caller compiles unchanged.
+    /// </param>
     public async Task<CreatedVoucher> CreateAsync(
         long amountMinor,
         string? requestedCode,
         string? note,
         DateTimeOffset? expiresAt,
         Guid createdByUserId,
-        CancellationToken ct)
+        CancellationToken ct = default,
+        bool isTrialCredit = false)
     {
         if (amountMinor <= 0)
             throw new ArgumentOutOfRangeException(nameof(amountMinor), "A voucher amount must be positive.");
@@ -62,6 +70,7 @@ public sealed class VoucherService(
             Note = string.IsNullOrWhiteSpace(note) ? "Balance voucher" : note.Trim(),
             CreatedByUserId = createdByUserId,
             ExpiresAt = expiresAt?.ToUniversalTime(),
+            IsTrialCredit = isTrialCredit,
             CreatedAt = clock.UtcNow,
             UpdatedAt = clock.UtcNow
         };
@@ -74,6 +83,13 @@ public sealed class VoucherService(
         catch (DbUpdateException ex)
             when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
         {
+            // 23505 says a unique index refused this, not which one, and this insert touches two:
+            // CodeHash (checked above, but a second request can still lose the race to it) and, for
+            // a trial credit only, IX_BillingVouchers_TrialCreditOwner — the partial index that lets
+            // at most one such voucher exist per owner. One message covers both refusals correctly
+            // either way ("this could not be created as asked") without guessing which one fired;
+            // SignupTrialCreditService, the only caller that ever sets isTrialCredit, treats any
+            // refusal here as the same safe no-op regardless of which index caused it.
             throw new InvalidOperationException("That voucher code already exists. Choose a different code.", ex);
         }
 

@@ -5,12 +5,71 @@ using Harbora.Domain.Identity;
 using Harbora.Infrastructure.Billing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using Xunit;
 
 namespace Harbora.Tests.Billing;
 
 public sealed class VoucherServiceTests
 {
+    [Fact]
+    public async Task A_voucher_can_be_minted_as_a_trial_credit_and_it_shows_on_the_row()
+    {
+        // The only door SignupTrialCreditService uses — isTrialCredit is trailing and defaulted, so
+        // every other caller (VouchersController's own admin form included) is unaffected.
+        await using var db = WalletHarness.SystemContext();
+        var service = Service(db);
+
+        var created = await service.CreateAsync(
+            50_000, requestedCode: null, note: "Signup trial credit", expiresAt: null,
+            createdByUserId: WalletHarness.Admin, ct: default, isTrialCredit: true);
+
+        created.Voucher.IsTrialCredit.Should().BeTrue();
+        (await db.BillingVouchers.AsNoTracking().SingleAsync(v => v.Id == created.Voucher.Id))
+            .IsTrialCredit.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task An_ordinary_voucher_is_never_marked_as_a_trial_credit()
+    {
+        await using var db = WalletHarness.SystemContext();
+        var service = Service(db);
+
+        var created = await service.CreateAsync(
+            50_000, "ABCDE-FGHJK", "launch credit", null, WalletHarness.Admin, default);
+
+        created.Voucher.IsTrialCredit.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_unique_violation_on_a_trial_credit_insert_is_refused_the_same_way_a_code_collision_is()
+    {
+        // 23505 alone does not say which index refused the insert, and a trial-credit insert
+        // touches two: CodeHash (checked by the pre-read above, but a race can still lose to it)
+        // and, for a trial credit only, the live-Postgres-verified partial index
+        // IX_BillingVouchers_TrialCreditOwner (see Harbora.Postgres.Tests.BillingRuntimeIndexTests,
+        // which proves that constraint fires for real). Both are refused the same honest way here —
+        // "this could not be created" — rather than one being silently swallowed; it is
+        // SignupTrialCreditService, the only caller that ever sets isTrialCredit, that decides a
+        // refusal here means "already granted" and treats it as a safe no-op.
+        await using var db = WalletHarness.SystemContext();
+        var hostile = WalletHarness.ProviderContext(db) as BillingContext
+            ?? throw new InvalidOperationException("expected a BillingContext");
+        hostile.FailTheNextSaveWith = Refusal(
+            PostgresErrorCodes.UniqueViolation,
+            "duplicate key value violates unique constraint \"IX_BillingVouchers_TrialCreditOwner\"");
+
+        var act = () => Service(hostile).CreateAsync(
+            50_000, requestedCode: null, note: null, expiresAt: null,
+            createdByUserId: WalletHarness.Admin, ct: default, isTrialCredit: true);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already exists*");
+    }
+
+    private static DbUpdateException Refusal(string sqlState, string message) =>
+        new(message, new PostgresException(message, "ERROR", "ERROR", sqlState));
+
     [Fact]
     public async Task A_created_voucher_keeps_only_a_hash_and_is_shown_once()
     {

@@ -32,7 +32,8 @@ public sealed class AdminSettingsController(
     Harbora.Infrastructure.Security.ExternalLoginSettingsService externalLogins,
     Harbora.Web.Infrastructure.ExternalLoginSchemeCache externalLoginSchemes,
     Microsoft.Extensions.Options.IOptions<Harbora.Modules.Sync.Infrastructure.SyncFeatureOptions> syncFeatures,
-    Microsoft.Extensions.Options.IOptions<Harbora.Modules.Backup.Infrastructure.BackupFeatureOptions> backupFeatures) : Controller
+    Microsoft.Extensions.Options.IOptions<Harbora.Modules.Backup.Infrastructure.BackupFeatureOptions> backupFeatures,
+    Harbora.Infrastructure.Billing.SignupTrialCreditService signupCredit) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
     private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -115,6 +116,47 @@ public sealed class AdminSettingsController(
         await audit.LogAsync("platform.name", "setting", platformName, ClientIp, workspaceId: null, ct: ct);
 
         TempData["Message"] = IsFa ? "نام پلتفرم ذخیره شد." : "Platform name saved.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// The signup trial credit (sub-project 1.9). Stored and read the same way every other numeric
+    /// platform setting here is — <see cref="Harbora.Infrastructure.Billing.SignupTrialCreditService"/>
+    /// owns the key so the read side (this page and the grant itself) can never drift apart.
+    /// </summary>
+    [HttpPost("signup-credit")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SaveSignupCredit(string? amount, CancellationToken ct)
+    {
+        // An empty box means "off", the same as a zero — there is no third state to a switch that
+        // only ever grants money, unlike the nullable rate boxes elsewhere on this platform that
+        // distinguish "free" from "not priced yet".
+        if (!string.IsNullOrWhiteSpace(amount) &&
+            !Harbora.Web.Infrastructure.MinorUnits.TryParseMajor(amount, out _))
+        {
+            TempData["Error"] = IsFa
+                ? "مبلغ را به‌صورت عدد وارد کنید، مثلاً ۵۰۰۰۰ یا ۰."
+                : "Enter the amount in figures, for example 50000 or 0.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        Harbora.Web.Infrastructure.MinorUnits.TryParseMajor(amount, out var amountMinor);
+        if (amountMinor < 0)
+        {
+            TempData["Error"] = IsFa
+                ? "اعتبار خوش‌آمدگویی نمی‌تواند منفی باشد."
+                : "The signup credit cannot be negative.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        await signupCredit.SetAmountMinorAsync(amountMinor, ct);
+        await audit.LogAsync("platform.signup_trial_credit", "setting", amountMinor.ToString(), ClientIp, workspaceId: null, ct: ct);
+
+        TempData["Message"] = amountMinor > 0
+            ? (IsFa
+                ? $"اعتبار خوش‌آمدگویی روی {Harbora.Web.Infrastructure.MinorUnits.Format(amountMinor)} تنظیم شد."
+                : $"Signup credit set to {Harbora.Web.Infrastructure.MinorUnits.Format(amountMinor)}.")
+            : (IsFa ? "اعتبار خوش‌آمدگویی خاموش شد؛ چیزی اعطا نمی‌شود." : "Signup credit turned off; nothing is granted.");
         return RedirectToAction(nameof(Index));
     }
 
@@ -249,6 +291,7 @@ public sealed class AdminSettingsController(
         var chosen = FeaturedTemplates.Parse(await ReadAsync(SettingKeys.FeaturedTemplates, ct));
 
         var sso = await externalLogins.GetAsync(ct);
+        var signupCreditTotals = await signupCredit.TotalsAsync(ct);
 
         return new AdminSettingsViewModel
         {
@@ -314,7 +357,11 @@ public sealed class AdminSettingsController(
                 .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion,
 
             DrillStatus = await Harbora.Infrastructure.DisasterRecovery.RestoreDrillRecord
-                .ReadAsync(db, DateTimeOffset.UtcNow, ct)
+                .ReadAsync(db, DateTimeOffset.UtcNow, ct),
+
+            SignupCreditAmountMinor = await signupCredit.GetAmountMinorAsync(ct),
+            SignupCreditIssuedTotalMinor = signupCreditTotals.TotalGrantedMinor,
+            SignupCreditIssuedCount = signupCreditTotals.WorkspacesGranted
         };
     }
 }

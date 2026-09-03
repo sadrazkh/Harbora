@@ -23,7 +23,8 @@ public sealed partial class WorkspaceAccountService(
     ISystemClock clock,
     IOptions<BillingOptions> billing,
     IQuotaService? quota = null,
-    IFunctionEventBus? functionEvents = null)
+    IFunctionEventBus? functionEvents = null,
+    SignupTrialCreditService? signupCredit = null)
 {
     /// <summary>
     /// Tells subscribing functions, when there is a bus to tell. Optional for the same reason the
@@ -105,6 +106,18 @@ public sealed partial class WorkspaceAccountService(
             CreatedAt = clock.UtcNow
         });
         await db.SaveChangesAsync(ct);
+
+        // After the wallet and the owner's own membership are committed — RedeemAsync requires both:
+        // a wallet to read the account's currency off, and a WorkspaceMember row to prove the person
+        // it is crediting on behalf of actually belongs here. Optional the same way quota and the
+        // event bus are: this type is also built directly by tests and by first-run setup, and
+        // neither should have to wire a voucher service just to create a workspace. See
+        // SignupTrialCreditService's own class comment for why "the owner" is the identity that
+        // makes a second attempt for the same person collect nothing, whichever workspace they are
+        // creating and however many times they retry.
+        if (signupCredit is not null)
+            await signupCredit.GrantAsync(workspace.Id, owner.Id, ct);
+
         await projects.EnsureDefaultEnvironmentAsync(workspace.Id, ct);
         await PublishAsync(Domain.Functions.FunctionEvents.WorkspaceCreated, workspace.Id, workspace.Name,
             [("workspace", workspace.Slug), ("personal", personal ? "true" : "false")], ct);

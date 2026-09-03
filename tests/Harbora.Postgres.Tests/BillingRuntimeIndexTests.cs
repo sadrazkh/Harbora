@@ -39,6 +39,36 @@ public sealed class BillingRuntimeIndexTests(PostgresLane lane)
     }
 
     [PostgresFact]
+    public async Task A_workspace_owner_can_only_ever_receive_one_trial_credit_voucher()
+    {
+        // Sub-project 1.9's whole idempotency guarantee: SignupTrialCreditService's fast-path read
+        // cannot win a real race between two concurrent grants for the same brand-new owner — this
+        // is the constraint that actually settles it, live, against Postgres rather than InMemory.
+        await using var db = PostgresLane.Open(await lane.FreshlyMigratedAsync("trial_credit_once"));
+        var owner = Guid.CreateVersion7();
+        db.BillingVouchers.Add(Voucher(owner, isTrialCredit: true, codeHash: new string('B', 64)));
+        await db.SaveChangesAsync();
+
+        db.BillingVouchers.Add(Voucher(owner, isTrialCredit: true, codeHash: new string('C', 64)));
+
+        (await Refusal(db)).ConstraintName.Should().Be("IX_BillingVouchers_TrialCreditOwner");
+    }
+
+    [PostgresFact]
+    public async Task An_administrators_own_name_can_still_head_many_ordinary_vouchers()
+    {
+        // The index is partial — WHERE "IsTrialCredit" — so it says nothing about an administrator's
+        // support vouchers, which all repeat the same CreatedByUserId (the admin) by design. Proves
+        // the index does not accidentally cap every operator at one voucher for life.
+        await using var db = PostgresLane.Open(await lane.FreshlyMigratedAsync("admin_vouchers_repeat"));
+        var admin = Guid.CreateVersion7();
+        db.BillingVouchers.Add(Voucher(admin, isTrialCredit: false, codeHash: new string('D', 64)));
+        db.BillingVouchers.Add(Voucher(admin, isTrialCredit: false, codeHash: new string('E', 64)));
+
+        await db.Awaiting(c => c.SaveChangesAsync()).Should().NotThrowAsync();
+    }
+
+    [PostgresFact]
     public async Task One_billing_run_cannot_have_two_live_dispatches()
     {
         await using var db = PostgresLane.Open(await lane.FreshlyMigratedAsync("billing_job_once"));
@@ -62,14 +92,16 @@ public sealed class BillingRuntimeIndexTests(PostgresLane lane)
         await db.Awaiting(c => c.SaveChangesAsync()).Should().NotThrowAsync();
     }
 
-    private static BillingVoucher Voucher() => new()
+    private static BillingVoucher Voucher(
+        Guid? createdByUserId = null, bool isTrialCredit = false, string? codeHash = null) => new()
     {
-        CodeHash = new string('A', 64),
+        CodeHash = codeHash ?? new string('A', 64),
         CodeHint = "AAAA",
         AmountMinor = 100_000,
         Currency = "IRR",
         Note = "test",
-        CreatedByUserId = Guid.CreateVersion7()
+        CreatedByUserId = createdByUserId ?? Guid.CreateVersion7(),
+        IsTrialCredit = isTrialCredit
     };
 
     private static async Task<PostgresException> Refusal(HarboraDbContext db)

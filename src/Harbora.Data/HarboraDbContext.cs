@@ -1067,6 +1067,17 @@ public class HarboraDbContext : DbContext
         {
             e.HasIndex(x => x.CodeHash).IsUnique();
             e.HasIndex(x => new { x.IsDisabled, x.RedeemedAt, x.ExpiresAt });
+            // Settles the race a read cannot: SignupTrialCreditService always names the workspace
+            // owner as CreatedByUserId (see its own class comment for why), so at most one
+            // IsTrialCredit row may ever exist per owner. Two concurrent grants for the same new
+            // account both pass a pre-check read and both try to insert — this index lets exactly
+            // one through and refuses the other with 23505, the same shape WalletService's own
+            // ledger primary key already uses to settle a credit race. Filtered so it says nothing
+            // about ordinary support vouchers, which repeat CreatedByUserId (the admin) freely.
+            e.HasIndex(x => x.CreatedByUserId)
+                .IsUnique()
+                .HasFilter("\"IsTrialCredit\"")
+                .HasDatabaseName("IX_BillingVouchers_TrialCreditOwner");
             e.Property(x => x.CodeHash).HasMaxLength(64);
             e.Property(x => x.CodeHint).HasMaxLength(8);
             e.Property(x => x.Currency).HasMaxLength(3);

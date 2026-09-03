@@ -95,4 +95,14 @@ public sealed class AdminSettingsViewModel
     /// <c>harbora record-drill-result</c>, which <c>deploy/restore-drill.sh</c> calls.
     /// </summary>
     public required Harbora.Infrastructure.DisasterRecovery.RestoreDrillStatus DrillStatus { get; init; }
+
+    /// <summary>
+    /// Sub-project 1.9 — the signup trial credit an administrator turns on. Zero is the shipped
+    /// default and grants nothing; see <c>Harbora.Infrastructure.Billing.SignupTrialCreditService</c>.
+    /// </summary>
+    public long SignupCreditAmountMinor { get; init; }
+
+    /// <summary>What has actually been granted so far — proof the switch above has done something.</summary>
+    public long SignupCreditIssuedTotalMinor { get; init; }
+    public int SignupCreditIssuedCount { get; init; }
 }
