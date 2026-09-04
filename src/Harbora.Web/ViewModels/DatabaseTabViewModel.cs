@@ -247,6 +247,13 @@ public sealed class DatabaseOverviewViewModel : DatabaseTabViewModel
     /// replicas" panel above: a replica of a replica is refused before it can ever exist.
     /// </summary>
     public string? PrimaryName { get; init; }
+
+    /// <summary>
+    /// This row's OWN lag, when <see cref="PrimaryName"/> is set — a customer who navigates straight
+    /// to a replica's own page must see the same honest figure the primary's "read replicas" table
+    /// shows, not just the fact that it is a replica at all.
+    /// </summary>
+    public Harbora.Infrastructure.Backups.ReplicaLagView? OwnLag { get; init; }
 }
 
 /// <summary>

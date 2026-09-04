@@ -116,4 +116,20 @@ public class ReplicasHttpTests(HarboraHttpFixture fixture)
         Panel.Read(db => db.AppManagedServices.Any(a => a.AppId == app.Id && a.ManagedServiceId == replica.Id))
             .Should().BeFalse("a replica must never gain its own, independently-attached AppManagedService row");
     }
+
+    [Fact]
+    public async Task A_replicas_own_page_says_its_lag_is_unmeasured_never_zero_before_any_check_has_run()
+    {
+        var primary = SeedDatabase("replicas-lag-primary");
+        var replica = SeedDatabase("replicas-lag-standby", primaryId: primary.Id);
+
+        Panel.GivenUser(fixture.WorkspaceId, "replica-lag-page@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("198.51.100.33", "replica-lag-page@example.com");
+
+        var html = await (await client.GetAsync($"/databases/{replica.Id}")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-replica-lag-status=\"nevermeasured\"",
+            "a replica ReplicationLagMonitor has never reached must say so plainly, never show a lag of zero");
+        html.Should().Contain(primary.Name, "the replica's own page must name which instance it is a replica of");
+    }
 }

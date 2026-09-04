@@ -193,6 +193,11 @@ public sealed partial class DatabasesController(
                     ? null : Harbora.Infrastructure.Services.ReplicationSupport.UnsupportedReason(service.Type),
                 PrimaryName = service.PrimaryManagedServiceId is { } primaryId
                     ? services.FirstOrDefault(s => s.Id == primaryId)?.Name
+                    : null,
+                OwnLag = service.PrimaryManagedServiceId is not null
+                    ? Harbora.Infrastructure.Backups.ReplicationLagPresenter.Compute(
+                        await db.ReplicationLagStatuses.AsNoTracking()
+                            .FirstOrDefaultAsync(s => s.ManagedServiceId == service.Id, ct), clock.UtcNow)
                     : null
             };
         }
@@ -311,6 +316,11 @@ public sealed partial class DatabasesController(
             PrimaryName = service.PrimaryManagedServiceId is { } primaryId
                 ? await db.ManagedServices.AsNoTracking().Where(s => s.Id == primaryId)
                     .Select(s => s.Name).FirstOrDefaultAsync(ct)
+                : null,
+            OwnLag = service.PrimaryManagedServiceId is not null
+                ? Harbora.Infrastructure.Backups.ReplicationLagPresenter.Compute(
+                    await db.ReplicationLagStatuses.AsNoTracking()
+                        .FirstOrDefaultAsync(s => s.ManagedServiceId == service.Id, ct), clock.UtcNow)
                 : null
         };
     }

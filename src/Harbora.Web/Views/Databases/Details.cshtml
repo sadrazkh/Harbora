@@ -753,6 +753,18 @@ else if (moving)
                         : $"This is a read-only replica of '{Model.PrimaryName}' — continuously updated, never written to directly.")
                 </p>
 
+                @if (Model.OwnLag is { } ownLag)
+                {
+                    <dl class="mb-3 space-y-1 text-xs" data-replica-lag-status="@ownLag.Status.ToString().ToLowerInvariant()">
+                        <div class="flex justify-between gap-2">
+                            <dt class="text-ink-faint">@(isFa ? "تأخیر رپلیکاسیون" : "Replication lag")</dt>
+                            <dd class="@(ownLag.Status == ReplicaLagStatus.Known ? "font-mono text-ink" : "text-warn")" dir="ltr">
+                                @ownLag.Message
+                            </dd>
+                        </div>
+                    </dl>
+                }
+
                 @if (Model.CanManage)
                 {
                     <form asp-action="PromoteReplica" asp-route-id="@db.Id" method="post" class="space-y-2" data-promote-form>
