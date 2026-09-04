@@ -24,7 +24,16 @@ public enum ConfigSource
 
     /// <summary>A <see cref="Harbora.Domain.ErrorTracking.ErrorTrackingProvider"/> attached to the app
     /// (1.8, 2026-09 market-gaps round two).</summary>
-    ErrorTracking
+    ErrorTracking,
+
+    /// <summary>
+    /// A read replica of a <see cref="Harbora.Domain.Services.ManagedService"/> the app already
+    /// attaches (3.2, round-2 market-gaps plan). Not a second, independent attachment — see
+    /// <see cref="Harbora.Domain.Services.ManagedService.PrimaryManagedServiceId"/>'s own doc — so this
+    /// source carries the SAME database identity <see cref="ConfigSource.Database"/> already names;
+    /// there is no separate "which replica" id to carry alongside it.
+    /// </summary>
+    Replica
 }
 
 /// <summary>
@@ -104,6 +113,23 @@ public readonly record struct DatabaseEnvEntry(string Key, string Value, bool Is
 public readonly record struct AttachedDatabaseEnv(
     int AttachOrder, Guid DatabaseId, string DatabaseName, IReadOnlyList<DatabaseEnvEntry> Entries);
 
+/// <summary>One env var a read replica contributes — the replica-side mirror of
+/// <see cref="DatabaseEnvEntry"/> (3.2, round-2 market-gaps plan).</summary>
+public readonly record struct ReplicaEnvEntry(string Key, string Value, bool IsSecret);
+
+/// <summary>
+/// A read replica's contribution to a merge, riding along with the SAME <see cref="AttachOrder"/>/
+/// <see cref="DatabaseId"/>/<see cref="DatabaseName"/> as the primary attachment that produced it —
+/// deliberately not a placement of its own, because a replica is never attached to an app
+/// independently (3.2, round-2 market-gaps plan; see
+/// <see cref="Harbora.Domain.Services.ManagedService.PrimaryManagedServiceId"/>). Sharing the ordering
+/// key means a replica's <c>{ALIAS}_REPLICA_URL</c> can never end up ranked against a DIFFERENT
+/// attachment than the one whose alias it is actually prefixed with — it always resolves, wins or
+/// loses on a shared key exactly alongside its own primary's other entries.
+/// </summary>
+public readonly record struct AttachedReplicaEnv(
+    int AttachOrder, Guid DatabaseId, string DatabaseName, IReadOnlyList<ReplicaEnvEntry> Entries);
+
 /// <summary>One env var an error-tracking provider contributes — the error-tracking-side mirror of
 /// <see cref="EmailProviderEnvEntry"/> (1.8, 2026-09 market-gaps round two).</summary>
 public readonly record struct ErrorTrackingEnvEntry(string Key, string Value, bool IsSecret);
@@ -128,10 +154,10 @@ public readonly record struct AttachedErrorTrackingEnv(
 ///
 /// <para>
 /// Precedence: the app's own <see cref="EnvironmentVariable"/> always wins over any group, bucket,
-/// email provider, database or error-tracking provider; among groups, the one with the higher
+/// email provider, database, replica or error-tracking provider; among groups, the one with the higher
 /// <see cref="AttachedGroupEntries.AttachOrder"/> (attached later) wins on a shared key; attached
-/// buckets, email providers, databases and error-tracking providers are all lower precedence than
-/// every group — they exist to hand an app default credentials, not to override a value somebody
+/// buckets, email providers, databases, replicas and error-tracking providers are all lower precedence
+/// than every group — they exist to hand an app default credentials, not to override a value somebody
 /// deliberately set through a group. This is also what lets a customer point an app at their own
 /// external Sentry/GlitchTip: a plain <c>SENTRY_DSN</c> the app already carries as its own
 /// <see cref="EnvironmentVariable"/> outranks an attached <see cref="Harbora.Domain.ErrorTracking.ErrorTrackingProvider"/>
@@ -148,7 +174,8 @@ public static class ConfigGroupMerge
         IEnumerable<AttachedBucketEnv>? attachedBuckets = null,
         IEnumerable<AttachedEmailProviderEnv>? attachedEmailProviders = null,
         IEnumerable<AttachedDatabaseEnv>? attachedDatabases = null,
-        IEnumerable<AttachedErrorTrackingEnv>? attachedErrorTracking = null)
+        IEnumerable<AttachedErrorTrackingEnv>? attachedErrorTracking = null,
+        IEnumerable<AttachedReplicaEnv>? attachedReplicas = null)
     {
         var byKey = new Dictionary<string, EffectiveEnvironmentEntry>(StringComparer.Ordinal);
 
@@ -172,6 +199,12 @@ public static class ConfigGroupMerge
                 byKey[entry.Key] = new EffectiveEnvironmentEntry(
                     entry.Key, entry.Value, entry.IsSecret, ConfigSource.Database,
                     null, null, null, null, null, null, database.DatabaseId, database.DatabaseName);
+
+        foreach (var replica in (attachedReplicas ?? []).OrderBy(r => r.AttachOrder))
+            foreach (var entry in replica.Entries)
+                byKey[entry.Key] = new EffectiveEnvironmentEntry(
+                    entry.Key, entry.Value, entry.IsSecret, ConfigSource.Replica,
+                    null, null, null, null, null, null, replica.DatabaseId, replica.DatabaseName);
 
         foreach (var errorTracking in (attachedErrorTracking ?? []).OrderBy(e => e.AttachOrder))
             foreach (var entry in errorTracking.Entries)

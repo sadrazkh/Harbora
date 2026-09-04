@@ -53,6 +53,20 @@ public sealed record LogicalDatabaseRowViewModel(
     DateTimeOffset? VectorExtensionCheckedAt);
 
 /// <summary>
+/// One read replica of this instance, for the Overview tab's "read replicas" panel (3.2, round-2
+/// market-gaps plan). <see cref="Lag"/> is never absent when <see cref="Status"/> is
+/// <see cref="Harbora.Domain.Common.ServiceStatus.Running"/> — <c>ReplicationLagPresenter.Compute</c>
+/// always returns a view, even when everything it has to say is "unknown" — which is the point: the
+/// row must never fall back to blank or to a fabricated zero for a replica the monitor has not (yet)
+/// reached.
+/// </summary>
+public sealed record ReplicaRowViewModel(
+    Guid Id,
+    string Name,
+    Harbora.Domain.Common.ServiceStatus Status,
+    Harbora.Infrastructure.Backups.ReplicaLagView Lag);
+
+/// <summary>
 /// What the database shell's header and tab strip need, on every tab. Mirrors <see cref="AppTabViewModel"/>.
 ///
 /// <para>
@@ -211,6 +225,28 @@ public sealed class DatabaseOverviewViewModel : DatabaseTabViewModel
     /// <c>LatestPoint</c> instead of hiding the failure behind "now".
     /// </summary>
     public Harbora.Infrastructure.Backups.PitrWindow? PitrWindow { get; init; }
+
+    /// <summary>
+    /// 3.2 (round-2 market-gaps plan): this instance's own read replicas, if any — always empty for a
+    /// non-PostgreSQL engine and for a replica itself (a replica cannot itself have replicas; see
+    /// <c>ReadReplicaPlan.WhyRefused</c>'s refusal of chained replication).
+    /// </summary>
+    public IReadOnlyList<ReplicaRowViewModel> Replicas { get; init; } = [];
+
+    /// <summary>Whether this engine can have a read replica at all — <c>ReplicationSupport.Supports</c>.</summary>
+    public bool ReplicationSupported { get; init; }
+
+    /// <summary>Why not, when <see cref="ReplicationSupported"/> is false — shown in place of the
+    /// create-replica form rather than beside a form that would only ever fail.</summary>
+    public string? ReplicationUnsupportedReason { get; init; }
+
+    /// <summary>
+    /// The instance this row is itself a read replica of, or null for an ordinary, independent
+    /// instance — <c>ManagedService.PrimaryManagedServiceId</c>'s own name, resolved once here so the
+    /// view never has to look it up. A replica's own Overview shows this instead of the "read
+    /// replicas" panel above: a replica of a replica is refused before it can ever exist.
+    /// </summary>
+    public string? PrimaryName { get; init; }
 }
 
 /// <summary>

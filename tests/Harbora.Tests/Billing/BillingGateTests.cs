@@ -624,6 +624,12 @@ public class StartPathCensusTests
             "point-in-time recovery (3.1, round-2 market-gaps plan): one-off helpers that list, copy " +
             "and prune WAL segments an already-running, already-billed database produced — it starts " +
             "no workload of its own, only moves files an existing container already wrote",
+        ["src/Harbora.Infrastructure/Backups/ReplicationLagMonitor.cs"] =
+            "read replicas (3.2, round-2 market-gaps plan): a one-off psql query against an already-" +
+            "running, already-billed replica's own connection — it starts no workload of its own, " +
+            "only asks an existing container how far behind it is. The replica itself was already " +
+            "gated at creation and provisioning through ManagedServiceEngine.cs, which is already on " +
+            "the MustAskTheGate list below",
         ["src/Harbora.Infrastructure/Backups/BackupStorage.cs"] =
             "moves an existing backup artifact between volumes and destinations",
         ["src/Harbora.Infrastructure/Backups/UpgradeSafetyService.cs"] =

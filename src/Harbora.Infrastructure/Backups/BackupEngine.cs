@@ -330,6 +330,23 @@ public sealed class BackupEngine(
         if (!PitrSupport.Supports(svc.Type))
             throw new InvalidOperationException(PitrSupport.UnsupportedReason(svc.Type));
 
+        // 3.2 (round-2 market-gaps plan): a physical base backup anchors point-in-time recovery for
+        // the instance it is taken from, and a replica has none of its own — no archive_command, no
+        // WalArchivingStatus row, nothing PitrRecoveryWindow could ever replay this forward onto. It
+        // would be a second, silently duplicate copy of exactly what the primary's own base backup
+        // already protects, taken from data that may itself be lagging. Refused by name, pointed at
+        // the primary, the same shape WalArchivingService.SetEnabledAsync already refuses PITR itself
+        // on a replica.
+        if (svc.PrimaryManagedServiceId is { } primaryId)
+        {
+            var primaryName = await db.ManagedServices.AsNoTracking()
+                .Where(s => s.Id == primaryId).Select(s => s.Name).FirstOrDefaultAsync(ct);
+            throw new InvalidOperationException(
+                $"'{svc.Name}' is a read replica of '{primaryName ?? "its primary"}'. A physical base " +
+                "backup anchors point-in-time recovery for the instance it is taken from — take it " +
+                "from the primary instead.");
+        }
+
         var definition = Services.ServiceCatalog.All[svc.Type];
         // The instance's own admin login — a base backup is a physical copy of the WHOLE cluster,
         // so there is no per-logical-database variant the way BackupDatabaseAsync's pg_dump has.

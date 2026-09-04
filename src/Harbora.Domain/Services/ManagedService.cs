@@ -191,4 +191,44 @@ public class ManagedService : BaseEntity
     /// migrated.
     /// </summary>
     public ICollection<ManagedServiceDatabase> Databases { get; set; } = new List<ManagedServiceDatabase>();
+
+    /// <summary>
+    /// The instance this row is a read-only streaming replica of, or null for an ordinary,
+    /// independent instance (3.2, round-2 market-gaps plan). A replica IS a <see cref="ManagedService"/>
+    /// row — not a second, parallel entity — deliberately: it is a real container Harbora provisions,
+    /// stops, resizes and bills exactly the way every other instance is
+    /// (<see cref="Harbora.Infrastructure.Billing.BillingTick"/> reads every row in the
+    /// <c>ManagedServices</c> table with no notion of "replica" at all, so a replica is billed for its
+    /// compute and its disk with zero new billing code — the "reuse the existing metering, do not
+    /// invent a second path" rule this feature was set). What is actually different about a replica is
+    /// entirely in how it is <em>provisioned</em> (<see cref="Harbora.Infrastructure.Services.ReadReplicaSeedPlan"/>
+    /// seeds it from <see cref="PrimaryManagedServiceId"/>'s own data via <c>pg_basebackup -R</c> instead of
+    /// starting empty) and in what it is <em>for</em> (surfaced to an app that already attaches the
+    /// primary as an additional, unmistakably-named <c>{ALIAS}_REPLICA_URL</c> — see
+    /// <see cref="Harbora.Infrastructure.Services.ReplicaAttachEnv"/> — never attached to an app on its
+    /// own, which is what would hand out a plain, indistinguishable <c>DATABASE_URL</c> for a
+    /// connection that must never take a write).
+    ///
+    /// <para>
+    /// Only meaningful for <see cref="ManagedServiceType.PostgreSql"/> —
+    /// <see cref="Harbora.Infrastructure.Services.ReplicationSupport.Supports"/> names which engines a
+    /// replica can exist for at all, the same "supported by name, refused by name" shape
+    /// <see cref="Harbora.Infrastructure.Backups.PitrSupport"/> already gives PostgreSQL's other
+    /// streaming-WAL capability.
+    /// </para>
+    ///
+    /// <para>
+    /// Restricted, not cascaded, at the database (<c>HarboraDbContext</c>): deleting a primary that
+    /// still has this FK pointed at it is refused there as the backstop for the same refusal
+    /// <c>DatabasesController.Remove</c> already gives by name, before SaveChanges ever turns it into a
+    /// raw constraint violation — the exact shape <c>AppManagedService.ManagedServiceId</c>'s own
+    /// Restrict already uses for "an app still attached blocks a database's delete", just one FK over.
+    /// </para>
+    /// </summary>
+    public Guid? PrimaryManagedServiceId { get; set; }
+    public ManagedService? PrimaryManagedService { get; set; }
+
+    /// <summary>The read replicas of this instance, if any — the inverse of
+    /// <see cref="PrimaryManagedServiceId"/>.</summary>
+    public ICollection<ManagedService> Replicas { get; set; } = new List<ManagedService>();
 }

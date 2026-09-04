@@ -736,6 +736,109 @@ else if (moving)
             <partial name="Design/_PanelEnd" />
         }
 
+        @if (db.Type == ManagedServiceType.PostgreSql)
+        {
+            @* 3.2 (round-2 market-gaps plan): read replicas. Lag is computed fresh on every render
+               (ReplicationLagPresenter.Compute, fed by ReplicationLagMonitor's own tick) and rendered
+               with the platform's three-state law — data / empty / not-measured — never a fabricated
+               zero: a replica whose lag cannot be read says so, in words, never a green tick. *@
+            var replicaPanel = new PanelModel(isFa ? "رپلیکاهای فقط-خواندنی" : "Read replicas");
+            <partial name="Design/_PanelStart" model="replicaPanel" />
+
+            @if (Model.PrimaryName is not null)
+            {
+                <p class="mb-3 text-xs leading-5 text-ink-faint" data-replica-of="@db.Id">
+                    @(isFa
+                        ? $"این یک رپلیکای فقط-خواندنیِ «{Model.PrimaryName}» است — همیشه به‌روزرسانی می‌شود، ولی هرگز مستقیماً پذیرای نوشتن نیست."
+                        : $"This is a read-only replica of '{Model.PrimaryName}' — continuously updated, never written to directly.")
+                </p>
+
+                @if (Model.CanManage)
+                {
+                    <form asp-action="PromoteReplica" asp-route-id="@db.Id" method="post" class="space-y-2" data-promote-form>
+                        @Html.AntiForgeryToken()
+                        <label class="block text-[11px] text-ink-faint" for="promote-confirm">
+                            @(isFa ? $"برای ارتقا، نام «{db.Name}» را دقیقاً بنویسید" : $"Type '{db.Name}' exactly to promote")
+                        </label>
+                        <input type="text" id="promote-confirm" name="confirmName" class="input w-full text-xs" dir="ltr" required />
+                        <button type="submit" class="btn-secondary w-full justify-center py-2 text-sm" data-promote-submit>
+                            @(isFa ? "ارتقا به نمونهٔ مستقل و قابل‌نوشتن" : "Promote to a standalone, writable instance")
+                        </button>
+                        <p class="text-[11px] leading-4 text-ink-faint">
+                            @(isFa
+                                ? "دیگر هرگز از اصلیِ پیشین به‌روز نمی‌شود؛ هر اپی که REPLICA_URL آن را می‌خواند دیگر پیش نمی‌رود."
+                                : "It stops receiving anything from its former primary; any app reading its REPLICA_URL stops catching up.")
+                        </p>
+                    </form>
+                }
+            }
+            else
+            {
+                <p class="mb-3 text-xs leading-5 text-ink-faint">
+                    @(isFa
+                        ? "کپی‌ای فقط-خواندنی و پیوسته‌به‌روز از این نمونه. هر اپی که این پایگاه‌داده را وصل کند، به‌طور خودکار REPLICA_URL را هم دریافت می‌کند."
+                        : "A continuously updated, read-only copy of this instance. Any app attached to this database automatically also receives REPLICA_URL.")
+                </p>
+
+                @if (Model.Replicas.Count == 0)
+                {
+                    <p class="text-xs text-ink-faint" data-replicas-state="empty">@(isFa ? "هنوز رپلیکایی ساخته نشده." : "No replicas yet.")</p>
+                }
+                else
+                {
+                    <table class="w-full text-xs" data-replicas-state="has-data">
+                        <thead>
+                            <tr class="text-ink-faint">
+                                <th class="text-start font-normal">@(isFa ? "نام" : "Name")</th>
+                                <th class="text-start font-normal">@(isFa ? "وضعیت" : "Status")</th>
+                                <th class="text-start font-normal">@(isFa ? "تأخیر" : "Lag")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in Model.Replicas)
+                            {
+                                <tr data-replica-id="@r.Id" data-replica-lag-status="@r.Lag.Status.ToString().ToLowerInvariant()">
+                                    <td><a asp-action="Details" asp-route-id="@r.Id" class="link">@r.Name</a></td>
+                                    <td class="text-ink">@r.Status</td>
+                                    <td>
+                                        @if (r.Lag.Status == ReplicaLagStatus.Known)
+                                        {
+                                            <span dir="ltr" class="font-mono text-ink">@r.Lag.Message</span>
+                                        }
+                                        else
+                                        {
+                                            @* Never "0", never blank — ReplicationLagPresenter's own honest
+                                               sentence for exactly why this replica's lag is unknown. *@
+                                            <span class="text-warn">@r.Lag.Message</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+
+                @if (Model.CanManage)
+                {
+                    <form asp-action="CreateReplica" asp-route-id="@db.Id" method="post" class="mt-4 space-y-2" data-create-replica-form>
+                        @Html.AntiForgeryToken()
+                        <label class="block text-[11px] text-ink-faint" for="replica-name">@(isFa ? "نام رپلیکا" : "Replica name")</label>
+                        <input type="text" id="replica-name" name="name" class="input w-full text-xs" required />
+                        <button type="submit" class="btn-secondary w-full justify-center py-2 text-sm" data-create-replica-submit>
+                            @(isFa ? "ساخت رپلیکا" : "Create replica")
+                        </button>
+                        <p class="text-[11px] leading-4 text-ink-faint">
+                            @(isFa
+                                ? "روی همان سرور و همان محیطِ این نمونه ساخته می‌شود."
+                                : "Created on this instance's own server and environment.")
+                        </p>
+                    </form>
+                }
+            }
+
+            <partial name="Design/_PanelEnd" />
+        }
+
         @{ var attachPanel = new PanelModel(T["Attach to app"].Value); }
         <partial name="Design/_PanelStart" model="attachPanel" />
 

@@ -213,6 +213,13 @@ public static class DependencyInjection
         services.AddScoped<Backups.PitrRestoreService>();
         services.AddHostedService<Backups.WalArchiveShipper>();
 
+        // 3.2 (round-2 market-gaps plan): read replicas reuse this same WAL-streaming machinery seen
+        // from the other angle — see ReadReplicaSeedPlan's own doc. The one genuinely new background
+        // service this feature needed: nothing else on the platform ever measures replication lag, and
+        // an application routing reads to a replica needs that honestly, on its own tick, whether or
+        // not anybody happens to have the panel open.
+        services.AddHostedService<Backups.ReplicationLagMonitor>();
+
         // What the dashboard opens with: findings a person can act on, from stored facts only.
         services.AddScoped<Dashboard.AttentionService>();
 

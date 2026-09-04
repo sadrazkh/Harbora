@@ -38,6 +38,19 @@ public sealed class WalArchivingService(HarboraDbContext db, ILogger<WalArchivin
 
         if (!PitrSupport.Supports(service.Type)) return PitrSupport.UnsupportedReason(service.Type);
 
+        // 3.2 (round-2 market-gaps plan): a read replica has no WAL of its own to archive — it never
+        // takes an independent write, so there is nothing an archive_command on it would ever ship
+        // beyond what streaming replication already copies live. Point-in-time recovery belongs on
+        // the primary, which is the row this actually refuses to and names.
+        if (service.PrimaryManagedServiceId is { } primaryId)
+        {
+            var primaryName = await db.ManagedServices.AsNoTracking()
+                .Where(s => s.Id == primaryId).Select(s => s.Name).FirstOrDefaultAsync(ct);
+            return $"'{service.Name}' is a read replica of '{primaryName ?? "its primary"}'. " +
+                   "Point-in-time recovery archives WAL from a primary, not from a replica — turn it " +
+                   "on there instead.";
+        }
+
         if (service.PitrEnabled == enable) return null;
 
         service.PitrEnabled = enable;

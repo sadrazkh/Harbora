@@ -570,6 +570,10 @@ public sealed partial class AppsController(
             // ServiceUsageService.ConnectionsFor below, for the "Databases" panel's Attached flag.
             .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
             .Include(a => a.ManagedServices).ThenInclude(ms => ms.Database)
+            // 3.2 (round-2 market-gaps plan): a running read replica rides along with its primary's
+            // own attachment — see AttachedReplicaEnv's own doc, and DeploymentPipeline.cs's matching
+            // Include for why this is not a second, independent attachment.
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService!).ThenInclude(m => m.Replicas)
             // 1.8 (2026-09 market-gaps round two): the same shape again — also read below to build
             // the attach-panel and the effective-env provenance for a SENTRY_DSN row.
             .Include(a => a.ErrorTrackingProviders).ThenInclude(et => et.ErrorTrackingProvider)

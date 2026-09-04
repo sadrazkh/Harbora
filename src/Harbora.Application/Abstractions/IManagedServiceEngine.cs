@@ -65,6 +65,13 @@ public interface IManagedServiceEngine
     /// </remarks>
     Task<RedisMemoryPolicyOutcome> UpdateRedisMemoryPolicyAsync(
         Guid serviceId, string? policy, long maxMemoryBytes, CancellationToken ct);
+
+    /// <summary>
+    /// Ends a read replica's recovery mode and makes it an ordinary, independent, writable instance
+    /// (3.2, round-2 market-gaps plan). Returns false with a reason for every refusal — not a replica,
+    /// not running, or the engine itself refused the promotion — never throws for an ordinary refusal.
+    /// </summary>
+    Task<(bool Ok, string? Error)> PromoteReplicaAsync(Guid replicaId, CancellationToken ct);
 }
 
 public sealed record ServiceCatalogEntry(

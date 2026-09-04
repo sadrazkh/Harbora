@@ -5,8 +5,8 @@ namespace Harbora.Infrastructure.Apps;
 
 /// <summary>
 /// Assembles a merge's inputs from an already-loaded <see cref="App"/> — the attached groups,
-/// storage buckets, email providers and managed services, each turned into the shape
-/// <see cref="ConfigGroupMerge.Merge"/> expects — and calls it.
+/// storage buckets, email providers, managed services and their read replicas, each turned into the
+/// shape <see cref="ConfigGroupMerge.Merge"/> expects — and calls it.
 ///
 /// <para>
 /// Before this existed, <c>DeploymentPipeline.BuildEnv</c> (what a container actually receives) and
@@ -22,7 +22,8 @@ namespace Harbora.Infrastructure.Apps;
 /// <para>
 /// <paramref name="app"/>'s <c>ConfigGroups</c> (with each <c>ConfigGroup.Entries</c>),
 /// <c>StorageBuckets</c> (with each <c>StorageBucket</c>), <c>EmailProviders</c> (with each
-/// <c>EmailProvider</c>), <c>ManagedServices</c> (with each <c>ManagedService</c> and <c>Database</c>)
+/// <c>EmailProvider</c>), <c>ManagedServices</c> (with each <c>ManagedService</c>, that
+/// <c>ManagedService</c>'s own <c>Replicas</c> — 3.2, round-2 market-gaps plan — and <c>Database</c>)
 /// and <c>EnvironmentVariables</c> must already be <c>Include</c>d — this does no loading of its own.
 /// </para>
 ///
@@ -63,6 +64,34 @@ public static class EffectiveEnvironmentBuilder
                 Harbora.Infrastructure.Services.ManagedServiceAttachEnv.EntriesFor(ms, protector)
                     .Select(e => new DatabaseEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
 
+        // 3.2 (round-2 market-gaps plan): a NEW attachment kind, not a change bolted onto the database
+        // one above — see AttachedReplicaEnv's own doc for why it rides along with the primary's
+        // AttachOrder/identity rather than getting its own. Only ever a Running replica: a replica
+        // still seeding from pg_basebackup has no data an app could safely read yet, and surfacing its
+        // REPLICA_URL before that would hand out a connection string to a container nothing is
+        // listening on. The oldest Running replica is picked when more than one exists, for the same
+        // "earliest wins, deterministically" reason CreatedAt already orders other lists on this
+        // platform — a replica an app reads from must not change identity from one deploy to the next
+        // just because a newer sibling was created in between.
+        var attachedReplicas = app.ManagedServices
+            .Where(ms => ms.ManagedService is not null)
+            .Select(ms => new
+            {
+                Attachment = ms,
+                Replica = ms.ManagedService!.Replicas
+                    .Where(r => r.Status == Domain.Common.ServiceStatus.Running)
+                    .OrderBy(r => r.CreatedAt)
+                    .FirstOrDefault()
+            })
+            .Where(x => x.Replica is not null)
+            .Select(x => new AttachedReplicaEnv(
+                x.Attachment.AttachOrder, x.Attachment.ManagedServiceId, x.Attachment.ManagedService!.Name,
+                Harbora.Infrastructure.Services.ReplicaAttachEnv.EntriesFor(
+                        Harbora.Infrastructure.Services.AttachedDatabaseCreds.Resolve(
+                            x.Attachment.ManagedService!, x.Attachment.Database, protector),
+                        x.Replica!, x.Attachment.Alias, protector)
+                    .Select(e => new ReplicaEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
+
         // 1.8 landed on master while this extraction was being written, and the two conflicted in
         // exactly the way git cannot see: master added a fifth attachment kind inline in BuildEnv,
         // this branch replaced that whole block with a call to here. Taking either side alone
@@ -83,6 +112,7 @@ public static class EffectiveEnvironmentBuilder
             attachedBuckets,
             attachedEmailProviders,
             attachedDatabases,
-            attachedErrorTracking);
+            attachedErrorTracking,
+            attachedReplicas);
     }
 }

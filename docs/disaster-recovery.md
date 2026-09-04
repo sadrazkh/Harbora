@@ -79,6 +79,17 @@ on its own is not restorable** the way a Database/Volume backup is — it needs 
 from it to reach a consistent point, so it never appears as an ordinary restorable artifact; only
 "Restore to a point in time" can use one.
 
+### Read replicas are not a backup (3.2, round-2 market-gaps plan)
+
+A PostgreSQL instance can have a read-only streaming replica (**Databases → the instance → Read
+replicas**), on the same server, for spreading read traffic off the primary — an app that attaches
+the primary automatically also gets `REPLICA_URL`. **It replicates everything, including a mistake:**
+a dropped table or a bad `UPDATE` on the primary reaches the replica within moments, so a replica is
+never a substitute for the Database/Volume backups above, and taking a physical base backup or
+turning on point-in-time recovery is refused on a replica by name — do that on the primary. Deleting
+a primary that still has a replica is refused, naming it; a replica's own reported lag is either a
+real figure or, honestly, "unknown" — never a green tick for a check that never ran.
+
 This document describes the **Backups** page, which every install has. It does **not** cover the
 separate **Backup Center** module (repositories, policies, the native and Kopia snapshot engines).
 That module is off by default — `Features:Backup` is `false` in `appsettings.json`, and its sidebar

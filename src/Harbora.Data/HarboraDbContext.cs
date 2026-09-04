@@ -107,6 +107,10 @@ public class HarboraDbContext : DbContext
     /// <summary>Every WAL segment Harbora has shipped to object storage — see
     /// <see cref="Harbora.Domain.Backups.WalSegment"/>.</summary>
     public DbSet<Harbora.Domain.Backups.WalSegment> WalSegments => Set<Harbora.Domain.Backups.WalSegment>();
+    /// <summary>Read-replica lag health, one row per replica <see cref="ManagedService"/> that has
+    /// ever been checked (3.2, round-2 market-gaps plan) — see
+    /// <see cref="Harbora.Domain.Services.ReplicationLagStatus"/>.</summary>
+    public DbSet<Harbora.Domain.Services.ReplicationLagStatus> ReplicationLagStatuses => Set<Harbora.Domain.Services.ReplicationLagStatus>();
     public DbSet<MailServer> MailServers => Set<MailServer>();
     public DbSet<MailDomain> MailDomains => Set<MailDomain>();
     public DbSet<MailMailbox> MailMailboxes => Set<MailMailbox>();
@@ -936,6 +940,24 @@ public class HarboraDbContext : DbContext
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
+        // --- read replicas (3.2, round-2 market-gaps plan) ---
+        // Restrict, not Cascade: deleting a primary that still has this FK pointed at it must be
+        // refused, never quietly take its replicas with it. DatabasesController.Remove's named refusal
+        // is the primary defence (ManagedServiceEngine.RemoveAsync never reaches a primary with any
+        // Replicas still attached); this is the same backstop-not-only-line-of-defence relationship
+        // AppManagedService.ManagedServiceId's own Restrict already has with its controller-side check.
+        b.Entity<ManagedService>(e => e.HasOne(x => x.PrimaryManagedService).WithMany(x => x.Replicas)
+            .HasForeignKey(x => x.PrimaryManagedServiceId).OnDelete(DeleteBehavior.Restrict));
+
+        // Cascade on the ManagedService side, the same reasoning WalArchivingStatus's own Cascade
+        // gives just above: a replica's lag history means nothing once the replica itself is gone.
+        b.Entity<Harbora.Domain.Services.ReplicationLagStatus>(e =>
+        {
+            e.HasIndex(x => x.ManagedServiceId).IsUnique();
+            e.HasOne<ManagedService>().WithMany().HasForeignKey(x => x.ManagedServiceId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         // --- file overrides (C2, 2026-08-22 config-delivery plan) ---
         // Cascade on the app side, and no other side to restrict against: a rule is not a shared
         // thing another app could also point at (unlike ConfigGroup/StorageBucket/EmailProvider),
@@ -1483,6 +1505,7 @@ public class HarboraDbContext : DbContext
         // a workspace's WAL health and archived segments are as tenant-scoped as its ordinary backups.
         b.Entity<Harbora.Domain.Backups.WalArchivingStatus>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Harbora.Domain.Backups.WalSegment>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Services.ReplicationLagStatus>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
 
         // Backup module. Each carries its own WorkspaceId rather than being filtered through its
         // parent, for the reason spelled out on Deployment below: a navigation filter over a

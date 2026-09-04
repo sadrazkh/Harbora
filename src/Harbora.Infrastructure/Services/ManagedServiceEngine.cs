@@ -184,6 +184,48 @@ public sealed class ManagedServiceEngine(
                 volumes.Add((walVolume, PostgresWalArchivingCommand.ArchiveMountPath, false));
             }
 
+            // 3.2 (round-2 market-gaps plan): the only place a read replica's data directory is
+            // actually seeded — and only ever on the FIRST successful provision. RunningImage is null
+            // exactly until then (set below on success, for every instance, replica or not), so a
+            // later rebuild of an already-seeded replica — a resize, a TLS retry — restarts the same
+            // container on the same, already-replicating data directory precisely the way an ordinary
+            // instance's rebuild reuses its own volume; running pg_basebackup a second time onto a
+            // non-empty directory would fail outright, and running it at all would throw away
+            // whatever the replica had already caught up to.
+            if (svc.PrimaryManagedServiceId is { } primaryId && svc.RunningImage is null)
+            {
+                if (!ReplicationSupport.Supports(svc.Type))
+                    throw new InvalidOperationException(ReplicationSupport.UnsupportedReason(svc.Type));
+
+                var primary = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == primaryId, ct)
+                    ?? throw new InvalidOperationException(
+                        $"'{svc.Name}' is a read replica of a primary that no longer exists.");
+
+                // pg_basebackup refuses to write into a non-empty directory, and a retry after an
+                // earlier seed attempt died partway through (a failed RunContainerAsync after a
+                // successful seed, say — RunningImage stays null until the container has actually
+                // started, so this branch runs again) would find exactly that. Wiped and recreated
+                // first so a retry is always seeding into a genuinely empty volume, never resuming
+                // into whatever the last attempt left behind.
+                try { await docker.RemoveVolumeAsync(svc.VolumeName, ct); } catch { /* nothing to remove on a first-ever attempt */ }
+                await docker.EnsureVolumeAsync(svc.VolumeName, ct);
+
+                // Reachable by container name only because a replica is placed on the primary's own
+                // server and in its own environment (ReadReplicaPlan.WhyRefused / the create action),
+                // which is what puts both containers on the SAME network resolved above.
+                var seedExit = await docker.RunOneOffAsync(new DockerOneOffRequest(
+                    image,
+                    ReadReplicaSeedPlan.SeedCommand(primary.ContainerName, primary.InternalPort, primary.Username, def.DataMountPath),
+                    [(svc.VolumeName, def.DataMountPath, false)],
+                    Env: ReadReplicaSeedPlan.Environment(SafeUnprotect(primary.EncryptedPassword)),
+                    NetworkMode: network),
+                    new Progress<string>(l => logger.LogInformation("{Svc} seed: {Line}", svc.Name, l)), ct);
+
+                if (seedExit != 0)
+                    throw new InvalidOperationException(
+                        $"Seeding the replica from '{primary.Name}' failed (pg_basebackup exit {seedExit}).");
+            }
+
             await docker.RunContainerAsync(new DockerRunRequest(
                 image, svc.ContainerName, network,
                 def.Env(creds),
@@ -505,6 +547,19 @@ public sealed class ManagedServiceEngine(
 
         svc.EncryptedPassword = protector.Protect(newPassword);
 
+        // 3.2 (round-2 market-gaps plan): every replica of this instance is a byte-for-byte copy of
+        // the same login, and replication itself already carries the ALTER ROLE this rotation is
+        // about to issue on svc through to every one of them — but Harbora's own record of what that
+        // plaintext IS would otherwise go stale on the replica's row the moment this line above
+        // changes it, and ReplicationLagMonitor.CheckOneAsync connects to the REPLICA using exactly
+        // that stored copy. Left unrotated, a primary's password change would silently turn every
+        // replica's lag from "known" to "unknown: authentication failed" forever, which is precisely
+        // the false negative this feature's whole honesty requirement exists to prevent becoming
+        // permanent. The ciphertext is copied as-is (never decrypted here) because it is the identical
+        // plaintext password under the same protector — nothing needs re-encrypting.
+        var replicas = await db.ManagedServices.Where(r => r.PrimaryManagedServiceId == svc.Id).ToListAsync(ct);
+        foreach (var replica in replicas) replica.EncryptedPassword = svc.EncryptedPassword;
+
         // C1 (2026-08-22 config-delivery plan): every AppManagedService attachment of this service
         // now has a stale connection string in its running container — set true unconditionally,
         // never compare-and-skip. The trap the config-delivery plan names explicitly: a rotation's
@@ -628,6 +683,46 @@ public sealed class ManagedServiceEngine(
             svc.Name, exit, cleaned);
         return new RedisMemoryPolicyOutcome(WasRunning: true, AppliedLive: false,
             LiveApplyError: string.IsNullOrWhiteSpace(cleaned) ? $"redis-cli exited {exit}." : cleaned);
+    }
+
+    /// <summary>
+    /// Ends a read replica's recovery mode and makes it an ordinary, independent, writable instance
+    /// (3.2, round-2 market-gaps plan) — see <see cref="ReplicaPromotionPlan"/>'s own doc for why this
+    /// is the one deliberate way the platform's replication topology ever changes, as opposed to the
+    /// several ways it is refused to change silently.
+    /// </summary>
+    public async Task<(bool Ok, string? Error)> PromoteReplicaAsync(Guid replicaId, CancellationToken ct)
+    {
+        var replica = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == replicaId, ct);
+        if (replica is null) return (false, "That database no longer exists.");
+        if (replica.PrimaryManagedServiceId is null) return (false, $"'{replica.Name}' is not a read replica.");
+        if (replica.Status != ServiceStatus.Running)
+            return (false, $"'{replica.Name}' is not running. Start it before promoting it.");
+
+        var docker = await engineFactory.ResolveAsync(replica.ServerId, ct);
+        var network = await NetworkForAsync(replica, ct);
+        var image = $"{ServiceCatalog.All[replica.Type].ImageRepo}:{replica.Version}";
+
+        var output = new System.Text.StringBuilder();
+        var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
+            image,
+            ReplicaPromotionPlan.Command(replica.ContainerName, replica.InternalPort, replica.Username, replica.DatabaseName),
+            [],
+            Env: ReplicaPromotionPlan.Environment(SafeUnprotect(replica.EncryptedPassword)),
+            NetworkMode: network),
+            new Deployments.InlineProgress<string>(line => { lock (output) output.AppendLine(line); }), ct);
+
+        if (exit != 0)
+            return (false, $"'{replica.Name}' refused to promote (exit {exit}). " +
+                            Deployments.LogText.Clean(output.ToString()).Trim());
+
+        // Only cleared once the engine has actually confirmed this — never assumed on the strength of
+        // a queued request, the same "requested vs. actually happened" discipline PitrEnabled and
+        // PgVectorEnabled already hold everywhere else on this row.
+        replica.PrimaryManagedServiceId = null;
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Promoted replica {Name} to a standalone, writable instance.", replica.Name);
+        return (true, null);
     }
 
     public async Task<ServiceConnectionInfo> GetConnectionInfoAsync(Guid serviceId, CancellationToken ct)

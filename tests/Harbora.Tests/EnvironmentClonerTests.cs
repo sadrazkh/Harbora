@@ -119,6 +119,7 @@ public class EnvironmentClonerTests
         public Task<string?> TestConnectionAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
         public Task<ServiceConnectionInfo> GetConnectionInfoAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
         public Task<RedisMemoryPolicyOutcome> UpdateRedisMemoryPolicyAsync(Guid id, string? policy, long maxMemoryBytes, CancellationToken ct) => throw new NotSupportedException();
+        public Task<(bool Ok, string? Error)> PromoteReplicaAsync(Guid replicaId, CancellationToken ct) => throw new NotSupportedException();
     }
 
     private sealed record Harness(

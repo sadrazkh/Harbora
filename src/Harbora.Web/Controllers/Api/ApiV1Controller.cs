@@ -219,6 +219,12 @@ public sealed class ApiV1Controller(
             .Include(a => a.EmailProviders).ThenInclude(ep => ep.EmailProvider)
             .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
             .Include(a => a.ManagedServices).ThenInclude(ms => ms.Database)
+            // 3.2 (round-2 market-gaps plan): a running read replica rides along with its primary's
+            // own attachment — see AttachedReplicaEnv's own doc, and DeploymentPipeline.cs's matching
+            // Include for why this is not a second, independent attachment. `harbora env pull` must
+            // see the exact same REPLICA_URL a real deploy would inject, or the CLI and the container
+            // disagree about what the app actually gets.
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService!).ThenInclude(m => m.Replicas)
             .FirstOrDefaultAsync(a => a.WorkspaceId == WorkspaceId && a.Slug == slug, ct);
         if (app is null) return NotFound(new { error = "App not found." });
 

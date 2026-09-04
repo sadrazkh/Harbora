@@ -99,6 +99,12 @@ public sealed class DeploymentPipeline(
             // points at, when it points at one — AttachedDatabaseCreds needs it loaded to pick the
             // right login.
             .Include(a => a.ManagedServices).ThenInclude(ms => ms.Database)
+            // 3.2 (round-2 market-gaps plan): a running read replica rides along with its primary's
+            // OWN attachment (see AttachedReplicaEnv's own doc) rather than being attached on its
+            // own, so the replica has to be loaded through the SAME ManagedService navigation the
+            // primary side already needed — a second, separate Include here would ask EF for a
+            // relation nothing above it selected.
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService!).ThenInclude(m => m.Replicas)
             // 1.8 (2026-09 market-gaps round two): the same shape again — an attached error-tracking
             // provider's own row, so BuildEnv can compute its SENTRY_DSN entry the same way.
             .Include(a => a.ErrorTrackingProviders).ThenInclude(et => et.ErrorTrackingProvider)

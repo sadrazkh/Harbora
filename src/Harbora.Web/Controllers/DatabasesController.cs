@@ -186,7 +186,14 @@ public sealed partial class DatabasesController(
                 LogicalDatabasesSupported = logicalSupported,
                 LogicalDatabasesUnsupportedReason = logicalSupported
                     ? null : Harbora.Infrastructure.Services.DatabaseGrantSql.UnsupportedReason(service.Type),
-                CanManageLogicalDatabasesLocally = logicalDatabases.CanCreateLocally
+                CanManageLogicalDatabasesLocally = logicalDatabases.CanCreateLocally,
+                Replicas = await BuildReplicaRowsAsync(service.Id, ct),
+                ReplicationSupported = Harbora.Infrastructure.Services.ReplicationSupport.Supports(service.Type),
+                ReplicationUnsupportedReason = Harbora.Infrastructure.Services.ReplicationSupport.Supports(service.Type)
+                    ? null : Harbora.Infrastructure.Services.ReplicationSupport.UnsupportedReason(service.Type),
+                PrimaryName = service.PrimaryManagedServiceId is { } primaryId
+                    ? services.FirstOrDefault(s => s.Id == primaryId)?.Name
+                    : null
             };
         }
 
@@ -296,8 +303,41 @@ public sealed partial class DatabasesController(
             PitrUnpublished = service.HasUnpublishedChanges,
             PitrWindow = Harbora.Infrastructure.Backups.PitrSupport.Supports(service.Type)
                 ? await walArchiving.RecoveryWindowAsync(service.Id, clock.UtcNow, ct)
+                : null,
+            Replicas = await BuildReplicaRowsAsync(service.Id, ct),
+            ReplicationSupported = Harbora.Infrastructure.Services.ReplicationSupport.Supports(service.Type),
+            ReplicationUnsupportedReason = Harbora.Infrastructure.Services.ReplicationSupport.Supports(service.Type)
+                ? null : Harbora.Infrastructure.Services.ReplicationSupport.UnsupportedReason(service.Type),
+            PrimaryName = service.PrimaryManagedServiceId is { } primaryId
+                ? await db.ManagedServices.AsNoTracking().Where(s => s.Id == primaryId)
+                    .Select(s => s.Name).FirstOrDefaultAsync(ct)
                 : null
         };
+    }
+
+    /// <summary>
+    /// The rows for this instance's own "read replicas" panel (3.2, round-2 market-gaps plan) — lag
+    /// computed fresh from <see cref="ReplicationLagPresenter.Compute"/> every render, never cached,
+    /// for the reason that class states: a cached reading is exactly the "green dot for a probe that
+    /// never fired" defect this whole feature exists to refuse.
+    /// </summary>
+    private async Task<IReadOnlyList<ReplicaRowViewModel>> BuildReplicaRowsAsync(Guid serviceId, CancellationToken ct)
+    {
+        var replicas = await db.ManagedServices.AsNoTracking()
+            .Where(r => r.PrimaryManagedServiceId == serviceId)
+            .OrderBy(r => r.CreatedAt)
+            .ToListAsync(ct);
+        if (replicas.Count == 0) return [];
+
+        var replicaIds = replicas.Select(r => r.Id).ToList();
+        var statuses = await db.ReplicationLagStatuses.AsNoTracking()
+            .Where(s => replicaIds.Contains(s.ManagedServiceId))
+            .ToDictionaryAsync(s => s.ManagedServiceId, ct);
+
+        return replicas.Select(r => new ReplicaRowViewModel(
+            r.Id, r.Name, r.Status,
+            Harbora.Infrastructure.Backups.ReplicationLagPresenter.Compute(
+                statuses.GetValueOrDefault(r.Id), clock.UtcNow))).ToList();
     }
 
     /// <summary>
@@ -818,6 +858,23 @@ public sealed partial class DatabasesController(
             return RedirectToAction(nameof(ConfirmRemove), new { id, deleteData });
         }
 
+        // 3.2 (round-2 market-gaps plan): the same idiom as the attached-apps refusal just above, one
+        // relationship over — a primary with a live replica must not be deleted out from under it. The
+        // ManagedService.PrimaryManagedServiceId FK is Restrict at the database (HarboraDbContext) as
+        // the backstop; this is the named refusal an operator actually reads, before that ever becomes
+        // a raw constraint violation.
+        var replicaNames = await db.ManagedServices.AsNoTracking()
+            .Where(r => r.PrimaryManagedServiceId == id).Select(r => r.Name).ToListAsync(ct);
+
+        if (replicaNames.Count > 0)
+        {
+            TempData["Error"] = IsFa
+                ? $"این دیتابیس هنوز رپلیکای {NamedList(replicaNames)} را دارد. برای حذف، ابتدا آن‌ها را حذف کنید."
+                : $"This database still has {NamedList(replicaNames)} replicating from it. Delete the " +
+                  "replica(s) first, then delete the primary.";
+            return RedirectToAction(nameof(ConfirmRemove), new { id, deleteData });
+        }
+
         // Typing the name is asked for only when the data goes with it — see ServiceRemovalPlan.
         if (!Harbora.Infrastructure.Services.ServiceRemovalPlan.IsConfirmed(deleteData, confirmName, svc.Name))
         {
@@ -1039,6 +1096,21 @@ public sealed partial class DatabasesController(
         // then started, looked healthy, and could not reach its database.
         var service = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id, ct);
         if (service is null) return NotFound();
+
+        // 3.2 (round-2 market-gaps plan): a read replica is never attached to an app on its own — that
+        // would hand out a plain, unmarked DATABASE_URL for a connection that must never take a
+        // write, exactly the ambiguity the plan requires this feature to refuse. A replica surfaces
+        // automatically, as REPLICA_URL, the moment an app attaches its PRIMARY instead (see
+        // ReplicaAttachEnv).
+        if (service.PrimaryManagedServiceId is not null)
+        {
+            return BackTo(returnUrl, IsFa
+                ? $"«{service.Name}» یک رپلیکای فقط-خواندنی است و مستقیماً به اپی وصل نمی‌شود. " +
+                  "دیتابیس اصلی آن را وصل کنید — REPLICA_URL به‌صورت خودکار در دسترس اپ قرار می‌گیرد."
+                : $"'{service.Name}' is a read-only replica and cannot be attached to an app on its " +
+                  "own. Attach its primary instead — REPLICA_URL becomes available to the app " +
+                  "automatically.", error: true);
+        }
 
         var verdict = Harbora.Infrastructure.Networking.NetworkWiring.CanAttach(
             app.EnvironmentId, service.EnvironmentId);
