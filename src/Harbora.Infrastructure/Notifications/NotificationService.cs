@@ -254,6 +254,10 @@ public sealed class NotificationService(
         AlertEvent.UptimeCheckFailed => a.OnUptimeCheckFailed,
         AlertEvent.LowBalance => true,
         AlertEvent.ServiceProvisionFailed => true,
+        // 5.2 (2026-09 market-gaps round two): same reasoning as ServiceProvisionFailed just above —
+        // no existing checkbox fits, and a pending approval nobody was told about is a deploy that
+        // silently never happens.
+        AlertEvent.DeploymentPendingApproval => true,
         AlertEvent.Test => true,
         // A platform announcement is never a workspace's own configured Alert channel — it reaches
         // people only through NotifyInAppOnlyAsync's N3 fan-out, not a Telegram group or webhook a

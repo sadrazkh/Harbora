@@ -143,12 +143,30 @@ public class DeploymentStepsTests
     public void Every_status_the_pipeline_can_reach_is_either_a_step_or_terminal()
     {
         // A status that is neither leaves the bar frozen with no explanation — which is the failure
-        // this whole file exists because of.
+        // this whole file exists because of. PendingApproval (5.2, 2026-09 market-gaps round two) is
+        // the one deliberate exception: the pipeline itself never reaches it — no Job exists for a
+        // deployment sitting there — so it is drawn correctly by falling to neither branch, the same
+        // "nothing is active yet" rendering StateOf already gives any status IndexOf does not place
+        // (see the next test).
         foreach (var status in Enum.GetValues<DeploymentStatus>())
         {
+            if (status == DeploymentStatus.PendingApproval) continue;
             var placed = DeploymentSteps.IndexOf(status) is not null || DeploymentSteps.IsTerminal(status);
             placed.Should().BeTrue($"{status} must be drawable");
         }
+    }
+
+    [Fact]
+    public void PendingApproval_draws_every_step_as_not_yet_started()
+    {
+        // Not a step on the bar and not terminal — the deployment has not begun, and every box
+        // correctly reads "not started" rather than "done" or "failed here".
+        DeploymentSteps.IndexOf(DeploymentStatus.PendingApproval).Should().BeNull();
+        DeploymentSteps.IsTerminal(DeploymentStatus.PendingApproval).Should().BeFalse();
+
+        Enumerable.Range(0, DeploymentSteps.Count)
+            .Select(i => DeploymentSteps.StateOf(i, DeploymentStatus.PendingApproval))
+            .Should().OnlyContain(s => s == StepState.Pending);
     }
 
     [Fact]

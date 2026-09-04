@@ -385,12 +385,24 @@ public sealed class RecordingDeploymentEngine : IDeploymentEngine
 {
     private readonly List<DeploymentRequest> _queued = [];
     private readonly List<Guid> _cancelled = [];
+    private readonly List<Guid> _approved = [];
+    private readonly List<(Guid DeploymentId, string Reason)> _rejected = [];
 
     public IReadOnlyList<DeploymentRequest> Queued { get { lock (_queued) return _queued.ToList(); } }
     public IReadOnlyList<Guid> Cancelled { get { lock (_cancelled) return _cancelled.ToList(); } }
 
+    /// <summary>5.2: every deployment id this fake was asked to approve — the seam a test asserts
+    /// against instead of the deployment's own status column, so "the panel says Queued" and "the
+    /// engine was actually asked to run this" cannot silently disagree.</summary>
+    public IReadOnlyList<Guid> Approved { get { lock (_approved) return _approved.ToList(); } }
+    public IReadOnlyList<(Guid DeploymentId, string Reason)> Rejected { get { lock (_rejected) return _rejected.ToList(); } }
+
     /// <summary>Set to make the next queue attempt fail the way a rollback in flight does.</summary>
     public string? RefuseWith { get; set; }
+
+    /// <summary>Set to make the next Approve/Reject call fail the way a self-approval or an
+    /// already-decided approval does.</summary>
+    public string? RefuseDecisionWith { get; set; }
 
     public Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct)
     {
@@ -402,6 +414,20 @@ public sealed class RecordingDeploymentEngine : IDeploymentEngine
     public Task CancelAsync(Guid deploymentId, CancellationToken ct)
     {
         lock (_cancelled) _cancelled.Add(deploymentId);
+        return Task.CompletedTask;
+    }
+
+    public Task ApproveAsync(Guid deploymentId, Guid approverUserId, CancellationToken ct)
+    {
+        if (RefuseDecisionWith is { } reason) throw new InvalidOperationException(reason);
+        lock (_approved) _approved.Add(deploymentId);
+        return Task.CompletedTask;
+    }
+
+    public Task RejectAsync(Guid deploymentId, Guid approverUserId, string reason, CancellationToken ct)
+    {
+        if (RefuseDecisionWith is { } r) throw new InvalidOperationException(r);
+        lock (_rejected) _rejected.Add((deploymentId, reason));
         return Task.CompletedTask;
     }
 }

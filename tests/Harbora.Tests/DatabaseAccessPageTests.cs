@@ -304,6 +304,8 @@ public class DatabaseAccessPageTests
         public Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
         public Task CancelAsync(Guid deploymentId, CancellationToken ct) => throw new NotSupportedException();
+        public Task ApproveAsync(Guid deploymentId, Guid approverUserId, CancellationToken ct) => throw new NotSupportedException();
+        public Task RejectAsync(Guid deploymentId, Guid approverUserId, string reason, CancellationToken ct) => throw new NotSupportedException();
     }
 
     private sealed class AlwaysAllowedQuota : IQuotaService

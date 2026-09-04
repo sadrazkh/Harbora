@@ -37,6 +37,126 @@
 @if (deployMsg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@deployMsg</div>}
 @if (deployErr is not null){<div class="mb-4 rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm">@deployErr</div>}
 
+@* ---- protected-environment approval gate (5.2, 2026-09 market-gaps round two) ----
+   A deploy to a protected environment does not run until a second person says so. This section is
+   the whole feature's UI: what it is waiting on, who can act, the deadline before it happens (never
+   discovered after the fact), and — once decided — who decided and why, so a resolved request keeps
+   the same trail a pending one had. *@
+@{
+    var approval = ViewBag.Approval as Harbora.Domain.Deployments.DeploymentApproval;
+    var people = ViewBag.ApprovalPeople as Dictionary<Guid, string> ?? new();
+    var canDecide = ViewBag.CanDecideApproval is true;
+    var isRequester = ViewBag.IsRequester is true;
+    string Who(Guid id) => people.TryGetValue(id, out var email) ? email : (deployIsFa ? "کاربر حذف‌شده" : "a removed user");
+}
+@if (approval is not null)
+{
+    var pendingDecision = approval.Decision == Harbora.Domain.Deployments.DeploymentApprovalDecision.Pending;
+    <section class="mb-4 rounded-xl border border-warn/40 bg-warn-soft p-4" data-approval-gate
+             data-decision="@approval.Decision">
+        @if (Model.Status == Harbora.Domain.Common.DeploymentStatus.PendingApproval && pendingDecision)
+        {
+            <div class="flex flex-wrap items-start justify-between gap-4">
+                <div class="text-sm text-ink">
+                    <strong class="block text-warn">
+                        @(deployIsFa ? "در انتظار تأیید یک فرد دیگر" : "Waiting for a second person to approve")
+                    </strong>
+                    <span class="mt-1 block text-ink-muted">
+                        @(deployIsFa
+                            ? $"درخواست‌دهنده: {Who(Model.TriggeredByUserId)}"
+                            : $"Requested by {Who(Model.TriggeredByUserId)}")
+                    </span>
+                    <span class="mt-1 block text-ink-muted" dir="ltr">
+                        @(deployIsFa ? "انقضا: " : "Expires: ")@approval.ExpiresAt.ToString("u")
+                    </span>
+                    @if (approval.CommitPinned)
+                    {
+                        <span class="mt-1 block text-ink-muted">
+                            @(deployIsFa ? "تأیید دقیقاً همین commit را منتشر می‌کند:" : "Approving releases exactly this commit:")
+                            <span dir="ltr" class="font-mono">@Model.GitRef</span>
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="mt-1 block text-ink-muted">
+                            @(deployIsFa
+                                ? "این استقرار به یک commit مشخص متصل نیست — تأیید هرچه در این لحظه سر شاخه باشد را منتشر می‌کند."
+                                : "This deploy is not pinned to a specific commit — approving it releases whatever is at the ref's head at that moment.")
+                        </span>
+                    }
+                </div>
+                <div class="flex flex-col items-end gap-2">
+                    @if (canDecide)
+                    {
+                        <form asp-controller="Deployments" asp-action="Approve" asp-route-id="@Model.Id" method="post">
+                            @Html.AntiForgeryToken()
+                            <button class="rounded-lg bg-ok hover:opacity-90 text-white px-4 py-2 text-sm font-semibold" data-approve-deployment>
+                                @(deployIsFa ? "تأیید و استقرار" : "Approve & deploy")
+                            </button>
+                        </form>
+                        <form asp-controller="Deployments" asp-action="Reject" asp-route-id="@Model.Id" method="post"
+                              class="flex items-center gap-2">
+                            @Html.AntiForgeryToken()
+                            <input type="text" name="reason" required maxlength="500" data-reject-reason
+                                   placeholder="@(deployIsFa ? "دلیل رد" : "Reason for rejecting")"
+                                   class="rounded-lg bg-canvas border border-line px-3 py-1.5 text-sm" />
+                            <button class="rounded-lg border border-danger text-danger hover:bg-danger-soft px-3 py-1.5 text-sm font-semibold"
+                                    data-reject-deployment>
+                                @(deployIsFa ? "رد" : "Reject")
+                            </button>
+                        </form>
+                    }
+                    else if (isRequester)
+                    {
+                        <span class="text-xs text-ink-faint max-w-xs text-end">
+                            @(deployIsFa
+                                ? "شما این استقرار را درخواست داده‌اید — یک فرد دیگر باید آن را تأیید یا رد کند."
+                                : "You requested this deployment — a second person needs to approve or reject it.")
+                        </span>
+                    }
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="text-sm text-ink" data-approval-outcome>
+                @if (approval.AutoApprovedNoSecondApprover)
+                {
+                    <span>
+                        @(deployIsFa
+                            ? "بدون تأیید دستی منتشر شد: هیچ فرد دیگری در این فضای کاری برای تأیید وجود نداشت."
+                            : "Released without a manual approval: nobody else in this workspace was eligible to approve it.")
+                    </span>
+                }
+                else if (approval.Decision == Harbora.Domain.Deployments.DeploymentApprovalDecision.Approved)
+                {
+                    <span>
+                        @(deployIsFa
+                            ? $"تأیید شد توسط {Who(approval.DecidedByUserId ?? Guid.Empty)}"
+                            : $"Approved by {Who(approval.DecidedByUserId ?? Guid.Empty)}")
+                    </span>
+                }
+                else if (approval.Decision == Harbora.Domain.Deployments.DeploymentApprovalDecision.Rejected)
+                {
+                    <span>
+                        @(deployIsFa
+                            ? $"رد شد توسط {Who(approval.DecidedByUserId ?? Guid.Empty)}: {approval.ReasonText}"
+                            : $"Rejected by {Who(approval.DecidedByUserId ?? Guid.Empty)}: {approval.ReasonText}")
+                    </span>
+                }
+                else if (approval.Decision == Harbora.Domain.Deployments.DeploymentApprovalDecision.Expired)
+                {
+                    <span>
+                        @(deployIsFa
+                            ? "هیچ‌کس پیش از موعد تأیید نکرد؛ درخواست منقضی شد."
+                            : "Nobody approved it in time — the request expired.")
+                    </span>
+                }
+            </div>
+        }
+    </section>
+}
+
 @* ---- why it is waiting, and the way out ----
    A queued deployment used to say nothing at all about what it was behind, and there was no way to
    stop it from anywhere in the product. The sentence comes from QueuePosition, which reads the same

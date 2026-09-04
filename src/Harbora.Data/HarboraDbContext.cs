@@ -78,6 +78,9 @@ public class HarboraDbContext : DbContext
     public DbSet<AppConfigGroup> AppConfigGroups => Set<AppConfigGroup>();
     public DbSet<Volume> Volumes => Set<Volume>();
     public DbSet<Deployment> Deployments => Set<Deployment>();
+    /// <summary>5.2 (2026-09 market-gaps round two): one row per deployment gated on a protected
+    /// environment — see the type's own doc for why the requester is not a column here.</summary>
+    public DbSet<DeploymentApproval> DeploymentApprovals => Set<DeploymentApproval>();
     public DbSet<CronRun> CronRuns => Set<CronRun>();
     public DbSet<DeploymentLog> DeploymentLogs => Set<DeploymentLog>();
     /// <summary>Persisted container output (2.2, 2026-09 log-retention plan) — see the type's own doc
@@ -557,6 +560,18 @@ public class HarboraDbContext : DbContext
         });
 
         b.Entity<DeploymentLog>(e => e.HasIndex(x => new { x.DeploymentId, x.Sequence }));
+
+        b.Entity<DeploymentApproval>(e =>
+        {
+            // One approval row per deployment — the Details page's own lookup and the uniqueness
+            // ApproveAsync/RejectAsync assume when they load "the" approval for a deployment id.
+            e.HasIndex(x => x.DeploymentId).IsUnique();
+            // The expiry sweep's own read: every still-Pending row past its ExpiresAt, across every
+            // workspace at once (IgnoreQueryFilters — see that class's own doc).
+            e.HasIndex(x => new { x.Decision, x.ExpiresAt });
+            e.HasOne(x => x.Deployment).WithMany()
+                .HasForeignKey(x => x.DeploymentId).OnDelete(DeleteBehavior.Cascade);
+        });
 
         b.Entity<CronRun>(e =>
         {
@@ -1626,6 +1641,12 @@ public class HarboraDbContext : DbContext
         // whose app row is missing — including from the crash reconciler whose entire job is to find
         // stranded deployments. A direct comparison has no such failure mode (and no join cost).
         b.Entity<Deployment>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+
+        // 5.2: filtered directly like Deployment above, and for the identical reason — the expiry
+        // sweep and the approve/reject actions reach a row by its own id or by DeploymentId, not by
+        // walking the Deployment navigation, so a navigation filter would add a join with the same
+        // inner-join hazard Deployment's own comment describes.
+        b.Entity<DeploymentApproval>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
 
         // EnvironmentVariable, Volume, DomainName and DeploymentLog are deliberately NOT filtered.
         // They are only ever reached through their parent — which is filtered — so a navigation

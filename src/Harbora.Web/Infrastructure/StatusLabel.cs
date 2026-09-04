@@ -26,6 +26,10 @@ public static class StatusLabel
         // The one the first version of this mapping forgot, which is exactly what the
         // every-value-has-both-languages test exists to catch.
         DeploymentStatus.HealthChecking => isFa ? "بررسی سلامت" : "Health check",
+        // 5.2 (2026-09 market-gaps round two): distinct from Queued on purpose — a deployment
+        // waiting on a person and a deployment merely behind others in line are different facts,
+        // and the whole point is that they must not look the same on this badge.
+        DeploymentStatus.PendingApproval => isFa ? "در انتظار تأیید" : "Pending approval",
         _ => Fallback(status.ToString(), isFa)
     };
 

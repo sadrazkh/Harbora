@@ -6,10 +6,40 @@ namespace Harbora.Application.Abstractions;
 /// </summary>
 public interface IDeploymentEngine
 {
-    /// <summary>Queue a deployment and return its id. Progress streams over <see cref="IDeploymentLogStream"/>.</summary>
+    /// <summary>
+    /// Queue a deployment and return its id. Progress streams over <see cref="IDeploymentLogStream"/>.
+    ///
+    /// <para>
+    /// 5.2 (2026-09 market-gaps round two): when the target app's environment is protected, the
+    /// returned deployment is not queued at all — it is created
+    /// <see cref="Domain.Common.DeploymentStatus.PendingApproval"/>, with no <c>Job</c> behind it,
+    /// and stays there until <see cref="ApproveAsync"/> or <see cref="RejectAsync"/> settles it (or
+    /// the expiry sweep does). One exception: a workspace with nobody else eligible to approve this
+    /// app deploys immediately, exactly as if unprotected — see
+    /// <c>DeploymentApprovalPlan.AutoApproveForLackOfSecondApprover</c> for why.
+    /// </para>
+    /// </summary>
     Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct);
 
     Task CancelAsync(Guid deploymentId, CancellationToken ct);
+
+    /// <summary>
+    /// Approves a deployment that is waiting on a protected environment's gate, and — if the same
+    /// checks an ordinary deploy passes at queue time still pass now — enqueues it. Throws
+    /// <see cref="InvalidOperationException"/> naming the reason when the deployment is not pending
+    /// approval, when its approval was already decided, or when <paramref name="approverUserId"/> is
+    /// the person who requested it.
+    /// </summary>
+    Task ApproveAsync(Guid deploymentId, Guid approverUserId, CancellationToken ct);
+
+    /// <summary>
+    /// Rejects a deployment that is waiting on a protected environment's gate. The deployment ends
+    /// <see cref="Domain.Common.DeploymentStatus.Cancelled"/>; the reason is what the panel and the
+    /// audit log both read to say this was a rejection rather than an ordinary cancel. Throws
+    /// <see cref="InvalidOperationException"/> for the same reasons <see cref="ApproveAsync"/> does,
+    /// plus an empty <paramref name="reason"/>.
+    /// </summary>
+    Task RejectAsync(Guid deploymentId, Guid approverUserId, string reason, CancellationToken ct);
 }
 
 public record DeploymentRequest(

@@ -93,6 +93,12 @@ public sealed class ProjectsController(
         var vm = await LoadAsync(id, environmentId, ct);
         if (vm is null) return NotFound();
 
+        // 5.2: drawn from the same capability SetProtection itself checks, so the toggle the page
+        // shows and the endpoint that would answer it can never disagree.
+        ViewBag.CanManageEnvironments = vm.Selected is null
+            ? false
+            : await access.AllowsAsync(new ResourcePlacement(id, vm.Selected.Id), Capabilities.AppsCreate, ct);
+
         ViewData["Title"] = vm.Project.Name;
         return View(vm);
     }
@@ -205,6 +211,53 @@ public sealed class ProjectsController(
             TempData["Error"] = IsFa ? ex.ReasonFa ?? ex.Message : ex.Message;
             return RedirectToAction(nameof(Details), new { id });
         }
+    }
+
+    /// <summary>
+    /// Turns an environment's protected-deploy gate on or off (5.2, 2026-09 market-gaps round two,
+    /// "approval gate on deploying to a protected environment"). Off by default on every environment
+    /// — <c>Environment.IsProtected</c>'s own doc says turning it on for a customer's production is
+    /// their decision, not the platform's, and this is the one place that decision is made.
+    ///
+    /// <para>
+    /// Gated the same way <see cref="AddEnvironment"/> and <see cref="CloneEnvironment"/> already are
+    /// — <see cref="Capabilities.AppsCreate"/> is the closest existing capability to "shapes this
+    /// project's environments"; a purpose-built one is a bigger schema/RBAC surface than this item's
+    /// own scope spends. Turning protection off is not refused while a deployment is mid-approval on
+    /// this environment: that deployment's own gate was already decided the moment it was requested
+    /// (its <c>DeploymentApproval</c> row exists independently of the environment's current setting),
+    /// so there is nothing for an in-flight approval to be stranded by either way.
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/environments/{environmentId:guid}/protection")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsCreate)]
+    public async Task<IActionResult> SetProtection(Guid id, Guid environmentId, bool isProtected, CancellationToken ct)
+    {
+        var environment = await db.Environments
+            .FirstOrDefaultAsync(e => e.Id == environmentId && e.ProjectId == id && e.WorkspaceId == WorkspaceId, ct);
+        if (environment is null) return NotFound();
+
+        if (!await access.AllowsAsync(new ResourcePlacement(id, environmentId), Capabilities.AppsCreate, ct))
+            return NotFound();
+
+        environment.IsProtected = isProtected;
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync(
+            isProtected ? "environment.protection_enabled" : "environment.protection_disabled",
+            "environment", environment.Id.ToString(), HttpContext.Connection.RemoteIpAddress?.ToString(),
+            workspaceId: WorkspaceId, ct: ct);
+
+        TempData["Message"] = isProtected
+            ? (IsFa
+                ? $"«{environment.Name}» اکنون محافظت‌شده است — استقرارها منتظر تأیید یک فرد دیگر می‌مانند."
+                : $"\"{environment.Name}\" is now protected — deploys wait for a second person to approve them.")
+            : (IsFa
+                ? $"محافظت «{environment.Name}» خاموش شد — استقرارها بی‌درنگ اجرا می‌شوند."
+                : $"Protection for \"{environment.Name}\" is off — deploys run immediately again.");
+
+        return RedirectToAction(nameof(Details), new { id, environmentId });
     }
 
     /// <summary>

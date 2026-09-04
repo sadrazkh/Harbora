@@ -47,6 +47,8 @@ public class TemplateKindAndRequiredSecretDeploymentTests
             Task.FromResult(Guid.CreateVersion7());
 
         public Task CancelAsync(Guid deploymentId, CancellationToken ct) => Task.CompletedTask;
+        public Task ApproveAsync(Guid deploymentId, Guid approverUserId, CancellationToken ct) => Task.CompletedTask;
+        public Task RejectAsync(Guid deploymentId, Guid approverUserId, string reason, CancellationToken ct) => Task.CompletedTask;
     }
 
     private static readonly DateTimeOffset Now = new(2026, 8, 21, 12, 0, 0, TimeSpan.Zero);

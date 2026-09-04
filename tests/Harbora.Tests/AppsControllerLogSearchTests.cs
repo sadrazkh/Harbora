@@ -243,6 +243,8 @@ public class AppsControllerLogSearchTests
 
         public Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct) => throw NotNeeded();
         public Task CancelAsync(Guid deploymentId, CancellationToken ct) => throw NotNeeded();
+        public Task ApproveAsync(Guid deploymentId, Guid approverUserId, CancellationToken ct) => throw NotNeeded();
+        public Task RejectAsync(Guid deploymentId, Guid approverUserId, string reason, CancellationToken ct) => throw NotNeeded();
         public Task<RollbackPlan> PrepareAsync(Guid appId, Guid targetDeploymentId, CancellationToken ct) => throw NotNeeded();
         public Task<DomainStatus> InspectAsync(string host, CancellationToken ct) => throw NotNeeded();
         public Task<WorkspaceUsage> GetUsageAsync(Guid workspaceId, CancellationToken ct) => throw NotNeeded();

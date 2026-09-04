@@ -48,6 +48,10 @@
            class="rounded-lg px-3 py-1.5 text-sm @(active ? "bg-surface-2 text-ink" : "text-ink-muted hover:text-ink")">
             @e.Name
             @if (e.IsDefault){<span class="text-[10px] text-ink-faint">@(isFa ? "پیش‌فرض" : "default")</span>}
+            @* 5.2 (2026-09 market-gaps round two): visible on the tab itself, not only after
+               clicking in — the whole point is that a protected environment reads differently
+               everywhere it appears, the same reasoning PendingApproval's own badge follows. *@
+            @if (e.IsProtected){<span class="text-[10px] text-warn" title="@(isFa ? "محافظت‌شده" : "Protected")">🔒</span>}
         </a>
     }
     <details class="relative ms-auto">
@@ -72,6 +76,42 @@
         </a>
     }
 </div>
+
+@* ---- protected-environment toggle (5.2, 2026-09 market-gaps round two) ----
+   Off by default on every environment — turning it on for a customer's production is their own
+   decision, made here, not assumed anywhere upstream. *@
+@if (selected is not null && ViewBag.CanManageEnvironments == true)
+{
+    // A plain if-cast rather than an `is { } env` pattern: Razor's tag-helper attribute codegen for
+    // the section element below does not reliably see a pattern variable introduced by the @if
+    // condition, and reported it as unassigned even though the null check plainly guards it.
+    var env = selected!;
+    <section class="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-surface p-4"
+              data-environment-protection data-protected="@env.IsProtected.ToString().ToLowerInvariant()">
+        <div class="text-sm">
+            <strong class="block text-ink">@(isFa ? "استقرار محافظت‌شده" : "Protected deploys")</strong>
+            <span class="mt-0.5 block text-ink-muted">
+                @(env.IsProtected
+                    ? (isFa
+                        ? $"استقرار به «{env.Name}» تا زمانی که یک فرد دیگر آن را تأیید نکند اجرا نمی‌شود."
+                        : $"A deploy to \"{env.Name}\" does not run until a second person approves it.")
+                    : (isFa
+                        ? $"استقرار به «{env.Name}» بی‌درنگ اجرا می‌شود."
+                        : $"A deploy to \"{env.Name}\" runs immediately."))
+            </span>
+        </div>
+        <form asp-controller="Projects" asp-action="SetProtection"
+              asp-route-id="@Model.Project.Id" asp-route-environmentId="@env.Id" method="post">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="isProtected" value="@(!env.IsProtected)" />
+            <button class="rounded-lg px-4 py-2 text-sm font-semibold @(env.IsProtected ? "border border-line-strong hover:border-danger hover:text-danger" : "bg-accent hover:bg-accent-hover text-white")">
+                @(env.IsProtected
+                    ? (isFa ? "خاموش کردن محافظت" : "Turn off protection")
+                    : (isFa ? "محافظت از این محیط" : "Protect this environment"))
+            </button>
+        </form>
+    </section>
+}
 
 <div class="grid lg:grid-cols-2 gap-6">
     <section class="rounded-xl border border-line bg-surface">

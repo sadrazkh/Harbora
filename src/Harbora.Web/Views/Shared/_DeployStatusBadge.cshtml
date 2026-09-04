@@ -11,6 +11,10 @@
         DeploymentStatus.Failed => "bg-danger/15 text-danger",
         DeploymentStatus.Cancelled => "bg-slate-500/15 text-ink",
         DeploymentStatus.RolledBack => "bg-warn/15 text-warn",
+        // 5.2: deliberately not the pulsing "in-flight" colour below — nothing is running, and a
+        // pulsing badge on a deployment nobody has looked at yet reads as "the platform is busy"
+        // when the honest fact is "a person needs to act".
+        DeploymentStatus.PendingApproval => "bg-warn/15 text-warn",
         _ => "bg-accent-hover/15 text-accent-text animate-pulse"
     };
 }

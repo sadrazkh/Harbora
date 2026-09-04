@@ -84,8 +84,39 @@ public sealed class DeploymentsController(
 
         // The button is drawn from the same answer the endpoint gives, so the two cannot disagree —
         // offering a control that always refuses teaches people to ignore it.
-        ViewBag.CanCancel = DeploymentStateMachine.IsInFlight(deployment.Status)
+        //
+        // 5.2: IsUnsettled rather than IsInFlight — a deployment sitting PendingApproval has just as
+        // much a "stop this" button as a Queued one does; the requester withdrawing their own request
+        // is a different act from an approver rejecting it (see Reject below), and reuses this one.
+        ViewBag.CanCancel = DeploymentStateMachine.IsUnsettled(deployment.Status)
                             && await access.CanTouchAppAsync(deployment.AppId, Capabilities.AppsDeploy, ct);
+
+        // 5.2 (2026-09 market-gaps round two): the approval record, when this deployment went through
+        // the protected-environment gate — shown regardless of the deployment's current status, so a
+        // decided one still says who approved or rejected it and why, not only a pending one.
+        var approval = await db.DeploymentApprovals.AsNoTracking()
+            .FirstOrDefaultAsync(a => a.DeploymentId == deployment.Id, ct);
+        if (approval is not null)
+        {
+            ViewBag.Approval = approval;
+
+            var isRequester = currentUser.UserId == deployment.TriggeredByUserId;
+            ViewBag.IsRequester = isRequester;
+
+            // The button is drawn from the same two facts ApproveAsync/RejectAsync themselves refuse
+            // on — pending, and not the requester — so the panel and the endpoint cannot disagree.
+            ViewBag.CanDecideApproval =
+                deployment.Status == DeploymentStatus.PendingApproval
+                && approval.Decision == Harbora.Domain.Deployments.DeploymentApprovalDecision.Pending
+                && !isRequester
+                && await access.CanTouchAppAsync(deployment.AppId, Capabilities.AppsDeploy, ct);
+
+            var peopleIds = new List<Guid> { deployment.TriggeredByUserId };
+            if (approval.DecidedByUserId is { } decidedBy) peopleIds.Add(decidedBy);
+            ViewBag.ApprovalPeople = await db.Users.AsNoTracking().IgnoreQueryFilters()
+                .Where(u => peopleIds.Contains(u.Id))
+                .ToDictionaryAsync(u => u.Id, u => u.Email, ct);
+        }
 
         return View(deployment);
     }
@@ -191,6 +222,103 @@ public sealed class DeploymentsController(
     private static string Ended(int number, DeploymentStatus status, bool isFa) => isFa
         ? $"استقرار #{number} پیش از لغو شدن به پایان رسیده بود ({status})."
         : $"Deployment #{number} had already ended ({status}), so there was nothing to cancel.";
+
+    /// <summary>
+    /// Approves a deployment waiting on a protected environment's gate (5.2, 2026-09 market-gaps
+    /// round two). <see cref="Capabilities.AppsDeploy"/> plus <c>CanTouchAppAsync</c> is the same
+    /// scoping this app's every other deploy action already asks — anyone who could deploy this app
+    /// could approve a deploy to it, with one further refusal the engine itself enforces: not the
+    /// person who asked for it. Audited inside <c>DeploymentEngine.ApproveAsync</c> itself, not here —
+    /// see that method's own doc for why the choke point is the single place this is logged.
+    /// </summary>
+    [HttpPost("/deployments/{id:guid}/approve")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
+    public async Task<IActionResult> Approve(Guid id, CancellationToken ct)
+    {
+        var row = await db.Deployments.AsNoTracking()
+            .Where(d => d.Id == id && d.App!.WorkspaceId == WorkspaceId)
+            .Select(d => new { d.AppId, d.Number })
+            .FirstOrDefaultAsync(ct);
+        if (row is null) return NotFound();
+        if (!await access.CanTouchAppAsync(row.AppId, Capabilities.AppsDeploy, ct)) return Forbid();
+
+        var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+        try
+        {
+            await deployEngine.ApproveAsync(id, currentUser.UserId ?? Guid.Empty, ct);
+        }
+        catch (QuotaRefusedException ex)
+        {
+            TempData["Error"] = (isFa ? ex.ReasonFa : null) ?? ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+        catch (CapacityRefusedException ex)
+        {
+            TempData["Error"] = (isFa ? ex.ReasonFa : null) ?? ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+        catch (LowDiskRefusedException ex)
+        {
+            TempData["Error"] = (isFa ? ex.ReasonFa : null) ?? ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+        catch (InvalidOperationException ex)
+        {
+            // The self-approval refusal and "already decided" both land here — DeploymentApprovalPlan
+            // names the reason, so the message is already the right sentence to show as-is.
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        TempData["Message"] = isFa
+            ? $"استقرار #{row.Number} تأیید شد و اکنون در صف قرار گرفت."
+            : $"Deployment #{row.Number} was approved and is now queued.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// Rejects a deployment waiting on a protected environment's gate (5.2). Ends it Cancelled, with
+    /// the reason recorded on the approval row — see <c>DeploymentEngine.RejectAsync</c>.
+    /// </summary>
+    [HttpPost("/deployments/{id:guid}/reject")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsDeploy)]
+    public async Task<IActionResult> Reject(Guid id, string? reason, CancellationToken ct)
+    {
+        var row = await db.Deployments.AsNoTracking()
+            .Where(d => d.Id == id && d.App!.WorkspaceId == WorkspaceId)
+            .Select(d => new { d.AppId, d.Number })
+            .FirstOrDefaultAsync(ct);
+        if (row is null) return NotFound();
+        if (!await access.CanTouchAppAsync(row.AppId, Capabilities.AppsDeploy, ct)) return Forbid();
+
+        var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            TempData["Error"] = isFa
+                ? "رد کردن یک استقرار باید دلیل داشته باشد."
+                : "A rejection needs a reason.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        try
+        {
+            await deployEngine.RejectAsync(id, currentUser.UserId ?? Guid.Empty, reason.Trim(), ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            TempData["Error"] = ex.Message;
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        TempData["Message"] = isFa
+            ? $"استقرار #{row.Number} رد شد."
+            : $"Deployment #{row.Number} was rejected.";
+        return RedirectToAction(nameof(Details), new { id });
+    }
 
     /// <summary>
     /// Retries a failed deployment (P6, 2026-08-17 app-environment-management design). Gated on
@@ -336,7 +464,16 @@ public sealed class DeploymentsController(
         }
 
         await audit.LogAsync("app.promote", "app", target.Id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
-        TempData["Message"] = $"Promoting {source.Value.Plan.ImageTag} to {target.Name}.";
+
+        // 5.2: a promotion is an ordinary QueueDeploymentAsync call, so a protected target gates it
+        // exactly like any other deploy — read back here only to say which one happened, not to
+        // decide it a second time.
+        var promotedStatus = await db.Deployments.AsNoTracking()
+            .Where(d => d.Id == deploymentId).Select(d => d.Status).FirstOrDefaultAsync(ct);
+        TempData["Message"] = promotedStatus == DeploymentStatus.PendingApproval
+            ? $"{target.Name} is a protected environment — promoting {source.Value.Plan.ImageTag} " +
+              "there is waiting on a second person to approve it."
+            : $"Promoting {source.Value.Plan.ImageTag} to {target.Name}.";
         return RedirectToAction(nameof(Details), new { id = deploymentId });
     }
 

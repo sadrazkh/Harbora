@@ -128,6 +128,11 @@ public static class DependencyInjection
         // Deployment engine
         services.AddScoped<IDeploymentEngine, DeploymentEngine>();
         services.AddScoped<DeploymentPipeline>();
+        // 5.2 (2026-09 market-gaps round two): approval gate on deploying to a protected environment.
+        services.Configure<Deployments.DeploymentApprovalOptions>(
+            config.GetSection(Deployments.DeploymentApprovalOptions.SectionName));
+        services.AddScoped<Deployments.DeploymentApproverFinder>();
+        services.AddHostedService<Deployments.DeploymentApprovalExpirySweeper>();
         services.AddScoped<IAppOperationsService, AppOperationsService>();
         services.AddScoped<IRollbackPlanner, Deployments.RollbackPlanner>();
         // Remote-node host ports are reserved, not guessed (see HostPortRange).

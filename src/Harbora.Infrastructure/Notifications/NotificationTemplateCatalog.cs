@@ -153,6 +153,14 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
             $"اُپ در دسترس نیست: {d.Get("AppName")}",
             $"بررسی دوره‌ای «{d.Get("AppName")}» ناموفق بود.\n\n{d.Get("Detail")}"),
 
+        // 5.2 (2026-09 market-gaps round two): DeploymentEngine.QueueDeploymentAsync raises this the
+        // moment a deploy to a protected environment enters PendingApproval — before any approver has
+        // looked at it, so there is no "who decided" fact to name yet, only what is waiting.
+        AlertEvent.DeploymentPendingApproval => (
+            $"در انتظار تأیید: {d.Get("AppName")} #{d.Get("DeploymentNumber")}",
+            $"استقرار «{d.Get("AppName")}» (#{d.Get("DeploymentNumber")}) روی محیط محافظت‌شدهٔ " +
+            $"«{d.Get("EnvironmentName")}» در انتظار تأیید یک فرد دیگر است."),
+
         // Not composed from a machine fact like every template above it — the operator's own words,
         // written in Announcement.TitleFa/BodyFa and handed over verbatim. AnnouncementNotifier is the
         // one raise site for this event, and it always sets both language pairs, so there is no
@@ -204,6 +212,11 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
         AlertEvent.UptimeCheckFailed => (
             $"App unreachable: {d.Get("AppName")}",
             $"The periodic check for \"{d.Get("AppName")}\" failed.\n\n{d.Get("Detail")}"),
+
+        AlertEvent.DeploymentPendingApproval => (
+            $"Awaiting approval: {d.Get("AppName")} #{d.Get("DeploymentNumber")}",
+            $"The deployment of \"{d.Get("AppName")}\" (#{d.Get("DeploymentNumber")}) to the protected " +
+            $"environment \"{d.Get("EnvironmentName")}\" is waiting for a second person to approve it."),
 
         AlertEvent.PlatformAnnouncement => (d.Get("Title"), d.Get("Body")),
 

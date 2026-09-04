@@ -35,6 +35,8 @@ public class GitWebhookScopeTests
             Task.FromResult(Guid.CreateVersion7());
 
         public Task CancelAsync(Guid deploymentId, CancellationToken ct) => Task.CompletedTask;
+        public Task ApproveAsync(Guid deploymentId, Guid approverUserId, CancellationToken ct) => Task.CompletedTask;
+        public Task RejectAsync(Guid deploymentId, Guid approverUserId, string reason, CancellationToken ct) => Task.CompletedTask;
     }
 
     [Fact]

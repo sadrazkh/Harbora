@@ -82,7 +82,19 @@ public enum DeploymentStatus
     RolledBack = 7,
     // Appended (value 8) so existing persisted values stay stable. Sits logically between
     // Deploying and Succeeded: the new container is up and being health-probed before cutover.
-    HealthChecking = 8
+    HealthChecking = 8,
+
+    /// <summary>
+    /// Waiting on a second person (5.2, 2026-09 market-gaps round two, "approval gate on deploying
+    /// to a protected environment"). Set instead of <see cref="Queued"/> when the target
+    /// <c>Environment.IsProtected</c> — the deployment row exists and is visible in every list the
+    /// moment it is requested, but no <c>Job</c> is enqueued for it and the engine never sees it
+    /// until <c>DeploymentApproval.Decision</c> turns <c>Approved</c>. Deliberately excluded from
+    /// <see cref="Harbora.Domain.Deployments.DeploymentStateMachine.InFlight"/> — see that class's
+    /// own doc for why a restart must never treat a pending approval as stranded work to fail.
+    /// Appended, never renumbered.
+    /// </summary>
+    PendingApproval = 9
 }
 
 public enum DeploymentTrigger
@@ -343,7 +355,21 @@ public enum AlertEvent
     /// <c>Harbora.Infrastructure.Monitoring.UptimeChecker</c> for where that is decided.
     /// </para>
     /// </summary>
-    UptimeCheckFailed = 11
+    UptimeCheckFailed = 11,
+
+    /// <summary>
+    /// A deploy to a protected environment is waiting on a second person (5.2, 2026-09 market-gaps
+    /// round two). Appended, for the same reason as the members above it.
+    ///
+    /// <para>
+    /// Carries no per-rule opt-in flag and matches every rule unconditionally — see
+    /// <c>NotificationService.Matches</c> — for the same reasoning as
+    /// <see cref="ServiceProvisionFailed"/>: there is no existing checkbox this cleanly fits, and a
+    /// pending approval nobody was told about is a deploy that silently never happens, which is
+    /// worse than one more line in an inbox nobody muted on purpose.
+    /// </para>
+    /// </summary>
+    DeploymentPendingApproval = 12
 }
 
 /// <summary>
