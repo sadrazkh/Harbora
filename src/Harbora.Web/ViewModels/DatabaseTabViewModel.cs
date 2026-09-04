@@ -189,6 +189,28 @@ public sealed class DatabaseOverviewViewModel : DatabaseTabViewModel
     /// <see cref="RedisMemoryPolicyUnpublished"/> already reads the very same field for Redis.
     /// </summary>
     public bool PgVectorUnpublished { get; init; }
+
+    /// <summary>
+    /// 3.1 (round-2 market-gaps plan): whether this PostgreSQL instance is set to archive its WAL for
+    /// point-in-time recovery — <c>ManagedService.PitrEnabled</c> verbatim. Always false for every
+    /// other engine (<c>PitrSupport.Supports</c>).
+    /// </summary>
+    public bool PitrEnabled { get; init; }
+
+    /// <summary>
+    /// Whether turning PITR on (or off) here has reached the running container's command line yet —
+    /// the same <c>HasUnpublishedChanges</c> idiom <see cref="PgVectorUnpublished"/> already reads.
+    /// While true, the panel must never show archiving as active — a green badge for a probe that
+    /// never fired is exactly the defect class this whole feature guards against.
+    /// </summary>
+    public bool PitrUnpublished { get; init; }
+
+    /// <summary>
+    /// The honestly-computed recoverable window, right now — never cached, never optimistic. See
+    /// <c>PitrRecoveryWindow</c> for what each <c>Status</c> means and why a failing archive shrinks
+    /// <c>LatestPoint</c> instead of hiding the failure behind "now".
+    /// </summary>
+    public Harbora.Infrastructure.Backups.PitrWindow? PitrWindow { get; init; }
 }
 
 /// <summary>

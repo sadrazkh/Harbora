@@ -615,6 +615,15 @@ public class StartPathCensusTests
         ["src/Harbora.Infrastructure/Backups/BackupEngine.cs"] =
             "backup and restore helpers, plus the restart of the database container it stopped itself " +
             "to restore into — a customer must be able to get their data out of a suspended workspace",
+        ["src/Harbora.Infrastructure/Backups/PitrRestoreService.cs"] =
+            "point-in-time recovery (3.1, round-2 market-gaps plan): a throwaway scratch instance " +
+            "built from a base backup and WAL the customer already paid to take and store, torn down " +
+            "the moment its recovered data is dumped out — the same reasoning BackupEngine's own " +
+            "restore helpers above already carry, just replaying further back in time first",
+        ["src/Harbora.Infrastructure/Backups/WalArchiveShipper.cs"] =
+            "point-in-time recovery (3.1, round-2 market-gaps plan): one-off helpers that list, copy " +
+            "and prune WAL segments an already-running, already-billed database produced — it starts " +
+            "no workload of its own, only moves files an existing container already wrote",
         ["src/Harbora.Infrastructure/Backups/BackupStorage.cs"] =
             "moves an existing backup artifact between volumes and destinations",
         ["src/Harbora.Infrastructure/Backups/UpgradeSafetyService.cs"] =

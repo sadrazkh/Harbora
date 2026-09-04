@@ -46,7 +46,10 @@ public sealed partial class DatabasesController(
     IDeploymentEngine deploymentEngine,
     IBackupEngine backupEngine,
     Harbora.Infrastructure.Backups.BackupDownloadTokens downloadTokens,
-    IServerEngineFactory engines) : Controller
+    IServerEngineFactory engines,
+    Harbora.Infrastructure.Backups.WalArchivingService walArchiving,
+    Harbora.Infrastructure.Backups.PitrRestoreService pitrRestore,
+    Harbora.Application.Abstractions.ISystemClock clock) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 
@@ -280,7 +283,15 @@ public sealed partial class DatabasesController(
                 ? null : Harbora.Infrastructure.Services.DatabaseGrantSql.UnsupportedReason(service.Type),
             CanManageLogicalDatabasesLocally = logicalDatabases.CanCreateLocally,
             PgVectorEnabled = service.PgVectorEnabled,
-            PgVectorUnpublished = service.HasUnpublishedChanges
+            PgVectorUnpublished = service.HasUnpublishedChanges,
+            // 3.1 (round-2 market-gaps plan): computed fresh on every render, never cached — a stale
+            // "window" is exactly the "green dot for a probe that never fired" defect this feature
+            // exists to refuse. Only meaningful for PostgreSQL; PitrSupport.Supports gates the panel.
+            PitrEnabled = service.PitrEnabled,
+            PitrUnpublished = service.HasUnpublishedChanges,
+            PitrWindow = Harbora.Infrastructure.Backups.PitrSupport.Supports(service.Type)
+                ? await walArchiving.RecoveryWindowAsync(service.Id, clock.UtcNow, ct)
+                : null
         };
     }
 

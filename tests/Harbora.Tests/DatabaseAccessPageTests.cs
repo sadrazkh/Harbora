@@ -182,7 +182,11 @@ public class DatabaseAccessPageTests
             // Sub-project 10's export/import actions are not exercised by these access-page tests.
             backupEngine: null!,
             downloadTokens: null!,
-            engines: engines)
+            engines: engines,
+            // 3.1's PITR toggle/restore actions are not exercised by these access-page tests either.
+            walArchiving: null!,
+            pitrRestore: null!,
+            clock: clock)
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };
@@ -262,7 +266,11 @@ public class DatabaseAccessPageTests
             downloadTokens: null!,
             // No local reach fixture: a database placed on any server is equally "elsewhere" for a
             // bare local engine, which is what these tests are about in the first place.
-            engines: new FakeServerEngineFactory(new FakeDockerEngine()))
+            engines: new FakeServerEngineFactory(new FakeDockerEngine()),
+            // 3.1's PITR toggle/restore actions are not exercised by these access-page tests either.
+            walArchiving: null!,
+            pitrRestore: null!,
+            clock: new Clock())
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };

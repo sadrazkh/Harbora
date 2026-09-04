@@ -129,6 +129,11 @@ public sealed class BackupEngine(
                 BackupType.AppConfig => await BackupAppConfigAsync(backup, stamp, ct),
                 BackupType.FullPlatform => await BackupPlatformAsync(backup, stamp, ct),
                 BackupType.Database or BackupType.Service => await BackupDatabaseAsync(backup, stamp, ct),
+                // 3.1 (round-2 market-gaps plan): pg_basebackup's own tar, not a logical dump — the
+                // anchor point-in-time recovery replays WAL forward from. Everything after this line
+                // (encryption, checksum, storage.PutFileAsync, delivery, retention) is the same
+                // machinery every other backup type already runs through; only the producer differs.
+                BackupType.PostgresBaseBackup => await BackupPostgresBaseAsync(backup, stamp, ct),
                 _ => await BackupVolumeAsync(backup, stamp, ct)
             });
 
@@ -306,6 +311,68 @@ public sealed class BackupEngine(
         return (key, staged);
     }
 
+    /// <summary>
+    /// Takes a PostgreSQL physical base backup (3.1, round-2 market-gaps plan) — a
+    /// <see cref="PostgresBaseBackupPlan"/> run, staged, encrypted, checksummed, stored, delivered
+    /// and retained through exactly the same code below <see cref="RunAsync"/>'s producer switch that
+    /// every other backup type already goes through. Only the command differs from
+    /// <see cref="BackupDatabaseAsync"/>'s own <c>pg_dump</c>; scheduling, destinations and retention
+    /// are not duplicated a second time.
+    /// </summary>
+    private async Task<(string Key, string Path)> BackupPostgresBaseAsync(Backup backup, string stamp, CancellationToken ct)
+    {
+        var svc = await db.ManagedServices.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == Guid.Parse(backup.TargetRef), ct);
+        if (svc is null) throw new InvalidOperationException("That database no longer exists.");
+
+        // Refused by name — never a Postgres-shaped command attempted against an engine that cannot
+        // honour it. MySQL/MariaDB base backups (binlog PITR) are an explicit follow-on, not this.
+        if (!PitrSupport.Supports(svc.Type))
+            throw new InvalidOperationException(PitrSupport.UnsupportedReason(svc.Type));
+
+        var definition = Services.ServiceCatalog.All[svc.Type];
+        // The instance's own admin login — a base backup is a physical copy of the WHOLE cluster,
+        // so there is no per-logical-database variant the way BackupDatabaseAsync's pg_dump has.
+        var creds = new Services.ServiceCreds(
+            svc.ContainerName, definition.Port, svc.Username, RevealPassword(svc.EncryptedPassword), svc.DatabaseName);
+
+        var key = $"basebackup-{svc.Name}-{stamp}";
+        var plan = PostgresBaseBackupPlan.For(svc.Type, creds, $"/backup/{key}")!;
+        key += plan.FileExtension;
+        plan = PostgresBaseBackupPlan.For(svc.Type, creds, $"/backup/{key}")!;
+
+        // Run from the database's own image, so pg_basebackup's client version matches the server —
+        // the same reasoning BackupDatabaseAsync's own comment gives for pg_dump.
+        var image = $"{definition.ImageRepo}:{svc.Version}";
+        var wsSlug = await db.Workspaces.Where(w => w.Id == svc.WorkspaceId).Select(w => w.Slug).FirstAsync(ct);
+        var environmentNetwork = await Networking.EnvironmentNetworkResolver.ForAsync(db, svc.EnvironmentId, ct);
+        var network = Networking.NetworkPlan.Primary(environmentNetwork, _runtime.WorkspaceNetwork(wsSlug));
+
+        var docker = RequireCapableHost(await HostForServiceAsync(svc, ct), "have a base backup taken");
+
+        var output = new System.Text.StringBuilder();
+        var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
+            image,
+            plan.Command,
+            [(_opt.StagingVolume, "/backup", false)],
+            Env: plan.Env,
+            NetworkMode: network),
+            new Deployments.InlineProgress<string>(line => { lock (output) output.AppendLine(line); }), ct);
+
+        if (exit != 0)
+            throw new InvalidOperationException(
+                $"The base backup failed (exit {exit}). {Deployments.LogText.Clean(output.ToString()).Trim()}");
+
+        var staged = Path.Combine(_opt.StagingDir, key);
+        if (!File.Exists(staged))
+            throw new InvalidOperationException(
+                $"The base backup reported success but no file arrived at {staged}. The helper mounts " +
+                $"the volume '{_opt.StagingVolume}' while the panel reads {_opt.StagingDir}; check that " +
+                "both resolve to the SAME docker volume (`docker volume ls`).");
+
+        return (key, staged);
+    }
+
     private async Task<(string Key, string Path)> BackupVolumeAsync(Backup backup, string stamp, CancellationToken ct)
     {
         var (volumeName, label) = await ResolveVolumeAsync(backup.Type, backup.TargetRef, ct);
@@ -339,7 +406,13 @@ public sealed class BackupEngine(
     private async Task<(string Key, string Path)?> TryBackupNodeAsync(
         Backup backup, string stamp, CancellationToken ct)
     {
-        if (backup.Type is BackupType.AppConfig or BackupType.FullPlatform) return null;
+        // PostgresBaseBackup excluded alongside AppConfig/FullPlatform for a different reason than
+        // either: a raw volume snapshot of a LIVE data directory is exactly the torn-write risk
+        // BackupDatabaseAsync's own class doc warns about for an ordinary database backup — no
+        // START/STOP BACKUP bracketing happened around it, so it carries no valid backup_label a
+        // recovery could replay WAL onto. A base backup is only ever pg_basebackup's own output.
+        if (backup.Type is BackupType.AppConfig or BackupType.FullPlatform or BackupType.PostgresBaseBackup)
+            return null;
 
         var host = await HostForAsync(backup.Type, backup.TargetRef, ct);
         if (host.Docker is not Nodes.NodeWorkloadEngine node) return null;
@@ -400,6 +473,18 @@ public sealed class BackupEngine(
         if (target is not null && backup.Type is not (BackupType.Database or BackupType.Service))
             throw new InvalidOperationException(
                 "Restoring into a different target is only supported for database backups.");
+
+        // 3.1 (round-2 market-gaps plan): refused here, before any docker call, before ANY read of
+        // the artifact — a base backup is a cold copy of a whole data directory, not something psql
+        // or a plain untar can put back on its own; it only means something once WAL is replayed
+        // forward onto it to a chosen moment. PitrRestoreService.RestoreToTimestampAsync is the only
+        // path that ever restores one. Falling through to the volume-restore branch below would
+        // otherwise treat backup.TargetRef — a ManagedService id — as if it were a raw docker volume
+        // name, and untar a Postgres data directory over whatever that happened to resolve to.
+        if (backup.Type is BackupType.PostgresBaseBackup)
+            throw new InvalidOperationException(
+                "A base backup cannot be restored on its own — it needs WAL replayed forward from it " +
+                "to reach a consistent, usable point. Use \"Restore to a point in time\" instead.");
 
         var fetched = await storage.GetToLocalAsync(backup.Destination!, backup.ArtifactPath, ct);
 
@@ -786,6 +871,51 @@ public sealed class BackupEngine(
             }
         }
         await db.SaveChangesAsync(ct);
+
+        // 3.1 (round-2 market-gaps plan): after base-backup retention above has actually run, not
+        // before — see EnforceWalRetentionAsync's own doc for why the ordering matters.
+        await EnforceWalRetentionAsync(ct);
+    }
+
+    /// <summary>
+    /// Prunes <see cref="WalSegment"/> rows for every PostgreSQL instance, anchored to whichever
+    /// <see cref="BackupType.PostgresBaseBackup"/> rows the retention pass just above this decided to
+    /// KEEP — read fresh, after that pass has already run and saved, never computed independently of
+    /// it. Tying WAL retention to base-backup retention this way is what stops a WAL prune from ever
+    /// orphaning a base backup: the oldest segment kept can never be newer than the oldest base backup
+    /// still on file, because that base backup's own <see cref="Backup.FinishedAt"/> is exactly the
+    /// floor this uses.
+    ///
+    /// <para>
+    /// An instance with NO base backup on file yet gets no WAL pruning at all — there is nothing safe
+    /// to anchor "everything before this is unreachable" to, and pruning anyway would strand every
+    /// future base backup with no WAL left to replay onto it once one finally exists. Conservative on
+    /// purpose: keeping WAL too long costs storage; deleting it too early costs a restore.
+    /// </para>
+    /// </summary>
+    private async Task EnforceWalRetentionAsync(CancellationToken ct)
+    {
+        var floors = await db.Backups.AsNoTracking()
+            .Where(b => b.Type == BackupType.PostgresBaseBackup && b.Status == BackupStatus.Completed)
+            .GroupBy(b => new { b.WorkspaceId, b.TargetRef })
+            .Select(g => new { g.Key.WorkspaceId, g.Key.TargetRef, Floor = g.Min(b => b.FinishedAt) })
+            .ToListAsync(ct);
+        var floorByService = floors.ToDictionary(
+            f => (f.WorkspaceId, f.TargetRef), f => f.Floor, EqualityComparer<(Guid, string)>.Default);
+
+        var segments = await db.WalSegments.Include(w => w.Destination).ToListAsync(ct);
+        var stale = segments.Where(s =>
+                floorByService.TryGetValue((s.WorkspaceId, s.ManagedServiceId.ToString()), out var floor)
+                && s.ArchivedAt < floor)
+            .ToList();
+
+        foreach (var segment in stale)
+        {
+            try { if (segment.Destination is not null) await storage.DeleteAsync(segment.Destination, segment.ArtifactPath, ct); }
+            catch (Exception ex) { logger.LogWarning(ex, "Failed to delete WAL segment artifact {Id}.", segment.Id); }
+            db.WalSegments.Remove(segment);
+        }
+        if (stale.Count > 0) await db.SaveChangesAsync(ct);
     }
 
     /// <inheritdoc />

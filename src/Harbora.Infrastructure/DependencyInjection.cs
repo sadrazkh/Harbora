@@ -202,6 +202,17 @@ public static class DependencyInjection
         // afternoon rather than during an incident.
         services.AddHostedService<Backups.BackupVerifier>();
 
+        // 3.1 (round-2 market-gaps plan): point-in-time recovery for PostgreSQL — the WAL-archiving
+        // toggle/window (WalArchivingService), the shipper that actually moves segments off the
+        // instance on a tick of its own (WalArchiveShipper), and the restore-to-timestamp orchestration
+        // (PitrRestoreService). All three sit beside BackupEngine rather than inside it: PITR reuses
+        // BackupEngine's scheduling/destinations/retention/delivery for the base backup itself
+        // (BackupType.PostgresBaseBackup), but WAL shipping runs on its own cadence, independent of
+        // when a base backup last completed.
+        services.AddScoped<Backups.WalArchivingService>();
+        services.AddScoped<Backups.PitrRestoreService>();
+        services.AddHostedService<Backups.WalArchiveShipper>();
+
         // What the dashboard opens with: findings a person can act on, from stored facts only.
         services.AddScoped<Dashboard.AttentionService>();
 

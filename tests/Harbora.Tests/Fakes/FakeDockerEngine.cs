@@ -547,12 +547,24 @@ public sealed class FakeDockerEngine : IDockerEngine
         return Task.FromResult<IReadOnlyList<VolumeInfo>>(_volumes.Values.ToList());
     }
 
+    /// <summary>
+    /// Runs after a one-off is recorded but before its exit code is decided — an opt-in escape hatch
+    /// for a caller whose real container would have written a file onto the shared staging volume
+    /// that the panel-side code then checks for (<c>BackupDatabaseAsync</c>'s own "the helper mounts
+    /// the volume by name, the panel reads it by path" comment is the general shape). This fake has
+    /// no real filesystem side effects of its own — a test that needs one sets this rather than the
+    /// production code losing its `File.Exists` safety check to make a fake pass. Null by default, so
+    /// every existing test is unaffected.
+    /// </summary>
+    public Action<DockerOneOffRequest>? OnOneOff { get; set; }
+
     public async Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         Record(nameof(RunOneOffAsync), request.Image);
         OneOffCommands.Add(string.Join(' ', request.Command));
         OneOffRequests.Add(request);
+        OnOneOff?.Invoke(request);
 
         foreach (var line in OneOffOutput) log?.Report(line);
 

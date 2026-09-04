@@ -195,7 +195,17 @@ public enum BackupType
     Volume = 1,
     AppConfig = 2,
     FullPlatform = 3,
-    Service = 4
+    Service = 4,
+
+    /// <summary>
+    /// A PostgreSQL physical base backup (3.1, round-2 market-gaps plan) — <c>pg_basebackup</c>'s own
+    /// tar output, not a logical dump. It exists to be the WAL-replay anchor point-in-time recovery
+    /// replays forward from; a base backup on its own restores the instance as of the moment it was
+    /// taken, exactly like <see cref="Database"/>/<see cref="Service"/> already do for a logical dump.
+    /// Appended, for the same reason as the value above it — never renumber; see this enum's own
+    /// class doc on why insertion or reordering silently breaks the job queue's exclusivity key.
+    /// </summary>
+    PostgresBaseBackup = 5
 }
 
 public enum BackupStatus

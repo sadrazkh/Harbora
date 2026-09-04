@@ -125,8 +125,10 @@ public class BackupRunIdentityTests
         ((int)BackupType.AppConfig).Should().Be(2);
         ((int)BackupType.FullPlatform).Should().Be(3);
         ((int)BackupType.Service).Should().Be(4);
+        // 3.1 (round-2 market-gaps plan): appended, never inserted — see this test's own doc above.
+        ((int)BackupType.PostgresBaseBackup).Should().Be(5);
 
-        Enum.GetValues<BackupType>().Length.Should().Be(5,
+        Enum.GetValues<BackupType>().Length.Should().Be(6,
             "a new member is welcome — appended, with its own line above, so the next person to " +
             "reorder them has to delete an assertion rather than merely not read a comment");
     }

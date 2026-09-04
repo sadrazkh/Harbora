@@ -620,6 +620,122 @@ else if (moving)
             <partial name="Design/_PanelEnd" />
         }
 
+        @if (db.Type == ManagedServiceType.PostgreSql)
+        {
+            @* 3.1 (round-2 market-gaps plan): WAL archiving + point-in-time recovery. Same "applies on
+               next rebuild" idiom as pgvector above — wal_level/archive_mode/archive_command are only
+               read at PostgreSQL startup, so this only ever stores the request until a rebuild happens.
+               PitrWindow is computed fresh on every render (WalArchivingService.RecoveryWindowAsync) —
+               never cached, never optimistic: a stale "window" is exactly the "green dot for a probe
+               that never fired" defect this feature exists to refuse. *@
+            var pitrPanel = new PanelModel(isFa ? "بازیابی در یک لحظهٔ مشخص (PITR)" : "Point-in-time recovery (PITR)");
+            <partial name="Design/_PanelStart" model="pitrPanel" />
+
+            <p class="mb-3 text-xs leading-5 text-ink-faint">
+                @(isFa
+                    ? "با روشن کردن این گزینه، Harbora فایل‌های WAL این نمونه را در محل ذخیرهٔ شیء آرشیو می‌کند تا بتوانید آن را به هر لحظه‌ای در گذشته بازیابی کنید، نه فقط تا آخرین پشتیبان زمان‌بندی‌شده."
+                    : "Turns on WAL archiving into object storage, so this instance can be restored to any moment in the past — not only to the last scheduled backup.")
+            </p>
+
+            var pitrWindow = Model.PitrWindow;
+            var pitrState = !Model.PitrEnabled ? "off"
+                : Model.PitrUnpublished ? "pending-restart"
+                : pitrWindow?.Status == PitrStatus.Degraded ? "degraded"
+                : pitrWindow?.Status == PitrStatus.Healthy ? "healthy"
+                : "not-yet-recoverable";
+
+            <dl class="mb-3 space-y-1 text-xs" data-pitr-instance-state="@pitrState">
+                <div class="flex justify-between gap-2">
+                    <dt class="text-ink-faint">@(isFa ? "وضعیت درخواستی" : "Requested state")</dt>
+                    <dd class="text-ink">@(Model.PitrEnabled ? (isFa ? "روشن" : "On") : (isFa ? "خاموش" : "Off"))</dd>
+                </div>
+                @if (Model.PitrEnabled)
+                {
+                    <div class="flex justify-between gap-2">
+                        <dt class="text-ink-faint">@(isFa ? "بازهٔ قابل بازیابی" : "Recoverable window")</dt>
+                        <dd class="text-ink"
+                            data-pitr-window-state="@(pitrWindow is { HasRecoverableWindow: true } ? "has-data" : Model.PitrUnpublished ? "not-measured" : "empty")">
+                            @if (pitrWindow is { HasRecoverableWindow: true })
+                            {
+                                <span dir="ltr" class="font-mono">
+                                    @pitrWindow.EarliestPoint!.Value.LocalDateTime.ToString(Dates.Stamp) – @pitrWindow.LatestPoint!.Value.LocalDateTime.ToString(Dates.Stamp)
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="text-ink-faint">@(isFa ? "هنوز چیزی برای بازیابی نیست" : "nothing recoverable yet")</span>
+                            }
+                        </dd>
+                    </div>
+                }
+            </dl>
+
+            @if (Model.PitrEnabled && Model.PitrUnpublished)
+            {
+                <p class="mb-3 text-[11px] leading-4 text-warn" data-pitr-unpublished>
+                    @(isFa
+                        ? "روشن شد، ولی هنوز روی کانتینر در حال اجرا اعمال نشده — برای شروع آرشیو WAL، کانتینر را بازسازی کنید."
+                        : "Turned on, but not yet applied to the running container — rebuild it to start WAL archiving.")
+                </p>
+            }
+            else if (pitrWindow?.Status == PitrStatus.Degraded)
+            {
+                <p class="mb-3 text-[11px] leading-4 text-warn" data-pitr-degraded>
+                    @* PitrRecoveryWindow.Compute's own sentence — the operator-facing "archiving has
+                       been failing for Xh; the point you can restore to is stuck at Y" wording lives
+                       there once, not re-derived here. *@
+                    @pitrWindow.Message
+                </p>
+            }
+
+            @if (Model.CanManage)
+            {
+                <form asp-action="Pitr" asp-route-id="@db.Id" method="post" data-pitr-form>
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="enable" value="@(!Model.PitrEnabled).ToString().ToLowerInvariant()" />
+                    <button class="btn-secondary w-full justify-center py-2 text-sm"
+                            data-pitr-toggle="@(Model.PitrEnabled ? "off" : "on")">
+                        @(Model.PitrEnabled
+                            ? (isFa ? "خاموش کردن آرشیو WAL" : "Turn WAL archiving off")
+                            : (isFa ? "روشن کردن آرشیو WAL" : "Turn WAL archiving on"))
+                    </button>
+                </form>
+                <p class="mt-2 text-[11px] leading-4 text-ink-faint">
+                    @(isFa
+                        ? "فقط اینجا ذخیره می‌شود؛ آرشیو با بازسازی بعدیِ کانتینر آغاز می‌شود."
+                        : "Only saved here; WAL archiving starts on the container's next rebuild.")
+                </p>
+
+                @if (pitrWindow is { HasRecoverableWindow: true })
+                {
+                    <form asp-action="PitrRestore" asp-route-id="@db.Id" method="post" class="mt-4 space-y-2" data-pitr-restore-form>
+                        @Html.AntiForgeryToken()
+                        <label class="block text-[11px] text-ink-faint" for="pitr-target">
+                            @(isFa ? "بازیابی تا این لحظه" : "Restore to this moment")
+                        </label>
+                        <input type="datetime-local" id="pitr-target" class="input w-full text-xs" dir="ltr"
+                               min="@Dates.LocalInputValue(pitrWindow.EarliestPoint)"
+                               max="@Dates.LocalInputValue(pitrWindow.LatestPoint)"
+                               value="@Dates.LocalInputValue(pitrWindow.LatestPoint)" />
+                        @* Populated by the inline script in @section Scripts below, right before submit
+                           — carried as a plain int unix timestamp, never a date string, across the
+                           redirect this action ends with (TempData re-types a date-shaped string). *@
+                        <input type="hidden" name="targetUnixSeconds" data-pitr-target-unix />
+                        <button type="submit" class="btn-secondary w-full justify-center py-2 text-sm" data-pitr-restore-submit>
+                            @(isFa ? "بازیابی به‌عنوان پایگاه‌دادهٔ جدید" : "Restore into a new database")
+                        </button>
+                        <p class="text-[11px] leading-4 text-ink-faint">
+                            @(isFa
+                                ? "یک پایگاه‌دادهٔ منطقی جدید می‌سازد؛ آنچه اکنون در حال اجراست دست‌نخورده می‌ماند."
+                                : "Creates a brand-new logical database; nothing currently running is touched.")
+                        </p>
+                    </form>
+                }
+            }
+
+            <partial name="Design/_PanelEnd" />
+        }
+
         @{ var attachPanel = new PanelModel(T["Attach to app"].Value); }
         <partial name="Design/_PanelStart" model="attachPanel" />
 
@@ -749,6 +865,21 @@ else if (moving)
         if (!button || !code) return;
         button.addEventListener('click', function () {
             navigator.clipboard?.writeText(code.textContent.trim());
+        });
+    })();
+    (function () {
+        // 3.1 (round-2 market-gaps plan): the browser is the only party that knows which timezone the
+        // picked datetime-local value is actually in — converted to a plain unix-seconds integer here,
+        // never a date string, so the server side never has to guess an offset and TempData never has
+        // a date-shaped string to re-type on the redirect this form's action ends with.
+        var form = document.querySelector('[data-pitr-restore-form]');
+        if (!form) return;
+        var picker = document.getElementById('pitr-target');
+        var hidden = form.querySelector('[data-pitr-target-unix]');
+        form.addEventListener('submit', function (e) {
+            var picked = picker && picker.value ? new Date(picker.value) : null;
+            if (!picked || isNaN(picked.getTime()) || !hidden) { e.preventDefault(); return; }
+            hidden.value = Math.floor(picked.getTime() / 1000);
         });
     })();
 </script>

@@ -101,6 +101,12 @@ public class HarboraDbContext : DbContext
     public DbSet<BackupDownloadToken> BackupDownloadTokens => Set<BackupDownloadToken>();
     public DbSet<BackupSchedule> BackupSchedules => Set<BackupSchedule>();
     public DbSet<BackupDelivery> BackupDeliveries => Set<BackupDelivery>();
+    /// <summary>PITR archiving health, one row per PostgreSQL instance that has ever turned it on
+    /// (3.1, round-2 market-gaps plan) — see <see cref="Harbora.Domain.Backups.WalArchivingStatus"/>.</summary>
+    public DbSet<Harbora.Domain.Backups.WalArchivingStatus> WalArchivingStatuses => Set<Harbora.Domain.Backups.WalArchivingStatus>();
+    /// <summary>Every WAL segment Harbora has shipped to object storage — see
+    /// <see cref="Harbora.Domain.Backups.WalSegment"/>.</summary>
+    public DbSet<Harbora.Domain.Backups.WalSegment> WalSegments => Set<Harbora.Domain.Backups.WalSegment>();
     public DbSet<MailServer> MailServers => Set<MailServer>();
     public DbSet<MailDomain> MailDomains => Set<MailDomain>();
     public DbSet<MailMailbox> MailMailboxes => Set<MailMailbox>();
@@ -905,6 +911,31 @@ public class HarboraDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        // --- point-in-time recovery (3.1, round-2 market-gaps plan) ---
+        // Cascade on the ManagedService side for both: neither means anything once the instance they
+        // describe is gone, the same reasoning ManagedServiceDatabase's own Cascade above already
+        // gives. No navigation back onto ManagedService — the instance is looked up by id where
+        // needed, the same loose-reference shape Backup.TargetRef already uses.
+        b.Entity<Harbora.Domain.Backups.WalArchivingStatus>(e =>
+        {
+            e.HasIndex(x => x.ManagedServiceId).IsUnique();
+            e.HasOne<ManagedService>().WithMany().HasForeignKey(x => x.ManagedServiceId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+        b.Entity<Harbora.Domain.Backups.WalSegment>(e =>
+        {
+            e.HasIndex(x => new { x.ManagedServiceId, x.ArchivedAt });
+            e.HasOne<ManagedService>().WithMany().HasForeignKey(x => x.ManagedServiceId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // Restrict, not Cascade: deleting a destination must not silently take a workspace's WAL
+            // history out with it. BackupManagementActions.DeleteDestination already refuses at the
+            // application layer while ordinary Backups or BackupSchedules reference a destination —
+            // this is the DB-level backstop for the same idea, on the one row here that does carry a
+            // real foreign key rather than Backup's own loose DestinationId.
+            e.HasOne(x => x.Destination).WithMany().HasForeignKey(x => x.DestinationId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
         // --- file overrides (C2, 2026-08-22 config-delivery plan) ---
         // Cascade on the app side, and no other side to restrict against: a rule is not a shared
         // thing another app could also point at (unlike ConfigGroup/StorageBucket/EmailProvider),
@@ -1448,6 +1479,10 @@ public class HarboraDbContext : DbContext
         b.Entity<Backup>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<BackupDestination>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<BackupSchedule>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        // 3.1 (round-2 market-gaps plan): PITR's own two rows, filtered exactly like the four above —
+        // a workspace's WAL health and archived segments are as tenant-scoped as its ordinary backups.
+        b.Entity<Harbora.Domain.Backups.WalArchivingStatus>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Backups.WalSegment>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
 
         // Backup module. Each carries its own WorkspaceId rather than being filtered through its
         // parent, for the reason spelled out on Deployment below: a navigation filter over a

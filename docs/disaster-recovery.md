@@ -59,6 +59,26 @@ are in.
 | **Volume** / **Database** | The volume's contents, or a logical dump (`pg_dump`, `mysqldump`, `mongodump`; Redis keeps its own snapshot file, so its volume is copied instead) | Yes, with a typed confirmation |
 | **Full platform** | A JSON *description* — settings, and a list of app and route names | **Only the settings.** It is an inventory, not an image. It will not rebuild your apps, users or routes |
 
+### Point-in-time recovery for PostgreSQL (3.1, round-2 market-gaps plan)
+
+A PostgreSQL instance can archive its WAL into object storage and take scheduled physical base
+backups (`pg_basebackup`), so it can be restored to any moment in between — not only to the moment
+of the last scheduled dump. Turn it on from the instance's own page (**Databases → the instance →
+Point-in-time recovery**); it changes `wal_level`/`archive_mode`/`archive_command`, which PostgreSQL
+only reads at startup, so it is not active until the instance's next rebuild — the page says
+"pending restart" rather than showing it as on.
+
+The panel computes the actual recoverable window fresh on every read, never optimistically: if
+archiving has been failing, the reported window stops at the last time it actually succeeded, not at
+now. Restoring lands in a **new** logical database by default; overwriting an existing one needs its
+name typed exactly, and the confirmation names every app currently attached to it.
+
+**MySQL/MariaDB have no PITR story yet** — binlog-based PITR is a separate, unbuilt feature; the
+toggle refuses those engines by name rather than pretending to almost support them. **A base backup
+on its own is not restorable** the way a Database/Volume backup is — it needs WAL replayed forward
+from it to reach a consistent point, so it never appears as an ordinary restorable artifact; only
+"Restore to a point in time" can use one.
+
 This document describes the **Backups** page, which every install has. It does **not** cover the
 separate **Backup Center** module (repositories, policies, the native and Kopia snapshot engines).
 That module is off by default — `Features:Backup` is `false` in `appsettings.json`, and its sidebar

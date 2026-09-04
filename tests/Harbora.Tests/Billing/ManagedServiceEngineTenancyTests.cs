@@ -272,7 +272,11 @@ public class ManagedServiceEngineTenancyTests
             // Sub-project 10's export/import actions are not exercised by these tenancy tests.
             backupEngine: null!,
             downloadTokens: null!,
-            engines: new FakeServerEngineFactory(docker))
+            engines: new FakeServerEngineFactory(docker),
+            // 3.1's PITR toggle/restore actions are not exercised by these tenancy tests either.
+            walArchiving: null!,
+            pitrRestore: null!,
+            clock: clock)
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };

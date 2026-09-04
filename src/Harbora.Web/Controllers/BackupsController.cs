@@ -276,6 +276,13 @@ public sealed partial class BackupsController(
             return await access.CanTouchAppAsync(id, capability, ct);
         if (type is BackupType.Database or BackupType.Service)
             return await access.CanTouchServiceAsync(id, capability, ct);
+        // 3.1 (round-2 market-gaps plan): a base backup targets the same kind of reference a
+        // Database/Service backup does — a ManagedService id — reusing CanTouchServiceAsync's own
+        // ownership check rather than a second one. The engine-side refusal by name for a
+        // non-PostgreSQL instance (PitrSupport) still runs when the job is actually processed; this
+        // check only gates who may even queue one.
+        if (type is BackupType.PostgresBaseBackup)
+            return await access.CanTouchServiceAsync(id, capability, ct);
         return false;
     }
 

@@ -257,12 +257,17 @@ public sealed partial class BackupsController
 
         var backups = await db.Backups.CountAsync(b => b.DestinationId == id, ct);
         var schedules = await db.BackupSchedules.CountAsync(s => s.DestinationId == id, ct);
+        // 3.1 (round-2 market-gaps plan): WalSegment carries a real FK (Restrict) onto this table,
+        // unlike Backup/BackupSchedule's loose DestinationId — so without this check a workspace with
+        // WAL history but no ordinary backup here would sail past the count above and hit a raw SQL
+        // foreign-key error instead of this sentence.
+        var walSegments = await db.WalSegments.CountAsync(w => w.DestinationId == id, ct);
 
-        if (backups + schedules > 0)
+        if (backups + schedules + walSegments > 0)
         {
             TempData["Error"] = IsFa
-                ? $"{backups} نسخهٔ پشتیبان و {schedules} زمان‌بندی به «{destination.Name}» اشاره می‌کنند. اول آن‌ها را پاک یا جابه‌جا کنید، وگرنه دکمهٔ دانلود و بازگردانی‌شان بی‌صدا از کار می‌افتد."
-                : $"{backups} backup(s) and {schedules} schedule(s) point at '{destination.Name}'. "
+                ? $"{backups} نسخهٔ پشتیبان، {schedules} زمان‌بندی و {walSegments} بخش WAL به «{destination.Name}» اشاره می‌کنند. اول آن‌ها را پاک یا جابه‌جا کنید، وگرنه دکمهٔ دانلود و بازگردانی‌شان بی‌صدا از کار می‌افتد."
+                : $"{backups} backup(s), {schedules} schedule(s) and {walSegments} WAL segment(s) point at '{destination.Name}'. "
                   + "Remove or move those first, or their download and restore buttons stop working with no explanation.";
             return RedirectToAction(nameof(Index));
         }

@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Harbora.Infrastructure.Backups;
 using Harbora.Infrastructure.Deployments;
 
 namespace Harbora.Infrastructure.Services;
@@ -168,6 +169,19 @@ public sealed class ManagedServiceEngine(
                     logger.LogError(
                         "Could not prepare a TLS certificate for {Svc}; it will start unencrypted.", svc.Name);
                 }
+            }
+
+            // 3.1 (round-2 market-gaps plan): the only place PitrEnabled (requested) turns into an
+            // actual container command line — the same seam PgVectorEnabled already owns for which
+            // image runs, and HasUnpublishedChanges below is cleared the same way for both. Appended
+            // after the TLS block, on top of whatever it decided (its own -c arguments, or nothing),
+            // never in place of it — see PostgresWalArchivingCommand.Extend.
+            if (svc.Type == ManagedServiceType.PostgreSql && svc.PitrEnabled)
+            {
+                command = PostgresWalArchivingCommand.Extend(command);
+                var walVolume = PostgresWalArchivingCommand.VolumeNameFor(svc.VolumeName);
+                await docker.EnsureVolumeAsync(walVolume, ct);
+                volumes.Add((walVolume, PostgresWalArchivingCommand.ArchiveMountPath, false));
             }
 
             await docker.RunContainerAsync(new DockerRunRequest(

@@ -127,6 +127,25 @@ public class ManagedService : BaseEntity
     /// </summary>
     public bool PgVectorEnabled { get; set; }
 
+    /// <summary>
+    /// Whether this PostgreSQL instance should archive its WAL and take scheduled base backups so it
+    /// can be recovered to a point in time (3.1, round-2 market-gaps plan). Meaningless for every
+    /// other engine — <see cref="Harbora.Infrastructure.Backups.PitrSupport.Supports"/> names which.
+    ///
+    /// <para>
+    /// Requested state, not observed state — the same <see cref="HasUnpublishedChanges"/> idiom
+    /// <see cref="PgVectorEnabled"/> already uses, and for an adjacent reason: turning this on changes
+    /// <c>wal_level</c>, <c>archive_mode</c> and <c>archive_command</c>, which PostgreSQL only reads at
+    /// startup, so the setting is not "live" until the next rebuild recreates the container with the
+    /// new command line. A panel that showed PITR as active the moment this flag is saved — before
+    /// that restart has ever happened — would be exactly the "green dot for a probe that never fired"
+    /// failure this platform exists to refuse. Whether archiving is actually succeeding, on top of
+    /// merely being configured, is a further fact this flag does not carry at all — see
+    /// <c>Harbora.Domain.Backups.WalArchivingStatus</c>.
+    /// </para>
+    /// </summary>
+    public bool PitrEnabled { get; set; }
+
     public string VolumeName { get; set; } = string.Empty;
 
     /// <summary>
