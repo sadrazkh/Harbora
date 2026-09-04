@@ -20,7 +20,19 @@ public sealed class LogIngestionEngine(
     ISystemClock clock,
     ILogger<LogIngestionEngine> logger) : ILogIngestionEngine
 {
-    public async Task<LogIngestionOutcome> IngestAsync(Guid appId, CancellationToken ct)
+    public Task<LogIngestionOutcome> IngestAsync(Guid appId, CancellationToken ct) =>
+        IngestCoreAsync(appId, null, ct);
+
+    public Task<LogIngestionOutcome> IngestContainerAsync(Guid appId, string containerId, CancellationToken ct) =>
+        IngestCoreAsync(appId, containerId, ct);
+
+    /// <param name="onlyContainerId">
+    /// When given, the container to read instead of resolving the app's current one — see
+    /// <see cref="ILogIngestionEngine.IngestContainerAsync"/> for why a cutover cannot ask "which
+    /// container is the app's" and get a useful answer.
+    /// </param>
+    private async Task<LogIngestionOutcome> IngestCoreAsync(
+        Guid appId, string? onlyContainerId, CancellationToken ct)
     {
         // Unfiltered and sessionless, the same reasoning AppOperationsService.ResolveAsync gives for
         // its own read: both callers of this method — the periodic tick and a pre-removal flush —
@@ -40,7 +52,8 @@ public sealed class LogIngestionEngine(
             return new LogIngestionOutcome(LogIngestionStatus.EngineUnreachable, 0, ex.Message);
         }
 
-        var containerId = await FindContainerIdAsync(docker, app.WorkspaceId, app.Slug, ct);
+        var containerId = onlyContainerId
+            ?? await FindContainerIdAsync(docker, app.WorkspaceId, app.Slug, ct);
         if (containerId is null)
             return new LogIngestionOutcome(LogIngestionStatus.NoContainer, 0, "No container is running for this app.");
 

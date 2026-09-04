@@ -1733,7 +1733,13 @@ public sealed class DeploymentPipeline(
             // own cutover fails.
             if (logIngestion is not null)
             {
-                try { await logIngestion.IngestAsync(appId, ct); }
+                // By id, never "the app's current container". At this instant the retiring container
+                // and its replacement are BOTH running and BOTH labelled for this app, and
+                // DeploymentPlanning.CurrentContainerId answers "the first running match" — an order
+                // nothing guarantees. Resolving by app here therefore returned the new container often
+                // enough to make this method's own test fail two runs in three, and in production it
+                // would have lost exactly the lines this flush exists to save while reporting success.
+                try { await logIngestion.IngestContainerAsync(appId, id, ct); }
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Best-effort log flush before retiring container {ContainerId} failed.", id[..12]);

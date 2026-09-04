@@ -47,5 +47,21 @@ public sealed record LogIngestionOutcome(LogIngestionStatus Status, int LinesIng
 /// </summary>
 public interface ILogIngestionEngine
 {
+    /// <summary>Ingests from whichever container is currently the app's — the timer's path.</summary>
     Task<LogIngestionOutcome> IngestAsync(Guid appId, CancellationToken ct);
+
+    /// <summary>
+    /// Ingests from one <b>named</b> container, for a caller that already knows which one it means.
+    ///
+    /// <para>
+    /// A redeploy's pre-removal flush must use this, and the reason is the whole point of that flush.
+    /// During a cutover the retiring container and its replacement are <b>both</b> running and both
+    /// carry the app's label, and <c>DeploymentPlanning.CurrentContainerId</c> answers "the first
+    /// running match" — an order nothing guarantees. So asking for "the app's container" in that
+    /// instant can hand back the <b>new</b> one, whose logs are not about to be destroyed. The
+    /// retiring container's last lines are then lost and the flush reports success for work it never
+    /// did. Passing the id that is about to be removed settles it.
+    /// </para>
+    /// </summary>
+    Task<LogIngestionOutcome> IngestContainerAsync(Guid appId, string containerId, CancellationToken ct);
 }
