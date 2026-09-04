@@ -153,7 +153,14 @@ public enum ManagedServiceType
     // generates the credentials, puts it on the environment's private network, and injects the
     // connection into whatever attaches to it.
     RabbitMq = 5,
-    Nats = 6
+    Nats = 6,
+
+    // 4.2 (round-2 market-gaps plan): promoted off the one-click template gallery, where it had no
+    // generated credentials, no attach-to-app and no backups. A single self-contained container, like
+    // the two brokers above — but its one secret is a master key rather than a user/password pair:
+    // every route needs it, and scoped keys are minted FROM it rather than issued by Harbora
+    // separately (see ServiceCatalog's own entry for the attach-time decision this implies).
+    Meilisearch = 7
 }
 
 public enum ServiceStatus

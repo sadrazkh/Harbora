@@ -112,6 +112,15 @@ public class DatabaseDumpPlanTests
     }
 
     [Fact]
+    public void Meilisearch_says_why_it_is_copied_instead_of_exported()
+    {
+        // Same shape as Redis above: not a gap that was overlooked, a real HTTP-only dump path this
+        // task did not build a command for, said honestly rather than left to look like an oversight.
+        DatabaseDumpPlan.For(ManagedServiceType.Meilisearch, Creds, "/b/x").Should().BeNull();
+        DatabaseDumpPlan.WhyNoDump(ManagedServiceType.Meilisearch).Should().Contain("volume");
+    }
+
+    [Fact]
     public void An_engine_with_a_logical_dump_offers_no_excuse_for_not_having_one()
     {
         // The guard on the message above: if every engine had an explanation, the screen would show

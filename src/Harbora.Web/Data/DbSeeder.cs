@@ -306,14 +306,14 @@ public sealed class DbSeeder(HarboraDbContext db)
             DescriptionFa = "پایش آپ‌تایم به‌صورت سلف‌هاست با تاریخچهٔ وضعیت پایدار.",
             ManifestJson = """{"image":"louislam/uptime-kuma:1","port":3001,"healthPath":"/","volumes":[{"mount":"/app/data"}],"env":[],"featured":true,"tags":["Monitoring","Status","SQLite"],"website":"https://uptime.kuma.pet","documentation":"https://github.com/louislam/uptime-kuma/wiki"}"""
         },
-        new()
-        {
-            Key = "meilisearch", Name = "Meilisearch", NameFa = "میلی‌سرچ",
-            Category = "data", IsBuiltIn = true,
-            Description = "Fast full-text search with a generated master key and persistent indexes.",
-            DescriptionFa = "جست‌وجوی متن سریع با کلید اصلی تولیدشده و ایندکس‌های پایدار.",
-            ManifestJson = """{"image":"getmeili/meilisearch:v1.15","port":7700,"healthPath":"/health","volumes":[{"mount":"/meili_data"}],"env":[{"key":"MEILI_ENV","default":"production"},{"key":"MEILI_MASTER_KEY","secret":true}],"tags":["Search","API","Data"],"website":"https://www.meilisearch.com","documentation":"https://www.meilisearch.com/docs/learn/self_hosted/getting_started_with_self_hosted_meilisearch"}"""
-        },
+        // 4.2 (round-2 market-gaps plan): Meilisearch used to be a one-click template here — no
+        // generated master key of its own, no attach-to-app, no backups, the exact gap this
+        // sub-project closes. Removed rather than kept alongside the new managed service: RabbitMQ and
+        // NATS, the two services this promotion is modelled on, were never offered as templates either,
+        // and shipping both paths would mean a customer who picks "Meilisearch" from this gallery gets
+        // the unmanaged version the new one exists to replace. Seeding is additive/update-only
+        // (SeedAsync above never deletes an AppTemplate row), so an installation that already seeded
+        // this row keeps it as-is — this only stops a NEW installation from ever seeing it.
         new()
         {
             // F6 (2026-08-21 functions-and-services plan, HARBORA-0038 phase 1): the Dev Inbox half.

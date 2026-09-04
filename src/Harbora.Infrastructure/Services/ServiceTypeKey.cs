@@ -23,6 +23,7 @@ public static class ServiceTypeKey
         ManagedServiceType.MongoDb => "mongodb",
         ManagedServiceType.RabbitMq => "rabbitmq",
         ManagedServiceType.Nats => "nats",
+        ManagedServiceType.Meilisearch => "meilisearch",
         _ => "database"
     };
 

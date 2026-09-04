@@ -416,8 +416,8 @@ apps on it; there is no in-place conversion.
   HMAC-verified webhooks; commit metadata, deploy history, rollback.
 - **Visual routing designer**: drag-and-drop rules, host/path routing, SSL toggle, HTTP→HTTPS,
   WebSocket, basic-auth, custom headers, live Traefik-config preview, validate + apply with rollback.
-- **Managed services**: five databases — PostgreSQL, MySQL, MariaDB, Redis, MongoDB — and two
-  message brokers, **RabbitMQ** and **NATS**. All seven are provisioned the same way: encrypted
+- **Managed services**: six databases — PostgreSQL, MySQL, MariaDB, Redis, MongoDB, Meilisearch — and
+  two message brokers, **RabbitMQ** and **NATS**. All eight are provisioned the same way: encrypted
   credentials Harbora generates, a place on the environment's private network, safe connection info,
   and one-click attach that injects the connection into the app.
 - **Backups**: app config, volume/database, full platform; local + S3-compatible; scheduled; retention;

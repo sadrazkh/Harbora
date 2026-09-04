@@ -39,6 +39,20 @@ public static class ConnectionProbe
             ["sh", "-c", $"redis-cli -h {Shell(creds.Host)} -p {creds.Port} PING"],
             new Dictionary<string, string> { ["REDISCLI_AUTH"] = creds.Password }),
 
+        // Meilisearch's own /health needs no key at all, so hitting it would prove only that the
+        // container is listening — not the thing this probe exists to catch ("wrong credentials are
+        // the common failure"). /keys does authenticate: its own docs say plainly "you must have the
+        // master key ... to access the keys route", so a 200 there proves the STORED key is the key
+        // the server will actually accept. The image carries curl (verified against the real
+        // Dockerfile — see ServiceCatalog's own entry), so this runs the same way every other probe
+        // here does: inside a one-off container of the service's own image, key never on argv.
+        ManagedServiceType.Meilisearch => new ProbePlan(
+            ["sh", "-c",
+             $"code=$(curl -s -m 5 -o /dev/null -w '%{{http_code}}' " +
+             $"-H \"Authorization: Bearer $MEILI_PROBE_KEY\" {Shell($"http://{creds.Host}:{creds.Port}/keys")}); " +
+             "echo \"HTTP $code\"; [ \"$code\" = \"200\" ]"],
+            new Dictionary<string, string> { ["MEILI_PROBE_KEY"] = creds.Password }),
+
         _ => null
     };
 
@@ -79,6 +93,16 @@ public static class ConnectionProbe
                    "use it so they pick up the new one.";
 
         if (text.Contains("Connection refused", StringComparison.OrdinalIgnoreCase))
+            return "Nothing is listening on that address. The database container is most likely stopped.";
+
+        // The Meilisearch probe above reports its own outcome as "HTTP $code" rather than through a
+        // client's own wording, since curl -f discards the response body a real message would come
+        // from. 000 is curl's own code for "no HTTP response arrived at all" (DNS failure, refused
+        // connection, timeout) — not a status Meilisearch itself ever sends.
+        if (text.Contains("HTTP 401", StringComparison.Ordinal))
+            return "The database refused the password. If it was rotated, redeploy the services that " +
+                   "use it so they pick up the new one.";
+        if (text.Contains("HTTP 000", StringComparison.Ordinal))
             return "Nothing is listening on that address. The database container is most likely stopped.";
 
         return $"The connection failed. {text}".Trim();

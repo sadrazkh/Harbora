@@ -39,9 +39,14 @@ public static class CredentialRotationPlan
 
     /// <summary>
     /// True when the only way to change the password is to start the container again with it. Redis
-    /// reads it from its own command line, so there is nothing to alter while it runs.
+    /// reads it from its own command line, so there is nothing to alter while it runs. Meilisearch is
+    /// the same shape: <c>MEILI_MASTER_KEY</c> is read once at boot and there is no admin route that
+    /// changes a running instance's own master key, so rotation here means the same recreate-with-the-
+    /// new-value <see cref="ManagedServiceEngine.RotatePasswordAsync"/> already does for Redis — no
+    /// second rotation mechanism, the existing one just applies to a second engine.
     /// </summary>
-    public static bool RequiresRecreate(ManagedServiceType type) => type is ManagedServiceType.Redis;
+    public static bool RequiresRecreate(ManagedServiceType type) =>
+        type is ManagedServiceType.Redis or ManagedServiceType.Meilisearch;
 
     /// <summary>
     /// Why this engine cannot be rotated yet, for the screen. Saying so is the point: a button that

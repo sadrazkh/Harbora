@@ -168,7 +168,8 @@ public class ManagedService : BaseEntity
     /// <summary>
     /// The logical databases inside this instance (D1, 2026-08-25 shared-databases plan) — see
     /// <see cref="ManagedServiceDatabase"/>. Empty for an instance whose engine has no database name
-    /// at all (Redis, RabbitMQ, NATS), and for one created before this shipped and never migrated.
+    /// at all (Redis, RabbitMQ, NATS, Meilisearch), and for one created before this shipped and never
+    /// migrated.
     /// </summary>
     public ICollection<ManagedServiceDatabase> Databases { get; set; } = new List<ManagedServiceDatabase>();
 }

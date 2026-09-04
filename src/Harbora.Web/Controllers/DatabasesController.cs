@@ -1037,8 +1037,9 @@ public sealed partial class DatabasesController(
         // belong to this instance); a caller that does not — every attach form this platform shipped
         // before D3 builds a picker — gets the instance's own default database when it has one, which
         // is what makes an attachment made today behave exactly as it always did. An instance with no
-        // logical database at all (Redis/RabbitMQ/NATS, or a Postgres/MySQL/MariaDB row a migration
-        // has not reached) resolves to null, the same fallback every such attachment has always used.
+        // logical database at all (Redis/RabbitMQ/NATS/Meilisearch, or a Postgres/MySQL/MariaDB row a
+        // migration has not reached) resolves to null, the same fallback every such attachment has
+        // always used.
         Guid? resolvedDatabaseId;
         if (databaseId is { } requestedDatabaseId)
         {

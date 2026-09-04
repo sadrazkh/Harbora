@@ -182,6 +182,53 @@ public static class ServiceCatalog
                     ["NATS_USER"] = c.User, ["NATS_PASSWORD"] = c.Password
                 }
             },
+            // 4.2 (round-2 market-gaps plan): promoted off the one-click template gallery — that
+            // template gave a customer a container with no generated key, no attach and no backups,
+            // exactly the gap this entry closes. Verified against the real image, not paraphrased from
+            // memory: the Meilisearch Dockerfile's final stage (getmeili/meilisearch, checked at
+            // v1.15.0) is `FROM alpine:3.20` with curl installed, which is what makes the connection
+            // probe below possible rather than a declined "speaks its own protocol" like the brokers.
+            //
+            // One secret, not a pair: MEILI_MASTER_KEY gates every route, and there is no separate
+            // username the way even Redis has an (unused) one. See AttachEnv below for what an
+            // attached app is actually handed and why.
+            [ManagedServiceType.Meilisearch] = new()
+            {
+                Type = ManagedServiceType.Meilisearch, DisplayName = "Meilisearch", DisplayNameFa = "میلی‌سرچ",
+                ImageRepo = "getmeili/meilisearch", Versions = ["v1.53", "v1.52"], Port = 7700,
+                DataMountPath = "/meili_data", HasDatabaseName = false,
+                // Production mode refuses to start without a master key at all, which is exactly the
+                // fail-loud behaviour wanted here — an instance that silently ran unauthenticated
+                // would be a worse outcome than one that refuses to boot.
+                Env = c => new() { ["MEILI_MASTER_KEY"] = c.Password, ["MEILI_ENV"] = "production" },
+                // Not a URI a client library parses (Meilisearch's own SDKs take a host and a key as
+                // two separate constructor arguments; there is no "meilisearch://" scheme to be one
+                // string). Labelled plainly instead of inventing a query-parameter convention
+                // Meilisearch's HTTP API does not actually accept — a plausible-looking but non-working
+                // "connection string" is worse than an honestly two-part one.
+                Conn = c => ($"http://{c.Host}:{c.Port} (master key: {c.Password})",
+                             $"http://{c.Host}:{c.Port} (master key: {Mask(c.Password)})"),
+                AttachEnv = c => new()
+                {
+                    ["MEILI_URL"] = $"http://{c.Host}:{c.Port}",
+                    ["MEILI_HOST"] = c.Host, ["MEILI_PORT"] = c.Port.ToString(),
+                    // The master key itself, handed whole — see the type doc above for why this is a
+                    // deliberate choice and not an oversight. Meilisearch derives scoped, expiring API
+                    // keys FROM the master key via its own POST /keys route, and Harbora could mint one
+                    // per attachment instead of handing over the master key. That would need a stateful
+                    // side effect at attach time (an HTTP call to the instance, a key to store, rotate
+                    // and revoke on detach) where every other AttachEnv here — including the two
+                    // brokers' own shared password — is a pure function of ServiceCreds computed fresh
+                    // wherever a merge runs (ManagedServiceAttachEnv.EntriesFor, RotatePasswordAsync's
+                    // diffing, the CLI's env pull). Every attached app already receives full control of
+                    // whatever it is attached to elsewhere in this catalogue — the instance admin login
+                    // for Postgres/MySQL/Mongo, the one shared password for Redis/RabbitMQ/NATS — so a
+                    // scoped key would be the first place this platform drew a trust boundary between
+                    // "attached" and "fully trusted" that it draws nowhere else. Worth building the day
+                    // that distinction matters; not before.
+                    ["MEILI_MASTER_KEY"] = c.Password
+                }
+            },
             [ManagedServiceType.MongoDb] = new()
             {
                 Type = ManagedServiceType.MongoDb, DisplayName = "MongoDB", DisplayNameFa = "MongoDB",

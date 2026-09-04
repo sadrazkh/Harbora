@@ -98,6 +98,15 @@ public static class DatabaseDumpPlan
     public static string? WhyNoDump(ManagedServiceType type) => type switch
     {
         ManagedServiceType.Redis => "Redis keeps its own snapshot file, so its data volume is copied instead of being exported.",
+
+        // Meilisearch's own dump/snapshot is reachable only over its HTTP API (POST /dumps, polled to
+        // completion, then the produced file read back out of the container) with the master key —
+        // not a command this can run through a shell the way pg_dump/mysqldump/mongodump are. Building
+        // that is real, additional work this task did not do, so it is said here rather than claimed:
+        // the volume is copied instead, exactly like Redis, not silently producing nothing.
+        ManagedServiceType.Meilisearch =>
+            "Meilisearch's dump is only reachable over its HTTP API with the master key, not a command " +
+            "Harbora can run against the container, so its data volume is copied instead of being exported.",
         _ => null
     };
 
