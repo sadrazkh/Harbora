@@ -496,6 +496,77 @@ public class StatusPageHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task An_uptime_probe_result_never_leaks_across_workspaces_either_direction()
+    {
+        // 2.1 (2026-09 market-gaps round two): the new db.UptimeChecks read StatusPageReport adds
+        // filters explicitly by workspace.Id, exactly like every other query in that class — this is
+        // the same "right tenant sees it, wrong tenant does not" shape the incidents test above already
+        // proves for StatusIncident, aimed at the query this sub-project added.
+        var (mineId, mineEnvId, mineHost) = GivenWorkspace("probe-mine-co");
+        var (theirsId, theirsEnvId, theirsHost) = GivenWorkspace("probe-theirs-co");
+        var mineAppId = Guid.CreateVersion7();
+        var theirsAppId = Guid.CreateVersion7();
+        var minePageId = Guid.CreateVersion7();
+        var theirsPageId = Guid.CreateVersion7();
+
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(new App
+            {
+                Id = mineAppId, WorkspaceId = mineId, EnvironmentId = mineEnvId,
+                Name = "mine-probe", Slug = "mine-probe", Kind = ServiceKind.Web,
+                SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/mine-probe:1.0",
+                Status = AppStatus.Running
+            });
+            db.StatusPages.Add(new StatusPage { Id = minePageId, WorkspaceId = mineId, IsEnabled = true });
+            db.StatusPageComponents.Add(new StatusPageComponent
+            {
+                WorkspaceId = mineId, StatusPageId = minePageId,
+                AppId = mineAppId, DisplayName = "Mine Probe", SortOrder = 0
+            });
+            // Mine is failing — the fact under test is that THEIRS never inherits this.
+            db.UptimeChecks.Add(new Harbora.Domain.Monitoring.UptimeCheck
+            {
+                WorkspaceId = mineId, AppId = mineAppId, IsEnabled = true,
+                LastOutcome = Harbora.Domain.Monitoring.UptimeCheckOutcome.Down,
+                LastCheckedAt = DateTimeOffset.UtcNow, LastDetail = "answered 500, expected 200."
+            });
+
+            db.Apps.Add(new App
+            {
+                Id = theirsAppId, WorkspaceId = theirsId, EnvironmentId = theirsEnvId,
+                Name = "theirs-probe", Slug = "theirs-probe", Kind = ServiceKind.Web,
+                SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/theirs-probe:1.0",
+                Status = AppStatus.Running
+            });
+            db.StatusPages.Add(new StatusPage { Id = theirsPageId, WorkspaceId = theirsId, IsEnabled = true });
+            db.StatusPageComponents.Add(new StatusPageComponent
+            {
+                WorkspaceId = theirsId, StatusPageId = theirsPageId,
+                AppId = theirsAppId, DisplayName = "Theirs Probe", SortOrder = 0
+            });
+            // Theirs is passing — must not be dragged down by mine's own failing check.
+            db.UptimeChecks.Add(new Harbora.Domain.Monitoring.UptimeCheck
+            {
+                WorkspaceId = theirsId, AppId = theirsAppId, IsEnabled = true,
+                LastOutcome = Harbora.Domain.Monitoring.UptimeCheckOutcome.Up,
+                LastCheckedAt = DateTimeOffset.UtcNow, LastDetail = "answered 200."
+            });
+        });
+        var client = Panel.ClientFrom("198.51.100.123");
+
+        // Direction one: my page shows my own (failing) probe result.
+        var mine = await (await client.GetWithHostAsync("/", mineHost)).Content.ReadAsStringAsync();
+        mine.Should().Contain("Mine Probe");
+        mine.Should().Contain("data-status-component-state=\"degraded\"");
+
+        // Direction two: their page shows their own (passing) probe result, unaffected by mine.
+        var theirs = await (await client.GetWithHostAsync("/", theirsHost)).Content.ReadAsStringAsync();
+        theirs.Should().Contain("Theirs Probe");
+        theirs.Should().Contain("data-status-component-state=\"operational\"");
+    }
+
+    [Fact]
     public async Task An_unregistered_slug_answers_404_rather_than_falling_back_to_any_workspace()
     {
         var client = Panel.ClientFrom("203.0.113.10");

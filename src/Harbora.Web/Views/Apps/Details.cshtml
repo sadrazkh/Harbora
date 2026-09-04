@@ -553,7 +553,7 @@
                             <li data-uptime-result-outcome="@outcomeAttr" class="flex items-center justify-between gap-2">
                                 <span class="@rowTone">@rowLabel</span>
                                 <span class="text-ink-faint" dir="ltr">
-                                    @(r.LatencyMs is { } ms ? $"{ms}ms · " : "")@r.CheckedAt.ToString("yyyy-MM-dd HH:mm")
+                                    @(r.LatencyMs is { } ms ? $"{ms}ms · " : "")@r.CheckedAt.ToString(Harbora.Web.Infrastructure.Dates.Stamp)
                                 </span>
                             </li>
                         }
