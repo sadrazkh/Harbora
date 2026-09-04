@@ -317,10 +317,20 @@ harbora apps
 harbora logs <deploymentId>
 harbora cancel <deploymentId>                  # stop one that is queued or running
 harbora status
+
+# Local-dev parity: the same environment the platform gives your app, on your machine.
+harbora env pull                               # writes the app's effective env (vars + groups + attached
+                                                # services, secrets decrypted and marked) to .env.local
+harbora run -- npm start                       # runs a local command with that same environment injected
 ```
 
 `harbora init` creates a ready-to-edit `harbora.yml`, so `harbora deploy` needs no arguments — the same
 file also drives CI. To reuse a different name: `harbora init --app my-name`.
+
+`harbora env pull` never overwrites an existing `.env.local` silently — it shows which keys would
+change and needs `--force` to replace it. `.env.local` is already excluded from every upload (see
+above); `harbora doctor` additionally warns if it exists but `.gitignore` does not exclude it, since
+it can hold real secret values.
 
 > First release not tagged yet? Build from source once: `dotnet publish src/Harbora.Cli -c Release`
 > (output in `src/Harbora.Cli/bin/Release/net10.0/publish/harbora`), or `dotnet run --project src/Harbora.Cli -- <args>`.

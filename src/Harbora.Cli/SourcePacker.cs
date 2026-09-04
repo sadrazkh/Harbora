@@ -157,19 +157,35 @@ public static class SourcePacker
         if (RootOnlyExclude.Contains(segments[0], StringComparer.OrdinalIgnoreCase))
             return $"built-in rule '{segments[0]}' (project root)";
 
-        foreach (var pattern in ignore)
+        var pattern = MatchingIgnorePattern(relativePath, ignore);
+        return pattern is null ? null : $"ignore pattern '{pattern}'";
+    }
+
+    /// <summary>
+    /// The first ignore-file pattern that matches <paramref name="relativePath"/>, or null — the
+    /// wildcard/segment rules <see cref="DescribeExclusion"/> applies to a loaded .gitignore/.dockerignore,
+    /// with none of <see cref="AlwaysExclude"/>/<see cref="RootOnlyExclude"/>'s built-ins layered on
+    /// top. Exposed separately for <c>Doctor.CheckEnvLocal</c> (4.1, 2026-09-04 local-dev-parity plan):
+    /// <c>.env.local</c> is itself one of those built-ins, so asking <see cref="DescribeExclusion"/>
+    /// whether it is excluded would always say yes, whether or not a real <c>.gitignore</c> says
+    /// anything about it at all.
+    /// </summary>
+    public static string? MatchingIgnorePattern(string relativePath, IReadOnlyCollection<string> patterns)
+    {
+        var segments = relativePath.Split('/');
+        foreach (var pattern in patterns)
         {
             if (pattern.Contains('*'))
             {
                 if (segments.Any(s => FileSystemName.MatchesSimpleExpression(pattern, s)) ||
                     FileSystemName.MatchesSimpleExpression(pattern, relativePath))
-                    return $"ignore pattern '{pattern}'";
+                    return pattern;
             }
             else if (relativePath.Equals(pattern, StringComparison.OrdinalIgnoreCase) ||
                      relativePath.StartsWith(pattern + "/", StringComparison.OrdinalIgnoreCase) ||
                      segments.Contains(pattern, StringComparer.OrdinalIgnoreCase))
             {
-                return $"ignore pattern '{pattern}'";
+                return pattern;
             }
         }
         return null;

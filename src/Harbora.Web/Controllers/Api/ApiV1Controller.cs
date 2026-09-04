@@ -25,7 +25,12 @@ public sealed class ApiV1Controller(
     IPasswordHasher passwordHasher,
     ITokenService tokens,
     IAuditLogger audit,
-    ICurrentUser currentUser) : ControllerBase
+    ICurrentUser currentUser,
+    // 4.1 (2026-09-04 local-dev-parity plan): what `Env` below decrypts a secret entry with, and the
+    // endpoint an attached bucket's S3_ENDPOINT resolves to — the same two dependencies
+    // DeploymentPipeline.BuildEnv and AppsController.Details already carry for the same reason.
+    ISecretProtector protector,
+    Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Storage.ObjectStorageOptions> storageOptions) : ControllerBase
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
 
@@ -184,6 +189,62 @@ public sealed class ApiV1Controller(
              })
             .ToListAsync(ct);
         return Ok(apps);
+    }
+
+    /// <summary>
+    /// The app's effective environment — the exact merge <c>DeploymentPipeline.BuildEnv</c> injects
+    /// into a container and the panel's env page renders, via
+    /// <see cref="Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder"/>. Backs <c>harbora env
+    /// pull</c> (4.1, 2026-09-04 local-dev-parity plan) — the reason "effective" has to mean exactly
+    /// what a deploy computes, not a second implementation the CLI keeps in step by hand.
+    ///
+    /// <para>
+    /// Unlike the env page, which never decrypts a secret because it only ever needs to mask one, this
+    /// hands back real plaintext: the whole point of the command is that a developer stops copying a
+    /// credential out of the panel by hand. <c>isSecret</c> travels with every entry regardless, so the
+    /// CLI can mark it in <c>.env.local</c> rather than writing it indistinguishably from an ordinary
+    /// value. Gated on <see cref="Capabilities.AppsEnv"/> — the same capability that gates editing an
+    /// env var in the panel — because handing back a secret's plaintext is at least as sensitive as
+    /// changing one.
+    /// </para>
+    /// </summary>
+    [HttpGet("apps/{slug}/env")]
+    [Authorize(Policy = Capabilities.AppsEnv, AuthenticationSchemes = TokenAuthenticationHandler.SchemeName)]
+    public async Task<IActionResult> Env(string slug, CancellationToken ct)
+    {
+        var app = await db.Apps
+            .Include(a => a.EnvironmentVariables)
+            .Include(a => a.ConfigGroups).ThenInclude(cg => cg.ConfigGroup!).ThenInclude(g => g.Entries)
+            .Include(a => a.StorageBuckets).ThenInclude(sb => sb.StorageBucket)
+            .Include(a => a.EmailProviders).ThenInclude(ep => ep.EmailProvider)
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.Database)
+            .FirstOrDefaultAsync(a => a.WorkspaceId == WorkspaceId && a.Slug == slug, ct);
+        if (app is null) return NotFound(new { error = "App not found." });
+
+        var merged = Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder.Compute(
+            app, protector, storageOptions.Value.CustomerEndpoint);
+
+        var entries = merged.Select(e => new
+        {
+            key = e.Key,
+            value = e.IsSecret ? SafeUnprotect(e.Value) : e.Value,
+            isSecret = e.IsSecret,
+            source = e.Source.ToString()
+        });
+
+        return Ok(entries);
+    }
+
+    /// <summary>
+    /// The same never-throw shape <c>DeploymentPipeline</c>'s own <c>SafeUnprotect</c> uses: a
+    /// ciphertext this panel cannot decrypt (an old key, a corrupted row) must not turn a `harbora env
+    /// pull` for nine working variables into a 500 over the tenth.
+    /// </summary>
+    private string SafeUnprotect(string ciphertext)
+    {
+        try { return protector.Unprotect(ciphertext); }
+        catch { return string.Empty; }
     }
 
     [HttpPost("apps/{slug}/deploy")]

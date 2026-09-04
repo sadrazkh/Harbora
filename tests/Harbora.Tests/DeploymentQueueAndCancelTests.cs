@@ -184,7 +184,8 @@ public class DeploymentQueueAndCancelTests
 
         var api = new ApiV1Controller(
             db, engine, Options.Create(new HarboraRuntimeOptions()),
-            passwordHasher: null!, tokens: null!, new SilentAudit(), caller)
+            passwordHasher: null!, tokens: null!, new SilentAudit(), caller,
+            new PassthroughProtector(), Options.Create(new Harbora.Infrastructure.Storage.ObjectStorageOptions()))
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

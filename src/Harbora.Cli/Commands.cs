@@ -21,6 +21,29 @@ internal static class Session
     }
 
     public static ApiClient Require(string? account = null) => new(RequireProfile(account));
+
+    /// <summary>
+    /// The same two-path resolution <c>harbora deploy</c> established — <c>--server</c>/<c>--token</c>
+    /// make a command self-contained for CI (no <c>harbora login</c> first), and otherwise fall back to
+    /// a stored session — factored out here so <c>env pull</c> and <c>run</c> don't each carry their
+    /// own copy of it. Returns null, having already said why, when <c>--server</c>/<c>--token</c> was
+    /// given but no server could be resolved; when neither was given at all this falls back to
+    /// <see cref="Require"/>, which — like every other command here — throws rather than returns null
+    /// when nobody is logged in.
+    /// </summary>
+    public static ApiClient? Resolve(string? server, string? token, string? account, string? configServer)
+    {
+        if (server is null && token is null) return Require(account);
+
+        var stored = HarboraConfig.Load().Resolve(account);
+        var resolvedServer = server ?? configServer ?? stored?.Server;
+        if (string.IsNullOrWhiteSpace(resolvedServer))
+        {
+            AnsiConsole.MarkupLine("[red]No server.[/] Pass [yellow]--server[/] with [yellow]--token[/].");
+            return null;
+        }
+        return new ApiClient(resolvedServer, token ?? stored?.Token);
+    }
 }
 
 /// <summary>
@@ -214,6 +237,10 @@ public sealed class DoctorCommand : AsyncCommand<DoctorCommand.Settings>
         string dir, ProjectConfig config, string? server, string? token, string? account, CancellationToken ct)
     {
         var checks = new List<Doctor.Check> { Doctor.CheckManifest(config, config.App) };
+        // 4.1 (2026-09-04 local-dev-parity plan): only in the full `harbora doctor` report, not in
+        // deploy's own preflight below — an ungitignored .env.local is a git-hygiene risk, not
+        // something that would break this deploy the way a Warn-level check here never would anyway.
+        checks.AddRange(Doctor.CheckEnvLocal(dir));
 
         var (buildChecks, referenced) = Doctor.CheckBuild(dir, config);
         checks.AddRange(buildChecks);

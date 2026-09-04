@@ -1,4 +1,4 @@
-using Harbora.Application.Abstractions;
+﻿using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
@@ -1469,62 +1469,15 @@ public sealed class DeploymentPipeline(
     /// </summary>
     private Dictionary<string, string> BuildEnv(App app, bool isLocal)
     {
-        var attachedBuckets = app.StorageBuckets
-            .Where(sb => sb.StorageBucket is not null)
-            .Select(sb => new AttachedBucketEnv(
-                sb.AttachOrder, sb.StorageBucketId, sb.StorageBucket!.Name,
-                // Ciphertext stays ciphertext here — the secret entry is decrypted exactly once,
-                // below, where every other IsSecret entry in the merge is (SafeUnprotect(e.Value)).
-                // Decrypting it a second time here would hand SafeUnprotect a plaintext string to
-                // "unprotect", which is not valid ciphertext and fails silently to "".
-                Harbora.Domain.Storage.BucketEnvKeys.EntriesFor(
-                        sb.StorageBucket!, _storageOpt.CustomerEndpoint, sb.StorageBucket!.EncryptedSecretKey)
-                    .Select(e => new BucketEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
-
-        // F6 (2026-08-21 functions-and-services plan): the same shape as attachedBuckets above, one
-        // attachment kind later — no endpoint translation needed here, unlike a bucket's S3_ENDPOINT,
-        // because a provider's Host is already the address its attached apps must reach directly
-        // (there is no Harbora-run relay in front of it).
-        var attachedEmailProviders = app.EmailProviders
-            .Where(ep => ep.EmailProvider is not null)
-            .Select(ep => new AttachedEmailProviderEnv(
-                ep.AttachOrder, ep.EmailProviderId, ep.EmailProvider!.Name,
-                Harbora.Domain.Email.EmailProviderEnvKeys.EntriesFor(
-                        ep.EmailProvider!, ep.EmailProvider!.EncryptedPassword)
-                    .Select(e => new EmailProviderEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
-
-        // C1 (2026-08-22 config-delivery plan): the same shape as attachedBuckets/attachedEmailProviders
-        // above, one attachment kind later. ManagedServiceAttachEnv is the one place that decrypts a
-        // service's password and re-encrypts every composed value that embeds it, so what reaches the
-        // merge as an "IsSecret" entry is real ciphertext, decrypted exactly once below — see that
-        // type's own doc for why a database's connection string cannot pass ciphertext through
-        // unchanged the way a bucket's single secret field does.
-        var attachedDatabases = app.ManagedServices
-            .Where(ms => ms.ManagedService is not null)
-            .Select(ms => new AttachedDatabaseEnv(
-                ms.AttachOrder, ms.ManagedServiceId, ms.ManagedService!.Name,
-                Services.ManagedServiceAttachEnv.EntriesFor(ms, protector)
-                    .Select(e => new DatabaseEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
-
-        // 1.8 (2026-09 market-gaps round two): the same shape as attachedBuckets/attachedEmailProviders
-        // above, one attachment kind later — ErrorTrackingEnvKeys.EntriesFor passes the provider's
-        // ciphertext DSN through unchanged, decrypted exactly once below, same as every other secret
-        // entry this merge carries.
-        var attachedErrorTracking = app.ErrorTrackingProviders
-            .Where(et => et.ErrorTrackingProvider is not null)
-            .Select(et => new AttachedErrorTrackingEnv(
-                et.AttachOrder, et.ErrorTrackingProviderId, et.ErrorTrackingProvider!.Name,
-                Harbora.Domain.ErrorTracking.ErrorTrackingEnvKeys.EntriesFor(et.ErrorTrackingProvider!.EncryptedDsn)
-                    .Select(e => new ErrorTrackingEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
-
-        var merged = ConfigGroupMerge.Merge(
-            app.EnvironmentVariables,
-            app.ConfigGroups.Select(cg => new AttachedGroupEntries(
-                cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])),
-            attachedBuckets,
-            attachedEmailProviders,
-            attachedDatabases,
-            attachedErrorTracking);
+        // Sub-project 4.1 (2026-09-04 local-dev-parity plan): the assembly of attached
+        // groups/buckets/email-providers/databases into ConfigGroupMerge's inputs used to be
+        // duplicated here and in AppsController.Details, kept in step only by a matching comment at
+        // each site. Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder is now the one place —
+        // also called by ApiV1Controller.Env (`harbora env pull`), so ciphertext stays ciphertext
+        // (ConfigGroupMerge's own contract); decrypted exactly once, below, where every other
+        // IsSecret entry in the merge is (SafeUnprotect(e.Value)).
+        var merged = Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder.Compute(
+            app, protector, _storageOpt.CustomerEndpoint);
 
         var env = merged.ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 

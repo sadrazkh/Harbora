@@ -206,6 +206,50 @@ spells the key differently — `ConnectionStrings:Default`, say — add one vari
 Redis and the brokers have no connection string; they are reached by URL (`REDIS_URL`, `AMQP_URL`,
 `NATS_URL`). Redeploy after attaching — variables are applied at release, not while a container runs.
 
+### Local-dev parity: `env pull` and `run`
+
+"Works on my machine" and "works on Harbora" are the same question once your local environment
+**is** the app's effective environment — the app's own variables, its config groups, and everything
+its attached services inject (`S3_*`, `SMTP_*`, database connection strings), exactly as
+`harbora deploy` would inject them. Both commands ask the server for that merge; neither recomputes
+any part of it locally, so a pull can never drift from what a deploy actually does.
+
+```bash
+harbora env pull                 # writes it to .env.local
+harbora run -- npm start         # or skip the file — run a command with it injected directly
+```
+
+`harbora env pull`:
+
+- **Never overwrites `.env.local` silently.** If the file already exists and would change, the CLI
+  prints which keys would be added, removed or changed (never the value of a secret, so nothing
+  sensitive ends up in your terminal scrollback just to show you a diff) and exits `1`. Pass `--force`
+  to replace it.
+- **Marks every secret.** A value that came from a secret `EnvironmentVariable`, a config group entry,
+  a bucket, an email provider or a database credential gets a `# SECRET (from …)` comment directly
+  above it in the file, naming where it came from — the file stays a plain `KEY=VALUE` list any
+  dotenv-reading tool still parses, nothing is folded into the value itself.
+- **`.env.local` is already excluded from every upload** (see *What is never uploaded*, below) — but
+  that says nothing about `git`. Run `harbora doctor`: it warns if `.env.local` exists and
+  `.gitignore` does not exclude it, since the whole point of this command is to stop copying a
+  credential by hand, and writing one into a file that then gets committed would make things worse,
+  not better.
+
+`harbora run -- <command>`:
+
+- Runs `<command>` as a real child process — not through a shell on Linux/macOS, and only through
+  `cmd.exe` on Windows where that is unavoidable (`.cmd`/`.bat` files, which is most Node tooling,
+  cannot be started any other way). No `.env.local` is written; the pulled environment is injected
+  directly into the child and nothing else changes about how it runs.
+- **Exit code and output are passed through unchanged.** stdout/stderr are never redirected or
+  buffered by the CLI, so a colored progress bar or an interactive prompt looks exactly like a bare
+  invocation would — and the command you ran after `--` decides the exit code, not `harbora run`.
+
+Both commands accept `--path`, `--server`/`--token` (for CI, same as `deploy`), and `--account`.
+`env pull` also takes the app slug positionally (`harbora env pull my-api`, same as `deploy`); `run`
+takes it as `--app`/`-a` instead, since a bare positional argument there would be ambiguous with the
+command you are asking it to run.
+
 ---
 
 ## 5. `harbora.yml`
@@ -346,6 +390,23 @@ without a repository — the flow this CLI exists for — will accept a plain de
 with *"no source archive was uploaded"*, because there was nothing for the server to fetch. Older
 panels omit the field; treat a missing value as "upload", which works for every app type.
 
+### `GET /apps/{slug}/env`
+The app's effective environment — exactly what a deploy would inject, via the same merge
+`DeploymentPipeline` uses. Requires the `apps.env` capability (the same one that gates editing an env
+var in the panel — handing back a secret's plaintext is at least as sensitive as changing one).
+
+```json
+[
+  { "key": "API_BASE", "value": "https://api.example.com", "isSecret": false, "source": "App" },
+  { "key": "DATABASE_URL", "value": "postgresql://…", "isSecret": true, "source": "Database" }
+]
+```
+
+`source` is one of `App`, `Group`, `Bucket`, `EmailProvider`, `Database` — where the value actually
+came from. Unlike everything else in the panel that only ever masks a secret, this endpoint returns
+one **decrypted**: `isSecret` still travels with it so a client can mark it, but the value is real
+plaintext. This is what `harbora env pull` and `harbora run` are for.
+
 ### `POST /apps/{slug}/deploy`
 Server-side deploy. Body optional:
 
@@ -417,7 +478,7 @@ and one already running is interrupted through its cancellation token.
 | `200` | Accepted |
 | `400` | Empty or malformed body |
 | `401` | Missing or invalid token |
-| `403` | The token's role lacks `apps.deploy` |
+| `403` | The token's role lacks the capability the endpoint needs (`apps.deploy` to deploy/cancel, `apps.env` to pull the environment) |
 | `404` | No such app or deployment **in your workspace** |
 | `409` | A conflicting deployment is in flight (e.g. a rollback is running), or the deployment has already ended |
 | `413` | Archive above the size limit |

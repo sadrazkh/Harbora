@@ -35,6 +35,14 @@ app.Configure(config =>
     config.AddCommand<LogsCommand>("logs").WithDescription("Stream logs for a deployment.");
     config.AddCommand<CancelCommand>("cancel").WithDescription("Stop a queued or running deployment.");
     config.AddCommand<UpdateCommand>("update").WithDescription("Update this CLI to the latest release.");
+    // 4.1 (2026-09-04 local-dev-parity plan): local-dev parity, the other half of `deploy` — running
+    // the same effective environment locally instead of only ever on the platform.
+    config.AddBranch("env", env =>
+    {
+        env.SetDescription("Work with an app's effective environment.");
+        env.AddCommand<EnvPullCommand>("pull").WithDescription("Write an app's effective environment to .env.local.");
+    });
+    config.AddCommand<RunCommand>("run").WithDescription("Run a local command with an app's effective environment injected.");
 
 #if DEBUG
     config.PropagateExceptions();

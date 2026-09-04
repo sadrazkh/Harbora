@@ -365,6 +365,83 @@ public class CliDoctorTests : IDisposable
         check.Detail.Should().Contain("2 file");
     }
 
+    // ---- .env.local gitignore check (4.1, 2026-09-04 local-dev-parity plan) --------------------
+
+    [Fact]
+    public void No_env_local_at_all_produces_no_check()
+    {
+        Doctor.CheckEnvLocal(_root).Should().BeEmpty(
+            "a project that has never run `harbora env pull` has nothing here worth reporting on");
+    }
+
+    [Fact]
+    public void An_env_local_excluded_by_gitignore_is_ok()
+    {
+        Write(".env.local", "KEY=value\n");
+        Write(".gitignore", "node_modules\n.env.local\n");
+
+        var check = Single(Doctor.CheckEnvLocal(_root), "Environment");
+
+        check.Level.Should().Be(Doctor.Level.Ok);
+        check.Detail.Should().Contain("excluded");
+    }
+
+    [Fact]
+    public void An_env_local_with_no_gitignore_at_all_warns()
+    {
+        Write(".env.local", "KEY=value\n");
+
+        var check = Single(Doctor.CheckEnvLocal(_root), "Environment");
+
+        check.Level.Should().Be(Doctor.Level.Warn);
+        check.Detail.Should().Contain(".gitignore");
+    }
+
+    [Fact]
+    public void An_env_local_with_a_gitignore_that_does_not_mention_it_warns()
+    {
+        Write(".env.local", "KEY=value\n");
+        Write(".gitignore", "node_modules\ndist\n");
+
+        var check = Single(Doctor.CheckEnvLocal(_root), "Environment");
+
+        check.Level.Should().Be(Doctor.Level.Warn);
+        check.Detail.Should().Contain("harbora env pull").And.Contain("secret");
+    }
+
+    [Fact]
+    public void A_wildcard_env_pattern_in_gitignore_counts_as_excluding_it()
+    {
+        Write(".env.local", "KEY=value\n");
+        Write(".gitignore", ".env*\n");
+
+        Single(Doctor.CheckEnvLocal(_root), "Environment").Level.Should().Be(Doctor.Level.Ok);
+    }
+
+    [Fact]
+    public void Env_local_being_a_built_in_upload_exclude_does_not_fake_an_ok_gitignore_result()
+    {
+        // .env.local is itself one of SourcePacker's AlwaysExclude names — DescribeExclusion would
+        // always say "excluded" for it regardless of .gitignore, which is exactly the trap this check
+        // must not fall into: an upload rule protects nothing from `git commit`.
+        Write(".env.local", "KEY=value\n");
+        Write(".gitignore", "node_modules\n");
+
+        Single(Doctor.CheckEnvLocal(_root), "Environment").Level.Should().Be(Doctor.Level.Warn,
+            "a built-in upload-exclusion rule must never be mistaken for a real .gitignore entry");
+    }
+
+    [Fact]
+    public async Task Doctor_full_report_includes_the_env_local_check()
+    {
+        Write("package.json", "{}");
+        Write(".env.local", "KEY=value\n");
+
+        var checks = await DoctorCommand.RunAsync(_root, new ProjectConfig { App = "my-app" }, null, null, null, default);
+
+        checks.Should().Contain(c => c.Name == "Environment");
+    }
+
     // ---- auth ---------------------------------------------------------------------------------
 
     private sealed class Panel(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler

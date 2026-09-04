@@ -285,10 +285,7 @@ public class DocumentationDriftTests
         var program = Read("src", "Harbora.Cli", "Program.cs");
         var readme = Read("README.md");
 
-        var registered = Regex.Matches(program, @"AddCommand<\w+>\(""([a-z][a-z0-9-]*)""\)")
-            .Select(m => m.Groups[1].Value)
-            .OrderBy(v => v, StringComparer.Ordinal)
-            .ToList();
+        var registered = RegisteredCommandNames(program);
 
         registered.Should().Contain("deploy", "the registrations were not parsed as expected");
 
@@ -299,6 +296,38 @@ public class DocumentationDriftTests
         undocumented.Should().BeEmpty(
             "README.md must show every command the CLI accepts. Missing: " +
             $"{string.Join(", ", undocumented)}. Add it to the 'Deploy directly' block.");
+    }
+
+    /// <summary>
+    /// Every command name Program.cs registers, as somebody would actually type it — including a
+    /// multi-word one added through <c>AddBranch</c> (4.1, 2026-09-04 local-dev-parity plan: <c>env
+    /// pull</c> is the CLI's first subcommand group). A bare <c>AddCommand&lt;EnvPullCommand&gt;("pull")</c>
+    /// inside that branch is not itself a runnable verb — <c>harbora pull</c> does not exist, only
+    /// <c>harbora env pull</c> does — so a branch's nested registrations are prefixed with its own
+    /// name before anything checks the README for them.
+    /// </summary>
+    private static List<string> RegisteredCommandNames(string program)
+    {
+        var names = new List<string>();
+
+        foreach (Match branch in Regex.Matches(
+                     program, @"AddBranch\(""([a-z][a-z0-9-]*)"",[^;]*?=>\s*\{(?<body>.*?)\}\s*\);",
+                     RegexOptions.Singleline))
+        {
+            var branchName = branch.Groups[1].Value;
+            foreach (Match cmd in Regex.Matches(
+                         branch.Groups["body"].Value, @"AddCommand<\w+>\(""([a-z][a-z0-9-]*)""\)"))
+                names.Add($"{branchName} {cmd.Groups[1].Value}");
+        }
+
+        // Everything outside a branch body is a flat, top-level command — remove the branch bodies
+        // first so their nested AddCommand calls are not also counted as bare, unprefixed verbs.
+        var withoutBranches = Regex.Replace(
+            program, @"AddBranch\(""[a-z][a-z0-9-]*"",[^;]*?=>\s*\{.*?\}\s*\);", "", RegexOptions.Singleline);
+        names.AddRange(Regex.Matches(withoutBranches, @"AddCommand<\w+>\(""([a-z][a-z0-9-]*)""\)")
+            .Select(m => m.Groups[1].Value));
+
+        return names.OrderBy(v => v, StringComparer.Ordinal).ToList();
     }
 
     [Fact]

@@ -357,6 +357,49 @@ public static class Doctor
         }
     }
 
+    // ---- .env.local: gitignored? (4.1, 2026-09-04 local-dev-parity plan) ---------------------
+
+    /// <summary>
+    /// <c>harbora env pull</c> writes an app's real, decrypted secret values into <c>.env.local</c>.
+    /// Warns when that file exists but nothing in <c>.gitignore</c> would stop <c>git add .</c> from
+    /// picking it up — the entire point of the command is that a developer stops copying a credential
+    /// by hand; writing it into a file that then gets committed to a shared remote would make things
+    /// worse, not better.
+    ///
+    /// <para>
+    /// Deliberately checks <c>.gitignore</c> alone, never <c>.dockerignore</c>: <c>.env.local</c> is
+    /// already one of <see cref="SourcePacker.AlwaysExclude"/>'s built-in names, so it never reaches an
+    /// uploaded archive regardless of either ignore file — this check is about the separate, real risk
+    /// of a git commit picking it up, which nothing about the upload path protects against.
+    /// </para>
+    ///
+    /// <para>Silent (no check at all) when <c>.env.local</c> does not exist — a project that has never
+    /// run <c>env pull</c> has nothing here worth reporting on, and an "OK, nothing to check" line would
+    /// only be noise next to every other check that verified something real.</para>
+    /// </summary>
+    public static List<Check> CheckEnvLocal(string projectDir)
+    {
+        var envLocalPath = Path.Combine(projectDir, ".env.local");
+        if (!File.Exists(envLocalPath)) return [];
+
+        var gitignorePath = Path.Combine(projectDir, ".gitignore");
+        var patterns = File.Exists(gitignorePath)
+            ? File.ReadAllLines(gitignorePath)
+                .Select(l => l.Trim())
+                .Where(l => l.Length > 0 && !l.StartsWith('#') && !l.StartsWith('!'))
+                .Select(l => l.Replace('\\', '/').Trim('/'))
+                .Where(l => l.Length > 0)
+                .ToList()
+            : [];
+
+        return SourcePacker.MatchingIgnorePattern(".env.local", patterns) is not null
+            ? [new Check("Environment", Level.Ok, ".env.local exists and is excluded by .gitignore.")]
+            : [new Check("Environment", Level.Warn,
+                ".env.local exists but nothing in .gitignore excludes it — `harbora env pull` writes real, " +
+                "decrypted secret values into that file, and an untracked-but-not-ignored file is one " +
+                "`git add .` away from reaching a shared remote. Add `.env.local` to .gitignore.")];
+    }
+
     // ---- auth: a session for this server, not expired --------------------------------------------
 
     /// <summary>

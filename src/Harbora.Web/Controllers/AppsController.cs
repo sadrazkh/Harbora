@@ -567,59 +567,13 @@ public sealed partial class AppsController(
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
-        var attachedBuckets = app.StorageBuckets
-            .Where(sb => sb.StorageBucket is not null)
-            .Select(sb => new Harbora.Domain.Apps.AttachedBucketEnv(
-                sb.AttachOrder, sb.StorageBucketId, sb.StorageBucket!.Name,
-                // Ciphertext stays ciphertext — this page always masks a secret entry regardless of
-                // its value (see the env-row partial below), so nothing here ever needs to decrypt it.
-                Harbora.Domain.Storage.BucketEnvKeys.EntriesFor(
-                        sb.StorageBucket!, storageOptions.Value.CustomerEndpoint, sb.StorageBucket!.EncryptedSecretKey)
-                    .Select(e => new Harbora.Domain.Apps.BucketEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
-            .ToList();
-
-        // F6 (2026-08-21 functions-and-services plan): the same shape as attachedBuckets above.
-        var attachedEmailProviders = app.EmailProviders
-            .Where(ep => ep.EmailProvider is not null)
-            .Select(ep => new Harbora.Domain.Apps.AttachedEmailProviderEnv(
-                ep.AttachOrder, ep.EmailProviderId, ep.EmailProvider!.Name,
-                Harbora.Domain.Email.EmailProviderEnvKeys.EntriesFor(
-                        ep.EmailProvider!, ep.EmailProvider!.EncryptedPassword)
-                    .Select(e => new Harbora.Domain.Apps.EmailProviderEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
-            .ToList();
-
-        // C1 (2026-08-22 config-delivery plan): the same shape as attachedBuckets/attachedEmailProviders
-        // above, one attachment kind later — see ManagedServiceAttachEnv's own doc for why (unlike a
-        // bucket's single secret field) it needs the protector to compose these entries at all.
-        var attachedDatabases = app.ManagedServices
-            .Where(ms => ms.ManagedService is not null)
-            .Select(ms => new Harbora.Domain.Apps.AttachedDatabaseEnv(
-                ms.AttachOrder, ms.ManagedServiceId, ms.ManagedService!.Name,
-                Harbora.Infrastructure.Services.ManagedServiceAttachEnv.EntriesFor(ms, protector)
-                    .Select(e => new Harbora.Domain.Apps.DatabaseEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
-            .ToList();
-
-        // 1.8 (2026-09 market-gaps round two): the same shape as attachedBuckets/attachedEmailProviders
-        // above, one attachment kind later — this page always masks a secret entry regardless of its
-        // value, so nothing here ever needs the plaintext DSN.
-        var attachedErrorTracking = app.ErrorTrackingProviders
-            .Where(et => et.ErrorTrackingProvider is not null)
-            .Select(et => new Harbora.Domain.Apps.AttachedErrorTrackingEnv(
-                et.AttachOrder, et.ErrorTrackingProviderId, et.ErrorTrackingProvider!.Name,
-                Harbora.Domain.ErrorTracking.ErrorTrackingEnvKeys.EntriesFor(et.ErrorTrackingProvider!.EncryptedDsn)
-                    .Select(e => new Harbora.Domain.Apps.ErrorTrackingEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
-            .ToList();
-
-        // The effective environment, with provenance — the same ConfigGroupMerge the deploy pipeline
-        // calls, so this page can never show a value the container would not actually receive.
-        ViewBag.EffectiveEnv = Harbora.Domain.Apps.ConfigGroupMerge.Merge(
-            app.EnvironmentVariables,
-            app.ConfigGroups.Select(cg => new Harbora.Domain.Apps.AttachedGroupEntries(
-                cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])),
-            attachedBuckets,
-            attachedEmailProviders,
-            attachedDatabases,
-            attachedErrorTracking);
+        // The effective environment, with provenance — the same assembly+merge DeploymentPipeline.BuildEnv
+        // and the CLI's `harbora env pull` (ApiV1Controller.Env) call, so this page can never show a
+        // value a deploy would not actually inject. Ciphertext stays ciphertext: this page always
+        // masks a secret entry regardless of its value (see the env-row partial below), so nothing
+        // here ever needs to decrypt one.
+        ViewBag.EffectiveEnv = Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder.Compute(
+            app, protector, storageOptions.Value.CustomerEndpoint);
 
         ViewBag.AttachedStorageBuckets = app.StorageBuckets
             .OrderBy(sb => sb.AttachOrder)
