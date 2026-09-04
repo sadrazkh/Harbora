@@ -15,10 +15,11 @@ using Xunit;
 namespace Harbora.Tests;
 
 /// <summary>
-/// Searching a fetched tail rather than a stored history — see <c>AppOperationsService.GetLogsAsync</c>:
-/// there is nowhere else for this to read from, because nothing has ever persisted a container's own
-/// stdout/stderr (unlike <c>DeploymentLog</c>, which is the build's log, not the running app's). A
-/// search across several apps is the same read fanned out, one container at a time.
+/// Searching a fetched container tail — every app here has persisted retention off
+/// (<c>App.LogRetentionDays</c> defaults to 0), so <c>SearchLogsAsync</c>'s persisted-store half never
+/// runs and behaviour is exactly what it was before 2.2 (2026-09 log-retention plan) added one.
+/// <see cref="LogIngestionEngineTests"/> and <see cref="LogSearchPersistedHistoryTests"/> cover what
+/// changes once an app turns retention on.
 ///
 /// <see cref="LogFilterTests"/> pins the matching rule itself; this pins the wiring around it —
 /// coverage honesty, per-app isolation, and the time-window fallback.

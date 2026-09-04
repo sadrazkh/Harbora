@@ -128,7 +128,13 @@ public sealed class LogsController(
                 reason = c.UnavailableReason,
                 linesScanned = c.LinesScanned,
                 timeWindowRequested = c.TimeWindowRequested,
-                timeWindowHonored = c.TimeWindowHonored
+                timeWindowHonored = c.TimeWindowHonored,
+                // 2.2 (2026-09 log-retention plan): how far back this app's own search actually
+                // reached, and whether that is short of the configured day count because of the disk
+                // budget rather than because the window has not elapsed yet.
+                retentionEnabled = c.RetentionEnabled,
+                reachedBackTo = c.ReachedBackTo,
+                budgetCapped = c.BudgetCapped
             })
         });
     }

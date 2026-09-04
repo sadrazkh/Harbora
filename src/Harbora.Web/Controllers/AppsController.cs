@@ -1797,6 +1797,34 @@ public sealed partial class AppsController(
         return RedirectToAction(nameof(Details), new { id });
     }
 
+    /// <summary>
+    /// Sets (or, at 0, turns off) how many days of this app's own container output stay searchable
+    /// after the container that wrote them is gone (2.2, 2026-09 log-retention plan), through
+    /// <see cref="IAppOperationsService.SetLogRetentionAsync"/>. Lives on the Logs tab rather than
+    /// Details, alongside the search it feeds.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsOperate)]
+    public async Task<IActionResult> SetLogRetention(Guid id, int days, CancellationToken ct)
+    {
+        if (!await OwnsAsync(id, ct)) return NotFound();
+
+        var result = await ops.SetLogRetentionAsync(id, days, ct);
+        if (!result.Success)
+        {
+            TempData["Error"] = result.Error;
+            return RedirectToAction(nameof(Logs), new { id });
+        }
+
+        await audit.LogAsync(days > 0 ? "app.logretention.set" : "app.logretention.off",
+            "app", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);
+        TempData["Message"] = days > 0
+            ? (IsFa ? $"نگه‌داری لاگ روی {days} روز تنظیم شد." : $"Log retention set to {days} day(s).")
+            : (IsFa ? "نگه‌داری لاگ خاموش شد؛ لاگ‌های ذخیره‌شده حذف شدند." : "Log retention turned off; stored logs were deleted.");
+        return RedirectToAction(nameof(Logs), new { id });
+    }
+
     [HttpPost]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.AppsDelete)]
@@ -1835,6 +1863,20 @@ public sealed partial class AppsController(
 
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
+
+        // 2.2 (2026-09 log-retention plan): how far back this app's persisted history actually
+        // reaches right now, shown next to the retention setting itself rather than only inside a
+        // search result — an operator turning this on wants to see it start accumulating without
+        // having to run a search first.
+        if (app.LogRetentionDays > 0)
+        {
+            ViewBag.LogRetentionEarliestAt = await db.AppLogLines.AsNoTracking()
+                .Where(l => l.AppId == id)
+                .OrderBy(l => l.Timestamp)
+                .Select(l => (DateTimeOffset?)l.Timestamp)
+                .FirstOrDefaultAsync(ct);
+        }
+
         return View(app);
     }
 
@@ -1875,6 +1917,18 @@ public sealed partial class AppsController(
         Response.Headers["X-Log-Lines-Scanned"] = coverage.LinesScanned.ToString();
         if (coverage.TimeWindowRequested)
             Response.Headers["X-Log-Time-Window-Honored"] = coverage.TimeWindowHonored ? "true" : "false";
+
+        // 2.2 (2026-09 log-retention plan): how far back this search actually reached, and whether the
+        // disk budget — not the configured day count — is why it does not reach further. Only sent
+        // when retention is on for this app; a header for a search that never consulted a persisted
+        // store at all would be a "0" printed where the truth is "not measured".
+        if (coverage.RetentionEnabled)
+        {
+            Response.Headers["X-Log-Retention-Enabled"] = "true";
+            Response.Headers["X-Log-Budget-Capped"] = coverage.BudgetCapped ? "true" : "false";
+            if (coverage.ReachedBackTo is { } r)
+                Response.Headers["X-Log-Reached-Back-To"] = r.UtcDateTime.ToString("O");
+        }
 
         if (!coverage.Reached) return Content(string.Empty, "text/plain");
 

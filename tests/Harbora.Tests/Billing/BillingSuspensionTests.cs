@@ -100,6 +100,8 @@ internal sealed class FakeAppOperations(BillingContext own) : IAppOperationsServ
     public Task<RateLimitToggleResult> SetRateLimitAsync(
         Guid appId, bool enabled, int average, int burst, CancellationToken ct) =>
         throw new NotSupportedException();
+    public Task<LogRetentionResult> SetLogRetentionAsync(Guid appId, int days, CancellationToken ct) =>
+        throw new NotSupportedException();
 }
 
 /// <summary>

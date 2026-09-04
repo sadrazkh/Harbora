@@ -4,6 +4,7 @@ using Harbora.Domain.Auditing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Identity;
+using Harbora.Domain.Logging;
 using Harbora.Domain.Nodes;
 using Harbora.NodeAgent.Contracts;
 
@@ -333,4 +334,26 @@ public static class RetentionRule
     public static Expression<Func<Domain.Notifications.NotificationDigestEntry, bool>>
         NotificationDigestEntriesToDelete(DateTimeOffset cutoff) =>
         entry => entry.DeliveryId != null && entry.CreatedAt < cutoff;
+
+    /// <summary>
+    /// One app's persisted log lines past ITS OWN cutoff (2.2, 2026-09 log-retention plan).
+    ///
+    /// <para>
+    /// The one rule in this file keyed to a single app rather than the whole table — every other
+    /// member here answers "which rows in this table are past the cutoff" for one shared cutoff the
+    /// whole install chose in <c>RetentionOptions</c>. <c>App.LogRetentionDays</c> is instead an
+    /// administrator's own per-app choice, so there is no single cutoff to close over; the sweeper
+    /// calls this once per app that has retention configured, each with that app's own cutoff, instead
+    /// of the single <c>SweepAgedTableAsync</c> pass every other table gets. See
+    /// <c>DataRetentionSweeper.SweepAppLogLinesAsync</c>.
+    /// </para>
+    /// <para>
+    /// <b>Safety.</b> Nothing reads a persisted log line for a decision the way a cron run's own row is
+    /// a lock — it exists purely to be shown to a person doing a search, exactly like a
+    /// <c>DeploymentLog</c> row past the point a deployment finished. There is no "still needed"
+    /// exception to encode here.
+    /// </para>
+    /// </summary>
+    public static Expression<Func<AppLogLine, bool>> AppLogLinesToDelete(Guid appId, DateTimeOffset cutoff) =>
+        line => line.AppId == appId && line.Timestamp < cutoff;
 }

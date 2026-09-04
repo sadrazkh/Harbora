@@ -228,6 +228,46 @@ public class App : BaseEntity
     /// 429s start — see <see cref="Harbora.Domain.Apps.AppRateLimitPolicy"/>.</summary>
     public int RateLimitBurst { get; set; } = AppRateLimitPolicy.RecommendedBurst;
 
+    // --- Persisted log retention (2.2, 2026-09 log-retention plan) ---
+    //
+    // The declarative half, the same role MaintenanceMode and the rate-limit fields play above: what
+    // the administrator asked for. LogIngestionHostedService reads this directly (IgnoreQueryFilters,
+    // sessionless) to decide which apps to poll; DataRetentionSweeper reads it the same way to decide
+    // each app's own age cutoff, since — unlike every other table that sweeper owns — there is no
+    // single shared cutoff here.
+
+    /// <summary>
+    /// How many days of this app's container output to keep in <see cref="Harbora.Domain.Logging.AppLogLine"/>,
+    /// searchable by <c>LogsController</c> after the container that wrote it is gone. <b>0 means
+    /// off</b> — deliberately not "keep forever" the way <c>RetentionOptions</c>' knobs read a
+    /// non-positive value: those tables exist regardless of any setting, but this one is pure opt-in
+    /// growth, so "off" has to mean "write nothing" rather than "write everything, unbounded".
+    /// Clamped to <c>LogIngestionOptions.MaxRetentionDays</c> by <c>AppOperationsService.SetLogRetentionAsync</c>,
+    /// the only writer.
+    /// </summary>
+    public int LogRetentionDays { get; set; }
+
+    /// <summary>
+    /// The moment persisted retention was last turned on for this app (0 → positive
+    /// <see cref="LogRetentionDays"/>) — cleared back to null whenever it is turned off. This is the
+    /// other half of what <see cref="LogRetentionBudgetCapped"/> needs: "we don't have logs from
+    /// before X" is only evidence of budget trimming if the app could otherwise have had them, i.e.
+    /// if retention had already been on since before X. Without this, an app that enabled retention an
+    /// hour ago would read as budget-capped simply for not yet having 30 days of history — the exact
+    /// false alarm this field exists to rule out.
+    /// </summary>
+    public DateTimeOffset? LogRetentionEnabledAt { get; set; }
+
+    /// <summary>
+    /// Whether the disk budget — not this app's own <see cref="LogRetentionDays"/> or how recently
+    /// <see cref="LogRetentionEnabledAt"/> was — is currently the reason its persisted history does
+    /// not reach as far back as it should. Fully recomputed from the actual data on every budget pass
+    /// (<c>LogBudgetEnforcer.RecomputeBudgetCappedAsync</c>) rather than merely set true and left —
+    /// so it also clears itself once enough time has passed that the real window no longer needs the
+    /// rows the budget once dropped. See that method for the exact comparison.
+    /// </summary>
+    public bool LogRetentionBudgetCapped { get; set; }
+
     public ICollection<EnvironmentVariable> EnvironmentVariables { get; set; } = new List<EnvironmentVariable>();
     public ICollection<Volume> Volumes { get; set; } = new List<Volume>();
     public ICollection<DomainName> Domains { get; set; } = new List<DomainName>();

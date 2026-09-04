@@ -80,6 +80,9 @@ public class HarboraDbContext : DbContext
     public DbSet<Deployment> Deployments => Set<Deployment>();
     public DbSet<CronRun> CronRuns => Set<CronRun>();
     public DbSet<DeploymentLog> DeploymentLogs => Set<DeploymentLog>();
+    /// <summary>Persisted container output (2.2, 2026-09 log-retention plan) — see the type's own doc
+    /// for why it exists alongside the fetched-tail search <c>DeploymentLog</c> never answered.</summary>
+    public DbSet<Harbora.Domain.Logging.AppLogLine> AppLogLines => Set<Harbora.Domain.Logging.AppLogLine>();
     public DbSet<DomainName> Domains => Set<DomainName>();
     /// <summary>A workspace's own BYO Cloudflare token (F9) — never the platform's own, which lives
     /// in <see cref="Setting"/> rows instead.</summary>
@@ -540,6 +543,20 @@ public class HarboraDbContext : DbContext
             // The history page reads newest-first for one job; the runner counts recent failures.
             e.HasIndex(x => new { x.AppId, x.StartedAt });
             e.HasOne(x => x.App).WithMany().HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<Harbora.Domain.Logging.AppLogLine>(e =>
+        {
+            // Search and both sweeps all read "this app's lines, newest/oldest within a window" —
+            // the exact shape CronRun's own index above serves for the same reason.
+            e.HasIndex(x => new { x.AppId, x.Timestamp });
+            // The ingestion cursor's own read: "this app's CURRENT container's newest line" — a
+            // different container id must never see an old container's cursor (AppLogLine's own doc
+            // explains why), so this index exists purely to make that lookup cheap.
+            e.HasIndex(x => new { x.AppId, x.ContainerId, x.Timestamp });
+            // The global budget trim orders across every app at once; see LogBudgetEnforcer.
+            e.HasIndex(x => x.Timestamp);
+            e.HasOne<App>().WithMany().HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
         });
 
         b.Entity<DomainName>(e =>
@@ -1402,6 +1419,7 @@ public class HarboraDbContext : DbContext
     {
         // Owns a WorkspaceId directly.
         b.Entity<App>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Logging.AppLogLine>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<Route>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<ManagedService>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         b.Entity<MailDomain>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);

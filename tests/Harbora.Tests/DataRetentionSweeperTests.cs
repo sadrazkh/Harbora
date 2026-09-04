@@ -273,10 +273,13 @@ public class DataRetentionSweeperTests
         db.UserNotifications.Should().ContainSingle().Which.Title.Should().Be("new");
         db.NotificationDigestEntries.Should().ContainSingle().Which.Title.Should().Be("new");
 
-        // Fifteen tables, one row each — and the sweep says so, rather than reporting a bare total
-        // that could hide a table it never reached.
-        result.Deleted.Should().HaveCount(15);
-        result.Deleted.Values.Should().AllSatisfy(n => n.Should().Be(1));
+        // Fifteen tables with one row each, plus AppLogLines (2.2, 2026-09 log-retention plan) — always
+        // reported even at zero, the same "no on/off knob, but still counted" shape IdempotencyRecords
+        // already has, since nothing here opted an app into persisted retention.
+        result.Deleted.Should().HaveCount(16);
+        result.Deleted[RetentionTables.AppLogLines].Should().Be(0);
+        result.Deleted.Where(d => d.Key != RetentionTables.AppLogLines)
+            .Should().AllSatisfy(d => d.Value.Should().Be(1));
         result.TotalDeleted.Should().Be(15);
     }
 
@@ -295,8 +298,8 @@ public class DataRetentionSweeperTests
         result.Failures.Should().ContainKey(RetentionTables.NodeEvents);
         result.Failures[RetentionTables.NodeEvents].Should().Contain("relation is locked");
 
-        // The other fourteen still ran.
-        result.Deleted.Should().HaveCount(14);
+        // The other fourteen, plus AppLogLines (2.2, 2026-09 log-retention plan), still ran.
+        result.Deleted.Should().HaveCount(15);
         result.Deleted.Should().NotContainKey(RetentionTables.NodeEvents);
         db.DeploymentLogs.Should().ContainSingle();
         db.AuditLogs.Should().ContainSingle();
@@ -322,7 +325,7 @@ public class DataRetentionSweeperTests
         result.Failures.Should().BeEmpty();
         result.KeptForever.Should().Contain(RetentionTables.DeploymentLogs);
         db.DeploymentLogs.Should().HaveCount(2, "a span too long to be a date means keep, not delete");
-        result.Deleted.Should().HaveCount(14, "every other table was still swept");
+        result.Deleted.Should().HaveCount(15, "every other table, plus AppLogLines, was still swept");
     }
 
     [Fact]

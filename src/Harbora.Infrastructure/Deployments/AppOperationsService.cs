@@ -2,6 +2,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
+using Harbora.Domain.Logging;
 using Harbora.Domain.Networking;
 using Harbora.Domain.Notifications;
 using Microsoft.EntityFrameworkCore;
@@ -31,7 +32,14 @@ public sealed class AppOperationsService(
     ILogger<AppOperationsService> logger,
     ISystemClock? clock = null,
     IEventPublisher? events = null,
-    IOptions<HarboraRuntimeOptions>? runtimeOptions = null) : IAppOperationsService
+    IOptions<HarboraRuntimeOptions>? runtimeOptions = null,
+    // 2.2 (2026-09 log-retention plan), same shape and same reason as the three above: a 12th/13th
+    // trailing optional parameter rather than required, so the five existing positional-construction
+    // test files keep compiling for the features they were never testing. logIngestion is null only
+    // in those tests (and in any other caller that genuinely has nothing to flush); DI always supplies
+    // a real one in production.
+    ILogIngestionEngine? logIngestion = null,
+    IOptions<Harbora.Infrastructure.Logging.LogIngestionOptions>? logIngestionOptions = null) : IAppOperationsService
 {
     // Defaulted rather than required, the same shape ManagedServiceEngine's own trailing
     // IEventPublisher? already uses: five existing test files construct this type positionally
@@ -41,6 +49,16 @@ public sealed class AppOperationsService(
     // one of them for a feature they never use; SetMaintenanceModeAsync is the only method that ever
     // reads these three, and DI always supplies real ones in production.
     private readonly HarboraRuntimeOptions _runtime = runtimeOptions?.Value ?? new HarboraRuntimeOptions();
+    private readonly Harbora.Infrastructure.Logging.LogIngestionOptions _logRetention =
+        logIngestionOptions?.Value ?? new Harbora.Infrastructure.Logging.LogIngestionOptions();
+
+    /// <summary>
+    /// The most persisted rows one search will look at for one app within its window — bounded for
+    /// the same reason <c>LogsController.LinesPerApp</c> bounds the live tail: an unbounded scan over
+    /// a long-retention app's full history would make one search's own cost scale with how much
+    /// history it kept, exactly the runaway this feature has to avoid causing anywhere it touches.
+    /// </summary>
+    private const int PersistedScanCap = 2000;
 
     public async Task RestartAsync(Guid appId, CancellationToken ct)
     {
@@ -311,6 +329,56 @@ public sealed class AppOperationsService(
         return RateLimitToggleResult.Ok;
     }
 
+    /// <inheritdoc/>
+    public async Task<LogRetentionResult> SetLogRetentionAsync(Guid appId, int days, CancellationToken ct)
+    {
+        // Refused before the DB, the same shape SetRateLimitAsync's own bounds check uses.
+        if (days < 0)
+            return LogRetentionResult.Failed("Retention days cannot be negative.");
+        if (days > _logRetention.MaxRetentionDays)
+            return LogRetentionResult.Failed(
+                $"Retention cannot exceed {_logRetention.MaxRetentionDays} days.");
+
+        // Unfiltered for the same reason SetMaintenanceModeAsync's own read is: ownership is the
+        // caller's to check, and every request-bound entry point (AppsController) already asks
+        // CanTouchAppAsync before this runs.
+        var app = await db.Apps.IgnoreQueryFilters().FirstOrDefaultAsync(a => a.Id == appId, ct);
+        if (app is null) return LogRetentionResult.Failed("No such app.");
+
+        var now = clock?.UtcNow ?? DateTimeOffset.UtcNow;
+
+        if (days == 0)
+        {
+            // Turning it off deletes what is already stored, immediately, rather than leaving it to
+            // rot unreachable — SearchLogsAsync only ever looks at persisted rows while
+            // LogRetentionDays > 0, so an orphaned row would sit on disk forever answering nothing.
+            // An operator turning a disk-costing feature off is asking for the disk back.
+            var doomed = db.AppLogLines.IgnoreQueryFilters().Where(l => l.AppId == appId);
+            if (db.Database.IsRelational())
+                await doomed.ExecuteDeleteAsync(ct);
+            else
+            {
+                var rows = await doomed.ToListAsync(ct);
+                db.AppLogLines.RemoveRange(rows);
+            }
+
+            app.LogRetentionDays = 0;
+            app.LogRetentionEnabledAt = null;
+            app.LogRetentionBudgetCapped = false;
+        }
+        else
+        {
+            // Only stamped on the 0 → positive transition: reconfiguring an already-enabled app's day
+            // count must not reset the "since" the budget-capped signal measures against, or every
+            // edit would look like a brand-new app with no history yet.
+            if (app.LogRetentionDays <= 0) app.LogRetentionEnabledAt = now;
+            app.LogRetentionDays = days;
+        }
+
+        await db.SaveChangesAsync(ct);
+        return LogRetentionResult.Ok;
+    }
+
     public async Task DeleteAsync(Guid appId, bool removeVolumes, CancellationToken ct)
     {
         // Deleting is also driven by the preview sweeper and by branch-deleted webhooks, neither of
@@ -332,7 +400,25 @@ public sealed class AppOperationsService(
         var docker = await engineFactory.ResolveAsync(app.ServerId, ct);
 
         var id = await FindContainerIdAsync(docker, app.WorkspaceId, app.Slug, ct);
-        if (id is not null) await docker.RemoveContainerAsync(id, force: true, ct);
+        if (id is not null)
+        {
+            // 2.2 (2026-09 log-retention plan): the last chance to persist this container's final
+            // lines. RemoveContainerAsync below makes `docker logs` stop answering for this id
+            // entirely — unlike an ordinary crash-restart, which Docker's own unless-stopped policy
+            // keeps under the same id (see ILogIngestionEngine's own doc) — so this is the one moment
+            // a crash's last lines are genuinely about to be destroyed rather than merely due for the
+            // next poll. Best-effort and never allowed to fail the delete itself: a flush that could
+            // not run is not a reason an app fails to delete.
+            if (logIngestion is not null)
+            {
+                try { await logIngestion.IngestAsync(appId, ct); }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Best-effort log flush before removing app {AppId}'s container failed.", appId);
+                }
+            }
+            await docker.RemoveContainerAsync(id, force: true, ct);
+        }
         if (removeVolumes)
             foreach (var v in app.Volumes) await docker.RemoveVolumeAsync(v.Name, ct);
 
@@ -407,62 +493,112 @@ public sealed class AppOperationsService(
     {
         var cap = maxLinesPerApp <= 0 ? 200 : maxLinesPerApp;
         var windowRequested = window is not null;
+        var now = DateTimeOffset.UtcNow;
         var hits = new List<LogSearchHit>();
         var coverage = new List<AppLogCoverage>();
 
         foreach (var appId in appIds)
         {
-            App app;
-            IDockerEngine docker;
-            string? containerId;
-            try
-            {
-                (app, docker, containerId) = await ResolveAsync(appId, ct);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Resolving app {AppId} for a log search failed.", appId);
-                coverage.Add(new AppLogCoverage(appId, appId.ToString(), false, ex.Message, 0, windowRequested, false));
-                continue;
-            }
+            // Looked up once, independent of whether the live engine can be reached — the persisted
+            // store (2.2, 2026-09 log-retention plan), when this app has retention configured, must
+            // still answer a search when the node itself is down, which is exactly the moment "why
+            // did it crash" matters most. A bare "no such app" name mirrors what the old code
+            // effectively said on a resolve failure, for an id that turns out not to exist at all.
+            var appRow = await db.Apps.IgnoreQueryFilters().AsNoTracking()
+                .FirstOrDefaultAsync(a => a.Id == appId, ct);
+            var appName = appRow?.Name ?? appId.ToString();
 
-            if (containerId is null)
-            {
-                coverage.Add(new AppLogCoverage(
-                    app.Id, app.Name, false, "No container is running for this app.", 0, windowRequested, false));
-                continue;
-            }
+            var liveReached = false;
+            string? liveReason = appRow is null ? "No such app." : null;
+            var liveLinesScanned = 0;
+            var windowHonored = false;
 
-            try
+            if (appRow is not null)
             {
-                if (window is { } w)
+                try
                 {
-                    try
+                    var docker = await engineFactory.ResolveAsync(appRow.ServerId, ct);
+                    var containerId = await FindContainerIdAsync(docker, appRow.WorkspaceId, appRow.Slug, ct);
+
+                    if (containerId is null)
                     {
-                        var timed = await docker.GetLogsSinceAsync(containerId, DateTimeOffset.UtcNow - w, cap, ct);
-                        var matched = LogFilter.ApplyTimed(timed, text, problemsOnly);
-                        hits.AddRange(matched.Select(m => new LogSearchHit(app.Id, app.Name, m.Text, m.Timestamp)));
-                        coverage.Add(new AppLogCoverage(app.Id, app.Name, true, null, timed.Count, true, true));
-                        continue;
+                        liveReason = "No container is running for this app.";
                     }
-                    catch (NotSupportedException)
+                    else if (window is { } w)
                     {
-                        // This app's host cannot attach real timestamps — fall through to the plain
-                        // tail below rather than reporting a false empty result for a window that was
-                        // never actually applied.
+                        try
+                        {
+                            var timed = await docker.GetLogsSinceAsync(containerId, now - w, cap, ct);
+                            var matched = LogFilter.ApplyTimed(timed, text, problemsOnly);
+                            hits.AddRange(matched.Select(m => new LogSearchHit(appRow.Id, appRow.Name, m.Text, m.Timestamp)));
+                            liveReached = true; liveLinesScanned = timed.Count; windowHonored = true;
+                        }
+                        catch (NotSupportedException)
+                        {
+                            // This app's host cannot attach real timestamps — fall through to the
+                            // plain tail below rather than reporting a false empty result for a
+                            // window that was never actually applied.
+                            var raw = await docker.GetLogsAsync(containerId, cap, ct);
+                            var matchedLines = LogFilter.Apply(raw, text, problemsOnly);
+                            hits.AddRange(matchedLines.Select(m => new LogSearchHit(appRow.Id, appRow.Name, m, null)));
+                            liveReached = true; liveLinesScanned = CountLines(raw); windowHonored = false;
+                        }
+                    }
+                    else
+                    {
+                        var raw = await docker.GetLogsAsync(containerId, cap, ct);
+                        var matchedLines = LogFilter.Apply(raw, text, problemsOnly);
+                        hits.AddRange(matchedLines.Select(m => new LogSearchHit(appRow.Id, appRow.Name, m, null)));
+                        liveReached = true; liveLinesScanned = CountLines(raw); windowHonored = false;
                     }
                 }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Fetching logs for app {AppId} failed.", appId);
+                    liveReason = ex.Message;
+                }
+            }
 
-                var raw = await docker.GetLogsAsync(containerId, cap, ct);
-                var matchedLines = LogFilter.Apply(raw, text, problemsOnly);
-                hits.AddRange(matchedLines.Select(m => new LogSearchHit(app.Id, app.Name, m, null)));
-                coverage.Add(new AppLogCoverage(app.Id, app.Name, true, null, CountLines(raw), windowRequested, false));
-            }
-            catch (Exception ex)
+            // The persisted store, merged in alongside the live tail rather than instead of it — a
+            // line still in the live tail may also already be persisted, and both halves have to
+            // contribute to what "how far back did this reach" reports.
+            DateTimeOffset? reachedBackTo = null;
+            var persistedReached = false;
+            var persistedLinesScanned = 0;
+            var retentionEnabled = appRow is { LogRetentionDays: > 0 };
+            var budgetCapped = false;
+
+            if (appRow is { LogRetentionDays: > 0 })
             {
-                logger.LogWarning(ex, "Fetching logs for app {AppId} failed.", appId);
-                coverage.Add(new AppLogCoverage(app.Id, app.Name, false, ex.Message, 0, windowRequested, false));
+                var since = window is { } w2 ? now - w2 : now.AddDays(-appRow.LogRetentionDays);
+                var rows = await db.AppLogLines.IgnoreQueryFilters().AsNoTracking()
+                    .Where(l => l.AppId == appId && l.Timestamp >= since)
+                    .OrderByDescending(l => l.Timestamp)
+                    .Take(PersistedScanCap)
+                    .ToListAsync(ct);
+
+                persistedReached = true;
+                persistedLinesScanned = rows.Count;
+                if (rows.Count > 0) reachedBackTo = rows[^1].Timestamp; // list is newest-first; last is oldest
+
+                // Stored newest-first (the query above); LogFilter.ApplyTimed's continuation-line
+                // grouping needs chronological order to attach a stack trace's frames to the line
+                // that introduced them.
+                var timedAscending = rows.AsEnumerable().Reverse()
+                    .Select(r => new TimedLogLine(r.Timestamp, r.Text)).ToList();
+                var persistedMatched = LogFilter.ApplyTimed(timedAscending, text, problemsOnly);
+                hits.AddRange(persistedMatched.Select(m => new LogSearchHit(appId, appName, m.Text, m.Timestamp)));
+
+                budgetCapped = appRow.LogRetentionBudgetCapped;
             }
+
+            var reached = liveReached || persistedReached;
+            coverage.Add(new AppLogCoverage(
+                appId, appName, reached,
+                reached ? null : liveReason,
+                liveLinesScanned + persistedLinesScanned,
+                windowRequested, windowHonored,
+                reachedBackTo, retentionEnabled, budgetCapped));
         }
 
         return new LogSearchResult(hits, coverage);

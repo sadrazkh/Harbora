@@ -293,6 +293,15 @@ public static class DependencyInjection
             config.GetSection(Maintenance.RetentionOptions.SectionName));
         services.AddHostedService<Maintenance.DataRetentionSweeper>();
 
+        // 2.2 (2026-09 log-retention plan): persisted per-app log retention, searchable by
+        // LogsController after the container that wrote it is gone. The disk-budget half of
+        // DataRetentionSweeper's own remit ("disk is finite and this is the feature most likely to
+        // fill it"), registered beside it for the same reason — see LogIngestionOptions' own doc.
+        services.Configure<Logging.LogIngestionOptions>(
+            config.GetSection(Logging.LogIngestionOptions.SectionName));
+        services.AddScoped<Application.Abstractions.ILogIngestionEngine, Logging.LogIngestionEngine>();
+        services.AddHostedService<Logging.LogIngestionHostedService>();
+
         // The durable scheduler queues every ended UTC hour and retries incomplete accounting runs.
         services.Configure<Billing.BillingOptions>(config.GetSection(Billing.BillingOptions.SectionName));
         services.AddScoped<Billing.BillingTick>();

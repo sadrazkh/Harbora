@@ -8,8 +8,8 @@
     <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "جست‌وجوی لاگ‌ها" : "Search logs")</h1>
     <p class="text-ink-muted text-sm">
         @(isFa
-            ? $"در {Model.Apps.Count} اپ این پروژه — هر بار روی جدیدترین خروجی هر کانتینر، نه یک آرشیو ذخیره‌شده."
-            : $"Across {Model.Apps.Count} app(s) in this project — each search re-fetches every container's own recent output; nothing is stored.")
+            ? $"در {Model.Apps.Count} اپ این پروژه — روی جدیدترین خروجی هر کانتینر، به‌علاوه‌ی هر تاریخچه‌ی ذخیره‌شده برای اپ‌هایی که نگه‌داری لاگ را روشن کرده‌اند."
+            : $"Across {Model.Apps.Count} app(s) in this project — each container's own recent output, plus any persisted history for apps that have log retention turned on.")
     </p>
 </div>
 
@@ -99,6 +99,10 @@
         const unreached = data.coverage.filter(c => !c.reached);
         const windowUnhonored = data.coverage.filter(c => c.timeWindowRequested && !c.timeWindowHonored);
         const scanned = data.coverage.reduce((n, c) => n + (c.linesScanned || 0), 0);
+        // 2.2 (2026-09 log-retention plan): apps whose persisted history does not reach as far back
+        // as it should because of the shared disk budget rather than their own configured day count.
+        const budgetCapped = data.coverage.filter(c => c.budgetCapped);
+        const withHistory = data.coverage.filter(c => c.retentionEnabled && c.reachedBackTo);
 
         const bits = [];
         bits.push(isFa
@@ -114,6 +118,17 @@
             bits.push(isFa
                 ? `بازه‌ی زمانی برای این‌ها اعمال نشد (کل خروجی دریافتی نمایش داده شد): ${names}.`
                 : `Time window not available for: ${names} (their full fetched tail was searched instead).`);
+        }
+        if (withHistory.length > 0) {
+            const oldest = withHistory.reduce((a, c) => !a || c.reachedBackTo < a ? c.reachedBackTo : a, null);
+            const when = new Date(oldest).toISOString().replace('T', ' ').replace('Z', '');
+            bits.push(isFa ? `تاریخچه‌ی ذخیره‌شده تا ${when} می‌رسد.` : `Persisted history reaches back to ${when}.`);
+        }
+        if (budgetCapped.length > 0) {
+            const names = budgetCapped.map(c => c.appName).join(', ');
+            bits.push(isFa
+                ? `بودجه‌ی دیسک تاریخچه را زودتر از تعداد روزهای تنظیم‌شده کوتاه کرده: ${names}.`
+                : `The disk budget — not their configured day count — is cutting history short for: ${names}.`);
         }
         coverage.textContent = bits.join(' ');
     }

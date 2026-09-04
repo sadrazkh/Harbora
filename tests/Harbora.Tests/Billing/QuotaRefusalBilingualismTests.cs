@@ -108,6 +108,8 @@ public class QuotaRefusalBilingualismTests
         public Task<RateLimitToggleResult> SetRateLimitAsync(
             Guid appId, bool enabled, int average, int burst, CancellationToken ct) =>
             Task.FromResult(RateLimitToggleResult.Ok);
+        public Task<LogRetentionResult> SetLogRetentionAsync(Guid appId, int days, CancellationToken ct) =>
+            Task.FromResult(LogRetentionResult.Ok);
     }
 
     /// <summary>The one method these tests exercise; everything else is <see cref="FakeManagedServiceEngine"/>'s own refusal.</summary>

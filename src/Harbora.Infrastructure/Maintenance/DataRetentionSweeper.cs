@@ -29,6 +29,9 @@ public static class RetentionTables
     public const string AlertDedupMarks = "AlertDedupMarks";
     public const string UserNotifications = "UserNotifications";
     public const string NotificationDigestEntries = "NotificationDigestEntries";
+    /// <summary>2.2 (2026-09 log-retention plan) — see <c>DataRetentionSweeper.SweepAppLogLinesAsync</c>
+    /// for why this table's age-based sweep is not one more <c>SweepAgedTableAsync</c> call.</summary>
+    public const string AppLogLines = "AppLogLines";
 }
 
 /// <summary>
@@ -268,6 +271,20 @@ public sealed class DataRetentionSweeper(
             config.NotificationDigestEntryDays,
             cutoff => Task.FromResult(RetentionRule.NotificationDigestEntriesToDelete(cutoff)));
 
+        // 2.2 (2026-09 log-retention plan): each app's own LogRetentionDays, not a shared
+        // RetentionOptions knob — see SweepAppLogLinesAsync for why this cannot go through
+        // SweepAgedTableAsync above like every other table here does.
+        try
+        {
+            deleted[RetentionTables.AppLogLines] = await SweepAppLogLinesAsync(db, now, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            failures[RetentionTables.AppLogLines] = ex.Message;
+            logger.LogError(ex, "Retention sweep of {Table} failed; the remaining tables were still swept.",
+                RetentionTables.AppLogLines);
+        }
+
         var result = new RetentionSweepResult(deleted, keptForever, failures);
 
         if (result.TotalDeleted > 0)
@@ -306,6 +323,33 @@ public sealed class DataRetentionSweeper(
             .ToListAsync(ct);
 
         return unfinished.Union(live).ToHashSet();
+    }
+
+    /// <summary>
+    /// Each app that has persisted log retention on, swept to its own <c>LogRetentionDays</c> cutoff —
+    /// one <c>ExecuteDeleteAsync</c> per app rather than the single shared-cutoff pass every other
+    /// table in this file gets, because there is no single cutoff: an administrator sets this per app,
+    /// exactly the "per-app, not platform-wide" shape <see cref="RetentionRule.AppLogLinesToDelete"/>'s
+    /// own doc explains. The set of apps this loops over is expected to be small — opting in costs
+    /// disk, so most installs will have few — which keeps a per-app loop as cheap in practice as it
+    /// would be to pretend a single shared cutoff existed here when it does not.
+    /// </summary>
+    private static async Task<int> SweepAppLogLinesAsync(HarboraDbContext db, DateTimeOffset now, CancellationToken ct)
+    {
+        var retained = await db.Apps.IgnoreQueryFilters()
+            .Where(a => a.LogRetentionDays > 0)
+            .Select(a => new { a.Id, a.LogRetentionDays })
+            .ToListAsync(ct);
+
+        var deleted = 0;
+        foreach (var app in retained)
+        {
+            ct.ThrowIfCancellationRequested();
+            var cutoff = now.AddDays(-app.LogRetentionDays);
+            deleted += await DeleteAsync(db, RetentionRule.AppLogLinesToDelete(app.Id, cutoff), ct);
+        }
+
+        return deleted;
     }
 
     /// <summary>

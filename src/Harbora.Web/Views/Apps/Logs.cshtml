@@ -36,6 +36,81 @@
    really reached what it was asked to. *@
 <div id="coverage" class="mb-2 text-xs text-ink-muted" dir="@(isFa ? "rtl" : "ltr")"></div>
 
+@* ---- Persisted log retention (2.2, 2026-09 log-retention plan) ----
+   An administrator-set day count, disk-budgeted, so history survives past the container that wrote
+   it — the gap plain container logs always had, since a replaced container's tail is simply gone. *@
+<section class="mb-4 rounded-xl border border-line bg-surface">
+    <div class="px-4 py-3 border-b border-line font-semibold flex items-center gap-2">
+        @(isFa ? "نگه‌داری لاگ" : "Log retention")
+        @if (Model.LogRetentionDays > 0)
+        {
+            <partial name="Design\_StatusPill" model="@(new StatusPillModel(isFa ? "روشن" : "On", "warn"))" />
+            @if (Model.LogRetentionBudgetCapped)
+            {
+                <partial name="Design\_StatusPill" model="@(new StatusPillModel(isFa ? "محدود به بودجه" : "Budget-capped", "error"))" />
+            }
+        }
+    </div>
+    <div class="p-4 space-y-3">
+        @if (Model.LogRetentionDays > 0)
+        {
+            <p class="text-sm text-ink-muted">
+                @(isFa
+                    ? $"خروجی این کانتینر تا {Model.LogRetentionDays} روز نگه داشته می‌شود و پس از جایگزینی کانتینر همچنان قابل جست‌وجوست."
+                    : $"This container's output is kept up to {Model.LogRetentionDays} day(s) and stays searchable after the container is replaced.")
+            </p>
+            @if (ViewBag.LogRetentionEarliestAt is DateTimeOffset earliest)
+            {
+                <p class="text-xs text-ink-faint" dir="ltr">
+                    @(isFa ? "تاریخچه از " : "History since ")@earliest.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC
+                </p>
+            }
+            else
+            {
+                <p class="text-xs text-ink-faint">@(isFa ? "هنوز خطی ذخیره نشده." : "Nothing persisted yet.")</p>
+            }
+            @if (Model.LogRetentionBudgetCapped)
+            {
+                <p class="text-xs text-warn">
+                    @(isFa
+                        ? "بودجه‌ی دیسک (سهم این اپ یا سقف کل پلتفرم) تاریخچه را زودتر از تعداد روزهای بالا کوتاه کرده است."
+                        : "The disk budget (this app's own share or the platform-wide cap) is cutting history short of the day count above.")
+                </p>
+            }
+            <form asp-controller="Apps" asp-action="SetLogRetention" asp-route-id="@Model.Id" method="post" class="flex items-end gap-2">
+                @Html.AntiForgeryToken()
+                <div>
+                    <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "روز" : "Days")</label>
+                    <input type="number" name="days" min="1" value="@Model.LogRetentionDays" dir="ltr"
+                           class="w-24 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
+                </div>
+                <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm font-semibold">@(isFa ? "به‌روزرسانی" : "Update")</button>
+            </form>
+            <form asp-controller="Apps" asp-action="SetLogRetention" asp-route-id="@Model.Id" method="post"
+                  onsubmit="return confirm('@(isFa ? "نگه‌داری لاگ خاموش شود؟ لاگ‌های ذخیره‌شده حذف خواهند شد." : "Turn log retention off? Everything already stored will be deleted.")')">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="days" value="0" />
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@(isFa ? "خاموش کردن نگه‌داری" : "Turn off retention")</button>
+            </form>
+        }
+        else
+        {
+            <p class="text-sm text-ink-muted">@(isFa
+                ? "نگه‌داری هنوز روشن نیست؛ با جایگزینی کانتینر (هر استقرار، هر ری‌استارت پس از خرابی) این خروجی از بین می‌رود."
+                : "Retention is not on yet; this container's output is lost the moment it is replaced — every deploy, every crash-restart that recreates rather than restarts in place.")</p>
+            <form asp-controller="Apps" asp-action="SetLogRetention" asp-route-id="@Model.Id" method="post" class="flex items-end gap-2">
+                @Html.AntiForgeryToken()
+                <div>
+                    <label class="mb-1 block text-xs text-ink-muted">@(isFa ? "روز" : "Days")</label>
+                    <input type="number" name="days" min="1" value="7" dir="ltr"
+                           class="w-24 rounded-lg bg-surface-2 border border-line-strong px-2 py-1.5 text-sm" />
+                </div>
+                <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@(isFa ? "روشن کردن نگه‌داری" : "Turn on retention")</button>
+            </form>
+        }
+    </div>
+</section>
+
 <div class="rounded-xl border border-line bg-terminal text-terminal-ink font-mono text-xs">
     <div class="flex items-center justify-between px-4 py-2 border-b border-line text-ink-muted">
         <span>harbora-@Model.Slug</span>
@@ -89,6 +164,19 @@
             text += isFa
                 ? ' بازه‌ی زمانی برای این اپ اعمال نشد؛ کل خروجی دریافتی نمایش داده شد.'
                 : ' The time window could not be applied for this app’s host; the full fetched tail is shown instead.';
+        }
+
+        // 2.2 (2026-09 log-retention plan): how far back this specific search reached, and whether
+        // that is short of the configured day count because of the disk budget.
+        const reachedBackTo = response.headers.get('X-Log-Reached-Back-To');
+        if (reachedBackTo) {
+            const when = new Date(reachedBackTo).toISOString().replace('T', ' ').replace('Z', '');
+            text += isFa ? ` تا ${when} بررسی شد.` : ` Reached back to ${when}.`;
+        }
+        if (response.headers.get('X-Log-Budget-Capped') === 'true') {
+            text += isFa
+                ? ' بودجه‌ی دیسک تاریخچه را زودتر از تعداد روزهای تنظیم‌شده کوتاه کرده است.'
+                : ' The disk budget — not the configured day count — is cutting this history short.';
         }
         coverage.textContent = text;
     }

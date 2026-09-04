@@ -76,6 +76,33 @@ public interface IAppOperationsService
     /// Same validation rule as <paramref name="average"/>.</param>
     Task<RateLimitToggleResult> SetRateLimitAsync(
         Guid appId, bool enabled, int average, int burst, CancellationToken ct);
+
+    /// <summary>
+    /// Turns persisted log retention on, off, or reconfigures its day count (2.2, 2026-09
+    /// log-retention plan) — the administrator-set half of the feature; <c>LogIngestionHostedService</c>
+    /// reads <c>App.LogRetentionDays</c> directly to decide what to poll.
+    ///
+    /// <para>
+    /// <paramref name="days"/> is clamped to <c>LogIngestionOptions.MaxRetentionDays</c> before it is
+    /// stored — never silently, a caller past the ceiling is refused with the number, the same
+    /// "refuse before the DB" shape <see cref="SetRateLimitAsync"/> already uses for its own bounds.
+    /// <c>0</c> turns retention off; unlike every knob in <c>RetentionOptions</c>, <c>0</c> here does
+    /// NOT mean "keep forever" — see <c>App.LogRetentionDays</c>'s own doc for why this table's default
+    /// has to be the opposite of every other append-only table's. Turning it off deletes every row
+    /// already persisted for this app immediately, rather than leaving them to rot unreachable by
+    /// search (which only ever looks at persisted rows while <c>LogRetentionDays &gt; 0</c>) — an
+    /// operator turning a disk-costing feature off is asking for the disk back, not for orphaned rows.
+    /// </para>
+    /// </summary>
+    Task<LogRetentionResult> SetLogRetentionAsync(Guid appId, int days, CancellationToken ct);
+}
+
+/// <summary>What happened when persisted log retention was toggled or reconfigured. Mirrors
+/// <see cref="RateLimitToggleResult"/>'s own shape.</summary>
+public sealed record LogRetentionResult(bool Success, string? Error)
+{
+    public static readonly LogRetentionResult Ok = new(true, null);
+    public static LogRetentionResult Failed(string error) => new(false, error);
 }
 
 /// <summary>

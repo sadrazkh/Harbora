@@ -71,6 +71,8 @@ public class ProjectDeletionServiceTests
         public Task<RateLimitToggleResult> SetRateLimitAsync(
             Guid appId, bool enabled, int average, int burst, CancellationToken ct) =>
             throw new NotSupportedException();
+        public Task<LogRetentionResult> SetLogRetentionAsync(Guid appId, int days, CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeServiceEngine(HarboraDbContext db, HashSet<Guid> refuses) : IManagedServiceEngine
