@@ -156,6 +156,14 @@ public sealed class ProjectsController(
     [Authorize(Policy = Capabilities.AppsCreate)]
     public async Task<IActionResult> Create(string name, CancellationToken ct)
     {
+        // 5.1 (per-app grants, HARBORA-0035): a project that does not exist yet has no placement any
+        // grant could name, so a member scoped to selected projects is refused here outright — the
+        // same "a workspace-wide rule is out of reach of a scoped member" answer RoutesController's
+        // own placement-less actions already give, applied to the one act that would otherwise hand
+        // a scoped member a project nobody granted them.
+        if (!await access.AllowsAsync(new ResourcePlacement(null, null), Capabilities.AppsCreate, ct))
+            return NotFound();
+
         if (string.IsNullOrWhiteSpace(name))
         {
             TempData["Error"] = "A project needs a name.";
@@ -180,6 +188,11 @@ public sealed class ProjectsController(
     public async Task<IActionResult> AddEnvironment(Guid id, string name, CancellationToken ct)
     {
         if (!await db.Projects.AnyAsync(p => p.Id == id && p.WorkspaceId == WorkspaceId, ct))
+            return NotFound();
+
+        // 5.1: found by AppScopeCensusTests — a member scoped to other projects could add an
+        // environment to a project nobody granted them.
+        if (!await access.AllowsAsync(new ResourcePlacement(id, null), Capabilities.AppsCreate, ct))
             return NotFound();
 
         try
@@ -288,6 +301,12 @@ public sealed class ProjectsController(
     [Authorize(Policy = Capabilities.AppsDelete)]
     public async Task<IActionResult> Delete(Guid id, string? confirmName, CancellationToken ct)
     {
+        // 5.1: found by AppScopeCensusTests. ConfirmDelete above only checks VISIBILITY (a Viewer
+        // grant on this project can see the confirmation page, matching Details); this is the action
+        // capability, so it is asked here the way every other mutation in this file asks it.
+        if (!await access.AllowsAsync(new ResourcePlacement(id, null), Capabilities.AppsDelete, ct))
+            return NotFound();
+
         var plan = await deletion.PlanAsync(WorkspaceId, id, ct);
         if (plan is null) return NotFound();
 

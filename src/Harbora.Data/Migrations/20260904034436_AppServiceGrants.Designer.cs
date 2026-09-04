@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260904034436_AppServiceGrants")]
+    partial class AppServiceGrants
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1216,89 +1219,6 @@ namespace Harbora.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("BackupSchedules");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Backups.WalArchivingStatus", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("ConsecutiveFailures")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset?>("LastAttemptAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("LastError")
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset?>("LastSuccessAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("ManagedServiceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<long>("SegmentsArchived")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ManagedServiceId")
-                        .IsUnique();
-
-                    b.ToTable("WalArchivingStatuses");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Backups.WalSegment", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("ArchivedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("ArtifactPath")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("DestinationId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid>("ManagedServiceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<long>("SizeBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DestinationId");
-
-                    b.HasIndex("ManagedServiceId", "ArchivedAt");
-
-                    b.ToTable("WalSegments");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Billing.BillingLedgerEntry", b =>
@@ -3113,11 +3033,6 @@ namespace Harbora.Data.Migrations
                     b.Property<bool>("OnSslExpiring")
                         .HasColumnType("boolean");
 
-                    b.Property<bool>("OnUptimeCheckFailed")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(true);
-
                     b.Property<int>("SustainedMinutes")
                         .HasColumnType("integer");
 
@@ -3327,115 +3242,6 @@ namespace Harbora.Data.Migrations
                     b.HasIndex("ServerId", "Name", "Timestamp");
 
                     b.ToTable("MonitoringMetrics");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Monitoring.UptimeCheck", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AppId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("BodyContains")
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("ExpectedStatus")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("IntervalSeconds")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("IsEnabled")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTimeOffset?>("LastCheckedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("LastDetail")
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)");
-
-                    b.Property<int?>("LastHttpStatus")
-                        .HasColumnType("integer");
-
-                    b.Property<long?>("LastLatencyMs")
-                        .HasColumnType("bigint");
-
-                    b.Property<int?>("LastOutcome")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset?>("NextCheckAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Path")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("TimeoutSeconds")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AppId")
-                        .IsUnique();
-
-                    b.HasIndex("IsEnabled", "NextCheckAt");
-
-                    b.ToTable("UptimeChecks");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Monitoring.UptimeCheckResult", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AppId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CheckedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Detail")
-                        .IsRequired()
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)");
-
-                    b.Property<int?>("HttpStatus")
-                        .HasColumnType("integer");
-
-                    b.Property<long?>("LatencyMs")
-                        .HasColumnType("bigint");
-
-                    b.Property<int>("Outcome")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("UptimeCheckId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AppId", "CheckedAt");
-
-                    b.ToTable("UptimeCheckResults");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Networking.Certificate", b =>
@@ -4881,9 +4687,6 @@ namespace Harbora.Data.Migrations
                         .HasColumnType("text");
 
                     b.Property<bool>("PgVectorEnabled")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("PitrEnabled")
                         .HasColumnType("boolean");
 
                     b.Property<string>("RedisEvictionPolicy")
@@ -6417,32 +6220,6 @@ namespace Harbora.Data.Migrations
                         .HasForeignKey("BackupId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Backups.WalArchivingStatus", b =>
-                {
-                    b.HasOne("Harbora.Domain.Services.ManagedService", null)
-                        .WithMany()
-                        .HasForeignKey("ManagedServiceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Backups.WalSegment", b =>
-                {
-                    b.HasOne("Harbora.Domain.Backups.BackupDestination", "Destination")
-                        .WithMany()
-                        .HasForeignKey("DestinationId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("Harbora.Domain.Services.ManagedService", null)
-                        .WithMany()
-                        .HasForeignKey("ManagedServiceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Destination");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Configuration.ConfigOverrideRule", b =>

@@ -26,12 +26,43 @@ public class BuildArgCheckboxHttpTests(HarboraHttpFixture fixture)
 {
     private HarboraWebFactory Panel => fixture.Panel;
 
+    /// <summary>
+    /// A project and environment of its own — uniquely slugged, since this collection fixture is
+    /// shared across every test in the class. 5.1 (per-app grants, HARBORA-0035): AddEnv now asks
+    /// ProjectAccessService whether the caller reaches this app, and that lookup requires a real
+    /// Environment behind EnvironmentId (a required FK per the app-environment-management design) —
+    /// an app seeded without one answers "not found" for every caller, Owner included, the same way
+    /// <c>CapabilityPolicyHttpTests.GivenApp</c> already seeds one for exactly this reason.
+    /// </summary>
+    private Guid SeedEnvironment()
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var projectId = Guid.CreateVersion7();
+        var environmentId = Guid.CreateVersion7();
+
+        Panel.Seed(db =>
+        {
+            db.Projects.Add(new Harbora.Domain.Projects.Project
+            {
+                Id = projectId, WorkspaceId = fixture.WorkspaceId, Name = "Shop", Slug = "buildarg-" + suffix
+            });
+            db.Environments.Add(new Harbora.Domain.Projects.Environment
+            {
+                Id = environmentId, WorkspaceId = fixture.WorkspaceId, ProjectId = projectId,
+                Name = "Production", Slug = "production", IsDefault = true
+            });
+        });
+
+        return environmentId;
+    }
+
     private App GivenApp(string slug)
     {
         var app = new App
         {
             WorkspaceId = fixture.WorkspaceId,
             ServerId = Guid.CreateVersion7(),
+            EnvironmentId = SeedEnvironment(),
             Name = slug,
             Slug = slug,
             Kind = ServiceKind.Web,

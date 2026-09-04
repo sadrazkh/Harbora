@@ -24,6 +24,7 @@ namespace Harbora.Web.Controllers;
 public sealed class NetworksController(
     HarboraDbContext db,
     ServiceUsageService usage,
+    Harbora.Infrastructure.Security.ProjectAccessService access,
     ICurrentUser currentUser) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -118,6 +119,12 @@ public sealed class NetworksController(
     /// </summary>
     private async Task<MoveServiceViewModel?> BuildMoveAsync(Guid appId, Guid targetEnvironmentId, CancellationToken ct)
     {
+        // 5.1 (per-app grants, HARBORA-0035): a plain WorkspaceId filter was the whole check here —
+        // a scoped member could move any app in the workspace to any environment. Answered the same
+        // way a resource that is not theirs always is: not found, not refused, so the response does
+        // not say which of the two it was.
+        if (!await access.CanTouchAppAsync(appId, Capabilities.AppsDeploy, ct)) return null;
+
         var service = await db.Apps
             .Include(a => a.EnvironmentVariables)
             .FirstOrDefaultAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
@@ -126,6 +133,12 @@ public sealed class NetworksController(
         var target = await db.Environments.Include(e => e.Project)
             .FirstOrDefaultAsync(e => e.Id == targetEnvironmentId && e.WorkspaceId == WorkspaceId, ct);
         if (target is null) return null;
+
+        // The destination is a placement choice too — moving into an environment the caller cannot
+        // reach is the same class of escape AppsController.Create's own environment check refuses.
+        if (!await access.AllowsAsync(
+                new ResourcePlacement(target.ProjectId, target.Id), Capabilities.AppsDeploy, ct))
+            return null;
 
         var current = await db.Environments.Include(e => e.Project)
             .FirstOrDefaultAsync(e => e.Id == service.EnvironmentId, ct);

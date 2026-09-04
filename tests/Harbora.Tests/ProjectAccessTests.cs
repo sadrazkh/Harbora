@@ -26,7 +26,19 @@ public class ProjectAccessTests
     private static ProjectGrant Grant(Guid project, SystemRole role = SystemRole.Member, Guid? environment = null) =>
         new() { ProjectId = project, EnvironmentId = environment, Role = role };
 
+    private static ProjectGrant AppGrant(Guid project, Guid app, SystemRole role = SystemRole.Member) =>
+        new() { ProjectId = project, AppId = app, Role = role };
+
+    private static ProjectGrant ServiceGrant(Guid project, Guid service, SystemRole role = SystemRole.Member) =>
+        new() { ProjectId = project, ServiceId = service, Role = role };
+
     private static ResourcePlacement In(Guid? project, Guid? environment = null) => new(project, environment);
+
+    private static ResourcePlacement OfApp(Guid? project, Guid app, Guid? environment = null) =>
+        new(project, environment, AppId: app);
+
+    private static ResourcePlacement OfService(Guid? project, Guid service, Guid? environment = null) =>
+        new(project, environment, ServiceId: service);
 
     [Fact]
     public void A_member_who_is_not_scoped_reaches_everything_as_before()
@@ -153,5 +165,92 @@ public class ProjectAccessTests
         ProjectAccess.Describe(Grant(Shop), "Shop", null).Should().Be("Member on all of Shop");
         ProjectAccess.Describe(Grant(Shop, SystemRole.Viewer, Production), "Shop", "Production")
             .Should().Be("Viewer on Shop · Production");
+    }
+
+    // ---- 5.1 (per-app and per-service grants, HARBORA-0035) ----
+
+    private static readonly Guid MarketingSite = Guid.NewGuid();
+    private static readonly Guid PayrollApi = Guid.NewGuid();
+    private static readonly Guid ShopCache = Guid.NewGuid();
+
+    [Fact]
+    public void A_member_scoped_to_one_app_reaches_that_app_with_no_project_grant_at_all()
+    {
+        // "Let the contractor work on the marketing site" without also handing them the project.
+        var grants = new[] { AppGrant(Shop, MarketingSite) };
+
+        ProjectAccess.Allows(SystemRole.Member, true, grants, OfApp(Shop, MarketingSite), Capabilities.AppsDeploy)
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void An_app_scoped_grant_does_not_reach_a_sibling_app_in_the_same_project()
+    {
+        // The narrowing is the whole point: one app, not "the project this app happens to sit in".
+        var grants = new[] { AppGrant(Shop, MarketingSite) };
+
+        ProjectAccess.Allows(SystemRole.Member, true, grants, OfApp(Shop, PayrollApi), Capabilities.AppsDeploy)
+            .Should().BeFalse("the grant named one app, not the project it lives in");
+    }
+
+    [Fact]
+    public void A_project_wide_grant_still_covers_an_app_with_no_grant_of_its_own()
+    {
+        // App-level grants are an addition, never a replacement for project/environment ones.
+        var grants = new[] { Grant(Shop) };
+
+        ProjectAccess.Allows(SystemRole.Member, true, grants, OfApp(Shop, MarketingSite), Capabilities.AppsDeploy)
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void An_app_scoped_grant_still_cannot_hand_out_a_power_the_role_lacks()
+    {
+        // Intersected, never unioned — the same guarantee project/environment grants already give.
+        var grants = new[] { AppGrant(Shop, MarketingSite, SystemRole.Owner) };
+
+        ProjectAccess.Allows(SystemRole.Viewer, true, grants, OfApp(Shop, MarketingSite), Capabilities.AppsDeploy)
+            .Should().BeFalse("a viewer granted 'owner on this app' is still a viewer");
+    }
+
+    [Fact]
+    public void A_member_scoped_to_one_service_reaches_that_service_with_no_project_grant_at_all()
+    {
+        var grants = new[] { ServiceGrant(Shop, ShopCache) };
+
+        ProjectAccess.Allows(SystemRole.Member, true, grants, OfService(Shop, ShopCache), Capabilities.DatabasesManage)
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_service_scoped_grant_does_not_widen_to_an_app_in_the_same_project()
+    {
+        var grants = new[] { ServiceGrant(Shop, ShopCache) };
+
+        ProjectAccess.Allows(SystemRole.Member, true, grants, OfApp(Shop, MarketingSite), Capabilities.AppsDeploy)
+            .Should().BeFalse("a grant naming one database says nothing about any app");
+    }
+
+    [Fact]
+    public void Seeing_the_project_excludes_a_member_scoped_only_to_one_app_in_it()
+    {
+        // The leak this exists to close: being handed one app must not open the whole project's own
+        // page, where every OTHER app's name would be listed too.
+        ProjectAccess.CanSee(SystemRole.Member, true, [AppGrant(Shop, MarketingSite)], Shop)
+            .Should().BeFalse("an app-scoped grant is narrower than project visibility, not an alternate route to it");
+    }
+
+    [Fact]
+    public void Seeing_the_project_still_follows_a_project_or_environment_grant()
+    {
+        ProjectAccess.CanSee(SystemRole.Member, true, [Grant(Shop)], Shop).Should().BeTrue();
+        ProjectAccess.CanSee(SystemRole.Member, true, [Grant(Shop, environment: Production)], Shop).Should().BeTrue();
+    }
+
+    [Fact]
+    public void An_app_scoped_grant_reads_as_a_sentence_naming_the_app()
+    {
+        ProjectAccess.Describe(AppGrant(Shop, MarketingSite), "Shop", "Production", "marketing-site")
+            .Should().Be("Member on Shop · marketing-site");
     }
 }

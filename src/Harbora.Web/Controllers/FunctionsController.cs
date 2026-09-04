@@ -38,6 +38,7 @@ public sealed class FunctionsController(
     IAuditLogger audit,
     AppAddressAssigner addresses,
     Harbora.Infrastructure.Projects.ProjectService projects,
+    Harbora.Infrastructure.Security.ProjectAccessService access,
     Harbora.Infrastructure.Billing.ResourceCreationBilling creationBilling) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -46,9 +47,21 @@ public sealed class FunctionsController(
     /// <summary>
     /// The apps whose source is rows in this database. Everything else in the workspace is an
     /// ordinary application and belongs on the Apps page.
+    ///
+    /// <para>
+    /// 5.1 (per-app grants, HARBORA-0035): a function app is an ordinary <see cref="App"/> (this
+    /// class's own opening remark), so it is scoped the exact way <c>AppsController</c> scopes one —
+    /// every action below that resolves one by id calls <see cref="MayAsync"/> or
+    /// <see cref="access"/> directly rather than trusting this workspace-only filter on its own,
+    /// the same split <c>AppsController</c> draws between "theirs" and "theirs to touch".
+    /// </para>
     /// </summary>
     private IQueryable<App> FunctionApps =>
         db.Apps.Where(a => a.WorkspaceId == WorkspaceId && a.SourceType == AppSourceType.InlineCode);
+
+    /// <summary>The same question <c>AppsController.MayAsync</c> asks, for this controller's own ids.</summary>
+    private Task<bool> MayAsync(Guid appId, string capability, CancellationToken ct) =>
+        access.CanTouchAppAsync(appId, capability, ct);
 
     /// <summary>
     /// F2: this workspace's own RabbitMQ services — the whole membership a Queue trigger's dropdown
@@ -69,7 +82,16 @@ public sealed class FunctionsController(
     {
         ViewData["Title"] = IsFa ? "فانکشن‌ها" : "Functions";
 
-        var apps = await FunctionApps.AsNoTracking()
+        var query = FunctionApps;
+        // 5.1: the same union AppsController.Index applies — a scoped member sees exactly the
+        // function apps their grants cover, project-wide or by name, and nothing else.
+        if (await access.VisibleProjectIdsAsync(ct) is { } visible)
+        {
+            var grantedAppIds = await access.GrantedAppIdsAsync(ct);
+            query = query.Where(a => visible.Contains(a.Environment!.ProjectId) || grantedAppIds.Contains(a.Id));
+        }
+
+        var apps = await query.AsNoTracking()
             .OrderBy(a => a.Name)
             .ToListAsync(ct);
 
@@ -132,6 +154,19 @@ public sealed class FunctionsController(
         if (!ModelState.IsValid) return View(await NewFormAsync(model, ct));
 
         var environment = await projects.ResolveEnvironmentAsync(WorkspaceId, null, ct);
+
+        // 5.1 (per-app grants, HARBORA-0035): the environment is auto-resolved rather than chosen by
+        // the form, but a scoped member without reach into it must not have a function app appear
+        // there anyway — the same placement check AppsController.Create makes for its own (chosen)
+        // environment.
+        if (!await access.AllowsAsync(
+                new ResourcePlacement(environment.ProjectId, environment.Id), Capabilities.AppsCreate, ct))
+        {
+            ModelState.AddModelError(string.Empty, IsFa
+                ? "شما اجازهٔ ساخت اپ در این پروژه را ندارید."
+                : "You do not have permission to create an app in this project.");
+            return View(await NewFormAsync(model, ct));
+        }
 
         var app = new App
         {
@@ -205,6 +240,9 @@ public sealed class FunctionsController(
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> Details(Guid id, CancellationToken ct)
     {
+        // 5.1: visibility, not an action capability — the same split AppsController.Details draws.
+        if (!await access.CanSeeAppAsync(id, ct)) return NotFound();
+
         var app = await FunctionApps.FirstOrDefaultAsync(a => a.Id == id, ct);
         if (app is null) return NotFound();
 
@@ -251,6 +289,9 @@ public sealed class FunctionsController(
     [Authorize(Policy = Capabilities.AppsDeploy)]
     public async Task<IActionResult> Publish(Guid id, CancellationToken ct)
     {
+        // 5.1: apps.deploy is the policy on this action, so a scoped member must also hold it here.
+        if (!await MayAsync(id, Capabilities.AppsDeploy, ct)) return NotFound();
+
         var app = await FunctionApps.FirstOrDefaultAsync(a => a.Id == id, ct);
         if (app is null) return NotFound();
 
@@ -278,6 +319,10 @@ public sealed class FunctionsController(
     [HttpGet("{id:guid}/new")]
     public async Task<IActionResult> NewFunction(Guid id, FunctionTrigger trigger, CancellationToken ct)
     {
+        // 5.1: visibility — the form only previews a function that does not exist yet, but it is
+        // reached through this app's own edit surface, so the same rule as reading it applies.
+        if (!await access.CanSeeAppAsync(id, ct)) return NotFound();
+
         var app = await FunctionApps.AsNoTracking().FirstOrDefaultAsync(a => a.Id == id, ct);
         if (app is null) return NotFound();
 
@@ -300,6 +345,9 @@ public sealed class FunctionsController(
     [HttpGet("{id:guid}/{functionId:guid}")]
     public async Task<IActionResult> EditFunction(Guid id, Guid functionId, CancellationToken ct)
     {
+        // 5.1: visibility, matching Details.
+        if (!await access.CanSeeAppAsync(id, ct)) return NotFound();
+
         var app = await FunctionApps.AsNoTracking().FirstOrDefaultAsync(a => a.Id == id, ct);
         if (app is null) return NotFound();
 
@@ -354,6 +402,9 @@ public sealed class FunctionsController(
     [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> SaveFunction(Guid id, Guid? functionId, FunctionFormModel model, CancellationToken ct)
     {
+        // 5.1: apps.env is the policy on this action, so a scoped member must also hold it here.
+        if (!await MayAsync(id, Capabilities.AppsEnv, ct)) return NotFound();
+
         var app = await FunctionApps.FirstOrDefaultAsync(a => a.Id == id, ct);
         if (app is null) return NotFound();
 
@@ -456,6 +507,9 @@ public sealed class FunctionsController(
     [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> DeleteFunction(Guid id, Guid functionId, CancellationToken ct)
     {
+        // 5.1: apps.env is the policy on this action, so a scoped member must also hold it here.
+        if (!await MayAsync(id, Capabilities.AppsEnv, ct)) return NotFound();
+
         var fn = await db.FunctionDefinitions.FirstOrDefaultAsync(f => f.Id == functionId && f.AppId == id, ct);
         if (fn is null) return NotFound();
 
@@ -482,6 +536,9 @@ public sealed class FunctionsController(
     [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> RestoreRevision(Guid id, Guid functionId, Guid revisionId, CancellationToken ct)
     {
+        // 5.1: apps.env is the policy on this action, so a scoped member must also hold it here.
+        if (!await MayAsync(id, Capabilities.AppsEnv, ct)) return NotFound();
+
         var app = await FunctionApps.FirstOrDefaultAsync(a => a.Id == id, ct);
         if (app is null) return NotFound();
 
@@ -520,6 +577,9 @@ public sealed class FunctionsController(
     [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> DiscardDeadLetter(Guid id, Guid functionId, Guid deadLetterId, CancellationToken ct)
     {
+        // 5.1: apps.env is the policy on this action, so a scoped member must also hold it here.
+        if (!await MayAsync(id, Capabilities.AppsEnv, ct)) return NotFound();
+
         var deadLetter = await db.FunctionQueueDeadLetters
             .FirstOrDefaultAsync(d => d.Id == deadLetterId && d.FunctionId == functionId && d.AppId == id, ct);
         if (deadLetter is null) return NotFound();
@@ -561,6 +621,9 @@ public sealed class FunctionsController(
     [Authorize(Policy = Capabilities.AppsOperate)]
     public async Task<IActionResult> RunNow(Guid id, Guid functionId, CancellationToken ct)
     {
+        // 5.1: apps.operate is the policy on this action, so a scoped member must also hold it here.
+        if (!await MayAsync(id, Capabilities.AppsOperate, ct)) return NotFound();
+
         var fn = await db.FunctionDefinitions.AsNoTracking()
             .FirstOrDefaultAsync(f => f.Id == functionId && f.AppId == id, ct);
         if (fn is null) return NotFound();

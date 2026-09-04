@@ -31,7 +31,7 @@ public sealed class ProjectAccessService(HarboraDbContext db, ICurrentUser curre
         var (role, scoped, grants) = await CallerAsync(ct);
 
         return ProjectAccess.Allows(role, scoped, grants,
-            new ResourcePlacement(app.ProjectId, app.EnvironmentId), capability);
+            new ResourcePlacement(app.ProjectId, app.EnvironmentId, AppId: appId), capability);
     }
 
     /// <summary>
@@ -57,7 +57,7 @@ public sealed class ProjectAccessService(HarboraDbContext db, ICurrentUser curre
 
         return placements
             .Where(a => ProjectAccess.Allows(role, scoped, grants,
-                new ResourcePlacement(a.ProjectId, a.EnvironmentId), capability))
+                new ResourcePlacement(a.ProjectId, a.EnvironmentId, AppId: a.Id), capability))
             .Select(a => a.Id)
             .ToHashSet();
     }
@@ -75,7 +75,7 @@ public sealed class ProjectAccessService(HarboraDbContext db, ICurrentUser curre
         var (role, scoped, grants) = await CallerAsync(ct);
 
         return ProjectAccess.Allows(role, scoped, grants,
-            new ResourcePlacement(service.ProjectId, service.EnvironmentId), capability);
+            new ResourcePlacement(service.ProjectId, service.EnvironmentId, ServiceId: serviceId), capability);
     }
 
     /// <summary>
@@ -144,7 +144,13 @@ public sealed class ProjectAccessService(HarboraDbContext db, ICurrentUser curre
         if (!await db.Apps.AsNoTracking().AnyAsync(a => a.Id == appId && a.WorkspaceId == currentUser.WorkspaceId, ct))
             return false;
 
-        return await CanSeeProjectAsync(projectId, ct);
+        // 5.1: a grant naming this app specifically is enough on its own — a contractor scoped to
+        // one app must reach it even in a project none of their other grants cover.
+        var (role, scoped, grants) = await CallerAsync(ct);
+        if (role is SystemRole.Owner or SystemRole.Admin || !scoped) return true;
+        if (grants.Any(g => g.AppId == appId)) return true;
+
+        return projectId is { } id && ProjectAccess.CanSee(role, scoped, grants, id);
     }
 
     /// <summary>The same question for a managed database.</summary>
@@ -159,16 +165,11 @@ public sealed class ProjectAccessService(HarboraDbContext db, ICurrentUser curre
             .Select(s => (Guid?)s.Environment!.ProjectId)
             .FirstOrDefaultAsync(ct);
 
-        return await CanSeeProjectAsync(projectId, ct);
-    }
+        var (role, scoped, grants) = await CallerAsync(ct);
+        if (role is SystemRole.Owner or SystemRole.Admin || !scoped) return true;
+        if (grants.Any(g => g.ServiceId == serviceId)) return true;
 
-    private async Task<bool> CanSeeProjectAsync(Guid? projectId, CancellationToken ct)
-    {
-        var visible = await VisibleProjectIdsAsync(ct);
-        if (visible is null) return true;
-
-        // Belongs to no project, and the caller only reaches projects: nothing covers it.
-        return projectId is { } id && visible.Contains(id);
+        return projectId is { } id && ProjectAccess.CanSee(role, scoped, grants, id);
     }
 
     /// <summary>The rule, asked about a placement the caller has already worked out.</summary>
@@ -181,6 +182,13 @@ public sealed class ProjectAccessService(HarboraDbContext db, ICurrentUser curre
     /// <summary>
     /// The projects the caller may see. Null means "all of them" — the common case, and worth
     /// distinguishing from an empty list so a caller does not filter everything away by accident.
+    ///
+    /// <para>
+    /// 5.1: excludes a project whose only grant is app- or service-scoped. Being handed one app must
+    /// not make every other app in that project's own list page visible too — see
+    /// <see cref="GrantedAppIdsAsync"/>/<see cref="GrantedServiceIdsAsync"/> for the narrower id set a
+    /// list page unions in on top of this one to still show that single named resource.
+    /// </para>
     /// </summary>
     public async Task<IReadOnlyCollection<Guid>?> VisibleProjectIdsAsync(CancellationToken ct)
     {
@@ -188,7 +196,30 @@ public sealed class ProjectAccessService(HarboraDbContext db, ICurrentUser curre
 
         if (role is SystemRole.Owner or SystemRole.Admin || !scoped) return null;
 
-        return grants.Select(g => g.ProjectId).Distinct().ToList();
+        return grants.Where(g => g.AppId is null && g.ServiceId is null)
+            .Select(g => g.ProjectId).Distinct().ToList();
+    }
+
+    /// <summary>
+    /// The apps the caller was granted by name, on top of whatever <see cref="VisibleProjectIdsAsync"/>
+    /// already covers project-wide. Empty for an unscoped caller — never consulted for one, since a
+    /// list page only asks this after <see cref="VisibleProjectIdsAsync"/> came back non-null.
+    /// </summary>
+    public async Task<IReadOnlyCollection<Guid>> GrantedAppIdsAsync(CancellationToken ct)
+    {
+        var (role, scoped, grants) = await CallerAsync(ct);
+        if (role is SystemRole.Owner or SystemRole.Admin || !scoped) return [];
+
+        return grants.Where(g => g.AppId is not null).Select(g => g.AppId!.Value).ToList();
+    }
+
+    /// <summary>The same, for managed services.</summary>
+    public async Task<IReadOnlyCollection<Guid>> GrantedServiceIdsAsync(CancellationToken ct)
+    {
+        var (role, scoped, grants) = await CallerAsync(ct);
+        if (role is SystemRole.Owner or SystemRole.Admin || !scoped) return [];
+
+        return grants.Where(g => g.ServiceId is not null).Select(g => g.ServiceId!.Value).ToList();
     }
 
     private async Task<(SystemRole Role, bool Scoped, IReadOnlyCollection<ProjectGrant> Grants)> CallerAsync(

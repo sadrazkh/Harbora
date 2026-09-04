@@ -17,8 +17,20 @@ public sealed record WorkspaceInvitationRow(
 public sealed record WorkspaceEnvironmentOption(Guid Id, string Name);
 public sealed record WorkspaceProjectOption(
     Guid Id, string Name, IReadOnlyList<WorkspaceEnvironmentOption> Environments);
+
+/// <summary>
+/// 5.1 (per-app and per-service grants, HARBORA-0035): the one named app a grant can be narrowed
+/// to, offered next to the whole-project/environment choice on the same form — "let the contractor
+/// work on the marketing site" without also handing them the project it lives in.
+/// </summary>
+public sealed record WorkspaceAppOption(Guid Id, string Name, string ProjectName);
+
+/// <summary>The same, for one named managed service.</summary>
+public sealed record WorkspaceServiceOption(Guid Id, string Name, string ProjectName);
+
 public sealed record WorkspaceProjectGrantRow(
-    Guid Id, Guid UserId, Guid ProjectId, Guid? EnvironmentId, SystemRole Role, string Description);
+    Guid Id, Guid UserId, Guid ProjectId, Guid? EnvironmentId, Guid? AppId, Guid? ServiceId,
+    SystemRole Role, string Description);
 
 public sealed class WorkspaceHubViewModel
 {
@@ -30,6 +42,8 @@ public sealed class WorkspaceHubViewModel
     public IReadOnlyList<WorkspaceMemberRow> Members { get; init; } = [];
     public IReadOnlyList<WorkspaceInvitationRow> Invitations { get; init; } = [];
     public IReadOnlyList<WorkspaceProjectOption> Projects { get; init; } = [];
+    public IReadOnlyList<WorkspaceAppOption> Apps { get; init; } = [];
+    public IReadOnlyList<WorkspaceServiceOption> Services { get; init; } = [];
     public IReadOnlyList<WorkspaceProjectGrantRow> Grants { get; init; } = [];
 
     /// <summary>Whether a password sign-in is currently refused for this workspace's non-exempt members.</summary>

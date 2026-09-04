@@ -420,6 +420,13 @@ public sealed class AppOperationsService(
         // Host-port reservations hang off the server, not the app, so nothing cascades them away.
         // Left behind they would retire a port from the node permanently, once per deleted app.
         await hostPorts.ReleaseAppAsync(appId, ct);
+        // 5.1 (per-app grants, HARBORA-0035): ProjectGrant carries no FK to cascade this the way
+        // DatabaseAccessGrant does off ManagedServiceId — it has none of any kind, by design (see
+        // HarboraDbContext's own remarks by the DbSet). Left behind, a grant naming a deleted app
+        // is a permission that grants nothing and a row nobody can ever explain; loaded and removed
+        // rather than ExecuteDeleteAsync for the same reason the routes just above are.
+        var appGrants = await db.ProjectGrants.IgnoreQueryFilters().Where(g => g.AppId == appId).ToListAsync(ct);
+        db.ProjectGrants.RemoveRange(appGrants);
         db.Apps.Remove(app); // cascades env vars, domains, deployments, volumes
         await db.SaveChangesAsync(ct);
 

@@ -93,8 +93,13 @@ public sealed partial class DatabasesController(
 
         var query = db.ManagedServices.Where(s => s.WorkspaceId == WorkspaceId);
         var visibleProjectIds = await access.VisibleProjectIdsAsync(ct);
+        // 5.1: same union AppsController.Index applies, for the same reason — a service-scoped
+        // grant must show that one service without opening its whole project.
         if (visibleProjectIds is { } visible)
-            query = query.Where(s => visible.Contains(s.Environment!.ProjectId));
+        {
+            var grantedServiceIds = await access.GrantedServiceIdsAsync(ct);
+            query = query.Where(s => visible.Contains(s.Environment!.ProjectId) || grantedServiceIds.Contains(s.Id));
+        }
 
         var services = await query.AsNoTracking()
             .Include(s => s.Environment).ThenInclude(e => e!.Project)

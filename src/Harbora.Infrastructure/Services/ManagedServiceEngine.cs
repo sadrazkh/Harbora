@@ -386,6 +386,13 @@ public sealed class ManagedServiceEngine(
         // With the backup engine in place, honouring deleteData is now safe: the UI warns and
         // users can back up first. Default keeps the volume.
         if (deleteData) await docker.RemoveVolumeAsync(svc.VolumeName, ct);
+
+        // 5.1 (per-app grants, HARBORA-0035): same cleanup AppOperationsService.DeleteAsync does for
+        // an AppId grant, for the ServiceId half — ProjectGrant has no FK to cascade this on its own.
+        var serviceGrants = await db.ProjectGrants.IgnoreQueryFilters()
+            .Where(g => g.ServiceId == serviceId).ToListAsync(ct);
+        db.ProjectGrants.RemoveRange(serviceGrants);
+
         db.ManagedServices.Remove(svc);
         await db.SaveChangesAsync(ct);
     }

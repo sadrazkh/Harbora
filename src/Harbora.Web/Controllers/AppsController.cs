@@ -110,8 +110,17 @@ public sealed partial class AppsController(
 
         // A list that shows what the buttons refuse is worse than a shorter list. Null means "every
         // project", which is the common case and must not be confused with an empty list.
+        //
+        // 5.1: a member granted one named app must still see it here even when nothing makes its
+        // project visible — VisibleProjectIdsAsync deliberately excludes an app-scoped grant from
+        // opening the whole project (see its own remarks), so this unions the two id sets rather than
+        // filtering by project alone, which would either hide their one app or leak every sibling
+        // app in the same project depending on which way the gap was closed.
         if (await access.VisibleProjectIdsAsync(ct) is { } visible)
-            query = query.Where(a => visible.Contains(a.Environment!.ProjectId));
+        {
+            var grantedAppIds = await access.GrantedAppIdsAsync(ct);
+            query = query.Where(a => visible.Contains(a.Environment!.ProjectId) || grantedAppIds.Contains(a.Id));
+        }
 
         var apps = await query
             .AsNoTracking()
@@ -956,6 +965,9 @@ public sealed partial class AppsController(
     public async Task<IActionResult> SetProtection(
         Guid id, bool basicAuthEnabled, string? user, string? password, string? ipAllowlist, CancellationToken ct)
     {
+        // 5.1 (per-app grants, HARBORA-0035): found by AppScopeCensusTests.
+        if (!await MayAsync(id, Capabilities.AppsEnv, ct)) return NotFound();
+
         var app = await db.Apps.Include(a => a.Domains).FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
@@ -1617,6 +1629,11 @@ public sealed partial class AppsController(
     [Authorize(Policy = Capabilities.AppsDeploy)]
     public async Task<IActionResult> ConfirmRollback(Guid id, Guid deploymentId, CancellationToken ct)
     {
+        // 5.1 (per-app grants, HARBORA-0035): neither this nor Rollback below checked scope — found
+        // by AppScopeCensusTests. A member scoped to projects could preview, and then run, a
+        // rollback on any app in the workspace.
+        if (!await MayAsync(id, Capabilities.AppsDeploy, ct)) return NotFound();
+
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
@@ -1629,6 +1646,10 @@ public sealed partial class AppsController(
     [Authorize(Policy = Capabilities.AppsDeploy)]
     public async Task<IActionResult> Rollback(Guid id, Guid deploymentId, CancellationToken ct)
     {
+        // 5.1: re-checked here too, not only on the confirmation screen above — the same reason the
+        // method's own comment three lines down re-checks CanRollback instead of trusting the page.
+        if (!await MayAsync(id, Capabilities.AppsDeploy, ct)) return NotFound();
+
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
@@ -1676,6 +1697,10 @@ public sealed partial class AppsController(
     [Authorize(Policy = Capabilities.AppsOperate)]
     public async Task<IActionResult> RunNow(Guid id, CancellationToken ct)
     {
+        // 5.1 (per-app grants, HARBORA-0035): found by AppScopeCensusTests — a member scoped to
+        // projects could run any cron app in the workspace on demand regardless of scope.
+        if (!await MayAsync(id, Capabilities.AppsOperate, ct)) return NotFound();
+
         var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
@@ -2057,6 +2082,12 @@ public sealed partial class AppsController(
     [Authorize(Policy = Capabilities.AppsEnv)]
     public async Task<IActionResult> AddEnv(Guid id, string key, string? value, bool isSecret, bool availableAtBuild, CancellationToken ct)
     {
+        // 5.1 (per-app grants, HARBORA-0035): DeleteEnv right below already checks this; AddEnv —
+        // the door that writes a SECRET onto an app — did not, so a member scoped to projects could
+        // add or overwrite an environment variable on any app in the workspace regardless of scope.
+        // Found by AppScopeCensusTests.
+        if (!await MayAsync(id, Capabilities.AppsEnv, ct)) return NotFound();
+
         var app = await db.Apps.Include(a => a.EnvironmentVariables).FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
         if (string.IsNullOrWhiteSpace(key)) { TempData["Error"] = "Key is required."; return RedirectToAction(nameof(Details), new { id }); }

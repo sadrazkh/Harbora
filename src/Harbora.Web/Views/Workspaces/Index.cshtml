@@ -171,7 +171,7 @@
                                         </div>
                                     }
                                 </div>
-                                <form asp-action="AddProjectGrant" asp-route-userId="@member.UserId" method="post" class="mt-3 grid gap-2 md:grid-cols-4">
+                                <form asp-action="AddProjectGrant" asp-route-userId="@member.UserId" method="post" class="mt-3 grid gap-2 md:grid-cols-5">
                                     @Html.AntiForgeryToken()
                                     <select name="projectId" class="form-control py-1" required>
                                         @foreach (var project in Model.Projects) { <option value="@project.Id">@project.Name</option> }
@@ -185,8 +185,19 @@
                                             </optgroup>
                                         }
                                     </select>
+                                    @* 5.1 (per-app and per-service grants, HARBORA-0035): narrows the grant above to one named
+                                       app/service instead of the project/environment picked to its left. Both default to "not
+                                       chosen" -- AddProjectGrant reads projectId/environmentId only when neither is set. *@
+                                    <select name="appId" class="form-control py-1">
+                                        <option value="">@(isFa ? "— اپ خاص —" : "— specific app —")</option>
+                                        @foreach (var app in Model.Apps) { <option value="@app.Id">@app.ProjectName · @app.Name</option> }
+                                    </select>
+                                    <select name="serviceId" class="form-control py-1">
+                                        <option value="">@(isFa ? "— سرویس خاص —" : "— specific service —")</option>
+                                        @foreach (var service in Model.Services) { <option value="@service.Id">@service.ProjectName · @service.Name</option> }
+                                    </select>
                                     <select name="role" class="form-control py-1"><option value="Member">Member</option><option value="Operator">Operator</option><option value="Viewer">Viewer</option></select>
-                                    <button class="btn-secondary py-1">@(isFa ? "افزودن مجوز" : "Add grant")</button>
+                                    <button class="btn-secondary py-1 md:col-span-5">@(isFa ? "افزودن مجوز" : "Add grant")</button>
                                 </form>
                             }
                         </div>

@@ -82,6 +82,24 @@ public sealed partial class WorkspacesController(
         var projectNames = projects.ToDictionary(p => p.Id, p => p.Name);
         var environmentNames = projects.SelectMany(p => p.Environments).ToDictionary(e => e.Id, e => e.Name);
 
+        // 5.1 (per-app grants, HARBORA-0035): apps/services offered on the same form as the
+        // project/environment picker, and looked up here so a resource-scoped grant's row reads
+        // "Member on Shop · api" instead of falling back to the project's own whole-project sentence.
+        var apps = canManage
+            ? await db.Apps.IgnoreQueryFilters().AsNoTracking()
+                .Where(a => a.WorkspaceId == WorkspaceId)
+                .Select(a => new { a.Id, a.Name, ProjectName = a.Environment!.Project!.Name })
+                .OrderBy(a => a.Name).ToListAsync(ct)
+            : [];
+        var services = canManage
+            ? await db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
+                .Where(s => s.WorkspaceId == WorkspaceId)
+                .Select(s => new { s.Id, s.Name, ProjectName = s.Environment!.Project!.Name })
+                .OrderBy(s => s.Name).ToListAsync(ct)
+            : [];
+        var appNames = apps.ToDictionary(a => a.Id, a => a.Name);
+        var serviceNames = services.ToDictionary(s => s.Id, s => s.Name);
+
         // Only the owner of a non-personal workspace can turn this on (see SetRequiresSingleSignOn),
         // so this is the only audience that needs to know who it would refuse before saving.
         var isOwnerOfSharedWorkspace = current.Workspace.OwnerUserId == UserId && !current.Workspace.IsPersonal;
@@ -116,13 +134,20 @@ public sealed partial class WorkspacesController(
             Projects = projects.Select(p => new WorkspaceProjectOption(
                 p.Id, p.Name, p.Environments.OrderBy(e => e.Name)
                     .Select(e => new WorkspaceEnvironmentOption(e.Id, e.Name)).ToList())).ToList(),
+            Apps = apps.Select(a => new WorkspaceAppOption(a.Id, a.Name, a.ProjectName)).ToList(),
+            Services = services.Select(s => new WorkspaceServiceOption(s.Id, s.Name, s.ProjectName)).ToList(),
             Grants = grants.Select(g => new WorkspaceProjectGrantRow(
-                g.Id, g.UserId, g.ProjectId, g.EnvironmentId, g.Role,
+                g.Id, g.UserId, g.ProjectId, g.EnvironmentId, g.AppId, g.ServiceId, g.Role,
                 Harbora.Domain.Authorization.ProjectAccess.Describe(g,
                     projectNames.GetValueOrDefault(g.ProjectId, "(deleted project)"),
                     g.EnvironmentId is { } environmentId
                         ? environmentNames.GetValueOrDefault(environmentId, "(deleted environment)")
-                        : null))).ToList()
+                        : null,
+                    g.AppId is { } grantAppId
+                        ? appNames.GetValueOrDefault(grantAppId, "(deleted app)")
+                        : g.ServiceId is { } grantServiceId
+                            ? serviceNames.GetValueOrDefault(grantServiceId, "(deleted service)")
+                            : null))).ToList()
         });
     }
 
@@ -301,10 +326,24 @@ public sealed partial class WorkspacesController(
             : (IsFa ? "محدودیت پروژه برداشته شد." : "Project scoping was removed."));
     }
 
+    /// <summary>
+    /// Saves one grant — whole project, one environment, or (5.1, HARBORA-0035) one named app or
+    /// service — for a member already limited to selected projects.
+    /// </summary>
+    /// <param name="appId">
+    /// When set, narrows the grant to this one app: <paramref name="projectId"/> and
+    /// <paramref name="environmentId"/> are ignored (both are still posted by the same form's other
+    /// two fields, since HTML has no way to disable them by which option was chosen) and resolved
+    /// from the app itself instead, the way <paramref name="environmentId"/> already resolves
+    /// <paramref name="projectId"/> below it.
+    /// </param>
+    /// <param name="serviceId">The same, for one named managed service. Mutually exclusive with
+    /// <paramref name="appId"/> — an app is checked first when a form somehow posts both.</param>
     [HttpPost("members/{userId:guid}/grants")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> AddProjectGrant(
-        Guid userId, Guid projectId, Guid? environmentId, SystemRole role, CancellationToken ct)
+        Guid userId, Guid projectId, Guid? environmentId, Guid? appId, Guid? serviceId,
+        SystemRole role, CancellationToken ct)
     {
         if (!await CanManageAsync(WorkspaceId, ct)) return Forbid();
         if (role is not (SystemRole.Member or SystemRole.Operator or SystemRole.Viewer))
@@ -314,7 +353,27 @@ public sealed partial class WorkspacesController(
         if (targetMember is null) return NotFound();
         if (targetMember.Role == WorkspaceRole.Admin)
             return Back(IsFa ? "مدیر به همه پروژه‌ها دسترسی دارد و مجوز پروژه‌ای نمی‌گیرد." : "An admin already reaches every project and cannot be project-scoped.", true);
-        if (environmentId is { } environment)
+
+        if (appId is { } grantedApp)
+        {
+            var appProject = await db.Apps.IgnoreQueryFilters().AsNoTracking()
+                .Where(a => a.Id == grantedApp && a.WorkspaceId == WorkspaceId)
+                .Select(a => (Guid?)a.Environment!.ProjectId).FirstOrDefaultAsync(ct);
+            if (appProject is null) return NotFound();
+            projectId = appProject.Value;
+            environmentId = null;
+            serviceId = null;
+        }
+        else if (serviceId is { } grantedService)
+        {
+            var serviceProject = await db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
+                .Where(s => s.Id == grantedService && s.WorkspaceId == WorkspaceId)
+                .Select(s => (Guid?)s.Environment!.ProjectId).FirstOrDefaultAsync(ct);
+            if (serviceProject is null) return NotFound();
+            projectId = serviceProject.Value;
+            environmentId = null;
+        }
+        else if (environmentId is { } environment)
         {
             var environmentProject = await db.Environments.IgnoreQueryFilters().AsNoTracking()
                 .Where(e => e.Id == environment && e.WorkspaceId == WorkspaceId)
@@ -327,12 +386,12 @@ public sealed partial class WorkspacesController(
 
         var existing = await db.ProjectGrants.IgnoreQueryFilters().FirstOrDefaultAsync(g =>
             g.WorkspaceId == WorkspaceId && g.UserId == userId && g.ProjectId == projectId
-            && g.EnvironmentId == environmentId, ct);
+            && g.EnvironmentId == environmentId && g.AppId == appId && g.ServiceId == serviceId, ct);
         if (existing is null)
             db.ProjectGrants.Add(new Harbora.Domain.Authorization.ProjectGrant
             {
                 WorkspaceId = WorkspaceId, UserId = userId, ProjectId = projectId,
-                EnvironmentId = environmentId, Role = role
+                EnvironmentId = environmentId, AppId = appId, ServiceId = serviceId, Role = role
             });
         else existing.Role = role;
         await db.SaveChangesAsync(ct);
