@@ -88,6 +88,10 @@ public static class NavigationMap
             // mailboxes on its own server. Sits beside storage: both are workspace-level backing
             // credentials an app attaches to, not a single app's own setting.
             new("email-providers", "EmailProviders", "Index", "send"),
+            // 1.8 (2026-09 market-gaps round two): BYO Sentry/GlitchTip DSN, the same shape as
+            // email-providers just above — a workspace-level backing credential an app attaches to
+            // for SENTRY_DSN, not a single app's own setting.
+            new("error-tracking", "ErrorTrackingProviders", "Index", "alert-triangle"),
             // 1.3 (2026-09 market-gaps round two): per-workspace pull credentials for a private
             // container registry. Sits beside email-providers/storage for the same reason: a
             // workspace-level backing credential apps use, not a single app's own setting.

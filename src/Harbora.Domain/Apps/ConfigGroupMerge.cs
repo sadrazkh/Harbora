@@ -20,7 +20,11 @@ public enum ConfigSource
     /// <summary>A <see cref="Harbora.Domain.Services.ManagedService"/> attached to the app via
     /// <see cref="Harbora.Domain.Services.AppManagedService"/> (C1, 2026-08-22 config-delivery
     /// plan).</summary>
-    Database
+    Database,
+
+    /// <summary>A <see cref="Harbora.Domain.ErrorTracking.ErrorTrackingProvider"/> attached to the app
+    /// (1.8, 2026-09 market-gaps round two).</summary>
+    ErrorTracking
 }
 
 /// <summary>
@@ -37,7 +41,8 @@ public readonly record struct EffectiveEnvironmentEntry(
     Guid? SourceGroupId, string? SourceGroupName,
     Guid? SourceBucketId = null, string? SourceBucketName = null,
     Guid? SourceEmailProviderId = null, string? SourceEmailProviderName = null,
-    Guid? SourceDatabaseId = null, string? SourceDatabaseName = null);
+    Guid? SourceDatabaseId = null, string? SourceDatabaseName = null,
+    Guid? SourceErrorTrackingId = null, string? SourceErrorTrackingName = null);
 
 /// <summary>
 /// One group's contribution to a merge: its attachment order for the app in question, its identity
@@ -99,6 +104,21 @@ public readonly record struct DatabaseEnvEntry(string Key, string Value, bool Is
 public readonly record struct AttachedDatabaseEnv(
     int AttachOrder, Guid DatabaseId, string DatabaseName, IReadOnlyList<DatabaseEnvEntry> Entries);
 
+/// <summary>One env var an error-tracking provider contributes — the error-tracking-side mirror of
+/// <see cref="EmailProviderEnvEntry"/> (1.8, 2026-09 market-gaps round two).</summary>
+public readonly record struct ErrorTrackingEnvEntry(string Key, string Value, bool IsSecret);
+
+/// <summary>
+/// One error-tracking provider's contribution to a merge: its attachment order for the app in
+/// question, its identity (for provenance), and its current entries — the error-tracking-side mirror
+/// of <see cref="AttachedEmailProviderEnv"/> (1.8, 2026-09 market-gaps round two). Same "second one
+/// wins" reasoning: a provider's env var name is fixed (<c>SENTRY_DSN</c>), so a second attach would
+/// otherwise silently overwrite the first one's value.
+/// </summary>
+public readonly record struct AttachedErrorTrackingEnv(
+    int AttachOrder, Guid ErrorTrackingProviderId, string ErrorTrackingProviderName,
+    IReadOnlyList<ErrorTrackingEnvEntry> Entries);
+
 /// <summary>
 /// The single place app-over-group-over-attachment precedence is decided: <b>the deploy pipeline's
 /// env assembly point</b> (<c>DeploymentPipeline.BuildEnv</c>) calls this to build what a container
@@ -107,12 +127,17 @@ public readonly record struct AttachedDatabaseEnv(
 /// value won.
 ///
 /// <para>
-/// Precedence: the app's own <see cref="EnvironmentVariable"/> always wins over any group, bucket or
-/// email provider; among groups, the one with the higher <see cref="AttachedGroupEntries.AttachOrder"/>
-/// (attached later) wins on a shared key; attached buckets and email providers are lower precedence
-/// than every group — they exist to hand an app default credentials, not to override a value
-/// somebody deliberately set through a group. Values are passed through unchanged — ciphertext stays
-/// ciphertext — so a caller decides for itself whether and when to decrypt.
+/// Precedence: the app's own <see cref="EnvironmentVariable"/> always wins over any group, bucket,
+/// email provider, database or error-tracking provider; among groups, the one with the higher
+/// <see cref="AttachedGroupEntries.AttachOrder"/> (attached later) wins on a shared key; attached
+/// buckets, email providers, databases and error-tracking providers are all lower precedence than
+/// every group — they exist to hand an app default credentials, not to override a value somebody
+/// deliberately set through a group. This is also what lets a customer point an app at their own
+/// external Sentry/GlitchTip: a plain <c>SENTRY_DSN</c> the app already carries as its own
+/// <see cref="EnvironmentVariable"/> outranks an attached <see cref="Harbora.Domain.ErrorTracking.ErrorTrackingProvider"/>
+/// exactly the same way it already outranks an attached bucket or email provider — nothing new was
+/// invented for it. Values are passed through unchanged — ciphertext stays ciphertext — so a caller
+/// decides for itself whether and when to decrypt.
 /// </para>
 /// </summary>
 public static class ConfigGroupMerge
@@ -122,13 +147,14 @@ public static class ConfigGroupMerge
         IEnumerable<AttachedGroupEntries> attachedGroups,
         IEnumerable<AttachedBucketEnv>? attachedBuckets = null,
         IEnumerable<AttachedEmailProviderEnv>? attachedEmailProviders = null,
-        IEnumerable<AttachedDatabaseEnv>? attachedDatabases = null)
+        IEnumerable<AttachedDatabaseEnv>? attachedDatabases = null,
+        IEnumerable<AttachedErrorTrackingEnv>? attachedErrorTracking = null)
     {
         var byKey = new Dictionary<string, EffectiveEnvironmentEntry>(StringComparer.Ordinal);
 
         // Lowest precedence first, so a later write in this loop is the one that survives: buckets,
-        // email providers and databases in attachment order, then groups in attachment order, then
-        // the app's own rows last, unconditionally on top.
+        // email providers, databases and error-tracking providers in attachment order, then groups in
+        // attachment order, then the app's own rows last, unconditionally on top.
         foreach (var bucket in (attachedBuckets ?? []).OrderBy(b => b.AttachOrder))
             foreach (var entry in bucket.Entries)
                 byKey[entry.Key] = new EffectiveEnvironmentEntry(
@@ -146,6 +172,13 @@ public static class ConfigGroupMerge
                 byKey[entry.Key] = new EffectiveEnvironmentEntry(
                     entry.Key, entry.Value, entry.IsSecret, ConfigSource.Database,
                     null, null, null, null, null, null, database.DatabaseId, database.DatabaseName);
+
+        foreach (var errorTracking in (attachedErrorTracking ?? []).OrderBy(e => e.AttachOrder))
+            foreach (var entry in errorTracking.Entries)
+                byKey[entry.Key] = new EffectiveEnvironmentEntry(
+                    entry.Key, entry.Value, entry.IsSecret, ConfigSource.ErrorTracking,
+                    null, null, null, null, null, null, null, null,
+                    errorTracking.ErrorTrackingProviderId, errorTracking.ErrorTrackingProviderName);
 
         foreach (var group in attachedGroups.OrderBy(g => g.AttachOrder))
             foreach (var entry in group.Entries)

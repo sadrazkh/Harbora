@@ -561,6 +561,9 @@ public sealed partial class AppsController(
             // ServiceUsageService.ConnectionsFor below, for the "Databases" panel's Attached flag.
             .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
             .Include(a => a.ManagedServices).ThenInclude(ms => ms.Database)
+            // 1.8 (2026-09 market-gaps round two): the same shape again — also read below to build
+            // the attach-panel and the effective-env provenance for a SENTRY_DSN row.
+            .Include(a => a.ErrorTrackingProviders).ThenInclude(et => et.ErrorTrackingProvider)
             .FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
         if (app is null) return NotFound();
 
@@ -596,6 +599,17 @@ public sealed partial class AppsController(
                     .Select(e => new Harbora.Domain.Apps.DatabaseEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
             .ToList();
 
+        // 1.8 (2026-09 market-gaps round two): the same shape as attachedBuckets/attachedEmailProviders
+        // above, one attachment kind later — this page always masks a secret entry regardless of its
+        // value, so nothing here ever needs the plaintext DSN.
+        var attachedErrorTracking = app.ErrorTrackingProviders
+            .Where(et => et.ErrorTrackingProvider is not null)
+            .Select(et => new Harbora.Domain.Apps.AttachedErrorTrackingEnv(
+                et.AttachOrder, et.ErrorTrackingProviderId, et.ErrorTrackingProvider!.Name,
+                Harbora.Domain.ErrorTracking.ErrorTrackingEnvKeys.EntriesFor(et.ErrorTrackingProvider!.EncryptedDsn)
+                    .Select(e => new Harbora.Domain.Apps.ErrorTrackingEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()))
+            .ToList();
+
         // The effective environment, with provenance — the same ConfigGroupMerge the deploy pipeline
         // calls, so this page can never show a value the container would not actually receive.
         ViewBag.EffectiveEnv = Harbora.Domain.Apps.ConfigGroupMerge.Merge(
@@ -604,7 +618,8 @@ public sealed partial class AppsController(
                 cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])),
             attachedBuckets,
             attachedEmailProviders,
-            attachedDatabases);
+            attachedDatabases,
+            attachedErrorTracking);
 
         ViewBag.AttachedStorageBuckets = app.StorageBuckets
             .OrderBy(sb => sb.AttachOrder)
@@ -616,6 +631,12 @@ public sealed partial class AppsController(
             .OrderBy(ep => ep.AttachOrder)
             .Select(ep => new AppEmailProviderRow(
                 ep.EmailProviderId, ep.EmailProvider?.Name ?? "", ep.AttachOrder, ep.HasUnpublishedChanges))
+            .ToList();
+
+        ViewBag.AttachedErrorTrackingProviders = app.ErrorTrackingProviders
+            .OrderBy(et => et.AttachOrder)
+            .Select(et => new AppErrorTrackingProviderRow(
+                et.ErrorTrackingProviderId, et.ErrorTrackingProvider?.Name ?? "", et.AttachOrder, et.HasUnpublishedChanges))
             .ToList();
 
         ViewBag.AttachedConfigGroups = app.ConfigGroups

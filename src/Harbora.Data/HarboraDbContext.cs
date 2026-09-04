@@ -206,6 +206,11 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Email.EmailProvider> EmailProviders => Set<Harbora.Domain.Email.EmailProvider>();
     public DbSet<Harbora.Domain.Email.AppEmailProvider> AppEmailProviders => Set<Harbora.Domain.Email.AppEmailProvider>();
 
+    /// <summary>Bring-your-own Sentry/GlitchTip DSNs (1.8, 2026-09 market-gaps round two) — the
+    /// error-tracking mirror of <see cref="EmailProviders"/>/<see cref="AppEmailProviders"/>.</summary>
+    public DbSet<Harbora.Domain.ErrorTracking.ErrorTrackingProvider> ErrorTrackingProviders => Set<Harbora.Domain.ErrorTracking.ErrorTrackingProvider>();
+    public DbSet<Harbora.Domain.ErrorTracking.AppErrorTrackingProvider> AppErrorTrackingProviders => Set<Harbora.Domain.ErrorTracking.AppErrorTrackingProvider>();
+
     /// <summary>Per-workspace private-registry pull credentials (1.3, 2026-09 market-gaps round two)
     /// — matched to an app's image by registry host, not attached app-by-app like
     /// <see cref="AppEmailProviders"/>, since a credential is a fact about the registry, not any one
@@ -901,6 +906,24 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => new { x.AppId, x.EmailProviderId }).IsUnique();
             e.HasOne(x => x.App).WithMany(a => a.EmailProviders).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.EmailProvider).WithMany(p => p.Apps).HasForeignKey(x => x.EmailProviderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // --- BYO Sentry/GlitchTip DSNs (1.8, 2026-09 market-gaps round two) ---
+        b.Entity<Harbora.Domain.ErrorTracking.ErrorTrackingProvider>(e =>
+        {
+            // A provider belongs to a workspace and is only ever shown through it — the same reason
+            // EmailProvider is filtered above.
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        });
+
+        // The AppEmailProvider shape exactly (F6): Restrict, not Cascade, on the provider side — a
+        // provider with apps still attached must be refused by the named-list check in
+        // ErrorTrackingProvidersController.Delete before this is ever reached.
+        b.Entity<Harbora.Domain.ErrorTracking.AppErrorTrackingProvider>(e =>
+        {
+            e.HasIndex(x => new { x.AppId, x.ErrorTrackingProviderId }).IsUnique();
+            e.HasOne(x => x.App).WithMany(a => a.ErrorTrackingProviders).HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.ErrorTrackingProvider).WithMany(p => p.Apps).HasForeignKey(x => x.ErrorTrackingProviderId).OnDelete(DeleteBehavior.Restrict);
         });
 
         // --- private-registry pull credentials (1.3, 2026-09 market-gaps round two) ---

@@ -93,6 +93,9 @@ public sealed class DeploymentPipeline(
             // points at, when it points at one — AttachedDatabaseCreds needs it loaded to pick the
             // right login.
             .Include(a => a.ManagedServices).ThenInclude(ms => ms.Database)
+            // 1.8 (2026-09 market-gaps round two): the same shape again — an attached error-tracking
+            // provider's own row, so BuildEnv can compute its SENTRY_DSN entry the same way.
+            .Include(a => a.ErrorTrackingProviders).ThenInclude(et => et.ErrorTrackingProvider)
             // C2 (same plan): this app's own file-override rules, applied to each replica's container
             // below (CreateContainerWithOverridesAsync) — unlike the five Includes above, these are
             // never merged into Env; they patch a value inside a file the container already has.
@@ -651,6 +654,8 @@ public sealed class DeploymentPipeline(
             await MarkEmailProvidersAppliedAsync(app, ct);
             // C1: the same guarantee again, for attached databases.
             await MarkManagedServicesAppliedAsync(app, ct);
+            // 1.8: the same guarantee again, for attached error-tracking providers.
+            await MarkErrorTrackingProvidersAppliedAsync(app, ct);
             // C2: the same guarantee once more — a rule is never baked into the image, so a rollback
             // still applies whatever the panel currently says for every rule this app carries.
             await MarkConfigOverrideRulesAppliedAsync(app, ct);
@@ -1501,13 +1506,25 @@ public sealed class DeploymentPipeline(
                 Services.ManagedServiceAttachEnv.EntriesFor(ms, protector)
                     .Select(e => new DatabaseEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
 
+        // 1.8 (2026-09 market-gaps round two): the same shape as attachedBuckets/attachedEmailProviders
+        // above, one attachment kind later — ErrorTrackingEnvKeys.EntriesFor passes the provider's
+        // ciphertext DSN through unchanged, decrypted exactly once below, same as every other secret
+        // entry this merge carries.
+        var attachedErrorTracking = app.ErrorTrackingProviders
+            .Where(et => et.ErrorTrackingProvider is not null)
+            .Select(et => new AttachedErrorTrackingEnv(
+                et.AttachOrder, et.ErrorTrackingProviderId, et.ErrorTrackingProvider!.Name,
+                Harbora.Domain.ErrorTracking.ErrorTrackingEnvKeys.EntriesFor(et.ErrorTrackingProvider!.EncryptedDsn)
+                    .Select(e => new ErrorTrackingEnvEntry(e.Key, e.Value, e.IsSecret)).ToList()));
+
         var merged = ConfigGroupMerge.Merge(
             app.EnvironmentVariables,
             app.ConfigGroups.Select(cg => new AttachedGroupEntries(
                 cg.AttachOrder, cg.ConfigGroupId, cg.ConfigGroup?.Name ?? "", cg.ConfigGroup?.Entries.ToList() ?? [])),
             attachedBuckets,
             attachedEmailProviders,
-            attachedDatabases);
+            attachedDatabases,
+            attachedErrorTracking);
 
         var env = merged.ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
@@ -1603,6 +1620,20 @@ public sealed class DeploymentPipeline(
     {
         var attachments = await db.AppManagedServices
             .Where(ms => ms.AppId == app.Id && ms.HasUnpublishedChanges)
+            .ToListAsync(ct);
+
+        foreach (var a in attachments) a.HasUnpublishedChanges = false;
+    }
+
+    /// <summary>
+    /// 1.8 (2026-09 market-gaps round two): the error-tracking mirror of
+    /// <see cref="MarkEmailProvidersAppliedAsync"/> — same reasoning, same idiom, one attachment kind
+    /// later.
+    /// </summary>
+    private async Task MarkErrorTrackingProvidersAppliedAsync(App app, CancellationToken ct)
+    {
+        var attachments = await db.AppErrorTrackingProviders
+            .Where(et => et.AppId == app.Id && et.HasUnpublishedChanges)
             .ToListAsync(ct);
 
         foreach (var a in attachments) a.HasUnpublishedChanges = false;

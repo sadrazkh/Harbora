@@ -118,3 +118,11 @@ public sealed record AppStorageBucketRow(
 /// </summary>
 public sealed record AppEmailProviderRow(
     Guid EmailProviderId, string Name, int AttachOrder, bool HasUnpublishedChanges);
+
+/// <summary>
+/// One <see cref="Harbora.Domain.ErrorTracking.ErrorTrackingProvider"/> attached to this app, in the
+/// same precedence order the Details env section shows it in (1.8, 2026-09 market-gaps round two) —
+/// the error-tracking mirror of <see cref="AppEmailProviderRow"/>.
+/// </summary>
+public sealed record AppErrorTrackingProviderRow(
+    Guid ErrorTrackingProviderId, string Name, int AttachOrder, bool HasUnpublishedChanges);

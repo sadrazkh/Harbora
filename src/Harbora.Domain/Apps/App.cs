@@ -261,6 +261,14 @@ public class App : BaseEntity
     public ICollection<Harbora.Domain.Services.AppManagedService> ManagedServices { get; set; } =
         new List<Harbora.Domain.Services.AppManagedService>();
 
+    /// <summary>Error-tracking (Sentry/GlitchTip-compatible) providers attached to this app (1.8,
+    /// 2026-09 market-gaps round two) — see
+    /// <see cref="Harbora.Domain.ErrorTracking.AppErrorTrackingProvider"/> and
+    /// <see cref="ConfigGroupMerge"/>, which merges them into the effective environment the same way
+    /// it merges <see cref="EmailProviders"/>.</summary>
+    public ICollection<Harbora.Domain.ErrorTracking.AppErrorTrackingProvider> ErrorTrackingProviders { get; set; } =
+        new List<Harbora.Domain.ErrorTracking.AppErrorTrackingProvider>();
+
     /// <summary>File-override rules for this app's own config file (C2, 2026-08-22 config-delivery
     /// plan) — see <see cref="Harbora.Domain.Configuration.ConfigOverrideRule"/>. Unlike
     /// <see cref="ConfigGroups"/>/<see cref="StorageBuckets"/>/<see cref="EmailProviders"/>, these are
