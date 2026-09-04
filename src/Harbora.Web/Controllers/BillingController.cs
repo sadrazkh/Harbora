@@ -123,6 +123,11 @@ public sealed class BillingController(
             // link to an empty page reads as a page that failed to load.
             NextPeriod = string.CompareOrdinal(period, thisMonth) < 0 ? Label(from.AddMonths(1)) : null,
             Costs = await wallets.BreakdownAsync(WorkspaceId, from, to, ct),
+            // Same rows as Costs above, sorted into the project and environment each one currently
+            // sits in. Forecast is asked for only when the top-of-page one is — a closed month and a
+            // suspended workspace have nothing to project for the workspace as a whole, and nothing
+            // to project per group either.
+            CostGroups = await wallets.BreakdownByProjectAsync(WorkspaceId, from, to, forecast is not null, ct),
             Credits = credits,
             Adjustments = adjustments,
             Forecast = forecast,

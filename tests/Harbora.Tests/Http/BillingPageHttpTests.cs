@@ -235,6 +235,150 @@ public class BillingPageHttpTests(HarboraHttpFixture fixture)
             "the adjustment must not be disguised as a resource cost row");
     }
 
+    // --- cost by project and environment --------------------------------------------------------
+
+    private (Guid ProjectId, Guid EnvironmentId) SeedProjectEnvironment(
+        Guid workspaceId, string projectName, string environmentName)
+    {
+        var project = new Harbora.Domain.Projects.Project
+        { WorkspaceId = workspaceId, Name = projectName, Slug = Slug(projectName) };
+        var environment = new Harbora.Domain.Projects.Environment
+        { WorkspaceId = workspaceId, ProjectId = project.Id, Name = environmentName, Slug = Slug(environmentName) };
+        Panel.Seed(db =>
+        {
+            db.Projects.Add(project);
+            db.Environments.Add(environment);
+        });
+        return (project.Id, environment.Id);
+    }
+
+    private Guid SeedGroupedApp(Guid workspaceId, Guid environmentId, string name)
+    {
+        var app = new Harbora.Domain.Apps.App
+        { WorkspaceId = workspaceId, EnvironmentId = environmentId, Name = name, Slug = Slug(name) };
+        Panel.Seed(db => db.Apps.Add(app));
+        return app.Id;
+    }
+
+    private static string Slug(string name) =>
+        name.ToLowerInvariant().Replace(" ", "-") + "-" + Guid.NewGuid().ToString("n")[..6];
+
+    [Fact]
+    public async Task Cost_by_project_shows_each_environments_total_and_it_sums_to_the_bill()
+    {
+        var tenant = GivenTenant("cost-groups-data");
+        var (projectId, environmentId) = SeedProjectEnvironment(tenant, "Storefront", "production");
+        var api = SeedGroupedApp(tenant, environmentId, "api");
+        var hour = new DateTimeOffset(2026, 9, 10, 0, 0, 0, TimeSpan.Zero);
+        Panel.Seed(db => db.BillingLedger.Add(new BillingLedgerEntry
+        {
+            WorkspaceId = tenant, BillingHour = hour, Kind = LedgerKind.Charge, AmountMinor = -1_500,
+            ResourceType = BilledResourceType.App, ResourceId = api, ResourceName = "api",
+            RunState = BilledRunState.Running, Hours = 1
+        }));
+        Panel.GivenUser(tenant, "cost-groups-member@example.com", SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.190", "cost-groups-member@example.com");
+        client.DefaultRequestHeaders.AcceptLanguage.Add(
+            new System.Net.Http.Headers.StringWithQualityHeaderValue("en"));
+
+        var page = await (await client.GetAsync("/billing?month=2026-09")).Content.ReadAsStringAsync();
+
+        page.Should().Contain("Cost by project and environment")
+            .And.Contain("Storefront")
+            .And.Contain(@"data-cost-groups-state=""data""")
+            .And.Contain($@"data-cost-group-project-id=""{projectId}""")
+            .And.Contain($@"data-cost-group-environment-id=""{environmentId}""")
+            .And.Contain(@"data-cost-group-total-minor=""-1500""");
+        // The one figure this whole section exists to keep honest: the groups have to sum to the
+        // same "In total" the ungrouped table above already shows for the identical period.
+        page.Should().Contain(@"data-cost-groups-total-minor=""-1500""");
+    }
+
+    [Fact]
+    public async Task Cost_by_project_shows_the_empty_state_rather_than_a_fabricated_zero_group()
+    {
+        var tenant = GivenTenant("cost-groups-empty");
+        Panel.GivenUser(tenant, "cost-groups-empty-member@example.com", SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.191", "cost-groups-empty-member@example.com");
+        client.DefaultRequestHeaders.AcceptLanguage.Add(
+            new System.Net.Http.Headers.StringWithQualityHeaderValue("en"));
+
+        var page = await (await client.GetAsync("/billing?month=2031-02")).Content.ReadAsStringAsync();
+
+        page.Should().Contain(@"data-cost-groups-state=""empty""")
+            .And.NotContain(@"data-cost-groups-state=""data""")
+            .And.NotContain("data-cost-group-total-minor");
+    }
+
+    [Fact]
+    public async Task Unassigned_spend_is_shown_as_its_own_named_group_rather_than_missing_from_the_page()
+    {
+        var tenant = GivenTenant("cost-groups-unassigned");
+        var hour = new DateTimeOffset(2026, 9, 11, 0, 0, 0, TimeSpan.Zero);
+        Panel.Seed(db => db.BillingLedger.Add(new BillingLedgerEntry
+        {
+            WorkspaceId = tenant, BillingHour = hour, Kind = LedgerKind.PlanMinimumTopUp, AmountMinor = -4_000,
+            ResourceType = BilledResourceType.PlanBase, ResourceId = null, ResourceName = "Starter",
+            RunState = BilledRunState.NotApplicable, Hours = 0
+        }));
+        Panel.GivenUser(tenant, "cost-groups-unassigned-member@example.com", SystemRole.Member);
+        var client = await Panel.SignedInAs("203.0.113.192", "cost-groups-unassigned-member@example.com");
+        client.DefaultRequestHeaders.AcceptLanguage.Add(
+            new System.Net.Http.Headers.StringWithQualityHeaderValue("en"));
+
+        var page = await (await client.GetAsync("/billing?month=2026-09")).Content.ReadAsStringAsync();
+
+        page.Should().Contain(@"data-cost-group-unassigned=""true""")
+            .And.Contain("Unassigned")
+            .And.Contain(@"data-cost-group-total-minor=""-4000""",
+                "the plan minimum has no project — it must still be counted, not dropped");
+    }
+
+    [Fact]
+    public async Task Each_tenants_own_project_names_appear_only_on_their_own_bill()
+    {
+        var acme = GivenTenant("cost-groups-tenant-acme");
+        var other = GivenTenant("cost-groups-tenant-other");
+        var (_, acmeEnvironmentId) = SeedProjectEnvironment(acme, "Acme Storefront", "production");
+        var acmeApp = SeedGroupedApp(acme, acmeEnvironmentId, "acme-api");
+        var (_, otherEnvironmentId) = SeedProjectEnvironment(other, "Other Storefront", "production");
+        var otherApp = SeedGroupedApp(other, otherEnvironmentId, "other-api");
+        var hour = new DateTimeOffset(2026, 9, 12, 0, 0, 0, TimeSpan.Zero);
+        Panel.Seed(db =>
+        {
+            db.BillingLedger.Add(new BillingLedgerEntry
+            {
+                WorkspaceId = acme, BillingHour = hour, Kind = LedgerKind.Charge, AmountMinor = -1_000,
+                ResourceType = BilledResourceType.App, ResourceId = acmeApp, ResourceName = "acme-api",
+                RunState = BilledRunState.Running, Hours = 1
+            });
+            db.BillingLedger.Add(new BillingLedgerEntry
+            {
+                WorkspaceId = other, BillingHour = hour, Kind = LedgerKind.Charge, AmountMinor = -9_000,
+                ResourceType = BilledResourceType.App, ResourceId = otherApp, ResourceName = "other-api",
+                RunState = BilledRunState.Running, Hours = 1
+            });
+        });
+        Panel.GivenUser(acme, "cost-groups-acme-member@example.com", SystemRole.Member);
+        Panel.GivenUser(other, "cost-groups-other-member@example.com", SystemRole.Member);
+        var acmeClient = await Panel.SignedInAs("203.0.113.193", "cost-groups-acme-member@example.com");
+        acmeClient.DefaultRequestHeaders.AcceptLanguage.Add(
+            new System.Net.Http.Headers.StringWithQualityHeaderValue("en"));
+        var otherClient = await Panel.SignedInAs("203.0.113.194", "cost-groups-other-member@example.com");
+        otherClient.DefaultRequestHeaders.AcceptLanguage.Add(
+            new System.Net.Http.Headers.StringWithQualityHeaderValue("en"));
+
+        var acmePage = await (await acmeClient.GetAsync("/billing?month=2026-09")).Content.ReadAsStringAsync();
+        var otherPage = await (await otherClient.GetAsync("/billing?month=2026-09")).Content.ReadAsStringAsync();
+
+        // The right tenant's rows present —
+        acmePage.Should().Contain("Acme Storefront");
+        otherPage.Should().Contain("Other Storefront");
+        // — and the wrong tenant's absent, in both directions.
+        acmePage.Should().NotContain("Other Storefront");
+        otherPage.Should().NotContain("Acme Storefront");
+    }
+
     // --- the cost forecast ---------------------------------------------------------------------
 
     /// <summary>The hour immediately before the one in progress right now — the newest hour the

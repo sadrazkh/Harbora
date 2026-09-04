@@ -51,6 +51,14 @@ public sealed class BillingPageViewModel
     /// <summary>One row per thing the workspace held, most expensive first.</summary>
     public IReadOnlyList<ResourceCost> Costs { get; init; } = [];
 
+    /// <summary>
+    /// The same rows as <see cref="Costs"/>, sorted into the project and environment each one is
+    /// placed in today — see <c>WalletService.BreakdownByProjectAsync</c>. Empty exactly when
+    /// <see cref="Costs"/> is empty, and its groups always sum to <see cref="CostTotalMinor"/>: it is
+    /// a partition of the same numbers, never a second query.
+    /// </summary>
+    public IReadOnlyList<ProjectCostGroup> CostGroups { get; init; } = [];
+
     /// <summary>Money paid in during the same window, newest first, never summed into the table above.</summary>
     public IReadOnlyList<BillingCreditRow> Credits { get; init; } = [];
 
